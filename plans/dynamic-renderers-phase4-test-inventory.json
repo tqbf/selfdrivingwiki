@@ -1,0 +1,588 @@
+{
+  "schemaVersion": 1,
+  "issue": 1026,
+  "phase": 4,
+  "pr": 4,
+  "scope": "Generic SourceDetailView presentation routing",
+  "baseSHA": "41c96e17051e2f131b279fbd34d243136cff2dd5",
+  "implementationSHA": "c2190baf45e68fe8a0dfbaeec5031703de2f39e5",
+  "productionSymbols": [
+    {
+      "symbol": "RendererPresentationState",
+      "file": "Sources/WikiFS/Renderer/RendererPresentationState.swift",
+      "decision": [
+        "RendererPresentationStateTests.sourceFallbackIsSelectedWhenNoRendererMatches",
+        "RendererPresentationStateTests.unextractedPDFDefaultsToRendered",
+        "RendererPresentationStateTests.presentableSourceDefaultsToSource",
+        "RendererPresentationStateTests.fallbackReasonRemainsVisibleUntilTheUserSelectsAPresentation",
+        "RendererPresentationStateTests.splitUsesCurrentDescriptorWhenPinIsStale"
+      ],
+      "error": [],
+      "boundary": [
+        "RendererPresentationStateTests.refreshDoesNotReplacePinnedRenderer",
+        "RendererPresentationStateTests.unavailablePinDoesNotBlockSplitSelection",
+        "RendererPresentationStateTests.splitMetricsFitDetailMinimumWidth"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "Pure value state has no asynchronous cancellation or teardown seam; unavailable pins clear deterministically and fallback text remains owner state."
+    },
+    {
+      "symbol": "RendererPresentationState.selectSource",
+      "file": "Sources/WikiFS/Renderer/RendererPresentationState.swift",
+      "decision": [
+        "RendererPresentationStateTests.selectingSourceClearsLiveRendererPin"
+      ],
+      "error": [],
+      "boundary": [
+        "RendererPresentationStateTests.fallbackRefreshKeepsSourceAndNotice"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "Explicit Source selection clears only the live pin; durable renderer preference remains available for retry."
+    },
+    {
+      "symbol": "RendererPresentationLifecycle.resolveLoadedSource / refreshLoadedSource",
+      "file": "Sources/WikiFS/Renderer/RendererPresentationLifecycle.swift",
+      "decision": [
+        "RendererPresentationStateTests.lifecycleUnextractedPDFUsesRenderedAndKeepsItsRendererPin",
+        "RendererPresentationStateTests.lifecycleExtractedPDFUsesSourceAfterMarkdownLoads",
+        "RendererPresentationStateTests.lifecycleReResolvesWhenPDFPresentabilityChanges",
+        "RendererPresentationStateTests.lifecycleTranscriptMediaUsesSourceAfterTranscriptLoads",
+        "RendererPresentationStateTests.lifecycleNativeTextUsesSource",
+        "RendererPresentationStateTests.lifecycleSourceNavigationDoesNotRetainPriorPresentation",
+        "RendererPresentationStateTests.refreshForDifferentSourceUsesResolvedSourceIdentity",
+        "RendererPresentationStateTests.lifecycleHTMLWithoutMarkdownUsesRenderedDescriptor",
+        "RendererPresentationStateTests.lifecycleEditingRefreshDoesNotReplaceSourceWithRendered"
+      ],
+      "error": [],
+      "boundary": [
+        "RendererPresentationStateTests.lifecycleReResolvesWhenPDFPresentabilityChanges",
+        "RendererPresentationStateTests.lifecycleSourceNavigationDoesNotRetainPriorPresentation"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "The lifecycle is synchronous and pure. It clears state before source navigation and re-keys newly resolved state from the loaded source facts."
+    },
+    {
+      "symbol": "RendererHostView",
+      "file": "Sources/WikiFS/Renderer/RendererHostView.swift",
+      "decision": [
+        "SourceDetailRendererArchitectureAuditTests.testNoFormatSpecificRendererRouting",
+        "RendererPresentationStateTests.splitMetricsFitDetailMinimumWidth"
+      ],
+      "error": [],
+      "boundary": [],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "Controls, fallback rendering, accessibility labels, shortcuts, and split layout are covered at pure host/state seams; hosted coverage remains a Phase 6/7 review checkpoint."
+    },
+    {
+      "symbol": "RendererHostView.shouldApplyDeferredFallback",
+      "file": "Sources/WikiFS/Renderer/RendererHostView.swift",
+      "decision": [
+        "RendererPresentationStateTests.deferredFallbackRejectsSourceNavigationAndDuplicateFallbacks",
+        "SourceDetailRendererArchitectureAuditTests.deferredFallbackIsGuardedByTheFailingSourceIdentity"
+      ],
+      "error": [],
+      "boundary": [],
+      "cancellation": [
+        "RendererPresentationStateTests.deferredFallbackRejectsSourceNavigationAndDuplicateFallbacks"
+      ],
+      "teardown": [],
+      "notes": "The pure identity gate prevents an unstructured fallback task from applying after source navigation or after a prior fallback."
+    },
+    {
+      "symbol": "SourceRendererPresentationPlanner",
+      "file": "Sources/WikiFS/Renderer/SourceRendererPresentationPlanner.swift",
+      "decision": [
+        "BuiltInRendererRegistryTests.plannerMatchesPDF",
+        "BuiltInRendererRegistryTests.plannerMatchesHTML",
+        "BuiltInRendererRegistryTests.plannerMatchesMermaid",
+        "BuiltInRendererRegistryTests.plannerMatchesMediaOrigin",
+        "BuiltInRendererRegistryTests.sourceFallbackIsOutsideRegistryMatching",
+        "BuiltInRendererRegistryTests.unextractedPDFDefaultKeepsQuoteAnchorReachable",
+        "BuiltInRendererRegistryTests.presentableSourceKindsDefaultToSource"
+      ],
+      "error": [
+        "BuiltInRendererRegistryTests.plannerRejectsMalformedMediaOrigins"
+      ],
+      "boundary": [
+        "BuiltInRendererRegistryTests.characterizesPDFWithoutMarkdown",
+        "BuiltInRendererRegistryTests.characterizesHTMLWithMarkdown",
+        "BuiltInRendererRegistryTests.characterizesHTMLWithoutMarkdown",
+        "BuiltInRendererRegistryTests.characterizesMermaid",
+        "BuiltInRendererRegistryTests.characterizesMediaWithTranscript",
+        "BuiltInRendererRegistryTests.characterizesPlainText",
+        "BuiltInRendererRegistryTests.characterizesUnknownContent",
+        "BuiltInRendererRegistryTests.characterizesMissingContent"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "Planner is synchronous and pure. HTML-without-markdown characterization covers the HTML-only boundary. Mermaid source normalization and existing source-content characterization tests are retained in SourcesTests."
+    },
+    {
+      "symbol": "BuiltInRendererFactoryMap.makeView(for:inputs:)",
+      "file": "Sources/WikiFS/Renderer/BuiltInRendererFactoryMap.swift",
+      "decision": [
+        "BuiltInRendererRegistryTests.builtInDescriptorAndFactoryExhaustiveness"
+      ],
+      "error": [],
+      "boundary": [
+        "BuiltInRendererRegistryTests.plannerMatchesPDF",
+        "BuiltInRendererRegistryTests.plannerMatchesHTML",
+        "BuiltInRendererRegistryTests.plannerMatchesMermaid",
+        "BuiltInRendererRegistryTests.plannerMatchesMediaOrigin"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "Factories are synchronous SwiftUI construction closures. Renderer-specific hosted lifecycle coverage remains a review checkpoint."
+    },
+    {
+      "symbol": "SourceDetailView.rendererDescriptors / beginRendererPresentationLoading / resolveRendererPresentation / persistRendererPreference",
+      "file": "Sources/WikiFS/Sources/SourceDetailView.swift",
+      "decision": [
+        "SourceDetailRendererArchitectureAuditTests.testNoFormatSpecificRendererRouting",
+        "RendererPresentationStateTests.selectingRenderedPinsTheExactReference",
+        "RendererPresentationStateTests.lifecycleReResolvesWhenPDFPresentabilityChanges",
+        "RendererPresentationStateTests.lifecycleSourceNavigationDoesNotRetainPriorPresentation"
+      ],
+      "error": [],
+      "boundary": [
+        "BuiltInRendererRegistryTests.sourceFallbackIsOutsideRegistryMatching",
+        "BuiltInRendererRegistryTests.plannerRejectsMalformedMediaOrigins"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "The owner loads bytes, markdown, and origin before it resolves presentation. Preference and presentation persistence are covered by RendererSettingsStoreTests.sourcePresentationRoundTripsAndDeletesIndependentlyOfRendererPreference."
+    },
+    {
+      "symbol": "SourceDetailView.handleRendererFallback / persistRendererPresentationSelection",
+      "file": "Sources/WikiFS/Sources/SourceDetailView.swift",
+      "decision": [
+        "SourceDetailRendererArchitectureAuditTests.rendererFallbackStaysLiveWithoutOverwritingStoredPresentationOrPreference",
+        "SourceDetailRendererArchitectureAuditTests.sourceSelectionPersistsOnlyPresentationAndPreservesRendererPreference"
+      ],
+      "error": [
+        "RendererPresentationStateTests.fallbackRefreshKeepsSourceAndNotice"
+      ],
+      "boundary": [
+        "SourceDetailRendererArchitectureAuditTests.rendererFallbackStaysLiveWithoutOverwritingStoredPresentationOrPreference"
+      ],
+      "cancellation": [],
+      "teardown": [
+        "RendererPresentationStateTests.deferredFallbackRejectsSourceNavigationAndDuplicateFallbacks"
+      ],
+      "notes": "Fallback is live-only; explicit Source presentation persistence is independent from renderer preference persistence."
+    },
+    {
+      "symbol": "SourceDetailView.rendererFactoryInputs / renderedContent(for:)",
+      "file": "Sources/WikiFS/Sources/SourceDetailView.swift",
+      "decision": [
+        "BuiltInRendererRegistryTests.plannerMatchesPDF",
+        "BuiltInRendererRegistryTests.plannerMatchesHTML",
+        "BuiltInRendererRegistryTests.plannerMatchesMermaid",
+        "BuiltInRendererRegistryTests.plannerMatchesMediaOrigin",
+        "BuiltInRendererRegistryTests.unextractedPDFDefaultKeepsQuoteAnchorReachable"
+      ],
+      "error": [
+        "BuiltInRendererRegistryTests.plannerRejectsMalformedMediaOrigins"
+      ],
+      "boundary": [
+        "BuiltInRendererRegistryTests.characterizesPDFWithMarkdown",
+        "BuiltInRendererRegistryTests.characterizesHTMLWithMarkdown",
+        "BuiltInRendererRegistryTests.characterizesMermaid",
+        "BuiltInRendererRegistryTests.characterizesMediaWithTranscript"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "Input preservation is characterized at the planner boundary. View-level cancellation and teardown are not represented by the current pure tests."
+    },
+    {
+      "symbol": "GRDBWikiStore.rendererSourcePresentation(sourceID:)",
+      "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift",
+      "decision": [
+        "RendererSettingsStoreTests.settingsRoundTripPersistsJournalRecordsInOrder",
+        "RendererSettingsStoreTests.sourcePresentationRoundTripsAndDeletesIndependentlyOfRendererPreference"
+      ],
+      "error": [],
+      "boundary": [
+        "RendererSettingsStoreTests.sourcePresentationRoundTripsAndDeletesIndependentlyOfRendererPreference"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "This synchronous store read decodes a persisted presentation mode. It has no cancellation or teardown path."
+    },
+    {
+      "symbol": "GRDBWikiStore.setRendererSourcePresentation(sourceID:presentation:)",
+      "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift",
+      "decision": [
+        "RendererSettingsStoreTests.settingsRoundTripPersistsJournalRecordsInOrder",
+        "RendererSettingsStoreTests.sourcePresentationFallbackRetainsRendererPreferences"
+      ],
+      "error": [
+        "RendererSettingsStoreTests.sourcePreferenceConstraintRollbackPersistsNoJournalRecord"
+      ],
+      "boundary": [
+        "RendererSettingsStoreTests.sourcePresentationRoundTripsAndDeletesIndependentlyOfRendererPreference",
+        "RendererSettingsStoreTests.rendererSettingsJournalDoesNotCreateResourceEventRecord"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "The write is a synchronous savepoint mutation. The named rollback test covers the shared renderer-settings transaction failure path."
+    },
+    {
+      "symbol": "GRDBWikiStore.removeRendererSourcePresentation(sourceID:)",
+      "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift",
+      "decision": [
+        "RendererSettingsStoreTests.sourcePresentationRoundTripsAndDeletesIndependentlyOfRendererPreference"
+      ],
+      "error": [],
+      "boundary": [
+        "RendererSettingsStoreTests.sourcePresentationRoundTripsAndDeletesIndependentlyOfRendererPreference"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "The delete and journal append are synchronous store work with no cancellation or teardown path."
+    },
+    {
+      "symbol": "WikiStore.rendererSourcePresentation(sourceID:) / setRendererSourcePresentation(sourceID:presentation:) / removeRendererSourcePresentation(sourceID:)",
+      "file": "Sources/WikiFSCore/Store/WikiStore.swift",
+      "decision": [
+        "RendererSettingsStoreTests.sourcePresentationRoundTripsAndDeletesIndependentlyOfRendererPreference"
+      ],
+      "error": [
+        "RendererSettingsStoreTests.sourcePreferenceConstraintRollbackPersistsNoJournalRecord"
+      ],
+      "boundary": [
+        "RendererSettingsStoreTests.rendererSettingsJournalDoesNotCreateResourceEventRecord"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "This protocol declares synchronous presentation persistence operations. The implementation tests cover the transaction and journal boundaries."
+    },
+    {
+      "symbol": "GRDBWikiStore.createRendererSourcePresentationsTableV50(in:)",
+      "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift",
+      "decision": [
+        "RendererSettingsStoreTests.freshSchemaCreatesRendererTablesAndReopensAtV50",
+        "RendererSettingsStoreTests.v50FreshAndUpgradeRendererSchemasMatch"
+      ],
+      "error": [],
+      "boundary": [
+        "RendererSettingsStoreTests.v50FreshAndUpgradeRendererSchemasMatch"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "Migration DDL runs inside the synchronous database migration transaction. Fresh and upgrade schema parity cover the migration boundary."
+    },
+    {
+      "symbol": "GRDBWikiStore.currentSchemaVersion / schemaVersion",
+      "file": "Sources/WikiFSCore/Store/GRDBWikiStore.swift",
+      "decision": [
+        "RendererSettingsStoreTests.freshSchemaCreatesRendererTablesAndReopensAtV50"
+      ],
+      "error": [],
+      "boundary": [
+        "RendererSettingsStoreTests.v50FreshAndUpgradeRendererSchemasMatch"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "This schema constant defines synchronous migration routing. It has no cancellation or teardown path."
+    },
+    {
+      "symbol": "WikiStoreModel.setRendererSourcePreference(sourceID:preference:)",
+      "file": "Sources/WikiFSCore/Store/WikiStoreModel.swift",
+      "decision": [
+        "RendererSettingsStoreTests.settingsRoundTripPersistsJournalRecordsInOrder",
+        "RendererSettingsStoreTests.sourcePresentationFallbackRetainsRendererPreferences"
+      ],
+      "error": [
+        "RendererSettingsStoreTests.sourcePreferenceConstraintRollbackPersistsNoJournalRecord"
+      ],
+      "boundary": [
+        "SourceDetailRendererArchitectureAuditTests.sourceSelectionPersistsOnlyPresentationAndPreservesRendererPreference"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "The main-actor model forwards a synchronous store mutation and logs failures. The store test covers its transaction error boundary."
+    },
+    {
+      "symbol": "WikiStoreModel.removeRendererSourcePreference(sourceID:)",
+      "file": "Sources/WikiFSCore/Store/WikiStoreModel.swift",
+      "decision": [
+        "SourceDetailRendererArchitectureAuditTests.sourceSelectionPersistsOnlyPresentationAndPreservesRendererPreference"
+      ],
+      "error": [],
+      "boundary": [
+        "SourceDetailRendererArchitectureAuditTests.rendererFallbackStaysLiveWithoutOverwritingStoredPresentationOrPreference"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "The main-actor forwarding method has no cancellation or teardown path. Architecture tests guard that live fallback does not invoke this removal."
+    },
+    {
+      "symbol": "WikiStoreModel.rendererSourcePreference(for:)",
+      "file": "Sources/WikiFSCore/Store/WikiStoreModel.swift",
+      "decision": [
+        "RendererSettingsStoreTests.settingsRoundTripPersistsJournalRecordsInOrder"
+      ],
+      "error": [
+        "RendererSettingsStoreTests.sourcePreferenceConstraintRollbackPersistsNoJournalRecord"
+      ],
+      "boundary": [
+        "SourceDetailRendererArchitectureAuditTests.sourceSelectionPersistsOnlyPresentationAndPreservesRendererPreference"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "The read helper returns nil after its logged store failure. It has no cancellation or teardown path."
+    },
+    {
+      "symbol": "WikiStoreModel.setRendererSourcePresentation(sourceID:presentation:)",
+      "file": "Sources/WikiFSCore/Store/WikiStoreModel.swift",
+      "decision": [
+        "RendererSettingsStoreTests.sourcePresentationRoundTripsAndDeletesIndependentlyOfRendererPreference",
+        "RendererSettingsStoreTests.sourcePresentationFallbackRetainsRendererPreferences"
+      ],
+      "error": [
+        "RendererSettingsStoreTests.sourcePreferenceConstraintRollbackPersistsNoJournalRecord"
+      ],
+      "boundary": [
+        "SourceDetailRendererArchitectureAuditTests.sourceSelectionPersistsOnlyPresentationAndPreservesRendererPreference"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "The main-actor forwarding method logs shared store-transaction failures. It has no cancellation or teardown path."
+    },
+    {
+      "symbol": "WikiStoreModel.removeRendererSourcePresentation(sourceID:)",
+      "file": "Sources/WikiFSCore/Store/WikiStoreModel.swift",
+      "decision": [
+        "RendererSettingsStoreTests.sourcePresentationRoundTripsAndDeletesIndependentlyOfRendererPreference"
+      ],
+      "error": [],
+      "boundary": [
+        "RendererSettingsStoreTests.sourcePresentationRoundTripsAndDeletesIndependentlyOfRendererPreference"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "The main-actor forwarding method delegates a synchronous delete. It has no cancellation or teardown path."
+    },
+    {
+      "symbol": "WikiStoreModel.rendererSourcePresentation(for:)",
+      "file": "Sources/WikiFSCore/Store/WikiStoreModel.swift",
+      "decision": [
+        "RendererSettingsStoreTests.sourcePresentationRoundTripsAndDeletesIndependentlyOfRendererPreference"
+      ],
+      "error": [],
+      "boundary": [
+        "SourceDetailRendererArchitectureAuditTests.sourceSelectionPersistsOnlyPresentationAndPreservesRendererPreference"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "The read helper returns the persisted mode or nil after logged store failure. It has no cancellation or teardown path."
+    },
+    {
+      "symbol": "RendererSourcePresentationMode",
+      "file": "Sources/WikiFSTypes/Renderer/RendererPhase3Types.swift",
+      "decision": [
+        "RendererPhase3PortableTests.sourcePresentationEventsRoundTripAtCurrentPayloadVersion",
+        "RendererSettingsStoreTests.sourcePresentationRoundTripsAndDeletesIndependentlyOfRendererPreference"
+      ],
+      "error": [],
+      "boundary": [
+        "RendererPhase3PortableTests.sourcePresentationEventsRoundTripAtCurrentPayloadVersion"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "This Codable enum is a pure persisted value with no cancellation or teardown path."
+    },
+    {
+      "symbol": "RendererSourcePresentation",
+      "file": "Sources/WikiFSTypes/Renderer/RendererPhase3Types.swift",
+      "decision": [
+        "RendererSettingsStoreTests.sourcePresentationRoundTripsAndDeletesIndependentlyOfRendererPreference"
+      ],
+      "error": [],
+      "boundary": [
+        "RendererSettingsStoreTests.settingsRoundTripPersistsJournalRecordsInOrder"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "This typed store row is synchronous data with no cancellation or teardown path."
+    },
+    {
+      "symbol": "RendererSettingsChangeEvent.sourcePresentationSet(sourceID:presentation:)",
+      "file": "Sources/WikiFSTypes/Renderer/RendererPhase3Types.swift",
+      "decision": [
+        "RendererPhase3PortableTests.sourcePresentationEventsRoundTripAtCurrentPayloadVersion",
+        "RendererSettingsStoreTests.settingsRoundTripPersistsJournalRecordsInOrder"
+      ],
+      "error": [
+        "RendererPhase3PortableTests.unsupportedRendererSettingsPayloadVersionRejectsBeforeEventDecodes"
+      ],
+      "boundary": [
+        "RendererPhase3PortableTests.sourcePresentationEventsRoundTripAtCurrentPayloadVersion"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "This typed payload case is synchronous. The versioned settings payload rejects unsupported grammars before event decoding."
+    },
+    {
+      "symbol": "RendererSettingsChangeEvent.sourcePresentationRemoved(sourceID:)",
+      "file": "Sources/WikiFSTypes/Renderer/RendererPhase3Types.swift",
+      "decision": [
+        "RendererPhase3PortableTests.sourcePresentationEventsRoundTripAtCurrentPayloadVersion",
+        "RendererSettingsStoreTests.sourcePresentationRoundTripsAndDeletesIndependentlyOfRendererPreference"
+      ],
+      "error": [
+        "RendererPhase3PortableTests.unsupportedRendererSettingsPayloadVersionRejectsBeforeEventDecodes"
+      ],
+      "boundary": [
+        "RendererPhase3PortableTests.sourcePresentationEventsRoundTripAtCurrentPayloadVersion"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "This typed payload case is synchronous. The versioned settings payload rejects unsupported grammars before event decoding."
+    },
+    {
+      "symbol": "PersistedWikiStoreChangeRecord.currentSchemaVersion / init(schemaVersion:eventID:sequence:scope:payload:committedAt:) / init(from:)",
+      "file": "Sources/WikiFSTypes/Renderer/RendererPhase3Types.swift",
+      "decision": [
+        "RendererMachineEventJournalTests.currentSettingsPayloadKeepsTheMachineEnvelopeAtV1",
+        "RendererPhase3PortableTests.legacyV1SettingsPayloadsRemainDecodable"
+      ],
+      "error": [
+        "RendererMachineEventJournalTests.unsupportedEnvelopeSchemaIsRejectedBeforeSuccess",
+        "RendererPhase3PortableTests.unsupportedRecordEnvelopeVersionRejectsBeforePayloadDecodes"
+      ],
+      "boundary": [
+        "RendererPhase3PortableTests.envelopePayloadRoundTrip",
+        "RendererPhase3PortableTests.envelopeResourcePayloadRoundTripUsesSameDiscriminatedEvent"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "The shared envelope remains exact v1 and validates its version before it decodes the payload. It has no cancellation or teardown path."
+    },
+    {
+      "symbol": "PersistedRendererSettingsChangePayload / WikiStoreChangeEvent Codable",
+      "file": "Sources/WikiFSTypes/Renderer/RendererPhase3Types.swift",
+      "decision": [
+        "RendererPhase3PortableTests.sourcePresentationEventsRoundTripAtCurrentPayloadVersion",
+        "RendererPhase3PortableTests.legacyV1SettingsPayloadsRemainDecodable"
+      ],
+      "error": [
+        "RendererPhase3PortableTests.unsupportedRendererSettingsPayloadVersionRejectsBeforeEventDecodes"
+      ],
+      "boundary": [
+        "RendererMachineEventJournalTests.currentSettingsPayloadKeepsTheMachineEnvelopeAtV1"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "Legacy unwrapped v1 settings events remain readable; writes use the versioned v2 settings payload and validate its schema before event decoding."
+    },
+    {
+      "symbol": "RendererResolution.preferred(descriptors:preference: RendererPreferenceReference?:input:hostProtocolRevision:)",
+      "file": "Sources/WikiFSTypes/Renderer/RendererResolution.swift",
+      "decision": [
+        "RendererResolutionTests.absentPreferenceKeepsTheHostOwnedSourceDefault",
+        "RendererResolutionTests.resolvesExactThenLogicalCompatiblePreference",
+        "RendererResolutionTests.ignoresIncompatibleExactPreference"
+      ],
+      "error": [],
+      "boundary": [
+        "RendererResolutionTests.resolvesEqualSemanticVersionsWithStableDescriptorTieBreak"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "This pure resolver overload has no cancellation or teardown path."
+    },
+    {
+      "symbol": "RendererResolution.preferred(descriptors:preference: RendererPreference?:input:hostProtocolRevision:)",
+      "file": "Sources/WikiFSTypes/Renderer/RendererResolution.swift",
+      "decision": [
+        "RendererResolutionTests.absentCompoundPreferenceKeepsTheHostOwnedSourceDefault",
+        "RendererResolutionTests.fallsBackFromUnavailableExactToLogicalPreference"
+      ],
+      "error": [
+        "RendererResolutionTests.rejectsCompoundPreferenceWithDifferentPackageOrRegistrationIdentity"
+      ],
+      "boundary": [
+        "RendererResolutionTests.resolvesExactThenLogicalCompatiblePreference"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "This pure resolver overload has no cancellation or teardown path."
+    },
+    {
+      "symbol": "RendererPresentationControlState",
+      "file": "Sources/WikiFS/Renderer/RendererHostView.swift",
+      "decision": [
+        "RendererPresentationStateTests.presentationControlsDescribeActiveVisualAndVoiceOverState"
+      ],
+      "error": [],
+      "boundary": [
+        "RendererPresentationStateTests.presentationControlsDescribeActiveVisualAndVoiceOverState"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "This pure control projection has no cancellation or teardown path."
+    },
+    {
+      "symbol": "SourceDetailView.refreshRendererPresentation()",
+      "file": "Sources/WikiFS/Sources/SourceDetailView.swift",
+      "decision": [
+        "RendererPresentationStateTests.unchangedRefreshPreservesPinnedRendererAndMode",
+        "RendererPresentationStateTests.refreshForDifferentSourceUsesResolvedSourceIdentity"
+      ],
+      "error": [
+        "RendererPresentationStateTests.fallbackRefreshKeepsSourceAndNotice"
+      ],
+      "boundary": [
+        "SourceDetailRendererArchitectureAuditTests.testNoFormatSpecificRendererRouting"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "The owner refreshes synchronously from loaded facts and logs planner errors. The lexical audit guards the active-editor refresh boundary. It creates no independent cancellation or teardown path."
+    },
+    {
+      "symbol": "SourceDetailView.refreshSourceBytesSnapshot()",
+      "file": "Sources/WikiFS/Sources/SourceDetailView.swift",
+      "decision": [
+        "SourceDetailRendererArchitectureAuditTests.testNoFormatSpecificRendererRouting"
+      ],
+      "error": [],
+      "boundary": [
+        "SourceDetailRendererArchitectureAuditTests.testNoFormatSpecificRendererRouting"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "This synchronous owner refresh has no cancellation or teardown path. The architecture audit pins its single source-byte seam."
+    },
+    {
+      "symbol": "SourceDetailView.sourcePresentationContent",
+      "file": "Sources/WikiFS/Sources/SourceDetailView.swift",
+      "decision": [
+        "BuiltInRendererRegistryTests.sourceFallbackIsOutsideRegistryMatching"
+      ],
+      "error": [
+        "BuiltInRendererRegistryTests.plannerRejectsMalformedMediaOrigins"
+      ],
+      "boundary": [
+        "BuiltInRendererRegistryTests.characterizesMediaWithTranscript",
+        "BuiltInRendererRegistryTests.characterizesMissingContent"
+      ],
+      "cancellation": [],
+      "teardown": [],
+      "notes": "The computed view projects already-loaded source facts. It has no independent cancellation or teardown path."
+    }
+  ],
+  "requiredArchitectureAudit": "SourceDetailRendererArchitectureAuditTests.testNoFormatSpecificRendererRouting",
+  "gateStatusAtInventoryCreation": {
+    "swiftBuildTargetWikiFS": "pass",
+    "makeBuild": "pass",
+    "focusedTests": "pass at 20970974 (production head): 119 renderer/app/resolution/persistence Swift Testing tests in 7 suites, including RendererPhase3PortableTests",
+    "fullMakeTest": "pass at 20970974 (production head): 3,116 tests in 264 suites",
+    "independentReview": "Claude/Opus request-changes at a056d896; production remediation 20970974; exact-head docs wrapper c2190baf; fresh exact-head review pending"
+  }
+}

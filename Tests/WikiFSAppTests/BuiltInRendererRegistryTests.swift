@@ -45,6 +45,60 @@ import WikiFSTypes
         #expect(id == .pdf)
     }
 
+    @Test("Unextracted PDF defaults rendered and carries its quote anchor to the PDF factory")
+    @MainActor
+    func unextractedPDFDefaultKeepsQuoteAnchorReachable() throws {
+        let source = fixtureSource(filename: "paper.pdf", ext: "pdf", mimeType: MimeType.pdf, byteSize: 4)
+        let descriptor = try #require(try SourceRendererPresentationPlanner()
+            .matchingDescriptors(for: source, boundedBytes: Data("%PDF".utf8), currentMarkdown: nil, origin: nil)
+            .first)
+        let state = RendererPresentationState.defaultState(
+            sourceID: source.id,
+            matchingRenderer: descriptor.reference,
+            hasPresentableSource: SourceRendererPresentationPlanner.hasPresentableSource(
+                for: source,
+                currentMarkdown: nil),
+            persistedSelection: nil)
+        let inputs = BuiltInRendererFactoryInputs(
+            sourceBytes: Data("%PDF".utf8),
+            pdfQuote: "a retained quote",
+            htmlSource: nil,
+            mermaidMarkdown: nil,
+            mediaTarget: nil,
+            selection: nil,
+            store: WikiStoreModel(store: try GRDBWikiStore(
+                databaseURL: URL.temporaryDirectory.appending(path: "renderer-quote-\(UUID().uuidString).sqlite"))),
+            readerZoom: .constant(1))
+
+        #expect(state.selection == .rendered)
+        #expect(state.pinnedRenderer == descriptor.reference)
+        #expect(inputs.pdfQuote == "a retained quote")
+        #expect(BuiltInRendererFactoryMap.makeView(for: descriptor, inputs: inputs) != nil)
+    }
+
+    @Test(arguments: [
+        ("markdown", fixtureSource(filename: "note.md", ext: "md", mimeType: MimeType.markdown, byteSize: 5), "# Note"),
+        ("plain text", fixtureSource(filename: "note.txt", ext: "txt", mimeType: "text/plain", byteSize: 5), "hello"),
+        ("media transcript", fixtureSource(filename: "video", ext: "", mimeType: "video/youtube", byteSize: 0), "Transcript")
+    ])
+    func presentableSourceKindsDefaultToSource(
+        _: String,
+        source: SourceSummary,
+        markdown: String
+    ) {
+        let pdf = BuiltInRendererReference.reference(for: .pdf)
+        let state = RendererPresentationState.defaultState(
+            sourceID: source.id,
+            matchingRenderer: pdf,
+            hasPresentableSource: SourceRendererPresentationPlanner.hasPresentableSource(
+                for: source,
+                currentMarkdown: markdown),
+            persistedSelection: nil)
+
+        #expect(state.selection == .source)
+        #expect(state.pinnedRenderer == nil)
+    }
+
     @Test("Planner maps HTML bytes to the HTML built-in")
     func plannerMatchesHTML() throws {
         let source = fixtureSource(filename: "page.html", ext: "html", mimeType: MimeType.html, byteSize: 14)
@@ -54,6 +108,13 @@ import WikiFSTypes
             currentMarkdown: nil,
             origin: nil)
         #expect(id == .html)
+    }
+
+    @Test("HTML extraction classification does not depend on a loaded byte snapshot")
+    func htmlExtractionClassificationSurvivesNilBytes() {
+        let source = fixtureSource(filename: "page.html", ext: "html", mimeType: MimeType.html, byteSize: 14)
+        #expect(SourceRendererPresentationPlanner.isHTMLSource(source))
+        #expect(SourceRendererPresentationPlanner.htmlSourceString(for: source, bytes: nil) == nil)
     }
 
     @Test("Planner maps Mermaid extension/content to the Mermaid built-in")
@@ -67,6 +128,15 @@ import WikiFSTypes
         #expect(id == .mermaid)
     }
 
+    @Test("Characterization: NULL-MIME standalone Mermaid uses Source markdown presentation")
+    func nullMIMEStandaloneMermaidUsesSourceMarkdownPresentation() {
+        let source = fixtureSource(filename: "diagram.mmd", ext: "mmd", mimeType: nil, byteSize: 12)
+
+        #expect(SourceRendererPresentationPlanner.usesMarkdownSourcePresentation(
+            for: source,
+            currentMarkdown: nil))
+    }
+
     @Test("Planner maps media origin to the Media built-in")
     func plannerMatchesMediaOrigin() throws {
         let source = fixtureSource(filename: "video.url", ext: "", mimeType: "video/youtube", byteSize: 0)
@@ -76,6 +146,35 @@ import WikiFSTypes
             currentMarkdown: nil,
             origin: fixtureOrigin(provider: .youtube, plan: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", externalIdentity: "dQw4w9WgXcQ"))
         #expect(id == .media)
+    }
+
+    @Test("Media without a transcript retains its dynamic Source empty state")
+    func mediaWithoutTranscriptUsesDynamicSourceEmptyState() {
+        let source = fixtureSource(filename: "video", ext: "", mimeType: "video/youtube", byteSize: 0)
+        let origin = fixtureOrigin(provider: .youtube, plan: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", externalIdentity: "dQw4w9WgXcQ")
+        let presentation = SourceRendererPresentationPlanner.emptyMediaPresentation(
+            for: source,
+            currentMarkdown: nil,
+            origin: origin)
+        #expect(presentation?.label == "No Video Transcript")
+        #expect(presentation?.description.contains("no captions") == true)
+    }
+
+    @Test("An unsupported built-in factory result remains an explicit host fallback")
+    @MainActor
+    func unsupportedFactoryReturnsNilForHostFallback() throws {
+        let descriptor = try testInstalledDescriptor()
+        let inputs = BuiltInRendererFactoryInputs(
+            sourceBytes: nil,
+            pdfQuote: nil,
+            htmlSource: nil,
+            mermaidMarkdown: nil,
+            mediaTarget: nil,
+            selection: nil,
+            store: WikiStoreModel(store: try GRDBWikiStore(
+                databaseURL: URL.temporaryDirectory.appending(path: "renderer-factory-\(UUID().uuidString).sqlite"))),
+            readerZoom: .constant(1))
+        #expect(BuiltInRendererFactoryMap.makeView(for: descriptor, inputs: inputs) == nil)
     }
 
     @Test("Planner preserves Source fallback for media origins missing renderable identity or plan")
@@ -163,6 +262,18 @@ import WikiFSTypes
             origin: nil)
         #expect(result.contentArea == .tabbed)
         #expect(result.tabs == [.reader, .html, .split])
+    }
+
+    @Test("Characterization: HTML without markdown renders HTML only")
+    func characterizesHTMLWithoutMarkdown() {
+        let result = SourceDetailPresentationCharacterization.characterize(
+            source: fixtureSource(filename: "page.html", ext: "html", mimeType: MimeType.html, byteSize: 14),
+            boundedBytes: Data("<h1>Hello</h1>".utf8),
+            currentMarkdown: nil,
+            hasProcessedMarkdown: false,
+            origin: nil)
+        #expect(result.contentArea == .tabbed)
+        #expect(result.tabs == [.html])
     }
 
     @Test("Characterization: Mermaid keeps Reader/Rendered/Split tabs")

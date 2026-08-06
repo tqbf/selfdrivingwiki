@@ -73,6 +73,12 @@ Sources/WikiFSCore/Store/WikiStoreModel.swift	public func selectSource(byID id: 
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func renameSource(id: SourceID, to newDisplayName: String)
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func deleteSource(_ id: SourceID)
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func sourceBytes(id: SourceID) -> Data?
+Sources/WikiFSCore/Store/WikiStoreModel.swift	public func setRendererSourcePreference(sourceID: SourceID, preference: RendererPreferenceReference)
+Sources/WikiFSCore/Store/WikiStoreModel.swift	public func removeRendererSourcePreference(sourceID: SourceID)
+Sources/WikiFSCore/Store/WikiStoreModel.swift	public func rendererSourcePreference(for sourceID: SourceID) -> RendererPreferenceReference?
+Sources/WikiFSCore/Store/WikiStoreModel.swift	public func setRendererSourcePresentation(sourceID: SourceID, presentation: RendererSourcePresentationMode)
+Sources/WikiFSCore/Store/WikiStoreModel.swift	public func removeRendererSourcePresentation(sourceID: SourceID)
+Sources/WikiFSCore/Store/WikiStoreModel.swift	public func rendererSourcePresentation(for sourceID: SourceID) -> RendererSourcePresentationMode?
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func sourceOrigin(for id: SourceID) -> SourceOrigin?
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func sourceEditHistory(for id: SourceID) -> [SourceOrigin]
 Sources/WikiFSCore/Store/WikiStoreModel.swift	public func isSourceRefreshable(for id: SourceID) -> Bool

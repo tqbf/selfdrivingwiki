@@ -129,6 +129,15 @@ struct RendererEventCursorTests {
             try PersistedWikiStoreChangeRecord(schemaVersion: 2, eventID: UUID(), sequence: 1, scope: .machine(scope), payload: .rendererSettings(.machineSafeModeChanged(isEnabled: true)), committedAt: time)
         }
     }
+
+    @Test func currentSettingsPayloadKeepsTheMachineEnvelopeAtV1() throws {
+        let record = record(sequence: 1)
+        #expect(record.schemaVersion == 1)
+        #expect(try JSONDecoder().decode(
+            PersistedWikiStoreChangeRecord.self,
+            from: JSONEncoder().encode(record)
+        ) == record)
+    }
 }
 
 private let scope = try! RendererMachineScopeID(validating: "renderer-machine")

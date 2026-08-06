@@ -9,6 +9,10 @@ import WikiFSTypes
 /// registry input. It intentionally does not choose the Source fallback; callers
 /// keep Source outside renderer matching.
 struct SourceRendererPresentationPlanner: Sendable {
+    struct EmptyMediaPresentation: Sendable, Equatable {
+        let label: String
+        let description: String
+    }
     let registry: RendererRegistrySnapshot
 
     init(installedDescriptors: [RendererDescriptor] = []) throws {
@@ -47,6 +51,22 @@ struct SourceRendererPresentationPlanner: Sendable {
             origin: origin))
     }
 
+    func preferredDescriptor(
+        preference: RendererPreferenceReference?,
+        for source: SourceSummary,
+        boundedBytes: Data?,
+        currentMarkdown: String?,
+        origin: SourceOrigin?
+    ) throws -> RendererDescriptor? {
+        try registry.preferred(
+            preference: preference,
+            input: input(
+                for: source,
+                boundedBytes: boundedBytes,
+                currentMarkdown: currentMarkdown,
+                origin: origin))
+    }
+
     nonisolated static func registryInput(
         for source: SourceSummary,
         boundedBytes: Data?,
@@ -80,6 +100,70 @@ struct SourceRendererPresentationPlanner: Sendable {
         return id
     }
 
+    /// Decodes original HTML only for descriptors that match the HTML contract.
+    nonisolated static func htmlSourceString(for source: SourceSummary, bytes: Data?) -> String? {
+        guard isHTMLSource(source), let bytes else { return nil }
+        return String(data: bytes, encoding: .utf8) ?? String(decoding: bytes, as: UTF8.self)
+    }
+
+    /// HTML classification is source metadata, independent of whether this
+    /// pane's bounded byte snapshot has loaded yet.
+    nonisolated static func isHTMLSource(_ source: SourceSummary) -> Bool {
+        htmlSource(source)
+    }
+
+    nonisolated static func renderableMermaidMarkdown(_ markdown: String?) -> String? {
+        guard let markdown else { return nil }
+        return MermaidSourceDetector.renderableMarkdown(from: markdown)
+    }
+
+    nonisolated static func hasPresentableSource(for source: SourceSummary, currentMarkdown: String?) -> Bool {
+        usesMarkdownSourcePresentation(for: source, currentMarkdown: currentMarkdown)
+    }
+
+    /// Whether Source should use the Markdown/reader path instead of the raw
+    /// binary fallback. Standalone Mermaid sources retain this path even for
+    /// legacy rows whose MIME type is NULL (#620).
+    nonisolated static func usesMarkdownSourcePresentation(
+        for source: SourceSummary,
+        currentMarkdown: String?
+    ) -> Bool {
+        currentMarkdown != nil ||
+            (!isHTMLSource(source) && source.mimeType.map(MimeType.isText) == true) ||
+            standaloneDiagramSource(source)
+    }
+
+    nonisolated static func mediaTarget(for source: SourceSummary, origin: SourceOrigin?) -> EmbedTarget? {
+        guard let mime = source.mimeType, let origin else { return nil }
+        return ExternalEmbed.target(for: SourceEmbedDescriptor(
+            id: source.id,
+            mimeType: mime,
+            externalIdentity: origin.externalIdentity,
+            agentName: origin.agentName,
+            planURL: origin.plan))
+    }
+
+    nonisolated static func emptyMediaPresentation(for source: SourceSummary, currentMarkdown: String?, origin: SourceOrigin?) -> EmptyMediaPresentation? {
+        guard currentMarkdown == nil, mediaTarget(for: source, origin: origin) != nil else { return nil }
+        let label = mediaLabel(for: source, origin: origin)
+        let description = origin?.provider == .youtube
+            ? "This video has no captions, so no transcript was extracted. The player is the source."
+            : "This media source has no extracted text yet. The player is the source."
+        return EmptyMediaPresentation(label: "No \(label) Transcript", description: description)
+    }
+
+    nonisolated static func showsMarkdownOriginMetadata(for source: SourceSummary) -> Bool {
+        let extractionPath = ContentKind.resolve(
+            mimeType: source.mimeType,
+            provider: nil,
+            ext: source.ext).capabilities.extractionPath
+        return extractionPath != .pdfBackend
+    }
+
+    nonisolated static func standaloneDiagramSource(_ source: SourceSummary) -> Bool {
+        MimeType.isMermaid(source.mimeType) || source.ext.lowercased() == MermaidSourceDetector.mermaidExtension || source.ext.lowercased() == "mermaid"
+    }
+
     private enum MediaMIMECandidate: Sendable, Equatable {
         case notMediaOrigin
         case rejected
@@ -99,6 +183,11 @@ struct SourceRendererPresentationPlanner: Sendable {
             return RendererMIMEType(rawValue: mime)
         }
         return nil
+    }
+
+    private static func htmlSource(_ source: SourceSummary) -> Bool {
+        if let mime = source.mimeType { return mime == MimeType.html || mime == MimeType.xhtml }
+        return ["html", "htm", "xhtml"].contains(source.ext.lowercased())
     }
 
     private static func normalizedExtension(_ value: String) throws -> RendererFileExtension? {
@@ -142,6 +231,12 @@ struct SourceRendererPresentationPlanner: Sendable {
             planURL: origin.plan)
         guard ExternalEmbed.target(for: descriptor) != nil else { return .rejected }
         return .renderable(mime)
+    }
+
+    private static func mediaLabel(for source: SourceSummary, origin: SourceOrigin?) -> String {
+        guard let mime = source.mimeType, let origin else { return "Media" }
+        let descriptor = SourceEmbedDescriptor(id: source.id, mimeType: mime, externalIdentity: origin.externalIdentity, agentName: origin.agentName, planURL: origin.plan)
+        return ExternalEmbed.mediaTabLabel(for: descriptor) ?? "Media"
     }
 
     private static func mediaMIME(for source: SourceSummary, provider: SourceProvider?) -> String? {

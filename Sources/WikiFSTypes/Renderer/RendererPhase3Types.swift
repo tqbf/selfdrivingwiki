@@ -252,20 +252,157 @@ public struct RendererSourcePreference: Codable, Hashable, Sendable {
     }
 }
 
+/// The source-reader arrangement selected by a person. This is independent of
+/// renderer preference: a source can retain a rendered arrangement while the
+/// registry uses its deterministic default renderer choice.
+public enum RendererSourcePresentationMode: String, Codable, CaseIterable, Hashable, Sendable {
+    case source
+    case rendered
+    case split
+}
+
+public struct RendererSourcePresentation: Codable, Hashable, Sendable {
+    public let sourceID: SourceID
+    public let presentation: RendererSourcePresentationMode
+    public let updatedAt: RFC3339Timestamp
+
+    public init(sourceID: SourceID, presentation: RendererSourcePresentationMode, updatedAt: RFC3339Timestamp) {
+        self.sourceID = sourceID
+        self.presentation = presentation
+        self.updatedAt = updatedAt
+    }
+}
+
 public enum RendererSettingsChangeEvent: Codable, Hashable, Sendable {
     case machineInstallStateChanged(packageID: RendererPackageID, version: RendererPackageVersion)
     case machineSafeModeChanged(isEnabled: Bool)
     case wikiEnablementSet(packageID: RendererPackageID, isEnabled: Bool)
     case sourcePreferenceSet(sourceID: SourceID, preference: RendererPreferenceReference)
     case sourcePreferenceRemoved(sourceID: SourceID)
+    case sourcePresentationSet(sourceID: SourceID, presentation: RendererSourcePresentationMode)
+    case sourcePresentationRemoved(sourceID: SourceID)
 }
 
-public enum WikiStoreChangeEvent: Codable, Hashable, Sendable {
+/// The versioned body for renderer-settings changes. Version 1 was the
+/// unwrapped `RendererSettingsChangeEvent` persisted by Phase 3b; version 2
+/// wraps the event so Phase 4 can evolve its payload without changing the
+/// shared journal envelope.
+public struct PersistedRendererSettingsChangePayload: Codable, Hashable, Sendable {
+    public static let currentSchemaVersion = 2
+
+    public let schemaVersion: Int
+    public let event: RendererSettingsChangeEvent
+
+    fileprivate enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case event
+    }
+
+    public init(
+        schemaVersion: Int = Self.currentSchemaVersion,
+        event: RendererSettingsChangeEvent
+    ) throws {
+        try Self.validateSchemaVersion(schemaVersion)
+        self.schemaVersion = schemaVersion
+        self.event = event
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        try Self.validateSchemaVersion(schemaVersion)
+
+        self.schemaVersion = schemaVersion
+        self.event = try container.decode(RendererSettingsChangeEvent.self, forKey: .event)
+    }
+
+    private static func validateSchemaVersion(_ schemaVersion: Int) throws {
+        guard schemaVersion == currentSchemaVersion else {
+            throw RendererValidationError.unsupportedManifestRevision(schemaVersion)
+        }
+    }
+}
+
+public enum WikiStoreChangeEvent: Hashable, Sendable {
     case resource(ResourceChangeEvent)
     case rendererSettings(RendererSettingsChangeEvent)
 }
 
+extension WikiStoreChangeEvent: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case resource
+        case rendererSettings
+    }
+
+    private enum AssociatedValueCodingKeys: String, CodingKey {
+        case value = "_0"
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if container.contains(.resource) {
+            let resource = try container.decode(
+                AssociatedValue<ResourceChangeEvent>.self,
+                forKey: .resource
+            )
+            self = .resource(resource.value)
+            return
+        }
+
+        guard container.contains(.rendererSettings) else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: container.codingPath, debugDescription: "Unknown wiki store change event.")
+            )
+        }
+
+        let settingsContainer = try container.nestedContainer(
+            keyedBy: AssociatedValueCodingKeys.self,
+            forKey: .rendererSettings
+        )
+        let payloadContainer = try settingsContainer.nestedContainer(
+            keyedBy: PersistedRendererSettingsChangePayload.CodingKeys.self,
+            forKey: .value
+        )
+
+        if payloadContainer.contains(.schemaVersion) {
+            let payload = try settingsContainer.decode(
+                PersistedRendererSettingsChangePayload.self,
+                forKey: .value
+            )
+            self = .rendererSettings(payload.event)
+        } else {
+            let legacyEvent = try settingsContainer.decode(
+                RendererSettingsChangeEvent.self,
+                forKey: .value
+            )
+            self = .rendererSettings(legacyEvent)
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .resource(let resource):
+            try container.encode(AssociatedValue(value: resource), forKey: .resource)
+        case .rendererSettings(let event):
+            let payload = try PersistedRendererSettingsChangePayload(event: event)
+            try container.encode(AssociatedValue(value: payload), forKey: .rendererSettings)
+        }
+    }
+
+    private struct AssociatedValue<Value: Codable>: Codable {
+        let value: Value
+
+        private enum CodingKeys: String, CodingKey {
+            case value = "_0"
+        }
+    }
+}
+
 public struct PersistedWikiStoreChangeRecord: Codable, Hashable, Sendable {
+    /// Version of the shared persisted journal envelope.
+    public static let currentSchemaVersion = 1
+
     public let schemaVersion: Int
     public let eventID: UUID
     public let sequence: UInt64
@@ -273,23 +410,49 @@ public struct PersistedWikiStoreChangeRecord: Codable, Hashable, Sendable {
     public let payload: WikiStoreChangeEvent
     public let committedAt: RFC3339Timestamp
 
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case eventID
+        case sequence
+        case scope
+        case payload
+        case committedAt
+    }
+
     public init(
-        schemaVersion: Int = 1,
+        schemaVersion: Int = PersistedWikiStoreChangeRecord.currentSchemaVersion,
         eventID: UUID,
         sequence: UInt64,
         scope: WikiStoreChangeScope,
         payload: WikiStoreChangeEvent,
         committedAt: RFC3339Timestamp
     ) throws {
-        guard schemaVersion == 1 else {
-            throw RendererValidationError.unsupportedManifestRevision(schemaVersion)
-        }
+        try Self.validateSchemaVersion(schemaVersion)
         self.schemaVersion = schemaVersion
         self.eventID = eventID
         self.sequence = sequence
         self.scope = scope
         self.payload = payload
         self.committedAt = committedAt
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        try Self.validateSchemaVersion(schemaVersion)
+
+        self.schemaVersion = schemaVersion
+        self.eventID = try container.decode(UUID.self, forKey: .eventID)
+        self.sequence = try container.decode(UInt64.self, forKey: .sequence)
+        self.scope = try container.decode(WikiStoreChangeScope.self, forKey: .scope)
+        self.payload = try container.decode(WikiStoreChangeEvent.self, forKey: .payload)
+        self.committedAt = try container.decode(RFC3339Timestamp.self, forKey: .committedAt)
+    }
+
+    private static func validateSchemaVersion(_ schemaVersion: Int) throws {
+        guard schemaVersion == currentSchemaVersion else {
+            throw RendererValidationError.unsupportedManifestRevision(schemaVersion)
+        }
     }
 }
 

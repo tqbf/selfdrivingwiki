@@ -285,6 +285,9 @@ public protocol WikiStore: Sendable {
     func rendererSourcePreference(sourceID: SourceID) throws -> RendererSourcePreference?
     func setRendererSourcePreference(sourceID: SourceID, preference: RendererPreferenceReference) throws
     func removeRendererSourcePreference(sourceID: SourceID) throws
+    func rendererSourcePresentation(sourceID: SourceID) throws -> RendererSourcePresentation?
+    func setRendererSourcePresentation(sourceID: SourceID, presentation: RendererSourcePresentationMode) throws
+    func removeRendererSourcePresentation(sourceID: SourceID) throws
     func rendererSettingsJournalRecords() throws -> [PersistedWikiStoreChangeRecord]
 
     /// The verbatim content bytes for one source, fetched on demand. On the
