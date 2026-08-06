@@ -136,6 +136,8 @@ struct DocumentationContractTests {
         )
 
         #expect(inventory.contains("ephemeral WebKit session lifecycle"))
+        #expect(inventory.contains("\"coveredSlices\": [0, 1, 2]"))
+        #expect(inventory.contains("\"baseSHA\": \"933a0637fa5593c4fdba611edb380058b5838f71\""))
         #expect(inventory.contains("It adds no bridge authorization"))
         #expect(inventory.contains("SourceVersionID"))
         #expect(inventory.contains("SourceMarkdownVersionID"))

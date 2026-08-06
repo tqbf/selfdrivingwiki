@@ -111,6 +111,11 @@ struct WikiAppWebViewSessionTests {
 
         sessions.forEach { $0.start() }
 
+        #expect(WikiAppWebViewPolicy.maximumConcurrentSessions > 0)
+        for session in sessions.prefix(WikiAppWebViewPolicy.maximumConcurrentSessions) {
+            #expect(session.state == .loading(session.state.sessionID))
+            #expect(session.webView != nil)
+        }
         let rejectedSession = sessions[WikiAppWebViewPolicy.maximumConcurrentSessions]
         #expect(rejectedSession.state == .failed(.init(
             sessionID: rejectedSession.state.sessionID,
