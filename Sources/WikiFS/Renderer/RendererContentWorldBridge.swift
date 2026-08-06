@@ -66,7 +66,10 @@ final class RendererContentWorldBroker {
         provenance: RendererBridgeMessageProvenance,
         sessionIsReady: Bool
     ) throws -> Data {
-        guard provenance.webViewID == expectedWebViewID else {
+        guard let expectedWebViewID,
+              let observedWebViewID = provenance.webViewID,
+              observedWebViewID == expectedWebViewID
+        else {
             throw RendererBridgeAuthorizationError.wrongWindow
         }
         guard provenance.originScheme == expectedOrigin.scheme,

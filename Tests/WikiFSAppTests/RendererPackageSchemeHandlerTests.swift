@@ -70,6 +70,37 @@ struct RendererPackageSchemeHandlerTests {
 
         #expect(task.events == [.failure])
     }
+
+    @Test("stopping a scheme task releases it without a terminal callback")
+    func stoppingTaskSuppressesLaterCancellation() {
+        let registry = RendererPackageSchemeTaskRegistry()
+        let task = RecordingTask(url: nil)
+        registry.begin(task)
+
+        registry.stop(task)
+        registry.cancelAll()
+
+        #expect(registry.activeTaskCount == 0)
+        #expect(task.events.isEmpty)
+        #expect(task.stopCount == 1)
+    }
+
+    @Test("a stop during response prevents data and finish callbacks")
+    func stopDuringResponsePreventsLaterCallbacks() {
+        let url = URL(string: "renderer-package://package/org.example.test/1.0.0/index.html")!
+        let registry = RendererPackageSchemeTaskRegistry()
+        let provider = StubResourceProvider(result: .success(.init(
+            data: Data("body".utf8), mimeType: RendererMIMEType(rawValue: "text/html")!, isEntryDocument: true
+        )))
+        let handler = RendererPackageSchemeHandler(resourceProvider: provider, taskRegistry: registry)
+        let task = RecordingTask(url: url)
+        task.onResponse = { registry.stop(task) }
+
+        handler.serve(task)
+
+        #expect(task.events == [.response])
+        #expect(task.stopCount == 1)
+    }
 }
 
 private final class StubResourceProvider: RendererPackageResourceProviding {
@@ -90,12 +121,15 @@ private final class RecordingTask: RendererPackageSchemeTask {
     private(set) var events: [Event] = []
     private(set) var response: HTTPURLResponse?
     private(set) var data = Data()
+    private(set) var stopCount = 0
+    var onResponse: (() -> Void)?
 
     init(url: URL?) { requestURL = url }
 
     func receive(response: HTTPURLResponse) {
         events.append(.response)
         self.response = response
+        onResponse?()
     }
 
     func receive(data: Data) {
@@ -105,5 +139,6 @@ private final class RecordingTask: RendererPackageSchemeTask {
 
     func finish() { events.append(.finish) }
     func fail(_ error: any Error) { events.append(.failure) }
+    func stop() { stopCount += 1 }
 }
 #endif

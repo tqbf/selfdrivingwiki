@@ -75,5 +75,51 @@ struct RendererContentWorldBridgeTests {
         #expect(handler.response(for: wrongWorld).1 == "wrong content world")
         #expect(handler.response(for: wrongOrigin).1 == "request denied")
     }
+
+    @Test("bridge rejects nil WebView provenance when no WebView is bound")
+    func rejectsNilWebViewProvenanceWithoutBinding() throws {
+        let (handler, message) = try makeHandlerAndMessage(binding: nil, observedWebViewID: nil)
+
+        #expect(handler.response(for: message).1 == "request denied")
+    }
+
+    @Test("bridge rejects nil WebView provenance after binding")
+    func rejectsNilWebViewProvenanceAfterBinding() throws {
+        let webView = NSObject()
+        let (handler, message) = try makeHandlerAndMessage(
+            binding: ObjectIdentifier(webView), observedWebViewID: nil
+        )
+
+        #expect(handler.response(for: message).1 == "request denied")
+    }
+
+    private func makeHandlerAndMessage(
+        binding: ObjectIdentifier?,
+        observedWebViewID: ObjectIdentifier?
+    ) throws -> (RendererScriptMessageHandler, RendererBridgeScriptMessage) {
+        let store = try GRDBWikiStore()
+        let source = try store.addSource(filename: "input.txt", data: Data("ok".utf8))
+        let version = try #require(try store.activeContentVersion(sourceID: source.id))
+        let input = RendererBridgeInput.source(versionID: version.id)
+        let broker = RendererContentWorldBroker(
+            sessionID: .init(rawValue: UUID()), capability: .init(rawValue: "secret"),
+            inputReader: .init(store: store, authorizedInput: input)
+        )
+        if let binding { broker.bind(webViewID: binding) }
+        let handler = RendererScriptMessageHandler(
+            broker: broker, expectedContentWorld: .page, sessionIsReady: { true }
+        )
+        let request = RendererBridgePageRequest(
+            id: .init(rawValue: "request-nil-webview"), method: .inputRead, input: input
+        )
+        let body = try String(decoding: JSONEncoder().encode(request), as: UTF8.self)
+        return (handler, .init(
+            body: body, isExpectedContentWorld: true,
+            provenance: .init(
+                webViewID: observedWebViewID, originScheme: "renderer-package",
+                originHost: "package", isMainFrame: true
+            )
+        ))
+    }
 }
 #endif

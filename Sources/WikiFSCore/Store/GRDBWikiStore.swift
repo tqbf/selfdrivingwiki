@@ -4557,12 +4557,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 return try Int.fetchOne(
                     db,
                     sql: """
-                    SELECT CASE
-                        WHEN smv.blob_hash IS NULL THEN length(CAST(smv.content AS BLOB))
-                        ELSE b.byte_size
-                    END
+                    SELECT b.byte_size
                     FROM source_markdown_versions smv
-                    LEFT JOIN blobs b ON b.hash = smv.blob_hash
+                    JOIN blobs b ON b.hash = smv.blob_hash
                     WHERE smv.id = ?;
                     """,
                     arguments: [versionID.rawValue]

@@ -13,6 +13,7 @@ protocol RendererPackageSchemeTask: AnyObject {
     func receive(data: Data)
     func finish()
     func fail(_ error: any Error)
+    func stop()
 }
 
 /// Main-actor bookkeeping for all active package-scheme tasks. Closing always
@@ -34,6 +35,13 @@ final class RendererPackageSchemeTaskRegistry {
     func cancel(_ task: any RendererPackageSchemeTask) {
         guard tasks.removeValue(forKey: ObjectIdentifier(task)) != nil else { return }
         task.fail(RendererPackageSchemeTaskError.cancelled)
+    }
+
+    /// WebKit has already ended this task. Release only our bookkeeping, then
+    /// tell adapters to suppress all later WebKit callbacks.
+    func stop(_ task: any RendererPackageSchemeTask) {
+        guard tasks.removeValue(forKey: ObjectIdentifier(task)) != nil else { return }
+        task.stop()
     }
 
     func contains(_ task: any RendererPackageSchemeTask) -> Bool {
@@ -86,7 +94,7 @@ final class RendererPackageSchemeHandler: NSObject, WKURLSchemeHandler {
         MainActor.assumeIsolated {
             let key = ObjectIdentifier(urlSchemeTask as AnyObject)
             guard let task = webKitTasks.removeValue(forKey: key) else { return }
-            taskRegistry.cancel(task)
+            taskRegistry.stop(task)
         }
     }
 
@@ -111,7 +119,9 @@ final class RendererPackageSchemeHandler: NSObject, WKURLSchemeHandler {
             guard taskRegistry.contains(task) else { return }
             let response = try response(for: resource, url: url)
             task.receive(response: response)
+            guard taskRegistry.contains(task) else { return }
             task.receive(data: resource.data)
+            guard taskRegistry.contains(task) else { return }
             task.finish()
             taskRegistry.finish(task)
         } catch {
@@ -137,13 +147,42 @@ final class RendererPackageSchemeHandler: NSObject, WKURLSchemeHandler {
 
 @MainActor
 private final class WebKitTaskAdapter: RendererPackageSchemeTask {
+    private enum State {
+        case active
+        case stopped
+        case completed
+    }
+
     private let task: any WKURLSchemeTask
+    private var state: State = .active
 
     init(task: any WKURLSchemeTask) { self.task = task }
 
     var requestURL: URL? { task.request.url }
-    func receive(response: HTTPURLResponse) { task.didReceive(response) }
-    func receive(data: Data) { task.didReceive(data) }
-    func finish() { task.didFinish() }
-    func fail(_ error: any Error) { task.didFailWithError(error) }
+    func receive(response: HTTPURLResponse) {
+        guard case .active = state else { return }
+        task.didReceive(response)
+    }
+
+    func receive(data: Data) {
+        guard case .active = state else { return }
+        task.didReceive(data)
+    }
+
+    func finish() {
+        guard case .active = state else { return }
+        state = .completed
+        task.didFinish()
+    }
+
+    func fail(_ error: any Error) {
+        guard case .active = state else { return }
+        state = .completed
+        task.didFailWithError(error)
+    }
+
+    func stop() {
+        guard case .active = state else { return }
+        state = .stopped
+    }
 }
