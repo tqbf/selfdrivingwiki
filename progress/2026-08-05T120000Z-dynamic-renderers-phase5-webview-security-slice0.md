@@ -1,4 +1,5 @@
 ---
+title: Dynamic renderer Phase 5 WebView-security Slice 0
 timestamp: 2026-08-05T12:00:00Z
 branch: feature/dynamic-renderers-05-webview-security
 status: complete
