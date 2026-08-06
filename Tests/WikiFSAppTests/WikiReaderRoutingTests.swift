@@ -56,6 +56,16 @@ struct WikiReaderRoutingTests {
         #expect(WikiReaderView.linkRoute(for: url) == .inert)
     }
 
+    @Test func syntheticOriginFootnoteFragmentIsSameDocument() {
+        let url = URL(string: "https://reader.wikifs.invalid/#wiki-fn-n10")!
+        #expect(WikiReaderOrigin.isSameDocumentFragment(url))
+    }
+
+    @Test func syntheticOriginRelativeSourceLinkIsNotSameDocumentFragment() {
+        let url = URL(string: "https://reader.wikifs.invalid/docs/README.md#install")!
+        #expect(!WikiReaderOrigin.isSameDocumentFragment(url))
+    }
+
     // MARK: - Phase 5 canonical `?id=` routing (AC.7)
 
     @Test func canonicalPageLinkCarriesId() {

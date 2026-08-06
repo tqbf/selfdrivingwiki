@@ -78,6 +78,22 @@ public enum WikiReaderOrigin {
     public static let string = "https://reader.wikifs.invalid"
     /// The same origin as a `URL`, for `loadHTMLString(baseURL:)`.
     public static var url: URL? { URL(string: string) }
+
+    /// Returns `true` for a fragment link within the reader document.
+    ///
+    /// `WKWebView` resolves `href="#target"` against `url`. The resulting URL
+    /// must bypass relative source-link routing so WebKit can scroll to the target.
+    public static func isSameDocumentFragment(_ url: URL) -> Bool {
+        guard let origin = Self.url,
+              url.scheme == origin.scheme,
+              url.host == origin.host,
+              url.port == origin.port,
+              url.fragment != nil,
+              url.query == nil else {
+            return false
+        }
+        return url.path.isEmpty || url.path == "/"
+    }
 }
 
 // MARK: - ExternalEmbed (pure dispatch table)
