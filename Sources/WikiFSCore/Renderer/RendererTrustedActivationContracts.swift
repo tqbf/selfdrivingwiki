@@ -90,6 +90,7 @@ public enum RendererExternalActivationError: Error, Equatable, Sendable {
     case navigationInvalidated
     case sessionFailed
     case sessionClosed
+    case capacityEvictedNonce
 }
 
 /// Session-local, one-use authorization state for externally opened URLs.
@@ -99,13 +100,21 @@ public struct RendererExternalActivationAuthorizer {
     private struct PendingActivation {
         let destination: RendererExternalDestination
         let context: RendererExternalActivationContext
+        let issuanceOrder: UInt64
         let expiresAt: Date
+    }
+
+    private struct InvalidatedActivation {
+        let error: RendererExternalActivationError
+        let invalidationOrder: UInt64
     }
 
     private let clock: any RendererActivationClock
     private let nonceGenerator: any RendererActivationNonceGenerating
     private var pending: [RendererExternalActivationNonce: PendingActivation] = [:]
-    private var invalidated: [RendererExternalActivationNonce: RendererExternalActivationError] = [:]
+    private var invalidated: [RendererExternalActivationNonce: InvalidatedActivation] = [:]
+    private var nextIssuanceOrder: UInt64 = 0
+    private var nextInvalidationOrder: UInt64 = 0
 
     public init(
         clock: any RendererActivationClock = SystemRendererActivationClock(),
@@ -119,11 +128,16 @@ public struct RendererExternalActivationAuthorizer {
         destination: RendererExternalDestination,
         context: RendererExternalActivationContext
     ) -> RendererExternalActivationNonce {
+        let now = clock.now()
+        invalidateExpiredPending(at: now)
+        evictOldestPendingActivationsUntilWithinLimit()
         let nonce = nonceGenerator.makeNonce()
+        nextIssuanceOrder &+= 1
         pending[nonce] = PendingActivation(
             destination: destination,
             context: context,
-            expiresAt: clock.now().addingTimeInterval(WikiAppWebViewPolicy.externalActivationNonceLifetime.timeInterval)
+            issuanceOrder: nextIssuanceOrder,
+            expiresAt: now.addingTimeInterval(WikiAppWebViewPolicy.externalActivationNonceLifetime.timeInterval)
         )
         return nonce
     }
@@ -134,7 +148,7 @@ public struct RendererExternalActivationAuthorizer {
         context: RendererExternalActivationContext
     ) throws -> RendererExternalDestination {
         guard let nonce else { throw RendererExternalActivationError.absentNonce }
-        if let invalidation = invalidated[nonce] { throw invalidation }
+        if let invalidation = invalidated[nonce] { throw invalidation.error }
         guard let activation = pending[nonce] else { throw RendererExternalActivationError.absentNonce }
         guard clock.now() < activation.expiresAt else {
             invalidate(nonce, reason: .expiredNonce)
@@ -167,13 +181,40 @@ public struct RendererExternalActivationAuthorizer {
     }
 
     public mutating func invalidateAll(reason: RendererExternalActivationError) {
-        for nonce in pending.keys { invalidated[nonce] = reason }
-        pending.removeAll()
+        let nonces = Array(pending.keys)
+        for nonce in nonces { invalidate(nonce, reason: reason) }
     }
 
     private mutating func invalidate(_ nonce: RendererExternalActivationNonce, reason: RendererExternalActivationError) {
         pending.removeValue(forKey: nonce)
-        invalidated[nonce] = reason
+        nextInvalidationOrder &+= 1
+        invalidated[nonce] = .init(error: reason, invalidationOrder: nextInvalidationOrder)
+        retainBoundedInvalidatedActivations()
+    }
+
+    private mutating func invalidateExpiredPending(at now: Date) {
+        let expiredNonces = pending.compactMap { nonce, activation in
+            activation.expiresAt <= now ? nonce : nil
+        }
+        for nonce in expiredNonces { invalidate(nonce, reason: .expiredNonce) }
+    }
+
+    private mutating func evictOldestPendingActivationsUntilWithinLimit() {
+        while pending.count >= WikiAppWebViewPolicy.maximumPendingExternalActivationNonces,
+              let oldestNonce = pending.min(by: { $0.value.issuanceOrder < $1.value.issuanceOrder })?.key {
+            invalidate(oldestNonce, reason: .capacityEvictedNonce)
+        }
+        retainBoundedInvalidatedActivations()
+    }
+
+    private mutating func retainBoundedInvalidatedActivations() {
+        let overflow = invalidated.count - WikiAppWebViewPolicy.maximumInvalidatedExternalActivationNonces
+        guard overflow > 0 else { return }
+        let oldestNonces = invalidated
+            .sorted { $0.value.invalidationOrder < $1.value.invalidationOrder }
+            .prefix(overflow)
+            .map(\.key)
+        for nonce in oldestNonces { invalidated.removeValue(forKey: nonce) }
     }
 }
 

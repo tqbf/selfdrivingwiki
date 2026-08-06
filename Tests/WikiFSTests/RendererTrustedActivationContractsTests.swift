@@ -5,10 +5,13 @@ import Testing
 struct RendererTrustedActivationContractsTests {
     @Test("external destinations normalize hosts and default ports")
     func normalizesExternalDestinations() throws {
-        let destination = try #require(RendererExternalDestination(url: URL(string: "HTTPS://Example.COM:443/path?q=one#two")!))
+        let normalizedURL = try #require(URL(string: "HTTPS://Example.COM:443/path?q=one#two"))
+        let destination = try #require(RendererExternalDestination(url: normalizedURL))
         #expect(destination.url.absoluteString == "https://example.com/path?q=one#two")
-        #expect(RendererExternalDestination(url: URL(string: "https://user:pass@example.com")!) == nil)
-        #expect(RendererExternalDestination(url: URL(string: "file:///tmp/test")!) == nil)
+        let credentialedURL = try #require(URL(string: "https://user:pass@example.com"))
+        #expect(RendererExternalDestination(url: credentialedURL) == nil)
+        let fileURL = try #require(URL(string: "file:///tmp/test"))
+        #expect(RendererExternalDestination(url: fileURL) == nil)
     }
 
     @Test("a trusted activation redeems exactly once for its normalized destination")
@@ -114,6 +117,40 @@ struct RendererTrustedActivationContractsTests {
         }
     }
 
+    @Test("bounded activation state evicts the oldest pending nonce without authorizing it")
+    func boundsPendingActivationState() throws {
+        var authorizer = authorizer()
+        let context = context()
+        let destination = try makeDestination("https://example.com/bounded")
+        let first = authorizer.recordTrustedActivation(destination: destination, context: context)
+
+        for _ in 1 ... WikiAppWebViewPolicy.maximumPendingExternalActivationNonces {
+            _ = authorizer.recordTrustedActivation(destination: destination, context: context)
+        }
+
+        #expect(throws: RendererExternalActivationError.capacityEvictedNonce) {
+            try authorizer.redeem(nonce: first, destination: destination, context: context)
+        }
+    }
+
+    @Test("bounded invalidation history never restores authorization")
+    func boundsInvalidatedActivationState() throws {
+        var authorizer = authorizer()
+        let context = context()
+        let destination = try makeDestination("https://example.com/tombstone")
+        let first = authorizer.recordTrustedActivation(destination: destination, context: context)
+        #expect(try authorizer.redeem(nonce: first, destination: destination, context: context) == destination)
+
+        for _ in 0 ..< WikiAppWebViewPolicy.maximumInvalidatedExternalActivationNonces {
+            let nonce = authorizer.recordTrustedActivation(destination: destination, context: context)
+            #expect(try authorizer.redeem(nonce: nonce, destination: destination, context: context) == destination)
+        }
+
+        #expect(throws: RendererExternalActivationError.absentNonce) {
+            try authorizer.redeem(nonce: first, destination: destination, context: context)
+        }
+    }
+
     private func authorizer(clock: TestClock = TestClock(now: .now)) -> RendererExternalActivationAuthorizer {
         RendererExternalActivationAuthorizer(clock: clock, nonceGenerator: TestNonceGenerator())
     }
@@ -124,7 +161,8 @@ struct RendererTrustedActivationContractsTests {
     }
 
     private func makeDestination(_ rawValue: String) throws -> RendererExternalDestination {
-        try #require(RendererExternalDestination(url: URL(string: rawValue)!))
+        let url = try #require(URL(string: rawValue))
+        return try #require(RendererExternalDestination(url: url))
     }
 }
 

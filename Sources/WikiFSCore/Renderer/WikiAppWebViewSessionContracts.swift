@@ -19,9 +19,17 @@ public enum WikiAppWebViewPolicy {
         ((maximumBridgeMessageByteCount - maximumBridgeResponseMetadataByteCount) / 4) * 3
     public static let maximumBridgeRequestIDByteCount = 256
     public static let maximumRetainedBridgeRequestIDs = 1_024
+    public static let externalActivationNonceByteCount = 32
+    public static let externalActivationNonceLifetime: Duration = .seconds(15)
+    /// Per-session cap for active external activation capabilities.
+    public static let maximumPendingExternalActivationNonces = 64
+    /// Bounded diagnostic/tombstone retention; removed entries are still never redeemable.
+    public static let maximumInvalidatedExternalActivationNonces = 256
     public static let loadTimeout: Duration = .seconds(30)
     public static let isolatedContentWorldNamePrefix = "com.selfdrivingwiki.renderer-host"
     public static let isolatedMessageHandlerName = "renderer-host"
+    public static let trustedActivationHandlerName = "renderer-trusted-activation"
+    public static let externalLinkHandlerName = "renderer-external-link"
 }
 
 public enum RendererSessionFailureKind: Equatable, Sendable {

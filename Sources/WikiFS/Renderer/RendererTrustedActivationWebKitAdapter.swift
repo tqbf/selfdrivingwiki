@@ -144,7 +144,9 @@ extension RendererTrustedActivationScriptMessageHandler {
             var reply = window.webkit.messageHandlers["\(WikiAppWebViewPolicy.trustedActivationHandlerName)"].postMessage(anchor.href);
             if (reply && typeof reply.then === 'function') {
               reply.then(function(nonce) {
-                if (typeof nonce === 'string') window.postMessage({rendererExternalActivation: {nonce: nonce, destination: anchor.href}}, '*');
+                if (typeof nonce === 'string') {
+                  window.webkit.messageHandlers["\(WikiAppWebViewPolicy.externalLinkHandlerName)"].postMessage(JSON.stringify({nonce: nonce, destination: anchor.href}));
+                }
               });
             }
           }
@@ -158,20 +160,4 @@ extension RendererTrustedActivationScriptMessageHandler {
     }
 }
 
-extension RendererExternalLinkScriptMessageHandler {
-    static func pageRelayScript(contentWorld: WKContentWorld) -> WKUserScript {
-        let source = """
-        window.addEventListener("message", function(event) {
-            if (event.source !== window || !event.data || !event.data.rendererExternalLink) { return; }
-            const reply = window.webkit.messageHandlers["\(WikiAppWebViewPolicy.externalLinkHandlerName)"].postMessage(JSON.stringify(event.data.rendererExternalLink));
-            if (reply && typeof reply.then === "function") {
-                reply.then(function(value) {
-                    window.postMessage({rendererExternalLinkResponse: value}, "*");
-                });
-            }
-        });
-        """
-        return WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: contentWorld)
-    }
-}
 #endif
