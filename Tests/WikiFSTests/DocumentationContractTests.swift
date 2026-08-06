@@ -30,6 +30,7 @@ struct DocumentationContractTests {
         "Deferred markdown-version namespace:",
     ]
     private static let sourceMarkdownVersionPlanPath = "plans/source-markdown-version-id-separation.md"
+    private static let dynamicRendererInventoryPath = "plans/dynamic-renderers-phase5-webview-test-inventory.json"
     private static let sourceMarkdownVersionProgressHeading = "# 2026-07-28 — SourceMarkdownVersionID separation (#956)"
     private static let requiredSourceMarkdownVersionPlanMarkers = [
         "Identifier boundary:",
@@ -125,6 +126,20 @@ struct DocumentationContractTests {
         #expect(progress.contains(Self.sourceMarkdownVersionProgressHeading))
         #expect(progress.contains("SourceMarkdownVersionAPISignatureManifestTests"))
         #expect(progress.contains("SourceMarkdownVersionIDPersistenceTests"))
+    }
+
+    @Test func dynamicRendererFutureSessionInputContractIsVersionPinnedAndHasNoWebViewImplementation() throws {
+        let root = try #require(Self.locateRepositoryRoot())
+        let inventory = try String(
+            contentsOf: root.appendingPathComponent(Self.dynamicRendererInventoryPath),
+            encoding: .utf8
+        )
+
+        #expect(inventory.contains("WebView security gate preparation; no WebView implementation"))
+        #expect(inventory.contains("SourceVersionID"))
+        #expect(inventory.contains("SourceMarkdownVersionID"))
+        #expect(inventory.contains("must not call live sourceContent(id:) for session input"))
+        #expect(inventory.contains("WikiAppWebViewSession"))
     }
 
     @Test func progressEntriesFollowTemplate() throws {
