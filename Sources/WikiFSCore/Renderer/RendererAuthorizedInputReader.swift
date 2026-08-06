@@ -6,18 +6,45 @@ import Foundation
 /// This intentionally has no SourceID-based API, which prevents an accidental
 /// call to the live-ref `WikiStore.sourceContent(id:)` path.
 public struct RendererAuthorizedInputReader {
-    private let store: any WikiStore
+    private let inputByteCount: (RendererBridgeInput) throws -> Int?
+    private let readPayload: (RendererBridgeInput) throws -> RendererBridgeInputPayload
     public let authorizedInput: RendererBridgeInput
 
     public init(store: any WikiStore, authorizedInput: RendererBridgeInput) {
-        self.store = store
         self.authorizedInput = authorizedInput
+        inputByteCount = { try store.rendererInputByteCount($0) }
+        readPayload = { try Self.readPinnedPayload(from: store, input: $0) }
+    }
+
+    init(
+        authorizedInput: RendererBridgeInput,
+        inputByteCount: @escaping (RendererBridgeInput) throws -> Int?,
+        readPayload: @escaping (RendererBridgeInput) throws -> RendererBridgeInputPayload
+    ) {
+        self.authorizedInput = authorizedInput
+        self.inputByteCount = inputByteCount
+        self.readPayload = readPayload
     }
 
     public func read(_ requestedInput: RendererBridgeInput) throws -> RendererBridgeInputPayload {
         guard requestedInput == authorizedInput else {
             throw RendererBridgeAuthorizationError.unauthorizedInput
         }
+        guard let byteCount = try inputByteCount(requestedInput) else {
+            throw RendererBridgeAuthorizationError.unavailablePinnedInput
+        }
+        guard byteCount >= 0,
+              byteCount <= WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount
+        else {
+            throw RendererBridgeAuthorizationError.oversizedPayload
+        }
+        return try payload(readPayload(requestedInput))
+    }
+
+    private static func readPinnedPayload(
+        from store: any WikiStore,
+        input requestedInput: RendererBridgeInput
+    ) throws -> RendererBridgeInputPayload {
         switch requestedInput {
         case .source(let versionID):
             guard let version = try store.sourceVersion(id: versionID) else {
@@ -29,19 +56,19 @@ public struct RendererAuthorizedInputReader {
             } catch {
                 throw RendererBridgeAuthorizationError.unavailablePinnedInput
             }
-            return try payload(mimeType: version.mimeType ?? "application/octet-stream", bytes: bytes)
+            return .init(mimeType: version.mimeType ?? "application/octet-stream", bytes: bytes)
         case .markdown(let versionID):
             guard let version = try store.processedMarkdownVersion(id: versionID) else {
                 throw RendererBridgeAuthorizationError.unavailablePinnedInput
             }
-            return try payload(mimeType: version.mimeType, bytes: Data(version.content.utf8))
+            return .init(mimeType: version.mimeType, bytes: Data(version.content.utf8))
         }
     }
 
-    private func payload(mimeType: String, bytes: Data) throws -> RendererBridgeInputPayload {
-        guard bytes.count <= WikiAppWebViewPolicy.maximumSourceByteCount else {
+    private func payload(_ payload: RendererBridgeInputPayload) throws -> RendererBridgeInputPayload {
+        guard payload.bytes.count <= WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount else {
             throw RendererBridgeAuthorizationError.oversizedPayload
         }
-        return RendererBridgeInputPayload(mimeType: mimeType, bytes: bytes)
+        return payload
     }
 }

@@ -13,6 +13,10 @@ public enum WikiAppWebViewPolicy {
     public static let maximumSourceByteCount = 32 * 1_024 * 1_024
     public static let maximumDecodedByteCount = RendererPackageValidationLimits.maximumDecodedInputByteCount
     public static let maximumBridgeMessageByteCount = 64 * 1_024
+    /// JSON and Base64 response framing need room inside the message limit.
+    public static let maximumBridgeResponseMetadataByteCount = 1 * 1_024
+    public static let maximumBridgeInputPayloadByteCount =
+        ((maximumBridgeMessageByteCount - maximumBridgeResponseMetadataByteCount) / 4) * 3
     public static let maximumBridgeRequestIDByteCount = 256
     public static let maximumRetainedBridgeRequestIDs = 1_024
     public static let loadTimeout: Duration = .seconds(30)

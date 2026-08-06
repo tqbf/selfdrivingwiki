@@ -31,6 +31,15 @@ final class RendererPackageSchemeTaskRegistry {
         tasks.removeValue(forKey: ObjectIdentifier(task))
     }
 
+    func cancel(_ task: any RendererPackageSchemeTask) {
+        guard tasks.removeValue(forKey: ObjectIdentifier(task)) != nil else { return }
+        task.fail(RendererPackageSchemeTaskError.cancelled)
+    }
+
+    func contains(_ task: any RendererPackageSchemeTask) -> Bool {
+        tasks[ObjectIdentifier(task)] != nil
+    }
+
     func cancelAll() {
         let outstanding = Array(tasks.values)
         tasks.removeAll()
@@ -53,6 +62,7 @@ final class RendererPackageSchemeHandler: NSObject, WKURLSchemeHandler {
     private let resourceProvider: any RendererPackageResourceProviding
     private let taskRegistry: RendererPackageSchemeTaskRegistry
     private var webKitTasks: [ObjectIdentifier: WebKitTaskAdapter] = [:]
+    var onTaskRegistered: ((any RendererPackageSchemeTask) -> Void)?
 
     init(
         resourceProvider: any RendererPackageResourceProviding,
@@ -76,7 +86,7 @@ final class RendererPackageSchemeHandler: NSObject, WKURLSchemeHandler {
         MainActor.assumeIsolated {
             let key = ObjectIdentifier(urlSchemeTask as AnyObject)
             guard let task = webKitTasks.removeValue(forKey: key) else { return }
-            taskRegistry.finish(task)
+            taskRegistry.cancel(task)
         }
     }
 
@@ -85,23 +95,29 @@ final class RendererPackageSchemeHandler: NSObject, WKURLSchemeHandler {
         webKitTasks.removeAll()
     }
 
-    /// Internal for focused task-ordering tests. The response is emitted before
-    /// the first body byte on every successful resource response.
+    /// Internal for focused task-ordering tests. The task remains registered
+    /// while its provider runs, so `close()` can cancel a reentrant serve.
     func serve(_ task: any RendererPackageSchemeTask) {
         taskRegistry.begin(task)
-        defer { taskRegistry.finish(task) }
+        onTaskRegistered?(task)
+        guard taskRegistry.contains(task) else { return }
         guard let url = task.requestURL else {
             task.fail(RendererPackageSchemeTaskError.requestDenied)
+            taskRegistry.finish(task)
             return
         }
         do {
             let resource = try resourceProvider.resource(for: url)
+            guard taskRegistry.contains(task) else { return }
             let response = try response(for: resource, url: url)
             task.receive(response: response)
             task.receive(data: resource.data)
             task.finish()
+            taskRegistry.finish(task)
         } catch {
+            guard taskRegistry.contains(task) else { return }
             task.fail(RendererPackageSchemeTaskError.requestDenied)
+            taskRegistry.finish(task)
         }
     }
 

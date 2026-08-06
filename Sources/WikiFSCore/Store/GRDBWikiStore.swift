@@ -4536,6 +4536,41 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    public func rendererInputByteCount(_ input: RendererBridgeInput) throws -> Int? {
+        try dbWriter.read { db in
+            switch input {
+            case .source(let versionID):
+                return try Int.fetchOne(
+                    db,
+                    sql: """
+                    SELECT CASE
+                        WHEN sv.blob_hash IS NULL THEN 0
+                        ELSE b.byte_size
+                    END
+                    FROM source_versions sv
+                    LEFT JOIN blobs b ON b.hash = sv.blob_hash
+                    WHERE sv.id = ?;
+                    """,
+                    arguments: [versionID.rawValue]
+                )
+            case .markdown(let versionID):
+                return try Int.fetchOne(
+                    db,
+                    sql: """
+                    SELECT CASE
+                        WHEN smv.blob_hash IS NULL THEN length(CAST(smv.content AS BLOB))
+                        ELSE b.byte_size
+                    END
+                    FROM source_markdown_versions smv
+                    LEFT JOIN blobs b ON b.hash = smv.blob_hash
+                    WHERE smv.id = ?;
+                    """,
+                    arguments: [versionID.rawValue]
+                )
+            }
+        }
+    }
+
     public func deleteSource(id: SourceID) throws {
         try mutate(event: { _ in
             self.localEvent(.source, id: id.rawValue, change: .deleted)

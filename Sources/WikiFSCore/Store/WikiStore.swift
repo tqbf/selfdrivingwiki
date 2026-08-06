@@ -301,6 +301,10 @@ public protocol WikiStore: Sendable {
     /// only source-byte read permitted for a version-pinned renderer session.
     func sourceContent(versionID: SourceVersionID) throws -> Data
 
+    /// The byte count for the one exact renderer input version. This must not
+    /// materialize its source or Markdown body.
+    func rendererInputByteCount(_ input: RendererBridgeInput) throws -> Int?
+
     /// Metadata for one exact immutable source-content version. This never
     /// resolves the active version for the source that owns it.
     func sourceVersion(id: SourceVersionID) throws -> SourceVersion?

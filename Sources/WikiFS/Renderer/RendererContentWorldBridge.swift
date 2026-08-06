@@ -5,6 +5,24 @@ import WikiFSCore
 
 // pattern: Imperative Shell
 
+/// Testable form of the WebKit metadata that establishes page provenance.
+@MainActor
+struct RendererBridgeMessageProvenance {
+    let webViewID: ObjectIdentifier?
+    let originScheme: String
+    let originHost: String
+    let isMainFrame: Bool
+}
+
+/// Testable form of a WebKit script message after the adapter has extracted
+/// its body, content-world result, and provenance.
+@MainActor
+struct RendererBridgeScriptMessage {
+    let body: Any
+    let isExpectedContentWorld: Bool
+    let provenance: RendererBridgeMessageProvenance
+}
+
 /// Main-actor adapter between the page's narrow postMessage envelope and the
 /// session-bound core bridge. The page never sees this handler's native name or
 /// the capability it adds before authorization.
@@ -17,7 +35,7 @@ final class RendererContentWorldBroker {
     private let capability: RendererSessionCapability
     private let mainFrameID = UUID()
     private var isClosed = false
-    private weak var expectedWebView: WKWebView?
+    private var expectedWebViewID: ObjectIdentifier?
     private let expectedOrigin: (scheme: String, host: String)
 
     init(
@@ -39,23 +57,22 @@ final class RendererContentWorldBroker {
         )
     }
 
-    func bind(to webView: WKWebView) { expectedWebView = webView }
+    func bind(to webView: WKWebView) { expectedWebViewID = ObjectIdentifier(webView) }
+
+    func bind(webViewID: ObjectIdentifier) { expectedWebViewID = webViewID }
 
     func handlePageEnvelope(
         _ envelope: Data,
-        webView: WKWebView?,
-        securityOrigin: WKSecurityOrigin?,
-        isMainFrame: Bool,
+        provenance: RendererBridgeMessageProvenance,
         sessionIsReady: Bool
     ) throws -> Data {
-        guard let expectedWebView, webView === expectedWebView else {
+        guard provenance.webViewID == expectedWebViewID else {
             throw RendererBridgeAuthorizationError.wrongWindow
         }
-        guard let securityOrigin,
-              securityOrigin.protocol == expectedOrigin.scheme,
-              securityOrigin.host == expectedOrigin.host
+        guard provenance.originScheme == expectedOrigin.scheme,
+              provenance.originHost == expectedOrigin.host
         else { throw RendererBridgeAuthorizationError.wrongWindow }
-        guard isMainFrame else { throw RendererBridgeAuthorizationError.nonMainFrame }
+        guard provenance.isMainFrame else { throw RendererBridgeAuthorizationError.nonMainFrame }
         guard envelope.count <= WikiAppWebViewPolicy.maximumBridgeMessageByteCount else {
             throw RendererBridgeAuthorizationError.oversizedEnvelope
         }
@@ -117,11 +134,20 @@ final class RendererScriptMessageHandler: NSObject, WKScriptMessageHandlerWithRe
         _ userContentController: WKUserContentController,
         didReceive message: WKScriptMessage
     ) async -> (Any?, String?) {
-        response(for: message)
+        response(for: .init(
+            body: message.body,
+            isExpectedContentWorld: message.world === expectedContentWorld,
+            provenance: .init(
+                webViewID: message.webView.map(ObjectIdentifier.init),
+                originScheme: message.frameInfo.securityOrigin.protocol,
+                originHost: message.frameInfo.securityOrigin.host,
+                isMainFrame: message.frameInfo.isMainFrame
+            )
+        ))
     }
 
-    private func response(for message: WKScriptMessage) -> (Any?, String?) {
-        guard message.world === expectedContentWorld else {
+    func response(for message: RendererBridgeScriptMessage) -> (Any?, String?) {
+        guard message.isExpectedContentWorld else {
             return (nil, "wrong content world")
         }
         guard let text = message.body as? String else {
@@ -130,9 +156,7 @@ final class RendererScriptMessageHandler: NSObject, WKScriptMessageHandlerWithRe
         do {
             let response = try broker.handlePageEnvelope(
                 Data(text.utf8),
-                webView: message.webView,
-                securityOrigin: message.frameInfo.securityOrigin,
-                isMainFrame: message.frameInfo.isMainFrame,
+                provenance: message.provenance,
                 sessionIsReady: sessionIsReady()
             )
             guard let responseText = String(data: response, encoding: .utf8) else {

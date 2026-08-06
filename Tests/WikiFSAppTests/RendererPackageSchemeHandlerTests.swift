@@ -53,6 +53,23 @@ struct RendererPackageSchemeHandlerTests {
         #expect(first.events == [.failure])
         #expect(second.events == [.failure])
     }
+
+    @Test("handler close cancels a task while its provider is serving")
+    func closeCancelsOutstandingServe() {
+        let url = URL(string: "renderer-package://package/org.example.test/1.0.0/index.html")!
+        let task = RecordingTask(url: url)
+        let provider = StubResourceProvider(result: .success(.init(
+            data: Data("late body".utf8),
+            mimeType: RendererMIMEType(rawValue: "text/html")!,
+            isEntryDocument: true
+        )))
+        let handler = RendererPackageSchemeHandler(resourceProvider: provider)
+        handler.onTaskRegistered = { _ in handler.close() }
+
+        handler.serve(task)
+
+        #expect(task.events == [.failure])
+    }
 }
 
 private final class StubResourceProvider: RendererPackageResourceProviding {
