@@ -122,13 +122,13 @@
       "RendererPackageActivationTests.coordinatorFailurePreservesCallerOwnedStaging"
     ],
     "future WebView sessions use only version-pinned input": [
-      "DocumentationContractTests.dynamicRendererFutureSessionInputContractIsVersionPinnedAndHasNoWebViewImplementation"
+        "DocumentationContractTests.dynamicRendererFutureSessionInputContractIsVersionPinnedAndSliceOneExcludesSessions"
     ]
   },
   "bidirectionalResolution": {
     "every production path maps to one or more named tests": true,
     "every named test resolves in one listed test path": true,
-    "command": "jq -e '.productionPaths[] | select((.symbols | length) > 0 and (.tests | length) > 0)' plans/dynamic-renderers-phase5-webview-test-inventory.json >/dev/null && rg -n 'servesDeclaredAsset|deniesInvalidRequests|deniesHashChangedAsset|deniesReplacementDuringOpen|sendsHeadersBeforeBody|deniedResourceFailsClosed|cancellationReleasesOutstandingTasks|cancelledActivationCleansStagingWithoutCreatingARecord|coordinatorFailurePreservesCallerOwnedStaging|schemaRejectsCheckAndApprovalFromAnotherHead|schemaRejectsUnresolvedCriticalAndHighFindings|schemaAcceptsClosedCriticalAndHighFindings|gateRecordUsesRFC3339JSONAndRoundTripsThroughFileStore|checkedInGateSchemaRequiresRFC3339RecordedAtAndTypedFindings|buildSuiteRejectsDirtyCheckoutBeforeCommandsRun|verifySucceedsWithFreshEvidenceAndStrictPolicy|verifyUsesPolicyFlagsInsteadOfHardCodingAllExactHeadRules|buildSuiteWritesAtomicEvidenceAndRechecksHeadAfterWrite|buildSuiteFailsClosedWhenPostWriteHeadChanges|commandEntryPointReturnsAfterASuccessfulVerify|dynamicRendererFutureSessionInputContractIsVersionPinnedAndHasNoWebViewImplementation' Tests"
+    "command": "jq -e '.productionPaths[] | select((.symbols | length) > 0 and (.tests | length) > 0)' plans/dynamic-renderers-phase5-webview-test-inventory.json >/dev/null && rg -n 'servesDeclaredAsset|deniesInvalidRequests|deniesHashChangedAsset|deniesReplacementDuringOpen|sendsHeadersBeforeBody|deniedResourceFailsClosed|cancellationReleasesOutstandingTasks|cancelledActivationCleansStagingWithoutCreatingARecord|coordinatorFailurePreservesCallerOwnedStaging|schemaRejectsCheckAndApprovalFromAnotherHead|schemaRejectsUnresolvedCriticalAndHighFindings|schemaAcceptsClosedCriticalAndHighFindings|gateRecordUsesRFC3339JSONAndRoundTripsThroughFileStore|checkedInGateSchemaRequiresRFC3339RecordedAtAndTypedFindings|buildSuiteRejectsDirtyCheckoutBeforeCommandsRun|verifySucceedsWithFreshEvidenceAndStrictPolicy|verifyUsesPolicyFlagsInsteadOfHardCodingAllExactHeadRules|buildSuiteWritesAtomicEvidenceAndRechecksHeadAfterWrite|buildSuiteFailsClosedWhenPostWriteHeadChanges|commandEntryPointReturnsAfterASuccessfulVerify|dynamicRendererFutureSessionInputContractIsVersionPinnedAndSliceOneExcludesSessions' Tests"
   },
   "excluded": [
     "WikiAppWebViewSession",
