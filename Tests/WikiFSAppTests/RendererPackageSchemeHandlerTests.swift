@@ -1,0 +1,92 @@
+#if os(macOS)
+import Foundation
+import Testing
+import WebKit
+import WikiFSCore
+@testable import WikiFS
+
+@MainActor
+struct RendererPackageSchemeHandlerTests {
+    @Test("sends CSP MIME and nosniff headers before body bytes")
+    func sendsHeadersBeforeBody() {
+        let url = URL(string: "renderer-package://package/org.example.test/1.0.0/index.html")!
+        let provider = StubResourceProvider(result: .success(.init(
+            data: Data("<html></html>".utf8),
+            mimeType: RendererMIMEType(rawValue: "text/html")!,
+            isEntryDocument: true
+        )))
+        let handler = RendererPackageSchemeHandler(resourceProvider: provider)
+        let task = RecordingTask(url: url)
+
+        handler.serve(task)
+
+        #expect(task.events == [.response, .data, .finish])
+        #expect(task.response?.value(forHTTPHeaderField: RendererContentSecurityPolicy.headerName) == RendererContentSecurityPolicy.headerValue)
+        #expect(task.response?.value(forHTTPHeaderField: RendererContentSecurityPolicy.noSniffHeaderName) == RendererContentSecurityPolicy.noSniffHeaderValue)
+        #expect(task.response?.value(forHTTPHeaderField: "Content-Type") == "text/html")
+        #expect(task.data == Data("<html></html>".utf8))
+    }
+
+    @Test("denied resources fail without response bytes")
+    func deniedResourceFailsClosed() {
+        let provider = StubResourceProvider(result: .failure(RendererPackageResourceError.undeclaredAsset))
+        let handler = RendererPackageSchemeHandler(resourceProvider: provider)
+        let task = RecordingTask(url: URL(string: "renderer-package://package/org.example.test/1.0.0/private.html")!)
+
+        handler.serve(task)
+
+        #expect(task.events == [.failure])
+        #expect(task.data.isEmpty)
+    }
+
+    @Test("registry cancels and releases all outstanding tasks")
+    func cancellationReleasesOutstandingTasks() {
+        let registry = RendererPackageSchemeTaskRegistry()
+        let first = RecordingTask(url: nil)
+        let second = RecordingTask(url: nil)
+        registry.begin(first)
+        registry.begin(second)
+
+        registry.cancelAll()
+
+        #expect(registry.activeTaskCount == 0)
+        #expect(first.events == [.failure])
+        #expect(second.events == [.failure])
+    }
+}
+
+private final class StubResourceProvider: RendererPackageResourceProviding {
+    let result: Result<RendererPackageResource, RendererPackageResourceError>
+
+    init(result: Result<RendererPackageResource, RendererPackageResourceError>) {
+        self.result = result
+    }
+
+    func resource(for url: URL) throws -> RendererPackageResource { try result.get() }
+}
+
+@MainActor
+private final class RecordingTask: RendererPackageSchemeTask {
+    enum Event: Equatable { case response, data, finish, failure }
+
+    let requestURL: URL?
+    private(set) var events: [Event] = []
+    private(set) var response: HTTPURLResponse?
+    private(set) var data = Data()
+
+    init(url: URL?) { requestURL = url }
+
+    func receive(response: HTTPURLResponse) {
+        events.append(.response)
+        self.response = response
+    }
+
+    func receive(data: Data) {
+        events.append(.data)
+        self.data.append(data)
+    }
+
+    func finish() { events.append(.finish) }
+    func fail(_ error: any Error) { events.append(.failure) }
+}
+#endif

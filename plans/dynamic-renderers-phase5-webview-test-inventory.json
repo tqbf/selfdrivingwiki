@@ -2,41 +2,151 @@
   "schemaVersion": 2,
   "issue": 1026,
   "phase": 5,
-  "slice": 0,
-  "baseSHA": "933a0637",
-  "scope": "WebView security gate preparation; no WebView implementation",
+  "slice": 1,
+  "baseSHA": "5e58228f77dd1477354fc9e03079e86fa913657a",
+  "scope": "WebView package-resource security boundary. This slice adds no WebView session, bridge, navigation delegate, storage policy, network harness, trusted activation, safe mode, SwiftUI host, Excalidraw, JSON Canvas, or settings UI.",
   "futureInputContract": "A future renderer session must receive version-pinned SourceVersionID source bytes or SourceMarkdownVersionID processed Markdown. It must not call live sourceContent(id:) for session input.",
   "productionPaths": [
     {
+      "path": "Sources/WikiFSCore/Renderer/RendererPackageResourceProvider.swift",
+      "symbols": [
+        "RendererPackageScheme",
+        "RendererPackageResourceProviding",
+        "ValidatedRendererPackageResourceProvider",
+        "RendererPackageMIMEType"
+      ],
+      "tests": [
+        "RendererPackageResourceProviderTests.servesDeclaredAsset",
+        "RendererPackageResourceProviderTests.deniesInvalidRequests",
+        "RendererPackageResourceProviderTests.deniesHashChangedAsset",
+        "RendererPackageResourceProviderTests.deniesReplacementDuringOpen"
+      ]
+    },
+    {
+      "path": "Sources/WikiFSCore/Renderer/RendererContentSecurityPolicy.swift",
+      "symbols": [
+        "RendererContentSecurityPolicy"
+      ],
+      "tests": [
+        "RendererPackageSchemeHandlerTests.sendsHeadersBeforeBody"
+      ]
+    },
+    {
+      "path": "Sources/WikiFS/Renderer/RendererPackageSchemeHandler.swift",
+      "symbols": [
+        "RendererPackageSchemeTaskRegistry",
+        "RendererPackageSchemeHandler"
+      ],
+      "tests": [
+        "RendererPackageSchemeHandlerTests.sendsHeadersBeforeBody",
+        "RendererPackageSchemeHandlerTests.deniedResourceFailsClosed",
+        "RendererPackageSchemeHandlerTests.cancellationReleasesOutstandingTasks"
+      ]
+    },
+    {
       "path": "Sources/WikiFSCore/Core/RendererMachineIndexStore.swift",
-      "symbols": ["RendererMachineIndexStore.activate"],
-      "tests": ["RendererPackageActivationTests.cancelledActivationCleansStagingWithoutCreatingARecord", "RendererPackageActivationTests.coordinatorFailurePreservesCallerOwnedStaging"]
+      "symbols": [
+        "RendererMachineIndexStore.activate"
+      ],
+      "tests": [
+        "RendererPackageActivationTests.cancelledActivationCleansStagingWithoutCreatingARecord",
+        "RendererPackageActivationTests.coordinatorFailurePreservesCallerOwnedStaging"
+      ]
     },
     {
       "path": "Sources/DynamicRendererPRSeriesAudit/Audit.swift",
-      "symbols": ["GitRepositoryQuerying", "GitHubPullRequestQuerying", "GateRecordReading", "GateRecordWriting", "AuditClock", "PRSeriesPolicy", "GateFindingDisposition", "GateRecordSchemaValidator", "DynamicRendererPRSeriesAuditor.verify", "DynamicRendererPRSeriesAuditor.buildSuite", "FileGateRecordStore"],
-      "tests": ["DynamicRendererPRSeriesAuditTests.schemaRejectsCheckAndApprovalFromAnotherHead", "DynamicRendererPRSeriesAuditTests.schemaRejectsUnresolvedCriticalAndHighFindings", "DynamicRendererPRSeriesAuditTests.schemaAcceptsClosedCriticalAndHighFindings", "DynamicRendererPRSeriesAuditTests.gateRecordUsesRFC3339JSONAndRoundTripsThroughFileStore", "DynamicRendererPRSeriesAuditTests.checkedInGateSchemaRequiresRFC3339RecordedAtAndTypedFindings", "DynamicRendererPRSeriesAuditTests.buildSuiteRejectsDirtyCheckoutBeforeCommandsRun", "DynamicRendererPRSeriesAuditTests.verifySucceedsWithFreshEvidenceAndStrictPolicy", "DynamicRendererPRSeriesAuditTests.verifyUsesPolicyFlagsInsteadOfHardCodingAllExactHeadRules", "DynamicRendererPRSeriesAuditTests.buildSuiteWritesAtomicEvidenceAndRechecksHeadAfterWrite", "DynamicRendererPRSeriesAuditTests.buildSuiteFailsClosedWhenPostWriteHeadChanges"]
+      "symbols": [
+        "GitRepositoryQuerying",
+        "GitHubPullRequestQuerying",
+        "GateRecordReading",
+        "GateRecordWriting",
+        "AuditClock",
+        "PRSeriesPolicy",
+        "GateFindingDisposition",
+        "GateRecordSchemaValidator",
+        "DynamicRendererPRSeriesAuditor.verify",
+        "DynamicRendererPRSeriesAuditor.buildSuite",
+        "FileGateRecordStore"
+      ],
+      "tests": [
+        "DynamicRendererPRSeriesAuditTests.schemaRejectsCheckAndApprovalFromAnotherHead",
+        "DynamicRendererPRSeriesAuditTests.schemaRejectsUnresolvedCriticalAndHighFindings",
+        "DynamicRendererPRSeriesAuditTests.schemaAcceptsClosedCriticalAndHighFindings",
+        "DynamicRendererPRSeriesAuditTests.gateRecordUsesRFC3339JSONAndRoundTripsThroughFileStore",
+        "DynamicRendererPRSeriesAuditTests.checkedInGateSchemaRequiresRFC3339RecordedAtAndTypedFindings",
+        "DynamicRendererPRSeriesAuditTests.buildSuiteRejectsDirtyCheckoutBeforeCommandsRun",
+        "DynamicRendererPRSeriesAuditTests.verifySucceedsWithFreshEvidenceAndStrictPolicy",
+        "DynamicRendererPRSeriesAuditTests.verifyUsesPolicyFlagsInsteadOfHardCodingAllExactHeadRules",
+        "DynamicRendererPRSeriesAuditTests.buildSuiteWritesAtomicEvidenceAndRechecksHeadAfterWrite",
+        "DynamicRendererPRSeriesAuditTests.buildSuiteFailsClosedWhenPostWriteHeadChanges"
+      ]
     },
     {
       "path": "Sources/DynamicRendererPRSeriesAudit/DynamicRendererPRSeriesAuditCommand.swift",
-      "symbols": ["AuditCommand.run"],
-      "tests": ["DynamicRendererPRSeriesAuditTests.commandEntryPointReturnsAfterASuccessfulVerify"]
+      "symbols": [
+        "AuditCommand.run"
+      ],
+      "tests": [
+        "DynamicRendererPRSeriesAuditTests.commandEntryPointReturnsAfterASuccessfulVerify"
+      ]
     }
   ],
-  "testPaths": ["Tests/WikiFSTests/RendererPackageActivationTests.swift", "Tests/DynamicRendererPRSeriesAuditTests/DynamicRendererPRSeriesAuditTests.swift", "Tests/WikiFSTests/DocumentationContractTests.swift"],
+  "testPaths": [
+    "Tests/WikiFSTests/RendererPackageResourceProviderTests.swift",
+    "Tests/WikiFSAppTests/RendererPackageSchemeHandlerTests.swift",
+    "Tests/WikiFSTests/RendererPackageActivationTests.swift",
+    "Tests/DynamicRendererPRSeriesAuditTests/DynamicRendererPRSeriesAuditTests.swift",
+    "Tests/WikiFSTests/DocumentationContractTests.swift"
+  ],
   "coverageByRisk": {
-    "caller-owned validated staging survives pre-ownership coordinator failure": ["RendererPackageActivationTests.coordinatorFailurePreservesCallerOwnedStaging"],
-    "successful command entry returns and the executable has a natural success exit": ["DynamicRendererPRSeriesAuditTests.commandEntryPointReturnsAfterASuccessfulVerify"],
-    "critical and high review findings cannot remain unresolved": ["DynamicRendererPRSeriesAuditTests.schemaRejectsUnresolvedCriticalAndHighFindings", "DynamicRendererPRSeriesAuditTests.schemaAcceptsClosedCriticalAndHighFindings"],
-    "RFC3339 evidence and schema shape": ["DynamicRendererPRSeriesAuditTests.gateRecordUsesRFC3339JSONAndRoundTripsThroughFileStore", "DynamicRendererPRSeriesAuditTests.checkedInGateSchemaRequiresRFC3339RecordedAtAndTypedFindings"],
-    "build evidence is atomic and rechecked after write": ["DynamicRendererPRSeriesAuditTests.buildSuiteWritesAtomicEvidenceAndRechecksHeadAfterWrite", "DynamicRendererPRSeriesAuditTests.buildSuiteFailsClosedWhenPostWriteHeadChanges"],
-    "future WebView sessions use only version-pinned input": ["DocumentationContractTests.dynamicRendererFutureSessionInputContractIsVersionPinnedAndHasNoWebViewImplementation"]
+    "a scheme request can only name the expected package ID, version, and a declared relative asset": [
+      "RendererPackageResourceProviderTests.deniesInvalidRequests"
+    ],
+    "an installed package is revalidated and a served asset is opened without following links, identity-checked, and rehashed": [
+      "RendererPackageResourceProviderTests.deniesHashChangedAsset",
+      "RendererPackageResourceProviderTests.deniesReplacementDuringOpen"
+    ],
+    "a valid declared entry asset has explicit MIME bytes and no file URL exposure": [
+      "RendererPackageResourceProviderTests.servesDeclaredAsset"
+    ],
+    "CSP, MIME, and nosniff headers arrive before any response body bytes": [
+      "RendererPackageSchemeHandlerTests.sendsHeadersBeforeBody"
+    ],
+    "a denied package resource emits no response bytes": [
+      "RendererPackageSchemeHandlerTests.deniedResourceFailsClosed"
+    ],
+    "close cancels and releases every registered scheme task": [
+      "RendererPackageSchemeHandlerTests.cancellationReleasesOutstandingTasks"
+    ],
+    "caller-owned validated staging survives pre-ownership coordinator failure": [
+      "RendererPackageActivationTests.coordinatorFailurePreservesCallerOwnedStaging"
+    ],
+    "future WebView sessions use only version-pinned input": [
+      "DocumentationContractTests.dynamicRendererFutureSessionInputContractIsVersionPinnedAndHasNoWebViewImplementation"
+    ]
   },
   "bidirectionalResolution": {
     "every production path maps to one or more named tests": true,
     "every named test resolves in one listed test path": true,
-    "command": "jq -e '.productionPaths[] | select((.symbols | length) > 0 and (.tests | length) > 0)' plans/dynamic-renderers-phase5-webview-test-inventory.json >/dev/null && rg -n 'coordinatorFailurePreservesCallerOwnedStaging|schemaRejectsUnresolvedCriticalAndHighFindings|schemaAcceptsClosedCriticalAndHighFindings|gateRecordUsesRFC3339JSONAndRoundTripsThroughFileStore|checkedInGateSchemaRequiresRFC3339RecordedAtAndTypedFindings|buildSuiteRejectsDirtyCheckoutBeforeCommandsRun|verifySucceedsWithFreshEvidenceAndStrictPolicy|verifyUsesPolicyFlagsInsteadOfHardCodingAllExactHeadRules|buildSuiteWritesAtomicEvidenceAndRechecksHeadAfterWrite|buildSuiteFailsClosedWhenPostWriteHeadChanges|commandEntryPointReturnsAfterASuccessfulVerify' Tests"
+    "command": "jq -e '.productionPaths[] | select((.symbols | length) > 0 and (.tests | length) > 0)' plans/dynamic-renderers-phase5-webview-test-inventory.json >/dev/null && rg -n 'servesDeclaredAsset|deniesInvalidRequests|deniesHashChangedAsset|deniesReplacementDuringOpen|sendsHeadersBeforeBody|deniedResourceFailsClosed|cancellationReleasesOutstandingTasks|cancelledActivationCleansStagingWithoutCreatingARecord|coordinatorFailurePreservesCallerOwnedStaging|schemaRejectsCheckAndApprovalFromAnotherHead|schemaRejectsUnresolvedCriticalAndHighFindings|schemaAcceptsClosedCriticalAndHighFindings|gateRecordUsesRFC3339JSONAndRoundTripsThroughFileStore|checkedInGateSchemaRequiresRFC3339RecordedAtAndTypedFindings|buildSuiteRejectsDirtyCheckoutBeforeCommandsRun|verifySucceedsWithFreshEvidenceAndStrictPolicy|verifyUsesPolicyFlagsInsteadOfHardCodingAllExactHeadRules|buildSuiteWritesAtomicEvidenceAndRechecksHeadAfterWrite|buildSuiteFailsClosedWhenPostWriteHeadChanges|commandEntryPointReturnsAfterASuccessfulVerify|dynamicRendererFutureSessionInputContractIsVersionPinnedAndHasNoWebViewImplementation' Tests"
   },
-  "excluded": ["WikiAppWebViewSession", "WKURLSchemeHandler", "CSP", "bridge", "navigation", "WebKit networking", "Excalidraw", "JSON Canvas", "settings UI"],
-  "honestCoverageLimits": ["The command-entry seam proves a successful invocation returns to async @main. It does not invoke LocalGit or GitHubCLI against a live pull request.", "This slice records the version-pinned future session input contract. It adds no WebView session implementation."]
+  "excluded": [
+    "WikiAppWebViewSession",
+    "ephemeral WebKit storage",
+    "bridge",
+    "navigation delegate",
+    "general subresource interception",
+    "network harness",
+    "trusted activation",
+    "safe mode",
+    "SwiftUI host",
+    "Excalidraw",
+    "JSON Canvas",
+    "settings UI"
+  ],
+  "honestCoverageLimits": [
+    "The portable provider tests do not run a live WKWebView or prove general network isolation. The later hosted network harness owns that claim.",
+    "The scheme handler is not registered on a WebView configuration in this slice. A later session slice owns configuration, navigation, bridge, and close integration.",
+    "The command-entry seam proves a successful invocation returns to async @main. It does not invoke LocalGit or GitHubCLI against a live pull request."
+  ]
 }
