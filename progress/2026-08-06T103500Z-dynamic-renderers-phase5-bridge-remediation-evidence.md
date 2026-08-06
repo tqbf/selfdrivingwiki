@@ -10,6 +10,7 @@ status: complete
 ## Progress
 
 - Production remediation head: `fdd303f199d736ea5f7737cb40037288f75a1eb4`.
+- The retained Phase 5 inventory uses base `933a0637fa5593c4fdba611edb380058b5838f71` and remediation head `fdd303f199d736ea5f7737cb40037288f75a1eb4`. This correction replaces an abbreviated, incorrect base pin. It does not change the retained gate results.
 - The Markdown byte preflight reads the pinned CAS blob size. A missing blob denies the input.
 - WebView provenance requires a non-nil expected binding and observed identity.
 - A stopped scheme task releases registry state without a WebKit failure callback.

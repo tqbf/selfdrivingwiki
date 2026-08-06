@@ -4,7 +4,7 @@
   "phase": 5,
   "slice": 4,
   "coveredSlices": [0, 1, 2, 3, 4],
-  "baseSHA": "a416935c",
+  "baseSHA": "933a0637fa5593c4fdba611edb380058b5838f71",
   "headSHA": "fdd303f199d736ea5f7737cb40037288f75a1eb4",
   "scope": "WebView package-resource security boundary, ephemeral WebKit session lifecycle, per-session capability-bound input.read, navigation policy, actual WebKit provenance checks, isolated-world reply delivery, and bounded replay state. The bridge has closed methods, bounded envelopes and payloads, replay rejection, main-frame and webView/origin/session checks, exact version-pinned source and markdown reads, and an isolated-world postMessage relay. It adds no trusted activation, general subresource interception, network harness, storage, safe mode, SwiftUI host, Excalidraw, JSON Canvas, or settings UI.",
   "futureInputContract": "RendererAuthorizedInputReader receives version-pinned SourceVersionID source bytes or SourceMarkdownVersionID processed Markdown. It must not call live sourceContent(id:) for session input.",
