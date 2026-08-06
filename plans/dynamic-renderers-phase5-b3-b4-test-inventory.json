@@ -89,6 +89,15 @@
     "Production stale-staging recovery remains deferred to the package-install lifecycle. recoverStaging cannot run from read or activate because a concurrent install can own a fresh UUID staging directory.",
     "Machine-index schema v2 rejects v1 explicitly because a v1 validated record cannot prove descriptor compatibility. A coordinated v1 migration remains outside this slice."
   ],
+  "deferredFollowUps": [
+    {
+      "id": "dynamic-renderers-phase5-activation-contention-error-normalization",
+      "severity": "medium",
+      "trigger": "RendererMachineIndexStore.activate catches only RendererMachineIndexStoreError for cleanup classification. A RendererPackageStoreCoordinator lock-acquisition timeout throws RendererCoordinatorFailure during a contended activation.",
+      "requiredFix": "Classify RendererCoordinatorFailure lock-acquisition timeouts without deleting the caller's validated staging tree, and preserve the specific activation error instead of returning generic activationFailed.",
+      "gate": "before first production activation caller"
+    }
+  ],
   "environmentEvidence": {
     "containerImage": "official Docker image swift:6.3-noble",
     "containerImageDigest": "sha256:69bf1f0281e13d82c9e49d67c2dd1dcc8c00bad738c860f4323d7078787ec8ea",

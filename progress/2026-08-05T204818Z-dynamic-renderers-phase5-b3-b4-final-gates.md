@@ -35,6 +35,20 @@ with Swift 6.3.3 on aarch64. Its explicit four-suite Phase 5 filter passed 37
 tests in four suites. The literal `WikiFSCoreTests` filter found 0 tests in 0
 suites in that container, so this record explicitly does not claim it passed.
 
+## Deferred follow-up gate
+
+**Gate: before the first production activation caller.**
+
+`RendererMachineIndexStore.activate` catches only
+`RendererMachineIndexStoreError` when it classifies cleanup. A contended
+activation can get a `RendererCoordinatorFailure` lock-acquisition timeout
+from `RendererPackageStoreCoordinator`. The current path can delete the
+caller's validated staging tree and return generic `activationFailed`.
+
+Before any production installer or activation caller is wired, classify that
+timeout without deleting the caller-owned staging tree. Preserve the specific
+activation error. No production activation caller exists in this slice.
+
 ## Verification
 
 - `DocumentationContractTests`: passed, 7 tests in 1 suite.
