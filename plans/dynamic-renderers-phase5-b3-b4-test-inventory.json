@@ -7,9 +7,9 @@
   "baseSHA": "a1b1f28b592641dbb26333c58ac4c675dd231ec8",
   "implementationSHA": "782338ffd5ee812b25d9974970876ffa2ec31b15",
   "auditedHeadSHA": "782338ffd5ee812b25d9974970876ffa2ec31b15",
-  "workingTreeHeadSHA": "782338ffd5ee812b25d9974970876ffa2ec31b15",
+  "workingTreeHeadSHA": "7f5b3418cc4f5a5362442c998fa73fdce66819ca",
   "implementationHeadRole": "Exact integrated Phase 5 production implementation audited by this inventory refresh.",
-  "documentationCommitRole": "This inventory is committed after the audited implementation. Its commit SHA does not replace implementationSHA.",
+  "documentationCommitRole": "The current working head carries the standalone typecheck harness fix and inventory refresh. It does not replace the audited production implementationSHA.",
   "focusedSuites": [
     { "suite": "RendererPackageActivationTests", "mappedTestCount": 13, "suiteTestCount": 13 },
     { "suite": "RendererDirectoryValidationTests", "mappedTestCount": 5, "suiteTestCount": 5 },
@@ -63,7 +63,8 @@
     "Tests/WikiFSTests/RendererPackageActivationTests.swift",
     "Tests/WikiFSTests/RendererDirectoryValidationTests.swift",
     "Tests/WikiFSTests/RendererMachineIndexStoreTests.swift",
-    "Tests/WikiFSTests/RendererPackageStoreLayoutTests.swift"
+    "Tests/WikiFSTests/RendererPackageStoreLayoutTests.swift",
+    "Tests/WikiFSTests/IdentifierBoundaryTypecheckTests.swift"
   ],
   "retainedExistingCoverage": [
     "RendererMachineIndexStoreTests.replacingAbsentReservationWithDifferentExpectedHashFailsClosedAcrossGenerations",
@@ -90,6 +91,7 @@
     { "command": "swift test --filter RendererMachineIndexStoreTests", "status": "passed: 13 tests in 1 suite" },
     { "command": "swift test --filter RendererPackageStoreLayoutTests", "status": "passed: 6 tests in 1 suite" },
     { "command": "swift test --filter 'RendererPackageActivationTests|RendererDirectoryValidationTests|RendererMachineIndexStoreTests|RendererPackageStoreLayoutTests'", "status": "passed: 37 tests in 4 suites on Swift 6.3.3 aarch64 Linux" },
+    { "command": "swift test --filter IdentifierBoundaryTypecheckTests", "status": "passed: 26 tests in 1 suite on macOS after adding CRendererPackageMove generated module-map discovery" },
     { "command": "swift build --target WikiFSCoreTests", "status": "passed on Swift 6.3.3 aarch64 Linux" },
     { "command": "swift test --filter WikiFSCoreTests", "status": "vacuous: 0 tests in this container; not claimed as a pass" },
     { "command": "git diff --check", "status": "passed" }
