@@ -138,7 +138,7 @@ struct DocumentationContractTests {
         #expect(inventory.contains("ephemeral WebKit session lifecycle"))
         #expect(inventory.contains("\"coveredSlices\": [0, 1, 2, 3, 4, 5]"))
         #expect(inventory.contains("\"baseSHA\": \"933a0637fa5593c4fdba611edb380058b5838f71\""))
-        #expect(inventory.contains("\"headSHA\": \"e29ff90fe6cc131c1e2e53cfc13b44965b21f152\""))
+        #expect(inventory.contains("\"headSHA\": \"a221ed969dc495abb4a938223a90a0831ac6bae6\""))
         #expect(inventory.contains("per-session capability-bound input.read"))
         #expect(inventory.contains("SourceVersionID"))
         #expect(inventory.contains("SourceMarkdownVersionID"))
@@ -149,6 +149,27 @@ struct DocumentationContractTests {
         #expect(inventory.contains("Failure accounting stores only a package identity"))
         #expect(inventory.contains("SwiftUI installed-renderer host and Source fallback"))
         #expect(inventory.contains("per-session storage and file-isolation coverage"))
+        #expect(inventory.contains("ordinary CI runs the selected portable WebKit-facing suites"))
+        #expect(inventory.contains("does not run in ordinary CI"))
+        #expect(inventory.contains("does not claim a pass when disabled"))
+    }
+
+    @Test func dynamicRendererCISelectsPortableWebKitSuitesAndExcludesHostedNetworkControls() throws {
+        let root = try #require(Self.locateRepositoryRoot())
+        let workflow = try String(
+            contentsOf: root.appendingPathComponent(".github/workflows/ci.yml"),
+            encoding: .utf8
+        )
+
+        #expect(workflow.contains("WIKIFS_APP_TESTS: \"1\""))
+        #expect(workflow.contains("RendererPackageSchemeHandlerTests"))
+        #expect(workflow.contains("RendererContentWorldBridgeTests"))
+        #expect(workflow.contains("RendererExternalLinkRedemptionGateTests"))
+        #expect(workflow.contains("WikiAppWebViewSessionTests"))
+        #expect(workflow.contains("WikiAppWebViewTests"))
+        #expect(workflow.contains("RendererSessionIsolationTests"))
+        #expect(workflow.contains("RendererHostedWebKitHarnessTests"))
+        #expect(workflow.contains("WIKIFS_RENDERER_HOSTED_NETWORK_TESTS") == false)
     }
 
     @Test func dynamicRendererInventoryMapsEveryExistingProductionPathToResolvedTests() throws {

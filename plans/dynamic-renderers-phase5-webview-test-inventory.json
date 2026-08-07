@@ -5,8 +5,10 @@
   "slice": 5,
   "coveredSlices": [0, 1, 2, 3, 4, 5],
   "baseSHA": "933a0637fa5593c4fdba611edb380058b5838f71",
-  "headSHA": "e29ff90fe6cc131c1e2e53cfc13b44965b21f152",
-  "scope": "WebView package-resource security boundary, ephemeral WebKit session lifecycle, per-session capability-bound input.read, navigation policy, actual WebKit provenance checks, isolated-world reply delivery, bounded replay state, trusted external-link activation contracts, machine-wide installed-renderer safe mode, the SwiftUI installed-renderer host and Source fallback, per-session storage and file-isolation coverage, and a live HTTP plus trusted-TLS WebSocket positive-control harness. The bridge has closed methods, bounded envelopes and payloads, replay rejection, main-frame and webView/origin/session checks, exact version-pinned source and markdown reads, and an isolated-world postMessage relay. Trusted activation uses a short-lived, one-use cryptographic nonce bound to a normalized HTTP(S) destination and host context. Failure accounting stores only a package identity, a closed cause, and a timestamp. The harness uses the login-keychain identity with SHA-1 7C0B00954A876487620BE7B2E2D0FDEC54B8EF08. The live WebKit WSS positive control passes with the real TLS listener and certificate.",
+  "headSHA": "a221ed969dc495abb4a938223a90a0831ac6bae6",
+  "headSHASemantics": "This is the production and evidence head reviewed before the CI/WSS remediation commit. The remediation changes only CI selection, test harness gating, and evidence wording. It does not change renderer production paths. The head does not claim that ordinary CI runs live WSS.",
+  "scope": "WebView package-resource security boundary, ephemeral WebKit session lifecycle, per-session capability-bound input.read, navigation policy, actual WebKit provenance checks, isolated-world reply delivery, bounded replay state, trusted external-link activation contracts, machine-wide installed-renderer safe mode, the SwiftUI installed-renderer host and Source fallback, per-session storage and file-isolation coverage, and a live HTTP plus trusted-TLS WebSocket positive-control harness. The bridge has closed methods, bounded envelopes and payloads, replay rejection, main-frame and webView/origin/session checks, exact version-pinned source and markdown reads, and an isolated-world postMessage relay. Trusted activation uses a short-lived, one-use cryptographic nonce bound to a normalized HTTP(S) destination and host context. Failure accounting stores only a package identity, a closed cause, and a timestamp. The hosted WSS control uses a login-keychain identity with SHA-1 7C0B00954A876487620BE7B2E2D0FDEC54B8EF08 when its explicit hosted-network gate is enabled. It does not claim a pass when disabled.",
+  "ciCoverage": "ordinary CI runs the selected portable WebKit-facing suites: package scheme handler, content-world bridge, external activation redemption gate, and SwiftUI host/session lifecycle. RendererSessionIsolationTests and RendererHostedWebKitHarnessTests do not run in ordinary CI because they require real GUI/WebKit storage or hosted network and login-keychain prerequisites.",
   "futureInputContract": "RendererAuthorizedInputReader receives version-pinned SourceVersionID source bytes or SourceMarkdownVersionID processed Markdown. It must not call live sourceContent(id:) for session input.",
   "productionPaths": [
     {
@@ -361,7 +363,7 @@
       "RendererNavigationPolicyTests.allowsPackageResources",
       "RendererNavigationPolicyTests.cancelsOutsidePackageBoundary"
     ],
-    "the mandatory positive control uses a live HTTP document receiver and a real TLS WebSocket receiver": [
+    "the explicitly opt-in hosted positive control uses a live HTTP document receiver and a real TLS WebSocket receiver": [
       "RendererHostedWebKitHarnessTests.permissiveWebKitReachesLiveHTTPAndWebSocketReceivers"
     ]
   },
@@ -385,6 +387,6 @@
     "The bridge and navigation tests do not prove live frame identity, navigation cancellation, or network isolation. A hosted WebKit suite must cover those conditions.",
     "The trusted-activation contract and redemption-gate tests do not execute a live WKWebView. They do not prove that WebKit supplies the observed provenance or that synthetic page events cannot obtain a nonce. The source-contract test checks that the nonce does not cross a shared window message path.",
     "The command-entry seam proves a successful invocation returns to async @main. It does not invoke LocalGit or GitHubCLI against a live pull request.",
-    "The trusted-TLS WebSocket positive control resolves the supplied login-keychain identity, starts its Network.framework listener, validates the WebSocket upgrade, and observes the live WebKit connection. This positive control does not prove restrictive network isolation."
+    "The trusted-TLS WebSocket positive control runs only when WIKIFS_RENDERER_HOSTED_NETWORK_TESTS=1 and the supplied login-keychain identity is available. It reports a disabled diagnostic when either prerequisite is absent. It does not run in ordinary CI, does not claim a pass when disabled, and does not prove restrictive network isolation."
   ]
 }

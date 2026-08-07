@@ -8,7 +8,14 @@ import Testing
 /// This intentionally uses a permissive configuration. It proves the two
 /// independently-owned loopback receivers are live and that WebKit can reach
 /// them before a restrictive renderer session is tested against the same seam.
-@Suite(.serialized, .timeLimit(.minutes(2)))
+@Suite(
+    .disabled(
+        if: RendererHostedNetworkPositiveControlGate.disabledReason != nil,
+        Comment(rawValue: RendererHostedNetworkPositiveControlGate.disabledReason ?? "hosted network positive control is available")
+    ),
+    .serialized,
+    .timeLimit(.minutes(2))
+)
 @MainActor
 struct RendererHostedWebKitHarnessTests {
     @Test
@@ -93,6 +100,18 @@ struct RendererHostedWebKitHarnessTests {
         #expect(observedWebSocket.token == webSocket.observationToken)
         #expect(observedHTTP.transport == .http)
         #expect(observedWebSocket.transport == .webSocket)
+    }
+}
+
+private enum RendererHostedNetworkPositiveControlGate {
+    static var disabledReason: String? {
+        guard ProcessInfo.processInfo.environment["WIKIFS_RENDERER_HOSTED_NETWORK_TESTS"] == "1" else {
+            return "Set WIKIFS_RENDERER_HOSTED_NETWORK_TESTS=1 to run the hosted HTTP/WSS positive control."
+        }
+        guard let identityDiagnostic = RendererLoopbackObservationServer.trustedLoopbackIdentityDiagnostic else {
+            return nil
+        }
+        return "Hosted HTTP/WSS positive control is disabled: \(identityDiagnostic)"
     }
 }
 #endif

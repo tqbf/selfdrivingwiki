@@ -237,7 +237,7 @@ final class RendererLoopbackObservationServer {
     }
 
     private func startSecureWebSocketListener(timeout: Duration) async throws {
-        let identity = try trustedLoopbackIdentity()
+        let identity = try Self.trustedLoopbackIdentity()
         let tlsOptions = NWProtocolTLS.Options()
         guard let networkIdentity = sec_identity_create(identity) else {
             throw ServerError.trustedIdentityMissing
@@ -419,7 +419,7 @@ final class RendererLoopbackObservationServer {
         return "request=\(requestLine), headers=\(names.joined(separator: ","))"
     }
 
-    private func trustedLoopbackIdentity() throws -> SecIdentity {
+    nonisolated private static func trustedLoopbackIdentity() throws -> SecIdentity {
         let query: [CFString: Any] = [
             kSecClass: kSecClassIdentity,
             kSecReturnRef: true,
@@ -451,10 +451,22 @@ final class RendererLoopbackObservationServer {
         throw ServerError.trustedIdentityMissing
     }
 
-    private static let trustedLoopbackCertificateSHA1 = Data([
+    nonisolated private static let trustedLoopbackCertificateSHA1 = Data([
         0x7C, 0x0B, 0x00, 0x95, 0x4A, 0x87, 0x64, 0x87, 0x62, 0x0B,
         0xE7, 0xB2, 0xE2, 0xD0, 0xFD, 0xEC, 0x54, 0xB8, 0xEF, 0x08,
     ])
+
+    /// Returns a diagnostic when the developer-local TLS identity required by
+    /// the hosted WSS positive control is unavailable. This is test-harness
+    /// availability, not a substitute receiver or a successful observation.
+    nonisolated static var trustedLoopbackIdentityDiagnostic: String? {
+        do {
+            _ = try trustedLoopbackIdentity()
+            return nil
+        } catch {
+            return error.localizedDescription
+        }
+    }
 
     @MainActor
     private final class SecureConnection {
