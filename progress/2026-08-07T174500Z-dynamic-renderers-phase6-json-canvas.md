@@ -21,6 +21,11 @@ This record does not claim either behavior.
 Commit `7e59888cf706e9b429ac0ca9cfecc1c5b760ee62` adds validation boundary tests.
 It does not change production behavior.
 
+Commit `cd12be4588b9529b63bf475f1c01521a12aebb84` adds deterministic keyboard traversal and individual VoiceOver semantics.
+The descriptor now sets `supportsVoiceOver` and `supportsKeyboardNavigation` to true.
+Up and Down traverse the document outline, selection stops at the first or last node, and Left and Right move between the outline and canvas surfaces.
+Each outline entry and each canvas node is a read-only selectable SwiftUI control with a meaningful label, selected value, and Select action.
+
 The decoder reads at most 256 KiB before it decodes JSON.
 It bounds nodes, edges, identifiers, text, coordinates, zoom, and translation.
 It accepts text nodes and node-to-node edges only.
@@ -36,19 +41,19 @@ The Excalidraw package files and tests did not change.
 
 ## Verification
 
-- `WIKIFS_APP_TESTS=1 swift test --filter 'JSONCanvasRendererTests|BuiltInRendererRegistryTests' --jobs 4` passed with 33 tests.
-- `WIKIFS_APP_TESTS=1 swift test --filter 'JSONCanvasRendererTests|BuiltInRendererRegistryTests|RendererArtifactMatcherTests|SourceDetailRendererArchitectureAuditTests' --jobs 4` passed with 41 tests.
-- `make lint` passed with zero violations and no new bare `try?` use.
-- `make build` and bare `swift build` passed.
+- `WIKIFS_APP_TESTS=1 swift test --filter 'JSONCanvasRendererTests|BuiltInRendererRegistryTests' --jobs 4` passed with 34 tests after the keyboard and VoiceOver implementation.
+- `WIKIFS_APP_TESTS=1 swift test --filter 'JSONCanvasRendererTests|BuiltInRendererRegistryTests|RendererArtifactMatcherTests|SourceDetailRendererArchitectureAuditTests' --jobs 4` passed with 45 tests after the keyboard and VoiceOver implementation.
+- `make lint` passed with zero violations and no new bare `try?` use after the keyboard and VoiceOver implementation.
+- `make build` and bare `swift build` passed after the keyboard and VoiceOver implementation.
 - `git diff --check` passed before the implementation commit.
-- The metadata correction adds focused assertions that both descriptor flags are false.
+- The registry test asserts both descriptor capability flags are true.
 - The validation tests cover excessive edges, duplicate node and edge IDs, invalid and non-finite geometry input, oversized text, translation clamps, and non-finite zoom factors.
-- `WIKIFS_APP_TESTS=1 swift test --filter DocumentationContractTests --jobs 4` passed with 11 tests after b75430935e5cb7bf8871c3aa8ae2c6cd6c23583f refreshed the Phase 5 evidence.
+- `WIKIFS_APP_TESTS=1 swift test --filter DocumentationContractTests --jobs 4` passed with 11 tests against this refreshed JSON Canvas evidence.
 
 ## Limits
 
-The native renderer does not support JSON Canvas links, file nodes, group nodes, keyboard traversal, accessibility labels, appearance work, or Reduce Motion behavior.
-The focused tests do not host a SwiftUI window or verify pixels.
+The native renderer does not support JSON Canvas links, file nodes, group nodes, host actions, appearance work, or explicit Reduce Motion behavior beyond its absence of animations.
+The focused tests do not host a SwiftUI window, assert AppKit keyboard routing or VoiceOver output, or verify pixels.
 The matcher reads only a bounded JSON prefix. A matching document can fail full decoding and then stays in Source fallback.
 
 [`plans/dynamic-renderers-phase6-json-canvas-test-inventory.json`](../plans/dynamic-renderers-phase6-json-canvas-test-inventory.json) maps each native path to its focused tests at the exact implementation commit.
