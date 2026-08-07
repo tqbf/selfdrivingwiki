@@ -220,6 +220,11 @@
       "tests": ["WikiAppWebViewTests.unavailableInstalledRendererReturnsNoView"]
     },
     {
+      "path": "Sources/WikiFS/Renderer/InstalledRendererHost.swift",
+      "symbols": ["InstalledRendererHost", "InstalledRendererHost.production", "InstalledRendererHost.resetInstalledRendererSafeMode"],
+      "tests": ["InstalledRendererHostTests.unavailableMachineStorePreservesSourceFallback", "InstalledRendererHostTests.recoveryUsesTypedReference"]
+    },
+    {
       "path": "Sources/WikiFS/Sources/SourceDetailView.swift",
       "symbols": ["SourceDetailView.renderedContent", "SourceDetailView.rendererPlanner"],
       "tests": ["WikiAppWebViewTests.sourceDetailKeepsInstalledFactoryOutsideBuiltInMap"]
@@ -244,6 +249,7 @@
     "Tests/WikiFSTests/RendererTrustedActivationContractsTests.swift",
     "Tests/WikiFSAppTests/RendererExternalLinkRedemptionGateTests.swift",
     "Tests/WikiFSAppTests/WikiAppWebViewTests.swift",
+    "Tests/WikiFSAppTests/InstalledRendererHostTests.swift",
     "Tests/WikiFSAppTests/RendererSessionIsolationTests.swift",
     "Tests/WikiFSAppTests/RendererHostedWebKitHarness.swift",
     "Tests/WikiFSAppTests/RendererHostedWebKitHarnessTests.swift",
@@ -335,7 +341,9 @@
       "WikiAppWebViewTests.dismantleClosesSession",
       "WikiAppWebViewTests.sessionFailureDefersStateMutation",
       "WikiAppWebViewTests.unavailableInstalledRendererReturnsNoView",
-      "WikiAppWebViewTests.sourceDetailKeepsInstalledFactoryOutsideBuiltInMap"
+      "WikiAppWebViewTests.sourceDetailKeepsInstalledFactoryOutsideBuiltInMap",
+      "InstalledRendererHostTests.unavailableMachineStorePreservesSourceFallback",
+      "InstalledRendererHostTests.recoveryUsesTypedReference"
     ],
     "fresh renderer sessions isolate transient browser storage and reject file navigation/content exposure": [
       "RendererSessionIsolationTests.sessionsIsolateTransientBrowserStorage",
