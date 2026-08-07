@@ -61,6 +61,8 @@ final class RendererContentWorldBroker {
 
     func bind(webViewID: ObjectIdentifier) { expectedWebViewID = webViewID }
 
+    var pageInput: RendererBridgeInput { inputReader.authorizedInput }
+
     func handlePageEnvelope(
         _ envelope: Data,
         provenance: RendererBridgeMessageProvenance,
@@ -174,6 +176,18 @@ final class RendererScriptMessageHandler: NSObject, WKScriptMessageHandlerWithRe
 }
 
 extension RendererContentWorldBroker {
+    static func inputBootstrapScript(input: RendererBridgeInput, contentWorld: WKContentWorld) -> WKUserScript {
+        let encodedInput: Data
+        do {
+            encodedInput = try JSONEncoder().encode(input)
+        } catch {
+            preconditionFailure("RendererBridgeInput must remain encodable: \(error)")
+        }
+        let inputJSON = String(decoding: encodedInput, as: UTF8.self)
+        let source = "document.documentElement.dataset.rendererInput = \(String(reflecting: inputJSON));"
+        return WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: contentWorld)
+    }
+
     static func pageRelayScript(contentWorld: WKContentWorld) -> WKUserScript {
         let source = """
         window.addEventListener("message", function(event) {

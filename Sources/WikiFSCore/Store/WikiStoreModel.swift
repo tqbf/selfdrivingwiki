@@ -2982,6 +2982,17 @@ public final class WikiStoreModel {
         DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: id) })
     }
 
+    /// Creates a renderer reader for the current immutable source version.
+    /// The reader retains that version ID, so a mounted renderer never follows
+    /// later edits through the live source reference.
+    public func rendererAuthorizedInputReader(for sourceID: SourceID) -> RendererAuthorizedInputReader? {
+        guard let version = DebugLog.trying(
+            "activeContentVersion",
+            operation: { try store.activeContentVersion(sourceID: sourceID) }
+        ) else { return nil }
+        return RendererAuthorizedInputReader(store: store, authorizedInput: .source(versionID: version.id))
+    }
+
     /// Renderer preferences are a wiki-store concern. Keeping this write at the
     /// main-actor model seam preserves the store's method-atomic mutation path.
     public func setRendererSourcePreference(sourceID: SourceID, preference: RendererPreferenceReference) {

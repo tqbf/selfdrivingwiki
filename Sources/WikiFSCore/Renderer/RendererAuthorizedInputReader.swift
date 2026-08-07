@@ -30,15 +30,24 @@ public struct RendererAuthorizedInputReader {
         guard requestedInput == authorizedInput else {
             throw RendererBridgeAuthorizationError.unauthorizedInput
         }
-        guard let byteCount = try inputByteCount(requestedInput) else {
+        try validateInput(maximumByteCount: WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount)
+        return try payload(readPayload(requestedInput))
+    }
+
+    /// Checks that the pinned input is still available and fits both the
+    /// descriptor and bridge limits before a WebKit session is created.
+    public func validateInput(maximumByteCount: Int) throws {
+        guard maximumByteCount > 0,
+              let byteCount = try inputByteCount(authorizedInput)
+        else {
             throw RendererBridgeAuthorizationError.unavailablePinnedInput
         }
         guard byteCount >= 0,
+              byteCount <= maximumByteCount,
               byteCount <= WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount
         else {
             throw RendererBridgeAuthorizationError.oversizedPayload
         }
-        return try payload(readPayload(requestedInput))
     }
 
     private static func readPinnedPayload(

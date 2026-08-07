@@ -119,7 +119,9 @@ final class InstalledRendererHost {
                         entryURL: entryURL),
                     reservation: reservation,
                     resourceProvider: provider,
-                    failureRecorder: failureRecorder)
+                    failureRecorder: failureRecorder,
+                    inputReader: nil,
+                    externalActivationPolicy: .disabled)
             })
     }
 

@@ -14,6 +14,8 @@ struct InstalledRendererSessionConfiguration {
     let reservation: RendererPackageReservation
     let resourceProvider: any RendererPackageResourceProviding
     let failureRecorder: RendererSessionFailureRecording?
+    let inputReader: RendererAuthorizedInputReader?
+    let externalActivationPolicy: RendererExternalActivationPolicy
 }
 
 /// The app-side seam for package-backed renderers. This is intentionally a peer
@@ -41,9 +43,11 @@ struct InstalledRendererFactory {
     func makeView(
         for descriptor: RendererDescriptor,
         inputs: Inputs,
+        inputReader: RendererAuthorizedInputReader?,
         onFailure: @escaping @MainActor (RendererSessionFailure) -> Void
     ) -> AnyView? {
         guard case let .webPackage(entryPoint) = descriptor.implementation,
+              let inputReader,
               let configuration = inputs.configuration(for: descriptor, entryPoint: entryPoint),
               configuration.identity.rendererReference == descriptor.reference,
               configuration.reservation.packageID == descriptor.reference.packageID,
@@ -51,10 +55,25 @@ struct InstalledRendererFactory {
               entryURLMatches(entryPoint: entryPoint, identity: configuration.identity)
         else { return nil }
 
+        do {
+            try inputReader.validateInput(maximumByteCount: descriptor.sizeLimits.maximumInputByteCount)
+        } catch {
+            DebugLog.reader("Installed renderer input was unavailable or exceeded its declared bound; using Source fallback.")
+            return nil
+        }
+
+        let sessionConfiguration = InstalledRendererSessionConfiguration(
+            identity: configuration.identity,
+            reservation: configuration.reservation,
+            resourceProvider: configuration.resourceProvider,
+            failureRecorder: configuration.failureRecorder,
+            inputReader: inputReader,
+            externalActivationPolicy: descriptor.linkPolicy == .userActivatedExternal ? .enabled : .disabled)
+
         return AnyView(WikiAppWebView(
             identity: configuration.identity,
             makeSession: { identity, reportFailure in
-                makeSession(identity, reportFailure, configuration)
+                makeSession(identity, reportFailure, sessionConfiguration)
             },
             onFailure: onFailure))
     }
@@ -69,7 +88,17 @@ struct InstalledRendererFactory {
             resourceProvider: configuration.resourceProvider,
             installedPackage: configuration.reservation,
             failureRecorder: configuration.failureRecorder,
-            lifecycleFailureHandler: reportFailure)
+            lifecycleFailureHandler: reportFailure,
+            bridgeFactory: configuration.inputReader.map { inputReader in
+                { sessionID in
+                    RendererContentWorldBroker(
+                        sessionID: sessionID,
+                        capability: .init(rawValue: UUID().uuidString),
+                        inputReader: inputReader,
+                        expectedOrigin: identity.entryURL)
+                }
+            },
+            externalActivationPolicy: configuration.externalActivationPolicy)
     }
 
     private func entryURLMatches(
