@@ -5,8 +5,8 @@
   "slice": 5,
   "coveredSlices": [0, 1, 2, 3, 4, 5],
   "baseSHA": "ad0cf2e73fd070d2e6b3b791c3ac655df952ff06",
-  "headSHA": "407f0fcca510004975b8ee7cef888fed0ae351bf",
-  "scope": "WebView package-resource security boundary, ephemeral WebKit session lifecycle, per-session capability-bound input.read, navigation policy, actual WebKit provenance checks, isolated-world reply delivery, bounded replay state, trusted external-link activation contracts, and machine-wide installed-renderer safe mode. The bridge has closed methods, bounded envelopes and payloads, replay rejection, main-frame and webView/origin/session checks, exact version-pinned source and markdown reads, and an isolated-world postMessage relay. Trusted activation uses a short-lived, one-use cryptographic nonce bound to a normalized HTTP(S) destination and host context. Failure accounting stores only a package identity, a closed cause, and a timestamp. It adds no session-host wiring, general subresource interception, network harness, storage, SwiftUI host, Excalidraw, JSON Canvas, or settings UI.",
+  "headSHA": "7b968c29bc39265a45a3984f11606ddf24042930",
+  "scope": "WebView package-resource security boundary, ephemeral WebKit session lifecycle, per-session capability-bound input.read, navigation policy, actual WebKit provenance checks, isolated-world reply delivery, bounded replay state, trusted external-link activation contracts, machine-wide installed-renderer safe mode, and a live HTTP plus trusted-TLS WebSocket positive-control harness. The bridge has closed methods, bounded envelopes and payloads, replay rejection, main-frame and webView/origin/session checks, exact version-pinned source and markdown reads, and an isolated-world postMessage relay. Trusted activation uses a short-lived, one-use cryptographic nonce bound to a normalized HTTP(S) destination and host context. Failure accounting stores only a package identity, a closed cause, and a timestamp. The harness uses the login-keychain identity with SHA-1 7C0B00954A876487620BE7B2E2D0FDEC54B8EF08. The live WebKit WSS positive control passes with the real TLS listener and certificate.",
   "futureInputContract": "RendererAuthorizedInputReader receives version-pinned SourceVersionID source bytes or SourceMarkdownVersionID processed Markdown. It must not call live sourceContent(id:) for session input.",
   "productionPaths": [
     {
@@ -223,7 +223,27 @@
     "Tests/DynamicRendererPRSeriesAuditTests/DynamicRendererPRSeriesAuditTests.swift",
     "Tests/WikiFSTests/DocumentationContractTests.swift",
     "Tests/WikiFSTests/RendererTrustedActivationContractsTests.swift",
-    "Tests/WikiFSAppTests/RendererExternalLinkRedemptionGateTests.swift"
+    "Tests/WikiFSAppTests/RendererExternalLinkRedemptionGateTests.swift",
+    "Tests/WikiFSAppTests/RendererHostedWebKitHarness.swift",
+    "Tests/WikiFSAppTests/RendererHostedWebKitHarnessTests.swift",
+    "Tests/WikiFSAppTests/RendererLoopbackObservationServers.swift"
+  ],
+  "harnessPaths": [
+    {
+      "path": "Tests/WikiFSAppTests/RendererHostedWebKitHarness.swift",
+      "symbols": ["RendererHostedWebKitHarness", "RendererHostedWebKitHarness.permissive"],
+      "tests": ["RendererHostedWebKitHarnessTests.permissiveWebKitReachesLiveHTTPAndWebSocketReceivers"]
+    },
+    {
+      "path": "Tests/WikiFSAppTests/RendererLoopbackObservationServers.swift",
+      "symbols": ["RendererLoopbackObservationServer", "trustedLoopbackIdentity", "startSecureWebSocketListener", "SecureConnection"],
+      "tests": ["RendererHostedWebKitHarnessTests.permissiveWebKitReachesLiveHTTPAndWebSocketReceivers"]
+    },
+    {
+      "path": "Tests/WikiFSAppTests/RendererHostedWebKitHarnessTests.swift",
+      "symbols": ["RendererHostedWebKitHarnessTests.permissiveWebKitReachesLiveHTTPAndWebSocketReceivers"],
+      "tests": ["RendererHostedWebKitHarnessTests.permissiveWebKitReachesLiveHTTPAndWebSocketReceivers"]
+    }
   ],
   "coverageByRisk": {
     "a scheme request can only name the expected package ID, version, and a declared relative asset": [
@@ -311,6 +331,9 @@
       "RendererContentWorldBridgeTests.rejectsWrongWorldAndProvenance",
       "RendererNavigationPolicyTests.allowsPackageResources",
       "RendererNavigationPolicyTests.cancelsOutsidePackageBoundary"
+    ],
+    "the mandatory positive control uses a live HTTP document receiver and a real TLS WebSocket receiver": [
+      "RendererHostedWebKitHarnessTests.permissiveWebKitReachesLiveHTTPAndWebSocketReceivers"
     ]
   },
   "bidirectionalResolution": {
@@ -320,7 +343,6 @@
   },
   "excluded": [
     "general subresource interception",
-    "network harness",
     "SwiftUI host",
     "Excalidraw",
     "JSON Canvas",
@@ -332,6 +354,7 @@
     "The portable isolated-world bridge tests exercise handler routing, reply encoding, and injected provenance. They do not run a live renderer document or prove WebKit supplies that provenance. A hosted suite still owns that claim.",
     "The bridge and navigation tests do not prove live frame identity, navigation cancellation, or network isolation. A hosted WebKit suite must cover those conditions.",
     "The trusted-activation contract and redemption-gate tests do not execute a live WKWebView. They do not prove that WebKit supplies the observed provenance or that synthetic page events cannot obtain a nonce. The source-contract test checks that the nonce does not cross a shared window message path.",
-    "The command-entry seam proves a successful invocation returns to async @main. It does not invoke LocalGit or GitHubCLI against a live pull request."
+    "The command-entry seam proves a successful invocation returns to async @main. It does not invoke LocalGit or GitHubCLI against a live pull request.",
+    "The trusted-TLS WebSocket positive control resolves the supplied login-keychain identity, starts its Network.framework listener, validates the WebSocket upgrade, and observes the live WebKit connection. This positive control does not prove restrictive network isolation."
   ]
 }
