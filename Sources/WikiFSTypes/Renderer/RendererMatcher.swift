@@ -26,6 +26,10 @@ public enum RendererMatcher: Codable, Hashable, Sendable {
     case normalizedMIME(RendererMIMEType)
     case extensionFallback(RendererFileExtension)
     case boundedSignature(RendererSignature)
+    /// A format discriminator decoded only from the bounded registry sniff.
+    /// Descriptors that include one require it to match before MIME or filename
+    /// routing may select the renderer.
+    case boundedJSONArtifact(RendererJSONArtifact)
     case artifactKind(RendererArtifactKind)
 
     public func matches(_ input: RendererMatchInput) -> Bool {
@@ -33,6 +37,7 @@ public enum RendererMatcher: Codable, Hashable, Sendable {
         case let .normalizedMIME(mime): input.mimeType == mime
         case let .extensionFallback(fileExtension): input.fileExtension == fileExtension
         case let .boundedSignature(signature): input.sniffedBytes.matches(signature)
+        case let .boundedJSONArtifact(artifact): artifact.matches(sniffedBytes: input.sniffedBytes)
         case let .artifactKind(kind): input.artifactKind == kind
         }
     }
@@ -40,6 +45,50 @@ public enum RendererMatcher: Codable, Hashable, Sendable {
     public var isExtensionFallback: Bool {
         if case .extensionFallback = self { return true }
         return false
+    }
+
+    /// JSON artifact validation is a required gate rather than an alternative
+    /// routing hint. This preserves Source fallback for malformed files whose
+    /// MIME type or extension otherwise looks renderable.
+    public var requiresArtifactValidation: Bool {
+        if case .boundedJSONArtifact = self { return true }
+        return false
+    }
+}
+
+/// The narrow JSON artifact signatures this phase can recognize. They are not
+/// document models: full Excalidraw and JSON Canvas decoding follows in later
+/// Phase 6 slices.
+public enum RendererJSONArtifact: String, Codable, CaseIterable, Hashable, Sendable {
+    case excalidraw
+    case jsonCanvas
+
+    /// Decodes no more than the established renderer sniff limit and rejects
+    /// malformed or format-incomplete values. Callers with a larger byte body
+    /// must first take the same bounded prefix used by ``RendererMatchInput``.
+    public func matches(sniffedBytes: Data) -> Bool {
+        guard sniffedBytes.count <= RendererMatchingLimits.maximumSniffByteCount else {
+            return false
+        }
+
+        switch self {
+        case .excalidraw:
+            do {
+                let signature = try JSONDecoder().decode(ExcalidrawSignature.self, from: sniffedBytes)
+                return signature.type == "excalidraw" && signature.version == ExcalidrawSignature.currentVersion
+            } catch {
+                // A malformed sniff is an expected non-match; Source remains available.
+                return false
+            }
+        case .jsonCanvas:
+            do {
+                _ = try JSONDecoder().decode(JSONCanvasSignature.self, from: sniffedBytes)
+                return true
+            } catch {
+                // A malformed sniff is an expected non-match; Source remains available.
+                return false
+            }
+        }
     }
 }
 
@@ -65,5 +114,41 @@ private extension Data {
         let end = signature.offset + signature.bytes.count
         guard count >= end else { return false }
         return Array(self[signature.offset..<end]) == signature.bytes
+    }
+}
+
+private struct ExcalidrawSignature: Decodable {
+    static let currentVersion = 2
+
+    let type: String
+    let version: Int
+    let elements: [JSONObject]
+}
+
+private struct JSONCanvasSignature: Decodable {
+    let nodes: [JSONObject]
+    let edges: [JSONObject]
+}
+
+/// Validates that the signature arrays contain JSON objects without allocating
+/// an untyped tree. The entire decoder input is already capped at 4 KiB.
+private struct JSONObject: Decodable {
+    init(from decoder: any Decoder) throws {
+        _ = try decoder.container(keyedBy: JSONKey.self)
+    }
+}
+
+private struct JSONKey: CodingKey {
+    let stringValue: String
+    let intValue: Int?
+
+    init?(stringValue: String) {
+        self.stringValue = stringValue
+        intValue = nil
+    }
+
+    init?(intValue: Int) {
+        stringValue = String(intValue)
+        self.intValue = intValue
     }
 }
