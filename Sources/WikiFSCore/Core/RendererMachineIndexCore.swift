@@ -66,12 +66,13 @@ public struct RendererMachineIndex: Codable, Equatable, Sendable {
     }
 
     /// Only activated, validator-produced records can enter an installed
-    /// registry. Safe mode is a machine-wide kill switch for installed code;
-    /// built-ins and the Source fallback are deliberately outside this value.
+    /// registry. New safe-mode suppression is scoped to each exact installed
+    /// package/version; the legacy machine-wide bit remains fail-closed for
+    /// indexes written by older versions. Built-ins and Source are outside it.
     public var availableDescriptorProjection: [RendererDescriptor] {
         guard safeModeIsEnabled == false else { return [] }
         return records
-            .filter { $0.state == .validated }
+            .filter { $0.state == .validated && $0.isSafeModeSuppressed == false }
             .flatMap(\.validatedDescriptors)
             .sorted { $0.reference < $1.reference }
     }
@@ -164,8 +165,63 @@ func rendererMachineIndexRecordingInstalledRendererFailure(
     let failures = try rendererInstalledRendererFailuresPruned(index.installedRendererFailures, now: now.date())
         + [.init(packageID: packageID, version: version, cause: cause, occurredAt: now)]
     let window = rendererInstalledRendererFailureWindow(failures, reservation: reservation)
-    let next = try index.replacing(records: index.records, safeModeIsEnabled: index.safeModeIsEnabled || window.hasReachedThreshold, installedRendererFailures: failures)
+    let nextRecords: [RendererPackageInstallRecord]
+    if window.hasReachedThreshold {
+        nextRecords = try index.records.map { record in
+            guard record.packageID == packageID, record.version == version, record.isSafeModeSuppressed == false else {
+                return record
+            }
+            return try RendererPackageInstallRecord(
+                packageID: record.packageID,
+                version: record.version,
+                expectedPackageHash: record.expectedPackageHash,
+                state: record.state,
+                reservedAt: record.reservedAt,
+                updatedAt: record.updatedAt,
+                diagnostic: record.diagnostic,
+                rollbackCandidate: record.rollbackCandidate,
+                isSafeModeSuppressed: true,
+                validatedDescriptors: record.validatedDescriptors
+            )
+        }
+    } else {
+        nextRecords = index.records
+    }
+    let next = try index.replacing(records: nextRecords, safeModeIsEnabled: index.safeModeIsEnabled, installedRendererFailures: failures)
     return (next, window)
+}
+
+func rendererMachineIndexResettingInstalledRendererSafeMode(
+    _ index: RendererMachineIndex,
+    packageID: RendererPackageID,
+    version: RendererPackageVersion,
+    expectedGeneration: UInt64
+) throws -> RendererMachineIndex {
+    guard index.generation == expectedGeneration else {
+        throw RendererMachineIndexStoreError.staleGeneration
+    }
+    let reservation = RendererPackageReservation(packageID: packageID, version: version)
+    guard index.records.contains(where: { RendererPackageReservation(packageID: $0.packageID, version: $0.version) == reservation }) else {
+        throw RendererMachineIndexStoreError.installedRendererNotAvailable
+    }
+    let records = try index.records.map { record -> RendererPackageInstallRecord in
+        guard RendererPackageReservation(packageID: record.packageID, version: record.version) == reservation,
+              record.isSafeModeSuppressed else { return record }
+        return try RendererPackageInstallRecord(
+            packageID: record.packageID,
+            version: record.version,
+            expectedPackageHash: record.expectedPackageHash,
+            state: record.state,
+            reservedAt: record.reservedAt,
+            updatedAt: record.updatedAt,
+            diagnostic: record.diagnostic,
+            rollbackCandidate: record.rollbackCandidate,
+            isSafeModeSuppressed: false,
+            validatedDescriptors: record.validatedDescriptors
+        )
+    }
+    let failures = index.installedRendererFailures.filter { $0.reservation != reservation }
+    return try index.replacing(records: records, safeModeIsEnabled: index.safeModeIsEnabled, installedRendererFailures: failures)
 }
 
 func rendererMachineIndexResettingInstalledRendererSafeMode(
@@ -175,5 +231,20 @@ func rendererMachineIndexResettingInstalledRendererSafeMode(
     guard index.generation == expectedGeneration else {
         throw RendererMachineIndexStoreError.staleGeneration
     }
-    return try index.replacing(records: index.records, safeModeIsEnabled: false, installedRendererFailures: [])
+    let records = try index.records.map { record -> RendererPackageInstallRecord in
+        guard record.isSafeModeSuppressed else { return record }
+        return try RendererPackageInstallRecord(
+            packageID: record.packageID,
+            version: record.version,
+            expectedPackageHash: record.expectedPackageHash,
+            state: record.state,
+            reservedAt: record.reservedAt,
+            updatedAt: record.updatedAt,
+            diagnostic: record.diagnostic,
+            rollbackCandidate: record.rollbackCandidate,
+            isSafeModeSuppressed: false,
+            validatedDescriptors: record.validatedDescriptors
+        )
+    }
+    return try index.replacing(records: records, safeModeIsEnabled: false, installedRendererFailures: [])
 }

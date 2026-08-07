@@ -21,9 +21,11 @@ struct RendererFailureWindowTests {
             index = result.index
         }
 
-        #expect(index.safeModeIsEnabled)
+        #expect(index.safeModeIsEnabled == false)
+        #expect(index.records.first(where: { $0.packageID == fixture.packageID })?.isSafeModeSuppressed == true)
         let reopened = try await RendererMachineIndexStore(layout: fixture.layout).read()
-        #expect(reopened.safeModeIsEnabled)
+        #expect(reopened.safeModeIsEnabled == false)
+        #expect(reopened.records.first(where: { $0.packageID == fixture.packageID })?.isSafeModeSuppressed == true)
     }
 
     @Test func agingPrunesFailuresOutsideNamedWindow() async throws {

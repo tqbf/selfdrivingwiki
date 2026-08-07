@@ -56,6 +56,9 @@ public struct RendererPackageInstallRecord: Codable, Hashable, Sendable, Compara
     public let updatedAt: RFC3339Timestamp
     public let diagnostic: RendererPackageInstallDiagnostic?
     public let rollbackCandidate: RendererPackageVersion?
+    /// A qualifying renderer failure suppresses only this exact package/version.
+    /// The optional decode default preserves older machine-index records.
+    public let isSafeModeSuppressed: Bool
     /// Normalized registrations copied from a validator-produced manifest after
     /// the immutable package root has been activated. This remains machine-only
     /// metadata and never enters wiki or File Provider persistence.
@@ -70,6 +73,7 @@ public struct RendererPackageInstallRecord: Codable, Hashable, Sendable, Compara
         updatedAt: RFC3339Timestamp,
         diagnostic: RendererPackageInstallDiagnostic? = nil,
         rollbackCandidate: RendererPackageVersion? = nil,
+        isSafeModeSuppressed: Bool = false,
         validatedDescriptors: [RendererDescriptor] = []
     ) throws {
         guard reservedAt <= updatedAt, rollbackCandidate != version else {
@@ -95,6 +99,7 @@ public struct RendererPackageInstallRecord: Codable, Hashable, Sendable, Compara
         self.updatedAt = updatedAt
         self.diagnostic = diagnostic
         self.rollbackCandidate = rollbackCandidate
+        self.isSafeModeSuppressed = isSafeModeSuppressed
         self.validatedDescriptors = descriptors
     }
 
@@ -103,7 +108,7 @@ public struct RendererPackageInstallRecord: Codable, Hashable, Sendable, Compara
     }
 
     private enum CodingKeys: String, CodingKey {
-        case packageID, version, expectedPackageHash, state, reservedAt, updatedAt, diagnostic, rollbackCandidate, validatedDescriptors
+        case packageID, version, expectedPackageHash, state, reservedAt, updatedAt, diagnostic, rollbackCandidate, isSafeModeSuppressed, validatedDescriptors
     }
 
     public init(from decoder: any Decoder) throws {
@@ -117,6 +122,7 @@ public struct RendererPackageInstallRecord: Codable, Hashable, Sendable, Compara
             updatedAt: container.decode(RFC3339Timestamp.self, forKey: .updatedAt),
             diagnostic: try container.decodeIfPresent(RendererPackageInstallDiagnostic.self, forKey: .diagnostic),
             rollbackCandidate: try container.decodeIfPresent(RendererPackageVersion.self, forKey: .rollbackCandidate),
+            isSafeModeSuppressed: try container.decodeIfPresent(Bool.self, forKey: .isSafeModeSuppressed) ?? false,
             validatedDescriptors: try container.decodeIfPresent([RendererDescriptor].self, forKey: .validatedDescriptors) ?? []
         )
     }

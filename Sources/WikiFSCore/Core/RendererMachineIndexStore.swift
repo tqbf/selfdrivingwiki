@@ -193,6 +193,21 @@ public actor RendererMachineIndexStore {
         }
     }
 
+    /// Re-enables one exact installed package/version and clears only its
+    /// rolling failure history. Other suppressed versions remain unavailable
+    /// until their own recovery action or the all-installed reset.
+    public func resetInstalledRendererSafeMode(
+        packageID: RendererPackageID,
+        version: RendererPackageVersion,
+        expectedGeneration: UInt64
+    ) async throws -> RendererMachineIndex {
+        try prepareRoot()
+        let storage = RendererMachineIndexSQLiteStorage(layout: layout, derivedIndexWriter: derivedIndexWriter)
+        return try await coordinator.withExclusiveAccess {
+            try storage.resetInstalledRendererSafeMode(packageID: packageID, version: version, expectedGeneration: expectedGeneration)
+        }
+    }
+
     /// Returns the current window after applying normal time aging. This read
     /// does not alter generation; the next qualifying write persists pruning.
     public func failureWindow(
@@ -265,6 +280,7 @@ public actor RendererMachineIndexStore {
                             state: .validated,
                             reservedAt: existing?.reservedAt ?? timestamp,
                             updatedAt: timestamp,
+                            isSafeModeSuppressed: existing?.isSafeModeSuppressed ?? false,
                             validatedDescriptors: revalidated.manifest.descriptors
                         )
                         records.removeAll {
@@ -500,6 +516,34 @@ private struct RendererMachineIndexSQLiteStorage: Sendable {
             } catch {
                 _ = sqlite3_exec(database, "ROLLBACK TO SAVEPOINT renderer_machine_index_safe_mode_reset", nil, nil, nil)
                 _ = sqlite3_exec(database, "RELEASE SAVEPOINT renderer_machine_index_safe_mode_reset", nil, nil, nil)
+                if error is RendererMachineIndexStoreError { throw error }
+                throw RendererMachineIndexStoreError.derivedIndexReplacementFailed
+            }
+        }
+    }
+
+    func resetInstalledRendererSafeMode(
+        packageID: RendererPackageID,
+        version: RendererPackageVersion,
+        expectedGeneration: UInt64
+    ) throws -> RendererMachineIndex {
+        try FileManager.default.createDirectory(at: layout.root, withIntermediateDirectories: true)
+        return try withDatabase { database in
+            guard try hasIndexTable(database) else { throw RendererMachineIndexStoreError.corruptIndex }
+            try ensureExpectedHashReservationTable(database)
+            let current = try load(database: database).index
+            try rendererMachineIndexValidatingPackagePaths(current, layout: layout)
+            let next = try rendererMachineIndexResettingInstalledRendererSafeMode(current, packageID: packageID, version: version, expectedGeneration: expectedGeneration)
+            try rendererMachineIndexValidatingPackagePaths(next, layout: layout)
+            try execute(database, sql: "SAVEPOINT renderer_machine_index_package_safe_mode_reset")
+            do {
+                try update(database: database, index: next)
+                try replaceDerivedIndex(next)
+                try execute(database, sql: "RELEASE SAVEPOINT renderer_machine_index_package_safe_mode_reset")
+                return next
+            } catch {
+                _ = sqlite3_exec(database, "ROLLBACK TO SAVEPOINT renderer_machine_index_package_safe_mode_reset", nil, nil, nil)
+                _ = sqlite3_exec(database, "RELEASE SAVEPOINT renderer_machine_index_package_safe_mode_reset", nil, nil, nil)
                 if error is RendererMachineIndexStoreError { throw error }
                 throw RendererMachineIndexStoreError.derivedIndexReplacementFailed
             }

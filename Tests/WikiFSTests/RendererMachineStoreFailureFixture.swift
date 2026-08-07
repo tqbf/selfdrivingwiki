@@ -13,6 +13,9 @@ struct RendererMachineStoreFailureFixture {
     let packageID: RendererPackageID
     let version: RendererPackageVersion
     let installedDescriptor: RendererDescriptor
+    let secondPackageID: RendererPackageID
+    let secondVersion: RendererPackageVersion
+    let secondInstalledDescriptor: RendererDescriptor
 
     init() throws {
         root = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
@@ -23,14 +26,18 @@ struct RendererMachineStoreFailureFixture {
         packageID = try RendererPackageID(validating: "org.example.failure-window")
         version = try RendererPackageVersion(validating: "1.0.0")
         installedDescriptor = try Self.descriptor(packageID: packageID, version: version, registrationID: "failure-web", implementation: .webPackage(.init(path: try RendererRelativePath(validating: "index.html"))))
+        secondPackageID = try RendererPackageID(validating: "org.example.sibling-window")
+        secondVersion = try RendererPackageVersion(validating: "1.0.0")
+        secondInstalledDescriptor = try Self.descriptor(packageID: secondPackageID, version: secondVersion, registrationID: "sibling-web", implementation: .webPackage(.init(path: try RendererRelativePath(validating: "index.html"))))
     }
 
     func installedStore() async throws -> RendererMachineIndexStore {
         let store = RendererMachineIndexStore(layout: layout)
         let initial = try await store.read()
         let timestamp = try Self.timestamp(minutes: 0)
-        let record = try RendererPackageInstallRecord(packageID: packageID, version: version, expectedPackageHash: RendererSHA256Digest(bytes: Array(repeating: 1, count: RendererSHA256Digest.byteCount)), state: .validated, reservedAt: timestamp, updatedAt: timestamp, validatedDescriptors: [installedDescriptor])
-        _ = try await store.mutate(expectedGeneration: initial.generation) { records, _ in records = [record] }
+        let firstRecord = try RendererPackageInstallRecord(packageID: packageID, version: version, expectedPackageHash: RendererSHA256Digest(bytes: Array(repeating: 1, count: RendererSHA256Digest.byteCount)), state: .validated, reservedAt: timestamp, updatedAt: timestamp, validatedDescriptors: [installedDescriptor])
+        let secondRecord = try RendererPackageInstallRecord(packageID: secondPackageID, version: secondVersion, expectedPackageHash: RendererSHA256Digest(bytes: Array(repeating: 3, count: RendererSHA256Digest.byteCount)), state: .validated, reservedAt: timestamp, updatedAt: timestamp, validatedDescriptors: [secondInstalledDescriptor])
+        _ = try await store.mutate(expectedGeneration: initial.generation) { records, _ in records = [firstRecord, secondRecord] }
         return store
     }
 
