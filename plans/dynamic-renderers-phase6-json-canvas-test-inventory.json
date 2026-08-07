@@ -3,12 +3,12 @@
   "issue": 1026,
   "phase": 6,
   "slice": 3,
-  "parentSHA": "50b99aeb2de11c462e5368707fa3b13300503282",
+  "parentSHA": "f81310c2143ff0007d2f6f7896e188db8a248047",
   "prBaseSHA": "0f3cadc5519b6b405be41de692c75568c99673d1",
   "remotePRHeadAtStart": "3a94d6df098efcce8dc4d00c934ea785d829ac4f",
-  "headSHA": "66c97c23d286ea86c183cb40ad6215485caac1ea",
-  "headSHASemantics": "This is the exact typed internal-link and host-action-seam implementation commit. The following documentation-only evidence commit does not change production or test code.",
-  "scope": "A bounded typed JSON Canvas decoder, a closed native built-in registration, a local read-only SwiftUI surface with pan, zoom, selection, deterministic keyboard traversal, individual VoiceOver node semantics, typed internal file and wiki references, and a closed inert host-action seam.",
+  "headSHA": "8b243e22e2fde5ba769ebe625f896591c0abd873",
+  "headSHASemantics": "This is the exact semantic-appearance and no-motion implementation commit. The following documentation-only evidence commit does not change production or test code.",
+  "scope": "A bounded typed JSON Canvas decoder, a closed native built-in registration, and a local read-only SwiftUI surface with semantic appearance-aware drawing, no visual transitions, pan, zoom, selection, deterministic keyboard traversal, individual VoiceOver node semantics, typed internal file and wiki references, and a closed inert host-action seam.",
   "productionPaths": [
     {
       "path": "Sources/WikiFSTypes/Renderer/RendererIdentifier.swift",
@@ -38,7 +38,7 @@
     {
       "path": "Sources/WikiFS/Renderer/JSONCanvasRendererView.swift",
       "symbols": ["JSONCanvasRendererView", "JSONCanvasRendererView.FocusSurface", "JSONCanvasRendererView.handleMoveCommand(_:from:)", "JSONCanvasRendererView.requestHostAction(for:)"],
-      "tests": ["JSONCanvasRendererTests.viewportTraversalFollowsDocumentOutline", "JSONCanvasRendererTests.internalHostActionsDispatchTypedRequest"]
+      "tests": ["JSONCanvasRendererTests.viewportTraversalFollowsDocumentOutline", "JSONCanvasRendererTests.internalHostActionsDispatchTypedRequest", "JSONCanvasRendererTests.rendererViewUsesSemanticAppearanceAndDisablesVisualMotion"]
     }
   ],
   "testPaths": [
@@ -51,7 +51,8 @@
       "The decoder preserves input order and makes deterministic outline and render projections.",
       "The native state clamps pan and zoom, selects nodes by canvas point or outline entry, and traverses the deterministic document outline.",
       "The native view exposes selectable individual canvas-node and outline-entry semantics, with matching deterministic keyboard traversal and VoiceOver order.",
-      "The decoder models only local file paths and canonical page/source wiki identifiers, and the closed dispatcher emits only their typed host actions after an explicit view action."
+      "The decoder models only local file paths and canonical page/source wiki identifiers, and the closed dispatcher emits only their typed host actions after an explicit view action.",
+      "The native view uses semantic background, primary, secondary, and accent styles with Dynamic-Type body fonts. Its selected border has a wider stroke as a non-color selection cue."
     ],
     "error": [
       "Unavailable, malformed, oversized, unsupported, unknown-field, excessive-node, excessive-edge, duplicate-identifier, invalid-geometry, oversized-text, unknown-edge-endpoint, and unsafe internal-link input fails closed.",
@@ -62,7 +63,8 @@
       "The decoder bounds nodes, edges, identifiers, text, coordinates, zoom, and translation.",
       "The viewport clamps translation at both bounds and ignores non-finite zoom factors.",
       "The decoder accepts text, local-file, and canonical-wiki link nodes with only modeled fields. It rejects absolute, traversal, scheme-bearing, credential-bearing, query, fragment, percent-escaped, external, and ambiguous link values.",
-      "The host-action seam carries typed requests only. It performs no navigation, file access, URL opening, network request, or WebView bridge call."
+      "The host-action seam carries typed requests only. It performs no navigation, file access, URL opening, network request, or WebView bridge call.",
+      "The renderer disables its transaction animation for pan, zoom, focus, and selection. It has no animation or transition modifier, so Reduce Motion needs no alternate transition."
     ],
     "cancellation": "Not applicable. The decoder and native state have no task, session, or asynchronous operation.",
     "teardown": "Not applicable. The focused decoder and state tests retain no resources."
@@ -75,12 +77,13 @@
   "excluded": [
     "Phase 5 host, WebView session, bridge, navigation, CSP, safe-mode, and trusted-activation contracts",
     "Excalidraw package files and tests",
-    "JSON Canvas external URL activation, host navigation/file resolution, appearance, and Reduce Motion follow-up work",
+    "JSON Canvas external URL activation and host navigation/file resolution",
     "package installation, management, rollback, removal, and Phase 7 work"
   ],
   "honestCoverageLimits": [
     "The native renderer supports text nodes, bounded local-file references, canonical page/source wiki references, and node-to-node edges. It does not support group nodes, arbitrary link URLs, aliases, fragments, version pins, or file reads.",
     "The descriptor sets supportsVoiceOver and supportsKeyboardNavigation to true. The focused pure-state test proves deterministic selection order, while source review verifies the individual SwiftUI node and outline semantics.",
+    "The focused source-contract test verifies semantic style tokens and the no-motion transaction. It does not host a window, toggle system appearance or Reduce Motion, measure contrast, or assert pixels.",
     "The focused tests validate the model and state. They do not host a SwiftUI window, exercise AppKit focus routing or VoiceOver output, or make a screenshot or golden-image assertion.",
     "The action dispatcher is an inert closed seam. The default renderer construction intentionally has no navigation or file-resolution handler until a separately authorized host-wiring slice.",
     "The bounded matcher can still select a document whose full decode fails. In that case the factory returns nil and the existing host keeps Source fallback."
