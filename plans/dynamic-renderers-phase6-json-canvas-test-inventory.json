@@ -3,12 +3,12 @@
   "issue": 1026,
   "phase": 6,
   "slice": 3,
-  "parentSHA": "f4fb8ed3ea58664391821f3dfc68cdf47fe64f1c",
+  "parentSHA": "b75430935e5cb7bf8871c3aa8ae2c6cd6c23583f",
   "prBaseSHA": "0f3cadc5519b6b405be41de692c75568c99673d1",
   "remotePRHeadAtStart": "3a94d6df098efcce8dc4d00c934ea785d829ac4f",
-  "headSHA": "e2315838a3470324195b9fde58c53ccd6283c0bf",
-  "headSHASemantics": "This is the exact implementation and test commit. The following documentation-only evidence commit does not change production or test code.",
-  "scope": "A bounded typed JSON Canvas decoder, a closed native built-in registration, and a local read-only SwiftUI surface with pan, zoom, selection, and outline state.",
+  "headSHA": "b09c82bc37ae4f6575f59df5485e3f828af8aaf7",
+  "headSHASemantics": "This is the exact metadata-correction implementation and test commit. The following documentation-only evidence commit does not change production or test code.",
+  "scope": "A bounded typed JSON Canvas decoder, a closed native built-in registration, a local read-only SwiftUI surface with pan, zoom, selection, and outline state, and corrected capability metadata.",
   "productionPaths": [
     {
       "path": "Sources/WikiFSTypes/Renderer/RendererIdentifier.swift",
@@ -49,7 +49,8 @@
     "success": [
       "The planner selects JSON Canvas only through the closed built-in descriptor map.",
       "The decoder preserves input order and makes deterministic outline and render projections.",
-      "The native state clamps pan and zoom and selects nodes by canvas point or outline entry."
+      "The native state clamps pan and zoom and selects nodes by canvas point or outline entry.",
+      "The descriptor declares no VoiceOver or keyboard-navigation support until those behaviors exist."
     ],
     "error": [
       "Unavailable, malformed, oversized, unsupported, unknown-field, excessive-node, and unknown-edge-endpoint input fails closed.",
@@ -76,6 +77,7 @@
   ],
   "honestCoverageLimits": [
     "The native renderer supports text nodes and node-to-node edges only. It does not support JSON Canvas file, link, or group nodes.",
+    "The descriptor sets supportsVoiceOver and supportsKeyboardNavigation to false. This slice does not add either behavior.",
     "The focused tests validate the model and state. They do not host a SwiftUI window or make a screenshot or golden-image assertion.",
     "The full make test suite has a pre-existing DocumentationContractTests failure. It expects a superseded Phase 5 inventory SHA and text. This slice does not change that Phase 5 evidence file.",
     "The bounded matcher can still select a document whose full decode fails. In that case the factory returns nil and the existing host keeps Source fallback."
