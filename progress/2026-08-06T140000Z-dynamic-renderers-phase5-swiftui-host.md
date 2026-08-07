@@ -1,7 +1,7 @@
 ---
 timestamp: 2026-08-06T140000Z
 title: Dynamic renderers Phase 5 SwiftUI host
-branch: feature/dynamic-renderers-05-webview-swiftui-host
+branch: feature/dynamic-renderers-05-webview-security
 status: complete
 ---
 
@@ -20,10 +20,10 @@ status: complete
 
 ## Verification
 
-- `swiftc -parse` passed for all owned Swift production and test files.
-- `swiftlint --strict --no-cache` passed for all owned Swift production and test files.
-- The inventory resolver and `git diff --check` passed.
-- The focused SwiftPM test command did not run. This fresh isolated worktree has no dependency checkout, and dependency fetching was intentionally not requested.
-- `make build` did not run. Its unrelated icon generation prerequisite uses `iconutil`, which has an environment limitation. This slice does not wait on that tool.
+- `swift build --disable-sandbox` passed after integration into the security branch at `65b449c5`.
+- The commit hook ran strict SwiftLint across 481 files and found zero violations.
+- The inventory resolver and `git diff --check` passed for the integrated file set.
+- Focused host and session tests remain part of the final cumulative verification; live WebKit tests are opt-in through `WIKIFS_APP_TESTS=1`.
+- `make build` may still be unavailable in this environment because its unchanged icon generation prerequisite uses `iconutil`; the direct SwiftPM build is the authoritative compile gate here.
 - Hosted tests remain opt-in through `WIKIFS_APP_TESTS=1`. They mount a real `WKWebView` with a recording session. They do not load a renderer package or prove network isolation.
-- Git could not stage the owned paths with the requested project-local index. The protected worktree Git object database rejected blob creation. No commit was created.
+- The host seam is committed as `65b449c52c181b717535f211249af47fec4c6980`; no push, merge, or retarget occurred.

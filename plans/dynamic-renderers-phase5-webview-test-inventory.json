@@ -4,9 +4,9 @@
   "phase": 5,
   "slice": 5,
   "coveredSlices": [0, 1, 2, 3, 4, 5],
-  "baseSHA": "ad0cf2e73fd070d2e6b3b791c3ac655df952ff06",
-  "headSHA": "7b968c29bc39265a45a3984f11606ddf24042930",
-  "scope": "WebView package-resource security boundary, ephemeral WebKit session lifecycle, per-session capability-bound input.read, navigation policy, actual WebKit provenance checks, isolated-world reply delivery, bounded replay state, trusted external-link activation contracts, machine-wide installed-renderer safe mode, and a live HTTP plus trusted-TLS WebSocket positive-control harness. The bridge has closed methods, bounded envelopes and payloads, replay rejection, main-frame and webView/origin/session checks, exact version-pinned source and markdown reads, and an isolated-world postMessage relay. Trusted activation uses a short-lived, one-use cryptographic nonce bound to a normalized HTTP(S) destination and host context. Failure accounting stores only a package identity, a closed cause, and a timestamp. The harness uses the login-keychain identity with SHA-1 7C0B00954A876487620BE7B2E2D0FDEC54B8EF08. The live WebKit WSS positive control passes with the real TLS listener and certificate.",
+  "baseSHA": "933a0637fa5593c4fdba611edb380058b5838f71",
+  "headSHA": "65b449c52c181b717535f211249af47fec4c6980",
+  "scope": "WebView package-resource security boundary, ephemeral WebKit session lifecycle, per-session capability-bound input.read, navigation policy, actual WebKit provenance checks, isolated-world reply delivery, bounded replay state, trusted external-link activation contracts, machine-wide installed-renderer safe mode, the SwiftUI installed-renderer host and Source fallback, per-session storage and file-isolation coverage, and a live HTTP plus trusted-TLS WebSocket positive-control harness. The bridge has closed methods, bounded envelopes and payloads, replay rejection, main-frame and webView/origin/session checks, exact version-pinned source and markdown reads, and an isolated-world postMessage relay. Trusted activation uses a short-lived, one-use cryptographic nonce bound to a normalized HTTP(S) destination and host context. Failure accounting stores only a package identity, a closed cause, and a timestamp. The harness uses the login-keychain identity with SHA-1 7C0B00954A876487620BE7B2E2D0FDEC54B8EF08. The live WebKit WSS positive control passes with the real TLS listener and certificate.",
   "futureInputContract": "RendererAuthorizedInputReader receives version-pinned SourceVersionID source bytes or SourceMarkdownVersionID processed Markdown. It must not call live sourceContent(id:) for session input.",
   "productionPaths": [
     {
@@ -204,6 +204,21 @@
       "path": "Sources/WikiFS/Renderer/RendererTrustedActivationWebKitAdapter.swift",
       "symbols": ["RendererExternalURLOpening", "RendererExternalLinkRedemptionGate", "RendererTrustedActivationScriptMessageHandler", "RendererExternalLinkScriptMessageHandler"],
       "tests": ["RendererExternalLinkRedemptionGateTests.opensOnlySuccessfullyRedeemedDestination", "RendererExternalLinkRedemptionGateTests.rejectedRedemptionsNeverReachTheExternalOpener", "RendererExternalLinkRedemptionGateTests.observationScriptKeepsNonceOutOfPageVisibleWindowState"]
+    },
+    {
+      "path": "Sources/WikiFS/Renderer/WikiAppWebView.swift",
+      "symbols": ["WikiAppWebViewSessionControlling", "InstalledRendererWebViewIdentity", "WikiAppWebView", "WikiAppWebViewRepresentable"],
+      "tests": ["WikiAppWebViewTests.mountDefersSessionStart", "WikiAppWebViewTests.identityReplacementClosesBeforeStartingReplacement", "WikiAppWebViewTests.dismantleClosesSession", "WikiAppWebViewTests.sessionFailureDefersStateMutation", "WikiAppWebViewTests.hostedMountAndDismantle"]
+    },
+    {
+      "path": "Sources/WikiFS/Renderer/InstalledRendererFactory.swift",
+      "symbols": ["InstalledRendererSessionConfiguration", "InstalledRendererFactory"],
+      "tests": ["WikiAppWebViewTests.unavailableInstalledRendererReturnsNoView"]
+    },
+    {
+      "path": "Sources/WikiFS/Sources/SourceDetailView.swift",
+      "symbols": ["SourceDetailView.renderedContent", "SourceDetailView.rendererPlanner"],
+      "tests": ["WikiAppWebViewTests.sourceDetailKeepsInstalledFactoryOutsideBuiltInMap"]
     }
   ],
   "testPaths": [
@@ -224,6 +239,8 @@
     "Tests/WikiFSTests/DocumentationContractTests.swift",
     "Tests/WikiFSTests/RendererTrustedActivationContractsTests.swift",
     "Tests/WikiFSAppTests/RendererExternalLinkRedemptionGateTests.swift",
+    "Tests/WikiFSAppTests/WikiAppWebViewTests.swift",
+    "Tests/WikiFSAppTests/RendererSessionIsolationTests.swift",
     "Tests/WikiFSAppTests/RendererHostedWebKitHarness.swift",
     "Tests/WikiFSAppTests/RendererHostedWebKitHarnessTests.swift",
     "Tests/WikiFSAppTests/RendererLoopbackObservationServers.swift"
@@ -308,6 +325,18 @@
       "WikiAppWebViewSessionTests.discardedLoadingSessionReleasesPermit",
       "WikiAppWebViewSessionTests.discardedFailedSessionReleasesCapacity"
     ],
+    "the SwiftUI host defers start and failure callbacks, closes before replacement, and preserves Source fallback when no validated package snapshot exists": [
+      "WikiAppWebViewTests.mountDefersSessionStart",
+      "WikiAppWebViewTests.identityReplacementClosesBeforeStartingReplacement",
+      "WikiAppWebViewTests.dismantleClosesSession",
+      "WikiAppWebViewTests.sessionFailureDefersStateMutation",
+      "WikiAppWebViewTests.unavailableInstalledRendererReturnsNoView",
+      "WikiAppWebViewTests.sourceDetailKeepsInstalledFactoryOutsideBuiltInMap"
+    ],
+    "fresh renderer sessions isolate transient browser storage and reject file navigation/content exposure": [
+      "RendererSessionIsolationTests.sessionsIsolateTransientBrowserStorage",
+      "RendererSessionIsolationTests.sessionsRejectFileNavigationAndContentExposure"
+    ],
     "future WebView sessions use only version-pinned input": [
         "DocumentationContractTests.dynamicRendererBridgeContractIsVersionPinnedAndNavigationScoped"
     ],
@@ -343,7 +372,6 @@
   },
   "excluded": [
     "general subresource interception",
-    "SwiftUI host",
     "Excalidraw",
     "JSON Canvas",
     "settings UI"
@@ -351,6 +379,8 @@
   "honestCoverageLimits": [
     "The portable provider tests do not run a live WKWebView or prove general network isolation. The later hosted network harness owns that claim.",
     "The opt-in lifecycle tests do not load a live renderer document. A later hosted network harness owns end-to-end WebKit behavior.",
+    "The SwiftUI host tests mount a real WKWebView only through a recording session. They prove insertion, deferred lifecycle ordering, failure deferral, replacement teardown, and Source fallback dispatch; they do not prove a live package navigation.",
+    "The session-isolation tests exercise real ephemeral WebKit data stores and file-navigation rejection. They do not prove the general network-isolation matrix.",
     "The portable isolated-world bridge tests exercise handler routing, reply encoding, and injected provenance. They do not run a live renderer document or prove WebKit supplies that provenance. A hosted suite still owns that claim.",
     "The bridge and navigation tests do not prove live frame identity, navigation cancellation, or network isolation. A hosted WebKit suite must cover those conditions.",
     "The trusted-activation contract and redemption-gate tests do not execute a live WKWebView. They do not prove that WebKit supplies the observed provenance or that synthetic page events cannot obtain a nonce. The source-contract test checks that the nonce does not cross a shared window message path.",

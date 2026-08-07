@@ -43,7 +43,7 @@ struct WikiAppWebViewTests {
         scheduler.runAll()
         coordinator.reconcile(identity: try identity("two"), in: container)
 
-        #expect(events.values == [.started])
+        #expect(events.values == [.started, .closed])
         scheduler.runAll()
         #expect(events.values == [.started, .closed, .started])
     }
@@ -119,7 +119,7 @@ struct WikiAppWebViewTests {
             identity: try identity("hosted"),
             makeSession: { _, _ in session },
             onFailure: { _ in })
-        let hosting = NSHostingController(rootView: view)
+        let hosting = NSHostingController(rootView: AnyView(view))
         let window = NSWindow(contentViewController: hosting)
         window.orderFront(nil)
         defer { window.orderOut(nil) }
@@ -130,7 +130,7 @@ struct WikiAppWebViewTests {
         #expect(session.events == [.started])
         #expect(findWebView(in: hosting.view) === webView)
 
-        hosting.rootView = EmptyView()
+        hosting.rootView = AnyView(EmptyView())
         for _ in 0 ..< 20 where session.events.count < 2 {
             await Task.yield()
         }
@@ -218,14 +218,14 @@ private func installedDescriptor() throws -> RendererDescriptor {
         reference: .init(packageID: packageID, version: version, registrationID: registrationID),
         displayName: "Installed",
         implementation: .webPackage(.init(path: path)),
-        matchers: [.init(mimeType: try RendererMIMEType(validating: "application/x-installed"))],
+        matchers: [.artifactKind(.source)],
         presentations: [.web],
-        approvedAssets: [.init(path: path, digest: try RendererSHA256Digest(validating: String(repeating: "0", count: 64)))],
+        approvedAssets: [.init(path: path, digest: RendererSHA256Digest(bytes: Array(repeating: 0, count: RendererSHA256Digest.byteCount)))],
         capabilities: [.inputRead],
-        sizeLimits: .init(maximumInputBytes: 1, maximumAssetBytes: 1),
+        sizeLimits: try .init(maximumInputByteCount: 1, maximumDecodedByteCount: 1),
         linkPolicy: .none,
-        accessibility: .init(label: "Installed", role: .document),
-        compatibility: .init(minimumHostProtocolRevision: 1, maximumHostProtocolRevision: 1),
+        accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
+        compatibility: try .init(minimumProtocolRevision: 1, maximumProtocolRevision: 1),
         priority: 0)
 }
 #endif

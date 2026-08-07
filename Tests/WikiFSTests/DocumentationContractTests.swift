@@ -137,8 +137,8 @@ struct DocumentationContractTests {
 
         #expect(inventory.contains("ephemeral WebKit session lifecycle"))
         #expect(inventory.contains("\"coveredSlices\": [0, 1, 2, 3, 4, 5]"))
-        #expect(inventory.contains("\"baseSHA\": \"ad0cf2e73fd070d2e6b3b791c3ac655df952ff06\""))
-        #expect(inventory.contains("\"headSHA\": \"7b968c29bc39265a45a3984f11606ddf24042930\""))
+        #expect(inventory.contains("\"baseSHA\": \"933a0637fa5593c4fdba611edb380058b5838f71\""))
+        #expect(inventory.contains("\"headSHA\": \"65b449c52c181b717535f211249af47fec4c6980\""))
         #expect(inventory.contains("per-session capability-bound input.read"))
         #expect(inventory.contains("SourceVersionID"))
         #expect(inventory.contains("SourceMarkdownVersionID"))
@@ -147,6 +147,8 @@ struct DocumentationContractTests {
         #expect(inventory.contains("navigation policy, actual WebKit provenance checks"))
         #expect(inventory.contains("machine-wide installed-renderer safe mode"))
         #expect(inventory.contains("Failure accounting stores only a package identity"))
+        #expect(inventory.contains("SwiftUI installed-renderer host and Source fallback"))
+        #expect(inventory.contains("per-session storage and file-isolation coverage"))
     }
 
     @Test func dynamicRendererInventoryMapsEveryExistingProductionPathToResolvedTests() throws {
