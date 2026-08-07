@@ -113,6 +113,7 @@ public enum BuiltInRendererID: String, Codable, CaseIterable, Hashable, Sendable
     case html
     case mermaid
     case media
+    case jsonCanvas = "json-canvas"
 
     public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
 }

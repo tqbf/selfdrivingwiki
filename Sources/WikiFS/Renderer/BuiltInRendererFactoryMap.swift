@@ -13,13 +13,14 @@ import WikiFSTypes
 /// surface never switches on a file format to select a renderer.
 @MainActor
 enum BuiltInRendererFactoryMap {
-    typealias Factory = @MainActor (BuiltInRendererFactoryInputs) -> AnyView
+    typealias Factory = @MainActor (BuiltInRendererFactoryInputs) -> AnyView?
 
     static let factories: [BuiltInRendererID: Factory] = [
         .pdf: makePDF,
         .html: makeHTML,
         .mermaid: makeMermaid,
         .media: makeMedia,
+        .jsonCanvas: makeJSONCanvas,
     ]
 
     static func factory(for id: BuiltInRendererID) -> Factory? {
@@ -36,7 +37,7 @@ enum BuiltInRendererFactoryMap {
         return factory(inputs)
     }
 
-    private static func makePDF(_ inputs: BuiltInRendererFactoryInputs) -> AnyView {
+    private static func makePDF(_ inputs: BuiltInRendererFactoryInputs) -> AnyView? {
         AnyView(Group {
             if let data = inputs.sourceBytes {
                 PDFViewWrapper(data: data, highlightQuote: inputs.pdfQuote)
@@ -50,7 +51,7 @@ enum BuiltInRendererFactoryMap {
         })
     }
 
-    private static func makeHTML(_ inputs: BuiltInRendererFactoryInputs) -> AnyView {
+    private static func makeHTML(_ inputs: BuiltInRendererFactoryInputs) -> AnyView? {
         AnyView(Group {
             if let html = inputs.htmlSource {
                 HTMLSourceWebView(html: html)
@@ -64,7 +65,7 @@ enum BuiltInRendererFactoryMap {
         })
     }
 
-    private static func makeMermaid(_ inputs: BuiltInRendererFactoryInputs) -> AnyView {
+    private static func makeMermaid(_ inputs: BuiltInRendererFactoryInputs) -> AnyView? {
         AnyView(Group {
             if let markdown = inputs.mermaidMarkdown {
                 WikiReaderView(markdown: markdown, currentSelection: inputs.selection, store: inputs.store)
@@ -80,7 +81,7 @@ enum BuiltInRendererFactoryMap {
         })
     }
 
-    private static func makeMedia(_ inputs: BuiltInRendererFactoryInputs) -> AnyView {
+    private static func makeMedia(_ inputs: BuiltInRendererFactoryInputs) -> AnyView? {
         AnyView(Group {
             if let target = inputs.mediaTarget {
                 MediaEmbedPlayerView(target: target)
@@ -94,6 +95,16 @@ enum BuiltInRendererFactoryMap {
                 }
             }
         })
+    }
+
+    private static func makeJSONCanvas(_ inputs: BuiltInRendererFactoryInputs) -> AnyView? {
+        do {
+            let document = try JSONCanvasDocument.decode(inputs.sourceBytes)
+            return AnyView(JSONCanvasRendererView(document: document))
+        } catch {
+            DebugLog.tabs("BuiltInRendererFactoryMap: JSON Canvas decode failed: \(error)")
+            return nil
+        }
     }
 }
 
