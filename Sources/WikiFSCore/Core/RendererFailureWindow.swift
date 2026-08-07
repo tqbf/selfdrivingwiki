@@ -19,6 +19,9 @@ public enum RendererInstalledRendererFailurePolicy {
     /// A terminal session event is retried across a bounded number of
     /// generation conflicts before the host records a diagnostic.
     public static let maximumRecordingAttempts = 3
+    /// A recovery action retries a bounded number of generation conflicts
+    /// before surfacing the contention to its caller.
+    public static let maximumResetAttempts = 3
     /// Keeps the durable, content-free accounting record bounded even when
     /// many installed versions fail during one window.
     public static let maximumRetainedFailures = 128

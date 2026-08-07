@@ -23,7 +23,26 @@ public struct RendererMachineIndex: Codable, Equatable, Sendable {
     ) throws {
         self.schemaVersion = schemaVersion
         self.generation = generation
-        self.records = records.sorted()
+        // Schema v2 persisted one machine-wide safe-mode bit. Preserve that
+        // fail-closed state while moving its effect into the per-version
+        // suppression field used by the current projection.
+        self.records = try records.map { record in
+            guard safeModeIsEnabled, record.state == .validated, record.isSafeModeSuppressed == false else {
+                return record
+            }
+            return try RendererPackageInstallRecord(
+                packageID: record.packageID,
+                version: record.version,
+                expectedPackageHash: record.expectedPackageHash,
+                state: record.state,
+                reservedAt: record.reservedAt,
+                updatedAt: record.updatedAt,
+                diagnostic: record.diagnostic,
+                rollbackCandidate: record.rollbackCandidate,
+                isSafeModeSuppressed: true,
+                validatedDescriptors: record.validatedDescriptors
+            )
+        }.sorted()
         self.safeModeIsEnabled = safeModeIsEnabled
         self.installedRendererFailures = installedRendererFailures
         try validate()
@@ -66,11 +85,9 @@ public struct RendererMachineIndex: Codable, Equatable, Sendable {
     }
 
     /// Only activated, validator-produced records can enter an installed
-    /// registry. New safe-mode suppression is scoped to each exact installed
-    /// package/version; the legacy machine-wide bit remains fail-closed for
-    /// indexes written by older versions. Built-ins and Source are outside it.
+    /// registry. Safe-mode suppression is scoped to each exact installed
+    /// package/version. Built-ins and Source are outside it.
     public var availableDescriptorProjection: [RendererDescriptor] {
-        guard safeModeIsEnabled == false else { return [] }
         return records
             .filter { $0.state == .validated && $0.isSafeModeSuppressed == false }
             .flatMap(\.validatedDescriptors)
@@ -187,7 +204,7 @@ func rendererMachineIndexRecordingInstalledRendererFailure(
     } else {
         nextRecords = index.records
     }
-    let next = try index.replacing(records: nextRecords, safeModeIsEnabled: index.safeModeIsEnabled, installedRendererFailures: failures)
+    let next = try index.replacing(records: nextRecords, safeModeIsEnabled: false, installedRendererFailures: failures)
     return (next, window)
 }
 
@@ -221,7 +238,7 @@ func rendererMachineIndexResettingInstalledRendererSafeMode(
         )
     }
     let failures = index.installedRendererFailures.filter { $0.reservation != reservation }
-    return try index.replacing(records: records, safeModeIsEnabled: index.safeModeIsEnabled, installedRendererFailures: failures)
+    return try index.replacing(records: records, safeModeIsEnabled: false, installedRendererFailures: failures)
 }
 
 func rendererMachineIndexResettingInstalledRendererSafeMode(

@@ -208,6 +208,28 @@ public actor RendererMachineIndexStore {
         }
     }
 
+    /// Production recovery seam for one exact installed package/version.
+    /// Reads and resets under generation-CAS, retrying only bounded contention;
+    /// callers do not need to coordinate a separately-observed generation.
+    public func resetInstalledRendererSafeMode(
+        packageID: RendererPackageID,
+        version: RendererPackageVersion
+    ) async throws -> RendererMachineIndex {
+        for _ in 0 ..< RendererInstalledRendererFailurePolicy.maximumResetAttempts {
+            let current = try await read()
+            do {
+                return try await resetInstalledRendererSafeMode(
+                    packageID: packageID,
+                    version: version,
+                    expectedGeneration: current.generation
+                )
+            } catch RendererMachineIndexStoreError.staleGeneration {
+                continue
+            }
+        }
+        throw RendererMachineIndexStoreError.staleGeneration
+    }
+
     /// Returns the current window after applying normal time aging. This read
     /// does not alter generation; the next qualifying write persists pruning.
     public func failureWindow(

@@ -209,6 +209,7 @@ struct RendererFailureWindowTests {
         #expect(migrated.generation == safe.generation)
         #expect(migrated.safeModeIsEnabled)
         #expect(migrated.records == safe.records)
+        #expect(migrated.availableDescriptorProjection.isEmpty)
         #expect(migrated.installedRendererFailures.isEmpty)
     }
 

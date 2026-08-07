@@ -83,6 +83,39 @@ struct RendererSafeModeTests {
         #expect((try await RendererMachineIndexStore(layout: fixture.layout).read()).safeModeIsEnabled == false)
     }
 
+    @Test func productionExactResetSeamDoesNotRequireASeparateGenerationRead() async throws {
+        let fixture = try RendererMachineStoreFailureFixture()
+        defer { fixture.remove() }
+        let store = try await fixture.installedStore()
+        var index = try await store.read()
+        for minute in 0 ..< RendererInstalledRendererFailurePolicy.threshold {
+            index = try await store.recordInstalledRendererFailure(
+                packageID: fixture.packageID,
+                version: fixture.version,
+                failure: .bridgeBootstrapFailed,
+                expectedGeneration: index.generation,
+                clock: RendererMachineStoreFailureFixture.Clock(
+                    timestamp: try RendererMachineStoreFailureFixture.timestamp(minutes: minute)
+                )
+            ).index
+        }
+
+        #expect(index.availableDescriptorProjection == [fixture.secondInstalledDescriptor])
+        let reset = try await store.resetInstalledRendererSafeMode(
+            packageID: fixture.packageID,
+            version: fixture.version
+        )
+
+        #expect(reset.availableDescriptorProjection == [fixture.installedDescriptor, fixture.secondInstalledDescriptor])
+        #expect(try await store.failureWindow(
+            packageID: fixture.packageID,
+            version: fixture.version,
+            clock: RendererMachineStoreFailureFixture.Clock(
+                timestamp: try RendererMachineStoreFailureFixture.timestamp(minutes: 1)
+            )
+        ).count == 0)
+    }
+
     @Test func staleResetCannotDiscardAConcurrentFailureHistory() async throws {
         let fixture = try RendererMachineStoreFailureFixture()
         defer { fixture.remove() }
