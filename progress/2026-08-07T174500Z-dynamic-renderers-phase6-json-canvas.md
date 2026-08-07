@@ -18,6 +18,9 @@ Commit `b09c82bc37ae4f6575f59df5485e3f828af8aaf7` corrects its capability metada
 The descriptor sets `supportsVoiceOver` and `supportsKeyboardNavigation` to false.
 This record does not claim either behavior.
 
+Commit `7e59888cf706e9b429ac0ca9cfecc1c5b760ee62` adds validation boundary tests.
+It does not change production behavior.
+
 The decoder reads at most 256 KiB before it decodes JSON.
 It bounds nodes, edges, identifiers, text, coordinates, zoom, and translation.
 It accepts text nodes and node-to-node edges only.
@@ -33,14 +36,14 @@ The Excalidraw package files and tests did not change.
 
 ## Verification
 
-- `WIKIFS_APP_TESTS=1 swift test --filter 'JSONCanvasRendererTests|BuiltInRendererRegistryTests' --jobs 4` passed with 30 tests.
+- `WIKIFS_APP_TESTS=1 swift test --filter 'JSONCanvasRendererTests|BuiltInRendererRegistryTests' --jobs 4` passed with 33 tests.
 - `WIKIFS_APP_TESTS=1 swift test --filter 'JSONCanvasRendererTests|BuiltInRendererRegistryTests|RendererArtifactMatcherTests|SourceDetailRendererArchitectureAuditTests' --jobs 4` passed with 41 tests.
 - `make lint` passed with zero violations and no new bare `try?` use.
 - `make build` and bare `swift build` passed.
 - `git diff --check` passed before the implementation commit.
-- `make test` ran 3,254 tests. Only `DocumentationContractTests.dynamicRendererBridgeContractIsVersionPinnedAndNavigationScoped` failed. It has three checks that expect superseded Phase 5 inventory evidence. This slice does not modify that inventory.
 - The metadata correction adds focused assertions that both descriptor flags are false.
-- `WIKIFS_APP_TESTS=1 swift test --filter DocumentationContractTests --jobs 4` passed with 11 tests after the Phase 5 evidence refresh.
+- The validation tests cover excessive edges, duplicate node and edge IDs, invalid and non-finite geometry input, oversized text, translation clamps, and non-finite zoom factors.
+- `WIKIFS_APP_TESTS=1 swift test --filter DocumentationContractTests --jobs 4` passed with 11 tests after b75430935e5cb7bf8871c3aa8ae2c6cd6c23583f refreshed the Phase 5 evidence.
 
 ## Limits
 

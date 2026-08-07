@@ -3,12 +3,12 @@
   "issue": 1026,
   "phase": 6,
   "slice": 3,
-  "parentSHA": "b75430935e5cb7bf8871c3aa8ae2c6cd6c23583f",
+  "parentSHA": "b09c82bc37ae4f6575f59df5485e3f828af8aaf7",
   "prBaseSHA": "0f3cadc5519b6b405be41de692c75568c99673d1",
   "remotePRHeadAtStart": "3a94d6df098efcce8dc4d00c934ea785d829ac4f",
-  "headSHA": "b09c82bc37ae4f6575f59df5485e3f828af8aaf7",
-  "headSHASemantics": "This is the exact metadata-correction implementation and test commit. The following documentation-only evidence commit does not change production or test code.",
-  "scope": "A bounded typed JSON Canvas decoder, a closed native built-in registration, a local read-only SwiftUI surface with pan, zoom, selection, and outline state, and corrected capability metadata.",
+  "headSHA": "7e59888cf706e9b429ac0ca9cfecc1c5b760ee62",
+  "headSHASemantics": "This is the exact validation-test implementation commit. The following documentation-only evidence commit does not change production or test code.",
+  "scope": "A bounded typed JSON Canvas decoder, a closed native built-in registration, a local read-only SwiftUI surface with pan, zoom, selection, and outline state, corrected capability metadata, and focused validation boundary tests.",
   "productionPaths": [
     {
       "path": "Sources/WikiFSTypes/Renderer/RendererIdentifier.swift",
@@ -28,12 +28,12 @@
     {
       "path": "Sources/WikiFS/Renderer/JSONCanvasDocument.swift",
       "symbols": ["JSONCanvasLimits", "JSONCanvasDocument.decode", "JSONCanvasRenderProjection", "JSONCanvasDocument.nodeID(containing:)", "JSONCanvasWireValidation"],
-      "tests": ["JSONCanvasRendererTests.decoderCreatesDeterministicProjection", "JSONCanvasRendererTests.decoderRejectsInvalidInput", "JSONCanvasRendererTests.decoderRejectsExcessiveNodeCount"]
+      "tests": ["JSONCanvasRendererTests.decoderCreatesDeterministicProjection", "JSONCanvasRendererTests.decoderRejectsInvalidInput", "JSONCanvasRendererTests.decoderRejectsExcessiveNodeCount", "JSONCanvasRendererTests.decoderRejectsEdgeAndIdentifierBounds", "JSONCanvasRendererTests.decoderRejectsGeometryAndTextBounds"]
     },
     {
       "path": "Sources/WikiFS/Renderer/JSONCanvasViewportState.swift",
       "symbols": ["JSONCanvasViewportState.pan(by:)", "JSONCanvasViewportState.zoom(by:)", "JSONCanvasViewportState.selectNode(at:in:)", "JSONCanvasViewportState.selectOutlineEntry"],
-      "tests": ["JSONCanvasRendererTests.viewportMaintainsBoundedInteractionState"]
+      "tests": ["JSONCanvasRendererTests.viewportMaintainsBoundedInteractionState", "JSONCanvasRendererTests.viewportClampsTranslationAndNonFiniteZoom"]
     },
     {
       "path": "Sources/WikiFS/Renderer/JSONCanvasRendererView.swift",
@@ -53,12 +53,13 @@
       "The descriptor declares no VoiceOver or keyboard-navigation support until those behaviors exist."
     ],
     "error": [
-      "Unavailable, malformed, oversized, unsupported, unknown-field, excessive-node, and unknown-edge-endpoint input fails closed.",
+      "Unavailable, malformed, oversized, unsupported, unknown-field, excessive-node, excessive-edge, duplicate-identifier, invalid-geometry, oversized-text, and unknown-edge-endpoint input fails closed.",
       "The built-in factory returns nil for unavailable or malformed input so the existing host keeps Source fallback."
     ],
     "boundary": [
       "The decoder checks the 256 KiB input bound before JSON decoding.",
       "The decoder bounds nodes, edges, identifiers, text, coordinates, zoom, and translation.",
+      "The viewport clamps translation at both bounds and ignores non-finite zoom factors.",
       "The decoder accepts only text nodes and only modeled fields. It retains no URL or action data."
     ],
     "cancellation": "Not applicable. The decoder and native state have no task, session, or asynchronous operation.",
@@ -79,7 +80,7 @@
     "The native renderer supports text nodes and node-to-node edges only. It does not support JSON Canvas file, link, or group nodes.",
     "The descriptor sets supportsVoiceOver and supportsKeyboardNavigation to false. This slice does not add either behavior.",
     "The focused tests validate the model and state. They do not host a SwiftUI window or make a screenshot or golden-image assertion.",
-    "The full make test suite has a pre-existing DocumentationContractTests failure. It expects a superseded Phase 5 inventory SHA and text. This slice does not change that Phase 5 evidence file.",
+    "DocumentationContractTests passed after b75430935e5cb7bf8871c3aa8ae2c6cd6c23583f refreshed the Phase 5 inventory evidence.",
     "The bounded matcher can still select a document whose full decode fails. In that case the factory returns nil and the existing host keeps Source fallback."
   ]
 }
