@@ -148,6 +148,12 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
     private var permit: RendererWebViewSessionPermit?
     private var bridge: RendererContentWorldBroker?
     private var scriptMessageHandler: RendererScriptMessageHandler?
+    private var trustedActivationHandler: RendererTrustedActivationScriptMessageHandler?
+    private var externalLinkHandler: RendererExternalLinkScriptMessageHandler?
+    private let externalLinkRedemptionGate: RendererExternalLinkRedemptionGate
+    private let windowID = UUID()
+    private let mainFrameID = UUID()
+    private var navigationID: UInt64 = 0
     private var requestGeneration = 0
     private(set) var webView: WKWebView?
 
@@ -158,7 +164,10 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
         configurationFactory: WikiAppWebViewConfigurationFactory = .init(),
         timeoutScheduler: any RendererWebViewLoadTimeoutScheduling = SystemRendererWebViewLoadTimeoutScheduler(),
         permits: RendererWebViewSessionPermitPool? = nil,
-        bridgeFactory: ((RendererSessionID) -> RendererContentWorldBroker)? = nil
+        bridgeFactory: ((RendererSessionID) -> RendererContentWorldBroker)? = nil,
+        externalURLOpener: any RendererExternalURLOpening = SystemRendererExternalURLOpener(),
+        activationClock: any RendererActivationClock = SystemRendererActivationClock(),
+        activationNonceGenerator: any RendererActivationNonceGenerating = SystemRendererActivationNonceGenerator()
     ) {
         self.entryURL = entryURL
         self.resourceProvider = resourceProvider
@@ -166,6 +175,11 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
         self.timeoutScheduler = timeoutScheduler
         self.permits = permits ?? .shared
         self.bridgeFactory = bridgeFactory
+        externalLinkRedemptionGate = .init(
+            opener: externalURLOpener,
+            clock: activationClock,
+            nonceGenerator: activationNonceGenerator
+        )
         machine = .init(sessionID: sessionID)
     }
 
@@ -212,6 +226,26 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
             self.bridge = bridge
             scriptMessageHandler = handler
         }
+        let trustedActivationHandler = RendererTrustedActivationScriptMessageHandler(
+            expectedContentWorld: configuration.contentWorld
+        ) { [weak self] url, webView, securityOrigin, isMainFrame in
+            self?.recordTrustedActivation(url: url, webView: webView, securityOrigin: securityOrigin, isMainFrame: isMainFrame)
+        }
+        let externalLinkHandler = RendererExternalLinkScriptMessageHandler(
+            expectedContentWorld: configuration.contentWorld
+        ) { [weak self] nonce, url, webView, securityOrigin, isMainFrame in
+            guard let self else { throw RendererExternalActivationError.sessionClosed }
+            return try self.redeemExternalLink(nonce: nonce, url: url, webView: webView, securityOrigin: securityOrigin, isMainFrame: isMainFrame)
+        }
+        configuration.userContentController.addScriptMessageHandler(
+            trustedActivationHandler, contentWorld: configuration.contentWorld, name: WikiAppWebViewPolicy.trustedActivationHandlerName
+        )
+        configuration.userContentController.addScriptMessageHandler(
+            externalLinkHandler, contentWorld: configuration.contentWorld, name: WikiAppWebViewPolicy.externalLinkHandlerName
+        )
+        configuration.userContentController.addUserScript(RendererTrustedActivationScriptMessageHandler.observationScript(contentWorld: configuration.contentWorld))
+        self.trustedActivationHandler = trustedActivationHandler
+        self.externalLinkHandler = externalLinkHandler
         let webView = WKWebView(frame: .zero, configuration: configuration.webViewConfiguration)
         webView.navigationDelegate = self
         webView.uiDelegate = self
@@ -226,22 +260,32 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
 
     func close() {
         guard machine.close() else { return }
-        releaseOwnedResources()
+        releaseOwnedResources(invalidation: .sessionClosed)
     }
 
-    private func releaseOwnedResources() {
+    private func releaseOwnedResources(invalidation: RendererExternalActivationError = .sessionClosed) {
         requestGeneration &+= 1
+        navigationID &+= 1
+        externalLinkRedemptionGate.invalidateAll(reason: invalidation)
         timeoutHandle?.cancel()
         timeoutHandle = nil
         webView?.stopLoading()
         bridge?.close()
         bridge = nil
         scriptMessageHandler = nil
+        trustedActivationHandler = nil
+        externalLinkHandler = nil
         configuration?.schemeHandler.close()
         if let configuration {
             configuration.userContentController.removeScriptMessageHandler(
                 forName: WikiAppWebViewPolicy.isolatedMessageHandlerName,
                 contentWorld: configuration.contentWorld
+            )
+            configuration.userContentController.removeScriptMessageHandler(
+                forName: WikiAppWebViewPolicy.trustedActivationHandlerName, contentWorld: configuration.contentWorld
+            )
+            configuration.userContentController.removeScriptMessageHandler(
+                forName: WikiAppWebViewPolicy.externalLinkHandlerName, contentWorld: configuration.contentWorld
             )
             configuration.userContentController.removeAllUserScripts()
         }
@@ -283,9 +327,11 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
     ) {
         guard self.webView === webView else {
+            externalLinkRedemptionGate.invalidateAll(reason: .wrongWindow)
             decisionHandler(.cancel)
             return
         }
+        invalidateForNavigation()
         decisionHandler(isAllowedPackageURL(navigationAction.request.url) ? .allow : .cancel)
     }
 
@@ -297,9 +343,11 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
         guard self.webView === webView,
               isAllowedPackageURL(navigationResponse.response.url)
         else {
+            externalLinkRedemptionGate.invalidateAll(reason: .navigationInvalidated)
             decisionHandler(.cancel)
             return
         }
+        invalidateForNavigation()
         decisionHandler(.allow)
     }
 
@@ -345,10 +393,57 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
     }
 
     private func failLoading(_ kind: RendererSessionFailureKind, webView: WKWebView? = nil) {
-        guard isLoading else { return }
         if let webView, self.webView !== webView { return }
+        externalLinkRedemptionGate.invalidateAll(reason: .sessionFailed)
+        guard isLoading else { return }
         machine.fail(sessionID: machine.sessionID, kind: kind)
-        releaseOwnedResources()
+        releaseOwnedResources(invalidation: .sessionFailed)
+    }
+
+    private func invalidateForNavigation() {
+        navigationID &+= 1
+        externalLinkRedemptionGate.invalidateAll(reason: .navigationInvalidated)
+    }
+
+    private func recordTrustedActivation(
+        url: URL, webView: WKWebView?, securityOrigin: WKSecurityOrigin?, isMainFrame: Bool
+    ) -> RendererExternalActivationNonce? {
+        guard self.webView === webView,
+              isReadyForBridge,
+              hasExpectedPackageOrigin(securityOrigin),
+              isMainFrame,
+              let destination = RendererExternalDestination(url: url)
+        else {
+            externalLinkRedemptionGate.invalidateAll(reason: isMainFrame ? .wrongWindow : .nonMainFrame)
+            return nil
+        }
+        return externalLinkRedemptionGate.recordTrustedActivation(destination: destination, context: externalActivationContext())
+    }
+
+    private func redeemExternalLink(
+        nonce: RendererExternalActivationNonce?, url: URL, webView: WKWebView?, securityOrigin: WKSecurityOrigin?, isMainFrame: Bool
+    ) throws -> URL {
+        guard self.webView === webView, hasExpectedPackageOrigin(securityOrigin) else {
+            externalLinkRedemptionGate.invalidateAll(reason: .wrongWindow)
+            throw RendererExternalActivationError.wrongWindow
+        }
+        guard isMainFrame else {
+            externalLinkRedemptionGate.invalidateAll(reason: .nonMainFrame)
+            throw RendererExternalActivationError.nonMainFrame
+        }
+        guard isReadyForBridge else { throw RendererExternalActivationError.navigationInvalidated }
+        guard let destination = RendererExternalDestination(url: url) else {
+            throw RendererExternalActivationError.destinationMismatch
+        }
+        return try externalLinkRedemptionGate.redeem(nonce: nonce, destination: destination, context: externalActivationContext())
+    }
+
+    private func externalActivationContext() -> RendererExternalActivationContext {
+        .init(sessionID: machine.sessionID, windowID: windowID, frameID: mainFrameID, mainFrameID: mainFrameID, navigationID: navigationID)
+    }
+
+    private func hasExpectedPackageOrigin(_ origin: WKSecurityOrigin?) -> Bool {
+        origin?.protocol == RendererPackageScheme.name && origin?.host == "package"
     }
 }
 #endif
