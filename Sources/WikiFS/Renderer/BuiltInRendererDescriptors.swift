@@ -66,7 +66,7 @@ enum BuiltInRendererDescriptors {
                     .boundedJSONArtifact(.jsonCanvas),
                 ],
                 maximumInputByteCount: JSONCanvasLimits.maximumInputByteCount,
-                accessibility: .init(supportsVoiceOver: false, supportsKeyboardNavigation: false),
+                accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
                 priority: BuiltInRendererPriority.jsonCanvas)
         }
     }

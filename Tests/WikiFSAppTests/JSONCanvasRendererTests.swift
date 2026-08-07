@@ -141,6 +141,19 @@ struct JSONCanvasRendererTests {
         #expect(viewport.scale == 2)
     }
 
+    @Test("viewport traversal follows the deterministic document outline")
+    func viewportTraversalFollowsDocumentOutline() throws {
+        let document = try JSONCanvasDocument.decode(Self.validCanvas)
+        var viewport = JSONCanvasViewportState()
+
+        #expect(viewport.traverseOutline(.next, in: document)?.rawValue == "first")
+        #expect(viewport.traverseOutline(.next, in: document)?.rawValue == "second")
+        #expect(viewport.traverseOutline(.next, in: document)?.rawValue == "second")
+        #expect(viewport.traverseOutline(.previous, in: document)?.rawValue == "first")
+        #expect(viewport.traverseOutline(.previous, in: document)?.rawValue == "first")
+        #expect(viewport.selectedNodeID?.rawValue == "first")
+    }
+
     private static func canvasData(
         nodes: [[String: Any]],
         edges: [[String: Any]] = []

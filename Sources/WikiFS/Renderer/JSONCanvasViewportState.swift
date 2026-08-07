@@ -3,6 +3,11 @@ import Foundation
 
 // pattern: Functional Core
 
+enum JSONCanvasOutlineTraversalDirection: Sendable {
+    case next
+    case previous
+}
+
 struct JSONCanvasViewportState: Sendable, Equatable {
     private(set) var scale: Double
     private(set) var translation: JSONCanvasPoint
@@ -45,6 +50,39 @@ struct JSONCanvasViewportState: Sendable, Equatable {
 
     mutating func selectNode(at point: JSONCanvasPoint, in document: JSONCanvasDocument) {
         select(nodeID: document.nodeID(containing: point))
+    }
+
+    @discardableResult
+    mutating func traverseOutline(
+        _ direction: JSONCanvasOutlineTraversalDirection,
+        in document: JSONCanvasDocument
+    ) -> JSONCanvasNodeID? {
+        let nodeIDs = document.outline.map(\.nodeID)
+        guard nodeIDs.isEmpty == false else {
+            select(nodeID: nil)
+            return nil
+        }
+
+        let index: Int
+        if let selectedNodeID, let selectedIndex = nodeIDs.firstIndex(of: selectedNodeID) {
+            switch direction {
+            case .next:
+                index = min(selectedIndex + 1, nodeIDs.index(before: nodeIDs.endIndex))
+            case .previous:
+                index = max(selectedIndex - 1, nodeIDs.startIndex)
+            }
+        } else {
+            switch direction {
+            case .next:
+                index = nodeIDs.startIndex
+            case .previous:
+                index = nodeIDs.index(before: nodeIDs.endIndex)
+            }
+        }
+
+        let nodeID = nodeIDs[index]
+        select(nodeID: nodeID)
+        return nodeID
     }
 
     func documentPoint(screenX: Double, screenY: Double) -> JSONCanvasPoint {

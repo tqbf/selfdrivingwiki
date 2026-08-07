@@ -12,56 +12,103 @@ struct JSONCanvasRendererView: View {
     @State private var dragStart: JSONCanvasPoint?
     @State private var dragInitialTranslation = JSONCanvasPoint.zero
     @State private var magnificationBaseline = 1.0
+    @FocusState private var focusedSurface: FocusSurface?
 
     var body: some View {
         HStack(spacing: 0) {
             List(document.outline) { entry in
                 Button(entry.label) {
-                    viewport.selectOutlineEntry(entry)
+                    selectOutlineEntry(entry)
                 }
                 .buttonStyle(.plain)
                 .font(.body)
                 .lineLimit(1)
                 .listRowBackground(viewport.selectedNodeID == entry.nodeID ? Color.accentColor.opacity(0.16) : .clear)
+                .accessibilityLabel("Outline node: \(entry.label)")
+                .accessibilityValue(viewport.selectedNodeID == entry.nodeID ? "Selected" : "Not selected")
+                .accessibilityHint("Press Return to select this read-only canvas node.")
+                .accessibilityAction(named: Text("Select")) {
+                    selectOutlineEntry(entry)
+                }
+                .onMoveCommand { handleMoveCommand($0, from: .outline) }
             }
             .frame(minWidth: 180, idealWidth: 220, maxWidth: 280)
+            .focusable()
+            .focused($focusedSurface, equals: .outline)
+            .onMoveCommand { handleMoveCommand($0, from: .outline) }
+            .accessibilityLabel("JSON Canvas outline")
+            .accessibilityHint("Use the Up and Down Arrow keys to select an outline node.")
 
             Divider()
 
-            Canvas { context, _ in
-                context.concatenate(CGAffineTransform(
-                    translationX: viewport.translation.x,
-                    y: viewport.translation.y))
-                context.concatenate(CGAffineTransform(scaleX: viewport.scale, y: viewport.scale))
+            GeometryReader { _ in
+                ZStack {
+                    Canvas { context, _ in
+                        context.concatenate(CGAffineTransform(
+                            translationX: viewport.translation.x,
+                            y: viewport.translation.y))
+                        context.concatenate(CGAffineTransform(scaleX: viewport.scale, y: viewport.scale))
 
-                for edge in document.renderProjection.edges {
-                    var path = Path()
-                    path.move(to: CGPoint(x: edge.start.x, y: edge.start.y))
-                    path.addLine(to: CGPoint(x: edge.end.x, y: edge.end.y))
-                    context.stroke(path, with: .color(.secondary), lineWidth: 1)
-                }
+                        for edge in document.renderProjection.edges {
+                            var path = Path()
+                            path.move(to: CGPoint(x: edge.start.x, y: edge.start.y))
+                            path.addLine(to: CGPoint(x: edge.end.x, y: edge.end.y))
+                            context.stroke(path, with: .color(.secondary), lineWidth: 1)
+                        }
 
-                for node in document.renderProjection.nodes {
-                    let rect = CGRect(
-                        x: node.frame.origin.x,
-                        y: node.frame.origin.y,
-                        width: node.frame.width,
-                        height: node.frame.height)
-                    let path = Path(roundedRect: rect, cornerRadius: 8)
-                    context.fill(path, with: .color(.secondary.opacity(0.08)))
-                    context.stroke(
-                        path,
-                        with: .color(viewport.selectedNodeID == node.id ? .accentColor : .secondary),
-                        lineWidth: viewport.selectedNodeID == node.id ? 2 : 1)
-                    let text = context.resolve(Text(node.text).font(.body).foregroundStyle(.primary))
-                    context.draw(text, in: rect.insetBy(dx: 10, dy: 8))
+                        for node in document.renderProjection.nodes {
+                            let rect = CGRect(
+                                x: node.frame.origin.x,
+                                y: node.frame.origin.y,
+                                width: node.frame.width,
+                                height: node.frame.height)
+                            let path = Path(roundedRect: rect, cornerRadius: 8)
+                            context.fill(path, with: .color(.secondary.opacity(0.08)))
+                            context.stroke(
+                                path,
+                                with: .color(viewport.selectedNodeID == node.id ? .accentColor : .secondary),
+                                lineWidth: viewport.selectedNodeID == node.id ? 2 : 1)
+                            let text = context.resolve(Text(node.text).font(.body).foregroundStyle(.primary))
+                            context.draw(text, in: rect.insetBy(dx: 10, dy: 8))
+                        }
+                    }
+
+                    ForEach(document.renderProjection.nodes) { node in
+                        Button {
+                            selectCanvasNode(node.id)
+                        } label: {
+                            Color.clear.contentShape(.rect)
+                        }
+                        .buttonStyle(.plain)
+                        .frame(
+                            width: node.frame.width * viewport.scale,
+                            height: node.frame.height * viewport.scale)
+                        .position(nodePosition(for: node))
+                        .accessibilityLabel("Canvas node: \(accessibilityLabel(for: node))")
+                        .accessibilityValue(viewport.selectedNodeID == node.id ? "Selected" : "Not selected")
+                        .accessibilityHint("Press Return to select this read-only canvas node.")
+                        .accessibilityAction(named: Text("Select")) {
+                            selectCanvasNode(node.id)
+                        }
+                        .onMoveCommand { handleMoveCommand($0, from: .canvas) }
+                    }
                 }
+                .background(.background)
+                .contentShape(.rect)
+                .focusable()
+                .focused($focusedSurface, equals: .canvas)
+                .onMoveCommand { handleMoveCommand($0, from: .canvas) }
+                .simultaneousGesture(dragGesture)
+                .simultaneousGesture(magnifyGesture)
+                .accessibilityLabel("JSON Canvas nodes")
+                .accessibilityHint("Use the Up and Down Arrow keys to select a canvas node.")
             }
-            .background(.background)
-            .contentShape(.rect)
-            .gesture(dragGesture)
-            .simultaneousGesture(magnifyGesture)
         }
+    }
+
+    private enum FocusSurface: Hashable {
+        case outline
+        case canvas
     }
 
     private var dragGesture: some Gesture {
@@ -86,6 +133,7 @@ struct JSONCanvasRendererView: View {
                 guard Self.dragDistance(delta) < 4 else { return }
                 let point = viewport.documentPoint(screenX: location.x, screenY: location.y)
                 viewport.selectNode(at: point, in: document)
+                focusedSurface = .canvas
             }
     }
 
@@ -101,6 +149,40 @@ struct JSONCanvasRendererView: View {
 
     private static func dragDistance(_ point: JSONCanvasPoint) -> Double {
         (point.x * point.x + point.y * point.y).squareRoot()
+    }
+
+    private func selectOutlineEntry(_ entry: JSONCanvasOutlineEntry) {
+        viewport.selectOutlineEntry(entry)
+        focusedSurface = .outline
+    }
+
+    private func selectCanvasNode(_ nodeID: JSONCanvasNodeID) {
+        viewport.select(nodeID: nodeID)
+        focusedSurface = .canvas
+    }
+
+    private func handleMoveCommand(_ direction: MoveCommandDirection, from surface: FocusSurface) {
+        switch direction {
+        case .up:
+            viewport.traverseOutline(.previous, in: document)
+        case .down:
+            viewport.traverseOutline(.next, in: document)
+        case .left, .right:
+            focusedSurface = surface == .outline ? .canvas : .outline
+        default:
+            break
+        }
+    }
+
+    private func nodePosition(for node: JSONCanvasRenderProjection.Node) -> CGPoint {
+        CGPoint(
+            x: node.frame.origin.x * viewport.scale + viewport.translation.x + node.frame.width * viewport.scale / 2,
+            y: node.frame.origin.y * viewport.scale + viewport.translation.y + node.frame.height * viewport.scale / 2)
+    }
+
+    private func accessibilityLabel(for node: JSONCanvasRenderProjection.Node) -> String {
+        let label = node.text.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+        return label.isEmpty ? "Text node" : label
     }
 }
 #endif
