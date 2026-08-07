@@ -66,6 +66,7 @@ enum BuiltInRendererDescriptors {
                     .boundedJSONArtifact(.jsonCanvas),
                 ],
                 maximumInputByteCount: JSONCanvasLimits.maximumInputByteCount,
+                accessibility: .init(supportsVoiceOver: false, supportsKeyboardNavigation: false),
                 priority: BuiltInRendererPriority.jsonCanvas)
         }
     }
@@ -75,6 +76,7 @@ enum BuiltInRendererDescriptors {
         displayName: String,
         matchers: [RendererMatcher],
         maximumInputByteCount: Int,
+        accessibility: RendererAccessibility = .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
         priority: Int
     ) -> RendererDescriptor {
         do {
@@ -90,7 +92,7 @@ enum BuiltInRendererDescriptors {
                     maximumInputByteCount: maximumInputByteCount,
                     maximumDecodedByteCount: maximumInputByteCount),
                 linkPolicy: .none,
-                accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
+                accessibility: accessibility,
                 compatibility: try .init(
                     minimumProtocolRevision: RendererRegistrySnapshotDefaults.hostProtocolRevision,
                     maximumProtocolRevision: RendererRegistrySnapshotDefaults.hostProtocolRevision),

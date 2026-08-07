@@ -148,6 +148,8 @@ import WikiFSTypes
     @MainActor
     func jsonCanvasFactoryFailsClosedToHostFallback() throws {
         let descriptor = BuiltInRendererDescriptors.descriptor(for: .jsonCanvas)
+        #expect(descriptor.accessibility.supportsVoiceOver == false)
+        #expect(descriptor.accessibility.supportsKeyboardNavigation == false)
         let validData = Data("""
         {"nodes":[{"id":"note","type":"text","x":0,"y":0,"width":120,"height":60,"text":"Note"}],"edges":[]}
         """.utf8)
