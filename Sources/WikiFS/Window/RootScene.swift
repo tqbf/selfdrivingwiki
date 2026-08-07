@@ -34,6 +34,7 @@ struct RootScene: View {
     @Bindable var registry: WikiRegistryClient
     @Bindable var sessionManager: SessionManager
     let fileProvider: FileProviderFacade
+    let installedRendererHost: InstalledRendererHost
 
     @State private var session: WikiSession?
     @State private var isSceneActive = false
@@ -185,7 +186,11 @@ struct RootScene: View {
     /// modifier has complex `Binding` + two trailing closures).
     @ViewBuilder
     private func sessionView(_ session: WikiSession) -> some View {
-        RootView(session: session, registry: registry, fileProvider: fileProvider)
+        RootView(
+            session: session,
+            registry: registry,
+            fileProvider: fileProvider,
+            installedRendererHost: installedRendererHost)
             .alert(
                 "Vacuum Orphaned Storage",
                 isPresented: Binding(

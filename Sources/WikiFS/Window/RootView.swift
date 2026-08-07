@@ -23,6 +23,7 @@ struct RootView: View {
     /// App-scoped registry: wiki list + active id + create/select/delete.
     @Bindable var registry: WikiRegistryClient
     let fileProvider: FileProviderFacade
+    let installedRendererHost: InstalledRendererHost
 
     var body: some View {
         ContentView(
@@ -33,7 +34,8 @@ struct RootView: View {
             agentLauncher: session.agentLauncher,
             extractionCoordinator: session.extractionCoordinator,
             queueEngine: session.queueEngine,
-            extractionProvider: session.extractionProvider
+            extractionProvider: session.extractionProvider,
+            installedRendererHost: installedRendererHost
         )
         .id(session.wikiID)
         // Consume a deferred cross-window `wiki://` navigation (set on the

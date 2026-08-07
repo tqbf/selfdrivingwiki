@@ -52,8 +52,8 @@ struct SourceDetailView: View {
     /// The app composition root will supply the validated installed-renderer
     /// snapshot. The default has no packages, which keeps Source available when
     /// the machine index is not ready yet.
-    let installedRendererFactory: InstalledRendererFactory = .unavailable
-    let installedRendererFactoryInputs: InstalledRendererFactory.Inputs = .unavailable
+    let installedRendererFactory: InstalledRendererFactory
+    let installedRendererFactoryInputs: InstalledRendererFactory.Inputs
 
     @AppStorage("editor.zoom") private var editorZoom = Double(ZoomScale.defaultScale)
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)

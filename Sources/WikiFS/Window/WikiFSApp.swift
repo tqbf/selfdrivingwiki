@@ -27,6 +27,7 @@ struct WikiFSApp: App {
     /// its session. Replaces the former `@State session` + `SessionRef`.
     @State private var sessionManager: SessionManager
     @State private var fileProvider = FileProviderFacade()
+    @State private var installedRendererHost: InstalledRendererHost
     /// One app-scoped launcher for Settings-only use ("Test Connection" + backend
     /// config). Has its own `GenerationGate`, independent of any session's gate
     /// — a Settings connection test doesn't block an active wiki's ingest.
@@ -231,6 +232,7 @@ struct WikiFSApp: App {
             }
         )
         _sessionManager = State(initialValue: sm)
+        _installedRendererHost = State(initialValue: InstalledRendererHost.production())
         _windowTracker = State(initialValue: WindowListTracker())
         
         let backgroundIngestCoordinator = BackgroundIngestCoordinator(
@@ -673,7 +675,8 @@ struct WikiFSApp: App {
                 wikiID: nil,
                 registry: registry,
                 sessionManager: sessionManager,
-                fileProvider: fileProvider
+                fileProvider: fileProvider,
+                installedRendererHost: installedRendererHost
             )
             .background(WindowBridgeProbe(bridge: openWindowBridge))
             .appEnvironment(
@@ -681,6 +684,7 @@ struct WikiFSApp: App {
                 openActivityWindow: { [weak openWindowBridge] queue in openWindowBridge?.openActivityWindow?(queue) },
                 chatDaemon: chatDaemonCoordinator,
                 healthMonitor: healthMonitor)
+            .task { await installedRendererHost.refresh() }
             .preferredColorScheme(appearanceColorScheme)
             .alert(
                 "Install Self Driving Wiki in Applications",
@@ -763,7 +767,8 @@ struct WikiFSApp: App {
                 wikiID: wikiID,
                 registry: registry,
                 sessionManager: sessionManager,
-                fileProvider: fileProvider
+                fileProvider: fileProvider,
+                installedRendererHost: installedRendererHost
             )
             .background(WindowBridgeProbe(bridge: openWindowBridge))
             .appEnvironment(

@@ -16,6 +16,7 @@ struct WikiDetailView: View {
     @Environment(\.chatDaemonCoordinator) private var chatDaemon
     let queueEngine: any QueueEngineClient
     let extractionProvider: any QueueExtractionProvider
+    let installedRendererHost: InstalledRendererHost
     let runIngest: (SourceID) -> Void
     @Binding var showingImportMarkdown: Bool
     @Binding var showingAddFromZotero: Bool
@@ -191,7 +192,9 @@ struct WikiDetailView: View {
                     queueEngine: queueEngine,
                     extractionProvider: extractionProvider,
                     fileProvider: fileProvider,
-                    store: store
+                    store: store,
+                    installedRendererFactory: installedRendererHost.factory,
+                    installedRendererFactoryInputs: installedRendererHost.inputs
                 )
             } else {
                 ContentUnavailableView {
