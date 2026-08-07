@@ -1,0 +1,67 @@
+:root {
+  color-scheme: light dark;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  background: Canvas;
+  color: CanvasText;
+}
+
+html, body, #viewer {
+  block-size: 100%;
+  inline-size: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+#viewer {
+  background-color: Canvas;
+  cursor: grab;
+  outline: none;
+}
+
+#viewer:active {
+  cursor: grabbing;
+}
+
+#viewer:focus-visible {
+  outline: 2px solid Highlight;
+  outline-offset: -2px;
+}
+
+.scene {
+  block-size: 100%;
+  inline-size: 100%;
+  touch-action: none;
+}
+
+.scene text {
+  fill: CanvasText;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  font-size: 16px;
+  dominant-baseline: hanging;
+  white-space: pre;
+}
+
+.scene .shape {
+  fill: color-mix(in srgb, Canvas 90%, currentColor 10%);
+  stroke: currentColor;
+  stroke-width: 2;
+}
+
+.scene .line {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+}
+
+.message {
+  display: grid;
+  block-size: 100%;
+  inline-size: 100%;
+  place-items: center;
+  color: GrayText;
+  font-size: 0.9rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { scroll-behavior: auto; }
+}
