@@ -102,11 +102,13 @@ public enum AsyncProcessRunner {
     struct Hooks: Sendable {
         var beforeLaunch: (@Sendable () async -> Void)?
         var didLaunch: (@Sendable (Int32) -> Void)?
+        var didLaunchIdentity: (@Sendable (ProcessSignalSafety.Identity?) -> Void)?
         var didTerminate: (@Sendable (Int32, Int32) -> Void)?
         var didRequestCancellation: (@Sendable () -> Void)?
         var runProcess: (@Sendable (Process) throws -> Void)?
         var requestTermination: @Sendable (Process) -> Void = { process in
-            if process.isRunning {
+            if process.isRunning,
+               ProcessSignalSafety.PositivePID(rawValue: process.processIdentifier) != nil {
                 process.terminate()
             }
         }
@@ -219,6 +221,7 @@ public enum AsyncProcessRunner {
                         let expectedIdentity = ProcessSignalSafety.PositivePID(rawValue: processID)
                             .flatMap(hooks.observeProcess)
                         hooks.didLaunch?(processID)
+                        hooks.didLaunchIdentity?(expectedIdentity)
                         if let target = state.recordLaunch(
                             processID: processID,
                             expectedIdentity: expectedIdentity) {

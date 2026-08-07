@@ -20,10 +20,10 @@ enum TranscriptSubprocess {
 
     // MARK: - ProcessRegistry
 
-    /// Tracks live subprocess ids so `NSApplication.willTerminate` kills
-    /// orphans without needing to own the `Process` instances directly.
+    /// Tracks launch identities so `NSApplication.willTerminate` can clean up
+    /// orphans without relying on a recyclable numeric PID.
     final class ProcessRegistry: @unchecked Sendable {
-        private var processIDs = Set<Int32>()
+        private var identities = [ProcessSignalSafety.PositivePID: ProcessSignalSafety.Identity]()
         private var registered = false
         private let lock = NSLock()
 
@@ -46,26 +46,64 @@ enum TranscriptSubprocess {
             #endif
         }
 
-        func track(_ processID: Int32) {
+        func track(_ identity: ProcessSignalSafety.Identity) {
             registerIfNeeded()
             lock.lock()
-            processIDs.insert(processID)
+            identities[identity.processID] = identity
             lock.unlock()
         }
 
         func untrack(_ processID: Int32) {
+            guard let processID = ProcessSignalSafety.PositivePID(rawValue: processID) else { return }
             lock.lock()
-            processIDs.remove(processID)
+            identities.removeValue(forKey: processID)
             lock.unlock()
         }
 
-        func terminateAllForTesting() { terminateAll() }
+        func terminateAllForTesting(
+            observeProcess: @escaping (ProcessSignalSafety.PositivePID) -> ProcessSignalSafety.Identity?,
+            sendSignal: @escaping (Int32, Int32) -> Int32
+        ) {
+            terminateAll(observeProcess: observeProcess, sendSignal: sendSignal)
+        }
+
         private func terminateAll() {
+            terminateAll(
+                observeProcess: { ProcessIdentityObservation.observe(processID: $0) },
+                sendSignal: { processID, signal in kill(processID, signal) })
+        }
+
+        private func terminateAll(
+            observeProcess: (ProcessSignalSafety.PositivePID) -> ProcessSignalSafety.Identity?,
+            sendSignal: (Int32, Int32) -> Int32
+        ) {
             lock.lock()
-            let snapshot = processIDs
+            let snapshot = Array(identities.values)
             lock.unlock()
-            for processID in snapshot where kill(processID, 0) == 0 {
-                _ = kill(processID, SIGTERM)
+
+            guard let expectedParentProcessID = ProcessSignalSafety.PositivePID(
+                rawValue: ProcessInfo.processInfo.processIdentifier)
+            else {
+                DebugLog.extraction("[transcript] refused orphan cleanup: invalid parent process ID")
+                return
+            }
+
+            for identity in snapshot {
+                switch ProcessSignalSafety.signal(
+                    processID: identity.processID,
+                    expectedIdentity: identity,
+                    expectedParentProcessID: expectedParentProcessID,
+                    observedIdentity: observeProcess(identity.processID),
+                    signal: sendSignal) {
+                case .sent(let result) where result == 0:
+                    break
+                case .sent(let result):
+                    DebugLog.extraction(
+                        "[transcript] orphan cleanup signal failed for PID \(identity.processID.rawValue): result=\(result)")
+                case .refused(let refusal):
+                    DebugLog.extraction(
+                        "[transcript] refused orphan cleanup for PID \(identity.processID.rawValue): \(refusal)")
+                }
             }
         }
     }
@@ -121,8 +159,10 @@ enum TranscriptSubprocess {
             let result = try await AsyncProcessRunner.run(
                 request,
                 hooks: .init(
-                    didLaunch: { processID in
-                        processRegistry.track(processID)
+                    didLaunchIdentity: { identity in
+                        if let identity {
+                            processRegistry.track(identity)
+                        }
                     },
                     didTerminate: { processID, _ in
                         processRegistry.untrack(processID)

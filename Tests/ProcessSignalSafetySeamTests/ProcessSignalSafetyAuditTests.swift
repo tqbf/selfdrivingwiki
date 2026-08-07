@@ -61,11 +61,16 @@ struct ProcessSignalSafetyAuditTests {
             .init(path: "Sources/WikiFSCore/Core/AsyncProcessRunner.swift",
                   primitive: .processTermination):
                 (1, "guarded: ProcessSignalSafety.verify confirms PID, parent PID, "
-                    + "and kernel start time against a fresh observation before TERM"),
+                    + "and kernel start time against a fresh observation before TERM; "
+                    + "the termination closure also rejects invalid process IDs"),
             .init(path: "Sources/WikiFSCore/Core/AsyncProcessRunner.swift",
                   primitive: .posixSignal):
                 (1, "guarded: injected sendSignal seam, reached only via "
                     + "ProcessSignalSafety.signal on a re-verified direct child"),
+            .init(path: "Sources/WikiFSCore/Integrations/TranscriptSubprocess.swift",
+                  primitive: .posixSignal):
+                (1, "guarded: injected sendSignal seam, reached only via "
+                    + "ProcessSignalSafety.signal on a re-verified tracked identity"),
             .init(path: "scripts/lib/test-watchdog-process-control.sh",
                   primitive: .shellSignal):
                 (1, "guarded: builtin kill is addressed by jobspec (%N), never by a "
@@ -80,10 +85,10 @@ struct ProcessSignalSafetyAuditTests {
             // so there is no PID-reuse window to close.
             .init(path: "Sources/WikiFSEngine/PdfExtractionService.swift",
                   primitive: .processTermination):
-                (3, "owns the Process object it terminates; no numeric PID involved"),
+                (3, "owns the Process object it terminates and rejects invalid process IDs"),
             .init(path: "Sources/WikiFS/Sources/DefuddleExtractionService.swift",
                   primitive: .processTermination):
-                (2, "owns the Process object it terminates; no numeric PID involved"),
+                (2, "owns the Process object it terminates and rejects invalid process IDs"),
             .init(path: "Sources/WikiFSEngine/ACPBackend.swift",
                   primitive: .processTermination):
                 (3, "terminates a held ACP client object, not a PID"),
@@ -95,16 +100,6 @@ struct ProcessSignalSafetyAuditTests {
             .init(path: "Sources/WikiFSEngine/ACPBackend.swift",
                   primitive: .posixSignal):
                 (1, "kill(pid, 0) is a liveness probe and delivers no signal"),
-
-            // --- Known-weak, pre-existing, tracked --------------------------
-            // NOT a safety approval. Recorded so it is visible and cannot be
-            // mistaken for a reviewed-safe pattern.
-            .init(path: "Sources/WikiFSCore/Integrations/TranscriptSubprocess.swift",
-                  primitive: .posixSignal):
-                (2, "WEAK, pre-existing: kill(pid, 0) then kill(pid, SIGTERM) on a "
-                    + "PID from a stored snapshot. This is a check-then-signal race "
-                    + "of the same class as #1051 and should migrate to "
-                    + "ProcessSignalSafety; out of scope for this change"),
 
             .init(path: "scripts/paseo-archive-cleanup.sh", primitive: .shellSignal):
                 (2, "WEAK, pre-existing: operator-run agent-archive cleanup. Selects "
@@ -238,6 +233,27 @@ struct ProcessSignalSafetyAuditTests {
             #expect(
                 executableBoundary.contains(pidAddressedKill) == false,
                 "signalling a numeric PID reintroduces the check-then-signal race")
+        }
+    }
+
+    @Test func processTerminationRequiresAValidProcessIdentifier() throws {
+        let root = repositoryRoot()
+        let expectedGuardCounts = [
+            "Sources/WikiFSCore/Core/AsyncProcessRunner.swift": 1,
+            "Sources/WikiFSEngine/PdfExtractionService.swift": 3,
+            "Sources/WikiFS/Sources/DefuddleExtractionService.swift": 2,
+        ]
+
+        for (relativePath, expectedCount) in expectedGuardCounts {
+            let source = try String(
+                contentsOf: root.appendingPathComponent(relativePath),
+                encoding: .utf8)
+            let executable = strippingCommentsAndLiterals(source, path: relativePath)
+            let guardCount = executable.components(separatedBy: "processIdentifier) != nil").count - 1
+
+            #expect(
+                guardCount == expectedCount,
+                "every Process.terminate() in \(relativePath) must reject invalid process IDs")
         }
     }
 

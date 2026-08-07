@@ -175,7 +175,10 @@ enum DefuddleExtractionService {
 
             defer {
                 group.cancelAll()
-                if process.isRunning { process.terminate() }
+                if process.isRunning,
+                   ProcessSignalSafety.PositivePID(rawValue: process.processIdentifier) != nil {
+                    process.terminate()
+                }
             }
 
             let result = await group.next() ?? nil
@@ -358,7 +361,8 @@ enum DefuddleExtractionService {
             lock.lock()
             let snapshot = procs
             lock.unlock()
-            for p in snapshot where p.isRunning {
+            for p in snapshot where p.isRunning
+                && ProcessSignalSafety.PositivePID(rawValue: p.processIdentifier) != nil {
                 p.terminate()
             }
         }
