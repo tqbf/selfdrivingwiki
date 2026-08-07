@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "issue": 1026,
+  "phase": 6,
+  "slice": 2,
+  "parentSHA": "3d91865ec3c897fd4e8164b3696719ef9a75966e",
+  "prBaseSHA": "0f3cadc5519b6b405be41de692c75568c99673d1",
+  "remotePRHeadAtStart": "3a94d6df098efcce8dc4d00c934ea785d829ac4f",
+  "headSHA": "30ae1e42b1c165bd1dbb7b2cba16d32b44a03b96",
+  "headSHASemantics": "This is the exact package and test commit. The documentation-only evidence commit does not change package or test code.",
+  "scope": "A local, static Excalidraw WebView package. The package has a read-only input bridge and pan and zoom view controls.",
+  "productionPaths": [
+    {
+      "path": "RendererPackages/Excalidraw/manifest.json",
+      "symbols": ["org.selfdrivingwiki.excalidraw-readonly@1.0.0", "excalidraw descriptor", "approvedAssets", "inputRead", "userActivatedExternal"],
+      "tests": ["ExcalidrawRendererPackageTests.reviewedPackageValidatesAndRegistersTypedArtifact", "ExcalidrawRendererPackageTests.packageDeclaresReadOnlyCapabilities", "ExcalidrawRendererPackageTests.staticViewerIsBoundedReadOnlyAndInteractive", "ExcalidrawRendererPackageTests.validatorRejectsModifiedStaticViewerAsset"]
+    },
+    {
+      "path": "RendererPackages/Excalidraw/viewer.js",
+      "symbols": ["input.read request", "pointer pan", "bounded wheel zoom", "bounded keyboard pan and zoom"],
+      "tests": ["ExcalidrawRendererPackageTests.staticViewerIsBoundedReadOnlyAndInteractive"]
+    },
+    {
+      "path": "RendererPackages/Excalidraw/viewer.css",
+      "symbols": ["viewer focus-visible style"],
+      "tests": ["ExcalidrawRendererPackageTests.staticViewerIsBoundedReadOnlyAndInteractive"]
+    },
+    {
+      "path": "RendererPackages/Excalidraw/index.html",
+      "symbols": ["read-only viewer label", "keyboard focus target"],
+      "tests": ["ExcalidrawRendererPackageTests.staticViewerIsBoundedReadOnlyAndInteractive"]
+    },
+    {
+      "path": "RendererPackages/Excalidraw/LICENSE.md",
+      "symbols": ["MIT license notice"],
+      "tests": ["ExcalidrawRendererPackageTests.packageDeclaresReadOnlyCapabilities"]
+    },
+    {
+      "path": "RendererPackages/Excalidraw/PROVENANCE.md",
+      "symbols": ["local package provenance", "asset digest review procedure"],
+      "tests": ["ExcalidrawRendererPackageTests.packageDeclaresReadOnlyCapabilities"]
+    }
+  ],
+  "testPaths": ["Tests/WikiFSAppTests/ExcalidrawRendererPackageTests.swift"],
+  "coverage": {
+    "success": ["The validator accepts the reviewed package and the registry matches an Excalidraw version 2 artifact.", "The package declares only inputRead and externalLink capabilities.", "The static viewer has pointer pan, bounded wheel zoom, bounded keyboard pan and zoom, and a visible focus style."],
+    "error": ["An unsupported Excalidraw version has no registry match.", "The validator rejects a changed viewer.js asset with assetHashMismatch."],
+    "boundary": ["The test checks that the manifest lists every package file except manifest.json.", "The test checks the total declared asset size against RendererPackageValidationLimits.maximumCopiedByteCount.", "The descriptor input bound does not exceed WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount.", "The test rejects fetch, network sockets, workers, dynamic imports, dynamic evaluation, writable browser storage, clipboard access, document.write, and contentEditable source patterns."],
+    "cancellation": "Not applicable. The package test has no task or session lifecycle.",
+    "teardown": "Each test deletes its isolated validator staging root."
+  },
+  "bidirectionalResolution": {
+    "everyProductionPathMapsToNamedTests": true,
+    "everyNamedTestResolvesInOneListedTestPath": true,
+    "command": "inventory=plans/dynamic-renderers-phase6-excalidraw-package-test-inventory.json && jq -e '(.productionPaths | length > 0) and (.testPaths | length > 0) and all(.productionPaths[]; ((.path | type == \"string\" and length > 0) and (.symbols | type == \"array\" and length > 0) and (.tests | type == \"array\" and length > 0))) and all(.testPaths[]; type == \"string\" and length > 0)' \"$inventory\" >/dev/null && while IFS= read -r listedPath; do test -f \"$listedPath\" || { echo \"inventory production path is missing: $listedPath\" >&2; exit 1; }; done < <(jq -r '.productionPaths[].path' \"$inventory\") && while IFS= read -r listedPath; do test -f \"$listedPath\" || { echo \"inventory test path is missing: $listedPath\" >&2; exit 1; }; done < <(jq -r '.testPaths[]' \"$inventory\") && while IFS= read -r testName; do functionName=${testName##*.}; matches=$(rg -l -F \"func ${functionName}(\" $(jq -r '.testPaths[]' \"$inventory\") | wc -l | tr -d ' '); test \"$matches\" -eq 1 || { echo \"inventory test did not resolve exactly once: $testName\" >&2; exit 1; }; done < <(jq -r '[.productionPaths[].tests[]] | unique[]' \"$inventory\")"
+  },
+  "excluded": ["Phase 5 host, WebView session, bridge, navigation, CSP, safe-mode, and trusted-activation contracts", "JSON Canvas decoding and native UI", "renderer package installation, management, rollback, and removal", "new network policy, runtime dependency loading, workers, and writable source input", "Phase 7 work"],
+  "honestCoverageLimits": ["The viewer source test proves static source patterns and declared controls. It does not run a hosted WebKit interaction test.", "The viewer supports a bounded subset of Excalidraw element shapes. It does not claim full Excalidraw compatibility.", "The installed-renderer host preserves Source fallback, but this slice does not change or rerun host lifecycle tests.", "The Phase 6 matcher reads only a bounded JSON prefix. Valid Excalidraw documents whose required signature falls outside that prefix keep Source fallback."]
+}
