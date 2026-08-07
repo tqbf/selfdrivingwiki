@@ -57,6 +57,46 @@ struct JSONCanvasRendererTests {
         }
     }
 
+    @Test("decoder rejects excessive edges and duplicate identifiers")
+    func decoderRejectsEdgeAndIdentifierBounds() throws {
+        let nodes = [Self.textNode(id: "first"), Self.textNode(id: "second")]
+        let excessiveEdges = (0...JSONCanvasLimits.maximumEdgeCount).map { index in
+            ["id": "edge-\(index)", "fromNode": "first", "toNode": "second"] as [String: Any]
+        }
+
+        #expect(throws: JSONCanvasDecodingError.tooManyEdges) {
+            try JSONCanvasDocument.decode(Self.canvasData(nodes: nodes, edges: excessiveEdges))
+        }
+        #expect(throws: JSONCanvasDecodingError.duplicateNodeID("first")) {
+            try JSONCanvasDocument.decode(Self.canvasData(nodes: [Self.textNode(id: "first"), Self.textNode(id: "first")]))
+        }
+        #expect(throws: JSONCanvasDecodingError.duplicateEdgeID("edge")) {
+            try JSONCanvasDocument.decode(Self.canvasData(
+                nodes: nodes,
+                edges: [
+                    ["id": "edge", "fromNode": "first", "toNode": "second"],
+                    ["id": "edge", "fromNode": "first", "toNode": "second"],
+                ]))
+        }
+    }
+
+    @Test("decoder rejects invalid geometry and oversized text")
+    func decoderRejectsGeometryAndTextBounds() throws {
+        #expect(throws: JSONCanvasDecodingError.invalidGeometry("first")) {
+            try JSONCanvasDocument.decode(Self.canvasData(nodes: [
+                Self.textNode(id: "first", width: 0),
+            ]))
+        }
+        #expect(throws: JSONCanvasDecodingError.malformedDocument) {
+            try JSONCanvasDocument.decode(Self.nonFiniteGeometryCanvas)
+        }
+        #expect(throws: JSONCanvasDecodingError.textTooLarge("first")) {
+            try JSONCanvasDocument.decode(Self.canvasData(nodes: [
+                Self.textNode(id: "first", text: String(repeating: "x", count: JSONCanvasLimits.maximumTextLength + 1)),
+            ]))
+        }
+    }
+
     @Test("viewport clamps pan zoom and selection state")
     func viewportMaintainsBoundedInteractionState() throws {
         let document = try JSONCanvasDocument.decode(Self.validCanvas)
@@ -79,6 +119,52 @@ struct JSONCanvasRendererTests {
 
         #expect(viewport.scale == JSONCanvasLimits.minimumScale)
         #expect(viewport.selectedNodeID == nil)
+    }
+
+    @Test("viewport clamps translation and ignores non-finite zoom factors")
+    func viewportClampsTranslationAndNonFiniteZoom() {
+        var viewport = JSONCanvasViewportState(scale: 2)
+
+        viewport.setTranslation(.init(
+            x: JSONCanvasLimits.maximumTranslationMagnitude + 1,
+            y: -JSONCanvasLimits.maximumTranslationMagnitude - 1))
+
+        #expect(viewport.translation == .init(
+            x: JSONCanvasLimits.maximumTranslationMagnitude,
+            y: -JSONCanvasLimits.maximumTranslationMagnitude))
+
+        viewport.setTranslation(.init(x: .infinity, y: .nan))
+        viewport.zoom(by: .infinity)
+        viewport.zoom(by: .nan)
+
+        #expect(viewport.translation == .zero)
+        #expect(viewport.scale == 2)
+    }
+
+    private static func canvasData(
+        nodes: [[String: Any]],
+        edges: [[String: Any]] = []
+    ) throws -> Data {
+        try JSONSerialization.data(withJSONObject: ["nodes": nodes, "edges": edges])
+    }
+
+    private static func textNode(
+        id: String,
+        x: Int = 0,
+        y: Int = 0,
+        width: Int = 120,
+        height: Int = 60,
+        text: String = "Text"
+    ) -> [String: Any] {
+        [
+            "id": id,
+            "type": "text",
+            "x": x,
+            "y": y,
+            "width": width,
+            "height": height,
+            "text": text,
+        ]
     }
 
     private static let validCanvas = Data("""
@@ -117,6 +203,15 @@ struct JSONCanvasRendererTests {
     {
       "nodes": [
         {"id":"text","type":"text","x":0,"y":0,"width":120,"height":60,"text":"Text","url":"https://example.com"}
+      ],
+      "edges": []
+    }
+    """.utf8)
+
+    private static let nonFiniteGeometryCanvas = Data("""
+    {
+      "nodes": [
+        {"id":"first","type":"text","x":1e999,"y":0,"width":120,"height":60,"text":"First"}
       ],
       "edges": []
     }
