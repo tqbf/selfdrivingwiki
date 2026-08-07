@@ -193,6 +193,39 @@ struct JSONCanvasRendererTests {
         #expect(viewport.selectedNodeID?.rawValue == "first")
     }
 
+    @Test("renderer view uses semantic appearance styles and disables visual motion")
+    func rendererViewUsesSemanticAppearanceAndDisablesVisualMotion() throws {
+        let source = try Self.rendererViewSource()
+
+        for semanticStyle in [
+            "Color.accentColor.opacity(0.16)",
+            ".color(.secondary.opacity(0.08))",
+            ".color(.secondary)",
+            ".background(.background)",
+            "Text(node.text).font(.body).foregroundStyle(.primary)",
+        ] {
+            #expect(source.contains(semanticStyle))
+        }
+        #expect(source.contains(".transaction { transaction in"))
+        #expect(source.contains("transaction.animation = nil"))
+        #expect(source.contains("transaction.disablesAnimations = true"))
+        #expect(source.contains("lineWidth: viewport.selectedNodeID == node.id ? 2 : 1"))
+        #expect(source.contains("withAnimation") == false)
+        #expect(source.contains(".animation(") == false)
+        #expect(source.contains(".transition(") == false)
+        #expect(source.contains("Color(nsColor:") == false)
+    }
+
+    private static func rendererViewSource() throws -> String {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        return try String(
+            contentsOf: root.appendingPathComponent("Sources/WikiFS/Renderer/JSONCanvasRendererView.swift"),
+            encoding: .utf8)
+    }
+
     private static func canvasData(
         nodes: [[String: Any]],
         edges: [[String: Any]] = []

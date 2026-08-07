@@ -127,6 +127,12 @@ struct JSONCanvasRendererView: View {
                 .accessibilityHint("Use the Up and Down Arrow keys to select a canvas node.")
             }
         }
+        // Pan, zoom, focus, and selection are direct manipulation. This renderer
+        // does not add visual motion and also blocks inherited implicit animation.
+        .transaction { transaction in
+            transaction.animation = nil
+            transaction.disablesAnimations = true
+        }
     }
 
     private enum FocusSurface: Hashable {
