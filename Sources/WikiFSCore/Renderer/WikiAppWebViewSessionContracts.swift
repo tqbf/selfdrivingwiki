@@ -32,6 +32,16 @@ public enum WikiAppWebViewPolicy {
     public static let externalLinkHandlerName = "renderer-external-link"
 }
 
+/// Host policy for the optional external-browser activation capability.
+///
+/// The default is deliberately disabled: a renderer page can choose an anchor
+/// destination, so installing this capability is an explicit host decision
+/// rather than an ambient property of every WebView session.
+public enum RendererExternalActivationPolicy: Equatable, Sendable {
+    case disabled
+    case enabled
+}
+
 public enum RendererSessionFailureKind: Equatable, Sendable {
     case invalidEntryURL
     case concurrencyLimitReached

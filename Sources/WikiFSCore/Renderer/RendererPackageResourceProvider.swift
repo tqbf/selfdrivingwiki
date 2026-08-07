@@ -91,16 +91,17 @@ public protocol RendererPackageResourceProviding {
     func resource(for url: URL) throws -> RendererPackageResource
 }
 
-/// Serves one immutable, version-pinned package directory. It revalidates the
-/// whole package and then reopens the requested manifest asset without
-/// following links before every response.
+/// Serves one validated, version-pinned package directory. The package is
+/// validated before the provider is created; each response still reopens the
+/// requested manifest asset without following links and rechecks its identity
+/// and digest.
 public struct ValidatedRendererPackageResourceProvider: RendererPackageResourceProviding {
     public let packageID: RendererPackageID
     public let version: RendererPackageVersion
     public let expectedPackageHash: RendererSHA256Digest
     public let installedRoot: URL
 
-    private let validator: RendererPackageValidator
+    private let validatedPackage: ValidatedRendererPackage
     private let fileSystem: any RendererPackageFileSystem
     private let diagnose: @Sendable (String) -> Void
 
@@ -112,12 +113,43 @@ public struct ValidatedRendererPackageResourceProvider: RendererPackageResourceP
         validator: RendererPackageValidator,
         fileSystem: any RendererPackageFileSystem = RealRendererPackageFileSystem(),
         diagnose: @escaping @Sendable (String) -> Void = { DebugLog.store($0) }
-    ) {
+    ) throws {
+        let installedRoot = installedRoot.standardizedFileURL
+        let validatedPackage = try validator.revalidateDirectory(installedRoot, expectedHash: expectedPackageHash)
+        try self.init(
+            packageID: packageID,
+            version: version,
+            expectedPackageHash: expectedPackageHash,
+            installedRoot: installedRoot,
+            validatedPackage: validatedPackage,
+            fileSystem: fileSystem,
+            diagnose: diagnose
+        )
+    }
+
+    /// Creates a provider from a package that was validated before the WebKit
+    /// session was created. Requests still perform per-asset no-follow,
+    /// identity, size, and digest checks, but do not rehash the whole package.
+    public init(
+        packageID: RendererPackageID,
+        version: RendererPackageVersion,
+        expectedPackageHash: RendererSHA256Digest,
+        installedRoot: URL,
+        validatedPackage: ValidatedRendererPackage,
+        fileSystem: any RendererPackageFileSystem = RealRendererPackageFileSystem(),
+        diagnose: @escaping @Sendable (String) -> Void = { DebugLog.store($0) }
+    ) throws {
+        let installedRoot = installedRoot.standardizedFileURL
+        guard validatedPackage.stagedRoot.standardizedFileURL == installedRoot,
+              validatedPackage.packageHash == expectedPackageHash,
+              validatedPackage.manifest.packageID == packageID,
+              validatedPackage.manifest.version == version
+        else { throw RendererPackageResourceError.packageRevalidationFailed }
         self.packageID = packageID
         self.version = version
         self.expectedPackageHash = expectedPackageHash
-        self.installedRoot = installedRoot.standardizedFileURL
-        self.validator = validator
+        self.installedRoot = installedRoot
+        self.validatedPackage = validatedPackage
         self.fileSystem = fileSystem
         self.diagnose = diagnose
     }
@@ -128,12 +160,7 @@ public struct ValidatedRendererPackageResourceProvider: RendererPackageResourceP
             return try fail(.packageIdentityMismatch)
         }
 
-        let package: ValidatedRendererPackage
-        do {
-            package = try validator.revalidateDirectory(installedRoot, expectedHash: expectedPackageHash)
-        } catch {
-            return try fail(.packageRevalidationFailed)
-        }
+        let package = validatedPackage
         guard package.manifest.packageID == packageID,
               package.manifest.version == version,
               package.packageHash == expectedPackageHash

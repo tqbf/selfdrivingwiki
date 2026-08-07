@@ -25,7 +25,7 @@ struct RendererPackageResourceProviderTests {
         let mismatched = RendererPackageScheme.url(packageID: otherID, version: fixture.version, path: declaredPath)
         try expectResourceFailure(.packageIdentityMismatch) { _ = try fixture.provider().resource(for: mismatched) }
 
-        let traversal = URL(string: "\(RendererPackageScheme.name)://package/\(fixture.packageID.rawValue)/\(fixture.version.rawValue)/%2E%2E/index.html")!
+        let traversal = try #require(URL(string: "\(RendererPackageScheme.name)://package/\(fixture.packageID.rawValue)/\(fixture.version.rawValue)/%2E%2E/index.html"))
         try expectResourceFailure(.invalidRequest) { _ = try fixture.provider().resource(for: traversal) }
 
         let undeclared = RendererPackageScheme.url(
@@ -36,13 +36,14 @@ struct RendererPackageResourceProviderTests {
         try expectResourceFailure(.undeclaredAsset) { _ = try fixture.provider().resource(for: undeclared) }
     }
 
-    @Test("revalidation and a fresh digest reject a changed installed asset")
+    @Test("a fresh digest rejects a changed installed asset")
     func deniesHashChangedAsset() throws {
         let fixture = try ResourceFixture()
         defer { fixture.remove() }
+        let provider = try fixture.provider()
         try Data("changed".utf8).write(to: fixture.entryURLOnDisk)
 
-        try expectResourceFailure(.packageRevalidationFailed) { _ = try fixture.provider().resource(for: fixture.entryURL) }
+        try expectResourceFailure(.assetHashMismatch) { _ = try provider.resource(for: fixture.entryURL) }
     }
 
     @Test("identity change between lstat and open fails closed")
@@ -54,7 +55,7 @@ struct RendererPackageResourceProviderTests {
         let replacementURL = fixture.root.appendingPathComponent("replacement.html")
         try Data("replacement".utf8).write(to: replacementURL)
         let replacement = try real.lstat(at: replacementURL)
-        let provider = fixture.provider(fileSystem: ReplacingFileSystem(before: original, opened: replacement, data: fixture.entryData))
+        let provider = try fixture.provider(fileSystem: ReplacingFileSystem(before: original, opened: replacement, data: fixture.entryData))
 
         try expectResourceFailure(.filesystemChanged) { _ = try provider.resource(for: fixture.entryURL) }
     }
@@ -100,8 +101,8 @@ private struct ResourceFixture {
         entryURL = RendererPackageScheme.url(packageID: packageID, version: version, path: asset.path)
     }
 
-    func provider(fileSystem: any RendererPackageFileSystem = RealRendererPackageFileSystem()) -> ValidatedRendererPackageResourceProvider {
-        ValidatedRendererPackageResourceProvider(
+    func provider(fileSystem: any RendererPackageFileSystem = RealRendererPackageFileSystem()) throws -> ValidatedRendererPackageResourceProvider {
+        try ValidatedRendererPackageResourceProvider(
             packageID: packageID,
             version: version,
             expectedPackageHash: expectedHash,

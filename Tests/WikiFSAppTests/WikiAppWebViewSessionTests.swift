@@ -24,6 +24,29 @@ struct WikiAppWebViewSessionTests {
         #expect(first.schemeHandler !== second.schemeHandler)
     }
 
+    @Test("external activation is disabled unless explicitly enabled")
+    func externalActivationRequiresExplicitHostPolicy() throws {
+        let entryURL = try #require(rendererEntryURL())
+        let disabled = WikiAppWebViewSession(
+            entryURL: entryURL,
+            resourceProvider: StubResourceProvider()
+        )
+        disabled.start()
+        let disabledWebView = try #require(disabled.webView)
+        #expect(disabledWebView.configuration.userContentController.userScripts.isEmpty)
+        disabled.close()
+
+        let enabled = WikiAppWebViewSession(
+            entryURL: entryURL,
+            resourceProvider: StubResourceProvider(),
+            externalActivationPolicy: .enabled
+        )
+        enabled.start()
+        let enabledWebView = try #require(enabled.webView)
+        #expect(enabledWebView.configuration.userContentController.userScripts.count == 1)
+        enabled.close()
+    }
+
     @Test("timeout records a failure and releases its resources")
     func timeoutFailureIsObservableAndReleasesResources() {
         let scheduler = ManualTimeoutScheduler()

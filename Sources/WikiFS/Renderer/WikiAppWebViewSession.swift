@@ -144,6 +144,7 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
     private let failureRecorder: RendererSessionFailureRecording?
     private let lifecycleFailureHandler: (@MainActor (RendererSessionFailure) -> Void)?
     private let bridgeFactory: ((RendererSessionID) throws -> RendererContentWorldBroker)?
+    private let externalActivationPolicy: RendererExternalActivationPolicy
 
     private var machine: WikiAppWebViewSessionStateMachine
     private var configuration: WikiAppWebViewConfigurationFactory.Configuration?
@@ -171,6 +172,7 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
         failureRecorder: RendererSessionFailureRecording? = nil,
         lifecycleFailureHandler: (@MainActor (RendererSessionFailure) -> Void)? = nil,
         bridgeFactory: ((RendererSessionID) throws -> RendererContentWorldBroker)? = nil,
+        externalActivationPolicy: RendererExternalActivationPolicy = .disabled,
         externalURLOpener: any RendererExternalURLOpening = SystemRendererExternalURLOpener(),
         activationClock: any RendererActivationClock = SystemRendererActivationClock(),
         activationNonceGenerator: any RendererActivationNonceGenerating = SystemRendererActivationNonceGenerator()
@@ -184,6 +186,7 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
         self.failureRecorder = failureRecorder
         self.lifecycleFailureHandler = lifecycleFailureHandler
         self.bridgeFactory = bridgeFactory
+        self.externalActivationPolicy = externalActivationPolicy
         externalLinkRedemptionGate = .init(
             opener: externalURLOpener,
             clock: activationClock,
@@ -241,26 +244,28 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
                 return
             }
         }
-        let trustedActivationHandler = RendererTrustedActivationScriptMessageHandler(
-            expectedContentWorld: configuration.contentWorld
-        ) { [weak self] url, webView, securityOrigin, isMainFrame in
-            self?.recordTrustedActivation(url: url, webView: webView, securityOrigin: securityOrigin, isMainFrame: isMainFrame)
+        if externalActivationPolicy == .enabled {
+            let trustedActivationHandler = RendererTrustedActivationScriptMessageHandler(
+                expectedContentWorld: configuration.contentWorld
+            ) { [weak self] url, webView, securityOrigin, isMainFrame in
+                self?.recordTrustedActivation(url: url, webView: webView, securityOrigin: securityOrigin, isMainFrame: isMainFrame)
+            }
+            let externalLinkHandler = RendererExternalLinkScriptMessageHandler(
+                expectedContentWorld: configuration.contentWorld
+            ) { [weak self] nonce, url, webView, securityOrigin, isMainFrame in
+                guard let self else { throw RendererExternalActivationError.sessionClosed }
+                return try self.redeemExternalLink(nonce: nonce, url: url, webView: webView, securityOrigin: securityOrigin, isMainFrame: isMainFrame)
+            }
+            configuration.userContentController.addScriptMessageHandler(
+                trustedActivationHandler, contentWorld: configuration.contentWorld, name: WikiAppWebViewPolicy.trustedActivationHandlerName
+            )
+            configuration.userContentController.addScriptMessageHandler(
+                externalLinkHandler, contentWorld: configuration.contentWorld, name: WikiAppWebViewPolicy.externalLinkHandlerName
+            )
+            configuration.userContentController.addUserScript(RendererTrustedActivationScriptMessageHandler.observationScript(contentWorld: configuration.contentWorld))
+            self.trustedActivationHandler = trustedActivationHandler
+            self.externalLinkHandler = externalLinkHandler
         }
-        let externalLinkHandler = RendererExternalLinkScriptMessageHandler(
-            expectedContentWorld: configuration.contentWorld
-        ) { [weak self] nonce, url, webView, securityOrigin, isMainFrame in
-            guard let self else { throw RendererExternalActivationError.sessionClosed }
-            return try self.redeemExternalLink(nonce: nonce, url: url, webView: webView, securityOrigin: securityOrigin, isMainFrame: isMainFrame)
-        }
-        configuration.userContentController.addScriptMessageHandler(
-            trustedActivationHandler, contentWorld: configuration.contentWorld, name: WikiAppWebViewPolicy.trustedActivationHandlerName
-        )
-        configuration.userContentController.addScriptMessageHandler(
-            externalLinkHandler, contentWorld: configuration.contentWorld, name: WikiAppWebViewPolicy.externalLinkHandlerName
-        )
-        configuration.userContentController.addUserScript(RendererTrustedActivationScriptMessageHandler.observationScript(contentWorld: configuration.contentWorld))
-        self.trustedActivationHandler = trustedActivationHandler
-        self.externalLinkHandler = externalLinkHandler
         let webView = WKWebView(frame: .zero, configuration: configuration.webViewConfiguration)
         webView.navigationDelegate = self
         webView.uiDelegate = self
