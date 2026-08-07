@@ -49,6 +49,11 @@ struct SourceDetailView: View {
     let extractionProvider: any QueueExtractionProvider
     let fileProvider: FileProviderFacade
     @Bindable var store: WikiStoreModel
+    /// The app composition root will supply the validated installed-renderer
+    /// snapshot. The default has no packages, which keeps Source available when
+    /// the machine index is not ready yet.
+    let installedRendererFactory: InstalledRendererFactory = .unavailable
+    let installedRendererFactoryInputs: InstalledRendererFactory.Inputs = .unavailable
 
     @AppStorage("editor.zoom") private var editorZoom = Double(ZoomScale.defaultScale)
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
@@ -97,6 +102,9 @@ struct SourceDetailView: View {
     /// pages. (Replaces the old always-on "already ingested" warning banner.)
     @State private var showReingestConfirmation = false
     @State private var rendererPresentationLifecycle = RendererPresentationLifecycle(sourceID: SourceID(rawValue: ""))
+    /// An installed renderer's terminal session failure is transient. The host
+    /// falls back to Source without changing the persisted renderer preference.
+    @State private var failedInstalledRendererReference: RendererReference?
     /// Cached once per source lifecycle so body evaluation and editor changes do
     /// not repeatedly synchronously fetch the complete SQLite blob.
     @State private var sourceBytesSnapshot: Data?
@@ -151,7 +159,7 @@ struct SourceDetailView: View {
 
     private var rendererDescriptors: [RendererDescriptor] {
         do {
-            let planner = try SourceRendererPresentationPlanner()
+            let planner = try rendererPlanner()
             return try planner.matchingDescriptors(
                 for: file,
                 boundedBytes: sourceBytesSnapshot,
@@ -1179,11 +1187,32 @@ struct SourceDetailView: View {
     }
 
     private func renderedContent(for descriptor: RendererDescriptor) -> AnyView? {
-        BuiltInRendererFactoryMap.makeView(for: descriptor, inputs: rendererFactoryInputs)
+        if let builtIn = BuiltInRendererFactoryMap.makeView(for: descriptor, inputs: rendererFactoryInputs) {
+            return builtIn
+        }
+        guard failedInstalledRendererReference != descriptor.reference else { return nil }
+        return installedRendererFactory.makeView(
+            for: descriptor,
+            inputs: installedRendererFactoryInputs) { _ in
+                // The representable already deferred this callback out of its
+                // AppKit/WebKit stack. Keep the detail-state mutation deferred
+                // as well because the rendered closure can run in an update pass.
+                Task { @MainActor in
+                    failedInstalledRendererReference = descriptor.reference
+                }
+            }
     }
 
     private func persistRendererPreference(_ reference: RendererReference) {
+        // A deliberate retry gets a new session. The failure marker only keeps
+        // the existing failed session from being recreated during fallback.
+        failedInstalledRendererReference = nil
         store.setRendererSourcePreference(sourceID: file.id, preference: .exact(reference))
+    }
+
+    private func rendererPlanner() throws -> SourceRendererPresentationPlanner {
+        try SourceRendererPresentationPlanner(
+            installedDescriptors: installedRendererFactoryInputs.enabledDescriptors)
     }
 
     private func persistRendererPresentationSelection(_ selection: RendererPresentationState.Selection) {
@@ -1203,7 +1232,7 @@ struct SourceDetailView: View {
     /// choice. Without it, a new presentable source returns to Source.
     private func resolveRendererPresentation() {
         do {
-            let planner = try SourceRendererPresentationPlanner()
+            let planner = try rendererPlanner()
             let preference = store.rendererSourcePreference(for: file.id)
             let descriptor: RendererDescriptor?
             if let preference {
@@ -1244,7 +1273,7 @@ struct SourceDetailView: View {
     /// not itself permission to rebuild the pane's exact renderer pin.
     private func refreshRendererPresentation() {
         do {
-            let planner = try SourceRendererPresentationPlanner()
+            let planner = try rendererPlanner()
             let descriptors = try planner.matchingDescriptors(
                 for: file,
                 boundedBytes: sourceBytesSnapshot,

@@ -142,6 +142,7 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
     private let permits: RendererWebViewSessionPermitPool
     private let installedPackage: RendererPackageReservation?
     private let failureRecorder: RendererSessionFailureRecording?
+    private let lifecycleFailureHandler: (@MainActor (RendererSessionFailure) -> Void)?
     private let bridgeFactory: ((RendererSessionID) throws -> RendererContentWorldBroker)?
 
     private var machine: WikiAppWebViewSessionStateMachine
@@ -168,6 +169,7 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
         permits: RendererWebViewSessionPermitPool? = nil,
         installedPackage: RendererPackageReservation? = nil,
         failureRecorder: RendererSessionFailureRecording? = nil,
+        lifecycleFailureHandler: (@MainActor (RendererSessionFailure) -> Void)? = nil,
         bridgeFactory: ((RendererSessionID) throws -> RendererContentWorldBroker)? = nil,
         externalURLOpener: any RendererExternalURLOpening = SystemRendererExternalURLOpener(),
         activationClock: any RendererActivationClock = SystemRendererActivationClock(),
@@ -180,6 +182,7 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
         self.permits = permits ?? .shared
         self.installedPackage = installedPackage
         self.failureRecorder = failureRecorder
+        self.lifecycleFailureHandler = lifecycleFailureHandler
         self.bridgeFactory = bridgeFactory
         externalLinkRedemptionGate = .init(
             opener: externalURLOpener,
@@ -415,6 +418,7 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
         if let webView, self.webView !== webView { return }
         externalLinkRedemptionGate.invalidateAll(reason: .sessionFailed)
         guard machine.fail(sessionID: machine.sessionID, kind: kind) else { return }
+        lifecycleFailureHandler?(.init(sessionID: machine.sessionID, kind: kind))
         recordInstalledRendererFailure(kind)
         releaseOwnedResources(invalidation: .sessionFailed)
     }
