@@ -20,10 +20,10 @@ status: complete
 
 ## Verification
 
-- `swift build --disable-sandbox` passed after integration into the security branch at `c87ae322`.
+- `swift build --disable-sandbox` passed after integration into the security branch at `e29ff90f`.
 - The commit hook ran strict SwiftLint across 481 files and found zero violations.
 - The inventory resolver and `git diff --check` passed for the integrated file set.
 - Focused host and session tests remain part of the final cumulative verification; live WebKit tests are opt-in through `WIKIFS_APP_TESTS=1`.
 - `make build` may still be unavailable in this environment because its unchanged icon generation prerequisite uses `iconutil`; the direct SwiftPM build is the authoritative compile gate here.
 - Hosted tests remain opt-in through `WIKIFS_APP_TESTS=1`. They mount a real `WKWebView` with a recording session. They do not load a renderer package or prove network isolation.
-- The host seam is committed as `c87ae322df2122971423349f6269993cb4591967`; no push, merge, or retarget occurred.
+- The host seam is committed as `e29ff90fe6cc131c1e2e53cfc13b44965b21f152`; no push, merge, or retarget occurred.

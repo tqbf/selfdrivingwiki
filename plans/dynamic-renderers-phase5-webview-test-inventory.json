@@ -5,7 +5,7 @@
   "slice": 5,
   "coveredSlices": [0, 1, 2, 3, 4, 5],
   "baseSHA": "933a0637fa5593c4fdba611edb380058b5838f71",
-  "headSHA": "c87ae322df2122971423349f6269993cb4591967",
+  "headSHA": "e29ff90fe6cc131c1e2e53cfc13b44965b21f152",
   "scope": "WebView package-resource security boundary, ephemeral WebKit session lifecycle, per-session capability-bound input.read, navigation policy, actual WebKit provenance checks, isolated-world reply delivery, bounded replay state, trusted external-link activation contracts, machine-wide installed-renderer safe mode, the SwiftUI installed-renderer host and Source fallback, per-session storage and file-isolation coverage, and a live HTTP plus trusted-TLS WebSocket positive-control harness. The bridge has closed methods, bounded envelopes and payloads, replay rejection, main-frame and webView/origin/session checks, exact version-pinned source and markdown reads, and an isolated-world postMessage relay. Trusted activation uses a short-lived, one-use cryptographic nonce bound to a normalized HTTP(S) destination and host context. Failure accounting stores only a package identity, a closed cause, and a timestamp. The harness uses the login-keychain identity with SHA-1 7C0B00954A876487620BE7B2E2D0FDEC54B8EF08. The live WebKit WSS positive control passes with the real TLS listener and certificate.",
   "futureInputContract": "RendererAuthorizedInputReader receives version-pinned SourceVersionID source bytes or SourceMarkdownVersionID processed Markdown. It must not call live sourceContent(id:) for session input.",
   "productionPaths": [
