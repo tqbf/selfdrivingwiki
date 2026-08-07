@@ -5,9 +5,9 @@
   "slice": 5,
   "coveredSlices": [0, 1, 2, 3, 4, 5],
   "baseSHA": "933a0637fa5593c4fdba611edb380058b5838f71",
-  "headSHA": "4cc6bde004a03afc88e40f682c23b1598f421300",
-  "headSHASemantics": "This is the last integrated implementation and CI head covered by the inventory. The hosted HTTP/WSS positive control remains explicitly opt-in and is not claimed as an ordinary CI pass.",
-  "scope": "WebView package-resource security boundary, ephemeral WebKit session lifecycle, per-session capability-bound input.read, navigation policy, actual WebKit provenance checks, isolated-world reply delivery, bounded replay state, trusted external-link activation contracts, package/version-scoped installed-renderer safe mode, the SwiftUI installed-renderer host and Source fallback, per-session storage and file-isolation coverage, and a live HTTP plus trusted-TLS WebSocket positive-control harness. The bridge has closed methods, bounded envelopes and payloads, replay rejection, main-frame and webView/origin/session checks, exact version-pinned source and markdown reads, and an isolated-world postMessage relay. Trusted activation uses a short-lived, one-use cryptographic nonce bound to a normalized HTTP(S) destination and host context. Failure accounting stores only a package identity, a closed cause, and a timestamp. The hosted WSS control uses a login-keychain identity with SHA-1 7C0B00954A876487620BE7B2E2D0FDEC54B8EF08 when its explicit hosted-network gate is enabled. It does not claim a pass when disabled.",
+  "headSHA": "1d01264a2b893c3c1e5a576d946dc318134799ea",
+  "headSHASemantics": "This is the exact host-wiring implementation and test commit. The following documentation-only evidence commit does not change production or test code. The hosted HTTP/WSS positive control remains explicitly opt-in and is not claimed as an ordinary CI pass.",
+  "scope": "WebView package-resource security boundary, ephemeral WebKit session lifecycle, per-session capability-bound input.read, navigation policy, actual WebKit provenance checks, isolated-world reply delivery, bounded replay state, trusted external-link activation contracts, package/version-scoped installed-renderer safe mode, and Source fallback. The host-wiring slice supplies a source-version-pinned reader to the installed renderer factory, checks descriptor and bridge size bounds before WebKit starts, injects only the typed input selector into the isolated world, and keeps the existing failure recorder and trusted external-link policy. The bridge has closed methods, bounded envelopes and payloads, replay rejection, main-frame and webView/origin/session checks, exact version-pinned source and markdown reads, and an isolated-world postMessage relay. Trusted activation uses a short-lived, one-use cryptographic nonce bound to a normalized HTTP(S) destination and host context. Failure accounting stores only a package identity, a closed cause, and a timestamp. The hosted WSS control uses a login-keychain identity with SHA-1 7C0B00954A876487620BE7B2E2D0FDEC54B8EF08 when its explicit hosted-network gate is enabled. It does not claim a pass when disabled.",
   "ciCoverage": "ordinary CI runs the selected portable WebKit-facing suites: package scheme handler, content-world bridge, external activation redemption gate, and SwiftUI host/session lifecycle. RendererSessionIsolationTests and RendererHostedWebKitHarnessTests do not run in ordinary CI because they require real GUI/WebKit storage or hosted network and login-keychain prerequisites.",
   "futureInputContract": "RendererAuthorizedInputReader receives version-pinned SourceVersionID source bytes or SourceMarkdownVersionID processed Markdown. It must not call live sourceContent(id:) for session input.",
   "productionPaths": [
@@ -113,8 +113,13 @@
     },
     {
       "path": "Sources/WikiFSCore/Renderer/RendererAuthorizedInputReader.swift",
-      "symbols": ["RendererAuthorizedInputReader"],
-      "tests": ["RendererAuthorizedInputReaderTests.oversizedPinnedInputsDoNotMaterializePayloads", "RendererAuthorizedInputReaderTests.storeBackedMarkdownReadUsesPinnedBlobBytes", "SourceVersionStoreTests.exactSourceVersionReadDoesNotFollowTheLiveContentRef"]
+      "symbols": ["RendererAuthorizedInputReader", "RendererAuthorizedInputReader.validateInput"],
+      "tests": ["RendererAuthorizedInputReaderTests.oversizedPinnedInputsDoNotMaterializePayloads", "RendererAuthorizedInputReaderTests.storeBackedMarkdownReadUsesPinnedBlobBytes", "SourceVersionStoreTests.exactSourceVersionReadDoesNotFollowTheLiveContentRef", "WikiAppWebViewTests.oversizedPinnedInputReturnsNoView"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Store/WikiStoreModel.swift",
+      "symbols": ["WikiStoreModel.rendererAuthorizedInputReader"],
+      "tests": ["WikiAppWebViewTests.sourceDetailKeepsInstalledFactoryOutsideBuiltInMap", "WikiAppWebViewTests.factoryWiresPinnedInputAndLifecycleContracts"]
     },
     {
       "path": "Sources/WikiFSCore/Store/GRDBWikiStore.swift",
@@ -123,8 +128,8 @@
     },
     {
       "path": "Sources/WikiFS/Renderer/RendererContentWorldBridge.swift",
-      "symbols": ["RendererContentWorldBroker", "RendererScriptMessageHandler"],
-      "tests": ["RendererContentWorldBridgeTests.repliesWithPinnedPayloadAfterProvenanceChecks", "RendererContentWorldBridgeTests.rejectsWrongWorldAndProvenance", "RendererContentWorldBridgeTests.rejectsNilWebViewProvenanceWithoutBinding", "RendererContentWorldBridgeTests.rejectsNilWebViewProvenanceAfterBinding"]
+      "symbols": ["RendererContentWorldBroker", "RendererContentWorldBroker.pageInput", "RendererContentWorldBroker.inputBootstrapScript", "RendererScriptMessageHandler"],
+      "tests": ["RendererContentWorldBridgeTests.inputBootstrapScriptExposesPinnedSelectorOnly", "RendererContentWorldBridgeTests.repliesWithPinnedPayloadAfterProvenanceChecks", "RendererContentWorldBridgeTests.rejectsWrongWorldAndProvenance", "RendererContentWorldBridgeTests.rejectsNilWebViewProvenanceWithoutBinding", "RendererContentWorldBridgeTests.rejectsNilWebViewProvenanceAfterBinding"]
     },
     {
       "path": "Sources/WikiFSCore/Renderer/RendererNavigationPolicy.swift",
@@ -149,7 +154,8 @@
         "WikiAppWebViewSessionTests.staleTimeoutDoesNotChangeReadySession",
         "WikiAppWebViewSessionTests.discardedLoadingSessionReleasesPermit",
         "WikiAppWebViewSessionTests.discardedFailedSessionReleasesCapacity",
-        "WikiAppWebViewSessionTests.externalActivationRequiresExplicitHostPolicy"
+        "WikiAppWebViewSessionTests.externalActivationRequiresExplicitHostPolicy",
+        "WikiAppWebViewTests.factoryWiresPinnedInputAndLifecycleContracts"
       ]
     },
     {
@@ -216,18 +222,18 @@
     },
     {
       "path": "Sources/WikiFS/Renderer/InstalledRendererFactory.swift",
-      "symbols": ["InstalledRendererSessionConfiguration", "InstalledRendererFactory"],
-      "tests": ["WikiAppWebViewTests.unavailableInstalledRendererReturnsNoView"]
+      "symbols": ["InstalledRendererSessionConfiguration", "InstalledRendererFactory.makeView", "InstalledRendererFactory.makeLiveSession"],
+      "tests": ["WikiAppWebViewTests.unavailableInstalledRendererReturnsNoView", "WikiAppWebViewTests.oversizedPinnedInputReturnsNoView", "WikiAppWebViewTests.factoryWiresPinnedInputAndLifecycleContracts"]
     },
     {
       "path": "Sources/WikiFS/Renderer/InstalledRendererHost.swift",
       "symbols": ["InstalledRendererHost", "InstalledRendererHost.production", "InstalledRendererHost.resetInstalledRendererSafeMode"],
-      "tests": ["InstalledRendererHostTests.unavailableMachineStorePreservesSourceFallback", "InstalledRendererHostTests.recoveryUsesTypedReference"]
+      "tests": ["InstalledRendererHostTests.unavailableMachineStorePreservesSourceFallback", "InstalledRendererHostTests.recoveryUsesTypedReference", "WikiAppWebViewTests.factoryWiresPinnedInputAndLifecycleContracts"]
     },
     {
       "path": "Sources/WikiFS/Sources/SourceDetailView.swift",
       "symbols": ["SourceDetailView.renderedContent", "SourceDetailView.rendererPlanner"],
-      "tests": ["WikiAppWebViewTests.sourceDetailKeepsInstalledFactoryOutsideBuiltInMap"]
+      "tests": ["WikiAppWebViewTests.sourceDetailKeepsInstalledFactoryOutsideBuiltInMap", "WikiAppWebViewTests.factoryWiresPinnedInputAndLifecycleContracts"]
     }
   ],
   "testPaths": [
@@ -345,6 +351,11 @@
       "InstalledRendererHostTests.unavailableMachineStorePreservesSourceFallback",
       "InstalledRendererHostTests.recoveryUsesTypedReference"
     ],
+    "the installed host validates a pinned input before session creation, passes the exact reader and existing failure recorder through the factory, and exposes only the typed selector to page code": [
+      "WikiAppWebViewTests.oversizedPinnedInputReturnsNoView",
+      "WikiAppWebViewTests.factoryWiresPinnedInputAndLifecycleContracts",
+      "RendererContentWorldBridgeTests.inputBootstrapScriptExposesPinnedSelectorOnly"
+    ],
     "fresh renderer sessions isolate transient browser storage and reject file navigation/content exposure": [
       "RendererSessionIsolationTests.sessionsIsolateTransientBrowserStorage",
       "RendererSessionIsolationTests.sessionsRejectFileNavigationAndContentExposure"
@@ -391,7 +402,7 @@
   "honestCoverageLimits": [
     "The portable provider tests do not run a live WKWebView or prove general network isolation. The later hosted network harness owns that claim.",
     "The opt-in lifecycle tests do not load a live renderer document. A later hosted network harness owns end-to-end WebKit behavior.",
-    "The SwiftUI host tests mount a real WKWebView only through a recording session. They prove insertion, deferred lifecycle ordering, failure deferral, replacement teardown, and Source fallback dispatch; they do not prove a live package navigation.",
+    "The host-wiring test uses a recording session. It proves pinned-reader, trusted-link-policy, failure-recorder, and teardown composition. It does not load a live installed package document.",
     "The session-isolation tests exercise real ephemeral WebKit data stores and file-navigation rejection. They do not prove the general network-isolation matrix.",
     "The portable isolated-world bridge tests exercise handler routing, reply encoding, and injected provenance. They do not run a live renderer document or prove WebKit supplies that provenance. A hosted suite still owns that claim.",
     "The bridge and navigation tests do not prove live frame identity, navigation cancellation, or network isolation. A hosted WebKit suite must cover those conditions.",
