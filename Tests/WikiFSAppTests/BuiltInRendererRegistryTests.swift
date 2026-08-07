@@ -154,6 +154,9 @@ import WikiFSTypes
         {"nodes":[{"id":"note","type":"text","x":0,"y":0,"width":120,"height":60,"text":"Note"}],"edges":[]}
         """.utf8)
         let malformedData = Data("{\"nodes\":[]".utf8)
+        let unsafeLinkData = Data("""
+        {"nodes":[{"id":"link","type":"file","x":0,"y":0,"width":120,"height":60,"file":"../secret.md"}],"edges":[]}
+        """.utf8)
 
         #expect(BuiltInRendererFactoryMap.makeView(
             for: descriptor,
@@ -164,6 +167,9 @@ import WikiFSTypes
         #expect(BuiltInRendererFactoryMap.makeView(
             for: descriptor,
             inputs: try Self.factoryInputs(sourceBytes: nil)) == nil)
+        #expect(BuiltInRendererFactoryMap.makeView(
+            for: descriptor,
+            inputs: try Self.factoryInputs(sourceBytes: unsafeLinkData)) == nil)
     }
 
     @Test("Characterization: NULL-MIME standalone Mermaid uses Source markdown presentation")

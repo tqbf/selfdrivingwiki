@@ -2,6 +2,7 @@
 import Foundation
 import Testing
 @testable import WikiFS
+import WikiFSTypes
 
 @Suite("JSON Canvas native renderer", .serialized, .timeLimit(.minutes(1)))
 struct JSONCanvasRendererTests {
@@ -15,6 +16,35 @@ struct JSONCanvasRendererTests {
         #expect(document.renderProjection.nodes.map(\.id.rawValue) == ["first", "second"])
     }
 
+    @Test("decoder models only typed internal file and wiki links")
+    func decoderModelsTypedInternalLinks() throws {
+        let document = try JSONCanvasDocument.decode(Self.internalLinkCanvas)
+        let fileReference = try #require(JSONCanvasInternalFileReference(rawValue: "notes/Readme.md"))
+        let pageID = PageID(rawValue: "01J00000000000000000000000")
+        let sourceID = SourceID(rawValue: "01J00000000000000000000001")
+
+        #expect(document.renderProjection.nodes.map(\.text) == [
+            "Readme.md",
+            "Page 01J00000000000000000000000",
+            "Source 01J00000000000000000000001",
+        ])
+        #expect(document.hostAction(for: try JSONCanvasNodeID(validating: "file")) == .openFile(fileReference))
+        #expect(document.hostAction(for: try JSONCanvasNodeID(validating: "page")) == .openWiki(.page(pageID)))
+        #expect(document.hostAction(for: try JSONCanvasNodeID(validating: "source")) == .openWiki(.source(sourceID)))
+    }
+
+    @Test("internal host actions dispatch only the typed request")
+    func internalHostActionsDispatchTypedRequest() throws {
+        let document = try JSONCanvasDocument.decode(Self.internalLinkCanvas)
+        let action = try #require(document.hostAction(for: try JSONCanvasNodeID(validating: "page")))
+        var receivedActions: [JSONCanvasHostAction] = []
+        let dispatcher = JSONCanvasHostActionDispatcher { receivedActions.append($0) }
+
+        dispatcher.dispatch(action)
+
+        #expect(receivedActions == [action])
+    }
+
     @Test("decoder rejects unavailable malformed oversized and unsupported Canvas input")
     func decoderRejectsInvalidInput() {
         #expect(throws: JSONCanvasDecodingError.unavailableInput) {
@@ -26,14 +56,23 @@ struct JSONCanvasRendererTests {
         #expect(throws: JSONCanvasDecodingError.oversizedInput) {
             try JSONCanvasDocument.decode(Data(repeating: 0, count: JSONCanvasLimits.maximumInputByteCount + 1))
         }
-        #expect(throws: JSONCanvasDecodingError.unsupportedNodeType("link")) {
-            try JSONCanvasDocument.decode(Self.unsupportedLinkCanvas)
+        #expect(throws: JSONCanvasDecodingError.unsupportedNodeType("group")) {
+            try JSONCanvasDocument.decode(Self.unsupportedGroupCanvas)
         }
         #expect(throws: JSONCanvasDecodingError.malformedDocument) {
             try JSONCanvasDocument.decode(Self.textNodeWithURLCanvas)
         }
         #expect(throws: JSONCanvasDecodingError.unknownEdgeEndpoint("missing")) {
             try JSONCanvasDocument.decode(Self.unknownEndpointCanvas)
+        }
+    }
+
+    @Test("decoder rejects unsafe, external, and ambiguous internal links")
+    func decoderRejectsUnsafeInternalLinks() {
+        for data in Self.unsafeInternalLinkCanvases {
+            #expect(throws: JSONCanvasDecodingError.invalidInternalLink("link")) {
+                try JSONCanvasDocument.decode(data)
+            }
         }
     }
 
@@ -192,14 +231,55 @@ struct JSONCanvasRendererTests {
     }
     """.utf8)
 
-    private static let unsupportedLinkCanvas = Data("""
+    private static let internalLinkCanvas = Data("""
     {
       "nodes": [
-        {"id":"link","type":"link","x":0,"y":0,"width":120,"height":60,"url":"https://example.com"}
+        {"id":"file","type":"file","x":0,"y":0,"width":120,"height":60,"file":"notes/Readme.md"},
+        {"id":"page","type":"link","x":0,"y":80,"width":120,"height":60,"url":"[[page:01J00000000000000000000000]]"},
+        {"id":"source","type":"link","x":0,"y":160,"width":120,"height":60,"url":"[[source:01J00000000000000000000001]]"}
       ],
       "edges": []
     }
     """.utf8)
+
+    private static let unsupportedGroupCanvas = Data("""
+    {
+      "nodes": [
+        {"id":"link","type":"group","x":0,"y":0,"width":120,"height":60,"url":"https://example.com"}
+      ],
+      "edges": []
+    }
+    """.utf8)
+
+    private static let unsafeInternalLinkCanvases: [Data] = [
+        fileLinkCanvas("/private/notes.md"),
+        fileLinkCanvas("//host/notes.md"),
+        fileLinkCanvas("../notes.md"),
+        fileLinkCanvas("notes/../secret.md"),
+        fileLinkCanvas("https://example.com/notes.md"),
+        fileLinkCanvas("file:notes.md"),
+        fileLinkCanvas("user@host/notes.md"),
+        fileLinkCanvas("notes.md?query"),
+        fileLinkCanvas("notes.md#fragment"),
+        fileLinkCanvas("notes%2Fsecret.md"),
+        wikiLinkCanvas("https://example.com"),
+        wikiLinkCanvas("wiki://page?id=01J00000000000000000000000"),
+        wikiLinkCanvas("[[page:not-a-ulid]]"),
+        wikiLinkCanvas("[[page:01J00000000000000000000000|Alias]]"),
+        wikiLinkCanvas("[[page:01J00000000000000000000000#Section]]"),
+    ]
+
+    private static func fileLinkCanvas(_ file: String) -> Data {
+        Data("""
+        {"nodes":[{"id":"link","type":"file","x":0,"y":0,"width":120,"height":60,"file":"\(file)"}],"edges":[]}
+        """.utf8)
+    }
+
+    private static func wikiLinkCanvas(_ url: String) -> Data {
+        Data("""
+        {"nodes":[{"id":"link","type":"link","x":0,"y":0,"width":120,"height":60,"url":"\(url)"}],"edges":[]}
+        """.utf8)
+    }
 
     private static let unknownEndpointCanvas = Data("""
     {

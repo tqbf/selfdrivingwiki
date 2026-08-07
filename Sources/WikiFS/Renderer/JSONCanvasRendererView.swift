@@ -7,12 +7,21 @@ import SwiftUI
 
 struct JSONCanvasRendererView: View {
     let document: JSONCanvasDocument
+    private let hostActionDispatcher: JSONCanvasHostActionDispatcher
 
     @State private var viewport = JSONCanvasViewportState()
     @State private var dragStart: JSONCanvasPoint?
     @State private var dragInitialTranslation = JSONCanvasPoint.zero
     @State private var magnificationBaseline = 1.0
     @FocusState private var focusedSurface: FocusSurface?
+
+    init(
+        document: JSONCanvasDocument,
+        onHostAction: @escaping (JSONCanvasHostAction) -> Void = { _ in }
+    ) {
+        self.document = document
+        hostActionDispatcher = .init(onHostAction)
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -31,6 +40,13 @@ struct JSONCanvasRendererView: View {
                     selectOutlineEntry(entry)
                 }
                 .onMoveCommand { handleMoveCommand($0, from: .outline) }
+                .contextMenu {
+                    if document.hostAction(for: entry.nodeID) != nil {
+                        Button("Open Internal Link") {
+                            requestHostAction(for: entry.nodeID)
+                        }
+                    }
+                }
             }
             .frame(minWidth: 180, idealWidth: 220, maxWidth: 280)
             .focusable()
@@ -91,6 +107,13 @@ struct JSONCanvasRendererView: View {
                             selectCanvasNode(node.id)
                         }
                         .onMoveCommand { handleMoveCommand($0, from: .canvas) }
+                        .contextMenu {
+                            if document.hostAction(for: node.id) != nil {
+                                Button("Open Internal Link") {
+                                    requestHostAction(for: node.id)
+                                }
+                            }
+                        }
                     }
                 }
                 .background(.background)
@@ -159,6 +182,11 @@ struct JSONCanvasRendererView: View {
     private func selectCanvasNode(_ nodeID: JSONCanvasNodeID) {
         viewport.select(nodeID: nodeID)
         focusedSurface = .canvas
+    }
+
+    private func requestHostAction(for nodeID: JSONCanvasNodeID) {
+        guard let action = document.hostAction(for: nodeID) else { return }
+        hostActionDispatcher.dispatch(action)
     }
 
     private func handleMoveCommand(_ direction: MoveCommandDirection, from surface: FocusSurface) {

@@ -1,5 +1,6 @@
 #if os(macOS)
 import Foundation
+import WikiFSCore
 
 // pattern: Functional Core
 
@@ -28,6 +29,7 @@ enum JSONCanvasDecodingError: Error, Equatable {
     case invalidGeometry(String)
     case textTooLarge(String)
     case unknownEdgeEndpoint(String)
+    case invalidInternalLink(String)
 }
 
 struct JSONCanvasNodeID: Hashable, Sendable, Comparable, Identifiable {
@@ -72,10 +74,109 @@ struct JSONCanvasRect: Sendable, Equatable {
     }
 }
 
+struct JSONCanvasInternalFileReference: RawRepresentable, Hashable, Sendable {
+    let path: RendererRelativePath
+
+    var rawValue: String { path.rawValue }
+
+    init?(rawValue: String) {
+        guard rawValue == rawValue.trimmingCharacters(in: .whitespacesAndNewlines),
+              rawValue.count <= JSONCanvasLimits.maximumIdentifierLength,
+              rawValue.unicodeScalars.allSatisfy({ scalar in
+                  scalar.properties.isWhitespace == false &&
+                      scalar.properties.generalCategory != .control
+              }),
+              rawValue.contains(":") == false,
+              rawValue.contains("@") == false,
+              rawValue.contains("?") == false,
+              rawValue.contains("#") == false,
+              rawValue.contains("%") == false,
+              let path = RendererRelativePath(rawValue: rawValue)
+        else { return nil }
+        self.path = path
+    }
+
+    var displayLabel: String {
+        path.rawValue.split(separator: "/").last.map(String.init) ?? path.rawValue
+    }
+}
+
+enum JSONCanvasWikiReference: Hashable, Sendable {
+    case page(PageID)
+    case source(SourceID)
+
+    init?(rawValue: String) {
+        guard rawValue.hasPrefix("[["), rawValue.hasSuffix("]]"),
+              rawValue == rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        else { return nil }
+
+        let contents = String(rawValue.dropFirst(2).dropLast(2))
+        let components = contents.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+        guard components.count == 2,
+              let kind = components.first,
+              let rawID = components.last,
+              WikiLinkParser.isCanonicalULID(String(rawID))
+        else { return nil }
+
+        switch kind {
+        case "page":
+            self = .page(PageID(rawValue: String(rawID)))
+        case "source":
+            self = .source(SourceID(rawValue: String(rawID)))
+        default:
+            return nil
+        }
+    }
+
+    var displayLabel: String {
+        switch self {
+        case .page(let id): "Page \(id.rawValue)"
+        case .source(let id): "Source \(id.rawValue)"
+        }
+    }
+}
+
+enum JSONCanvasInternalLink: Hashable, Sendable {
+    case file(JSONCanvasInternalFileReference)
+    case wiki(JSONCanvasWikiReference)
+
+    var displayLabel: String {
+        switch self {
+        case .file(let reference): reference.displayLabel
+        case .wiki(let reference): reference.displayLabel
+        }
+    }
+}
+
+enum JSONCanvasHostAction: Hashable, Sendable {
+    case openFile(JSONCanvasInternalFileReference)
+    case openWiki(JSONCanvasWikiReference)
+
+    init(internalLink: JSONCanvasInternalLink) {
+        switch internalLink {
+        case .file(let reference): self = .openFile(reference)
+        case .wiki(let reference): self = .openWiki(reference)
+        }
+    }
+}
+
+struct JSONCanvasHostActionDispatcher {
+    let handler: (JSONCanvasHostAction) -> Void
+
+    init(_ handler: @escaping (JSONCanvasHostAction) -> Void) {
+        self.handler = handler
+    }
+
+    func dispatch(_ action: JSONCanvasHostAction) {
+        handler(action)
+    }
+}
+
 struct JSONCanvasNode: Sendable, Equatable, Identifiable {
     let id: JSONCanvasNodeID
     let frame: JSONCanvasRect
     let text: String
+    let internalLink: JSONCanvasInternalLink?
 }
 
 struct JSONCanvasEdge: Sendable, Equatable, Identifiable {
@@ -96,6 +197,7 @@ struct JSONCanvasRenderProjection: Sendable, Equatable {
         let id: JSONCanvasNodeID
         let frame: JSONCanvasRect
         let text: String
+        let internalLink: JSONCanvasInternalLink?
     }
 
     struct Edge: Sendable, Equatable, Identifiable {
@@ -141,21 +243,20 @@ struct JSONCanvasDocument: Sendable, Equatable {
         var decodedNodes: [JSONCanvasNode] = []
         decodedNodes.reserveCapacity(wireDocument.nodes.count)
         for wireNode in wireDocument.nodes {
-            guard wireNode.type == "text" else {
-                throw JSONCanvasDecodingError.unsupportedNodeType(wireNode.type)
-            }
-            guard let text = wireNode.text else {
-                throw JSONCanvasDecodingError.malformedDocument
-            }
             let nodeID = try JSONCanvasNodeID(validating: wireNode.id)
             guard knownNodeIDs.insert(nodeID).inserted else {
                 throw JSONCanvasDecodingError.duplicateNodeID(nodeID.rawValue)
             }
-            guard text.count <= JSONCanvasLimits.maximumTextLength else {
+            let content = try Self.validatedContent(for: wireNode, nodeID: nodeID)
+            guard content.text.count <= JSONCanvasLimits.maximumTextLength else {
                 throw JSONCanvasDecodingError.textTooLarge(nodeID.rawValue)
             }
             let frame = try Self.validatedFrame(for: wireNode, nodeID: nodeID)
-            decodedNodes.append(.init(id: nodeID, frame: frame, text: text))
+            decodedNodes.append(.init(
+                id: nodeID,
+                frame: frame,
+                text: content.text,
+                internalLink: content.internalLink))
         }
 
         var knownEdgeIDs: Set<String> = []
@@ -181,7 +282,11 @@ struct JSONCanvasDocument: Sendable, Equatable {
         edges = decodedEdges
         let nodesByID = Dictionary(uniqueKeysWithValues: decodedNodes.map { ($0.id, $0) })
         let renderNodes = decodedNodes.sorted(by: Self.outlineOrder).map {
-            JSONCanvasRenderProjection.Node(id: $0.id, frame: $0.frame, text: $0.text)
+            JSONCanvasRenderProjection.Node(
+                id: $0.id,
+                frame: $0.frame,
+                text: $0.text,
+                internalLink: $0.internalLink)
         }
         var renderEdges: [JSONCanvasRenderProjection.Edge] = []
         renderEdges.reserveCapacity(decodedEdges.count)
@@ -202,6 +307,38 @@ struct JSONCanvasDocument: Sendable, Equatable {
 
     func nodeID(containing point: JSONCanvasPoint) -> JSONCanvasNodeID? {
         renderProjection.nodes.reversed().first { $0.frame.contains(point) }?.id
+    }
+
+    func hostAction(for nodeID: JSONCanvasNodeID) -> JSONCanvasHostAction? {
+        guard let internalLink = nodes.first(where: { $0.id == nodeID })?.internalLink else { return nil }
+        return .init(internalLink: internalLink)
+    }
+
+    private static func validatedContent(
+        for wireNode: JSONCanvasWireNode,
+        nodeID: JSONCanvasNodeID
+    ) throws -> (text: String, internalLink: JSONCanvasInternalLink?) {
+        switch wireNode.type {
+        case "text":
+            guard let text = wireNode.text else {
+                throw JSONCanvasDecodingError.malformedDocument
+            }
+            return (text, nil)
+        case "file":
+            guard let rawFile = wireNode.file,
+                  let reference = JSONCanvasInternalFileReference(rawValue: rawFile)
+            else { throw JSONCanvasDecodingError.invalidInternalLink(nodeID.rawValue) }
+            let internalLink = JSONCanvasInternalLink.file(reference)
+            return (internalLink.displayLabel, internalLink)
+        case "link":
+            guard let rawURL = wireNode.url,
+                  let reference = JSONCanvasWikiReference(rawValue: rawURL)
+            else { throw JSONCanvasDecodingError.invalidInternalLink(nodeID.rawValue) }
+            let internalLink = JSONCanvasInternalLink.wiki(reference)
+            return (internalLink.displayLabel, internalLink)
+        default:
+            throw JSONCanvasDecodingError.unsupportedNodeType(wireNode.type)
+        }
     }
 
     private static func validatedFrame(
@@ -255,14 +392,20 @@ private struct JSONCanvasWireNode: Decodable {
     let width: Double
     let height: Double
     let text: String?
+    let file: String?
+    let url: String?
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: JSONCanvasWireKey.self)
         let type = try container.decode(String.self, forKey: .type)
-        let allowedKeys = if type == "text" {
-            ["id", "type", "x", "y", "width", "height", "text"]
-        } else {
-            ["id", "type", "x", "y", "width", "height", "url"]
+        let allowedKeys: [String]
+        switch type {
+        case "text":
+            allowedKeys = ["id", "type", "x", "y", "width", "height", "text"]
+        case "file":
+            allowedKeys = ["id", "type", "x", "y", "width", "height", "file"]
+        default:
+            allowedKeys = ["id", "type", "x", "y", "width", "height", "url"]
         }
         try JSONCanvasWireValidation.rejectUnknownKeys(container.allKeys, allowed: allowedKeys)
 
@@ -273,6 +416,8 @@ private struct JSONCanvasWireNode: Decodable {
         width = try container.decode(Double.self, forKey: .width)
         height = try container.decode(Double.self, forKey: .height)
         text = try container.decodeIfPresent(String.self, forKey: .text)
+        file = try container.decodeIfPresent(String.self, forKey: .file)
+        url = try container.decodeIfPresent(String.self, forKey: .url)
     }
 }
 
@@ -317,6 +462,8 @@ private struct JSONCanvasWireKey: CodingKey, Hashable {
     static let width = Self("width")
     static let height = Self("height")
     static let text = Self("text")
+    static let file = Self("file")
+    static let url = Self("url")
     static let fromNode = Self("fromNode")
     static let toNode = Self("toNode")
 }
