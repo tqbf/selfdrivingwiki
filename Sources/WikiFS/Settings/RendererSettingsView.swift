@@ -26,7 +26,7 @@ struct RendererSettingsRow: Identifiable, Hashable {
 @Observable
 final class RendererSettingsModel {
     let host: InstalledRendererHost
-    let wiki: WikiStoreModel?
+    private(set) var wiki: WikiStoreModel?
 
     private(set) var rows: [RendererSettingsRow] = []
     private(set) var isBusy = false
@@ -35,6 +35,15 @@ final class RendererSettingsModel {
 
     init(host: InstalledRendererHost, wiki: WikiStoreModel?) {
         self.host = host
+        self.wiki = wiki
+        rebuildRows()
+    }
+
+    /// Settings is app-scoped, while wiki enablement and source preferences are
+    /// session-scoped. Refresh the adapter whenever the active session changes
+    /// so a long-lived Settings scene never writes through a stale store.
+    func updateWiki(_ wiki: WikiStoreModel?) {
+        guard self.wiki !== wiki else { return }
         self.wiki = wiki
         rebuildRows()
     }
@@ -119,24 +128,31 @@ final class RendererSettingsModel {
     }
 
     private func rebuildRows() {
-        rows = (host.machineIndex?.records ?? []).sorted().map { record in
-            let descriptor = record.validatedDescriptors.first
-            return RendererSettingsRow(
-                record: record,
-                displayName: descriptor?.displayName ?? record.packageID.rawValue,
-                registrations: record.validatedDescriptors.map { $0.reference.registrationID.rawValue },
-                isEnabledForWiki: wiki?.rendererWikiEnablement(for: record.packageID) ?? false)
-        }
+        rows = (host.machineIndex?.records ?? [])
+            .filter { $0.state != .removed }
+            .sorted()
+            .map { record in
+                let descriptor = record.validatedDescriptors.first
+                return RendererSettingsRow(
+                    record: record,
+                    displayName: descriptor?.displayName ?? record.packageID.rawValue,
+                    registrations: record.validatedDescriptors.map { $0.reference.registrationID.rawValue },
+                    isEnabledForWiki: wiki?.rendererWikiEnablement(for: record.packageID) ?? false)
+            }
     }
 }
 
 struct RendererSettingsView: View {
+    private let wiki: WikiStoreModel?
+    private let wikiID: WikiID?
     @State private var model: RendererSettingsModel
     @State private var showingPicker = false
     @State private var removalCandidate: RendererSettingsRow?
     @State private var selectedSourceID: SourceID?
 
-    init(host: InstalledRendererHost, wiki: WikiStoreModel?) {
+    init(host: InstalledRendererHost, wiki: WikiStoreModel?, wikiID: WikiID?) {
+        self.wiki = wiki
+        self.wikiID = wikiID
         _model = State(initialValue: RendererSettingsModel(host: host, wiki: wiki))
     }
 
@@ -217,7 +233,11 @@ struct RendererSettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
-        .task { await model.refresh() }
+        .task(id: wikiID) {
+            model.updateWiki(wiki)
+            selectedSourceID = wiki?.sources.first?.id
+            await model.refresh()
+        }
         .onChange(of: showingPicker) { _, isPresented in
             guard isPresented else { return }
             let panel = RendererSettingsPackagePicker.makePanel()
@@ -281,7 +301,15 @@ struct RendererSettingsView: View {
     @ViewBuilder
     private func sourceVersionControls(model: RendererSettingsModel) -> some View {
         if let source = model.wiki?.sources.first(where: { $0.id == selectedSourceID }) ?? model.wiki?.sources.first {
-            Picker("Source for version selection", selection: $selectedSourceID) {
+            Picker("Source for version selection", selection: Binding(
+                get: {
+                    guard let selectedSourceID,
+                          model.wiki?.sources.contains(where: { $0.id == selectedSourceID }) == true else {
+                        return model.wiki?.sources.first?.id
+                    }
+                    return selectedSourceID
+                },
+                set: { selectedSourceID = $0 })) {
                 ForEach(model.wiki?.sources ?? []) { source in
                     Text(source.effectiveName).tag(Optional(source.id))
                 }

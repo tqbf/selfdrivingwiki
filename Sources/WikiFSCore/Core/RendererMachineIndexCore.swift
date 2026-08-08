@@ -127,6 +127,7 @@ public enum RendererMachineIndexStoreError: Error, Equatable, Sendable {
     case activationFailed
     case activationCleanupFailed
     case activationCancelled
+    case packageRemovalFailed
     case packageRootAlreadyExists
     case installedRendererNotAvailable
 }

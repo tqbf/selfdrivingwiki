@@ -865,7 +865,8 @@ struct WikiFSApp: App {
                     .tabItem { Label("Appearance", systemImage: "paintbrush") }
                 RendererSettingsView(
                     host: installedRendererHost,
-                    wiki: settingsWikiStore)
+                    wiki: settingsWikiStore,
+                    wikiID: registry.activeWikiID)
                     .tag(SettingsTab.renderers)
                     .tabItem { Label("Renderers", systemImage: "square.stack.3d.up") }
             }

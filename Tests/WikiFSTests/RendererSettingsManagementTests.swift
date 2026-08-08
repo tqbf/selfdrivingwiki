@@ -28,6 +28,7 @@ struct RendererSettingsManagementTests {
         let initial = try await store.read()
         let packageRoot = layout.packageURL(packageID: packageID, version: version)
         try FileManager.default.createDirectory(at: packageRoot, withIntermediateDirectories: true)
+        #expect(isRendererPackageStorePathContained(packageRoot, within: layout.packagesRoot))
         _ = try await store.mutate(expectedGeneration: initial.generation) { records, _ in
             records.append(record)
         }

@@ -84,7 +84,7 @@ final class InstalledRendererHost {
             apply(try await machineStore.remove(packageID: packageID, version: version))
             return true
         } catch {
-            DebugLog.store("Installed renderer removal was rejected; keeping the package record.")
+            DebugLog.store("Installed renderer removal could not complete; keeping the current machine record.")
             return false
         }
     }

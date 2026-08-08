@@ -353,6 +353,10 @@ public actor RendererMachineIndexStore {
                 return current
             }
 
+            let installed = layout.packageURL(packageID: packageID, version: version)
+            guard isRendererPackageStorePathContained(installed, within: layout.packagesRoot) else {
+                throw RendererMachineIndexStoreError.invalidPackagePath
+            }
             let timestamp = clock.now()
             let next = try storage.mutate(expectedGeneration: expectedGeneration) { records, _ in
                 guard let existing = records.first(where: { $0.packageID == packageID && $0.version == version }) else {
@@ -371,16 +375,14 @@ public actor RendererMachineIndexStore {
                 records.removeAll { $0.packageID == packageID && $0.version == version }
                 records.append(removed)
             }
-            let installed = layout.packageURL(packageID: packageID, version: version)
             if FileManager.default.fileExists(atPath: installed.path) {
-                guard isRendererPackageStorePathContained(installed, within: layout.packagesRoot)
-                else { throw RendererMachineIndexStoreError.invalidPackagePath }
                 do { try FileManager.default.removeItem(at: installed) }
                 catch {
-                    // The redacted removed record remains authoritative. Keep
-                    // the result usable and surface Source fallback while the
-                    // orphan root is diagnosed on the next registry refresh.
-                    DebugLog.store("Renderer package removal left an inaccessible orphan root.")
+                    // The tombstone is authoritative, but removal must still
+                    // report failure when its payload remains on disk. The
+                    // caller can surface this diagnostic and retry cleanup.
+                    DebugLog.store("Renderer package removal committed a tombstone but could not clean up its payload.")
+                    throw RendererMachineIndexStoreError.packageRemovalFailed
                 }
             }
             return next
