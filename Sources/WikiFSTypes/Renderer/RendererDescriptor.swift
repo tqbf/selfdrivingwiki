@@ -127,10 +127,15 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
     /// Match MIME, signature, and artifact matchers first. Extensions are used only
     /// when no stronger matcher from any descriptor succeeds.
     public func matchTier(for input: RendererMatchInput) -> RendererMatchTier? {
-        if matchers.contains(where: { $0.isExtensionFallback == false && $0.matches(input) }) {
+        let requiredArtifactMatchers = matchers.filter(\.requiresArtifactValidation)
+        guard requiredArtifactMatchers.allSatisfy({ $0.matches(input) }) else {
+            return nil
+        }
+        let routingMatchers = matchers.filter { $0.requiresArtifactValidation == false }
+        if routingMatchers.contains(where: { $0.isExtensionFallback == false && $0.matches(input) }) {
             return .strong
         }
-        if matchers.contains(where: { $0.isExtensionFallback && $0.matches(input) }) {
+        if routingMatchers.contains(where: { $0.isExtensionFallback && $0.matches(input) }) {
             return .extensionFallback
         }
         return nil

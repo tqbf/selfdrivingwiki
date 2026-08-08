@@ -1193,7 +1193,8 @@ struct SourceDetailView: View {
         guard failedInstalledRendererReference != descriptor.reference else { return nil }
         return installedRendererFactory.makeView(
             for: descriptor,
-            inputs: installedRendererFactoryInputs) { _ in
+            inputs: installedRendererFactoryInputs,
+            inputReader: store.rendererAuthorizedInputReader(for: file.id)) { _ in
                 // The representable already deferred this callback out of its
                 // AppKit/WebKit stack. Keep the detail-state mutation deferred
                 // as well because the rendered closure can run in an update pass.

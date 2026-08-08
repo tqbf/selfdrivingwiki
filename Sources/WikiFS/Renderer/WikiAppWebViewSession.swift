@@ -234,6 +234,11 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
                     name: WikiAppWebViewPolicy.isolatedMessageHandlerName
                 )
                 configuration.userContentController.addUserScript(
+                    RendererContentWorldBroker.inputBootstrapScript(
+                        input: bridge.pageInput,
+                        contentWorld: configuration.contentWorld)
+                )
+                configuration.userContentController.addUserScript(
                     RendererContentWorldBroker.pageRelayScript(contentWorld: configuration.contentWorld)
                 )
                 self.bridge = bridge

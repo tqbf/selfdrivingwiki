@@ -6,6 +6,19 @@ import WikiFSCore
 
 @MainActor
 struct RendererContentWorldBridgeTests {
+    @Test("input bootstrap exposes the pinned selector without a session capability")
+    func inputBootstrapScriptExposesPinnedSelectorOnly() {
+        let input = RendererBridgeInput.source(versionID: .init(rawValue: "source-version"))
+
+        let source = RendererContentWorldBroker
+            .inputBootstrapScript(input: input, contentWorld: .page)
+            .source
+
+        #expect(source.contains("document.documentElement.dataset.rendererInput"))
+        #expect(source.contains("source-version"))
+        #expect(source.contains("capability") == false)
+    }
+
     @Test("isolated-world bridge replies only to bound main-frame package messages")
     func repliesWithPinnedPayloadAfterProvenanceChecks() throws {
         let store = try GRDBWikiStore()

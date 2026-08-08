@@ -128,6 +128,50 @@ import WikiFSTypes
         #expect(id == .mermaid)
     }
 
+    @Test("Planner maps a complete JSON Canvas document to the native built-in")
+    func plannerMatchesJSONCanvas() throws {
+        let source = fixtureSource(filename: "diagram.canvas", ext: "canvas", mimeType: "application/json", byteSize: 90)
+        let data = Data("""
+        {"nodes":[{"id":"note","type":"text","x":0,"y":0,"width":120,"height":60,"text":"Note"}],"edges":[]}
+        """.utf8)
+
+        let id = try SourceRendererPresentationPlanner.plannedBuiltInRenderer(
+            for: source,
+            boundedBytes: data,
+            currentMarkdown: nil,
+            origin: nil)
+
+        #expect(id == .jsonCanvas)
+    }
+
+    @Test("JSON Canvas factory returns nil for unavailable and malformed input so the host keeps Source")
+    @MainActor
+    func jsonCanvasFactoryFailsClosedToHostFallback() throws {
+        let descriptor = BuiltInRendererDescriptors.descriptor(for: .jsonCanvas)
+        #expect(descriptor.accessibility.supportsVoiceOver)
+        #expect(descriptor.accessibility.supportsKeyboardNavigation)
+        let validData = Data("""
+        {"nodes":[{"id":"note","type":"text","x":0,"y":0,"width":120,"height":60,"text":"Note"}],"edges":[]}
+        """.utf8)
+        let malformedData = Data("{\"nodes\":[]".utf8)
+        let unsafeLinkData = Data("""
+        {"nodes":[{"id":"link","type":"file","x":0,"y":0,"width":120,"height":60,"file":"../secret.md"}],"edges":[]}
+        """.utf8)
+
+        #expect(BuiltInRendererFactoryMap.makeView(
+            for: descriptor,
+            inputs: try Self.factoryInputs(sourceBytes: validData)) != nil)
+        #expect(BuiltInRendererFactoryMap.makeView(
+            for: descriptor,
+            inputs: try Self.factoryInputs(sourceBytes: malformedData)) == nil)
+        #expect(BuiltInRendererFactoryMap.makeView(
+            for: descriptor,
+            inputs: try Self.factoryInputs(sourceBytes: nil)) == nil)
+        #expect(BuiltInRendererFactoryMap.makeView(
+            for: descriptor,
+            inputs: try Self.factoryInputs(sourceBytes: unsafeLinkData)) == nil)
+    }
+
     @Test("Characterization: NULL-MIME standalone Mermaid uses Source markdown presentation")
     func nullMIMEStandaloneMermaidUsesSourceMarkdownPresentation() {
         let source = fixtureSource(filename: "diagram.mmd", ext: "mmd", mimeType: nil, byteSize: 12)
@@ -355,6 +399,20 @@ import WikiFSTypes
             origin: nil)
         #expect(result.contentArea == .binaryFallback)
         #expect(result.tabs == [])
+    }
+
+    @MainActor
+    private static func factoryInputs(sourceBytes: Data?) throws -> BuiltInRendererFactoryInputs {
+        BuiltInRendererFactoryInputs(
+            sourceBytes: sourceBytes,
+            pdfQuote: nil,
+            htmlSource: nil,
+            mermaidMarkdown: nil,
+            mediaTarget: nil,
+            selection: nil,
+            store: WikiStoreModel(store: try GRDBWikiStore(
+                databaseURL: URL.temporaryDirectory.appending(path: "json-canvas-renderer-\(UUID().uuidString).sqlite"))),
+            readerZoom: .constant(1))
     }
 }
 

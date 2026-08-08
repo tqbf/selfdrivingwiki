@@ -92,7 +92,92 @@ struct WikiAppWebViewTests {
         let descriptor = try installedDescriptor()
         let factory = InstalledRendererFactory.unavailable
 
-        #expect(factory.makeView(for: descriptor, inputs: .unavailable, onFailure: { _ in }) == nil)
+        #expect(factory.makeView(for: descriptor, inputs: .unavailable, inputReader: nil, onFailure: { _ in }) == nil)
+    }
+
+    @Test("an oversized pinned input preserves Source fallback before a session starts")
+    func oversizedPinnedInputReturnsNoView() throws {
+        let store = try GRDBWikiStore()
+        let source = try store.addSource(filename: "input.txt", data: Data("too large".utf8))
+        let version = try #require(try store.activeContentVersion(sourceID: source.id))
+        let reader = RendererAuthorizedInputReader(
+            store: store,
+            authorizedInput: .source(versionID: version.id))
+        let descriptor = try installedDescriptor(maximumInputByteCount: 1)
+        let configuration = try installedConfiguration(for: descriptor)
+        let factory = InstalledRendererFactory(makeSession: { _, _, _ in
+            Issue.record("an oversized input must not create a renderer session")
+            return RecordingWebViewSession()
+        })
+        let inputs = InstalledRendererFactory.Inputs(
+            enabledDescriptors: [descriptor],
+            resolveConfiguration: { _, _ in configuration })
+
+        #expect(factory.makeView(
+            for: descriptor,
+            inputs: inputs,
+            inputReader: reader,
+            onFailure: { _ in }) == nil)
+    }
+
+    @Test("factory binds the pinned input, trusted links, and failure recorder to one hosted session")
+    func factoryWiresPinnedInputAndLifecycleContracts() async throws {
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        defer { lease.release() }
+        _ = NSApplication.shared
+        let store = try GRDBWikiStore()
+        let source = try store.addSource(filename: "input.txt", data: Data("ok".utf8))
+        let version = try #require(try store.activeContentVersion(sourceID: source.id))
+        let reader = RendererAuthorizedInputReader(
+            store: store,
+            authorizedInput: .source(versionID: version.id))
+        let descriptor = try installedDescriptor(
+            maximumInputByteCount: 1_024,
+            linkPolicy: .userActivatedExternal)
+        let failureRecorder: RendererSessionFailureRecording = { _, _ in }
+        let configuration = try installedConfiguration(
+            for: descriptor,
+            failureRecorder: failureRecorder)
+        var capturedConfiguration: InstalledRendererSessionConfiguration?
+        let session = RecordingWebViewSession()
+        let factory = InstalledRendererFactory(makeSession: { _, reportFailure, configuration in
+            capturedConfiguration = configuration
+            session.failure = reportFailure
+            return session
+        })
+        let inputs = InstalledRendererFactory.Inputs(
+            enabledDescriptors: [descriptor],
+            resolveConfiguration: { _, _ in configuration })
+        guard let view = factory.makeView(
+            for: descriptor,
+            inputs: inputs,
+            inputReader: reader,
+            onFailure: { _ in }) else {
+            Issue.record("a valid pinned input should create an installed renderer view")
+            return
+        }
+        let hosting = NSHostingController(rootView: view)
+        let window = NSWindow(contentViewController: hosting)
+        window.orderFront(nil)
+        defer { window.orderOut(nil) }
+
+        for _ in 0 ..< 20 where capturedConfiguration == nil {
+            await Task.yield()
+        }
+        let captured = try #require(capturedConfiguration)
+        #expect(captured.inputReader?.authorizedInput == reader.authorizedInput)
+        #expect(captured.externalActivationPolicy == .enabled)
+        #expect(captured.failureRecorder != nil)
+        for _ in 0 ..< 20 where session.events.isEmpty {
+            await Task.yield()
+        }
+        #expect(session.events == [.started])
+
+        hosting.rootView = AnyView(EmptyView())
+        for _ in 0 ..< 20 where session.events.count < 2 {
+            await Task.yield()
+        }
+        #expect(session.events == [.started, .closed])
     }
 
     @Test("Source detail dispatches installed renderers through the peer factory")
@@ -105,6 +190,7 @@ struct WikiAppWebViewTests {
 
         #expect(source.contains("BuiltInRendererFactoryMap.makeView"))
         #expect(source.contains("installedRendererFactory.makeView"))
+        #expect(source.contains("rendererAuthorizedInputReader(for: file.id)"))
         #expect(source.contains("failedInstalledRendererReference"))
     }
 
@@ -209,7 +295,10 @@ private func findWebView(in view: NSView) -> WKWebView? {
     return nil
 }
 
-private func installedDescriptor() throws -> RendererDescriptor {
+private func installedDescriptor(
+    maximumInputByteCount: Int = 1,
+    linkPolicy: RendererLinkPolicy = .none
+) throws -> RendererDescriptor {
     let packageID = try RendererPackageID(validating: "org.example.installed")
     let version = try RendererPackageVersion(validating: "1.0.0")
     let registrationID = try RendererRegistrationID(validating: "installed")
@@ -221,11 +310,46 @@ private func installedDescriptor() throws -> RendererDescriptor {
         matchers: [.artifactKind(.source)],
         presentations: [.web],
         approvedAssets: [.init(path: path, digest: RendererSHA256Digest(bytes: Array(repeating: 0, count: RendererSHA256Digest.byteCount)))],
-        capabilities: [.inputRead],
-        sizeLimits: try .init(maximumInputByteCount: 1, maximumDecodedByteCount: 1),
-        linkPolicy: .none,
+        capabilities: linkPolicy == .userActivatedExternal ? [.inputRead, .externalLink] : [.inputRead],
+        sizeLimits: try .init(
+            maximumInputByteCount: maximumInputByteCount,
+            maximumDecodedByteCount: maximumInputByteCount),
+        linkPolicy: linkPolicy,
         accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
         compatibility: try .init(minimumProtocolRevision: 1, maximumProtocolRevision: 1),
         priority: 0)
 }
+
+@MainActor
+private func installedConfiguration(
+    for descriptor: RendererDescriptor,
+    resourceProvider: any RendererPackageResourceProviding = UnavailableRendererPackageResourceProvider(),
+    failureRecorder: RendererSessionFailureRecording? = nil
+) throws -> InstalledRendererSessionConfiguration {
+    guard case let .webPackage(entryPoint) = descriptor.implementation else {
+        throw RendererPackageResourceError.invalidRequest
+    }
+    let reservation = RendererPackageReservation(
+        packageID: descriptor.reference.packageID,
+        version: descriptor.reference.version)
+    return .init(
+        identity: .init(
+            rendererReference: descriptor.reference,
+            entryURL: RendererPackageScheme.url(
+                packageID: reservation.packageID,
+                version: reservation.version,
+                path: entryPoint.path)),
+        reservation: reservation,
+        resourceProvider: resourceProvider,
+        failureRecorder: failureRecorder,
+        inputReader: nil,
+        externalActivationPolicy: .disabled)
+}
+
+private struct UnavailableRendererPackageResourceProvider: RendererPackageResourceProviding {
+    func resource(for url: URL) throws -> RendererPackageResource {
+        throw RendererPackageResourceError.undeclaredAsset
+    }
+}
+
 #endif

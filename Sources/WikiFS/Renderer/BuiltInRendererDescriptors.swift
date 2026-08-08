@@ -56,6 +56,18 @@ enum BuiltInRendererDescriptors {
                 matchers: BuiltInRendererMIME.mediaMIMEs.map { .normalizedMIME(mime($0)) },
                 maximumInputByteCount: BuiltInRendererLimits.bytelessMaximumInputByteCount,
                 priority: BuiltInRendererPriority.media)
+        case .jsonCanvas:
+            return make(
+                id: .jsonCanvas,
+                displayName: "JSON Canvas",
+                matchers: [
+                    .normalizedMIME(mime(BuiltInRendererMIME.json)),
+                    .extensionFallback(fileExtension("canvas")),
+                    .boundedJSONArtifact(.jsonCanvas),
+                ],
+                maximumInputByteCount: JSONCanvasLimits.maximumInputByteCount,
+                accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
+                priority: BuiltInRendererPriority.jsonCanvas)
         }
     }
 
@@ -64,6 +76,7 @@ enum BuiltInRendererDescriptors {
         displayName: String,
         matchers: [RendererMatcher],
         maximumInputByteCount: Int,
+        accessibility: RendererAccessibility = .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
         priority: Int
     ) -> RendererDescriptor {
         do {
@@ -79,7 +92,7 @@ enum BuiltInRendererDescriptors {
                     maximumInputByteCount: maximumInputByteCount,
                     maximumDecodedByteCount: maximumInputByteCount),
                 linkPolicy: .none,
-                accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
+                accessibility: accessibility,
                 compatibility: try .init(
                     minimumProtocolRevision: RendererRegistrySnapshotDefaults.hostProtocolRevision,
                     maximumProtocolRevision: RendererRegistrySnapshotDefaults.hostProtocolRevision),
@@ -130,6 +143,7 @@ enum BuiltInRendererReference {
 }
 
 enum BuiltInRendererPriority {
+    static let jsonCanvas = 110
     static let bytefulDocument = 100
     static let markdownDocument = 90
     static let media = 80
@@ -142,6 +156,7 @@ enum BuiltInRendererLimits {
 }
 
 enum BuiltInRendererMIME {
+    static let json = "application/json"
     static let mermaid = "text/mermaid"
     static let youtube = "video/youtube"
     static let vimeo = "video/vimeo"

@@ -74,3 +74,53 @@ enum RendererFixtures {
         )
     }
 }
+
+/// Deterministic, bounded Phase 6 inputs. These fixtures deliberately stop at
+/// the artifact-discriminator boundary; document decoding and rendering belong
+/// to later Phase 6 slices.
+enum Phase6RendererArtifactFixtures {
+    static let excalidraw = Data("""
+    {"type":"excalidraw","version":2,"elements":[],"appState":{},"files":{}}
+    """.utf8)
+
+    static let jsonCanvas = Data("""
+    {"nodes":[],"edges":[]}
+    """.utf8)
+
+    static let malformedExcalidraw = Data("""
+    {"type":"excalidraw","version":1,"elements":[]}
+    """.utf8)
+
+    static let malformedJSONCanvas = Data("""
+    {"nodes":{},"edges":[]}
+    """.utf8)
+
+    static let malformedJSON = Data("{".utf8)
+
+    static func descriptor(
+        packageID: String,
+        registrationID: String,
+        fileExtension: String,
+        artifact: RendererJSONArtifact
+    ) throws -> RendererDescriptor {
+        try RendererFixtures.webDescriptor(
+            packageID: try .init(validating: packageID),
+            registrationID: try .init(validating: registrationID),
+            matchers: [
+                .normalizedMIME(try .init(validating: "application/json")),
+                .extensionFallback(try .init(validating: fileExtension)),
+                .boundedJSONArtifact(artifact),
+            ])
+    }
+
+    static func input(
+        bytes: Data,
+        fileExtension: String
+    ) throws -> RendererMatchInput {
+        try .init(
+            mimeType: try .init(validating: "application/json"),
+            fileExtension: try .init(validating: fileExtension),
+            sniffedBytes: bytes,
+            artifactKind: .source)
+    }
+}

@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "issue": 1026,
+  "phase": 6,
+  "slice": 1,
+  "baseSHA": "3a94d6df098efcce8dc4d00c934ea785d829ac4f",
+  "headSHA": "4f8bd8d175b8ba98c1bdf84195ba262222dd1ddc",
+  "headSHASemantics": "This is the exact implementation and test commit. The following documentation-only evidence commit does not change production or test code.",
+  "scope": "Bounded Excalidraw and JSON Canvas JSON artifact matching, deterministic valid and malformed fixtures, deterministic registry selection, and host-owned Source fallback for malformed artifacts.",
+  "productionPaths": [
+    {
+      "path": "Sources/WikiFSTypes/Renderer/RendererMatcher.swift",
+      "symbols": [
+        "RendererMatcher.boundedJSONArtifact",
+        "RendererMatcher.requiresArtifactValidation",
+        "RendererJSONArtifact",
+        "RendererJSONArtifact.matches",
+        "ExcalidrawSignature",
+        "JSONCanvasSignature",
+        "JSONObject"
+      ],
+      "tests": [
+        "RendererArtifactMatcherTests.identifiesBoundedExcalidrawArtifact",
+        "RendererArtifactMatcherTests.identifiesBoundedJSONCanvasArtifact",
+        "RendererArtifactMatcherTests.rejectsMalformedArtifactsAndOversizedSniffs",
+        "RendererArtifactRegistryTests.registrySelectsOnlyTheTypedArtifactIndependentlyOfInputOrder",
+        "RendererArtifactRegistryTests.malformedArtifactKeepsRegistryEmptyForHostSourceFallback"
+      ]
+    },
+    {
+      "path": "Sources/WikiFSTypes/Renderer/RendererDescriptor.swift",
+      "symbols": [
+        "RendererDescriptor.matchTier"
+      ],
+      "tests": [
+        "RendererArtifactRegistryTests.registrySelectsOnlyTheTypedArtifactIndependentlyOfInputOrder",
+        "RendererArtifactRegistryTests.malformedArtifactKeepsRegistryEmptyForHostSourceFallback"
+      ]
+    }
+  ],
+  "testPaths": [
+    "Tests/WikiFSTypesRendererTests/RendererArtifactMatcherTests.swift"
+  ],
+  "coverage": {
+    "success": [
+      "The Excalidraw signature requires type excalidraw, version 2, and an elements object array.",
+      "The JSON Canvas signature requires nodes and edges object arrays.",
+      "The registry selects each matching descriptor independently of registration input order."
+    ],
+    "error": [
+      "Malformed JSON, an unsupported Excalidraw version, and non-array Canvas fields do not match.",
+      "A malformed artifact has no registry match even when its MIME type and extension route to a renderer."
+    ],
+    "boundary": [
+      "The matcher rejects bytes above RendererMatchingLimits.maximumSniffByteCount.",
+      "RendererMatchInput rejects the same oversized sniff before it stores bytes."
+    ],
+    "cancellation": "Not applicable. This slice has no task, session, or asynchronous operation.",
+    "teardown": "Not applicable. This slice allocates no retained resource."
+  },
+  "bidirectionalResolution": {
+    "everyProductionPathMapsToNamedTests": true,
+    "everyNamedTestResolvesInOneListedTestPath": true,
+    "command": "inventory=plans/dynamic-renderers-phase6-matcher-test-inventory.json && jq -e '(.productionPaths | length > 0) and (.testPaths | length > 0) and all(.productionPaths[]; ((.path | type == \"string\" and length > 0) and (.symbols | type == \"array\" and length > 0) and (.tests | type == \"array\" and length > 0))) and all(.testPaths[]; type == \"string\" and length > 0)' \"$inventory\" >/dev/null && while IFS= read -r listedPath; do test -f \"$listedPath\" || { echo \"inventory production path is missing: $listedPath\" >&2; exit 1; }; done < <(jq -r '.productionPaths[].path' \"$inventory\") && while IFS= read -r listedPath; do test -f \"$listedPath\" || { echo \"inventory test path is missing: $listedPath\" >&2; exit 1; }; done < <(jq -r '.testPaths[]' \"$inventory\") && while IFS= read -r testName; do functionName=${testName##*.}; matches=$(rg -l -F \"func ${functionName}(\" $(jq -r '.testPaths[]' \"$inventory\") | wc -l | tr -d ' '); test \"$matches\" -eq 1 || { echo \"inventory test did not resolve exactly once: $testName\" >&2; exit 1; }; done < <(jq -r '[.productionPaths[].tests[]] | unique[]' \"$inventory\")"
+  },
+  "excluded": [
+    "Excalidraw viewer package and WebView UI",
+    "JSON Canvas decoding and native UI",
+    "session host wiring",
+    "external link changes",
+    "safe-mode changes",
+    "Phase 7 package management"
+  ],
+  "honestCoverageLimits": [
+    "These tests identify only bounded format signatures. They do not validate complete Excalidraw or JSON Canvas documents.",
+    "No renderer descriptor is registered in the app yet. JSON Canvas stays out of the closed built-in factory map until its native view exists.",
+    "No hosted WebKit, appearance, accessibility, link, pan, zoom, or session test is in this slice."
+  ]
+}
