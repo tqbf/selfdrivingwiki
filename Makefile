@@ -124,7 +124,7 @@ NOTARY_PROFILE ?= wikifs-notary
 PROVISION_PROFILE ?=
 NOTES_FILE       ?=
 
-.PHONY: all deps build check check-release test test-watchdog test-fast test-fast-release release run reload clean install uninstall register help prune-provider-registrations \
+.PHONY: all deps build check check-release test test-watchdog test-fast test-fast-release test-linux test-linux-focus release run reload clean install uninstall register help prune-provider-registrations \
         check-version notary-setup sign zip-notary notarize staple zip-release \
         checksum verify-release dist github-release print-version icon prompts \
         version keychain mutate mutate-scope check-mutate-tool lint lint-baseline lint-analyze hooks
@@ -141,6 +141,8 @@ help:
 	@echo "  test-watchdog     Same as test, but with a wall-clock timeout + hang/slow-test report"
 	@echo "  test-fast         Fast test tier (debug) — skips slow SQLite integration suites"
 	@echo "  test-fast-release Fast test tier in release mode (faster runtime, slower compile)"
+	@echo "  test-linux        Run the CI-equivalent portable Swift suite in Linux"
+	@echo "  test-linux-focus  Run one portable suite in Linux (TEST_FILTER=WikiFSCoreTests...)"
 	@echo "  lint              SwiftLint: fail on NEW bare try? in Sources/ + tools/"
 	@echo "  lint-baseline     Re-snapshot .swiftlint-baseline.json (run after fixing try?s)"
 	@echo "  lint-analyze      SwiftLint analyzer: unused decls/imports (advisory, slow, not in CI)"
@@ -305,6 +307,15 @@ test-fast: deps prompts version keychain
 test-fast-release: deps prompts version keychain
 	swift test -c release --parallel --num-workers $(SWIFT_TEST_NUM_WORKERS) --skip $(FAST_TEST_SKIP)
 	@echo "✓ fast tests pass (release)"
+
+# Linux portability validation (#1077). The script deliberately does not use
+# the host Swift toolchain or the macOS-only `deps` target.
+test-linux:
+	@scripts/test-linux.sh
+
+test-linux-focus:
+	@[ -n "$(TEST_FILTER)" ] || { echo "✗ TEST_FILTER is required (example: make test-linux-focus TEST_FILTER=WikiFSCoreTests.RendererStoreTests)" >&2; exit 2; }
+	@LINUX_TEST_FILTER="$(TEST_FILTER)" scripts/test-linux.sh
 
 # ---------------------------------------------------------------------------
 # Mutation testing (swift-mutation-testing — schematized mutator runs)
