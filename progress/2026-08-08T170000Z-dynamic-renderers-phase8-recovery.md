@@ -38,6 +38,13 @@ expectation repairs, and accessibility/status coverage. The earlier clean
 exact-head gates passed before this final bounded repair; they are being
 rerun against this SHA before the PR opens.
 
+## Verification
+
+- The focused renderer settings, bootstrap, activation, staging, and
+  documentation suites pass on the current implementation.
+- \`make build\` passes on the exact recovery head.
+- The full \`make test\` gate is rerun after this documentation-contract repair.
+
 ## Scope boundary
 
 This recovery does not add a renderer catalog, remote distribution, signing,
