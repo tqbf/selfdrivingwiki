@@ -333,6 +333,64 @@ public actor RendererMachineIndexStore {
         }
     }
 
+    /// Removes one installed package version without touching wiki-scoped
+    /// enablement or source preferences. The authoritative machine-index
+    /// mutation and package cleanup both occur under the coordinator lock.
+    public func remove(
+        packageID: RendererPackageID,
+        version: RendererPackageVersion,
+        expectedGeneration: UInt64
+    ) async throws -> RendererMachineIndex {
+        try prepareRoot()
+        let storage = RendererMachineIndexSQLiteStorage(layout: layout, derivedIndexWriter: derivedIndexWriter)
+        return try await coordinator.withExclusiveAccess {
+            let current = try storage.readOrInitialize()
+            guard current.generation == expectedGeneration else {
+                throw RendererMachineIndexStoreError.staleGeneration
+            }
+            guard current.records.contains(where: { $0.packageID == packageID && $0.version == version }) else {
+                return current
+            }
+
+            let next = try storage.mutate(expectedGeneration: expectedGeneration) { records, _ in
+                records.removeAll { $0.packageID == packageID && $0.version == version }
+            }
+            let installed = layout.packageURL(packageID: packageID, version: version)
+            if FileManager.default.fileExists(atPath: installed.path) {
+                guard isRendererPackageStorePathContained(installed, within: layout.packagesRoot)
+                else { throw RendererMachineIndexStoreError.invalidPackagePath }
+                do { try FileManager.default.removeItem(at: installed) }
+                catch {
+                    // The authoritative record is already removed. Keep the
+                    // result usable and leave a redacted diagnostic for the
+                    // next registry refresh to surface Source fallback.
+                    DebugLog.store("Renderer package removal left an inaccessible orphan root.")
+                }
+            }
+            return next
+        }
+    }
+
+    /// Removes one package version using a bounded generation retry. The
+    /// caller never has to race a separately observed machine generation.
+    public func remove(
+        packageID: RendererPackageID,
+        version: RendererPackageVersion
+    ) async throws -> RendererMachineIndex {
+        for _ in 0 ..< 3 {
+            let current = try await read()
+            do {
+                return try await remove(
+                    packageID: packageID,
+                    version: version,
+                    expectedGeneration: current.generation)
+            } catch RendererMachineIndexStoreError.staleGeneration {
+                continue
+            }
+        }
+        throw RendererMachineIndexStoreError.staleGeneration
+    }
+
     /// Changes machine install/safe-mode state and appends its durable renderer
     /// event in the same coordinator-held SQLite transaction. Nothing is
     /// emitted here; callers may publish a payload only after this returns.

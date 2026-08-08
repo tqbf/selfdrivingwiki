@@ -55,6 +55,40 @@ final class InstalledRendererHost {
         }
     }
 
+    /// Validates and activates one local directory through the same machine
+    /// store used by renderer sessions. No archive or caller-owned path enters
+    /// the installed package root.
+    @discardableResult
+    func installRendererDirectory(_ directory: URL) async -> Bool {
+        guard let machineStore, let layout else { return false }
+        do {
+            let validator = RendererPackageValidator(
+                packageRoot: layout.root,
+                stagingRoot: layout.stagingRoot)
+            let package = try validator.validate(directory: directory)
+            let current = try await machineStore.read()
+            apply(try await machineStore.activate(package, expectedGeneration: current.generation))
+            return true
+        } catch {
+            DebugLog.store("Installed renderer directory was rejected; keeping Source fallback.")
+            return false
+        }
+    }
+
+    /// Removes one exact package version while preserving wiki enablement and
+    /// source preferences. Existing panes keep their own pinned session.
+    @discardableResult
+    func removeRenderer(packageID: RendererPackageID, version: RendererPackageVersion) async -> Bool {
+        guard let machineStore else { return false }
+        do {
+            apply(try await machineStore.remove(packageID: packageID, version: version))
+            return true
+        } catch {
+            DebugLog.store("Installed renderer removal was rejected; keeping the package record.")
+            return false
+        }
+    }
+
     /// Re-enables exactly one installed package version and refreshes the
     /// renderer snapshot. The return value is false when recovery was rejected
     /// or the machine store is unavailable.
