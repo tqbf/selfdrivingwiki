@@ -3,10 +3,10 @@
   "issue": 1026,
   "phase": 7,
   "slice": 1,
-  "parentSHA": "30ea96cc",
+  "parentSHA": "a329e8770c63762cf07fd4249dc71b53173e9662",
   "prBaseBranch": "feature/dynamic-renderers-06-excalidraw-json-canvas",
   "prBaseSHA": "71c085250bc40614f7169394ef2bab444d147bf4",
-  "headSHA": "30ea96cc",
+  "headSHA": "30ea96cc3719b651066570679b148d7e14fbd885",
   "headSHASemantics": "This is the exact implementation and focused-test commit. The following documentation-only commit records the evidence.",
   "scope": "Native Renderers settings management over the existing machine package store and wiki renderer-settings seams.",
   "productionPaths": [
@@ -31,6 +31,11 @@
       "tests": ["RendererSettingsManagementTests.removalPreservesMachineBoundary"]
     },
     {
+      "path": "Sources/WikiFSCore/Core/RendererMachineIndexCore.swift",
+      "symbols": ["rendererMachineIndexValidatingPackagePaths removed-tombstone handling"],
+      "tests": ["RendererSettingsManagementTests.removalPreservesMachineBoundary"]
+    },
+    {
       "path": "Sources/WikiFSCore/Store/WikiStoreModel.swift",
       "symbols": ["rendererWikiEnablement", "setRendererWikiEnablement"],
       "tests": ["RendererSettingsManagementTests.versionSelectionUsesExactReference"]
@@ -51,7 +56,7 @@
     "success": [
       "The Renderers tab exposes Installed on This Mac and Enabled for This Wiki as separate scopes.",
       "Installation accepts one local directory and routes it through validation and machine-store activation.",
-      "Removal deletes only the machine package record and payload. Wiki enablement and source preferences remain separate.",
+      "Removal retains a redacted removed machine record, deletes only the package payload, and leaves wiki enablement and source preferences separate.",
       "Safe-mode reset refreshes the host projection. Registry refresh does not mutate active session pins.",
       "Source version selection stores an exact typed renderer reference.",
       "Diagnostics use progressive disclosure and the settings surface uses semantic body text and system colors."

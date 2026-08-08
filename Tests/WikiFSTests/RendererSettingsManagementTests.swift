@@ -4,7 +4,7 @@ import Testing
 
 @Suite(.serialized, .timeLimit(.minutes(1)))
 struct RendererSettingsManagementTests {
-    @Test("removal deletes only the machine package record and payload")
+    @Test("removal retains a redacted machine tombstone and deletes only the payload")
     func removalPreservesMachineBoundary() async throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("renderer-settings-\(UUID().uuidString)", isDirectory: true)
@@ -34,9 +34,12 @@ struct RendererSettingsManagementTests {
 
         let removed = try await store.remove(packageID: packageID, version: version)
 
-        #expect(removed.records.isEmpty)
+        #expect(removed.records.count == 1)
+        #expect(removed.records.first?.state == .removed)
+        #expect(removed.records.first?.diagnostic == .packageRemoved)
+        #expect(removed.availableDescriptorProjection.isEmpty)
         #expect(FileManager.default.fileExists(atPath: packageRoot.path) == false)
-        #expect(try await store.read().records.isEmpty)
+        #expect(try await store.read().records.first?.state == .removed)
     }
 
     @Test("renderer preference version selection is an exact typed reference")

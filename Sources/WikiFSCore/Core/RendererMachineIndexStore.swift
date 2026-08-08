@@ -339,7 +339,8 @@ public actor RendererMachineIndexStore {
     public func remove(
         packageID: RendererPackageID,
         version: RendererPackageVersion,
-        expectedGeneration: UInt64
+        expectedGeneration: UInt64,
+        clock: any RendererEventClock = WallRendererEventClock()
     ) async throws -> RendererMachineIndex {
         try prepareRoot()
         let storage = RendererMachineIndexSQLiteStorage(layout: layout, derivedIndexWriter: derivedIndexWriter)
@@ -352,8 +353,23 @@ public actor RendererMachineIndexStore {
                 return current
             }
 
+            let timestamp = clock.now()
             let next = try storage.mutate(expectedGeneration: expectedGeneration) { records, _ in
+                guard let existing = records.first(where: { $0.packageID == packageID && $0.version == version }) else {
+                    return
+                }
+                let removed = try RendererPackageInstallRecord(
+                    packageID: existing.packageID,
+                    version: existing.version,
+                    expectedPackageHash: existing.expectedPackageHash,
+                    state: .removed,
+                    reservedAt: existing.reservedAt,
+                    updatedAt: timestamp,
+                    diagnostic: .packageRemoved,
+                    rollbackCandidate: existing.rollbackCandidate,
+                    isSafeModeSuppressed: false)
                 records.removeAll { $0.packageID == packageID && $0.version == version }
+                records.append(removed)
             }
             let installed = layout.packageURL(packageID: packageID, version: version)
             if FileManager.default.fileExists(atPath: installed.path) {
@@ -361,9 +377,9 @@ public actor RendererMachineIndexStore {
                 else { throw RendererMachineIndexStoreError.invalidPackagePath }
                 do { try FileManager.default.removeItem(at: installed) }
                 catch {
-                    // The authoritative record is already removed. Keep the
-                    // result usable and leave a redacted diagnostic for the
-                    // next registry refresh to surface Source fallback.
+                    // The redacted removed record remains authoritative. Keep
+                    // the result usable and surface Source fallback while the
+                    // orphan root is diagnosed on the next registry refresh.
                     DebugLog.store("Renderer package removal left an inaccessible orphan root.")
                 }
             }
@@ -375,7 +391,8 @@ public actor RendererMachineIndexStore {
     /// caller never has to race a separately observed machine generation.
     public func remove(
         packageID: RendererPackageID,
-        version: RendererPackageVersion
+        version: RendererPackageVersion,
+        clock: any RendererEventClock = WallRendererEventClock()
     ) async throws -> RendererMachineIndex {
         for _ in 0 ..< 3 {
             let current = try await read()
@@ -383,7 +400,8 @@ public actor RendererMachineIndexStore {
                 return try await remove(
                     packageID: packageID,
                     version: version,
-                    expectedGeneration: current.generation)
+                    expectedGeneration: current.generation,
+                    clock: clock)
             } catch RendererMachineIndexStoreError.staleGeneration {
                 continue
             }
