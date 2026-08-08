@@ -193,7 +193,6 @@ let package = Package(
                 // are available inside the .app's Contents/Resources/ at runtime.
                 // Loaded via Bundle.module (see PromptLoader.swift).
                 .copy("Resources/Prompts"),
-                .copy("../../docs/skills/renderer-package-maintainer/references/current-package-guide.md"),
                 .copy("../../docs/skills/renderer-package-maintainer/references/wiki-state-chat-reference.md"),
             ],
             swiftSettings: strictSwiftSettings,

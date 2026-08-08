@@ -366,10 +366,10 @@ fi
 # fallback.
 if [ -f "${SPM_RESOURCE_BUNDLE}/wiki-state-chat-reference.md" ]; then
   mkdir -p "${APPEX_CONTENTS}/Resources" "${DAEMON_XPC_CONTENTS}/Resources"
-  echo "  ✓ bundled renderer package guide into app + extension + wikid XPC service"
   cp "${SPM_RESOURCE_BUNDLE}/wiki-state-chat-reference.md" "${RESOURCES_DIR}/"
   cp "${SPM_RESOURCE_BUNDLE}/wiki-state-chat-reference.md" "${APPEX_CONTENTS}/Resources/"
   cp "${SPM_RESOURCE_BUNDLE}/wiki-state-chat-reference.md" "${DAEMON_XPC_CONTENTS}/Resources/"
+  echo "  ✓ bundled renderer package guide into app + extension + wikid XPC service"
 else
   echo "  ⚠ WIKI_STATE renderer reference not found at ${SPM_RESOURCE_BUNDLE}" >&2
   echo "    Rebuild WikiFSCore before packaging. WIKI_STATE rendering will fail at runtime." >&2

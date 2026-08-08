@@ -23,7 +23,7 @@ struct RendererPackageDocumentationTests {
         #expect(guide.contains("5ce39d66a927d4e2933dc6a637a9c54eee55a1d54da48b87791b0d90bd23022b"))
         #expect(stateReference.contains("every compatible validated installed renderer available to every wiki"))
         #expect(stateReference.contains("This short reference is context for wiki operations."))
-        #expect(package.contains("renderer-package-maintainer/references/current-package-guide.md"))
+        #expect(!package.contains("renderer-package-maintainer/references/current-package-guide.md"))
         #expect(package.contains("renderer-package-maintainer/references/wiki-state-chat-reference.md"))
         #expect(package.contains("RendererPackages/Excalidraw"))
         #expect(guideLoader.contains("Bundle.main.url(forResource: \"wiki-state-chat-reference\", withExtension: \"md\")"))
