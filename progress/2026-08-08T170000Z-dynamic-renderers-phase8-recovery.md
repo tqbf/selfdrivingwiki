@@ -6,7 +6,7 @@ status: recovery-gates
 issue: 1026
 phase: 8
 base_sha: 609dc66f0e0b13c298ab528e46fdf74bf4a420ce
-head_sha: 3b291cf0cc990be6240fec79c5619fb6269915c9
+head_sha: f77031f3303af197a648e27adfba6ec314995abd
 ---
 
 # Dynamic renderers Phase 8 recovery
@@ -22,16 +22,16 @@ snapshot, integrated main, and resolved candidate.
 
 ## Exact-head evidence
 
-The reconciled branch is clean at `3b291cf0cc990be6240fec79c5619fb6269915c9`,
+The reconciled branch is clean at `f77031f3303af197a648e27adfba6ec314995abd`,
 based on `609dc66f0e0b13c298ab528e46fdf74bf4a420ce`. The updated machine-readable
 inventory maps changed production symbols and success, error, boundary,
 cancellation, and teardown paths to named tests.
 
 The focused renderer settings, bootstrap, activation, staging, and
-documentation suites passed after the bounded Foundation import and exact
-expectation repairs. `make build`, `make test`, prerequisite synchronization,
-bare `swift build`, and bare `swift test` also passed in clean exact-head
-evidence worktrees. The full suite reported 3,259 tests in 293 suites passed.
+documentation suites passed after the bounded Foundation import, exact
+expectation repairs, and accessibility/status coverage. The earlier clean
+exact-head gates passed before this final bounded repair; they are being
+rerun against this SHA before the PR opens.
 
 ## Scope boundary
 
