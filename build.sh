@@ -359,6 +359,22 @@ else
   echo "    Run 'make prompts' then rebuild. Prompt loading will crash at runtime." >&2
 fi
 
+# RendererPackageGuide is a bounded WIKI_STATE.md reference, not a prompt.
+# Copy it beside the prompts so app, extension, and wikid XPC Bundle.main
+# lookups work after the built app is moved away from the originating .build
+# directory. RendererPackageGuide retains Bundle.module as the SwiftPM/test
+# fallback.
+if [ -f "${SPM_RESOURCE_BUNDLE}/current-package-guide.md" ]; then
+  mkdir -p "${APPEX_CONTENTS}/Resources" "${DAEMON_XPC_CONTENTS}/Resources"
+  cp "${SPM_RESOURCE_BUNDLE}/current-package-guide.md" "${RESOURCES_DIR}/"
+  cp "${SPM_RESOURCE_BUNDLE}/current-package-guide.md" "${APPEX_CONTENTS}/Resources/"
+  cp "${SPM_RESOURCE_BUNDLE}/current-package-guide.md" "${DAEMON_XPC_CONTENTS}/Resources/"
+  echo "  ✓ bundled renderer package guide into app + extension + wikid XPC service"
+else
+  echo "  ⚠ renderer package guide not found at ${SPM_RESOURCE_BUNDLE}" >&2
+  echo "    Rebuild WikiFSCore before packaging. WIKI_STATE rendering will fail at runtime." >&2
+fi
+
 [ -f "${APP_ICON}" ] && cp "${APP_ICON}" "${RESOURCES_DIR}/AppIcon.icns"
 
 cat > "${CONTENTS}/Info.plist" <<PLIST
