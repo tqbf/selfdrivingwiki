@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "issue": 1026,
+  "phase": 8,
+  "slice": 1,
+  "parentSHA": "20d7f52b49d6670862553636bef6e690de6e434c",
+  "headSHA": "02cb57443f505ed134247c034f55aa5cc51fd447",
+  "headSHASemantics": "This is the local implementation and focused-test commit.",
+  "scope": "Clarify local renderer package import in the existing Renderers settings UI without changing package validation or storage behavior.",
+  "productionPaths": [
+    {
+      "path": "Sources/WikiFS/Settings/RendererSettingsView.swift",
+      "symbols": ["RendererSettingsView"],
+      "tests": ["RendererSettingsManagementViewTests.settingsSurfaceUsesApprovedScopesAndCopy"]
+    },
+    {
+      "path": "Sources/WikiFS/Settings/RendererSettingsPackagePicker.swift",
+      "symbols": ["RendererSettingsPackagePicker.configure", "RendererSettingsPackagePicker.validatedDirectory"],
+      "tests": ["RendererSettingsPackagePickerTests.testV1PickerAcceptsOneDirectoryAndRejectsFilesAndArchives"]
+    }
+  ],
+  "testPaths": [
+    "Tests/WikiFSAppTests/RendererSettingsManagementViewTests.swift",
+    "Tests/WikiFSAppTests/RendererSettingsPackagePickerTests.swift"
+  ],
+  "coverage": {
+    "success": [
+      "The Renderers settings UI identifies local package import as an advanced action.",
+      "The UI explains that one local package folder is validated and copied for use on this Mac.",
+      "The UI states that it does not use the selected source folder after import."
+    ],
+    "boundary": [
+      "The picker accepts one directory and rejects files, archives, and multiple selections at its validation boundary.",
+      "The UI does not expose an app-managed destination path."
+    ]
+  },
+  "excluded": [
+    "Package storage, package validation, machine index semantics, registry refresh behavior, and renderer session pins",
+    "Hosted Settings window and VoiceOver runtime validation",
+    "Remote distribution, signing, archives, and package catalog work"
+  ],
+  "verification": {
+    "command": "WIKIFS_APP_TESTS=1 swift test --filter 'RendererSettingsManagementViewTests|RendererSettingsPackagePickerTests' --jobs 4",
+    "result": "passed: 3 tests in 2 suites"
+  }
+}
