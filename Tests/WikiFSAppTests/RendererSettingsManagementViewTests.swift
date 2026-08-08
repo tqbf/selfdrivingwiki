@@ -17,6 +17,10 @@ struct RendererSettingsManagementViewTests {
             contentsOf: repositoryRoot.appendingPathComponent(
                 "Sources/WikiFS/Settings/RendererSettingsView.swift"),
             encoding: .utf8)
+        let appSource = try String(
+            contentsOf: repositoryRoot.appendingPathComponent(
+                "Sources/WikiFS/Window/WikiFSApp.swift"),
+            encoding: .utf8)
 
         #expect(source.contains("Installed on This Mac"))
         #expect(source.contains("No renderer packages are installed on this Mac."))
@@ -27,6 +31,7 @@ struct RendererSettingsManagementViewTests {
         #expect(source.contains("RendererSettingsPackagePicker.importButtonTitle"))
         #expect(source.contains("RendererSettingsPackagePicker.v1FormatMessage"))
         #expect(source.contains("The renderer package could not be validated or installed."))
+        #expect(appSource.contains(".task { await installedRendererHost.bootstrapBundledRendererPackages() }"))
         #expect(!source.contains("Install Renderer Directory"))
         #expect(!source.contains("No Renderer Directories"))
         #expect(!source.contains("The renderer directory could not be validated or installed."))
