@@ -11,6 +11,11 @@ head_sha: f77031f3303af197a648e27adfba6ec314995abd
 
 # Dynamic renderers Phase 8 recovery
 
+## Progress
+
+The recovered implementation and its focused evidence are being finalized on
+the exact Phase 8 branch head.
+
 ## Reconciliation
 
 The retained Phase 8 work was reconciled against integrated Phase 7 main in a
