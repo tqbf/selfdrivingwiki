@@ -3039,6 +3039,25 @@ public final class WikiStoreModel {
         })
     }
 
+    /// Returns the current-wiki enablement for one machine-installed package.
+    /// A missing row deliberately means disabled; removal never deletes this
+    /// row, so reinstalling the same package restores the logical preference.
+    public func rendererWikiEnablement(for packageID: RendererPackageID) -> Bool {
+        DebugLog.trying("rendererWikiEnablement", operation: {
+            try store.rendererWikiEnablement(packageID: packageID)?.isEnabled ?? false
+        }) ?? false
+    }
+
+    /// Persists current-wiki enablement through the store's renderer-settings
+    /// mutation seam. Machine installation and wiki preference remain separate.
+    public func setRendererWikiEnablement(packageID: RendererPackageID, isEnabled: Bool) {
+        do {
+            try store.setRendererWikiEnablement(packageID: packageID, isEnabled: isEnabled)
+        } catch {
+            DebugLog.store("WikiStoreModel.setRendererWikiEnablement failed: \(error)")
+        }
+    }
+
     public func isSourceIngested(_ file: SourceSummary) -> Bool {
         sourceIngestedStatus[file.id] ?? false
     }

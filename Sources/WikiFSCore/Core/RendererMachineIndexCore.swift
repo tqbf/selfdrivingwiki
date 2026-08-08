@@ -127,6 +127,7 @@ public enum RendererMachineIndexStoreError: Error, Equatable, Sendable {
     case activationFailed
     case activationCleanupFailed
     case activationCancelled
+    case packageRemovalFailed
     case packageRootAlreadyExists
     case installedRendererNotAvailable
 }
@@ -141,6 +142,10 @@ func rendererMachineIndexValidatingPackagePaths(
         throw RendererMachineIndexStoreError.invalidPackagePath
     }
     for record in index.records {
+        // A removed tombstone intentionally has no live payload. Its typed
+        // package/version identity remains bounded by the value types, while
+        // live reservations still require an in-root package location.
+        guard record.state != .removed else { continue }
         let packageURL = layout.packageURL(packageID: record.packageID, version: record.version)
         guard isRendererPackageStorePathContained(packageURL, within: layout.packagesRoot) else {
             throw RendererMachineIndexStoreError.invalidPackagePath

@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "issue": 1026,
+  "phase": 7,
+  "slice": 1,
+  "parentSHA": "2864c339d1c786d174e01eef3f42011e196c91d7",
+  "prBaseBranch": "feature/dynamic-renderers-06-excalidraw-json-canvas",
+  "prBaseSHA": "71c085250bc40614f7169394ef2bab444d147bf4",
+  "headSHA": "924ecc81050b8ca96b76c3b910a8cddbbdf03562",
+  "headSHASemantics": "This is the exact implementation and focused-test commit. The following documentation-only commit records the evidence.",
+  "scope": "Native Renderers settings management over the existing machine package store and wiki renderer-settings seams.",
+  "productionPaths": [
+    {
+      "path": "Sources/WikiFS/Renderer/InstalledRendererHost.swift",
+      "symbols": ["installRendererDirectory", "removeRenderer", "resetInstalledRendererSafeMode", "refresh"],
+      "tests": ["RendererSettingsManagementTests.removalPreservesMachineBoundary", "InstalledRendererHostTests.unavailableMachineStorePreservesSourceFallback"]
+    },
+    {
+      "path": "Sources/WikiFS/Settings/RendererSettingsView.swift",
+      "symbols": ["RendererSettingsModel", "RendererSettingsModel.updateWiki", "RendererSettingsView", "RendererSettingsRow"],
+      "tests": ["RendererSettingsManagementViewTests.settingsSurfaceUsesApprovedScopesAndCopy", "RendererSettingsManagementViewTests.settingsModelTracksCurrentWikiStore"]
+    },
+    {
+      "path": "Sources/WikiFS/Window/WikiFSApp.swift",
+      "symbols": ["SettingsTab.renderers", "RendererSettingsView"],
+      "tests": ["RendererSettingsManagementViewTests.settingsSurfaceUsesApprovedScopesAndCopy"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererMachineIndexStore.swift",
+      "symbols": ["remove(packageID:version:)", "remove(packageID:version:expectedGeneration:)", "RendererMachineIndexStoreError.packageRemovalFailed"],
+      "tests": ["RendererSettingsManagementTests.removalPreservesMachineBoundary"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererMachineIndexCore.swift",
+      "symbols": ["rendererMachineIndexValidatingPackagePaths removed-tombstone handling"],
+      "tests": ["RendererSettingsManagementTests.removalPreservesMachineBoundary"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Store/WikiStoreModel.swift",
+      "symbols": ["rendererWikiEnablement", "setRendererWikiEnablement"],
+      "tests": ["RendererSettingsManagementTests.versionSelectionUsesExactReference"]
+    },
+    {
+      "path": "Sources/WikiFS/Settings/RendererSettingsPackagePicker.swift",
+      "symbols": ["configure", "validatedDirectory", "v1FormatMessage"],
+      "tests": ["RendererSettingsPackagePickerTests.testV1PickerAcceptsOneDirectoryAndRejectsFilesAndArchives"]
+    }
+  ],
+  "testPaths": [
+    "Tests/WikiFSTests/RendererSettingsManagementTests.swift",
+    "Tests/WikiFSAppTests/RendererSettingsManagementViewTests.swift",
+    "Tests/WikiFSAppTests/RendererSettingsPackagePickerTests.swift",
+    "Tests/WikiFSAppTests/InstalledRendererHostTests.swift"
+  ],
+  "coverage": {
+    "success": [
+      "The Renderers tab exposes Installed on This Mac and Enabled for This Wiki as separate scopes.",
+      "Installation accepts one local directory and routes it through validation and machine-store activation.",
+      "Removal validates its payload path before mutation, retains a redacted removed machine record, deletes only the package payload, and reports cleanup failure instead of claiming success.",
+      "Safe-mode reset refreshes the host projection. Registry refresh does not mutate active session pins.",
+      "Source version selection stores an exact typed renderer reference.",
+      "Diagnostics use progressive disclosure and the settings surface uses semantic body text and system colors."
+    ],
+    "error": [
+      "Invalid directories remain on Source fallback through the existing validator and host failure boundary.",
+      "A missing machine store leaves installation and removal unavailable without changing wiki data."
+    ],
+    "boundary": [
+      "Package bytes stay in the machine App Group store. Wiki renderer settings stay in the current wiki database.",
+      "The settings adapter does not construct renderer sessions or rewrite an existing RendererReference pin."
+    ],
+    "teardown": "Focused tests remove temporary machine-store roots with explicit failure reporting."
+  },
+  "bidirectionalResolution": {
+    "everyProductionPathMapsToNamedTests": true,
+    "everyNamedTestResolvesInOneListedTestPath": true,
+    "command": "inventory=plans/dynamic-renderers-phase7-management-test-inventory.json && jq -e '(.productionPaths | length > 0) and (.testPaths | length > 0) and all(.productionPaths[]; (.path | type == \"string\" and length > 0) and (.symbols | length > 0) and (.tests | length > 0))' \"$inventory\" >/dev/null && while IFS= read -r path; do test -f \"$path\" || exit 1; done < <(jq -r '.productionPaths[].path, .testPaths[]' \"$inventory\") && while IFS= read -r testName; do functionName=${testName##*.}; test $(rg -l -F \"func ${functionName}(\" $(jq -r '.testPaths[]' \"$inventory\") | wc -l | tr -d ' ') -eq 1 || exit 1; done < <(jq -r '[.productionPaths[].tests[]] | unique[]' \"$inventory\")'"
+  },
+  "excluded": [
+    "PR merging, issue closure, and Phase 6 branch mutation",
+    "Hosted SwiftUI settings screenshots and VoiceOver output",
+    "Cross-process renderer event fan-out beyond the existing Phase 3 seams",
+    "Source data deletion or migration"
+  ],
+  "honestCoverageLimits": [
+    "The settings view contract test reads source text. It does not host a Settings window; the model regression test verifies that the adapter switches stores when the active wiki changes.",
+    "The focused version test proves the exact preference type. It does not create a live source database.",
+    "Full installation through a real user-selected package requires a hosted app test and remains a later Phase 7 validation slice.",
+    "The current implementation does not add a second renderer registry or change active pane lifecycle.",
+    "Removed tombstones retain their expected package hash as a fail-closed reservation; reinstalling the same package ID/version requires the same reviewed hash."
+  ]
+}

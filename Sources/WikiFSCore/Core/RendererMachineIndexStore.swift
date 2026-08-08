@@ -333,6 +333,84 @@ public actor RendererMachineIndexStore {
         }
     }
 
+    /// Removes one installed package version without touching wiki-scoped
+    /// enablement or source preferences. The authoritative machine-index
+    /// mutation and package cleanup both occur under the coordinator lock.
+    public func remove(
+        packageID: RendererPackageID,
+        version: RendererPackageVersion,
+        expectedGeneration: UInt64,
+        clock: any RendererEventClock = WallRendererEventClock()
+    ) async throws -> RendererMachineIndex {
+        try prepareRoot()
+        let storage = RendererMachineIndexSQLiteStorage(layout: layout, derivedIndexWriter: derivedIndexWriter)
+        return try await coordinator.withExclusiveAccess {
+            let current = try storage.readOrInitialize()
+            guard current.generation == expectedGeneration else {
+                throw RendererMachineIndexStoreError.staleGeneration
+            }
+            guard current.records.contains(where: { $0.packageID == packageID && $0.version == version }) else {
+                return current
+            }
+
+            let installed = layout.packageURL(packageID: packageID, version: version)
+            guard isRendererPackageStorePathContained(installed, within: layout.packagesRoot) else {
+                throw RendererMachineIndexStoreError.invalidPackagePath
+            }
+            let timestamp = clock.now()
+            let next = try storage.mutate(expectedGeneration: expectedGeneration) { records, _ in
+                guard let existing = records.first(where: { $0.packageID == packageID && $0.version == version }) else {
+                    return
+                }
+                let removed = try RendererPackageInstallRecord(
+                    packageID: existing.packageID,
+                    version: existing.version,
+                    expectedPackageHash: existing.expectedPackageHash,
+                    state: .removed,
+                    reservedAt: existing.reservedAt,
+                    updatedAt: timestamp,
+                    diagnostic: .packageRemoved,
+                    rollbackCandidate: existing.rollbackCandidate,
+                    isSafeModeSuppressed: false)
+                records.removeAll { $0.packageID == packageID && $0.version == version }
+                records.append(removed)
+            }
+            if FileManager.default.fileExists(atPath: installed.path) {
+                do { try FileManager.default.removeItem(at: installed) }
+                catch {
+                    // The tombstone is authoritative, but removal must still
+                    // report failure when its payload remains on disk. The
+                    // caller can surface this diagnostic and retry cleanup.
+                    DebugLog.store("Renderer package removal committed a tombstone but could not clean up its payload.")
+                    throw RendererMachineIndexStoreError.packageRemovalFailed
+                }
+            }
+            return next
+        }
+    }
+
+    /// Removes one package version using a bounded generation retry. The
+    /// caller never has to race a separately observed machine generation.
+    public func remove(
+        packageID: RendererPackageID,
+        version: RendererPackageVersion,
+        clock: any RendererEventClock = WallRendererEventClock()
+    ) async throws -> RendererMachineIndex {
+        for _ in 0 ..< 3 {
+            let current = try await read()
+            do {
+                return try await remove(
+                    packageID: packageID,
+                    version: version,
+                    expectedGeneration: current.generation,
+                    clock: clock)
+            } catch RendererMachineIndexStoreError.staleGeneration {
+                continue
+            }
+        }
+        throw RendererMachineIndexStoreError.staleGeneration
+    }
+
     /// Changes machine install/safe-mode state and appends its durable renderer
     /// event in the same coordinator-held SQLite transaction. Nothing is
     /// emitted here; callers may publish a payload only after this returns.
