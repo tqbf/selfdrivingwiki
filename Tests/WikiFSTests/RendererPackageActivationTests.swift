@@ -98,6 +98,37 @@ struct RendererPackageActivationTests {
         #expect(try await store.read() == activated)
     }
 
+    @Test func matchingHashForNonValidatedRecordFailsClosedAtExistingDestination() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let package = try fixture.validate()
+        let store = RendererMachineIndexStore(layout: fixture.layout)
+        let activated = try await store.activate(package, expectedGeneration: 0, clock: fixture.clock)
+        let timestamp = try RFC3339Timestamp(validating: "2026-08-08T17:00:00+00:00")
+        let quarantined = try RendererPackageInstallRecord(
+            packageID: fixture.packageID,
+            version: fixture.version,
+            expectedPackageHash: package.packageHash,
+            state: .quarantined,
+            reservedAt: timestamp,
+            updatedAt: timestamp)
+        let quarantinedIndex = try await store.mutate(expectedGeneration: activated.generation) { records, _ in
+            records = [quarantined]
+        }
+        let retry = try fixture.validate()
+
+        await #expect(throws: RendererMachineIndexStoreError.packageRootAlreadyExists) {
+            _ = try await store.activate(
+                retry,
+                expectedGeneration: quarantinedIndex.generation,
+                clock: fixture.clock)
+        }
+
+        let root = fixture.layout.packageURL(packageID: fixture.packageID, version: fixture.version)
+        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("index.html").path))
+        #expect(try await store.read().records == [quarantined])
+    }
+
     @Test func activationHashConflictRollsBackNewlyMovedPackage() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }

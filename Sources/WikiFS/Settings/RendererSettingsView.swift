@@ -154,7 +154,7 @@ struct RendererSettingsView: View {
                         Text(RendererSettingsPackagePicker.localImportSourceMessage)
                         Text(RendererSettingsPackagePicker.localImportStorageMessage)
                         Text(RendererSettingsPackagePicker.localImportAfterMessage)
-                        Text(RendererSettingsPackagePicker.v1FormatMessage)
+                        Text("Files and archives are not supported.")
                         Button(RendererSettingsPackagePicker.importButtonTitle, systemImage: "square.and.arrow.down") {
                             showingPicker = true
                         }
@@ -166,6 +166,12 @@ struct RendererSettingsView: View {
                     Task { await model.refresh() }
                 }
                 .disabled(model.isBusy)
+                if model.isBusy {
+                    ProgressView("Updating renderer packages…")
+                        .controlSize(.small)
+                        .accessibilityLabel("Updating renderer packages")
+                        .accessibilityAddTraits(.updatesFrequently)
+                }
             } header: {
                 Text("Package Management")
             }
@@ -211,6 +217,7 @@ struct RendererSettingsView: View {
                 Section {
                     Label(error, systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.red)
+                        .accessibilityLabel("Renderer management unavailable. (error)")
                 } header: {
                     Text("Renderer management unavailable")
                 }
@@ -222,6 +229,16 @@ struct RendererSettingsView: View {
             model.updateWiki(wiki)
             selectedSourceID = wiki?.sources.first?.id
             await model.refresh()
+        }
+        .onChange(of: model.isBusy) { _, isBusy in
+            if isBusy {
+                announceAccessibility("Updating renderer packages")
+            }
+        }
+        .onChange(of: model.lastError) { _, error in
+            if let error {
+                announceAccessibility("Renderer management unavailable. \(error)")
+            }
         }
         .onChange(of: showingPicker) { _, isPresented in
             guard isPresented else { return }
@@ -301,13 +318,39 @@ struct RendererSettingsView: View {
             }
             ForEach(model.rows.filter { $0.record.state == .validated }) { row in
                 ForEach(model.descriptors(for: row), id: \.reference) { descriptor in
-                    Button("Use \(descriptor.displayName) \(descriptor.reference.version.rawValue) for \(source.effectiveName)") {
+                    let preference = model.wiki?.rendererSourcePreference(for: source.id)
+                    let isSelected = isExactPreference(preference, matching: descriptor.reference)
+                    Button {
                         model.selectVersion(descriptor, for: source.id)
+                    } label: {
+                        HStack {
+                            Text("Use \(descriptor.displayName) \(descriptor.reference.version.rawValue) for \(source.effectiveName)")
+                            if isSelected {
+                                Image(systemName: "checkmark")
+                                    .accessibilityHidden(true)
+                            }
+                        }
                     }
-                    .accessibilityLabel("Select renderer version \(descriptor.reference.version.rawValue) for \(source.effectiveName)")
+                    .accessibilityLabel("\(descriptor.displayName), version \(descriptor.reference.version.rawValue), for \(source.effectiveName)")
+                    .accessibilityValue(isSelected ? "Selected renderer version" : "Not selected")
                 }
             }
         }
+    }
+
+    private func announceAccessibility(_ message: String) {
+        NSAccessibility.post(
+            element: NSApp as Any,
+            notification: .announcementRequested,
+            userInfo: [.announcement: message])
+    }
+
+    private func isExactPreference(
+        _ preference: RendererPreferenceReference?,
+        matching reference: RendererReference
+    ) -> Bool {
+        guard case let .exact(selectedReference) = preference else { return false }
+        return selectedReference == reference
     }
 }
 #endif

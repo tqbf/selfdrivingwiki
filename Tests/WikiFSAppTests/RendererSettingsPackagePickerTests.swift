@@ -47,5 +47,8 @@ struct RendererSettingsPackagePickerTests {
         #expect(throws: RendererSettingsPackagePicker.SelectionError.expectedOneDirectory) {
             try RendererSettingsPackagePicker.validatedDirectory(from: [packageDirectory, root])
         }
+        #expect(throws: RendererSettingsPackagePicker.SelectionError.expectedOneDirectory) {
+            try RendererSettingsPackagePicker.validatedDirectory(from: [])
+        }
     }
 }

@@ -20,6 +20,7 @@ struct RendererPackageDocumentationTests {
         #expect(guide.contains("input.read"))
         #expect(guide.contains("5ce39d66a927d4e2933dc6a637a9c54eee55a1d54da48b87791b0d90bd23022b"))
         #expect(package.contains("renderer-package-maintainer/references/current-package-guide.md"))
+        #expect(package.contains("RendererPackages/Excalidraw"))
         #expect(!guide.contains("Enabled for This Wiki"))
         #expect(!guide.contains("disabled by default per wiki"))
     }

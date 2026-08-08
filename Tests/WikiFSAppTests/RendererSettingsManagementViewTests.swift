@@ -36,6 +36,12 @@ struct RendererSettingsManagementViewTests {
         #expect(source.contains(".filter { $0.state != .removed }"))
         #expect(source.contains(".task(id: wikiID)"))
         #expect(source.contains("model.updateWiki(wiki)"))
+        #expect(source.contains("rendererSourcePreference(for: source.id)"))
+        #expect(source.contains("Selected renderer version"))
+        #expect(source.contains("Updating renderer packages"))
+        #expect(source.contains("announcementRequested"))
+        #expect(source.contains("Files and archives are not supported."))
+        #expect(!source.contains("Text(RendererSettingsPackagePicker.v1FormatMessage)"))
         #expect(source.contains(".font(.body)"))
         #expect(!source.contains(".font(.system(size:"))
         #expect(!source.contains("Enabled for This Wiki"))
@@ -43,6 +49,40 @@ struct RendererSettingsManagementViewTests {
         #expect(!source.contains("setRendererWikiEnablement"))
         #expect(!source.contains("rendererWikiEnablement(for:"))
         #expect(!source.contains("isEnabledForWiki"))
+    }
+
+    @Test("settings model reports install failure and clears busy state")
+    func settingsModelReportsInstallFailure() async {
+        let model = RendererSettingsModel(
+            host: InstalledRendererHost(machineStore: nil, layout: nil),
+            wiki: nil)
+
+        await model.install(directory: URL.temporaryDirectory.appending(path: "missing-renderer-package"))
+
+        #expect(model.lastError == "The renderer package could not be validated or installed.")
+        #expect(model.isBusy == false)
+    }
+
+    @Test("settings model installs a validated package into machine-wide rows")
+    func settingsModelInstallsValidatedPackage() async throws {
+        let root = URL.temporaryDirectory.appending(path: "renderer-settings-install-\(UUID().uuidString)")
+        defer {
+            do { try FileManager.default.removeItem(at: root) }
+            catch { Issue.record("Renderer settings install fixture cleanup failed.") }
+        }
+        let layout = try RendererPackageStoreLayout(appGroupContainerRoot: root)
+        let host = InstalledRendererHost(
+            machineStore: RendererMachineIndexStore(layout: layout),
+            layout: layout)
+        let model = RendererSettingsModel(host: host, wiki: nil)
+        let packageURL = try #require(BundledRendererPackages.excalidrawResourceURL())
+
+        await model.install(directory: packageURL)
+
+        #expect(model.lastError == nil)
+        #expect(model.isBusy == false)
+        #expect(model.rows.count == 1)
+        #expect(model.diagnostic == "Renderer registry refreshed after installation.")
     }
 
     @Test("settings model follows the current wiki store")
