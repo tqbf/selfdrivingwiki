@@ -1509,12 +1509,17 @@ internal struct WikiReaderRep: NSViewRepresentable {
             var p=m.parentNode; while(m.firstChild) p.insertBefore(m.firstChild,m);
             p.removeChild(m); p.normalize();
           });
-          // Source extraction can convert straight quotes in a cite anchor to
-          // typographic quotes in the rendered text. Normalize only the
-          // comparison view: each replacement is one character, so `map` still
-          // indexes the original DOM text used to construct the Range.
-          function normalizeQuotes(s){ return s.replace(/[“”]/g,'"'); }
-          var nq=normalizeQuotes(q).replace(/\\s+/g," ").trim().toLowerCase();
+          // Source extraction can convert citation text into editorial
+          // typography. Normalize only the comparison view. A character may
+          // expand (for example, `…` → `...`), so every normalized character
+          // retains the original DOM node + offset in `map`.
+          function normalizeTypography(s){
+            return s.replace(/[“”]/g,'"').replace(/[‘’]/g,"'")
+              .replace(/[‐‑‒–—―−]/g,"-").replace(/…/g,"...")
+              .replace(/ﬀ/g,"ff").replace(/ﬁ/g,"fi").replace(/ﬂ/g,"fl")
+              .replace(/ﬃ/g,"ffi").replace(/ﬄ/g,"ffl").replace(/[ﬅﬆ]/g,"st");
+          }
+          var nq=normalizeTypography(q).replace(/\\s+/g," ").trim().toLowerCase();
           if(!nq){ return; }
           var chars=[], map=[];
           var tw=document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
@@ -1524,7 +1529,12 @@ internal struct WikiReaderRep: NSViewRepresentable {
               var c=v[i];
               if(/\\s/.test(c)){
                 if(chars.length===0||chars[chars.length-1]!==" "){ chars.push(" "); map.push({n:tw.currentNode,o:i}); }
-              } else { chars.push(normalizeQuotes(c).toLowerCase()); map.push({n:tw.currentNode,o:i}); }
+              } else {
+                var normalized=normalizeTypography(c).toLowerCase();
+                for(var j=0;j<normalized.length;j++){
+                  chars.push(normalized[j]); map.push({n:tw.currentNode,o:i});
+                }
+              }
             }
           }
           var lo=0, hi=chars.length;

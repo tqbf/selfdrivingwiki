@@ -188,6 +188,19 @@ struct QuoteHighlightWebViewTests {
         #expect(await markText(in: webView) == renderedQuote)
     }
 
+    @Test("#1059 highlight normalizes source typography without changing its selection")
+    func highlightMatchesRenderedTypographyVariants() async throws {
+        let (lease, window, webView) = await makeHostedWebView()
+        defer { Self.releaseWindow(window); lease.release() }
+        let quote = #""quoted" 'single' office - example ..."#
+        let renderedQuote = #"“quoted” ‘single’ ofﬁce — example …"#
+        try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML("<p>\(renderedQuote)</p>"))
+
+        await run(webView, WikiReaderRep.highlightJS(quote: quote))
+
+        #expect(await markText(in: webView) == renderedQuote)
+    }
+
     @Test func highlightMatchesAcrossCollapsedWhitespace() async throws {
         // The source has extra internal whitespace / a newline; the quote is
         // single-spaced. The index-map fallback must still wrap the match.
