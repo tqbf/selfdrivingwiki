@@ -6,7 +6,7 @@ status: final-gates-blocked-voiceover-and-approval
 issue: 1026
 phase: 8
 base_sha: 609dc66f0e0b13c298ab528e46fdf74bf4a420ce
-head_sha: 2e097ee5c0ab9309e5463ef6a78f14b7156545f4
+head_sha: d16547f3c3642a86fc7cfdc98059bcd901931248
 ---
 
 # Dynamic renderers Phase 8 recovery
@@ -30,10 +30,15 @@ snapshot, integrated main, and resolved candidate.
 ## Exact-head evidence
 
 The implementation branch is clean at
-`2e097ee5c0ab9309e5463ef6a78f14b7156545f4`, based on
+`d16547f3c3642a86fc7cfdc98059bcd901931248`, based on
 `609dc66f0e0b13c298ab528e46fdf74bf4a420ce`. The updated machine-readable
 inventory maps changed production symbols and success, error, boundary,
 cancellation, and teardown paths to named tests.
+
+The final implementation cleanup removes the obsolete full maintainer-guide
+resource from the SwiftPM runtime bundle and orders the packaged-resource
+success diagnostic after its copy operations. The bounded WIKI_STATE reference
+and bundled Excalidraw payload remain included in the signed app resources.
 
 The focused renderer settings, bootstrap, activation, staging, and
 documentation suites passed after the bounded Foundation import, exact
