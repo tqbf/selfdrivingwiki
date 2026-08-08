@@ -318,6 +318,26 @@ Add native settings UI and complete the user workflow.
 
 Merge gate: all issue #1026 exit criteria, per-PR test inventories, exact-head checks, retained audit/review records, and final commands pass; no critical or high finding is unresolved; every medium or low finding is fixed or explicitly rebutted; and any specialist review required after a critical/high fix has passed.
 
+### Phase 8 recovery amendment for issue #1026
+
+The approved Phase 8 recovery supersedes the Phase 7 package-management wording
+above where the retained implementation resolves the design detail differently:
+
+1. Compatible validated renderer packages are machine-scoped and available to
+   every wiki. Persisted per-wiki enablement rows and APIs remain only as
+   compatibility data; Phase 8 does not expose enablement controls.
+2. The advanced import action is labeled “Import Renderer Package…” and accepts
+   one local directory only. The existing validator and coordinated machine
+   store remain the import and storage boundary.
+3. The reviewed bundled Excalidraw package is bootstrapped from the signed app
+   resources through the existing validator and machine store. Source and
+   native renderer fallback remains available on every failure path.
+4. The repository maintainer skill remains repository documentation. Runtime
+   WIKI_STATE receives only the bounded chat reference; no generic chat skill
+   execution or system-prompt injection is added.
+5. Delivery is the Phase 7 integrated main plus this single Phase 8 recovery PR;
+   the earlier seven-PR delivery wording is superseded for this recovery.
+
 # Acceptance Criteria
 
 - **AC.1:** Portable renderer IDs prevent package, version, registration, exact-reference, and logical-reference namespace interchange at compile time.

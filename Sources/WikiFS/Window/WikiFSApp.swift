@@ -684,7 +684,7 @@ struct WikiFSApp: App {
                 openActivityWindow: { [weak openWindowBridge] queue in openWindowBridge?.openActivityWindow?(queue) },
                 chatDaemon: chatDaemonCoordinator,
                 healthMonitor: healthMonitor)
-            .task { await installedRendererHost.refresh() }
+            .task { await installedRendererHost.bootstrapBundledRendererPackages() }
             .preferredColorScheme(appearanceColorScheme)
             .alert(
                 "Install Self Driving Wiki in Applications",

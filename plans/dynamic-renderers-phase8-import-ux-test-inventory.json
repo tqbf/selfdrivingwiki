@@ -1,0 +1,165 @@
+{
+  "schemaVersion": 1,
+  "issue": 1026,
+  "phase": 8,
+  "slice": "recovery",
+  "baseSHA": "609dc66f0e0b13c298ab528e46fdf74bf4a420ce",
+  "headSHA": "d16547f3c3642a86fc7cfdc98059bcd901931248",
+  "scope": "Complete the approved Phase 8 import UX and preserved amendments against integrated Phase 7 main.",
+  "productionSymbols": [
+    {
+      "path": "Sources/WikiFS/Renderer/BundledRendererPackages.swift",
+      "symbols": [
+        "BundledRendererPackages.excalidrawPackageID",
+        "BundledRendererPackages.excalidrawVersion",
+        "BundledRendererPackages.excalidrawRegistrationID",
+        "BundledRendererPackages.excalidrawResourceURL"
+      ],
+      "tests": [
+        "InstalledRendererHostTests.bundled Excalidraw is available as an app resource with its reviewed identity",
+        "InstalledRendererHostTests.bundled Excalidraw bootstrap installs once and remains available to every wiki",
+        "InstalledRendererHostTests.bundled bootstrap fails closed when an installed hash conflicts",
+        "InstalledRendererHostTests.an unavailable machine store preserves the Source fallback"
+      ],
+      "branches": {
+        "success": ["resource found", "typed package identity matches", "resource is validated and activated"],
+        "error": ["activation conflict or validator failure"],
+        "boundary": ["resource lookup is limited to app/module bundle resources; source checkout is not a runtime input"],
+        "cancellation": ["activation cancellation is covered by RendererPackageActivationTests.cancelledActivationCleansStagingWithoutCreatingARecord"],
+        "teardown": ["activation cleanup is covered by RendererPackageActivationTests.revalidationFailureCleansStagingAndDoesNotActivate"]
+      }
+    },
+    {
+      "path": "Sources/WikiFS/Renderer/InstalledRendererHost.swift",
+      "symbols": ["InstalledRendererHost.bootstrapBundledRendererPackages", "InstalledRendererHost.installRendererDirectory", "InstalledRendererHost.refresh"],
+      "tests": [
+        "InstalledRendererHostTests.bundled Excalidraw bootstrap installs once and remains available to every wiki",
+        "InstalledRendererHostTests.bundled bootstrap fails closed when an installed hash conflicts",
+        "InstalledRendererHostTests.an unavailable machine store preserves the Source fallback",
+        "InstalledRendererHostTests.host recovery is scoped by the typed renderer reference",
+        "RendererSettingsManagementViewTests.settings model installs a validated package into machine-wide rows",
+        "RendererSettingsManagementViewTests.settings model reports install failure and clears busy state",
+        "RendererPackageActivationTests.successfulActivationMovesValidatedPackageAndProjectsDescriptors",
+        "RendererPackageActivationTests.revalidationFailureCleansStagingAndDoesNotActivate",
+        "RendererPackageActivationTests.installedRootPassedToPublicActivationIsNeverDeleted"
+      ],
+      "branches": {
+        "success": ["validated local directory or bundled resource reaches machine activation", "registry refresh exposes compatible descriptors"],
+        "error": ["missing store", "validation failure", "activation conflict", "refresh preserves Source fallback"],
+        "boundary": ["only validated package directories enter activation; app-managed storage remains outside wiki storage"],
+        "cancellation": ["RendererPackageActivationTests.cancelledActivationCleansStagingWithoutCreatingARecord"],
+        "teardown": ["RendererPackageActivationTests.coordinatorFailurePreservesCallerOwnedStaging", "RendererPackageActivationTests.cleanupFailureNeverActivatesARevalidationFailure"]
+      }
+    },
+    {
+      "path": "Sources/WikiFS/Settings/RendererSettingsPackagePicker.swift",
+      "symbols": ["RendererSettingsPackagePicker.importButtonTitle", "RendererSettingsPackagePicker.configure", "RendererSettingsPackagePicker.selectedDirectory"],
+      "tests": ["RendererSettingsPackagePickerTests.testV1PickerAcceptsOneDirectoryAndRejectsFilesAndArchives"],
+      "branches": {
+        "success": ["one local directory is accepted"],
+        "error": ["file selection rejected", "archive selection rejected", "multiple selection rejected", "empty selection rejected"],
+        "boundary": ["canChooseDirectories true", "canChooseFiles false", "no archive or destination selection surface"]
+      }
+    },
+    {
+      "path": "Sources/WikiFS/Settings/RendererSettingsView.swift",
+      "symbols": ["RendererSettingsModel.install", "RendererSettingsModel.rebuildRows", "RendererSettingsView.body", "RendererSettingsView.rendererRow", "RendererSettingsView.sourceVersionControls"],
+      "tests": ["RendererSettingsManagementViewTests.settings surface exposes machine installation without wiki enablement controls", "RendererSettingsManagementViewTests.settings model installs a validated package into machine-wide rows", "RendererSettingsManagementViewTests.settings model reports install failure and clears busy state", "RendererSettingsManagementViewTests.settings model follows the current wiki store"],
+      "branches": {
+        "success": ["advanced local import is exposed", "source-specific exact version preferences remain available", "installed compatible packages are shown machine-wide"],
+        "error": ["invalid package reports validation/install error", "empty installed list presents no-package state"],
+        "boundary": ["no per-wiki enablement toggle or API call", "no app-managed destination path", "safe mode and Source fallback remain outside settings mutation"],
+        "teardown": ["busy state is cleared with defer after import attempt"]
+      }
+    },
+    {
+      "path": "Sources/WikiFS/Window/WikiFSApp.swift",
+      "symbols": ["WikiFSApp.body renderer-host task"],
+      "tests": ["RendererSettingsManagementViewTests.settings surface exposes machine installation without wiki enablement controls"],
+      "branches": {
+        "success": ["application task invokes bundled bootstrap at launch"],
+        "error": ["bootstrap itself fails closed and refreshes Source/native availability"],
+        "teardown": ["task lifecycle is owned by the app scene"]
+      }
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererMachineIndexStore.swift",
+      "symbols": ["RendererMachineIndexStore.activate"],
+      "tests": [
+        "RendererPackageActivationTests.existingIdenticalPackageVersionIsAnIdempotentNoOp",
+        "RendererPackageActivationTests.existingConflictingPackageVersionFailsBeforeTheNoReplaceMove",
+        "RendererPackageActivationTests.matchingHashForNonValidatedRecordFailsClosedAtExistingDestination",
+        "RendererPackageActivationTests.successfulActivationMovesValidatedPackageAndProjectsDescriptors",
+        "RendererPackageActivationTests.cancelledActivationCleansStagingWithoutCreatingARecord",
+        "RendererPackageActivationTests.finalPackageRootStaysContainedAndRejectsLinksOnRevalidation"
+      ],
+      "branches": {
+        "success": ["new validated package moves into app-managed package root and records descriptors", "same package/version/hash returns current index without a new activation"],
+        "error": ["same package/version with conflicting hash fails closed before no-replace move", "validation/revalidation/coordinator/storage failure does not activate"],
+        "boundary": ["coordinator lock protects index inspection and activation", "package bytes remain outside wiki storage", "final root containment and symlink rejection"],
+        "cancellation": ["cancellation cleans staging without creating a record"],
+        "teardown": ["caller-owned staging is preserved on coordinator failure", "cleanup failure cannot activate a failed revalidation"]
+      }
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererPackageGuide.swift",
+      "symbols": ["RendererPackageGuide.text"],
+      "tests": ["RendererPackageDocumentationTests.maintainer skill and staged guide state machine-wide availability"],
+      "branches": {
+        "success": ["bounded WIKI_STATE chat reference is available from the WikiFSCore resource bundle"],
+        "error": ["missing or unreadable bundled guide fails closed during resource loading; defensive branch is not independently injectable because Bundle.module resources are immutable in production"],
+        "boundary": ["guide is chat reference only and does not execute a skill or enter the system prompt"]
+      }
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/WikiStateSnapshot.swift",
+      "symbols": ["WikiStateSnapshot.render"],
+      "tests": ["AgentStagingTests.stateFileRendersTitlesIndexAndLog", "AgentStagingTests.stateFileHandlesFreshAndEmptyWiki"],
+      "branches": {
+        "success": ["bounded WIKI_STATE chat reference is appended to staged WIKI_STATE.md"],
+        "boundary": ["state output remains a staged chat reference and does not become a system prompt"],
+        "teardown": ["state staging retains the existing source/page staging contract"]
+      }
+    },
+    {
+      "path": "Package.swift",
+      "symbols": ["WikiFSCore resource declaration for wiki-state-chat-reference.md", "WikiFS app resource declaration for RendererPackages/Excalidraw"],
+      "tests": ["RendererPackageDocumentationTests.maintainer skill and staged guide state machine-wide availability"],
+      "branches": {
+        "success": ["SwiftPM declares both bounded resources"],
+        "boundary": ["resources are copied into bundles; no remote package distribution is introduced"]
+      }
+    },
+    {
+      "path": "docs/skills/renderer-package-maintainer/SKILL.md",
+      "symbols": ["renderer-package-maintainer documentation contract"],
+      "tests": ["RendererPackageDocumentationTests.maintainer skill and staged guide state machine-wide availability"],
+      "branches": {
+        "success": ["maintainer guidance documents the local validated package workflow"],
+        "boundary": ["documentation excludes catalogs, remote distribution, signing, archives, and per-wiki enablement"]
+      }
+    },
+    {
+      "path": "docs/skills/renderer-package-maintainer/references/current-package-guide.md",
+      "symbols": ["current package guide"],
+      "tests": ["RendererPackageDocumentationTests.maintainer skill and staged guide state machine-wide availability", "RendererPackageDocumentationTests.documented two-file example has a valid manifest hash"],
+      "branches": {
+        "success": ["guide documents machine-wide availability and validated package hashes"],
+        "boundary": ["guide retains the storage and security boundaries"]
+      }
+    }
+  ],
+  "resourceAndBuildChanges": ["Package.swift", "build.sh", "docs/skills/renderer-package-maintainer/SKILL.md", "docs/skills/renderer-package-maintainer/references/current-package-guide.md", "docs/skills/renderer-package-maintainer/references/wiki-state-chat-reference.md"],
+  "testPaths": [
+    "Tests/WikiFSAppTests/InstalledRendererHostTests.swift",
+    "Tests/WikiFSAppTests/RendererSettingsManagementViewTests.swift",
+    "Tests/WikiFSAppTests/RendererSettingsPackagePickerTests.swift",
+    "Tests/WikiFSTests/AgentStagingTests.swift",
+    "Tests/WikiFSTests/RendererPackageActivationTests.swift",
+    "Tests/WikiFSTests/RendererPackageDocumentationTests.swift"
+  ],
+  "excluded": [
+    "catalogs, remote distribution, signing, archives, destination selection, new package architecture, generic chat skill execution, prompt inflation, sandbox/plugin mutation, and security weakening",
+    "hosted VoiceOver spoken-output validation remains a manual release gate rather than an automated claim"
+  ]
+}

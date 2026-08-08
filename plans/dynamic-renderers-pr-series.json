@@ -7,7 +7,8 @@
     { "branch": "feature/dynamic-renderers-04-routing", "base": "feature/dynamic-renderers-03-preferences", "titlePrefix": "feat(renderer):" },
     { "branch": "feature/dynamic-renderers-05-webview-security", "base": "feature/dynamic-renderers-04-routing", "titlePrefix": "feat(renderer):" },
     { "branch": "feature/dynamic-renderers-06-canvas", "base": "feature/dynamic-renderers-05-webview-security", "titlePrefix": "feat(renderer):" },
-    { "branch": "feature/dynamic-renderers-07-management", "base": "feature/dynamic-renderers-06-canvas", "titlePrefix": "feat(renderer):" }
+    { "branch": "feature/dynamic-renderers-07-management", "base": "feature/dynamic-renderers-06-canvas", "titlePrefix": "feat(renderer):" },
+    { "branch": "feature/dynamic-renderers-08-import-ux", "base": "main", "titlePrefix": "feat(renderers):" }
   ],
   "policy": { "requireExactHead": true, "requireChecksOnHead": true, "requireApprovalsOnHead": true }
 }
