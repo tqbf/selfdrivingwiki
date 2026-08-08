@@ -13,7 +13,7 @@ enum RendererSettingsPackagePicker {
     static let localImportSourceMessage = "Select one local renderer package folder as an import source."
     static let localImportStorageMessage = "Self Driving Wiki validates and copies it for use on this Mac."
     static let localImportAfterMessage = "The selected source folder is not used after import."
-    static let v1FormatMessage = "Package format v1 accepts one local directory. Files and archives are not supported."
+    static let v1FormatMessage = "Select one local renderer package folder as an import source. Self Driving Wiki validates and copies it. The selected source folder is not used after import. Files and archives are not supported."
 
     enum SelectionError: Error, Equatable {
         case expectedOneDirectory

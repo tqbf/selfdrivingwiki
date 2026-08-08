@@ -60,7 +60,7 @@ final class RendererSettingsModel {
         lastError = nil
         defer { isBusy = false }
         guard await host.installRendererDirectory(directory) else {
-            lastError = "The renderer directory could not be validated or installed."
+            lastError = "The renderer package could not be validated or installed."
             return
         }
         diagnostic = "Renderer registry refreshed after installation."
@@ -183,7 +183,7 @@ struct RendererSettingsView: View {
 
             Section {
                 if model.rows.isEmpty {
-                    ContentUnavailableView("No Renderer Directories", systemImage: "square.stack.3d.up.slash")
+                    ContentUnavailableView("No renderer packages are installed on this Mac.", systemImage: "square.stack.3d.up.slash")
                 } else {
                     ForEach(model.rows) { row in
                         rendererRow(row, model: model)

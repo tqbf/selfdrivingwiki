@@ -18,7 +18,7 @@ struct RendererSettingsPackagePickerTests {
         #expect(RendererSettingsPackagePicker.localImportStorageMessage == "Self Driving Wiki validates and copies it for use on this Mac.")
         #expect(RendererSettingsPackagePicker.localImportAfterMessage == "The selected source folder is not used after import.")
         #expect(panel.prompt == "Import Renderer Package…")
-        #expect(panel.message == "Package format v1 accepts one local directory. Files and archives are not supported.")
+        #expect(panel.message == "Select one local renderer package folder as an import source. Self Driving Wiki validates and copies it. The selected source folder is not used after import. Files and archives are not supported.")
 
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("renderer-picker-\(UUID().uuidString)", isDirectory: true)
