@@ -1278,6 +1278,12 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     decisionHandler(.cancel)
                     return
                 }
+                // A fragment-only link resolves against the synthetic reader origin.
+                // Allow it so WKWebView scrolls to the target within this document.
+                if WikiReaderOrigin.isSameDocumentFragment(url) {
+                    decisionHandler(.allow)
+                    return
+                }
                 // Relative links in source markdown (e.g. `[Back to README](../README.md)`)
                 // are not `[[wikilinks]]`, so `RelativeLinkRewriter` leaves them as raw
                 // `<a href>`. WKWebView resolves them against the synthetic reader origin
