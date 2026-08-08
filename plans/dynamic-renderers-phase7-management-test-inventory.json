@@ -3,10 +3,10 @@
   "issue": 1026,
   "phase": 7,
   "slice": 1,
-  "parentSHA": "930e92de12d3bfa8f24f4e39ec3d0229c40840e4",
+  "parentSHA": "7e01f947d45b71fb7e5cf51d36ea693ebe6ebef6",
   "prBaseBranch": "feature/dynamic-renderers-06-excalidraw-json-canvas",
   "prBaseSHA": "71c085250bc40614f7169394ef2bab444d147bf4",
-  "headSHA": "4feec36454321d4b9f268e6f865125d96d8784d4",
+  "headSHA": "e80f00181d84580ac303f1d57ca03ad238bebd96",
   "headSHASemantics": "This is the exact implementation and focused-test commit. The following documentation-only commit records the evidence.",
   "scope": "Native Renderers settings management over the existing machine package store and wiki renderer-settings seams.",
   "productionPaths": [

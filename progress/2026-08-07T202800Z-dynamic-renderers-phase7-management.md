@@ -11,7 +11,7 @@ phase: 7
 
 ## Progress
 
-Commit `a329e877` adds the native Renderers settings workflow on top of the existing package and wiki stores. Commit `30ea96cc` adds the settings-surface contract test. Commit `4feec364` retains a redacted removal tombstone while deleting the package payload and allows the machine index to read that intentional no-payload state.
+Commit `a329e877` adds the native Renderers settings workflow on top of the existing package and wiki stores. Commit `30ea96cc` adds the settings-surface contract test. Commit `4feec364` retains a redacted removal tombstone while deleting the package payload and allows the machine index to read that intentional no-payload state. Commit `e80f0018` corrects settings diagnostic interpolation and the management section heading.
 
 The settings tab shows two scopes. “Installed on This Mac” reports package versions from the machine index. “Enabled for This Wiki” writes only the current wiki enablement row.
 
@@ -31,6 +31,7 @@ Removal retains a redacted `.removed` machine record and deletes the package pay
 - Observed: the pre-commit lint hook reported zero violations and no new bare `try?` use for both commits.
 - Observed: `git diff --check` passed before each commit.
 - Observed: the inventory bidirectional resolver passed after adding the removed-tombstone validator path.
+- Observed: opted-in settings/picker tests passed again after the diagnostic and heading correction.
 - Hosted Settings window validation, independent Phase 7 review, and PR CI remain pending.
 
 ## Limits
