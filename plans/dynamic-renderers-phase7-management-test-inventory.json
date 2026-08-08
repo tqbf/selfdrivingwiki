@@ -3,10 +3,10 @@
   "issue": 1026,
   "phase": 7,
   "slice": 1,
-  "parentSHA": "7e01f947d45b71fb7e5cf51d36ea693ebe6ebef6",
+  "parentSHA": "2864c339d1c786d174e01eef3f42011e196c91d7",
   "prBaseBranch": "feature/dynamic-renderers-06-excalidraw-json-canvas",
   "prBaseSHA": "71c085250bc40614f7169394ef2bab444d147bf4",
-  "headSHA": "e80f00181d84580ac303f1d57ca03ad238bebd96",
+  "headSHA": "924ecc81050b8ca96b76c3b910a8cddbbdf03562",
   "headSHASemantics": "This is the exact implementation and focused-test commit. The following documentation-only commit records the evidence.",
   "scope": "Native Renderers settings management over the existing machine package store and wiki renderer-settings seams.",
   "productionPaths": [
@@ -17,8 +17,8 @@
     },
     {
       "path": "Sources/WikiFS/Settings/RendererSettingsView.swift",
-      "symbols": ["RendererSettingsModel", "RendererSettingsView", "RendererSettingsRow"],
-      "tests": ["RendererSettingsManagementViewTests.settingsSurfaceUsesApprovedScopesAndCopy"]
+      "symbols": ["RendererSettingsModel", "RendererSettingsModel.updateWiki", "RendererSettingsView", "RendererSettingsRow"],
+      "tests": ["RendererSettingsManagementViewTests.settingsSurfaceUsesApprovedScopesAndCopy", "RendererSettingsManagementViewTests.settingsModelTracksCurrentWikiStore"]
     },
     {
       "path": "Sources/WikiFS/Window/WikiFSApp.swift",
@@ -27,7 +27,7 @@
     },
     {
       "path": "Sources/WikiFSCore/Core/RendererMachineIndexStore.swift",
-      "symbols": ["remove(packageID:version:)", "remove(packageID:version:expectedGeneration:)"],
+      "symbols": ["remove(packageID:version:)", "remove(packageID:version:expectedGeneration:)", "RendererMachineIndexStoreError.packageRemovalFailed"],
       "tests": ["RendererSettingsManagementTests.removalPreservesMachineBoundary"]
     },
     {
@@ -56,7 +56,7 @@
     "success": [
       "The Renderers tab exposes Installed on This Mac and Enabled for This Wiki as separate scopes.",
       "Installation accepts one local directory and routes it through validation and machine-store activation.",
-      "Removal retains a redacted removed machine record, deletes only the package payload, and leaves wiki enablement and source preferences separate.",
+      "Removal validates its payload path before mutation, retains a redacted removed machine record, deletes only the package payload, and reports cleanup failure instead of claiming success.",
       "Safe-mode reset refreshes the host projection. Registry refresh does not mutate active session pins.",
       "Source version selection stores an exact typed renderer reference.",
       "Diagnostics use progressive disclosure and the settings surface uses semantic body text and system colors."
@@ -83,9 +83,10 @@
     "Source data deletion or migration"
   ],
   "honestCoverageLimits": [
-    "The settings view contract test reads source text. It does not host a Settings window.",
+    "The settings view contract test reads source text. It does not host a Settings window; the model regression test verifies that the adapter switches stores when the active wiki changes.",
     "The focused version test proves the exact preference type. It does not create a live source database.",
     "Full installation through a real user-selected package requires a hosted app test and remains a later Phase 7 validation slice.",
-    "The current implementation does not add a second renderer registry or change active pane lifecycle."
+    "The current implementation does not add a second renderer registry or change active pane lifecycle.",
+    "Removed tombstones retain their expected package hash as a fail-closed reservation; reinstalling the same package ID/version requires the same reviewed hash."
   ]
 }
