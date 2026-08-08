@@ -4,7 +4,7 @@
   "phase": 8,
   "slice": "recovery",
   "baseSHA": "609dc66f0e0b13c298ab528e46fdf74bf4a420ce",
-  "headSHA": "f77031f3303af197a648e27adfba6ec314995abd",
+  "headSHA": "2e097ee5c0ab9309e5463ef6a78f14b7156545f4",
   "scope": "Complete the approved Phase 8 import UX and preserved amendments against integrated Phase 7 main.",
   "productionSymbols": [
     {
@@ -106,7 +106,7 @@
       "symbols": ["RendererPackageGuide.text"],
       "tests": ["RendererPackageDocumentationTests.maintainer skill and staged guide state machine-wide availability"],
       "branches": {
-        "success": ["bounded current package guide is available from the WikiFSCore resource bundle"],
+        "success": ["bounded WIKI_STATE chat reference is available from the WikiFSCore resource bundle"],
         "error": ["missing or unreadable bundled guide fails closed during resource loading; defensive branch is not independently injectable because Bundle.module resources are immutable in production"],
         "boundary": ["guide is chat reference only and does not execute a skill or enter the system prompt"]
       }
@@ -116,14 +116,14 @@
       "symbols": ["WikiStateSnapshot.render"],
       "tests": ["AgentStagingTests.stateFileRendersTitlesIndexAndLog", "AgentStagingTests.stateFileHandlesFreshAndEmptyWiki"],
       "branches": {
-        "success": ["bounded current package guide is appended to staged WIKI_STATE.md"],
+        "success": ["bounded WIKI_STATE chat reference is appended to staged WIKI_STATE.md"],
         "boundary": ["state output remains a staged chat reference and does not become a system prompt"],
         "teardown": ["state staging retains the existing source/page staging contract"]
       }
     },
     {
       "path": "Package.swift",
-      "symbols": ["WikiFSCore resource declaration for current-package-guide.md", "WikiFS app resource declaration for RendererPackages/Excalidraw"],
+      "symbols": ["WikiFSCore resource declaration for wiki-state-chat-reference.md", "WikiFS app resource declaration for RendererPackages/Excalidraw"],
       "tests": ["RendererPackageDocumentationTests.maintainer skill and staged guide state machine-wide availability"],
       "branches": {
         "success": ["SwiftPM declares both bounded resources"],
@@ -149,7 +149,7 @@
       }
     }
   ],
-  "resourceAndBuildChanges": ["Package.swift", "docs/skills/renderer-package-maintainer/SKILL.md", "docs/skills/renderer-package-maintainer/references/current-package-guide.md"],
+  "resourceAndBuildChanges": ["Package.swift", "build.sh", "docs/skills/renderer-package-maintainer/SKILL.md", "docs/skills/renderer-package-maintainer/references/current-package-guide.md", "docs/skills/renderer-package-maintainer/references/wiki-state-chat-reference.md"],
   "testPaths": [
     "Tests/WikiFSAppTests/InstalledRendererHostTests.swift",
     "Tests/WikiFSAppTests/RendererSettingsManagementViewTests.swift",
