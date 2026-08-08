@@ -66,7 +66,7 @@ final class RendererSettingsModel {
             lastError = "The renderer version could not be removed."
             return
         }
-        diagnostic = "Removed (row.record.packageID.rawValue) \(row.record.version.rawValue). Source data and wiki preferences were preserved."
+        diagnostic = "Removed \(row.record.packageID.rawValue) \(row.record.version.rawValue). Source data and wiki preferences were preserved."
         rebuildRows()
     }
 
@@ -80,7 +80,7 @@ final class RendererSettingsModel {
             lastError = "Safe-mode reset was rejected."
             return
         }
-        diagnostic = "Safe mode reset for (row.record.packageID.rawValue) \(row.record.version.rawValue)."
+        diagnostic = "Safe mode reset for \(row.record.packageID.rawValue) \(row.record.version.rawValue)."
         rebuildRows()
     }
 
@@ -109,7 +109,7 @@ final class RendererSettingsModel {
         wiki.setRendererSourcePreference(
             sourceID: source,
             preference: .exact(descriptor.reference))
-        diagnostic = "Selected (descriptor.displayName) \(descriptor.reference.version.rawValue) for this source."
+        diagnostic = "Selected \(descriptor.displayName) \(descriptor.reference.version.rawValue) for this source."
     }
 
     func descriptors(for row: RendererSettingsRow) -> [RendererDescriptor] {
@@ -155,7 +155,7 @@ struct RendererSettingsView: View {
                 }
                 .disabled(model.isBusy)
             } header: {
-                Text("Installed on This Mac")
+                Text("Package Management")
             }
 
             Section {
