@@ -7,8 +7,8 @@ import WikiFSCore
 @Suite(.serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct RendererSettingsManagementViewTests {
-    @Test("settings surface exposes the approved management scopes and copy")
-    func settingsSurfaceUsesApprovedScopesAndCopy() throws {
+    @Test("settings surface exposes machine installation without wiki enablement controls")
+    func settingsSurfaceUsesMachineInstallationScopesAndCopy() throws {
         let repositoryRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -19,7 +19,6 @@ struct RendererSettingsManagementViewTests {
             encoding: .utf8)
 
         #expect(source.contains("Installed on This Mac"))
-        #expect(source.contains("Enabled for This Wiki"))
         #expect(source.contains("No renderer packages are installed on this Mac."))
         #expect(source.contains("Advanced Local Renderer Package Import"))
         #expect(source.contains("RendererSettingsPackagePicker.localImportSourceMessage"))
@@ -39,6 +38,11 @@ struct RendererSettingsManagementViewTests {
         #expect(source.contains("model.updateWiki(wiki)"))
         #expect(source.contains(".font(.body)"))
         #expect(!source.contains(".font(.system(size:"))
+        #expect(!source.contains("Enabled for This Wiki"))
+        #expect(!source.contains("Enablement applies only to the currently open wiki."))
+        #expect(!source.contains("setRendererWikiEnablement"))
+        #expect(!source.contains("rendererWikiEnablement(for:"))
+        #expect(!source.contains("isEnabledForWiki"))
     }
 
     @Test("settings model follows the current wiki store")

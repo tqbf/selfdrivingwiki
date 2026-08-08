@@ -146,6 +146,9 @@ public struct WikiStateSnapshot: Equatable, Sendable {
       lines.append(Self.renderBookmarkTree(bookmarkNodes))
     }
 
+    lines.append("")
+    lines.append(RendererPackageGuide.text)
+
     return lines.joined(separator: "\n") + "\n"
   }
 

@@ -272,6 +272,29 @@ public actor RendererMachineIndexStore {
                     else { throw RendererMachineIndexStoreError.activationFailed }
                     cleanupTarget = .staging(revalidated.stagedRoot)
 
+                    // Inspect the index while the coordinator lock is held
+                    // before the no-replace move. A filesystem collision only
+                    // says that a path exists. The index is authoritative for
+                    // whether that exact package/version is an idempotent
+                    // installation or a conflicting hash.
+                    let current = try storage.readOrInitialize()
+                    if let existing = current.records.first(where: {
+                        $0.packageID == revalidated.manifest.packageID &&
+                        $0.version == revalidated.manifest.version
+                    }) {
+                        guard existing.expectedPackageHash == revalidated.packageHash else {
+                            throw RendererMachineIndexStoreError.conflictingExpectedHash
+                        }
+                        if existing.state == .validated {
+                            try rendererMachineActivationCleanup(
+                                .staging(revalidated.stagedRoot),
+                                layout: layout,
+                                cleaner: activationCleaner)
+                            cleanupTarget = nil
+                            return current
+                        }
+                    }
+
                     let destination = layout.packageURL(packageID: revalidated.manifest.packageID, version: revalidated.manifest.version)
                     try rendererMachineActivationEnsureDirectory(layout.packagesRoot)
                     try rendererMachineActivationEnsureDirectory(destination.deletingLastPathComponent())
@@ -286,7 +309,6 @@ public actor RendererMachineIndexStore {
                     }
 
                     try Task.checkCancellation()
-                    _ = try storage.readOrInitialize()
                     let timestamp = clock.now()
                     return try storage.mutate(expectedGeneration: expectedGeneration) { records, _ in
                         let existing = records.first {

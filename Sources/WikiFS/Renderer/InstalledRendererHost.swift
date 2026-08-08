@@ -55,6 +55,43 @@ final class InstalledRendererHost {
         }
     }
 
+    /// Validates and activates the reviewed Excalidraw resource through the
+    /// same staged package path as a local directory import. A broken bundle or
+    /// conflicting installed hash fails closed while Source and native renderers
+    /// stay available through the refreshed machine snapshot.
+    func bootstrapBundledRendererPackages() async {
+        guard let machineStore, let layout else {
+            await refresh()
+            return
+        }
+        guard let packageURL = BundledRendererPackages.excalidrawResourceURL() else {
+            DebugLog.store("Bundled Excalidraw renderer resource was unavailable; using Source fallback.")
+            await refresh()
+            return
+        }
+        do {
+            let validator = RendererPackageValidator(
+                packageRoot: layout.root,
+                stagingRoot: layout.stagingRoot)
+            let package = try validator.validate(directory: packageURL)
+            guard package.manifest.packageID == BundledRendererPackages.excalidrawPackageID,
+                  package.manifest.version == BundledRendererPackages.excalidrawVersion,
+                  package.manifest.descriptors.contains(where: {
+                      $0.reference.registrationID == BundledRendererPackages.excalidrawRegistrationID
+                  })
+            else {
+                DebugLog.store("Bundled Excalidraw renderer resource had an unexpected identity; using Source fallback.")
+                await refresh()
+                return
+            }
+            let current = try await machineStore.read()
+            _ = try await machineStore.activate(package, expectedGeneration: current.generation)
+        } catch {
+            DebugLog.store("Bundled Excalidraw renderer bootstrap failed; using Source fallback.")
+        }
+        await refresh()
+    }
+
     /// Validates and activates one local directory through the same machine
     /// store used by renderer sessions. No archive or caller-owned path enters
     /// the installed package root.

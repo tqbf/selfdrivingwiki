@@ -61,22 +61,41 @@ struct RendererPackageActivationTests {
         #expect(try await store.read().availableDescriptorProjection == fixture.manifest.descriptors)
     }
 
-    @Test func existingDestinationIsAnExplicitConflictAndCleansOnlyStaging() async throws {
+    @Test func existingIdenticalPackageVersionIsAnIdempotentNoOp() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
         let package = try fixture.validate()
         let store = RendererMachineIndexStore(layout: fixture.layout)
         _ = try await store.read()
-        _ = try await store.activate(package, expectedGeneration: 0, clock: fixture.clock)
+        let activated = try await store.activate(package, expectedGeneration: 0, clock: fixture.clock)
         let retry = try fixture.validate()
         let root = fixture.layout.packageURL(packageID: fixture.packageID, version: fixture.version)
 
-        await #expect(throws: RendererMachineIndexStoreError.packageRootAlreadyExists) {
-            try await store.activate(retry, expectedGeneration: 1, clock: fixture.clock)
-        }
+        let repeated = try await store.activate(retry, expectedGeneration: activated.generation, clock: fixture.clock)
 
         #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("index.html").path))
         #expect(FileManager.default.fileExists(atPath: retry.stagedRoot.path) == false)
+        #expect(repeated == activated)
+    }
+
+    @Test func existingConflictingPackageVersionFailsBeforeTheNoReplaceMove() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let package = try fixture.validate()
+        let store = RendererMachineIndexStore(layout: fixture.layout)
+        _ = try await store.read()
+        let activated = try await store.activate(package, expectedGeneration: 0, clock: fixture.clock)
+        try fixture.rewrite(contents: Data("different renderer payload".utf8))
+        let conflicting = try fixture.validate()
+        let root = fixture.layout.packageURL(packageID: fixture.packageID, version: fixture.version)
+
+        await #expect(throws: RendererMachineIndexStoreError.conflictingExpectedHash) {
+            try await store.activate(conflicting, expectedGeneration: activated.generation, clock: fixture.clock)
+        }
+
+        #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("index.html").path))
+        #expect(FileManager.default.fileExists(atPath: conflicting.stagedRoot.path) == false)
+        #expect(try await store.read() == activated)
     }
 
     @Test func activationHashConflictRollsBackNewlyMovedPackage() async throws {

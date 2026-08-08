@@ -13,15 +13,15 @@ struct RendererSettingsRow: Identifiable, Hashable {
     let record: RendererPackageInstallRecord
     let displayName: String
     let registrations: [String]
-    let isEnabledForWiki: Bool
 
     var id: String { "\(record.packageID.rawValue)@\(record.version.rawValue)" }
 }
 
-/// Settings-facing adapter for the two renderer scopes. It deliberately owns
-/// no renderer-resolution state: the machine index and WikiStoreModel remain
-/// authoritative, while InstalledRendererHost refreshes only future registry
-/// snapshots. Existing panes retain their pinned reference.
+/// Settings-facing adapter for machine package management and source-specific
+/// preferences. It deliberately owns no renderer-resolution state: the machine
+/// index and WikiStoreModel remain authoritative, while InstalledRendererHost
+/// refreshes only future registry snapshots. Existing panes retain their pinned
+/// reference.
 @MainActor
 @Observable
 final class RendererSettingsModel {
@@ -39,9 +39,9 @@ final class RendererSettingsModel {
         rebuildRows()
     }
 
-    /// Settings is app-scoped, while wiki enablement and source preferences are
-    /// session-scoped. Refresh the adapter whenever the active session changes
-    /// so a long-lived Settings scene never writes through a stale store.
+    /// Settings is app-scoped, while source preferences are session-scoped.
+    /// Refresh the adapter whenever the active session changes so a long-lived
+    /// Settings scene never writes through a stale store.
     func updateWiki(_ wiki: WikiStoreModel?) {
         guard self.wiki !== wiki else { return }
         self.wiki = wiki
@@ -93,16 +93,6 @@ final class RendererSettingsModel {
         rebuildRows()
     }
 
-    func setEnabled(_ row: RendererSettingsRow, enabled: Bool) {
-        guard let wiki else {
-            lastError = "Open a wiki before changing renderer enablement."
-            return
-        }
-        wiki.setRendererWikiEnablement(packageID: row.record.packageID, isEnabled: enabled)
-        diagnostic = enabled ? "Enabled for this wiki." : "Disabled for this wiki."
-        rebuildRows()
-    }
-
     func report(error: String) {
         lastError = error
     }
@@ -136,8 +126,7 @@ final class RendererSettingsModel {
                 return RendererSettingsRow(
                     record: record,
                     displayName: descriptor?.displayName ?? record.packageID.rawValue,
-                    registrations: record.validatedDescriptors.map { $0.reference.registrationID.rawValue },
-                    isEnabledForWiki: wiki?.rendererWikiEnablement(for: record.packageID) ?? false)
+                    registrations: record.validatedDescriptors.map { $0.reference.registrationID.rawValue })
             }
     }
 }
@@ -195,17 +184,6 @@ struct RendererSettingsView: View {
 
             Section {
                 if let wiki = model.wiki {
-                    Text("Enablement applies only to the currently open wiki.")
-                        .foregroundStyle(.secondary)
-                    ForEach(model.rows) { row in
-                        Toggle(isOn: Binding(
-                            get: { row.isEnabledForWiki },
-                            set: { model.setEnabled(row, enabled: $0) })) {
-                            Label(row.displayName, systemImage: "book")
-                        }
-                        .accessibilityValue(row.isEnabledForWiki ? "Enabled" : "Disabled")
-                        .disabled(model.isBusy || row.record.state != .validated)
-                    }
                     if wiki.sources.isEmpty {
                         Text("Add a source to choose an exact renderer version.")
                             .foregroundStyle(.secondary)
@@ -213,11 +191,11 @@ struct RendererSettingsView: View {
                         sourceVersionControls(model: model)
                     }
                 } else {
-                    Text("Open a wiki to manage enablement and version selection.")
+                    Text("Open a wiki to choose an exact renderer version for a source.")
                         .foregroundStyle(.secondary)
                 }
             } header: {
-                Text("Enabled for This Wiki")
+                Text("Source Renderer Preferences")
             }
 
             if let diagnostic = model.diagnostic {
