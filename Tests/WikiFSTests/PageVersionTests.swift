@@ -641,14 +641,14 @@ struct PageVersionTests {
     }
 
     /// AC.8 (migration ladder sanity) — a fresh DB must report the current
-    /// `user_version`. The v49 step adds the dynamic renderer wiki settings
-    /// and journal foundation.
-    @Test func v49SchemaVersionAfterMigration() throws {
-        #expect(GRDBWikiStore.schemaVersion == 49,
+    /// `user_version`. The v50 step adds source-scoped renderer presentation
+    /// modes after the renderer settings and journal foundation.
+    @Test func v50SchemaVersionAfterMigration() throws {
+        #expect(GRDBWikiStore.schemaVersion == 50,
                 "schemaVersion must report the current migration version")
         let store = try tempStore()
         let v = store.pragmaValue("user_version")
-        #expect(v == "49", "fresh DB stamps user_version = 49 (got \(v))")
+        #expect(v == "50", "fresh DB stamps user_version = 50 (got \(v))")
     }
 
     // MARK: - #817: pageVersionBody (read arbitrary version body)

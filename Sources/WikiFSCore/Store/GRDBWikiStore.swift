@@ -145,7 +145,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// databases produced by that store carry `PRAGMA user_version` up to 37, and
     /// this store must recognize them as already-current so the ladder is a no-op
     /// on re-open (the proven `if version < N`)
-    private static let currentSchemaVersion = 49
+    private static let currentSchemaVersion = 50
     /// The current schema version (mirrors the former
     /// `SQLiteWikiStore.currentSchemaVersion`). Public so tests can assert the
     /// migration ladder landed at the expected `user_version`.
@@ -1474,6 +1474,18 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             version = 49
         }
 
+        // v49→v50: source-scoped presentation modes are independent of
+        // renderer references, so an automatic renderer choice can still
+        // restore Rendered or Split without inventing a stored preference.
+        if version < 50 {
+            try db.inTransaction(.immediate) {
+                try Self.createRendererSourcePresentationsTableV50(in: db)
+                try db.execute(sql: "PRAGMA user_version = 50;")
+                return .commit
+            }
+            version = 50
+        }
+
         // Catch-all fallback: any DB older than `currentSchemaVersion` whose
         // per-step work has not been added above (the steady-state guard for a
         // genuine currentSchemaVersion bump). Drops FTS5 + stamps
@@ -1621,6 +1633,21 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             subsystem_id TEXT PRIMARY KEY,
             sequence INTEGER NOT NULL CHECK (sequence >= 0),
             updated_at TEXT NOT NULL
+        );
+        """)
+        try createRendererSourcePresentationsTableV50(in: db)
+    }
+
+    private static func createRendererSourcePresentationsTableV50(in db: Database) throws {
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS renderer_source_presentations (
+            source_id TEXT PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
+            presentation_mode TEXT NOT NULL CHECK (presentation_mode IN ('source', 'rendered', 'split')),
+            updated_at TEXT NOT NULL CHECK (
+                length(updated_at) >= 25 AND
+                substr(updated_at, -6, 1) IN ('+', '-') AND
+                substr(updated_at, -3, 1) = ':'
+            )
         );
         """)
     }
@@ -3532,6 +3559,36 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    public func rendererSourcePresentation(sourceID: SourceID) throws -> RendererSourcePresentation? {
+        try dbWriter.read { db in
+            try Row.fetchOne(
+                db,
+                sql: "SELECT source_id, presentation_mode, updated_at FROM renderer_source_presentations WHERE source_id = ?;",
+                arguments: [sourceID.rawValue]
+            ).map(Self.rendererSourcePresentation(from:))
+        }
+    }
+
+    public func setRendererSourcePresentation(sourceID: SourceID, presentation: RendererSourcePresentationMode) throws {
+        let event = RendererSettingsChangeEvent.sourcePresentationSet(sourceID: sourceID, presentation: presentation)
+        try mutateRendererSettings(event: event) { db, committedAt in
+            try db.execute(sql: """
+            INSERT INTO renderer_source_presentations (source_id, presentation_mode, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(source_id) DO UPDATE SET
+                presentation_mode = excluded.presentation_mode,
+                updated_at = excluded.updated_at;
+            """, arguments: [sourceID.rawValue, presentation.rawValue, committedAt.rawValue])
+        }
+    }
+
+    public func removeRendererSourcePresentation(sourceID: SourceID) throws {
+        let event = RendererSettingsChangeEvent.sourcePresentationRemoved(sourceID: sourceID)
+        try mutateRendererSettings(event: event) { db, _ in
+            try db.execute(sql: "DELETE FROM renderer_source_presentations WHERE source_id = ?;", arguments: [sourceID.rawValue])
+        }
+    }
+
     public func rendererSettingsJournalRecords() throws -> [PersistedWikiStoreChangeRecord] {
         try dbWriter.read { db in
             try Row.fetchAll(db, sql: """
@@ -3625,6 +3682,16 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             preference: rendererPreferenceReference(from: row),
             updatedAt: RFC3339Timestamp(validating: row["updated_at"])
         )
+    }
+
+    private static func rendererSourcePresentation(from row: Row) throws -> RendererSourcePresentation {
+        guard let presentation = RendererSourcePresentationMode(rawValue: row["presentation_mode"]) else {
+            throw WikiStoreError.unexpected("Unknown renderer source presentation mode")
+        }
+        return try RendererSourcePresentation(
+            sourceID: SourceID(rawValue: row["source_id"]),
+            presentation: presentation,
+            updatedAt: RFC3339Timestamp(validating: row["updated_at"]))
     }
 
     private static func rendererJournalRecord(from row: Row) throws -> PersistedWikiStoreChangeRecord {

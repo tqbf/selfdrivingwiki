@@ -24,6 +24,102 @@ public struct RendererMachineScopeID: RawRepresentable, Codable, Hashable, Senda
     }
 
     public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+
+}
+
+/// Lifecycle state recorded for an immutable renderer package version.
+/// A3 persists all cases but deliberately exposes none to the renderer registry.
+public enum RendererPackageInstallState: String, Codable, CaseIterable, Hashable, Sendable {
+    case unvalidated
+    case validated
+    case quarantined
+    case removed
+}
+
+/// A closed, redacted install diagnostic. It has no free-form text by design:
+/// machine records must never retain package/source bytes, credentials, paths,
+/// or untrusted validator output.
+public enum RendererPackageInstallDiagnostic: String, Codable, CaseIterable, Hashable, Sendable {
+    case packageValidationFailed
+    case packageQuarantined
+    case packageRemoved
+    case indexConsistencyFailure
+}
+
+/// One immutable package-version reservation in the machine index.
+public struct RendererPackageInstallRecord: Codable, Hashable, Sendable, Comparable {
+    public let packageID: RendererPackageID
+    public let version: RendererPackageVersion
+    public let expectedPackageHash: RendererSHA256Digest
+    public let state: RendererPackageInstallState
+    public let reservedAt: RFC3339Timestamp
+    public let updatedAt: RFC3339Timestamp
+    public let diagnostic: RendererPackageInstallDiagnostic?
+    public let rollbackCandidate: RendererPackageVersion?
+    /// Normalized registrations copied from a validator-produced manifest after
+    /// the immutable package root has been activated. This remains machine-only
+    /// metadata and never enters wiki or File Provider persistence.
+    public let validatedDescriptors: [RendererDescriptor]
+
+    public init(
+        packageID: RendererPackageID,
+        version: RendererPackageVersion,
+        expectedPackageHash: RendererSHA256Digest,
+        state: RendererPackageInstallState,
+        reservedAt: RFC3339Timestamp,
+        updatedAt: RFC3339Timestamp,
+        diagnostic: RendererPackageInstallDiagnostic? = nil,
+        rollbackCandidate: RendererPackageVersion? = nil,
+        validatedDescriptors: [RendererDescriptor] = []
+    ) throws {
+        guard reservedAt <= updatedAt, rollbackCandidate != version else {
+            throw RendererValidationError.invalidIdentifier(kind: "renderer package install record", value: "inconsistent record")
+        }
+        let descriptors = validatedDescriptors.sorted { $0.reference < $1.reference }
+        guard Set(descriptors.map(\.reference)).count == descriptors.count,
+              descriptors.allSatisfy({ $0.reference.packageID == packageID && $0.reference.version == version })
+        else {
+            throw RendererValidationError.invalidIdentifier(kind: "renderer package install record", value: "inconsistent validated descriptors")
+        }
+        guard state != .validated || descriptors.isEmpty == false else {
+            throw RendererValidationError.invalidIdentifier(kind: "renderer package install record", value: "validated record missing descriptors")
+        }
+        guard state == .validated || descriptors.isEmpty else {
+            throw RendererValidationError.invalidIdentifier(kind: "renderer package install record", value: "unavailable record has descriptors")
+        }
+        self.packageID = packageID
+        self.version = version
+        self.expectedPackageHash = expectedPackageHash
+        self.state = state
+        self.reservedAt = reservedAt
+        self.updatedAt = updatedAt
+        self.diagnostic = diagnostic
+        self.rollbackCandidate = rollbackCandidate
+        self.validatedDescriptors = descriptors
+    }
+
+    public static func < (lhs: Self, rhs: Self) -> Bool {
+        (lhs.packageID, lhs.version) < (rhs.packageID, rhs.version)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case packageID, version, expectedPackageHash, state, reservedAt, updatedAt, diagnostic, rollbackCandidate, validatedDescriptors
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            packageID: container.decode(RendererPackageID.self, forKey: .packageID),
+            version: container.decode(RendererPackageVersion.self, forKey: .version),
+            expectedPackageHash: container.decode(RendererSHA256Digest.self, forKey: .expectedPackageHash),
+            state: container.decode(RendererPackageInstallState.self, forKey: .state),
+            reservedAt: container.decode(RFC3339Timestamp.self, forKey: .reservedAt),
+            updatedAt: container.decode(RFC3339Timestamp.self, forKey: .updatedAt),
+            diagnostic: try container.decodeIfPresent(RendererPackageInstallDiagnostic.self, forKey: .diagnostic),
+            rollbackCandidate: try container.decodeIfPresent(RendererPackageVersion.self, forKey: .rollbackCandidate),
+            validatedDescriptors: try container.decodeIfPresent([RendererDescriptor].self, forKey: .validatedDescriptors) ?? []
+        )
+    }
 }
 
 public struct RendererEventSubsystemID: RawRepresentable, Codable, Hashable, Sendable, Comparable {
@@ -117,6 +213,17 @@ public struct RFC3339Timestamp: RawRepresentable, Codable, Hashable, Sendable, C
 
     public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
 
+    /// Parses a persisted timestamp using the same RFC 3339 variants accepted
+    /// at construction. Persistence readers must not substitute a sentinel.
+    public func date() throws -> Date {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds, .withColonSeparatorInTimeZone]
+        if let date = formatter.date(from: rawValue) { return date }
+        formatter.formatOptions = [.withInternetDateTime, .withColonSeparatorInTimeZone]
+        if let date = formatter.date(from: rawValue) { return date }
+        throw RendererValidationError.invalidIdentifier(kind: "offset-bearing RFC3339 timestamp", value: rawValue)
+    }
+
     private static func isOffsetBearingRFC3339(_ value: String) -> Bool {
         guard value.contains("T"), value.count >= 25 else { return false }
         let suffix = value.suffix(6)
@@ -164,20 +271,157 @@ public struct RendererSourcePreference: Codable, Hashable, Sendable {
     }
 }
 
+/// The source-reader arrangement selected by a person. This is independent of
+/// renderer preference: a source can retain a rendered arrangement while the
+/// registry uses its deterministic default renderer choice.
+public enum RendererSourcePresentationMode: String, Codable, CaseIterable, Hashable, Sendable {
+    case source
+    case rendered
+    case split
+}
+
+public struct RendererSourcePresentation: Codable, Hashable, Sendable {
+    public let sourceID: SourceID
+    public let presentation: RendererSourcePresentationMode
+    public let updatedAt: RFC3339Timestamp
+
+    public init(sourceID: SourceID, presentation: RendererSourcePresentationMode, updatedAt: RFC3339Timestamp) {
+        self.sourceID = sourceID
+        self.presentation = presentation
+        self.updatedAt = updatedAt
+    }
+}
+
 public enum RendererSettingsChangeEvent: Codable, Hashable, Sendable {
     case machineInstallStateChanged(packageID: RendererPackageID, version: RendererPackageVersion)
     case machineSafeModeChanged(isEnabled: Bool)
     case wikiEnablementSet(packageID: RendererPackageID, isEnabled: Bool)
     case sourcePreferenceSet(sourceID: SourceID, preference: RendererPreferenceReference)
     case sourcePreferenceRemoved(sourceID: SourceID)
+    case sourcePresentationSet(sourceID: SourceID, presentation: RendererSourcePresentationMode)
+    case sourcePresentationRemoved(sourceID: SourceID)
 }
 
-public enum WikiStoreChangeEvent: Codable, Hashable, Sendable {
+/// The versioned body for renderer-settings changes. Version 1 was the
+/// unwrapped `RendererSettingsChangeEvent` persisted by Phase 3b; version 2
+/// wraps the event so Phase 4 can evolve its payload without changing the
+/// shared journal envelope.
+public struct PersistedRendererSettingsChangePayload: Codable, Hashable, Sendable {
+    public static let currentSchemaVersion = 2
+
+    public let schemaVersion: Int
+    public let event: RendererSettingsChangeEvent
+
+    fileprivate enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case event
+    }
+
+    public init(
+        schemaVersion: Int = Self.currentSchemaVersion,
+        event: RendererSettingsChangeEvent
+    ) throws {
+        try Self.validateSchemaVersion(schemaVersion)
+        self.schemaVersion = schemaVersion
+        self.event = event
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        try Self.validateSchemaVersion(schemaVersion)
+
+        self.schemaVersion = schemaVersion
+        self.event = try container.decode(RendererSettingsChangeEvent.self, forKey: .event)
+    }
+
+    private static func validateSchemaVersion(_ schemaVersion: Int) throws {
+        guard schemaVersion == currentSchemaVersion else {
+            throw RendererValidationError.unsupportedManifestRevision(schemaVersion)
+        }
+    }
+}
+
+public enum WikiStoreChangeEvent: Hashable, Sendable {
     case resource(ResourceChangeEvent)
     case rendererSettings(RendererSettingsChangeEvent)
 }
 
+extension WikiStoreChangeEvent: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case resource
+        case rendererSettings
+    }
+
+    private enum AssociatedValueCodingKeys: String, CodingKey {
+        case value = "_0"
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if container.contains(.resource) {
+            let resource = try container.decode(
+                AssociatedValue<ResourceChangeEvent>.self,
+                forKey: .resource
+            )
+            self = .resource(resource.value)
+            return
+        }
+
+        guard container.contains(.rendererSettings) else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: container.codingPath, debugDescription: "Unknown wiki store change event.")
+            )
+        }
+
+        let settingsContainer = try container.nestedContainer(
+            keyedBy: AssociatedValueCodingKeys.self,
+            forKey: .rendererSettings
+        )
+        let payloadContainer = try settingsContainer.nestedContainer(
+            keyedBy: PersistedRendererSettingsChangePayload.CodingKeys.self,
+            forKey: .value
+        )
+
+        if payloadContainer.contains(.schemaVersion) {
+            let payload = try settingsContainer.decode(
+                PersistedRendererSettingsChangePayload.self,
+                forKey: .value
+            )
+            self = .rendererSettings(payload.event)
+        } else {
+            let legacyEvent = try settingsContainer.decode(
+                RendererSettingsChangeEvent.self,
+                forKey: .value
+            )
+            self = .rendererSettings(legacyEvent)
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .resource(let resource):
+            try container.encode(AssociatedValue(value: resource), forKey: .resource)
+        case .rendererSettings(let event):
+            let payload = try PersistedRendererSettingsChangePayload(event: event)
+            try container.encode(AssociatedValue(value: payload), forKey: .rendererSettings)
+        }
+    }
+
+    private struct AssociatedValue<Value: Codable>: Codable {
+        let value: Value
+
+        private enum CodingKeys: String, CodingKey {
+            case value = "_0"
+        }
+    }
+}
+
 public struct PersistedWikiStoreChangeRecord: Codable, Hashable, Sendable {
+    /// Version of the shared persisted journal envelope.
+    public static let currentSchemaVersion = 1
+
     public let schemaVersion: Int
     public let eventID: UUID
     public let sequence: UInt64
@@ -185,23 +429,49 @@ public struct PersistedWikiStoreChangeRecord: Codable, Hashable, Sendable {
     public let payload: WikiStoreChangeEvent
     public let committedAt: RFC3339Timestamp
 
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion
+        case eventID
+        case sequence
+        case scope
+        case payload
+        case committedAt
+    }
+
     public init(
-        schemaVersion: Int = 1,
+        schemaVersion: Int = PersistedWikiStoreChangeRecord.currentSchemaVersion,
         eventID: UUID,
         sequence: UInt64,
         scope: WikiStoreChangeScope,
         payload: WikiStoreChangeEvent,
         committedAt: RFC3339Timestamp
     ) throws {
-        guard schemaVersion == 1 else {
-            throw RendererValidationError.unsupportedManifestRevision(schemaVersion)
-        }
+        try Self.validateSchemaVersion(schemaVersion)
         self.schemaVersion = schemaVersion
         self.eventID = eventID
         self.sequence = sequence
         self.scope = scope
         self.payload = payload
         self.committedAt = committedAt
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        try Self.validateSchemaVersion(schemaVersion)
+
+        self.schemaVersion = schemaVersion
+        self.eventID = try container.decode(UUID.self, forKey: .eventID)
+        self.sequence = try container.decode(UInt64.self, forKey: .sequence)
+        self.scope = try container.decode(WikiStoreChangeScope.self, forKey: .scope)
+        self.payload = try container.decode(WikiStoreChangeEvent.self, forKey: .payload)
+        self.committedAt = try container.decode(RFC3339Timestamp.self, forKey: .committedAt)
+    }
+
+    private static func validateSchemaVersion(_ schemaVersion: Int) throws {
+        guard schemaVersion == currentSchemaVersion else {
+            throw RendererValidationError.unsupportedManifestRevision(schemaVersion)
+        }
     }
 }
 
@@ -212,6 +482,26 @@ public protocol RendererEventIDGenerating: Sendable {
 public struct UUIDRendererEventIDGenerator: RendererEventIDGenerating {
     public init() {}
     public func nextEventID() -> UUID { UUID() }
+}
+
+/// Supplies a candidate sequence for a machine journal append. The journal
+/// validates it against its durable scoped high-water mark before committing.
+public protocol RendererEventSequenceGenerating: Sendable {
+    func nextSequence(after: UInt64) -> UInt64
+}
+
+public struct DurableRendererEventSequenceGenerator: RendererEventSequenceGenerating {
+    public init() {}
+    public func nextSequence(after sequence: UInt64) -> UInt64 { sequence + 1 }
+}
+
+public protocol RendererEventProcessLeaseIDGenerating: Sendable {
+    func nextLeaseID() -> RendererEventProcessLeaseID
+}
+
+public struct UUIDRendererEventProcessLeaseIDGenerator: RendererEventProcessLeaseIDGenerating {
+    public init() {}
+    public func nextLeaseID() -> RendererEventProcessLeaseID { RendererEventProcessLeaseID() }
 }
 
 public protocol RendererEventClock: Sendable {
