@@ -9,7 +9,10 @@ import WikiFSCore
 /// URLs cannot enter the package-install workflow through another call path.
 @MainActor
 enum RendererSettingsPackagePicker {
-    static let installButtonTitle = "Install Renderer Directory"
+    static let importButtonTitle = "Import Renderer Package…"
+    static let localImportSourceMessage = "Select one local renderer package folder as an import source."
+    static let localImportStorageMessage = "Self Driving Wiki validates and copies it for use on this Mac."
+    static let localImportAfterMessage = "The selected source folder is not used after import."
     static let v1FormatMessage = "Package format v1 accepts one local directory. Files and archives are not supported."
 
     enum SelectionError: Error, Equatable {
@@ -28,8 +31,8 @@ enum RendererSettingsPackagePicker {
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = false
-        panel.prompt = installButtonTitle
-        panel.title = installButtonTitle
+        panel.prompt = importButtonTitle
+        panel.title = importButtonTitle
         panel.message = v1FormatMessage
     }
 

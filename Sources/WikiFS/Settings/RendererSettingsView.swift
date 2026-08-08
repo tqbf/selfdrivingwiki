@@ -160,12 +160,19 @@ struct RendererSettingsView: View {
         @Bindable var model = model
         Form {
             Section {
-                Text("Package format v1 accepts one local directory. Files and archives are not supported.")
-                    .foregroundStyle(.secondary)
-                Button("Install Renderer Directory", systemImage: "square.and.arrow.down") {
-                    showingPicker = true
+                DisclosureGroup("Advanced Local Renderer Package Import") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(RendererSettingsPackagePicker.localImportSourceMessage)
+                        Text(RendererSettingsPackagePicker.localImportStorageMessage)
+                        Text(RendererSettingsPackagePicker.localImportAfterMessage)
+                        Text(RendererSettingsPackagePicker.v1FormatMessage)
+                        Button(RendererSettingsPackagePicker.importButtonTitle, systemImage: "square.and.arrow.down") {
+                            showingPicker = true
+                        }
+                        .disabled(model.isBusy)
+                    }
                 }
-                .disabled(model.isBusy)
+                .accessibilityLabel("Advanced local renderer package import")
                 Button("Refresh Registry", systemImage: "arrow.clockwise") {
                     Task { await model.refresh() }
                 }

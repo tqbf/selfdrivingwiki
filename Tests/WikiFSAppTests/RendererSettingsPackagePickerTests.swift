@@ -13,7 +13,11 @@ struct RendererSettingsPackagePickerTests {
         #expect(panel.canChooseDirectories)
         #expect(!panel.canChooseFiles)
         #expect(!panel.allowsMultipleSelection)
-        #expect(panel.prompt == "Install Renderer Directory")
+        #expect(RendererSettingsPackagePicker.importButtonTitle == "Import Renderer Package…")
+        #expect(RendererSettingsPackagePicker.localImportSourceMessage == "Select one local renderer package folder as an import source.")
+        #expect(RendererSettingsPackagePicker.localImportStorageMessage == "Self Driving Wiki validates and copies it for use on this Mac.")
+        #expect(RendererSettingsPackagePicker.localImportAfterMessage == "The selected source folder is not used after import.")
+        #expect(panel.prompt == "Import Renderer Package…")
         #expect(panel.message == "Package format v1 accepts one local directory. Files and archives are not supported.")
 
         let root = FileManager.default.temporaryDirectory
