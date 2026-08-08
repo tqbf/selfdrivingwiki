@@ -30,6 +30,7 @@ struct DocumentationContractTests {
         "Deferred markdown-version namespace:",
     ]
     private static let sourceMarkdownVersionPlanPath = "plans/source-markdown-version-id-separation.md"
+    private static let dynamicRendererInventoryPath = "plans/dynamic-renderers-phase5-webview-test-inventory.json"
     private static let sourceMarkdownVersionProgressHeading = "# 2026-07-28 — SourceMarkdownVersionID separation (#956)"
     private static let requiredSourceMarkdownVersionPlanMarkers = [
         "Identifier boundary:",
@@ -125,6 +126,118 @@ struct DocumentationContractTests {
         #expect(progress.contains(Self.sourceMarkdownVersionProgressHeading))
         #expect(progress.contains("SourceMarkdownVersionAPISignatureManifestTests"))
         #expect(progress.contains("SourceMarkdownVersionIDPersistenceTests"))
+    }
+
+    @Test func dynamicRendererBridgeContractIsVersionPinnedAndNavigationScoped() throws {
+        let root = try #require(Self.locateRepositoryRoot())
+        let inventory = try String(
+            contentsOf: root.appendingPathComponent(Self.dynamicRendererInventoryPath),
+            encoding: .utf8
+        )
+
+        #expect(inventory.contains("ephemeral WebKit session lifecycle"))
+        #expect(inventory.contains("\"coveredSlices\": [0, 1, 2, 3, 4, 5]"))
+        #expect(inventory.contains("\"baseSHA\": \"933a0637fa5593c4fdba611edb380058b5838f71\""))
+        #expect(inventory.contains("\"headSHA\": \"4cc6bde004a03afc88e40f682c23b1598f421300\""))
+        #expect(inventory.contains("per-session capability-bound input.read"))
+        #expect(inventory.contains("SourceVersionID"))
+        #expect(inventory.contains("SourceMarkdownVersionID"))
+        #expect(inventory.contains("must not call live sourceContent(id:) for session input"))
+        #expect(inventory.contains("WikiAppWebViewSession"))
+        #expect(inventory.contains("navigation policy, actual WebKit provenance checks"))
+        #expect(inventory.contains("package/version-scoped installed-renderer safe mode"))
+        #expect(inventory.contains("Failure accounting stores only a package identity"))
+        #expect(inventory.contains("SwiftUI installed-renderer host and Source fallback"))
+        #expect(inventory.contains("per-session storage and file-isolation coverage"))
+        #expect(inventory.contains("ordinary CI runs the selected portable WebKit-facing suites"))
+        #expect(inventory.contains("does not run in ordinary CI"))
+        #expect(inventory.contains("does not claim a pass when disabled"))
+    }
+
+    @Test func dynamicRendererCISelectsPortableWebKitSuitesAndExcludesHostedNetworkControls() throws {
+        let root = try #require(Self.locateRepositoryRoot())
+        let workflow = try String(
+            contentsOf: root.appendingPathComponent(".github/workflows/ci.yml"),
+            encoding: .utf8
+        )
+
+        #expect(workflow.contains("WIKIFS_APP_TESTS: \"1\""))
+        #expect(workflow.contains("RendererPackageSchemeHandlerTests"))
+        #expect(workflow.contains("RendererContentWorldBridgeTests"))
+        #expect(workflow.contains("RendererExternalLinkRedemptionGateTests"))
+        #expect(workflow.contains("WikiAppWebViewSessionTests"))
+        #expect(workflow.contains("WikiAppWebViewTests"))
+        #expect(workflow.contains("RendererSessionIsolationTests"))
+        #expect(workflow.contains("RendererHostedWebKitHarnessTests"))
+        #expect(workflow.contains("WIKIFS_RENDERER_HOSTED_NETWORK_TESTS") == false)
+    }
+
+    @Test func dynamicRendererInventoryMapsEveryExistingProductionPathToResolvedTests() throws {
+        let root = try #require(Self.locateRepositoryRoot())
+        let data = try Data(contentsOf: root.appendingPathComponent(Self.dynamicRendererInventoryPath))
+        let inventory = try #require(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            "inventory must be a JSON object"
+        )
+        let productionPaths = try #require(inventory["productionPaths"] as? [[String: Any]])
+        let testPaths = try #require(inventory["testPaths"] as? [String])
+        try #require(productionPaths.isEmpty == false)
+        try #require(testPaths.isEmpty == false)
+
+        let testURLs = try testPaths.map { path in
+            let url = root.appendingPathComponent(path)
+            try #require(FileManager.default.fileExists(atPath: url.path), "missing listed test path: \(path)")
+            return url
+        }
+
+        for productionPath in productionPaths {
+            let path = try #require(productionPath["path"] as? String)
+            #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent(path).path), "missing listed production path: \(path)")
+            let symbols = try #require(productionPath["symbols"] as? [String])
+            let tests = try #require(productionPath["tests"] as? [String])
+            try #require(symbols.isEmpty == false, "production path has no symbols: \(path)")
+            try #require(tests.isEmpty == false, "production path has no tests: \(path)")
+
+            for testName in tests {
+                let functionName = try #require(testName.split(separator: ".").last)
+                let matches = testURLs.filter { url in
+                    (try? String(contentsOf: url, encoding: .utf8))?.contains("func \(functionName)(") == true
+                }
+                #expect(matches.count == 1, "inventory test must resolve exactly once: \(testName)")
+            }
+        }
+    }
+
+    @Test func rendererBridgeWebKitBoundaryIsExplicitlyScoped() throws {
+        let root = try #require(Self.locateRepositoryRoot())
+        let bridge = try String(
+            contentsOf: root.appendingPathComponent("Sources/WikiFS/Renderer/RendererContentWorldBridge.swift"),
+            encoding: .utf8
+        )
+        let session = try String(
+            contentsOf: root.appendingPathComponent("Sources/WikiFS/Renderer/WikiAppWebViewSession.swift"),
+            encoding: .utf8
+        )
+        let policy = try String(
+            contentsOf: root.appendingPathComponent("Sources/WikiFSCore/Renderer/RendererNavigationPolicy.swift"),
+            encoding: .utf8
+        )
+        let csp = try String(
+            contentsOf: root.appendingPathComponent("Sources/WikiFSCore/Renderer/RendererContentSecurityPolicy.swift"),
+            encoding: .utf8
+        )
+
+        #expect(bridge.contains("WKScriptMessageHandlerWithReply"))
+        #expect(bridge.contains("message.webView"))
+        #expect(bridge.contains("securityOrigin"))
+        #expect(bridge.contains("forMainFrameOnly: true"))
+        #expect(bridge.contains("rendererBridgeResponse"))
+        #expect(session.contains("RendererNavigationPolicy.decision"))
+        #expect(session.contains("decidePolicyFor navigationAction"))
+        #expect(session.contains("decisionHandler(.cancel)"))
+        #expect(session.contains("createWebViewWith"))
+        #expect(policy.contains("RendererPackageScheme.request"))
+        #expect(csp.contains("navigate-to") == false)
     }
 
     @Test func progressEntriesFollowTemplate() throws {

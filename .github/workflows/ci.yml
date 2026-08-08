@@ -104,6 +104,17 @@ jobs:
         env:
           WIKIFS_APP_TESTS: "1"
         run: xcrun swift test --parallel --num-workers 1 --filter 'ChatPresentationAPIManifestTests|DaemonChatUsageTests|DaemonChatControllerMetadataTests|DaemonChatControllerTests'
+      - name: Test Phase 5 portable WebKit-facing security suites
+        # This enables the macOS app-test target, then runs only the portable
+        # Phase 5 bridge, package-scheme, external-activation, and host/session
+        # lifecycle suites. It deliberately excludes RendererSessionIsolationTests
+        # (real WebKit data stores and windows) and RendererHostedWebKitHarnessTests
+        # (real HTTP/WSS receivers plus a login-keychain TLS identity). Ordinary CI
+        # therefore does not claim live WebSocket or storage-isolation coverage.
+        timeout-minutes: 15
+        env:
+          WIKIFS_APP_TESTS: "1"
+        run: xcrun swift test --parallel --num-workers 1 --filter 'RendererPackageSchemeHandlerTests|RendererContentWorldBridgeTests|RendererExternalLinkRedemptionGateTests|WikiAppWebViewSessionTests|WikiAppWebViewTests'
 
   # Linux Swift CI (#754) — builds and tests the portable target
   # (WikiFSCoreTests) on ubuntu-latest. Validates the macOS/Linux

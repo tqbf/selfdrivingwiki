@@ -121,6 +121,32 @@ struct RendererPackageActivationTests {
         #expect(try await store.read().records.isEmpty)
     }
 
+    @Test func coordinatorFailurePreservesCallerOwnedStaging() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let package = try fixture.validate()
+        _ = try await RendererMachineIndexStore(layout: fixture.layout).read()
+        let coordinator = RendererPackageStoreCoordinator(
+            layout: fixture.layout,
+            processIdentity: RendererProcessIdentity(processID: 42, executableIdentity: "test", hostIdentity: "test-host", bootSessionIdentity: nil),
+            tokenGenerator: InvalidCoordinatorToken()
+        )
+        let store = RendererMachineIndexStore(layout: fixture.layout, coordinator: coordinator)
+
+        do {
+            _ = try await store.activate(package, expectedGeneration: 0, clock: fixture.clock)
+            Issue.record("Expected coordinator acquisition to fail.")
+        } catch {
+            let failure = error as? RendererCoordinatorFailure
+            #expect(failure == .invalidOwnerToken)
+        }
+
+        let destination = fixture.layout.packageURL(packageID: fixture.packageID, version: fixture.version)
+        #expect(FileManager.default.fileExists(atPath: package.stagedRoot.path))
+        #expect(FileManager.default.fileExists(atPath: destination.path) == false)
+        #expect(try await RendererMachineIndexStore(layout: fixture.layout).read().records.isEmpty)
+    }
+
     @Test func cleanupFailureNeverActivatesARevalidationFailure() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
@@ -241,7 +267,7 @@ struct RendererPackageActivationTests {
         {"schemaVersion":1,"generation":0,"records":[],"safeModeIsEnabled":false}
         """.utf8)
 
-        #expect(RendererMachineIndex.currentSchemaVersion == 2)
+        #expect(RendererMachineIndex.currentSchemaVersion == 3)
         #expect(throws: RendererMachineIndexStoreError.unsupportedSchemaVersion) {
             _ = try JSONDecoder().decode(RendererMachineIndex.self, from: legacy)
         }
@@ -314,4 +340,8 @@ private struct FailingCleaner: RendererPackageActivationCleaning {
     func removeRecursively(_: URL) throws { throw CleanupFailure() }
 
     private struct CleanupFailure: Error {}
+}
+
+private struct InvalidCoordinatorToken: RendererCoordinatorOwnerTokenGenerating {
+    func nextOwnerToken() -> String { "invalid" }
 }

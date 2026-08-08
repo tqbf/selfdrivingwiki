@@ -4512,6 +4512,62 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    /// Reads one immutable source version directly. Unlike `sourceContent(id:)`,
+    /// this method never follows a live ref or the default-active fallback.
+    public func sourceContent(versionID: SourceVersionID) throws -> Data {
+        try dbWriter.read { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: "SELECT blob_hash FROM source_versions WHERE id = ?;",
+                arguments: [versionID.rawValue]
+            ) else {
+                throw WikiStoreError.sourceVersionNotFound(versionID)
+            }
+            let blobHash: String? = row["blob_hash"]
+            guard let blobHash else { return Data() }
+            guard let blobRow = try Row.fetchOne(
+                db,
+                sql: "SELECT content FROM blobs WHERE hash = ?;",
+                arguments: [blobHash]
+            ) else {
+                return Data()
+            }
+            return blobRow["content"]
+        }
+    }
+
+    public func rendererInputByteCount(_ input: RendererBridgeInput) throws -> Int? {
+        try dbWriter.read { db in
+            switch input {
+            case .source(let versionID):
+                return try Int.fetchOne(
+                    db,
+                    sql: """
+                    SELECT CASE
+                        WHEN sv.blob_hash IS NULL THEN 0
+                        ELSE b.byte_size
+                    END
+                    FROM source_versions sv
+                    LEFT JOIN blobs b ON b.hash = sv.blob_hash
+                    WHERE sv.id = ?;
+                    """,
+                    arguments: [versionID.rawValue]
+                )
+            case .markdown(let versionID):
+                return try Int.fetchOne(
+                    db,
+                    sql: """
+                    SELECT b.byte_size
+                    FROM source_markdown_versions smv
+                    JOIN blobs b ON b.hash = smv.blob_hash
+                    WHERE smv.id = ?;
+                    """,
+                    arguments: [versionID.rawValue]
+                )
+            }
+        }
+    }
+
     public func deleteSource(id: SourceID) throws {
         try mutate(event: { _ in
             self.localEvent(.source, id: id.rawValue, change: .deleted)
@@ -9598,6 +9654,21 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     public func activeContentVersion(sourceID: SourceID) throws -> SourceVersion? {
         try dbWriter.read { db in
             try self.activeContentVersion(sourceID: sourceID, on: db)
+        }
+    }
+
+    public func sourceVersion(id: SourceVersionID) throws -> SourceVersion? {
+        try dbWriter.read { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT id, source_id, parent_id, blob_hash, mime_type,
+                       activity_id, external_identity, fetched_at
+                FROM source_versions WHERE id = ?;
+                """,
+                arguments: [id.rawValue]
+            ) else { return nil }
+            return try Self.readSourceVersion(from: row)
         }
     }
 

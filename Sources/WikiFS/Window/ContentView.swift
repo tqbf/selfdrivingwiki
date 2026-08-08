@@ -18,6 +18,7 @@ struct ContentView: View {
     let extractionCoordinator: ExtractionCoordinator
     let queueEngine: any QueueEngineClient
     let extractionProvider: any QueueExtractionProvider
+    let installedRendererHost: InstalledRendererHost
     @State private var pendingAddURL: PendingAddURL?
     /// Driven by `.dropDestination`'s `isTargeted` callback to fade in a subtle
     /// accent border while a drag hovers the window (set via the closure param —
@@ -314,6 +315,7 @@ struct ContentView: View {
             extractionCoordinator: extractionCoordinator,
             queueEngine: queueEngine,
             extractionProvider: extractionProvider,
+            installedRendererHost: installedRendererHost,
             runIngest: { id in runIngest(sourceID: id) },
             showingImportMarkdown: $showingImportMarkdown,
             showingAddFromZotero: $showingAddFromZotero,

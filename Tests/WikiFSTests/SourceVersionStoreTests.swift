@@ -184,6 +184,18 @@ struct SourceVersionStoreTests {
         ) == v1.id.rawValue)
     }
 
+    @Test func exactSourceVersionReadDoesNotFollowTheLiveContentRef() throws {
+        let store = try tempStore()
+        let source = try store.addSource(filename: "pinned.txt", data: Data("first".utf8))
+        let first = try #require(try store.activeContentVersion(sourceID: source.id))
+        let second = try store.appendContentVersion(sourceID: source.id, data: Data("second".utf8))
+
+        #expect(try store.sourceContent(versionID: first.id) == Data("first".utf8))
+        #expect(try store.sourceContent(versionID: second.id) == Data("second".utf8))
+        #expect(try store.sourceContent(id: source.id) == Data("second".utf8))
+        #expect(try store.sourceVersion(id: first.id)?.sourceID == source.id)
+    }
+
     @Test func sourceOriginAndExtractionProvenanceCarrySourceVersionID() throws {
         let store = try tempStore()
         let source = try store.addSource(

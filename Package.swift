@@ -63,6 +63,17 @@ let package = Package(
         .package(url: "https://github.com/wsargent/tantivy.swift.git", from: "0.3.5"),
     ],
     targets: [
+        .executableTarget(
+            name: "DynamicRendererPRSeriesAudit",
+            path: "Sources/DynamicRendererPRSeriesAudit",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "DynamicRendererPRSeriesAuditTests",
+            dependencies: ["DynamicRendererPRSeriesAudit"],
+            path: "Tests/DynamicRendererPRSeriesAuditTests",
+            swiftSettings: strictSwiftSettings
+        ),
         // System SQLite3 module for Linux. On macOS, `import SQLite3` resolves
         // to the SDK's built-in module. On Linux, this system module wraps
         // libsqlite3-dev's <sqlite3.h> so `import SQLite3` works identically.

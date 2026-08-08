@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "branches": [
+    { "branch": "feature/dynamic-renderers-01-model", "base": "main", "titlePrefix": "feat(renderer):" },
+    { "branch": "feature/dynamic-renderers-02-packages", "base": "feature/dynamic-renderers-01-model", "titlePrefix": "feat(renderer):" },
+    { "branch": "feature/dynamic-renderers-03-preferences", "base": "feature/dynamic-renderers-02-packages", "titlePrefix": "feat(renderer):" },
+    { "branch": "feature/dynamic-renderers-04-routing", "base": "feature/dynamic-renderers-03-preferences", "titlePrefix": "feat(renderer):" },
+    { "branch": "feature/dynamic-renderers-05-webview-security", "base": "feature/dynamic-renderers-04-routing", "titlePrefix": "feat(renderer):" },
+    { "branch": "feature/dynamic-renderers-06-canvas", "base": "feature/dynamic-renderers-05-webview-security", "titlePrefix": "feat(renderer):" },
+    { "branch": "feature/dynamic-renderers-07-management", "base": "feature/dynamic-renderers-06-canvas", "titlePrefix": "feat(renderer):" }
+  ],
+  "policy": { "requireExactHead": true, "requireChecksOnHead": true, "requireApprovalsOnHead": true }
+}

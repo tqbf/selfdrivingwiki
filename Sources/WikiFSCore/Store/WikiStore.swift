@@ -296,6 +296,19 @@ public protocol WikiStore: Sendable {
     /// `.notFound` if absent.
     func sourceContent(id: SourceID) throws -> Data
 
+    /// The verbatim bytes for one exact immutable source-content version.
+    /// This never follows the live `source-content` ref and is therefore the
+    /// only source-byte read permitted for a version-pinned renderer session.
+    func sourceContent(versionID: SourceVersionID) throws -> Data
+
+    /// The byte count for the one exact renderer input version. This must not
+    /// materialize its source or Markdown body.
+    func rendererInputByteCount(_ input: RendererBridgeInput) throws -> Int?
+
+    /// Metadata for one exact immutable source-content version. This never
+    /// resolves the active version for the source that owns it.
+    func sourceVersion(id: SourceVersionID) throws -> SourceVersion?
+
     /// Remove a source by id.
     func deleteSource(id: SourceID) throws
 

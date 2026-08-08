@@ -1,0 +1,402 @@
+{
+  "schemaVersion": 2,
+  "issue": 1026,
+  "phase": 5,
+  "slice": 5,
+  "coveredSlices": [0, 1, 2, 3, 4, 5],
+  "baseSHA": "933a0637fa5593c4fdba611edb380058b5838f71",
+  "headSHA": "4cc6bde004a03afc88e40f682c23b1598f421300",
+  "headSHASemantics": "This is the last integrated implementation and CI head covered by the inventory. The hosted HTTP/WSS positive control remains explicitly opt-in and is not claimed as an ordinary CI pass.",
+  "scope": "WebView package-resource security boundary, ephemeral WebKit session lifecycle, per-session capability-bound input.read, navigation policy, actual WebKit provenance checks, isolated-world reply delivery, bounded replay state, trusted external-link activation contracts, package/version-scoped installed-renderer safe mode, the SwiftUI installed-renderer host and Source fallback, per-session storage and file-isolation coverage, and a live HTTP plus trusted-TLS WebSocket positive-control harness. The bridge has closed methods, bounded envelopes and payloads, replay rejection, main-frame and webView/origin/session checks, exact version-pinned source and markdown reads, and an isolated-world postMessage relay. Trusted activation uses a short-lived, one-use cryptographic nonce bound to a normalized HTTP(S) destination and host context. Failure accounting stores only a package identity, a closed cause, and a timestamp. The hosted WSS control uses a login-keychain identity with SHA-1 7C0B00954A876487620BE7B2E2D0FDEC54B8EF08 when its explicit hosted-network gate is enabled. It does not claim a pass when disabled.",
+  "ciCoverage": "ordinary CI runs the selected portable WebKit-facing suites: package scheme handler, content-world bridge, external activation redemption gate, and SwiftUI host/session lifecycle. RendererSessionIsolationTests and RendererHostedWebKitHarnessTests do not run in ordinary CI because they require real GUI/WebKit storage or hosted network and login-keychain prerequisites.",
+  "futureInputContract": "RendererAuthorizedInputReader receives version-pinned SourceVersionID source bytes or SourceMarkdownVersionID processed Markdown. It must not call live sourceContent(id:) for session input.",
+  "productionPaths": [
+    {
+      "path": "Sources/WikiFSCore/Renderer/RendererPackageResourceProvider.swift",
+      "symbols": [
+        "RendererPackageScheme",
+        "RendererPackageResourceProviding",
+        "ValidatedRendererPackageResourceProvider",
+        "RendererPackageMIMEType"
+      ],
+      "tests": [
+        "RendererPackageResourceProviderTests.servesDeclaredAsset",
+        "RendererPackageResourceProviderTests.deniesInvalidRequests",
+        "RendererPackageResourceProviderTests.deniesHashChangedAsset",
+        "RendererPackageResourceProviderTests.deniesReplacementDuringOpen"
+      ]
+    },
+    {
+      "path": "Sources/WikiFSCore/Renderer/RendererContentSecurityPolicy.swift",
+      "symbols": [
+        "RendererContentSecurityPolicy"
+      ],
+      "tests": [
+        "RendererPackageSchemeHandlerTests.sendsHeadersBeforeBody"
+      ]
+    },
+    {
+      "path": "Sources/WikiFS/Renderer/RendererPackageSchemeHandler.swift",
+      "symbols": [
+        "RendererPackageSchemeTaskRegistry",
+        "RendererPackageSchemeHandler"
+      ],
+      "tests": [
+        "RendererPackageSchemeHandlerTests.sendsHeadersBeforeBody",
+        "RendererPackageSchemeHandlerTests.deniedResourceFailsClosed",
+        "RendererPackageSchemeHandlerTests.cancellationReleasesOutstandingTasks",
+        "RendererPackageSchemeHandlerTests.closeCancelsOutstandingServe",
+        "RendererPackageSchemeHandlerTests.stoppingTaskSuppressesLaterCancellation",
+        "RendererPackageSchemeHandlerTests.stopDuringResponsePreventsLaterCallbacks"
+      ]
+    },
+    {
+      "path": "Sources/WikiFSCore/Renderer/WikiAppWebViewSessionContracts.swift",
+      "symbols": [
+        "RendererSessionID",
+        "WikiAppWebViewPolicy",
+        "RendererSessionFailureKind.installedRendererFailureCause",
+        "RendererSessionFailure",
+        "WikiAppWebViewSessionStateMachine"
+      ],
+      "tests": [
+        "WikiAppWebViewSessionContractsTests.policyUsesNamedLimits",
+        "WikiAppWebViewSessionContractsTests.closeIsTerminalAndIdempotent",
+        "WikiAppWebViewSessionContractsTests.failureRequiresCurrentLoadingSession"
+      ]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererFailureWindow.swift",
+      "symbols": [
+        "RendererInstalledRendererFailureCause",
+        "RendererInstalledRendererFailurePolicy",
+        "rendererInstalledRendererFailuresPruned"
+      ],
+      "tests": [
+        "RendererFailureWindowTests.windowIncludesItsExactStartAndExcludesOlderFailures",
+        "RendererFailureWindowTests.eachExplicitlyCountedFailureParticipatesInTheWindow",
+        "RendererFailureWindowTests.retainedFailureHistoryHasANamedBound"
+      ]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererMachineIndexCore.swift",
+      "symbols": [
+        "RendererMachineIndex.availableDescriptorProjection",
+        "rendererMachineIndexRecordingInstalledRendererFailure",
+        "rendererMachineIndexResettingInstalledRendererSafeMode"
+      ],
+      "tests": [
+        "RendererFailureWindowTests.countedFailuresAtThresholdEnableSafeModeAndPersist",
+        "RendererSafeModeTests.thresholdSuppressesOnlyFailedPackageVersionAndExactResetRestoresIt",
+        "RendererSafeModeTests.thresholdDisablesInstalledOnlyAndResetRestores",
+        "RendererSafeModeTests.staleResetCannotDiscardAConcurrentFailureHistory"
+      ]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererMachineIndexStore.swift",
+      "symbols": [
+        "RendererMachineIndexStore.recordInstalledRendererFailure",
+        "RendererMachineIndexStore.resetInstalledRendererSafeMode",
+        "RendererMachineIndexSQLiteStorage.migrate"
+      ],
+      "tests": [
+        "RendererFailureWindowTests.concurrentStoresRejectStaleFailureUpdateWithoutLosingFirstWrite",
+        "RendererFailureWindowTests.simultaneousTwoStoreUpdatesCommitOnlyOneGeneration",
+        "RendererFailureWindowTests.retriedSecondStoreUpdatePreservesBothFailures",
+        "RendererFailureWindowTests.v2MigrationPreservesDescriptorsSafeModeAndGeneration"
+      ]
+    },
+    {
+      "path": "Sources/WikiFSCore/Renderer/RendererBridgeContracts.swift",
+      "symbols": ["RendererBridgeRequest", "RendererBridgeAuthorizer", "RendererBridgeAuthorizationContext"],
+      "tests": ["RendererBridgeContractsTests.acceptsFreshBoundedRequest", "RendererBridgeContractsTests.rejectsInvalidRequests", "RendererBridgeContractsTests.bindsSessionWindowFrameAndInput", "RendererBridgeContractsTests.requestIdentifiersAreBoundedBeforeReplayRetention", "RendererBridgeContractsTests.replayRetentionHasDeterministicBound"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Renderer/RendererAuthorizedInputReader.swift",
+      "symbols": ["RendererAuthorizedInputReader"],
+      "tests": ["RendererAuthorizedInputReaderTests.oversizedPinnedInputsDoNotMaterializePayloads", "RendererAuthorizedInputReaderTests.storeBackedMarkdownReadUsesPinnedBlobBytes", "SourceVersionStoreTests.exactSourceVersionReadDoesNotFollowTheLiveContentRef"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Store/GRDBWikiStore.swift",
+      "symbols": ["GRDBWikiStore.rendererInputByteCount"],
+      "tests": ["RendererAuthorizedInputReaderTests.storeBackedMarkdownReadUsesPinnedBlobBytes"]
+    },
+    {
+      "path": "Sources/WikiFS/Renderer/RendererContentWorldBridge.swift",
+      "symbols": ["RendererContentWorldBroker", "RendererScriptMessageHandler"],
+      "tests": ["RendererContentWorldBridgeTests.repliesWithPinnedPayloadAfterProvenanceChecks", "RendererContentWorldBridgeTests.rejectsWrongWorldAndProvenance", "RendererContentWorldBridgeTests.rejectsNilWebViewProvenanceWithoutBinding", "RendererContentWorldBridgeTests.rejectsNilWebViewProvenanceAfterBinding"]
+    },
+    {
+      "path": "Sources/WikiFSCore/Renderer/RendererNavigationPolicy.swift",
+      "symbols": ["RendererNavigationDecision", "RendererNavigationPolicy"],
+      "tests": ["RendererNavigationPolicyTests.allowsPackageResources", "RendererNavigationPolicyTests.cancelsOutsidePackageBoundary"]
+    },
+    {
+      "path": "Sources/WikiFS/Renderer/WikiAppWebViewSession.swift",
+      "symbols": [
+        "RendererWebViewDataStoreProviding",
+        "RendererWebViewLoadTimeoutScheduling",
+        "WikiAppWebViewConfigurationFactory",
+        "WikiAppWebViewSession"
+      ],
+      "tests": [
+        "WikiAppWebViewSessionTests.configurationFactoryCreatesFreshComponents",
+        "WikiAppWebViewSessionTests.invalidEntryURLFailsClosed",
+        "WikiAppWebViewSessionTests.closeIsTerminalAndReleasesPermit",
+        "WikiAppWebViewSessionTests.timeoutFailureIsObservableAndReleasesResources",
+        "WikiAppWebViewSessionTests.defaultSessionsShareTheGlobalCapacityLimit",
+        "WikiAppWebViewSessionTests.failedSessionReleasesReferencesAndCapacity",
+        "WikiAppWebViewSessionTests.staleTimeoutDoesNotChangeReadySession",
+        "WikiAppWebViewSessionTests.discardedLoadingSessionReleasesPermit",
+        "WikiAppWebViewSessionTests.discardedFailedSessionReleasesCapacity",
+        "WikiAppWebViewSessionTests.externalActivationRequiresExplicitHostPolicy"
+      ]
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererMachineIndexStore.swift",
+      "symbols": [
+        "RendererMachineIndexStore.activate"
+      ],
+      "tests": [
+        "RendererPackageActivationTests.cancelledActivationCleansStagingWithoutCreatingARecord",
+        "RendererPackageActivationTests.coordinatorFailurePreservesCallerOwnedStaging"
+      ]
+    },
+    {
+      "path": "Sources/DynamicRendererPRSeriesAudit/Audit.swift",
+      "symbols": [
+        "GitRepositoryQuerying",
+        "GitHubPullRequestQuerying",
+        "GateRecordReading",
+        "GateRecordWriting",
+        "AuditClock",
+        "PRSeriesPolicy",
+        "GateFindingDisposition",
+        "GateRecordSchemaValidator",
+        "DynamicRendererPRSeriesAuditor.verify",
+        "DynamicRendererPRSeriesAuditor.buildSuite",
+        "FileGateRecordStore"
+      ],
+      "tests": [
+        "DynamicRendererPRSeriesAuditTests.schemaRejectsCheckAndApprovalFromAnotherHead",
+        "DynamicRendererPRSeriesAuditTests.schemaRejectsUnresolvedCriticalAndHighFindings",
+        "DynamicRendererPRSeriesAuditTests.schemaAcceptsClosedCriticalAndHighFindings",
+        "DynamicRendererPRSeriesAuditTests.gateRecordUsesRFC3339JSONAndRoundTripsThroughFileStore",
+        "DynamicRendererPRSeriesAuditTests.checkedInGateSchemaRequiresRFC3339RecordedAtAndTypedFindings",
+        "DynamicRendererPRSeriesAuditTests.buildSuiteRejectsDirtyCheckoutBeforeCommandsRun",
+        "DynamicRendererPRSeriesAuditTests.verifySucceedsWithFreshEvidenceAndStrictPolicy",
+        "DynamicRendererPRSeriesAuditTests.verifyUsesPolicyFlagsInsteadOfHardCodingAllExactHeadRules",
+        "DynamicRendererPRSeriesAuditTests.buildSuiteWritesAtomicEvidenceAndRechecksHeadAfterWrite",
+        "DynamicRendererPRSeriesAuditTests.buildSuiteFailsClosedWhenPostWriteHeadChanges"
+      ]
+    },
+    {
+      "path": "Sources/DynamicRendererPRSeriesAudit/DynamicRendererPRSeriesAuditCommand.swift",
+      "symbols": [
+        "AuditCommand.run"
+      ],
+      "tests": [
+        "DynamicRendererPRSeriesAuditTests.commandEntryPointReturnsAfterASuccessfulVerify"
+      ]
+    },
+    {
+      "path": "Sources/WikiFSCore/Renderer/RendererTrustedActivationContracts.swift",
+      "symbols": ["RendererExternalDestination", "RendererExternalActivationNonce", "RendererActivationClock", "RendererActivationNonceGenerating", "RendererExternalActivationContext", "RendererExternalActivationAuthorizer"],
+      "tests": ["RendererTrustedActivationContractsTests.normalizesExternalDestinations", "RendererTrustedActivationContractsTests.redeemsOnce", "RendererTrustedActivationContractsTests.rejectsAbsentExpiredAndSubstitutedDestinations", "RendererTrustedActivationContractsTests.expiresAtDeadline", "RendererTrustedActivationContractsTests.systemNoncesAreOpaqueAndURLSafe", "RendererTrustedActivationContractsTests.invalidatesAllHostLifecycleBoundaries", "RendererTrustedActivationContractsTests.boundsPendingActivationState", "RendererTrustedActivationContractsTests.boundsInvalidatedActivationState"]
+    },
+    {
+      "path": "Sources/WikiFS/Renderer/RendererTrustedActivationWebKitAdapter.swift",
+      "symbols": ["RendererExternalURLOpening", "RendererExternalLinkRedemptionGate", "RendererTrustedActivationScriptMessageHandler", "RendererExternalLinkScriptMessageHandler"],
+      "tests": ["RendererExternalLinkRedemptionGateTests.opensOnlySuccessfullyRedeemedDestination", "RendererExternalLinkRedemptionGateTests.rejectedRedemptionsNeverReachTheExternalOpener", "RendererExternalLinkRedemptionGateTests.observationScriptKeepsNonceOutOfPageVisibleWindowState"]
+    },
+    {
+      "path": "Sources/WikiFS/Renderer/WikiAppWebView.swift",
+      "symbols": ["WikiAppWebViewSessionControlling", "InstalledRendererWebViewIdentity", "WikiAppWebView", "WikiAppWebViewRepresentable"],
+      "tests": ["WikiAppWebViewTests.mountDefersSessionStart", "WikiAppWebViewTests.identityReplacementClosesBeforeStartingReplacement", "WikiAppWebViewTests.dismantleClosesSession", "WikiAppWebViewTests.sessionFailureDefersStateMutation", "WikiAppWebViewTests.hostedMountAndDismantle"]
+    },
+    {
+      "path": "Sources/WikiFS/Renderer/InstalledRendererFactory.swift",
+      "symbols": ["InstalledRendererSessionConfiguration", "InstalledRendererFactory"],
+      "tests": ["WikiAppWebViewTests.unavailableInstalledRendererReturnsNoView"]
+    },
+    {
+      "path": "Sources/WikiFS/Renderer/InstalledRendererHost.swift",
+      "symbols": ["InstalledRendererHost", "InstalledRendererHost.production", "InstalledRendererHost.resetInstalledRendererSafeMode"],
+      "tests": ["InstalledRendererHostTests.unavailableMachineStorePreservesSourceFallback", "InstalledRendererHostTests.recoveryUsesTypedReference"]
+    },
+    {
+      "path": "Sources/WikiFS/Sources/SourceDetailView.swift",
+      "symbols": ["SourceDetailView.renderedContent", "SourceDetailView.rendererPlanner"],
+      "tests": ["WikiAppWebViewTests.sourceDetailKeepsInstalledFactoryOutsideBuiltInMap"]
+    }
+  ],
+  "testPaths": [
+    "Tests/WikiFSTests/RendererPackageResourceProviderTests.swift",
+    "Tests/WikiFSAppTests/RendererPackageSchemeHandlerTests.swift",
+    "Tests/WikiFSTests/WikiAppWebViewSessionContractsTests.swift",
+    "Tests/WikiFSTests/RendererBridgeContractsTests.swift",
+    "Tests/WikiFSTests/RendererAuthorizedInputReaderTests.swift",
+    "Tests/WikiFSTests/SourceVersionStoreTests.swift",
+    "Tests/WikiFSTests/RendererNavigationPolicyTests.swift",
+    "Tests/WikiFSAppTests/RendererContentWorldBridgeTests.swift",
+    "Tests/WikiFSAppTests/WikiAppWebViewSessionTests.swift",
+    "Tests/WikiFSTests/RendererPackageActivationTests.swift",
+    "Tests/WikiFSTests/RendererFailureWindowTests.swift",
+    "Tests/WikiFSTests/RendererSafeModeTests.swift",
+    "Tests/WikiFSTests/RendererMachineStoreFailureFixture.swift",
+    "Tests/DynamicRendererPRSeriesAuditTests/DynamicRendererPRSeriesAuditTests.swift",
+    "Tests/WikiFSTests/DocumentationContractTests.swift",
+    "Tests/WikiFSTests/RendererTrustedActivationContractsTests.swift",
+    "Tests/WikiFSAppTests/RendererExternalLinkRedemptionGateTests.swift",
+    "Tests/WikiFSAppTests/WikiAppWebViewTests.swift",
+    "Tests/WikiFSAppTests/InstalledRendererHostTests.swift",
+    "Tests/WikiFSAppTests/RendererSessionIsolationTests.swift",
+    "Tests/WikiFSAppTests/RendererHostedWebKitHarness.swift",
+    "Tests/WikiFSAppTests/RendererHostedWebKitHarnessTests.swift",
+    "Tests/WikiFSAppTests/RendererLoopbackObservationServers.swift"
+  ],
+  "harnessPaths": [
+    {
+      "path": "Tests/WikiFSAppTests/RendererHostedWebKitHarness.swift",
+      "symbols": ["RendererHostedWebKitHarness", "RendererHostedWebKitHarness.permissive"],
+      "tests": ["RendererHostedWebKitHarnessTests.permissiveWebKitReachesLiveHTTPAndWebSocketReceivers"]
+    },
+    {
+      "path": "Tests/WikiFSAppTests/RendererLoopbackObservationServers.swift",
+      "symbols": ["RendererLoopbackObservationServer", "trustedLoopbackIdentity", "startSecureWebSocketListener", "SecureConnection"],
+      "tests": ["RendererHostedWebKitHarnessTests.permissiveWebKitReachesLiveHTTPAndWebSocketReceivers"]
+    },
+    {
+      "path": "Tests/WikiFSAppTests/RendererHostedWebKitHarnessTests.swift",
+      "symbols": ["RendererHostedWebKitHarnessTests.permissiveWebKitReachesLiveHTTPAndWebSocketReceivers"],
+      "tests": ["RendererHostedWebKitHarnessTests.permissiveWebKitReachesLiveHTTPAndWebSocketReceivers"]
+    }
+  ],
+  "coverageByRisk": {
+    "a scheme request can only name the expected package ID, version, and a declared relative asset": [
+      "RendererPackageResourceProviderTests.deniesInvalidRequests"
+    ],
+    "an installed package is revalidated and a served asset is opened without following links, identity-checked, and rehashed": [
+      "RendererPackageResourceProviderTests.deniesHashChangedAsset",
+      "RendererPackageResourceProviderTests.deniesReplacementDuringOpen"
+    ],
+    "a valid declared entry asset has explicit MIME bytes and no file URL exposure": [
+      "RendererPackageResourceProviderTests.servesDeclaredAsset"
+    ],
+    "CSP, MIME, and nosniff headers arrive before any response body bytes": [
+      "RendererPackageSchemeHandlerTests.sendsHeadersBeforeBody"
+    ],
+    "a denied package resource emits no response bytes": [
+      "RendererPackageSchemeHandlerTests.deniedResourceFailsClosed"
+    ],
+    "close cancels and releases every registered scheme task": [
+      "RendererPackageSchemeHandlerTests.cancellationReleasesOutstandingTasks",
+      "RendererPackageSchemeHandlerTests.closeCancelsOutstandingServe"
+    ],
+    "caller-owned validated staging survives pre-ownership coordinator failure": [
+      "RendererPackageActivationTests.coordinatorFailurePreservesCallerOwnedStaging"
+    ],
+    "the session policy has explicit bounds and a closed state ignores late callbacks": [
+      "WikiAppWebViewSessionContractsTests.policyUsesNamedLimits",
+      "WikiAppWebViewSessionContractsTests.closeIsTerminalAndIdempotent",
+      "WikiAppWebViewSessionContractsTests.failureRequiresCurrentLoadingSession"
+    ],
+    "a bridge request is capability-bound, replay-rejected, and rejected for the wrong window or frame": [
+      "RendererBridgeContractsTests.rejectsInvalidRequests",
+      "RendererBridgeContractsTests.bindsSessionWindowFrameAndInput"
+    ],
+    "an exact source-version read does not follow the current source-content ref": [
+      "SourceVersionStoreTests.exactSourceVersionReadDoesNotFollowTheLiveContentRef"
+    ],
+    "an oversized pinned source or Markdown input fails before its body is materialized": [
+      "RendererAuthorizedInputReaderTests.oversizedPinnedInputsDoNotMaterializePayloads"
+    ],
+    "a store-backed Markdown bridge read uses the immutable authorized blob instead of a current Markdown head": [
+      "RendererAuthorizedInputReaderTests.storeBackedMarkdownReadUsesPinnedBlobBytes"
+    ],
+    "nil WebView bindings and observed WebView identities deny bridge requests": [
+      "RendererContentWorldBridgeTests.rejectsNilWebViewProvenanceWithoutBinding",
+      "RendererContentWorldBridgeTests.rejectsNilWebViewProvenanceAfterBinding"
+    ],
+    "a stopped scheme task receives no failure, body, or finish callback after WebKit revokes it": [
+      "RendererPackageSchemeHandlerTests.stoppingTaskSuppressesLaterCancellation",
+      "RendererPackageSchemeHandlerTests.stopDuringResponsePreventsLaterCallbacks"
+    ],
+    "each session uses fresh ephemeral WebKit objects, a per-session content world, and terminal close cancels its timer and releases its permit": [
+      "WikiAppWebViewSessionTests.configurationFactoryCreatesFreshComponents",
+      "WikiAppWebViewSessionTests.invalidEntryURLFailsClosed",
+      "WikiAppWebViewSessionTests.closeIsTerminalAndReleasesPermit",
+      "WikiAppWebViewSessionTests.timeoutFailureIsObservableAndReleasesResources"
+    ],
+    "the default session limit is global, failures release WebKit resources, and stale timeout callbacks cannot change a ready session": [
+      "WikiAppWebViewSessionTests.defaultSessionsShareTheGlobalCapacityLimit",
+      "WikiAppWebViewSessionTests.failedSessionReleasesReferencesAndCapacity",
+      "WikiAppWebViewSessionTests.staleTimeoutDoesNotChangeReadySession",
+      "WikiAppWebViewSessionTests.discardedLoadingSessionReleasesPermit",
+      "WikiAppWebViewSessionTests.discardedFailedSessionReleasesCapacity"
+    ],
+    "the SwiftUI host defers start and failure callbacks, closes before replacement, and preserves Source fallback when no validated package snapshot exists": [
+      "WikiAppWebViewTests.mountDefersSessionStart",
+      "WikiAppWebViewTests.identityReplacementClosesBeforeStartingReplacement",
+      "WikiAppWebViewTests.dismantleClosesSession",
+      "WikiAppWebViewTests.sessionFailureDefersStateMutation",
+      "WikiAppWebViewTests.unavailableInstalledRendererReturnsNoView",
+      "WikiAppWebViewTests.sourceDetailKeepsInstalledFactoryOutsideBuiltInMap",
+      "InstalledRendererHostTests.unavailableMachineStorePreservesSourceFallback",
+      "InstalledRendererHostTests.recoveryUsesTypedReference"
+    ],
+    "fresh renderer sessions isolate transient browser storage and reject file navigation/content exposure": [
+      "RendererSessionIsolationTests.sessionsIsolateTransientBrowserStorage",
+      "RendererSessionIsolationTests.sessionsRejectFileNavigationAndContentExposure"
+    ],
+    "future WebView sessions use only version-pinned input": [
+        "DocumentationContractTests.dynamicRendererBridgeContractIsVersionPinnedAndNavigationScoped"
+    ],
+    "a trusted external activation is a URL-safe cryptographic capability bound to the session, window, main frame, navigation, and normalized destination; it expires strictly at its deadline, cannot be replayed, and has bounded state": [
+      "RendererTrustedActivationContractsTests.normalizesExternalDestinations",
+      "RendererTrustedActivationContractsTests.redeemsOnce",
+      "RendererTrustedActivationContractsTests.rejectsAbsentExpiredAndSubstitutedDestinations",
+      "RendererTrustedActivationContractsTests.expiresAtDeadline",
+      "RendererTrustedActivationContractsTests.systemNoncesAreOpaqueAndURLSafe",
+      "RendererTrustedActivationContractsTests.invalidatesAllHostLifecycleBoundaries",
+      "RendererTrustedActivationContractsTests.boundsPendingActivationState",
+      "RendererTrustedActivationContractsTests.boundsInvalidatedActivationState"
+    ],
+    "only a successful trusted-activation redemption can invoke the external URL opener": [
+      "RendererExternalLinkRedemptionGateTests.opensOnlySuccessfullyRedeemedDestination",
+      "RendererExternalLinkRedemptionGateTests.rejectedRedemptionsNeverReachTheExternalOpener",
+      "RendererExternalLinkRedemptionGateTests.observationScriptKeepsNonceOutOfPageVisibleWindowState"
+    ],
+    "WebKit bridge provenance, reply delivery, frame scope, navigation policy, and CSP boundary are explicit": [
+      "RendererContentWorldBridgeTests.repliesWithPinnedPayloadAfterProvenanceChecks",
+      "RendererContentWorldBridgeTests.rejectsWrongWorldAndProvenance",
+      "RendererNavigationPolicyTests.allowsPackageResources",
+      "RendererNavigationPolicyTests.cancelsOutsidePackageBoundary"
+    ],
+    "the explicitly opt-in hosted positive control uses a live HTTP document receiver and a real TLS WebSocket receiver": [
+      "RendererHostedWebKitHarnessTests.permissiveWebKitReachesLiveHTTPAndWebSocketReceivers"
+    ]
+  },
+  "bidirectionalResolution": {
+    "every production path maps to one or more named tests": true,
+    "every named test resolves in one listed test path": true,
+    "command": "inventory=plans/dynamic-renderers-phase5-webview-test-inventory.json && jq -e '(.productionPaths | length > 0) and (.testPaths | length > 0) and all(.productionPaths[]; ((.path | type == \"string\" and length > 0) and (.symbols | type == \"array\" and length > 0) and (.tests | type == \"array\" and length > 0))) and all(.testPaths[]; type == \"string\" and length > 0)' \"$inventory\" >/dev/null && while IFS= read -r listedPath; do test -f \"$listedPath\" || { echo \"inventory production path is missing: $listedPath\" >&2; exit 1; }; done < <(jq -r '.productionPaths[].path' \"$inventory\") && while IFS= read -r listedPath; do test -f \"$listedPath\" || { echo \"inventory test path is missing: $listedPath\" >&2; exit 1; }; done < <(jq -r '.testPaths[]' \"$inventory\") && while IFS= read -r testName; do functionName=${testName##*.}; matches=$(rg -l -F \"func ${functionName}(\" $(jq -r '.testPaths[]' \"$inventory\") | wc -l | tr -d ' '); test \"$matches\" -eq 1 || { echo \"inventory test did not resolve exactly once: $testName\" >&2; exit 1; }; done < <(jq -r '[.productionPaths[].tests[]] | unique[]' \"$inventory\")"
+  },
+  "excluded": [
+    "general subresource interception",
+    "Excalidraw",
+    "JSON Canvas",
+    "settings UI"
+  ],
+  "honestCoverageLimits": [
+    "The portable provider tests do not run a live WKWebView or prove general network isolation. The later hosted network harness owns that claim.",
+    "The opt-in lifecycle tests do not load a live renderer document. A later hosted network harness owns end-to-end WebKit behavior.",
+    "The SwiftUI host tests mount a real WKWebView only through a recording session. They prove insertion, deferred lifecycle ordering, failure deferral, replacement teardown, and Source fallback dispatch; they do not prove a live package navigation.",
+    "The session-isolation tests exercise real ephemeral WebKit data stores and file-navigation rejection. They do not prove the general network-isolation matrix.",
+    "The portable isolated-world bridge tests exercise handler routing, reply encoding, and injected provenance. They do not run a live renderer document or prove WebKit supplies that provenance. A hosted suite still owns that claim.",
+    "The bridge and navigation tests do not prove live frame identity, navigation cancellation, or network isolation. A hosted WebKit suite must cover those conditions.",
+    "The trusted-activation contract and redemption-gate tests do not execute a live WKWebView. They do not prove that WebKit supplies the observed provenance or that synthetic page events cannot obtain a nonce. The source-contract test checks that the nonce does not cross a shared window message path.",
+    "The command-entry seam proves a successful invocation returns to async @main. It does not invoke LocalGit or GitHubCLI against a live pull request.",
+    "The trusted-TLS WebSocket positive control runs only when WIKIFS_RENDERER_HOSTED_NETWORK_TESTS=1 and the supplied login-keychain identity is available. It reports a disabled diagnostic when either prerequisite is absent. It does not run in ordinary CI, does not claim a pass when disabled, and does not prove restrictive network isolation."
+  ]
+}
