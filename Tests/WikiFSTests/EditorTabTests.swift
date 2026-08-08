@@ -24,6 +24,23 @@ struct EditorTabTests {
         #expect(model.recentlyClosedTabs.isEmpty)
     }
 
+    @Test func openingConfiguredHomePageCreatesTheHomeTab() throws {
+        let (model, store) = try tempModel()
+        let home = try store.createPage(title: "Home")
+        model.reloadFromStore()
+
+        #expect(model.openHomePageIfConfigured(homePageID: home.id))
+        #expect(model.activeTab?.selection == .page(home.id))
+    }
+
+    @Test func openingMissingConfiguredHomePageDoesNothing() throws {
+        let (model, _) = try tempModel()
+        let missingHomeID = PageID(rawValue: ULID.generate())
+
+        #expect(!model.openHomePageIfConfigured(homePageID: missingHomeID))
+        #expect(model.tabs.isEmpty)
+    }
+
     // MARK: - Sidebar-driven selection creates tabs
 
     @Test func firstSidebarSelectionCreatesInitialTab() throws {

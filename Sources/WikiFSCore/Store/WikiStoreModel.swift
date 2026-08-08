@@ -593,6 +593,14 @@ public final class WikiStoreModel {
         return true
     }
 
+    /// Opens the configured home page when it still exists in this wiki.
+    /// Returns `false` for an unset or stale home-page ID.
+    @discardableResult
+    public func openHomePageIfConfigured(homePageID: PageID?) -> Bool {
+        guard let homePageID else { return false }
+        return selectPage(byID: homePageID)
+    }
+
     // MARK: - Source link resolution
 
     /// Existence check for `[[source:…]]` linkification: returns `true` when a

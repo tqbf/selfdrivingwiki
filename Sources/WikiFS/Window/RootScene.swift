@@ -249,6 +249,9 @@ struct RootScene: View {
                 return
             }
             session = resolved
+            if resolved.store.openHomePageIfConfigured(homePageID: descriptor.homePageID) {
+                DebugLog.tabs("RootScene [Opening wiki]: opened configured home page for wikiID=\(wikiID.rawValue)")
+            }
             // Wire the File Provider bus subscription for this wiki's session.
             fileProvider.subscribeBus(for: wikiID, bus: resolved.store.eventBus)
             Task { await fileProvider.activate(id: descriptor.id, displayName: descriptor.displayName) }
