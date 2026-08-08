@@ -2,45 +2,125 @@
   "schemaVersion": 1,
   "issue": 1026,
   "phase": 8,
-  "slice": 1,
-  "parentSHA": "20d7f52b49d6670862553636bef6e690de6e434c",
-  "headSHA": "02cb57443f505ed134247c034f55aa5cc51fd447",
-  "headSHASemantics": "This is the local implementation and focused-test commit.",
-  "scope": "Clarify local renderer package import in the existing Renderers settings UI without changing package validation or storage behavior.",
-  "productionPaths": [
+  "slice": "recovery",
+  "baseSHA": "609dc66f0e0b13c298ab528e46fdf74bf4a420ce",
+  "headSHA": "3b291cf0cc990be6240fec79c5619fb6269915c9",
+  "scope": "Complete the approved Phase 8 import UX and preserved amendments against integrated Phase 7 main.",
+  "productionSymbols": [
     {
-      "path": "Sources/WikiFS/Settings/RendererSettingsView.swift",
-      "symbols": ["RendererSettingsView"],
-      "tests": ["RendererSettingsManagementViewTests.settingsSurfaceUsesApprovedScopesAndCopy"]
+      "path": "Sources/WikiFS/Renderer/BundledRendererPackages.swift",
+      "symbols": [
+        "BundledRendererPackages.excalidrawPackageID",
+        "BundledRendererPackages.excalidrawVersion",
+        "BundledRendererPackages.excalidrawRegistrationID",
+        "BundledRendererPackages.excalidrawResourceURL"
+      ],
+      "tests": [
+        "InstalledRendererHostTests.bundled Excalidraw is available as an app resource with its reviewed identity",
+        "InstalledRendererHostTests.bundled Excalidraw bootstrap installs once and remains available to every wiki"
+      ],
+      "branches": {
+        "success": ["resource found", "typed package identity matches", "resource is validated and activated"],
+        "error": ["resource absent", "unexpected package/version/registration identity", "validator or activation failure"],
+        "boundary": ["resource lookup is limited to app/module bundle resources; source checkout is not a runtime input"],
+        "cancellation": ["activation cancellation is covered by RendererPackageActivationTests.cancelledActivationCleansStagingWithoutCreatingARecord"],
+        "teardown": ["activation cleanup is covered by RendererPackageActivationTests.revalidationFailureCleansStagingAndDoesNotActivate"]
+      }
+    },
+    {
+      "path": "Sources/WikiFS/Renderer/InstalledRendererHost.swift",
+      "symbols": ["InstalledRendererHost.bootstrapBundledRendererPackages", "InstalledRendererHost.installRendererDirectory", "InstalledRendererHost.refresh"],
+      "tests": [
+        "InstalledRendererHostTests.bundled Excalidraw bootstrap installs once and remains available to every wiki",
+        "InstalledRendererHostTests.an unavailable machine store preserves the Source fallback",
+        "InstalledRendererHostTests.host recovery is scoped by the typed renderer reference",
+        "RendererPackageActivationTests.successfulActivationMovesValidatedPackageAndProjectsDescriptors",
+        "RendererPackageActivationTests.revalidationFailureCleansStagingAndDoesNotActivate",
+        "RendererPackageActivationTests.installedRootPassedToPublicActivationIsNeverDeleted"
+      ],
+      "branches": {
+        "success": ["validated local directory or bundled resource reaches machine activation", "registry refresh exposes compatible descriptors"],
+        "error": ["missing store", "missing resource", "identity mismatch", "validation failure", "activation failure", "refresh preserves Source fallback"],
+        "boundary": ["only validated package directories enter activation; app-managed storage remains outside wiki storage"],
+        "cancellation": ["RendererPackageActivationTests.cancelledActivationCleansStagingWithoutCreatingARecord"],
+        "teardown": ["RendererPackageActivationTests.coordinatorFailurePreservesCallerOwnedStaging", "RendererPackageActivationTests.cleanupFailureNeverActivatesARevalidationFailure"]
+      }
     },
     {
       "path": "Sources/WikiFS/Settings/RendererSettingsPackagePicker.swift",
-      "symbols": ["RendererSettingsPackagePicker.configure", "RendererSettingsPackagePicker.validatedDirectory"],
-      "tests": ["RendererSettingsPackagePickerTests.testV1PickerAcceptsOneDirectoryAndRejectsFilesAndArchives"]
+      "symbols": ["RendererSettingsPackagePicker.importButtonTitle", "RendererSettingsPackagePicker.configure", "RendererSettingsPackagePicker.selectedDirectory"],
+      "tests": ["RendererSettingsPackagePickerTests.testV1PickerAcceptsOneDirectoryAndRejectsFilesAndArchives"],
+      "branches": {
+        "success": ["one local directory is accepted"],
+        "error": ["file selection rejected", "archive selection rejected", "multiple selection rejected", "empty selection rejected"],
+        "boundary": ["canChooseDirectories true", "canChooseFiles false", "no archive or destination selection surface"]
+      }
+    },
+    {
+      "path": "Sources/WikiFS/Settings/RendererSettingsView.swift",
+      "symbols": ["RendererSettingsModel.install", "RendererSettingsModel.rebuildRows", "RendererSettingsView.body", "RendererSettingsView.rendererRow", "RendererSettingsView.sourceVersionControls"],
+      "tests": ["RendererSettingsManagementViewTests.settings surface exposes machine installation without wiki enablement controls", "RendererSettingsManagementViewTests.settings model follows the current wiki store"],
+      "branches": {
+        "success": ["advanced local import is exposed", "source-specific exact version preferences remain available", "installed compatible packages are shown machine-wide"],
+        "error": ["invalid package reports validation/install error", "empty installed list presents no-package state"],
+        "boundary": ["no per-wiki enablement toggle or API call", "no app-managed destination path", "safe mode and Source fallback remain outside settings mutation"],
+        "teardown": ["busy state is cleared with defer after import attempt"]
+      }
+    },
+    {
+      "path": "Sources/WikiFS/Window/WikiFSApp.swift",
+      "symbols": ["WikiFSApp.body renderer-host task"],
+      "tests": ["InstalledRendererHostTests.bundled Excalidraw bootstrap installs once and remains available to every wiki"],
+      "branches": {
+        "success": ["application task invokes bundled bootstrap at launch"],
+        "error": ["bootstrap itself fails closed and refreshes Source/native availability"],
+        "teardown": ["task lifecycle is owned by the app scene"]
+      }
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererMachineIndexStore.swift",
+      "symbols": ["RendererMachineIndexStore.activate"],
+      "tests": [
+        "RendererPackageActivationTests.existingIdenticalPackageVersionIsAnIdempotentNoOp",
+        "RendererPackageActivationTests.existingConflictingPackageVersionFailsBeforeTheNoReplaceMove",
+        "RendererPackageActivationTests.successfulActivationMovesValidatedPackageAndProjectsDescriptors",
+        "RendererPackageActivationTests.cancelledActivationCleansStagingWithoutCreatingARecord",
+        "RendererPackageActivationTests.finalPackageRootStaysContainedAndRejectsLinksOnRevalidation"
+      ],
+      "branches": {
+        "success": ["new validated package moves into app-managed package root and records descriptors", "same package/version/hash returns current index without a new activation"],
+        "error": ["same package/version with conflicting hash fails closed before no-replace move", "validation/revalidation/coordinator/storage failure does not activate"],
+        "boundary": ["coordinator lock protects index inspection and activation", "package bytes remain outside wiki storage", "final root containment and symlink rejection"],
+        "cancellation": ["cancellation cleans staging without creating a record"],
+        "teardown": ["caller-owned staging is preserved on coordinator failure", "cleanup failure cannot activate a failed revalidation"]
+      }
+    },
+    {
+      "path": "Sources/WikiFSCore/Core/RendererPackageGuide.swift + Sources/WikiFSCore/Core/WikiStateSnapshot.swift",
+      "symbols": ["RendererPackageGuide.text", "WikiStateSnapshot.render"],
+      "tests": ["RendererPackageDocumentationTests.maintainer skill and staged guide state machine-wide availability", "RendererPackageDocumentationTests.documented two-file example has a valid manifest hash", "AgentStagingTests.stateFileRendersTitlesIndexAndLog", "AgentStagingTests.stateFileHandlesFreshAndEmptyWiki"],
+      "branches": {
+        "success": ["bounded current package guide is appended to staged WIKI_STATE.md"],
+        "error": ["missing or unreadable bundled guide fails closed during resource loading"],
+        "boundary": ["guide is chat reference only and does not execute a skill or enter the system prompt"],
+        "teardown": ["state staging retains the existing source/page staging contract"]
+      }
     }
   ],
+  "resourceAndBuildChanges": [
+    "Package.swift declares the maintainer guide and Excalidraw package resources",
+    "docs/skills/renderer-package-maintainer/ and its current package guide document the bounded local package workflow"
+  ],
   "testPaths": [
+    "Tests/WikiFSAppTests/InstalledRendererHostTests.swift",
     "Tests/WikiFSAppTests/RendererSettingsManagementViewTests.swift",
-    "Tests/WikiFSAppTests/RendererSettingsPackagePickerTests.swift"
+    "Tests/WikiFSAppTests/RendererSettingsPackagePickerTests.swift",
+    "Tests/WikiFSTests/AgentStagingTests.swift",
+    "Tests/WikiFSTests/RendererPackageActivationTests.swift",
+    "Tests/WikiFSTests/RendererPackageDocumentationTests.swift"
   ],
-  "coverage": {
-    "success": [
-      "The Renderers settings UI identifies local package import as an advanced action.",
-      "The UI explains that one local package folder is validated and copied for use on this Mac.",
-      "The UI states that it does not use the selected source folder after import."
-    ],
-    "boundary": [
-      "The picker accepts one directory and rejects files, archives, and multiple selections at its validation boundary.",
-      "The UI does not expose an app-managed destination path."
-    ]
-  },
   "excluded": [
-    "Package storage, package validation, machine index semantics, registry refresh behavior, and renderer session pins",
-    "Hosted Settings window and VoiceOver runtime validation",
-    "Remote distribution, signing, archives, and package catalog work"
-  ],
-  "verification": {
-    "command": "WIKIFS_APP_TESTS=1 swift test --filter 'RendererSettingsManagementViewTests|RendererSettingsPackagePickerTests' --jobs 4",
-    "result": "passed: 3 tests in 2 suites"
-  }
+    "catalogs, remote distribution, signing, archives, destination selection, new package architecture, generic chat skill execution, prompt inflation, sandbox/plugin mutation, and security weakening",
+    "hosted VoiceOver spoken-output validation remains a manual release gate rather than an automated claim"
+  ]
 }
