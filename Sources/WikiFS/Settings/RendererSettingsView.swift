@@ -215,9 +215,9 @@ struct RendererSettingsView: View {
             }
             if let error = model.lastError {
                 Section {
-                    Label(error, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.red)
-                        .accessibilityLabel("Renderer management unavailable. (error)")
+                        Label(error, systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.red)
+                            .accessibilityLabel("Renderer management unavailable. \(error)")
                 } header: {
                     Text("Renderer management unavailable")
                 }

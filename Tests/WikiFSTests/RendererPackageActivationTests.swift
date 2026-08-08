@@ -76,6 +76,12 @@ struct RendererPackageActivationTests {
         #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("index.html").path))
         #expect(FileManager.default.fileExists(atPath: retry.stagedRoot.path) == false)
         #expect(repeated == activated)
+
+        let staleRetry = try fixture.validate()
+        await #expect(throws: RendererMachineIndexStoreError.staleGeneration) {
+            try await store.activate(staleRetry, expectedGeneration: activated.generation + 1, clock: fixture.clock)
+        }
+        #expect(FileManager.default.fileExists(atPath: staleRetry.stagedRoot.path) == false)
     }
 
     @Test func existingConflictingPackageVersionFailsBeforeTheNoReplaceMove() async throws {

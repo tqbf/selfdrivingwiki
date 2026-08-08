@@ -278,6 +278,9 @@ public actor RendererMachineIndexStore {
                     // whether that exact package/version is an idempotent
                     // installation or a conflicting hash.
                     let current = try storage.readOrInitialize()
+                    guard current.generation == expectedGeneration else {
+                        throw RendererMachineIndexStoreError.staleGeneration
+                    }
                     if let existing = current.records.first(where: {
                         $0.packageID == revalidated.manifest.packageID &&
                         $0.version == revalidated.manifest.version

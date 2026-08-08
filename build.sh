@@ -375,6 +375,20 @@ else
   echo "    Rebuild WikiFSCore before packaging. WIKI_STATE rendering will fail at runtime." >&2
 fi
 
+# The bundled Excalidraw package belongs to the WikiFS app target rather than
+# WikiFSCore. Copy it out of SwiftPM's module bundle into the signed app
+# resources so the bootstrap can resolve it after the app is moved away from
+# the originating .build directory.
+SPM_APP_RESOURCE_BUNDLE="${BIN_DIR}/WikiFS_WikiFS.bundle"
+if [ -d "${SPM_APP_RESOURCE_BUNDLE}/Excalidraw" ]; then
+  mkdir -p "${RESOURCES_DIR}/RendererPackages"
+  cp -R "${SPM_APP_RESOURCE_BUNDLE}/Excalidraw" "${RESOURCES_DIR}/RendererPackages/"
+  echo "  ✓ bundled Excalidraw renderer package into app resources"
+else
+  echo "  ⚠ bundled Excalidraw package not found at ${SPM_APP_RESOURCE_BUNDLE}" >&2
+  echo "    Rebuild WikiFS before packaging. Bundled renderer bootstrap will use Source fallback." >&2
+fi
+
 [ -f "${APP_ICON}" ] && cp "${APP_ICON}" "${RESOURCES_DIR}/AppIcon.icns"
 
 cat > "${CONTENTS}/Info.plist" <<PLIST

@@ -36,6 +36,8 @@ struct RendererPackageDocumentationTests {
         #expect(buildScript.contains("cp \"${SPM_RESOURCE_BUNDLE}/current-package-guide.md\" \"${RESOURCES_DIR}/\""))
         #expect(buildScript.contains("cp \"${SPM_RESOURCE_BUNDLE}/current-package-guide.md\" \"${APPEX_CONTENTS}/Resources/\""))
         #expect(buildScript.contains("cp \"${SPM_RESOURCE_BUNDLE}/current-package-guide.md\" \"${DAEMON_XPC_CONTENTS}/Resources/\""))
+        #expect(buildScript.contains("${BIN_DIR}/WikiFS_WikiFS.bundle"))
+        #expect(buildScript.contains("cp -R \"${SPM_APP_RESOURCE_BUNDLE}/Excalidraw\" \"${RESOURCES_DIR}/RendererPackages/\""))
     }
 
     @Test("documented two-file example has a valid manifest hash")
