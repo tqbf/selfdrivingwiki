@@ -202,9 +202,9 @@ struct AgentStagingTests {
     #expect(md.contains("- Photosynthesis"))
     #expect(md.contains("# Index"))
     #expect(md.contains("## [2026-06-16] ingest | notes.txt"))
-    #expect(md.contains("Self Driving Wiki includes and manages the read-only Excalidraw renderer automatically."))
-    #expect(md.contains("Every compatible validated installed renderer is available to every wiki."))
-    #expect(md.contains("directories only"))
+    #expect(md.lowercased().contains("every compatible validated installed renderer available to every wiki"))
+    #expect(md.contains("Advanced renderer import accepts one local directory only."))
+    #expect(md.contains("This short reference is context for wiki operations."))
     // It tells the agent not to re-fetch the state.
     #expect(md.lowercased().contains("do not need to run `wikictl page list`"))
   }

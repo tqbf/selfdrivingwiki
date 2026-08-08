@@ -9,6 +9,7 @@ struct RendererPackageDocumentationTests {
         let root = repositoryRoot()
         let skill = try String(contentsOf: root.appending(path: "docs/skills/renderer-package-maintainer/SKILL.md"), encoding: .utf8)
         let guide = try String(contentsOf: root.appending(path: "docs/skills/renderer-package-maintainer/references/current-package-guide.md"), encoding: .utf8)
+        let stateReference = try String(contentsOf: root.appending(path: "docs/skills/renderer-package-maintainer/references/wiki-state-chat-reference.md"), encoding: .utf8)
         let package = try String(contentsOf: root.appending(path: "Package.swift"), encoding: .utf8)
         let guideLoader = try String(contentsOf: root.appending(path: "Sources/WikiFSCore/Core/RendererPackageGuide.swift"), encoding: .utf8)
 
@@ -20,10 +21,13 @@ struct RendererPackageDocumentationTests {
         #expect(guide.contains("renderer_wiki_enablement"))
         #expect(guide.contains("input.read"))
         #expect(guide.contains("5ce39d66a927d4e2933dc6a637a9c54eee55a1d54da48b87791b0d90bd23022b"))
+        #expect(stateReference.contains("every compatible validated installed renderer available to every wiki"))
+        #expect(stateReference.contains("This short reference is context for wiki operations."))
         #expect(package.contains("renderer-package-maintainer/references/current-package-guide.md"))
+        #expect(package.contains("renderer-package-maintainer/references/wiki-state-chat-reference.md"))
         #expect(package.contains("RendererPackages/Excalidraw"))
-        #expect(guideLoader.contains("Bundle.main.url(forResource: \"current-package-guide\", withExtension: \"md\")"))
-        #expect(RendererPackageGuide.text.contains("Every compatible validated installed renderer is available to every wiki."))
+        #expect(guideLoader.contains("Bundle.main.url(forResource: \"wiki-state-chat-reference\", withExtension: \"md\")"))
+        #expect(RendererPackageGuide.text.contains("every compatible validated installed renderer available to every wiki"))
         #expect(!guide.contains("Enabled for This Wiki"))
         #expect(!guide.contains("disabled by default per wiki"))
     }
@@ -33,9 +37,9 @@ struct RendererPackageDocumentationTests {
         let root = repositoryRoot()
         let buildScript = try String(contentsOf: root.appending(path: "build.sh"), encoding: .utf8)
 
-        #expect(buildScript.contains("cp \"${SPM_RESOURCE_BUNDLE}/current-package-guide.md\" \"${RESOURCES_DIR}/\""))
-        #expect(buildScript.contains("cp \"${SPM_RESOURCE_BUNDLE}/current-package-guide.md\" \"${APPEX_CONTENTS}/Resources/\""))
-        #expect(buildScript.contains("cp \"${SPM_RESOURCE_BUNDLE}/current-package-guide.md\" \"${DAEMON_XPC_CONTENTS}/Resources/\""))
+        #expect(buildScript.contains("cp \"${SPM_RESOURCE_BUNDLE}/wiki-state-chat-reference.md\" \"${RESOURCES_DIR}/\""))
+        #expect(buildScript.contains("cp \"${SPM_RESOURCE_BUNDLE}/wiki-state-chat-reference.md\" \"${APPEX_CONTENTS}/Resources/\""))
+        #expect(buildScript.contains("cp \"${SPM_RESOURCE_BUNDLE}/wiki-state-chat-reference.md\" \"${DAEMON_XPC_CONTENTS}/Resources/\""))
         #expect(buildScript.contains("${BIN_DIR}/WikiFS_WikiFS.bundle"))
         #expect(buildScript.contains("cp -R \"${SPM_APP_RESOURCE_BUNDLE}/Excalidraw\" \"${RESOURCES_DIR}/RendererPackages/\""))
     }

@@ -6,16 +6,16 @@ import Foundation
 /// state file. It is not a system prompt and does not execute a maintainer skill.
 enum RendererPackageGuide {
     static let text: String = {
-        guard let url = Bundle.main.url(forResource: "current-package-guide", withExtension: "md")
-            ?? Bundle.module.url(forResource: "current-package-guide", withExtension: "md")
-            ?? Bundle.module.url(forResource: "current-package-guide", withExtension: "md", subdirectory: "references")
+        guard let url = Bundle.main.url(forResource: "wiki-state-chat-reference", withExtension: "md")
+            ?? Bundle.module.url(forResource: "wiki-state-chat-reference", withExtension: "md")
+            ?? Bundle.module.url(forResource: "wiki-state-chat-reference", withExtension: "md", subdirectory: "references")
         else {
-            fatalError("current-package-guide.md is missing from Bundle.main or the WikiFSCore resource bundle.")
+            fatalError("wiki-state-chat-reference.md is missing from Bundle.main or the WikiFSCore resource bundle.")
         }
         do {
             return try String(contentsOf: url, encoding: .utf8)
         } catch {
-            fatalError("current-package-guide.md could not be read from \(url).")
+            fatalError("wiki-state-chat-reference.md could not be read from \(url).")
         }
     }()
 }
