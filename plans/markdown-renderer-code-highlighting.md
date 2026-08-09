@@ -70,10 +70,26 @@ ms, Swift 11.725 ms, and JSON 8.729 ms. The largest RSS delta is Scala at
 20.39 MiB. Every result meets the 50 ms and 32 MiB requirements.
 
 The aggregate helper records parser, query, range-validation, HTML-assembly,
-and total timings. It also records capture and token counts. The direct UTF-8
+and total timings. It also records capture and emitted normalized-token counts;
+the C ABI intentionally exposes no independent post-normalization range count,
+so the emitted-token count is the observable range count. The direct UTF-8
 builder removes per-token source strings and repeated UTF-8 conversion. It
 keeps validated source order and first-range precedence. Query iteration and
 overlap normalization remain linear.
+
+The remediation release run reused the same production highlighter source hash
+(`f0573c0497b941c149e9045406eebec4e8291400126f9486937bf243dde77337`) and
+vendored C target as the app comparison. It ran the retained
+`ReleaseCodeHighlightAggregateProbe` at the exact remediation head with three
+warmups and twenty 100 KiB samples per grammar. Its p95 totals were Java
+9.043 ms, Scala 12.229 ms, HTML 8.654 ms, Swift 11.521 ms, and JSON 8.650 ms.
+Scala's 21.36 MiB fresh-process RSS delta was the largest. These are release
+equivalent measurements: fixture creation, build/setup, and evidence writing
+are outside the samples. The probe package reports one unhandled temporary
+`Probe/main.swift` warning; that source is not in the aggregate executable or
+the shipped app. The ignored exact-head record links the command, per-stage
+values, hashes, and identity at
+`tmp/orchestration/markdown-renderer-embeds/phase1-exact-head-evidence.json`.
 
 The approved H1 exception has a separate before-and-after release measurement.
 `tmp/orchestration/markdown-renderer-embeds/phase1-release-size-measurement-a40156d.json`
@@ -97,10 +113,10 @@ The supported SwiftPM sanitizer commands passed the focused six-test
 highlighter suite. They were `WIKIFS_APP_TESTS=1 swift test --sanitize address
 --filter CodeSyntaxHighlighterTests --jobs 4` and `WIKIFS_APP_TESTS=1 swift
 test --sanitize thread --filter CodeSyntaxHighlighterTests --jobs 4`. The TSan
-process emitted host CoreData XPC connection warnings. It reported no sanitizer
-fault and the suite passed. The earlier manual `-Xlinker -fsanitize=address`
-command remains an Apple linker limitation. It is not sanitizer success
-evidence.
+process emitted host CoreData XPC connection warnings during test-host
+initialization, but no ThreadSanitizer fault; both selected suites passed. The
+earlier manual `-Xlinker -fsanitize=address` command remains an Apple linker
+limitation. It is not sanitizer success evidence.
 
 ## Maintenance and known limitation
 

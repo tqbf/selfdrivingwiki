@@ -45,5 +45,11 @@ Its SHA-256 is
 It records an 8,251,456-byte linked app delta and no shipped test, benchmark,
 or fixture file. The C contribution contains only the approved runtime, five
 grammars, query wrapper, and reader implementation. The remaining audit gate
-work will bind normal-gate evidence to the exact remediation head. Delivery
-readiness, push, and pull request actions remain stopped.
+work binds normal-gate evidence to the exact remediation head. A release
+aggregate rerun using the unchanged production highlighter source recorded
+100 KiB p95 totals of 9.043 ms (Java), 12.229 ms (Scala), 8.654 ms (HTML),
+11.521 ms (Swift), and 8.650 ms (JSON); its largest fresh-process RSS delta
+was 21.36 MiB. `make build`, `make test`, app-enabled and bare SwiftPM tests,
+and focused AddressSanitizer and ThreadSanitizer highlighter suites passed.
+The TSan host emitted CoreData XPC environment warnings without a sanitizer
+fault. Delivery readiness, push, and pull request actions remain stopped.
