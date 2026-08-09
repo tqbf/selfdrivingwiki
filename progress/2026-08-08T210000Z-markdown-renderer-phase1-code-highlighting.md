@@ -113,6 +113,23 @@ and make-test log `tmp/orchestration/markdown-renderer-embeds/gates/make-test-87
 The nonempty prerequisite record is `gates/prerequisites-f6cd101d-r4.log`
 (SHA-256 `115fc2d1c271aacc399f3e9131ae6d929cfe4c792c6882ea70034046512a9c1f`).
 
+The operator reaffirmed the final exact-head H1 exception. The release
+executable is 96,056,944 bytes. The final delta is 8,384,864 bytes. The prior
+delta was 8,251,456 bytes. The additional approved growth is 133,408 bytes.
+The final head is `f6cd101df847b92f2a439cabfbb1d7dd404d28c1`. The final tree is
+`dfd81201b736fa82c7a14291858c22efe8698717`. The base and merge base are
+`14f07d60093daf25596522924a77b6fa0742a23d`. The measurement used `make release`.
+The final evidence record is
+`tmp/orchestration/markdown-renderers-embeds/phase1-r1-final-head-evidence-f6cd101d.json`
+with SHA-256
+`88c68d53a82bd4134cd69178cfe0c999c3af7cece0662af394b590a3c444fd8d`.
+The exception applies only to the five-grammar implementation and the same
+124-file app attribution. It does not allow a new dependency, grammar, source
+maximum, shipped test, benchmark, fixture, unrelated growth, or future waiver.
+Any later identity, bundle, dependency, grammar, or unexplained size change
+invalidates the exception and needs fresh evidence. PR 1 must disclose this
+decision and its evidence.
+
 The independent `e18c9f62` audit measured every grammar at the accepted 256 KiB
 maximum. Its worst parse-plus-query p95 was Scala at 31.527 ms and its highest
 RSS delta was Scala at 31.19 MiB. The regular `CodeHighlightBenchmark` fresh
