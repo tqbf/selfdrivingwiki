@@ -3,9 +3,9 @@
   "phase": "Phase 1 ordinary fenced code and native Tree-sitter highlighting",
   "base": "14f07d60093daf25596522924a77b6fa0742a23d",
   "historicalReviewedImplementationHead": "e18c9f62230076954a9424b0a800210611ee3041",
-  "currentExactHeadEvidence": "tmp/orchestration/markdown-renderer-embeds/phase1-r1-final-head-evidence-f6cd101d.json",
-  "currentExactHead": "dd0ac890112c8e557cb36dde560d370695b89a36",
-  "currentExactTree": "80768f7a152f33f9cea1f8121f8aa8fe1537e394",
+  "acceptedMeasurementHeadEvidence": "tmp/orchestration/markdown-renderer-embeds/phase1-r1-final-head-evidence-f6cd101d.json",
+  "documentationCandidateHead": "7cfac57166090cbaf3879acd797a07fafe489651",
+  "documentationCandidateTree": "b3d8068daf77c04ca0ad17b20e2ed3b9ba71add6",
   "currentExactBase": "14f07d60093daf25596522924a77b6fa0742a23d",
   "priorAudit": {
     "path": "tmp/orchestration/markdown-renderer-embeds/audit/phase1-independent-audit-a40156d.md",
@@ -20,6 +20,11 @@
     "sha256": "4bba73445875156dc7f6d2c6cd32aec4013feadd435ac29919cc85e0d3ee4bf8",
     "inputManifest": "tmp/orchestration/markdown-renderer-embeds/measured-input-manifest-875a2438.json",
     "inputManifestSHA256": "e4c330ef9b623621c2b52c639a54fc29cc33b901f466af684af840a9f126542e"
+  },
+  "evidenceRoots": {
+    "orchestratorAuditReports": "tmp/orchestration/markdown-renderer-embeds/audit",
+    "implementationBuildBenchmarkGateAndManifestArtifacts": "tmp/orchestration/markdown-renderer-embeds",
+    "basis": "Ignored artifacts are not one clone-complete bundle. SHA-256 and recorded recovery-workspace identity are authoritative. Project-relative paths are stable hints."
   },
   "measurementManifestCompleteness": {
     "status": "forward-correction-required",

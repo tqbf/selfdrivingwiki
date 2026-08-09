@@ -149,6 +149,14 @@ or a future waiver. A later head, bundle, dependency, grammar, source-maximum,
 or unexplained size change invalidates this exception and needs fresh evidence.
 PR 1 must state these values, boundaries, and invalidation conditions.
 
+The accepted measurement head is `f6cd101d`. The documentation candidate head is
+`7cfac571`; no measurement is claimed at that head. Canonical audit reports are
+preserved in the orchestrator checkout under `tmp/orchestration/markdown-renderer-embeds/audit`.
+Build, benchmark, gate, and input-manifest artifacts are retained in the
+implementation workspace under the same project-relative root. These ignored
+artifacts are not one clone-complete bundle. SHA-256 and recorded recovery-workspace
+identity are authoritative; paths are stable hints.
+
 The canonical exact-head non-size evidence is the focused log
 `tmp/orchestration/markdown-renderer-embeds/gates/focused-875a2438.log`
 (SHA-256 `0fd1a3d085e8a92d4019aa9553d130e20e3ce317845fcdbfd12221d0cfd4dbf0`)

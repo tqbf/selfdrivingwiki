@@ -84,6 +84,13 @@ The f6cd101d-to-875a2438 source/build-input diff is empty. Any manifest input,
 bundle, dependency, grammar, query, fixture, build setting, or base change ends
 this inheritance and requires new measurement and operator approval.
 
+The accepted H1 measurement remains at `f6cd101d`; `7cfac571` is a
+documentation candidate and claims no new measurement. Canonical audit reports
+are retained in the orchestrator checkout. Build, benchmark, gate, and manifest
+artifacts are retained in the implementation workspace. Both use the same
+project-relative evidence-root hint. SHA-256 and recovery-workspace identity,
+not a clone-complete artifact bundle, are authoritative.
+
 Canonical final-head evidence names the focused log
 `tmp/orchestration/markdown-renderer-embeds/gates/focused-875a2438.log`
 (SHA-256 `0fd1a3d085e8a92d4019aa9553d130e20e3ce317845fcdbfd12221d0cfd4dbf0`)
