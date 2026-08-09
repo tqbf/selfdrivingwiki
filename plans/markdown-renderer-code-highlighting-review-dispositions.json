@@ -12,7 +12,7 @@
     "sha256": "1b7a3d78a1ffb48d8da5f78e23661b7014d1da02b12110fa75b3ad5f8adebb00"
   },
   "freshAudit": {
-    "path": "/Users/wsargent/.paseo/worktrees/3d2txdt2/markdown-renderers-01-audit-f6cd101d-r3/tmp/orchestration/markdown-renderers-embeds/audit/phase1-independent-audit-f6cd101d-r3.md",
+    "path": "tmp/orchestration/markdown-renderer-embeds/audit/phase1-independent-audit-f6cd101d-r3.md",
     "sha256": "2c1a83eec0dc2b338d86bccee701f0f83026fe64f8bf1e10fbbfcfc935d262d5"
   },
   "operatorExceptions": [
@@ -28,7 +28,7 @@
       "finalDeltaBytes": 8384864,
       "priorDeltaBytes": 8251456,
       "additionalApprovedGrowthBytes": 133408,
-      "evidence": "tmp/orchestration/markdown-renderers-embeds/phase1-r1-final-head-evidence-f6cd101d.json",
+      "evidence": "tmp/orchestration/markdown-renderer-embeds/phase1-r1-final-head-evidence-f6cd101d.json",
       "evidenceSHA256": "88c68d53a82bd4134cd69178cfe0c999c3af7cece0662af394b590a3c444fd8d",
       "boundaries": "Exact five-grammar implementation, unchanged 124-file attribution, no new dependency, and no shipped test, benchmark, or fixture artifact.",
       "invalidation": "Any later head, bundle, dependency, grammar, source-maximum, or unexplained size change needs fresh evidence and a new decision."

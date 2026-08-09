@@ -129,11 +129,17 @@ The final head is `f6cd101df847b92f2a439cabfbb1d7dd404d28c1`. Its tree is
 `14f07d60093daf25596522924a77b6fa0742a23d`. The measurement used `make release`
 and compared the exact-head arm64 app executable with the approved
 base. The final evidence record is
-`tmp/orchestration/markdown-renderers-embeds/phase1-r1-final-head-evidence-f6cd101d.json`
+`tmp/orchestration/markdown-renderer-embeds/phase1-r1-final-head-evidence-f6cd101d.json`
 with SHA-256
 `88c68d53a82bd4134cd69178cfe0c999c3af7cece0662af394b590a3c444fd8d`.
+The final documentation-only head inherits this measurement only through
+`tmp/orchestration/markdown-renderer-embeds/measured-input-manifest-875a2438.json`
+(SHA-256 `e4c330ef9b623621c2b52c639a54fc29cc33b901f466af684af840a9f126542e`).
+Its measured source and build-input diff from `f6cd101d` is empty. Any listed
+input, bundle inventory, dependency, grammar, query, fixture, build setting, or
+base change requires a new measurement and operator decision.
 The independent Claude audit is
-`/Users/wsargent/.paseo/worktrees/3d2txdt2/markdown-renderers-01-audit-f6cd101d-r3/tmp/orchestration/markdown-renderers-embeds/audit/phase1-independent-audit-f6cd101d-r3.md`
+`tmp/orchestration/markdown-renderer-embeds/audit/phase1-independent-audit-f6cd101d-r3.md`
 with SHA-256
 `2c1a83eec0dc2b338d86bccee701f0f83026fe64f8bf1e10fbbfcfc935d262d5`.
 The same 124 bundle files account for the measured growth. No new dependency
@@ -142,6 +148,26 @@ does not allow a new grammar, a larger source maximum, unrelated binary growth,
 or a future waiver. A later head, bundle, dependency, grammar, source-maximum,
 or unexplained size change invalidates this exception and needs fresh evidence.
 PR 1 must state these values, boundaries, and invalidation conditions.
+
+The canonical exact-head non-size evidence is the focused log
+`tmp/orchestration/markdown-renderer-embeds/gates/focused-875a2438.log`
+(SHA-256 `0fd1a3d085e8a92d4019aa9553d130e20e3ce317845fcdbfd12221d0cfd4dbf0`)
+and the make-test log `tmp/orchestration/markdown-renderer-embeds/gates/make-test-875a2438.log`
+(SHA-256 `2bfc205bf508efa94fdb1e9ad0eb1e1ed04704dd770f404bd1dd6e25d14a779b`).
+The prerequisite record is `gates/prerequisites-f6cd101d-r4.log` (SHA-256
+`115fc2d1c271aacc399f3e9131ae6d929cfe4c792c6882ea70034046512a9c1f`).
+The base G1 log is `baseline/swift-test-base-20260809-074808.log` (SHA-256
+`83cfaf605a1dd46632c321e74d8faae65cf05ee39e778357d8447c81f4f0d6f9`).
+It is a canonical copy of retained main-checkout provenance. G1 remains a
+base-equivalent non-pass.
+
+The historical aggregate probe is retired as a reproducible execution surface
+because its links point to the removed former highlighter path. Its immutable
+record remains provenance only. The committed CodeHighlightBenchmark is the
+supported performance surface. A late highlighter failure can consume a budget
+slot after eligibility. This cosmetic limitation does not affect fail-closed
+output. Query compilation failure remains a permanent fail-closed degradation:
+the affected fence emits escaped plain code.
 
 The independent Claude audit at `e18c9f62230076954a9424b0a800210611ee3041`
 also retained release measurements at the accepted 256 KiB maximum in
