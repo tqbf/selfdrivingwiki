@@ -1050,6 +1050,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         /// the pure WKWebView parse/layout (loadHTMLString→didFinish).
         private var htmlLoadStart: DispatchTime?
         private var isLoadingBinding: Binding<Bool>?
+        private var renderOptions: MarkdownRenderOptions?
 
         func startLoad(markdown: String, isLoading: Binding<Bool>) {
             convertTask?.cancel()  // drop any in-flight conversion for stale markdown
@@ -1067,6 +1068,8 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 Task { @MainActor in isLoading.wrappedValue = true }
             }
             loadStart = DispatchTime.now()
+            let renderOptions = MarkdownRenderOptions.reader
+            self.renderOptions = renderOptions
             // Measure the synchronous click→startLoad window: openTab →
             // loadDrafts (getPage + stripped) → SwiftUI re-render → this
             // updateNSView→startLoad dispatch. This is the gap NOT covered by
@@ -1144,7 +1147,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     // absolute/data:/wiki: srcs before calling us.
                     guard let map = renderedSourceMap, let siblingID = map[src] else { return nil }
                     return "\(WikiLinkMarkdown.blobScheme)://source/\(siblingID.rawValue)"
-                })
+                }, options: renderOptions)
                 let html = WikiReaderView.documentHTML(body)
                 let convertMs = Self.elapsedMs(since: t0)
                 let convertDone = DispatchTime.now()
@@ -1464,6 +1467,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
 
             // 4. Fresh render context (memoized, event-bus-invalidated).
             let context = store.renderContext()
+            let renderOptions = self.renderOptions ?? .reader
 
             // 5. Off-main fetch + render. `readPool` is `nil` for in-memory
             //    stores (a separate `:memory:` connection sees a different,
@@ -1475,12 +1479,12 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 if let pool = store.readPool {
                     raw = try await pool.asyncRead { roStore in
                         try TransclusionEmbedder.renderEmbedBody(
-                            store: roStore, target: target, context: context)
+                            store: roStore, target: target, context: context, options: renderOptions)
                     }
                 } else if let grdb = store.internalStore as? GRDBWikiStore {
                     // Main-actor fallback (in-memory tests; rare in prod).
                     raw = try TransclusionEmbedder.renderEmbedBody(
-                        store: grdb, target: target, context: context)
+                        store: grdb, target: target, context: context, options: renderOptions)
                 } else {
                     raw = TransclusionEmbedder.emptySentinel
                 }

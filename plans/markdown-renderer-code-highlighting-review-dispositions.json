@@ -15,14 +15,14 @@
   "dispositions": [
     { "id": "M1", "status": "discharged", "basis": "Fresh release maximum-block probe measured all five 256 KiB fixtures. Scala was worst at 31.19 MiB RSS delta, below the 32 MiB criterion." },
     { "id": "M2", "status": "fixed", "basis": "CodeSyntaxHighlighterSecurityTests anchors AC.2 at the public boundary: capture-shaped adversarial text stays inert, has exact textContent, and output classes remain within the closed palette." },
-    { "id": "M3", "status": "architect-or-operator-owned", "basis": "The ChatWebView boundary remains outside Phase 1. No CSS or ChatWebView change is authorized." },
-    { "id": "M4", "status": "architect-or-operator-owned", "basis": "The checked-in corpus is now explicitly deterministic fixture metadata, but release-probe versioning and representative-corpus policy require an architect decision." },
+    { "id": "M3", "status": "fixed", "basis": "ChatWebView now passes MarkdownRenderOptions.chat. Fenced chat code remains escaped inert plain code, preserves its language class, and cannot emit an sdw-code token span; no chat CSS was added." },
+    { "id": "M4", "status": "fixed", "basis": "CodeHighlightBenchmarkFixtures is committed, creates deterministic exact-size fixtures, and its checked-in corpus metadata names the constructor and representative nested Scala shape." },
     { "id": "M5", "status": "fixed", "basis": "The diagnostic is stamped non-gating, uses its actual measurement role, and no longer carries a hard-coded uncommitted head." },
     { "id": "M6", "status": "discharged", "basis": "Fresh release maximum-block evidence places the worst parse-plus-query p95 at 31.527 ms, inside the plan's 100 ms cancellation-observation window. The existing cancellation seam remains covered without a blocking timing test." },
     { "id": "L1", "status": "discharged", "basis": "Validated C-order tokens are not sorted. The builder preserves first-range precedence and rejects an unexpected order fail closed." },
     { "id": "L2", "status": "discharged", "basis": "Out-of-order untrusted ranges return nil and use escaped fallback; they are not repaired or reordered." },
     { "id": "L3", "status": "architect-or-operator-owned", "basis": "Reader contrast policy is not changed in this pass. The requested CSS change is outside the authorized scope." },
-    { "id": "L4", "status": "architect-or-operator-owned", "basis": "Renderer-wide block accounting and ChatWebView scope remain the F5 architecture decision." },
+    { "id": "L4", "status": "fixed", "basis": "MarkdownRenderOptions carries one synchronized HighlightedCodeBlockBudget from the root reader conversion to transclusion rendering, while the explicit chat policy disables highlighting." },
     { "id": "L5", "status": "discharged", "basis": "The direct byte builder rejects non-contiguous UTF-8 storage and conversion failure, then uses the inert escaped fallback." },
     { "id": "L6", "status": "fixed", "basis": "The include-closure manifest records all nine compilation roots with upstream and candidate blobs, as well as the complete local include closure." },
     { "id": "L7", "status": "fixed", "basis": "The security suite asserts that every closed palette class has the existing reader stylesheet rule." },
@@ -31,15 +31,15 @@
     { "id": "L10", "status": "discharged", "basis": "No history rewrite is proposed or needed; the current branch retains the audited commit chain." },
     { "id": "L11", "status": "fixed", "basis": "The 32-call concurrency fixture now uses distinct language and source invocations and compares every result with its serial expected output." },
     { "id": "F1", "status": "discharged", "basis": "The fresh Claude audit produced retained release evidence at the accepted 256 KiB maximum for every grammar." },
-    { "id": "F2", "status": "architect-or-operator-owned", "basis": "Scala's worst observed maximum-block RSS delta is 31.19 MiB, 97.5% of the 32 MiB budget. The measurement passes, but margin disposition remains architect-owned." },
+    { "id": "F2", "status": "architect-or-operator-owned", "basis": "The architect cleared a committed nested-Scala 256 KiB fresh-process repeat. Its exact-head 32 MiB result remains required evidence; no margin or accepted-size change is made by this corrective pass." },
     { "id": "F3", "status": "fixed", "basis": "This finite, machine-readable inventory dispositions every prior M1-M6 and L1-L11 finding and every fresh F1-F10 finding." },
     { "id": "F4", "status": "fixed", "basis": "CodeSyntaxHighlighterSecurityTests adds the named AC.2 closed-palette and inert-output regression anchor." },
-    { "id": "F5", "status": "architect-or-operator-owned", "basis": "The source reader's per-renderer block policy versus ChatWebView is a scope decision. This pass makes no ChatWebView or CSS change." },
+    { "id": "F5", "status": "fixed", "basis": "The typed reader/chat policy is explicit. WikiReader shares a document-wide budget with TransclusionEmbedder; ChatWebView disables highlighting and retains inert escaped fences without token CSS." },
     { "id": "F6", "status": "discharged", "basis": "The existing cancellation closure has focused coverage, and exact release maximum-block parse-plus-query p95 is below 100 ms without adding a scheduler-sensitive assertion." },
-    { "id": "F7", "status": "architect-or-operator-owned", "basis": "Fixture metadata now states deterministic construction and representative blocks. Tracking or governing the ignored release probe remains an architect decision." },
+    { "id": "F7", "status": "fixed", "basis": "The committed fixture generator and release-test measurement schema make the nested Scala maximum input and representative blocks reproducible. Ignored JSON records are restricted to the benchmark evidence directory." },
     { "id": "F8", "status": "fixed", "basis": "The debug evidence schema labels RSS as process-wide ru_maxrss diagnostic data, not highlighter-attributable memory." },
     { "id": "F9", "status": "fixed", "basis": "The closure manifest now includes the complete blob and candidate-byte verification for runtime lib.c and all eight grammar parser or scanner roots." },
     { "id": "F10", "status": "fixed", "basis": "Design, inventory, and fixture metadata now state the reviewed evidence boundaries, deterministic fixture source, and closure-root accounting." }
   ],
-  "unresolved": ["F2", "F5"]
+  "unresolved": ["F2"]
 }

@@ -274,6 +274,32 @@ struct TransclusionEmbedTests {
         #expect(!TransclusionEmbedder.isEmpty(html))
     }
 
+    @Test func rootAndTransclusionShareTheDocumentHighlightedFenceBudget() throws {
+        let store = try TestStoreFactory.inMemory()
+        let embedded = try store.createPage(title: "Embedded")
+        let fence = "```swift\nlet value = 1\n```"
+        try store.updatePage(
+            id: embedded.id,
+            title: "Embedded",
+            body: [fence, fence].joined(separator: "\n\n"))
+        let context = contextFor(store: store, pages: [(embedded.id.rawValue, "Embedded")])
+        let options = MarkdownRenderOptions.reader
+        let root = MarkdownHTMLRenderer.render(
+            Array(repeating: fence, count: CodeHighlightingPolicy.maximumHighlightedBlockCount - 1)
+                .joined(separator: "\n\n"),
+            options: options)
+        let embeddedHTML = try TransclusionEmbedder.renderEmbedBody(
+            store: store,
+            target: .page(embedded.id),
+            context: context,
+            options: options)
+        let marker = "<span class=\"sdw-code-keyword\">let</span>"
+
+        #expect(root.components(separatedBy: marker).count - 1 == CodeHighlightingPolicy.maximumHighlightedBlockCount - 1)
+        #expect(embeddedHTML.components(separatedBy: marker).count - 1 == 1)
+        #expect(embeddedHTML.contains("<pre><code class=\"language-swift\">let value = 1"))
+    }
+
     @Test func renderEmbedBodyNestedEmbedsCollapse() throws {
         // A page whose body contains a `![[Inner]]` → rendered HTML has a
         // nested `<details class="sdw-transclusion">` with no `open` attribute.

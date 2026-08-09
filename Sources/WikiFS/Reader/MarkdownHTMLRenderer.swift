@@ -1,6 +1,47 @@
 import Foundation
 import Markdown
+import Synchronization
 import WikiFSCore
+
+/// Selects whether one Markdown conversion may use native ordinary-code
+/// highlighting. Chat explicitly disables this policy to keep transcript fences
+/// as inert escaped plain code.
+enum MarkdownCodeHighlightingPolicy: Sendable {
+    case enabled(HighlightedCodeBlockBudget)
+    case disabled
+}
+
+/// Immutable inputs for one Markdown conversion. A reader document shares its
+/// budget with lazily rendered transclusions. Other callers receive an explicit
+/// policy instead of inheriting highlighting accidentally.
+struct MarkdownRenderOptions: Sendable {
+    let codeHighlighting: MarkdownCodeHighlightingPolicy
+
+    static var reader: Self {
+        Self(codeHighlighting: .enabled(HighlightedCodeBlockBudget()))
+    }
+
+    static let chat = Self(codeHighlighting: .disabled)
+}
+
+/// A document-scoped fence budget. The mutex protects only the remaining
+/// count. It never contains mutable Tree-sitter parser, tree, query-cursor, or
+/// result state.
+final class HighlightedCodeBlockBudget: Sendable {
+    private let remaining: Mutex<Int>
+
+    init(limit: Int = CodeHighlightingPolicy.maximumHighlightedBlockCount) {
+        remaining = Mutex(limit)
+    }
+
+    func claim() -> Bool {
+        remaining.withLock { value in
+            guard value > 0 else { return false }
+            value -= 1
+            return true
+        }
+    }
+}
 
 /// Renders Markdown → HTML for the source web reader (the `WKWebView` path).
 /// Walks a swift-markdown `Document` with a `MarkupVisitor`, emitting faithful
@@ -28,10 +69,12 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
     static func render(
         _ markdown: String,
         imageResolver: ((String) -> String?)? = nil,
+        options: MarkdownRenderOptions = .reader,
         isCancelled: @escaping @Sendable () -> Bool = { Task.isCancelled }
     ) -> String {
         var renderer = MarkdownHTMLRenderer()
         renderer.imageResolver = imageResolver
+        renderer.codeHighlighting = options.codeHighlighting
         renderer.isCancelled = isCancelled
         return renderer.visit(Document(parsing: markdown))
     }
@@ -43,8 +86,8 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
     /// Phase 4: optional resolver that rewrites a relative image src to a
     /// `wiki-blob://source/<id>` URL. Set by the static `render` before visiting.
     private var imageResolver: ((String) -> String?)?
+    private var codeHighlighting: MarkdownCodeHighlightingPolicy = .disabled
     private var isCancelled: @Sendable () -> Bool = { Task.isCancelled }
-    private var highlightedFenceCount = 0
 
     private mutating func visitChildren(_ markup: Markup) -> String {
         var s = ""
@@ -77,9 +120,9 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
             ? ""
             : " class=\"language-\(escapeAttribute(codeBlock.language ?? ""))\""
         let highlighted: String?
-        if let language = CodeLanguage.fromFenceInfo(codeBlock.language),
-           highlightedFenceCount < CodeHighlightingPolicy.maximumHighlightedBlockCount {
-            highlightedFenceCount += 1
+        if case .enabled(let budget) = codeHighlighting,
+           let language = CodeLanguage.fromFenceInfo(codeBlock.language),
+           budget.claim() {
             highlighted = CodeSyntaxHighlighter.highlightedHTML(
                 source: codeBlock.code,
                 language: language,

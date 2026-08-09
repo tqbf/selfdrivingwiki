@@ -12,6 +12,14 @@ to HTML and `jsonc` maps to JSON. Any other fence, source above 256 KiB,
 document block after the first 100, cancellation, unavailable C result, or
 invalid token result uses the existing escaped-code fallback.
 
+`MarkdownRenderOptions` makes this policy explicit at the render boundary.
+`WikiReaderView` creates one `.reader` option for the root conversion and
+retains it for transclusion fetches; its `HighlightedCodeBlockBudget` is thus
+document-wide rather than visitor-local. `ChatWebView` passes `.chat`, which
+disables tokenization while retaining the ordinary escaped fence and its
+original `language-<info>` class. Chat adds no token CSS and never emits an
+`sdw-code-*` span.
+
 The C boundary creates and destroys its parser, tree, query, and cursor during
 one synchronous call. One query definition per grammar is initialized with
 `pthread_once`. The initializer filters captures that have no closed-palette
@@ -124,6 +132,21 @@ attributable solely to the highlighter, so it does not assert release latency
 or RSS budgets. The release aggregate and maximum-block records remain the
 performance evidence.
 
+The committed `CodeHighlightBenchmarkFixtures` constructor supplies the
+maximum-size nested Scala input. It repeats syntactically complete objects with
+nested expressions, generic `Box[Map[String, List[Int]]]` values,
+interpolation, and collection transformations, then finishes the exact byte
+budget with a legal Scala line comment. The opt-in
+`CodeHighlightPerformanceTests.releaseMaximumNestedScalaProbe` is the
+reproducible fresh-process shell: each
+`swift test -c release --filter CodeHighlightPerformanceTests.releaseMaximumNestedScalaProbe` invocation
+performs three warmups and twenty measured calls after fixture construction.
+It records parser, query, range-validation, HTML-assembly, and total p50/p95,
+capture and emitted-token (validated-range) counts, and a clearly limited
+process-wide RSS delta to the ignored benchmark directory. The exact-head
+records are generated only after the corrective commit and are not shipped in
+the app.
+
 The supported SwiftPM sanitizer commands passed the focused six-test
 highlighter suite. They were `WIKIFS_APP_TESTS=1 swift test --sanitize address
 --filter CodeSyntaxHighlighterTests --jobs 4` and `WIKIFS_APP_TESTS=1 swift
@@ -138,9 +161,11 @@ limitation. It is not sanitizer success evidence.
 [`plans/markdown-renderer-code-highlighting-review-dispositions.json`](markdown-renderer-code-highlighting-review-dispositions.json)
 is the finite disposition matrix for the earlier M1–M6 and L1–L11 findings and
 the fresh F1–F10 findings. It binds both independent audit reports by SHA-256.
-F2, the Scala maximum-block RSS margin, and F5, the reader versus ChatWebView
-block-policy boundary, remain architect or operator owned. This Phase 1 pass
-does not change either boundary.
+The F5 boundary is corrected by the explicit reader/chat policy and shared
+reader-document budget. M4 and F7 are corrected by the committed deterministic
+fixture constructor and fresh-process schema. F2 remains pending the new
+exact-head maximum-size RSS evidence and a fresh independent audit; no margin
+or threshold is claimed before that evidence exists.
 
 ## Maintenance and known limitation
 

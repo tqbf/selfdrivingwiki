@@ -7,8 +7,11 @@
   "productionSymbols": [
     { "path": "Sources/CTreeSitterHighlighting/TreeSitterHighlighting.c", "symbols": ["definition_for", "wiki_tree_sitter_highlight", "wiki_tree_sitter_highlight_result_count", "wiki_tree_sitter_highlight_result_tokens", "wiki_tree_sitter_highlight_result_timing", "wiki_tree_sitter_highlight_result_delete"] },
     { "path": "Sources/WikiFS/Reader/CodeSyntaxHighlighter.swift", "symbols": ["CodeLanguage.fromFenceInfo(_:)", "CodeHighlightingPolicy", "CodeHighlightMeasurement", "CodeSyntaxHighlighter.highlightedHTML(source:language:isCancelled:measurement:)", "CodeSyntaxHighlighter.validateTokenStream(_:count:sourceBytes:)", "CodeSyntaxHighlighter.escapedHTML(sourceBytes:tokenPointer:count:)"] },
-    { "path": "Sources/WikiFS/Reader/MarkdownHTMLRenderer.swift", "symbols": ["MarkdownHTMLRenderer.render(_:imageResolver:isCancelled:)", "MarkdownHTMLRenderer.visitCodeBlock(_)"] },
-    { "path": "Sources/WikiFS/Reader/WikiReaderView.swift", "symbols": ["WikiReaderView.documentHTML(_:) code token CSS"] }
+    { "path": "Sources/WikiFS/Reader/CodeHighlightBenchmarkFixtures.swift", "symbols": ["CodeHighlightBenchmarkFixtures.nestedScalaMaximum(bytes:)", "CodeHighlightBenchmarkFixtures.representativeFencedBlocks()"] },
+    { "path": "Sources/WikiFS/Reader/MarkdownHTMLRenderer.swift", "symbols": ["MarkdownCodeHighlightingPolicy", "MarkdownRenderOptions.reader", "MarkdownRenderOptions.chat", "HighlightedCodeBlockBudget.claim()", "MarkdownHTMLRenderer.render(_:imageResolver:options:isCancelled:)", "MarkdownHTMLRenderer.visitCodeBlock(_)"] },
+    { "path": "Sources/WikiFS/Reader/TransclusionEmbedder.swift", "symbols": ["TransclusionEmbedder.renderEmbedBody(store:target:context:options:)"] },
+    { "path": "Sources/WikiFS/Reader/WikiReaderView.swift", "symbols": ["WikiReaderRep.Coordinator.startLoad(markdown:isLoading:)", "WikiReaderRep.Coordinator.processEmbedFetch(_:)", "WikiReaderView.documentHTML(_:) code token CSS"] },
+    { "path": "Sources/WikiFS/Chats/ChatWebView.swift", "symbols": ["ChatWebView.Coordinator.renderedMarkdown(_:context:)"] }
   ],
   "decisionAndErrorBranches": [
     "closed language and two accepted aliases select one of five native grammars",
@@ -19,7 +22,10 @@
     "only closed palette spans are emitted; source slices are HTML escaped",
     "query compilation and ignored-capture filtering finish before pthread_once publication",
     "Tree-sitter parser, tree, cursor, and result state is created and freed in the invoking C call",
-    "the direct UTF-8 builder rejects invalid conversion or capacity overflow and uses escaped fallback"
+    "the direct UTF-8 builder rejects invalid conversion or capacity overflow and uses escaped fallback",
+    "reader policy shares one synchronized highlighted-fence budget across root conversion and transclusions",
+    "chat policy disables native token spans and retains escaped ordinary fenced code",
+    "the release probe accepts only an ignored benchmark-directory JSON output path and records a process-wide RSS limitation"
   ],
   "tests": [
     "CodeSyntaxHighlighterTests.testHostileHTMLAndMultibyteSourceStayInertAndTextEquivalent()",
@@ -33,7 +39,11 @@
     "MarkdownHTMLRendererTests.approvedFenceLanguagesHighlightWithoutChangingText()",
     "MarkdownHTMLRendererTests.closedFenceLanguageAliasesPreserveOriginalClass()",
     "MarkdownHTMLRendererTests.highlightingLimitsAndCancellationFallBackToPlainCode()",
-    "MarkdownHTMLRendererTests.mermaidFenceEmitsLanguageClassAndEscaping()"
+    "MarkdownHTMLRendererTests.mermaidFenceEmitsLanguageClassAndEscaping()",
+    "ChatTranscriptPresentationTests.fencedCodeStaysEscapedAndUnhighlightedInChat()",
+    "TransclusionEmbedTests.rootAndTransclusionShareTheDocumentHighlightedFenceBudget()",
+    "CodeHighlightPerformanceTests.nestedScalaMaximumFixtureIsDeterministic()",
+    "CodeHighlightPerformanceTests.releaseMaximumNestedScalaProbe()"
   ],
   "provenance": {
     "includeClosureManifest": "tmp/orchestration/markdown-renderer-embeds/include-closure-manifest.json",

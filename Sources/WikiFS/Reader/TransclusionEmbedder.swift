@@ -52,7 +52,8 @@ enum TransclusionEmbedder {
     static func renderEmbedBody(
         store: GRDBWikiStore,
         target: TargetID,
-        context: WikiRenderContext
+        context: WikiRenderContext,
+        options: MarkdownRenderOptions = .reader
     ) throws -> String {
         let raw: String?
         let contentKind: ReaderMarkdown.ContentKind
@@ -73,7 +74,7 @@ enum TransclusionEmbedder {
             embedInfo: context.embedInfo,
             displayName: context.displayName,
             pinnedExtractionID: context.pinnedExtractionID)
-        return MarkdownHTMLRenderer.render(prepared)
+        return MarkdownHTMLRenderer.render(prepared, options: options)
     }
 
     /// Pure read against a read-only store: source-derived markdown HEAD if

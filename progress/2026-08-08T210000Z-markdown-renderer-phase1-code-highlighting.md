@@ -20,6 +20,10 @@ The C boundary owns mutable Tree-sitter state for one synchronous invocation.
 Swift validates returned byte ranges against UTF-8 boundaries, escapes every
 source slice, and emits only a fixed semantic token palette. The renderer has a
 256 KiB per-block limit, a 100-block document limit, and cancellation fallback.
+`MarkdownRenderOptions` makes the policy explicit: WikiReader shares one
+document-wide highlighted-fence budget with its transclusions, while ChatWebView
+uses a disabled policy and keeps fenced code escaped, inert, and free of
+`sdw-code-*` spans.
 
 The design and full immutable source/license provenance are in
 [`plans/markdown-renderer-code-highlighting.md`](../plans/markdown-renderer-code-highlighting.md).
@@ -59,9 +63,12 @@ fault. Delivery readiness, push, and pull request actions remain stopped.
 The independent `e18c9f62` audit measured every grammar at the accepted 256 KiB
 maximum. Its worst parse-plus-query p95 was Scala at 31.527 ms and its highest
 RSS delta was Scala at 31.19 MiB. The accepted criterion passed, but the 97.5%
-Scala RSS margin is F2 and remains architect-owned. F5, the reader versus
-ChatWebView block-policy boundary, also remains architect-owned. The
-disposition pass adds AC.2 public-boundary inert-output coverage, distinct
-32-call inputs, deterministic fixture metadata, process-wide RSS labeling, and
-nine recorded compilation-root blobs. It does not change production rendering,
-the five grammars, or later-phase scope.
+Scala RSS margin is F2 and remains pending a new exact-head 256 KiB nested
+Scala fresh-process measurement. The corrective pass fixes F5 by separating
+the reader and chat policies and sharing the reader's budget with
+TransclusionEmbedder. It also fixes M4/F7 with a committed deterministic nested
+Scala fixture generator and release-test measurement schema. The ignored probe
+records stage timings, capture/token/range counts, and the explicitly limited
+process-wide RSS delta. It does not change the five grammars, thresholds,
+security policy, or later-phase scope. A fresh heterogeneous audit remains
+required after the corrective commit.

@@ -120,6 +120,16 @@ struct ChatTranscriptPresentationTests {
         #expect(html.contains("<code>─────────────────────────────────────────────────</code>") == false)
     }
 
+    @Test func fencedCodeStaysEscapedAndUnhighlightedInChat() {
+        let source = "let value = \"<script>inert</script>\""
+        let html = ChatWebView.Coordinator.renderedMarkdown("```swift\n\(source)\n```")
+
+        #expect(html.contains("<pre><code class=\"language-swift\">"))
+        #expect(html.contains("sdw-code-") == false)
+        #expect(html.contains("<script>inert</script>") == false)
+        #expect(html.contains("&lt;script&gt;inert&lt;/script&gt;"))
+    }
+
     @Test func incompleteToolFenceRemainsVisibleAsRawOutput() {
         let row = ChatDisplayRow.toolCall(
             id: ToolCallID(rawValue: "tool-incomplete-fence"),
