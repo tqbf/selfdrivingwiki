@@ -2,7 +2,25 @@
   "schemaVersion": 1,
   "phase": "Phase 1 ordinary fenced code and native Tree-sitter highlighting",
   "base": "14f07d60093daf25596522924a77b6fa0742a23d",
-  "headBinding": "tmp/orchestration/markdown-renderer-embeds/phase1-exact-head-evidence.json",
+  "headBinding": "tmp/orchestration/markdown-renderer-embeds/phase1-r1-final-head-evidence-f6cd101d.json",
+  "currentExactHead": {
+    "head": "f6cd101df847b92f2a439cabfbb1d7dd404d28c1",
+    "tree": "dfd81201b736fa82c7a14291858c22efe8698717",
+    "parent": "e80f138bf8417c1e656bff9c6119ab5cd343c2a8",
+    "base": "14f07d60093daf25596522924a77b6fa0742a23d",
+    "mergeBase": "14f07d60093daf25596522924a77b6fa0742a23d",
+    "evidenceSHA256": "88c68d53a82bd4134cd69178cfe0c999c3af7cece0662af394b590a3c444fd8d",
+    "h1": {
+      "measurementCommand": "make release",
+      "finalExecutableBytes": 96056944,
+      "finalDeltaBytes": 8384864,
+      "priorDeltaBytes": 8251456,
+      "additionalApprovedGrowthBytes": 133408,
+      "bundleFileCount": 124,
+      "attribution": "Same 124-file app bundle. No new dependency or shipped test, benchmark, or fixture artifact.",
+      "operatorException": "operator-exception-phase-1-h1-exact-head-size-20260809-001"
+    }
+  },
   "reviewDispositionInventory": "plans/markdown-renderer-code-highlighting-review-dispositions.json",
   "productionSymbols": [
     { "path": "Sources/CTreeSitterHighlighting/TreeSitterHighlighting.c", "symbols": ["definition_for", "wiki_tree_sitter_highlight", "wiki_tree_sitter_highlight_result_count", "wiki_tree_sitter_highlight_result_tokens", "wiki_tree_sitter_highlight_result_timing", "wiki_tree_sitter_highlight_result_delete"] },
@@ -62,7 +80,7 @@
   ],
   "historicalEvidenceLimitations": [
     "release-byte-buffer-aggregate-record.json captured head equal to base from an out-of-tree probe harness; it is retained as a historical performance record, not exact-head identity evidence.",
-    "F2, G1, H1, and sanitizer records retain their original immutable heads. The M-2 corrective cycle writes a separate ignored exact-head record and does not rewrite historical evidence."
+    "F2, G1, H1, and sanitizer records retain their original immutable heads. The final H1 decision is a separate exact-head exception record. The M-2 corrective cycle writes separate ignored exact-head records and does not rewrite historical evidence."
   ],
   "baselineGateLimitations": [
     {
@@ -70,11 +88,13 @@
       "status": "base-equivalent-non-pass",
       "command": "WIKIFS_APP_TESTS=1 swift test --filter LauncherChatAgentRuntimeTests.acpToolOutputKeepsTheDescriptorAndRendersRawOutputSafely --jobs 4",
       "base": "14f07d60093daf25596522924a77b6fa0742a23d",
-      "candidate": "74079438437ad3177671285c4993392c6c135b9f",
+      "candidate": "f6cd101df847b92f2a439cabfbb1d7dd404d28c1",
       "result": "Both exits are 1 with the same two provider-wrapper assertions.",
       "cause": "ChatWebView.toolDetailPayload intentionally removes a complete provider-added Markdown fence before escaping the tool detail. The Phase 1 .chat Markdown policy does not change this path.",
-      "candidateLog": "tmp/test-logs/swift-test-20260809-073422.log",
-      "candidateLogSHA256": "d6f938a46816ea0d1bf647037a416c58900ac8f9e27f4d4da68cb7a4e0e3eceb",
+      "baseLog": "tmp/orchestration/markdown-renderer-embeds/baseline/swift-test-base-20260809-074808.log",
+      "baseLogSHA256": "83cfaf605a1dd46632c321e74d8faae65cf05ee39e778357d8447c81f4f0d6f9",
+      "candidateLog": "tmp/orchestration/markdown-renderer-embeds/gates/g1-f6cd101d.log",
+      "candidateLogSHA256": "d71cf809d7e74dd09739c95c281cd6ce32e1f6288a75ce7251e53e510c3961fe",
       "disposition": "Retain as a baseline limitation. Do not claim that the app-enabled full suite passed or modify ChatWebView.toolDetailPayload or LauncherChatAgentRuntimeTests in Phase 1."
     }
   ]

@@ -121,6 +121,28 @@ artifact. The remaining 14,335 bundle bytes come from exact-head version data,
 ad-hoc signatures, and one-byte MLX cache metadata variation. This measured
 exception does not change the five-language set or any security policy.
 
+The final exact-head H1 record extends this narrow exception. The final release
+executable is 96,056,944 bytes. Its delta is 8,384,864 bytes. The prior delta
+was 8,251,456 bytes. The operator approved the additional 133,408 bytes.
+The final head is `f6cd101df847b92f2a439cabfbb1d7dd404d28c1`. Its tree is
+`dfd81201b736fa82c7a14291858c22efe8698717`. Its base and merge base are
+`14f07d60093daf25596522924a77b6fa0742a23d`. The measurement used `make release`
+and compared the exact-head arm64 app executable with the approved
+base. The final evidence record is
+`tmp/orchestration/markdown-renderers-embeds/phase1-r1-final-head-evidence-f6cd101d.json`
+with SHA-256
+`88c68d53a82bd4134cd69178cfe0c999c3af7cece0662af394b590a3c444fd8d`.
+The independent Claude audit is
+`/Users/wsargent/.paseo/worktrees/3d2txdt2/markdown-renderers-01-audit-f6cd101d-r3/tmp/orchestration/markdown-renderers-embeds/audit/phase1-independent-audit-f6cd101d-r3.md`
+with SHA-256
+`2c1a83eec0dc2b338d86bccee701f0f83026fe64f8bf1e10fbbfcfc935d262d5`.
+The same 124 bundle files account for the measured growth. No new dependency
+or shipped test, benchmark, or fixture artifact entered the app. The exception
+does not allow a new grammar, a larger source maximum, unrelated binary growth,
+or a future waiver. A later head, bundle, dependency, grammar, source-maximum,
+or unexplained size change invalidates this exception and needs fresh evidence.
+PR 1 must state these values, boundaries, and invalidation conditions.
+
 The independent Claude audit at `e18c9f62230076954a9424b0a800210611ee3041`
 also retained release measurements at the accepted 256 KiB maximum in
 `tmp/orchestration/markdown-renderer-embeds/audit/maxblock-{java,scala,html,swift,json}.json`.

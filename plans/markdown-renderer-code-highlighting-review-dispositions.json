@@ -3,23 +3,55 @@
   "phase": "Phase 1 ordinary fenced code and native Tree-sitter highlighting",
   "base": "14f07d60093daf25596522924a77b6fa0742a23d",
   "historicalReviewedImplementationHead": "e18c9f62230076954a9424b0a800210611ee3041",
-  "currentExactHeadEvidence": "tmp/orchestration/markdown-renderer-embeds/phase1-m1-m2-corrective-evidence.json",
+  "currentExactHeadEvidence": "tmp/orchestration/markdown-renderer-embeds/phase1-r1-final-head-evidence-f6cd101d.json",
+  "currentExactHead": "f6cd101df847b92f2a439cabfbb1d7dd404d28c1",
+  "currentExactTree": "dfd81201b736fa82c7a14291858c22efe8698717",
+  "currentExactBase": "14f07d60093daf25596522924a77b6fa0742a23d",
   "priorAudit": {
     "path": "/Users/wsargent/.paseo/worktrees/3d2txdt2/markdown-renderers-01-audit-a40156d/tmp/orchestration/markdown-renderer-embeds/audit/phase1-independent-audit-a40156d.md",
     "sha256": "1b7a3d78a1ffb48d8da5f78e23661b7014d1da02b12110fa75b3ad5f8adebb00"
   },
   "freshAudit": {
-    "path": "/Users/wsargent/.paseo/worktrees/3d2txdt2/markdown-renderers-01-audit-e18c9f62/tmp/orchestration/markdown-renderer-embeds/audit/phase1-independent-audit-e18c9f62.md",
-    "sha256": "391f363c01c92f3e9f9075548c7c834f1173610127b93655f1303c0e8eefdc70"
+    "path": "/Users/wsargent/.paseo/worktrees/3d2txdt2/markdown-renderers-01-audit-f6cd101d-r3/tmp/orchestration/markdown-renderers-embeds/audit/phase1-independent-audit-f6cd101d-r3.md",
+    "sha256": "2c1a83eec0dc2b338d86bccee701f0f83026fe64f8bf1e10fbbfcfc935d262d5"
+  },
+  "operatorExceptions": [
+    {
+      "id": "H1",
+      "status": "accepted",
+      "exceptionId": "operator-exception-phase-1-h1-exact-head-size-20260809-001",
+      "head": "f6cd101df847b92f2a439cabfbb1d7dd404d28c1",
+      "tree": "dfd81201b736fa82c7a14291858c22efe8698717",
+      "base": "14f07d60093daf25596522924a77b6fa0742a23d",
+      "measurementCommand": "make release",
+      "finalExecutableBytes": 96056944,
+      "finalDeltaBytes": 8384864,
+      "priorDeltaBytes": 8251456,
+      "additionalApprovedGrowthBytes": 133408,
+      "evidence": "tmp/orchestration/markdown-renderers-embeds/phase1-r1-final-head-evidence-f6cd101d.json",
+      "evidenceSHA256": "88c68d53a82bd4134cd69178cfe0c999c3af7cece0662af394b590a3c444fd8d",
+      "boundaries": "Exact five-grammar implementation, unchanged 124-file attribution, no new dependency, and no shipped test, benchmark, or fixture artifact.",
+      "invalidation": "Any later head, bundle, dependency, grammar, source-maximum, or unexplained size change needs fresh evidence and a new decision."
+    }
+  ],
+  "prDisclosure": {
+    "status": "required_before_pr1",
+    "statements": [
+      "The final H1 exception accepts a 96,056,944-byte executable and an 8,384,864-byte delta.",
+      "The prior delta was 8,251,456 bytes. The operator approved the additional 133,408 bytes.",
+      "The exception applies only to the exact five-grammar implementation and unchanged 124-file app attribution.",
+      "The G1 app-enabled test remains a base-equivalent non-pass. The full app-enabled suite is not claimed passed.",
+      "Later identity, bundle, dependency, grammar, source-maximum, or unexplained size changes invalidate the H1 exception."
+    ]
   },
   "allowedStatuses": ["fixed", "discharged", "architect-or-operator-owned"],
   "dispositions": [
     { "id": "M-1", "status": "fixed", "basis": "Both MarkdownHTMLRenderer.render and TransclusionEmbedder.renderEmbedBody require MarkdownRenderOptions. WikiReader retains its one explicit reader option; an unexpected absent context logs and uses .disabled. The API-shape test and all compiled call sites anchor this contract." },
-    { "id": "M-2", "status": "discharged", "basis": "The original M-1/M-2 corrective record covers only final-head F2, G1, and H1 release-size evidence. Exact-head sanitizer evidence is independently owned by the Claude audit, and exact-head make build and make test evidence is separately recorded. Historical artifacts retain their original identities and are not rewritten. G1 remains a documented candidate-no-worse-than-base non-pass; the app-enabled full suite is not claimed passed." },
+    { "id": "M-2", "status": "discharged", "basis": "The original M-1/M-2 corrective record covers final-head F2, G1, and the earlier H1 release-size evidence. The final H1 exception is recorded separately at f6cd101d. Exact-head sanitizer, make build, and make test evidence remain separately owned. Historical artifacts retain their original identities. G1 remains a candidate-no-worse-than-base non-pass, and the app-enabled full suite is not claimed passed." },
     { "id": "L-A", "status": "fixed", "basis": "The renderer checks language, source size, cancellation, and basic highlighter eligibility before claiming the synchronized document budget. An oversized fence followed by a valid fence regression anchors the behavior." },
     { "id": "L-B", "status": "fixed", "basis": "escapedHTML accepts only a private ValidatedTokenStream created after palette, order, bounds, and UTF-8 boundary checks against the active source buffer." },
     { "id": "L-C", "status": "fixed", "basis": "The production-source hash and historical-versus-current evidence roles are recorded accurately in the design and inventory." },
-    { "id": "L-E", "status": "fixed", "basis": "The matrix preserves prior audit identity as historical and points current review to the corrective exact-head evidence record." },
+    { "id": "L-E", "status": "fixed", "basis": "The matrix preserves prior audit identity as historical and points current review to the final f6cd101d exact-head evidence record." },
     { "id": "L-F", "status": "discharged", "basis": "The aggregate identity anomaly is retained honestly as an out-of-tree harness-capture limitation and is excluded from exact-head proof." },
     { "id": "M1", "status": "discharged", "basis": "Fresh release maximum-block probe measured all five 256 KiB fixtures. Scala was worst at 31.19 MiB RSS delta, below the 32 MiB criterion." },
     { "id": "M2", "status": "fixed", "basis": "CodeSyntaxHighlighterSecurityTests anchors AC.2 at the public boundary: capture-shaped adversarial text stays inert, has exact textContent, and output classes remain within the closed palette." },
@@ -54,9 +86,11 @@
     {
       "id": "G1",
       "status": "base-equivalent-non-pass",
-      "basis": "The approved base 14f07d60093daf25596522924a77b6fa0742a23d and candidate 74079438437ad3177671285c4993392c6c135b9f both exit 1 for the filtered LauncherChatAgentRuntimeTests wrapper assertion. ChatWebView.toolDetailPayload intentionally removes a complete provider-added fence. Phase 1 only passes .chat to MarkdownHTMLRenderer and does not change that path.",
-      "candidateLog": "tmp/test-logs/swift-test-20260809-073422.log",
-      "candidateLogSHA256": "d6f938a46816ea0d1bf647037a416c58900ac8f9e27f4d4da68cb7a4e0e3eceb",
+      "basis": "The approved base 14f07d60093daf25596522924a77b6fa0742a23d and final candidate f6cd101df847b92f2a439cabfbb1d7dd404d28c1 both exit 1 for the filtered LauncherChatAgentRuntimeTests wrapper assertion. ChatWebView.toolDetailPayload intentionally removes a complete provider-added fence. Phase 1 only passes .chat to MarkdownHTMLRenderer and does not change that path.",
+      "baseLog": "tmp/orchestration/markdown-renderer-embeds/baseline/swift-test-base-20260809-074808.log",
+      "baseLogSHA256": "83cfaf605a1dd46632c321e74d8faae65cf05ee39e778357d8447c81f4f0d6f9",
+      "candidateLog": "tmp/orchestration/markdown-renderer-embeds/gates/g1-f6cd101d.log",
+      "candidateLogSHA256": "d71cf809d7e74dd09739c95c281cd6ce32e1f6288a75ce7251e53e510c3961fe",
       "disposition": "Keep this result as PR evidence. Do not claim the app-enabled full suite passed."
     }
   ]
