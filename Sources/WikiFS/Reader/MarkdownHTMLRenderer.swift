@@ -22,6 +22,8 @@ struct MarkdownRenderOptions: Sendable {
         Self(codeHighlighting: .enabled(HighlightedCodeBlockBudget()))
     }
 
+    /// Fail-closed policy for callers without an authoritative reader context.
+    static let disabled = Self(codeHighlighting: .disabled)
     static let chat = Self(codeHighlighting: .disabled)
 }
 
@@ -70,7 +72,7 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
     static func render(
         _ markdown: String,
         imageResolver: ((String) -> String?)? = nil,
-        options: MarkdownRenderOptions = .reader,
+        options: MarkdownRenderOptions,
         isCancelled: @escaping @Sendable () -> Bool = { Task.isCancelled }
     ) -> String {
         var renderer = MarkdownHTMLRenderer()
@@ -123,6 +125,10 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         let highlighted: String?
         if case .enabled(let budget) = codeHighlighting,
            let language = CodeLanguage.fromFenceInfo(codeBlock.language),
+           CodeSyntaxHighlighter.isEligibleSource(
+               codeBlock.code,
+               language: language,
+               isCancelled: isCancelled),
            budget.claim() {
             highlighted = CodeSyntaxHighlighter.highlightedHTML(
                 source: codeBlock.code,

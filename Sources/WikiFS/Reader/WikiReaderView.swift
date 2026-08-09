@@ -1467,7 +1467,15 @@ internal struct WikiReaderRep: NSViewRepresentable {
 
             // 4. Fresh render context (memoized, event-bus-invalidated).
             let context = store.renderContext()
-            let renderOptions = self.renderOptions ?? .reader
+            let renderOptions: MarkdownRenderOptions
+            if let configuredOptions = self.renderOptions {
+                renderOptions = configuredOptions
+            } else {
+                // A lazy embed without the root document's policy must never
+                // acquire reader highlighting implicitly.
+                DebugLog.reader("embed-fetch missing document render policy; using disabled highlighting")
+                renderOptions = .disabled
+            }
 
             // 5. Off-main fetch + render. `readPool` is `nil` for in-memory
             //    stores (a separate `:memory:` connection sees a different,

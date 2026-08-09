@@ -53,7 +53,7 @@ enum TransclusionEmbedder {
         store: GRDBWikiStore,
         target: TargetID,
         context: WikiRenderContext,
-        options: MarkdownRenderOptions = .reader
+        options: MarkdownRenderOptions
     ) throws -> String {
         let raw: String?
         let contentKind: ReaderMarkdown.ContentKind

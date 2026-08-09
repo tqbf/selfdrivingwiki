@@ -49,7 +49,7 @@ struct CodeHighlightPerformanceTests {
         }
         let maxAfterRSS = Self.peakRSSBytes()
         let hundredBlockSamples = Self.measure(Self.measuredSamples) {
-            _ = MarkdownHTMLRenderer.render(fixtures.hundredBlocks)
+            _ = MarkdownHTMLRenderer.render(fixtures.hundredBlocks, options: .reader)
         }
 
         let evidence = Evidence(

@@ -85,7 +85,7 @@ struct CodeSyntaxHighlighterTests {
     func testCancellationFallsBackBetweenBlocks() {
         let fences = Array(repeating: "~~~swift\nlet value = 1\n~~~", count: 2).joined(separator: "\n\n")
         let calls = Mutex(0)
-        let html = MarkdownHTMLRenderer.render(fences, isCancelled: {
+        let html = MarkdownHTMLRenderer.render(fences, options: .reader, isCancelled: {
             calls.withLock {
                 $0 += 1
                 return $0 > 2

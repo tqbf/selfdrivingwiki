@@ -2,7 +2,8 @@
   "schemaVersion": 1,
   "phase": "Phase 1 ordinary fenced code and native Tree-sitter highlighting",
   "base": "14f07d60093daf25596522924a77b6fa0742a23d",
-  "reviewedImplementationHead": "e18c9f62230076954a9424b0a800210611ee3041",
+  "historicalReviewedImplementationHead": "e18c9f62230076954a9424b0a800210611ee3041",
+  "currentExactHeadEvidence": "tmp/orchestration/markdown-renderer-embeds/phase1-m1-m2-corrective-evidence.json",
   "priorAudit": {
     "path": "/Users/wsargent/.paseo/worktrees/3d2txdt2/markdown-renderers-01-audit-a40156d/tmp/orchestration/markdown-renderer-embeds/audit/phase1-independent-audit-a40156d.md",
     "sha256": "1b7a3d78a1ffb48d8da5f78e23661b7014d1da02b12110fa75b3ad5f8adebb00"
@@ -13,6 +14,13 @@
   },
   "allowedStatuses": ["fixed", "discharged", "architect-or-operator-owned"],
   "dispositions": [
+    { "id": "M-1", "status": "fixed", "basis": "Both MarkdownHTMLRenderer.render and TransclusionEmbedder.renderEmbedBody require MarkdownRenderOptions. WikiReader retains its one explicit reader option; an unexpected absent context logs and uses .disabled. The API-shape test and all compiled call sites anchor this contract." },
+    { "id": "M-2", "status": "discharged", "basis": "The M-1/M-2 corrective commit is followed by a separate ignored exact-head evidence record for F2, G1, release size, sanitizer, and current gates. Historical artifacts retain their original identities and are not rewritten." },
+    { "id": "L-A", "status": "fixed", "basis": "The renderer checks language, source size, cancellation, and basic highlighter eligibility before claiming the synchronized document budget. An oversized fence followed by a valid fence regression anchors the behavior." },
+    { "id": "L-B", "status": "fixed", "basis": "escapedHTML accepts only a private ValidatedTokenStream created after palette, order, bounds, and UTF-8 boundary checks against the active source buffer." },
+    { "id": "L-C", "status": "fixed", "basis": "The production-source hash and historical-versus-current evidence roles are recorded accurately in the design and inventory." },
+    { "id": "L-E", "status": "fixed", "basis": "The matrix preserves prior audit identity as historical and points current review to the corrective exact-head evidence record." },
+    { "id": "L-F", "status": "discharged", "basis": "The aggregate identity anomaly is retained honestly as an out-of-tree harness-capture limitation and is excluded from exact-head proof." },
     { "id": "M1", "status": "discharged", "basis": "Fresh release maximum-block probe measured all five 256 KiB fixtures. Scala was worst at 31.19 MiB RSS delta, below the 32 MiB criterion." },
     { "id": "M2", "status": "fixed", "basis": "CodeSyntaxHighlighterSecurityTests anchors AC.2 at the public boundary: capture-shaped adversarial text stays inert, has exact textContent, and output classes remain within the closed palette." },
     { "id": "M3", "status": "fixed", "basis": "ChatWebView now passes MarkdownRenderOptions.chat. Fenced chat code remains escaped inert plain code, preserves its language class, and cannot emit an sdw-code token span; no chat CSS was added." },

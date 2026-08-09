@@ -97,16 +97,27 @@ private enum CodeSyntaxTokenPalette: UInt8 {
 /// Every parser, tree, query, cursor, and C result is allocated and released in
 /// the same synchronous call. No mutable Tree-sitter object crosses a task.
 public enum CodeSyntaxHighlighter {
+    /// Checks the synchronous highlighter's inexpensive, fail-closed entry
+    /// conditions. Callers use this before reserving document-wide work.
+    public static func isEligibleSource(
+        _ source: String,
+        language: CodeLanguage?,
+        isCancelled: @Sendable () -> Bool
+    ) -> Bool {
+        language != nil
+            && !isCancelled()
+            && source.utf8.count <= CodeHighlightingPolicy.maximumHighlightedSourceBytes
+            && source.utf8.count <= Int(UInt32.max)
+    }
+
     public static func highlightedHTML(
         source: String,
         language: CodeLanguage?,
         isCancelled: @Sendable () -> Bool,
         measurement: ((CodeHighlightMeasurement) -> Void)? = nil
     ) -> String? {
-        guard let language,
-              !isCancelled(),
-              source.utf8.count <= CodeHighlightingPolicy.maximumHighlightedSourceBytes,
-              source.utf8.count <= Int(UInt32.max)
+        guard isEligibleSource(source, language: language, isCancelled: isCancelled),
+              let language
         else {
             return nil
         }
@@ -126,14 +137,14 @@ public enum CodeSyntaxHighlighter {
 
             guard let highlighted = source.utf8.withContiguousStorageIfAvailable({ sourceBytes -> String? in
                 let rangeStarted = DispatchTime.now().uptimeNanoseconds
-                guard validateTokenStream(tokenPointer, count: Int(count), sourceBytes: sourceBytes) else {
+                guard let tokens = validatedTokenStream(tokenPointer, count: Int(count), sourceBytes: sourceBytes) else {
                     return nil
                 }
                 let rangeFinished = DispatchTime.now().uptimeNanoseconds
                 guard !isCancelled() else { return nil }
 
                 let htmlStarted = DispatchTime.now().uptimeNanoseconds
-                let html = escapedHTML(sourceBytes: sourceBytes, tokenPointer: tokenPointer, count: Int(count))
+                let html = escapedHTML(sourceBytes: sourceBytes, tokens: tokens)
                 let htmlFinished = DispatchTime.now().uptimeNanoseconds
                 if html != nil {
                     measurement?(CodeHighlightMeasurement(
@@ -156,18 +167,17 @@ public enum CodeSyntaxHighlighter {
 
     private static func escapedHTML(
         sourceBytes: UnsafeBufferPointer<UInt8>,
-        tokenPointer: UnsafePointer<WikiTreeSitterToken>?,
-        count: Int
+        tokens: ValidatedTokenStream
     ) -> String? {
-        guard let capacity = plannedOutputCapacity(sourceByteCount: sourceBytes.count, tokenCount: count) else {
+        guard let capacity = plannedOutputCapacity(sourceByteCount: sourceBytes.count, tokenCount: tokens.count) else {
             return nil
         }
 
         var output: [UInt8] = []
         output.reserveCapacity(capacity)
         var cursor = 0
-        if let tokenPointer {
-            for index in 0..<count {
+        if let tokenPointer = tokens.pointer {
+            for index in 0..<tokens.count {
                 let token = tokenPointer[index]
                 guard let palette = CodeSyntaxTokenPalette(rawValue: token.category),
                       let start = Int(exactly: token.start_byte),
@@ -175,6 +185,8 @@ public enum CodeSyntaxHighlighter {
                 else {
                     return nil
                 }
+                // `ValidatedTokenStream` guarantees palette membership,
+                // source-ordered UTF-8 ranges, and in-bounds endpoints.
                 guard start >= cursor else { continue }
                 appendEscaped(sourceBytes, from: cursor, to: start, into: &output)
                 output.append(contentsOf: palette.openingTagUTF8)
@@ -193,13 +205,21 @@ public enum CodeSyntaxHighlighter {
     private static let closingSpanTag = Array("</span>".utf8)
     private static let maximumMarkupBytesPerToken = 48
 
-    private static func validateTokenStream(
+    /// A token stream whose C ranges have been checked against the active
+    /// contiguous UTF-8 source buffer. Its pointer is used only before the C
+    /// result is released by `highlightedHTML`'s enclosing `defer`.
+    private struct ValidatedTokenStream {
+        let pointer: UnsafePointer<WikiTreeSitterToken>?
+        let count: Int
+    }
+
+    private static func validatedTokenStream(
         _ tokenPointer: UnsafePointer<WikiTreeSitterToken>?,
         count: Int,
         sourceBytes: UnsafeBufferPointer<UInt8>
-    ) -> Bool {
-        guard count == 0 || tokenPointer != nil else { return false }
-        guard let tokenPointer else { return true }
+    ) -> ValidatedTokenStream? {
+        guard count == 0 || tokenPointer != nil else { return nil }
+        guard let tokenPointer else { return ValidatedTokenStream(pointer: nil, count: count) }
 
         var previousStart = 0
         // `ts_query_cursor_next_capture` yields source-ordered captures. Reject
@@ -213,11 +233,11 @@ public enum CodeSyntaxHighlighter {
                   isValidUTF8Range(start: start, end: end, in: sourceBytes),
                   start >= previousStart
             else {
-                return false
+                return nil
             }
             previousStart = start
         }
-        return true
+        return ValidatedTokenStream(pointer: tokenPointer, count: count)
     }
 
     private static func isValidUTF8Range(

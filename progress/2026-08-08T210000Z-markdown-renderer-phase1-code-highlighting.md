@@ -38,9 +38,9 @@ The ignored retained include-closure evidence is
 
 Focused `MarkdownHTMLRendererTests` cover the five languages, approved aliases,
 unsupported-language fallback, inert HTML, exact code text, limit fallback, and
-cancellation fallback. Implementation commit
-`a40156d790eb5f686ad536f8b897e34f8bb22983` contains the bounded Phase 1
-candidate. Delivery remains stopped while the exact-head audit findings close.
+cancellation fallback. Commit `a40156d790eb5f686ad536f8b897e34f8bb22983` is
+the historical bounded Phase 1 candidate, not the current-head binding.
+Delivery remains stopped while the exact-head audit findings close.
 
 The H1 operator exception has a clean arm64 release comparison at base
 `14f07d60093daf25596522924a77b6fa0742a23d` and implementation commit
@@ -90,3 +90,14 @@ The Phase 1 `.chat` option does not use that helper. The candidate log is
 `d6f938a46816ea0d1bf647037a416c58900ac8f9e27f4d4da68cb7a4e0e3eceb`.
 The control manifest retains the exact-base comparison. This record does not
 claim an app-enabled full-suite pass.
+
+The M-1/M-2 corrective cycle removes the highlighting-enabled defaults from
+both render entry points, makes absent reader context fail closed to disabled
+highlighting, and reserves the shared document budget only after language,
+size, cancellation, and basic highlighter eligibility pass. It also represents
+the checked C ranges with a private validated-token stream before byte-buffer
+assembly. The historical aggregate probe records `head == base` because its
+out-of-tree harness captured identity incorrectly; it remains retained as
+historical performance evidence and not exact-head proof. A new ignored
+exact-head record binds this correction's F2, G1, app-size, sanitizer, and
+normal-gate evidence without rewriting the historical artifacts.

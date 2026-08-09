@@ -12,19 +12,21 @@ to HTML and `jsonc` maps to JSON. Any other fence, source above 256 KiB,
 document block after the first 100, cancellation, unavailable C result, or
 invalid token result uses the existing escaped-code fallback.
 
-`MarkdownRenderOptions` makes this policy explicit at the render boundary.
-`WikiReaderView` creates one `.reader` option for the root conversion and
-retains it for transclusion fetches; its `HighlightedCodeBlockBudget` is thus
-document-wide rather than visitor-local. `ChatWebView` passes `.chat`, which
-disables tokenization while retaining the ordinary escaped fence and its
-original `language-<info>` class. Chat adds no token CSS and never emits an
-`sdw-code-*` span.
+`MarkdownRenderOptions` is required at both render entry points; there is no
+highlighting-enabled default. `WikiReaderView` creates one `.reader` option for
+the root conversion and retains it for transclusion fetches; its
+`HighlightedCodeBlockBudget` is thus document-wide rather than visitor-local.
+An unexpectedly missing reader context logs and uses the fail-closed
+`.disabled` policy. `ChatWebView` passes `.chat`, which disables tokenization
+while retaining the ordinary escaped fence and its original `language-<info>`
+class. Chat adds no token CSS and never emits an `sdw-code-*` span.
 
 The C boundary creates and destroys its parser, tree, query, and cursor during
 one synchronous call. One query definition per grammar is initialized with
 `pthread_once`. The initializer filters captures that have no closed-palette
 mapping before it publishes the query. Swift receives a value-token buffer,
-validates every byte range as a UTF-8 `String` boundary, and escapes source
+validates every byte range as a UTF-8 `String` boundary, and represents the
+checked C buffer as a private `ValidatedTokenStream` before escaping source
 bytes into one capacity-planned buffer. It wraps source only in the closed
 `sdw-code-*` palette. No mutable Tree-sitter state crosses a task or actor
 boundary. The implementation does not use `@unchecked Sendable`.
@@ -87,9 +89,13 @@ builder removes per-token source strings and repeated UTF-8 conversion. It
 keeps validated source order and first-range precedence. Query iteration and
 overlap normalization remain linear.
 
-The remediation release run reused the same production highlighter source hash
-(`f0573c0497b941c149e9045406eebec4e8291400126f9486937bf243dde77337`) and
-vendored C target as the app comparison. It ran the retained
+The historical remediation release run used production highlighter source hash
+`f0573c0497b941c149e9045406eebec4e8291400126f9486937bf243dde77337` and the
+same vendored C target as the app comparison. The M-1/L-A/L-B corrective
+source hash is `a4a46dd8aee0b39882792d62c657a07f00fbe37805744bab0932e90499c730a5`;
+its exact commit, tree, and post-commit measurements are recorded in a new
+ignored exact-head evidence record rather than overwriting this historical run.
+The historical run used the retained
 `ReleaseCodeHighlightAggregateProbe` at the exact remediation head with three
 warmups and twenty 100 KiB samples per grammar. Its p95 totals were Java
 9.043 ms, Scala 12.229 ms, HTML 8.654 ms, Swift 11.521 ms, and JSON 8.650 ms.
@@ -171,6 +177,16 @@ reader-document budget. M4 and F7 are corrected by the committed deterministic
 fixture constructor and fresh-process schema. F2 is discharged only by the
 narrow recorded operator exception; no margin, threshold, or accepted-size
 change is claimed.
+
+The M-1 corrective cycle removes the reader default from both public render
+entry points and adds an API-shape regression test. L-A now checks the closed
+language, source size, cancellation, and basic highlighter feasibility before
+claiming a document budget slot. L-B uses `ValidatedTokenStream` to make the
+assembler's validated-range precondition explicit without allocating a second
+per-token collection. The subsequent M-2 validation binds the correction to a
+new ignored exact-head record; historical F2, G1, H1, sanitizer, and aggregate
+records remain unchanged. The aggregate record's `head == base` identity is a
+known out-of-tree harness-capture anomaly and is not used as exact-head proof.
 
 ## Maintenance and known limitation
 

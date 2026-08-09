@@ -6,10 +6,10 @@
   "reviewDispositionInventory": "plans/markdown-renderer-code-highlighting-review-dispositions.json",
   "productionSymbols": [
     { "path": "Sources/CTreeSitterHighlighting/TreeSitterHighlighting.c", "symbols": ["definition_for", "wiki_tree_sitter_highlight", "wiki_tree_sitter_highlight_result_count", "wiki_tree_sitter_highlight_result_tokens", "wiki_tree_sitter_highlight_result_timing", "wiki_tree_sitter_highlight_result_delete"] },
-    { "path": "Sources/WikiFSCodeHighlighting/CodeSyntaxHighlighter.swift", "symbols": ["CodeLanguage.fromFenceInfo(_:)", "CodeHighlightingPolicy", "CodeHighlightMeasurement", "CodeSyntaxHighlighter.highlightedHTML(source:language:isCancelled:measurement:)", "CodeSyntaxHighlighter.validateTokenStream(_:count:sourceBytes:)", "CodeSyntaxHighlighter.escapedHTML(sourceBytes:tokenPointer:count:)"] },
+    { "path": "Sources/WikiFSCodeHighlighting/CodeSyntaxHighlighter.swift", "sha256": "a4a46dd8aee0b39882792d62c657a07f00fbe37805744bab0932e90499c730a5", "symbols": ["CodeLanguage.fromFenceInfo(_:)", "CodeHighlightingPolicy", "CodeHighlightMeasurement", "CodeSyntaxHighlighter.isEligibleSource(_:language:isCancelled:)", "CodeSyntaxHighlighter.highlightedHTML(source:language:isCancelled:measurement:)", "CodeSyntaxHighlighter.ValidatedTokenStream", "CodeSyntaxHighlighter.validatedTokenStream(_:count:sourceBytes:)", "CodeSyntaxHighlighter.escapedHTML(sourceBytes:tokens:)"] },
     { "path": "Sources/WikiFSCodeHighlighting/CodeHighlightBenchmarkFixtures.swift", "symbols": ["CodeHighlightBenchmarkFixtures.nestedScalaMaximum(bytes:)", "CodeHighlightBenchmarkFixtures.representativeFencedBlocks()"] },
     { "path": "Sources/CodeHighlightBenchmark", "symbols": ["CodeHighlightBenchmarkCommand.parse(arguments:)", "BenchmarkReportBuilder.make(options:system:fixtureID:fixtureDigestSHA256:sourceBytes:warmupRuns:samples:rssDeltaBytes:)", "CodeHighlightBenchmarkRunner.run(options:)"] },
-    { "path": "Sources/WikiFS/Reader/MarkdownHTMLRenderer.swift", "symbols": ["MarkdownCodeHighlightingPolicy", "MarkdownRenderOptions.reader", "MarkdownRenderOptions.chat", "HighlightedCodeBlockBudget.claim()", "MarkdownHTMLRenderer.render(_:imageResolver:options:isCancelled:)", "MarkdownHTMLRenderer.visitCodeBlock(_)"] },
+    { "path": "Sources/WikiFS/Reader/MarkdownHTMLRenderer.swift", "symbols": ["MarkdownCodeHighlightingPolicy", "MarkdownRenderOptions.reader", "MarkdownRenderOptions.disabled", "MarkdownRenderOptions.chat", "HighlightedCodeBlockBudget.claim()", "MarkdownHTMLRenderer.render(_:imageResolver:options:isCancelled:)", "MarkdownHTMLRenderer.visitCodeBlock(_)"] },
     { "path": "Sources/WikiFS/Reader/TransclusionEmbedder.swift", "symbols": ["TransclusionEmbedder.renderEmbedBody(store:target:context:options:)"] },
     { "path": "Sources/WikiFS/Reader/WikiReaderView.swift", "symbols": ["WikiReaderRep.Coordinator.startLoad(markdown:isLoading:)", "WikiReaderRep.Coordinator.processEmbedFetch(_:)", "WikiReaderView.documentHTML(_:) code token CSS"] },
     { "path": "Sources/WikiFS/Chats/ChatWebView.swift", "symbols": ["ChatWebView.Coordinator.renderedMarkdown(_:context:)"] }
@@ -24,6 +24,9 @@
     "query compilation and ignored-capture filtering finish before pthread_once publication",
     "Tree-sitter parser, tree, cursor, and result state is created and freed in the invoking C call",
     "the direct UTF-8 builder rejects invalid conversion or capacity overflow and uses escaped fallback",
+    "render entry points require an explicit typed policy; an absent reader context fails closed to disabled highlighting",
+    "only language-, size-, cancellation-, and basic-feasibility-eligible fences claim a shared document budget slot",
+    "the byte assembler accepts only a private validated token stream whose ranges were checked against the active UTF-8 buffer",
     "reader policy shares one synchronized highlighted-fence budget across root conversion and transclusions",
     "chat policy disables native token spans and retains escaped ordinary fenced code",
     "the CodeHighlightBenchmark release probe accepts only its closed nested-Scala mode and ignored benchmark-directory JSON output path, then records a process-wide RSS limitation"
@@ -56,6 +59,10 @@
   "directCoverageLimits": [
     "The C allocation-failure branch is not deterministically injectable through the production ABI.",
     "Sanitizer support depends on the local Swift/Clang linker toolchain; command output is retained separately from functional test results."
+  ],
+  "historicalEvidenceLimitations": [
+    "release-byte-buffer-aggregate-record.json captured head equal to base from an out-of-tree probe harness; it is retained as a historical performance record, not exact-head identity evidence.",
+    "F2, G1, H1, and sanitizer records retain their original immutable heads. The M-2 corrective cycle writes a separate ignored exact-head record and does not rewrite historical evidence."
   ],
   "baselineGateLimitations": [
     {

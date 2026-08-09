@@ -269,7 +269,7 @@ struct TransclusionEmbedTests {
         let context = contextFor(store: store, pages: [(page.id.rawValue, "Inner")])
 
         let html = try TransclusionEmbedder.renderEmbedBody(
-            store: store, target: .page(page.id), context: context)
+            store: store, target: .page(page.id), context: context, options: .disabled)
         #expect(html.contains("Hello"))
         #expect(html.contains("<strong>world</strong>"))
         #expect(!TransclusionEmbedder.isEmpty(html))
@@ -315,7 +315,7 @@ struct TransclusionEmbedTests {
             pages: [(inner.id.rawValue, "Inner"), (outer.id.rawValue, "Outer")])
 
         let html = try TransclusionEmbedder.renderEmbedBody(
-            store: store, target: .page(outer.id), context: context)
+            store: store, target: .page(outer.id), context: context, options: .disabled)
         #expect(html.contains("sdw-transclusion"))
         #expect(html.contains("data-sdw-embed-kind=\"page\""))
         // Collapsed-by-default: NO `open` attribute on the nested details.
@@ -331,7 +331,7 @@ struct TransclusionEmbedTests {
         // it (house rule). The Coordinator catches and renders "Failed to load".
         #expect(throws: Error.self) {
             _ = try TransclusionEmbedder.renderEmbedBody(
-                store: store, target: .page(ghostID), context: context)
+                store: store, target: .page(ghostID), context: context, options: .disabled)
         }
     }
 
@@ -344,7 +344,7 @@ struct TransclusionEmbedTests {
         let context = contextFor(store: store, pages: [], sources: [(src.id.rawValue, "doc.pdf")])
 
         let html = try TransclusionEmbedder.renderEmbedBody(
-            store: store, target: .source(src.id), context: context)
+            store: store, target: .source(src.id), context: context, options: .disabled)
         #expect(html.contains("Extracted"))
         #expect(html.contains("The body."))
     }
@@ -377,7 +377,7 @@ struct TransclusionEmbedTests {
         )
 
         let html = try TransclusionEmbedder.renderEmbedBody(
-            store: store, target: .page(page.id), context: context)
+            store: store, target: .page(page.id), context: context, options: .disabled)
         #expect(html.contains("pin=\(v2.id.rawValue)"))
     }
 
@@ -389,7 +389,7 @@ struct TransclusionEmbedTests {
         let context = contextFor(store: store, pages: [], sources: [(src.id.rawValue, "notes.txt")])
 
         let html = try TransclusionEmbedder.renderEmbedBody(
-            store: store, target: .source(src.id), context: context)
+            store: store, target: .source(src.id), context: context, options: .disabled)
         #expect(html.contains("Plain text body."))
     }
 
@@ -406,7 +406,7 @@ struct TransclusionEmbedTests {
         #expect(body == nil)
 
         let html = try TransclusionEmbedder.renderEmbedBody(
-            store: store, target: .source(src.id), context: context)
+            store: store, target: .source(src.id), context: context, options: .disabled)
         #expect(TransclusionEmbedder.isEmpty(html))
     }
 

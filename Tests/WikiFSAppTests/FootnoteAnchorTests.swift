@@ -62,7 +62,8 @@ struct FootnoteAnchorTests {
         // same string, or native WKWebView scroll won't find the target. Checked
         // on the fully rendered HTML (the format actually loaded into the view).
         let html = MarkdownHTMLRenderer.render(
-            ReaderMarkdown.prepared(Self.footnoteMarkdown) { _, _ in true })
+            ReaderMarkdown.prepared(Self.footnoteMarkdown) { _, _ in true },
+            options: .disabled)
         for id in ["n", "other"] {
             let anchor = "id=\"wiki-fn-\(id)\""
             let href = "href=\"#wiki-fn-\(id)\""
@@ -73,7 +74,8 @@ struct FootnoteAnchorTests {
 
     @Test func renderedHTMLContainsAnchorAndReferenceLink() {
         let html = MarkdownHTMLRenderer.render(
-            ReaderMarkdown.prepared(Self.footnoteMarkdown) { _, _ in true })
+            ReaderMarkdown.prepared(Self.footnoteMarkdown) { _, _ in true },
+            options: .disabled)
         // The anchor element is emitted verbatim (raw inline HTML).
         #expect(html.contains("<a id=\"wiki-fn-n\"></a>"))
         // The reference is a real fragment <a href="#wiki-fn-n">.
