@@ -32,12 +32,18 @@ The ignored retained include-closure evidence is
 
 Focused `MarkdownHTMLRendererTests` cover the five languages, approved aliases,
 unsupported-language fallback, inert HTML, exact code text, limit fallback, and
-cancellation fallback. The complete gate and exact-head evidence are recorded
-after the implementation commit.
+cancellation fallback. Implementation commit
+`a40156d790eb5f686ad536f8b897e34f8bb22983` contains the bounded Phase 1
+candidate. Delivery remains stopped while the exact-head audit findings close.
 
-The pre-delivery normal gate run passed on the preserved candidate at base and
-HEAD `14f07d60093daf25596522924a77b6fa0742a23d`. It passed `make build`,
-`make test`, app-test-enabled `swift test`, `make prompts`, bare `swift build`,
-bare `swift test`, focused renderer tests, and focused sanitizer tests. The
-candidate remains uncommitted. Delivery readiness, commit, push, and pull
-request actions remain stopped for orchestrator direction.
+The H1 operator exception has a clean arm64 release comparison at base
+`14f07d60093daf25596522924a77b6fa0742a23d` and implementation commit
+`a40156d790eb5f686ad536f8b897e34f8bb22983`. The ignored record is
+`tmp/orchestration/markdown-renderer-embeds/phase1-release-size-measurement-a40156d.json`.
+Its SHA-256 is
+`fd494056f59b8d99cb4f35a13e0c4ed53ba8a9825849ff0e81720863d26866df`.
+It records an 8,251,456-byte linked app delta and no shipped test, benchmark,
+or fixture file. The C contribution contains only the approved runtime, five
+grammars, query wrapper, and reader implementation. The remaining audit gate
+work will bind normal-gate evidence to the exact remediation head. Delivery
+readiness, push, and pull request actions remain stopped.

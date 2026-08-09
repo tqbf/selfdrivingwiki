@@ -75,6 +75,24 @@ builder removes per-token source strings and repeated UTF-8 conversion. It
 keeps validated source order and first-range precedence. Query iteration and
 overlap normalization remain linear.
 
+The approved H1 exception has a separate before-and-after release measurement.
+`tmp/orchestration/markdown-renderer-embeds/phase1-release-size-measurement-a40156d.json`
+has SHA-256
+`fd494056f59b8d99cb4f35a13e0c4ed53ba8a9825849ff0e81720863d26866df`.
+It compares clean arm64 `make release` app bundles at base
+`14f07d60093daf25596522924a77b6fa0742a23d` and implementation commit
+`a40156d790eb5f686ad536f8b897e34f8bb22983`. The linked app executable grows
+by 8,251,456 bytes. The approved C target contributes 8,165,388 bytes across
+the runtime, five grammar parsers or scanners, and the query wrapper. The two
+bundles each contain 124 files. They contain no test, benchmark, or fixture
+artifact. The remaining 14,335 bundle bytes come from exact-head version data,
+ad-hoc signatures, and one-byte MLX cache metadata variation. This measured
+exception does not change the five-language set or any security policy.
+
+The debug performance test is a serialized diagnostic. It records samples but
+does not assert release latency or process-wide RSS budgets. The release
+aggregate record remains the performance gate.
+
 The supported SwiftPM sanitizer commands passed the focused six-test
 highlighter suite. They were `WIKIFS_APP_TESTS=1 swift test --sanitize address
 --filter CodeSyntaxHighlighterTests --jobs 4` and `WIKIFS_APP_TESTS=1 swift
