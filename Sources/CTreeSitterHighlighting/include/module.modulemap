@@ -1,0 +1,4 @@
+module CTreeSitterHighlighting {
+  header "CTreeSitterHighlighting/CTreeSitterHighlighting.h"
+  export *
+}

@@ -27,10 +27,12 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
     /// unresolved relatives are left verbatim. Phase 4 sibling resolution.
     static func render(
         _ markdown: String,
-        imageResolver: ((String) -> String?)? = nil
+        imageResolver: ((String) -> String?)? = nil,
+        isCancelled: @escaping @Sendable () -> Bool = { Task.isCancelled }
     ) -> String {
         var renderer = MarkdownHTMLRenderer()
         renderer.imageResolver = imageResolver
+        renderer.isCancelled = isCancelled
         return renderer.visit(Document(parsing: markdown))
     }
 
@@ -41,6 +43,8 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
     /// Phase 4: optional resolver that rewrites a relative image src to a
     /// `wiki-blob://source/<id>` URL. Set by the static `render` before visiting.
     private var imageResolver: ((String) -> String?)?
+    private var isCancelled: @Sendable () -> Bool = { Task.isCancelled }
+    private var highlightedFenceCount = 0
 
     private mutating func visitChildren(_ markup: Markup) -> String {
         var s = ""
@@ -72,7 +76,18 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         let cls = (codeBlock.language ?? "").isEmpty
             ? ""
             : " class=\"language-\(escapeAttribute(codeBlock.language ?? ""))\""
-        return "<pre><code\(cls)>\(escape(codeBlock.code))</code></pre>"
+        let highlighted: String?
+        if let language = CodeLanguage.fromFenceInfo(codeBlock.language),
+           highlightedFenceCount < CodeHighlightingPolicy.maximumHighlightedBlockCount {
+            highlightedFenceCount += 1
+            highlighted = CodeSyntaxHighlighter.highlightedHTML(
+                source: codeBlock.code,
+                language: language,
+                isCancelled: isCancelled)
+        } else {
+            highlighted = nil
+        }
+        return "<pre><code\(cls)>\(highlighted ?? escape(codeBlock.code))</code></pre>"
     }
 
     mutating func visitThematicBreak(_ thematicBreak: ThematicBreak) -> String { "<hr>" }

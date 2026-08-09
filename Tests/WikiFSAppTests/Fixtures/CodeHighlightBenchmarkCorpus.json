@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "warmupRuns": 3,
+  "measuredSamples": 20,
+  "grammars": ["java", "scala", "html", "swift", "json"],
+  "fixtures": {
+    "malformed": "unterminated and structurally malformed source per grammar",
+    "representativeBlocks": 100,
+    "hundredKiBBytes": 102400,
+    "maximumAcceptedBytes": 262144
+  },
+  "budgets": {
+    "maximumBlockP95Milliseconds": 250,
+    "hundredKiBBlockP95Milliseconds": 50,
+    "hundredBlockDocumentP95Milliseconds": 500,
+    "maximumBlockPeakRSSDeltaBytes": 33554432
+  },
+  "measurement": {
+    "clock": "DispatchTime.uptimeNanoseconds",
+    "rss": "Darwin getrusage(RUSAGE_SELF).ru_maxrss",
+    "releaseConfiguration": "swift test -c release --filter CodeHighlightPerformanceTests"
+  }
+}
+

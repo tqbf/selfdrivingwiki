@@ -120,8 +120,77 @@ struct MarkdownHTMLRendererTests {
     @Test func fencedCodeBlockWithLanguage() {
         let md = "```swift\nlet x = 1\n```"
         let html = MarkdownHTMLRenderer.render(md)
-        // cmark keeps the trailing newline in the code content.
-        #expect(html == "<pre><code class=\"language-swift\">let x = 1\n</code></pre>")
+        #expect(html.contains("<pre><code class=\"language-swift\">"))
+        #expect(html.contains("<span class=\"sdw-code-keyword\">let</span> x"))
+        #expect(html.contains("<span class=\"sdw-code-number\">1</span>"))
+    }
+
+    @Test func highlightedHTMLFenceRemainsInertAndTextEquivalent() {
+        let source = "<script>alert('x')</script>\n"
+        let html = MarkdownHTMLRenderer.render("```html\n\(source)```")
+        #expect(html.contains("class=\"language-html\""))
+        #expect(html.contains("&lt;"))
+        #expect(html.contains("script"))
+        #expect(!html.contains("<script>alert"))
+        #expect(html.contains("sdw-code-"))
+        #expect(codeTextContent(in: html) == source)
+    }
+
+    @Test("all five approved fenced-code languages produce closed-palette spans")
+    func approvedFenceLanguagesHighlightWithoutChangingText() {
+        let cases = [
+            ("java", "class Example { int value = 1; }\n"),
+            ("scala", "object Example { val value = 1 }\n"),
+            ("html", "<div class=\"example\">value</div>\n"),
+            ("swift", "let value = 1\n"),
+            ("json", "{\"value\": 1}\n"),
+        ]
+
+        for (language, source) in cases {
+            let html = MarkdownHTMLRenderer.render("```\(language)\n\(source)```")
+            #expect(html.contains("class=\"language-\(language)\""), "Missing language class for \(language)")
+            #expect(html.contains("sdw-code-"), "No highlighted token for \(language)")
+            #expect(codeTextContent(in: html) == source, "Changed code text for \(language)")
+        }
+    }
+
+    @Test("only approved fence-info aliases select a grammar")
+    func closedFenceLanguageAliasesPreserveOriginalClass() {
+        let aliases = [
+            ("xml", "<node>text</node>\n"),
+            ("jsonc", "// comment\n{\"value\": 1}\n"),
+        ]
+        for (alias, source) in aliases {
+            let html = MarkdownHTMLRenderer.render("```\(alias)\n\(source)```")
+            #expect(html.contains("class=\"language-\(alias)\""))
+            #expect(html.contains("sdw-code-"))
+            #expect(codeTextContent(in: html) == source)
+        }
+
+        let unsupported = MarkdownHTMLRenderer.render("```javascript\nconst value = '<script>';\n```")
+        #expect(unsupported.contains("class=\"language-javascript\""))
+        #expect(!unsupported.contains("sdw-code-"))
+        #expect(!unsupported.contains("<script>"))
+    }
+
+    @Test("highlighting limits and cancellation fail closed to ordinary escaped code")
+    func highlightingLimitsAndCancellationFallBackToPlainCode() {
+        let oversized = String(repeating: "x", count: CodeHighlightingPolicy.maximumHighlightedSourceBytes + 1)
+        #expect(CodeSyntaxHighlighter.highlightedHTML(
+            source: oversized,
+            language: .swift,
+            isCancelled: { false }) == nil)
+        #expect(CodeSyntaxHighlighter.highlightedHTML(
+            source: "let value = 1",
+            language: .swift,
+            isCancelled: { true }) == nil)
+
+        let fence = "```swift\nlet value = 1\n```"
+        let markdown = Array(repeating: fence, count: CodeHighlightingPolicy.maximumHighlightedBlockCount + 1)
+            .joined(separator: "\n\n")
+        let html = MarkdownHTMLRenderer.render(markdown)
+        let marker = "<span class=\"sdw-code-keyword\">let</span>"
+        #expect(html.components(separatedBy: marker).count - 1 == CodeHighlightingPolicy.maximumHighlightedBlockCount)
     }
 
     @Test func regularLink() {
@@ -176,6 +245,34 @@ struct MarkdownHTMLRendererTests {
         // so #fragment resolution stays consistent between the two readers.
         let html = MarkdownHTMLRenderer.render("# Overview\n\n# Overview")
         #expect(html == "<h1 id=\"overview\">Overview</h1><h1 id=\"overview-1\">Overview</h1>")
+    }
+
+    private func codeTextContent(in html: String) -> String {
+        guard let codeStart = html.range(of: ">"),
+              let codeEnd = html.range(of: "</code>")
+        else {
+            Issue.record("Expected a code element: \(html)")
+            return ""
+        }
+        let content = html[codeStart.upperBound..<codeEnd.lowerBound]
+        var text = ""
+        var insideTag = false
+        for character in content {
+            switch character {
+            case "<": insideTag = true
+            case ">" where insideTag: insideTag = false
+            default:
+                if !insideTag {
+                    text.append(character)
+                }
+            }
+        }
+        return text
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#39;", with: "'")
     }
 
     // MARK: Mermaid

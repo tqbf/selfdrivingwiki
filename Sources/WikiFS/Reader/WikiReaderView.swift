@@ -220,6 +220,16 @@ struct WikiReaderView: View {
             --muted: rgba(60, 60, 67, 0.6);
             --code-bg: rgba(0, 0, 0, 0.06);
             --border: rgba(0, 0, 0, 0.12);
+            --code-keyword: #8b3a65;
+            --code-string: #0b6e4f;
+            --code-comment: #6e6e73;
+            --code-type: #0a5f9e;
+            --code-function: #7a4d00;
+            --code-property: #6d3c91;
+            --code-number: #9a3d00;
+            --code-operator: #505050;
+            --code-punctuation: #505050;
+            --code-constant: #7a4d00;
           }
           @media (prefers-color-scheme: dark) {
             :root {
@@ -227,6 +237,16 @@ struct WikiReaderView: View {
               --muted: rgba(235, 235, 245, 0.6);
               --code-bg: rgba(255, 255, 255, 0.08);
               --border: rgba(255, 255, 255, 0.16);
+              --code-keyword: #ff7ab2;
+              --code-string: #8bd5a8;
+              --code-comment: #a1a1a6;
+              --code-type: #7dcfff;
+              --code-function: #ffd580;
+              --code-property: #c6a0f6;
+              --code-number: #f5a97f;
+              --code-operator: #d0d0d5;
+              --code-punctuation: #d0d0d5;
+              --code-constant: #ffd580;
             }
           }
           /* color-scheme above drives the page canvas (light/dark background). */
@@ -300,6 +320,16 @@ struct WikiReaderView: View {
             font-size: 13px; line-height: 1.45;
           }
           pre code { background: none; padding: 0; font-size: inherit; }
+          .sdw-code-keyword { color: var(--code-keyword); }
+          .sdw-code-string { color: var(--code-string); }
+          .sdw-code-comment { color: var(--code-comment); }
+          .sdw-code-type { color: var(--code-type); }
+          .sdw-code-function { color: var(--code-function); }
+          .sdw-code-property { color: var(--code-property); }
+          .sdw-code-number { color: var(--code-number); }
+          .sdw-code-operator { color: var(--code-operator); }
+          .sdw-code-punctuation { color: var(--code-punctuation); }
+          .sdw-code-constant { color: var(--code-constant); }
           hr { border: none; border-top: 1px solid var(--border); margin: 1.5em 0; }
           table { border-collapse: collapse; margin: 0 0 1em; }
           th, td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; vertical-align: top; }
