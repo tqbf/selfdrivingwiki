@@ -54,22 +54,30 @@ struct CodeSyntaxHighlighterTests {
 
     @Test("concurrent calls keep parser state invocation-local")
     func testConcurrentHighlightCallsAreThreadConfined() async {
-        let source = "let value = 1"
-        let expected = CodeSyntaxHighlighter.highlightedHTML(source: source, language: .swift, isCancelled: { false })
-        let results = await withTaskGroup(of: String?.self, returning: [String?].self) { group in
-            for _ in 0..<32 {
+        let invocations = (0..<32).map { index in
+            let language = CodeLanguage.allCases[index % CodeLanguage.allCases.count]
+            return Invocation(language: language, source: Self.source(for: language, index: index))
+        }
+        let expected = invocations.map {
+            CodeSyntaxHighlighter.highlightedHTML(source: $0.source, language: $0.language, isCancelled: { false })
+        }
+        let results = await withTaskGroup(of: (Int, String?).self, returning: [String?].self) { group in
+            for (index, invocation) in invocations.enumerated() {
                 group.addTask {
-                    CodeSyntaxHighlighter.highlightedHTML(source: source, language: .swift, isCancelled: { false })
+                    (index, CodeSyntaxHighlighter.highlightedHTML(
+                        source: invocation.source,
+                        language: invocation.language,
+                        isCancelled: { false }))
                 }
             }
-            var values: [String?] = []
-            for await value in group {
-                values.append(value)
+            var values = Array<String?>(repeating: nil, count: invocations.count)
+            for await (index, value) in group {
+                values[index] = value
             }
             return values
         }
-        #expect(expected != nil)
-        #expect(results.allSatisfy { $0 == expected })
+        #expect(expected.allSatisfy { $0 != nil })
+        #expect(results == expected)
     }
 
     @Test("cancellation is checked before every ordinary fence")
@@ -102,6 +110,21 @@ struct CodeSyntaxHighlighterTests {
             .replacingOccurrences(of: "&lt;", with: "<")
             .replacingOccurrences(of: "&gt;", with: ">")
             .replacingOccurrences(of: "&amp;", with: "&")
+    }
+
+    private struct Invocation: Sendable {
+        let language: CodeLanguage
+        let source: String
+    }
+
+    private static func source(for language: CodeLanguage, index: Int) -> String {
+        switch language {
+        case .java: "class Example\(index) { int value = \(index); }"
+        case .scala: "object Example\(index) { val value = \(index) }"
+        case .html: "<example data-value=\"\(index)\">\(index)</example>"
+        case .swift: "let value\(index) = \(index)"
+        case .json: "{\"value\": \(index)}"
+        }
     }
 }
 

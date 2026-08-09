@@ -1,11 +1,14 @@
 {
   "schemaVersion": 1,
+  "artifactKind": "deterministic-fixture-metadata",
+  "fixtureSource": "CodeHighlightPerformanceTests.fixtures()",
   "warmupRuns": 3,
   "measuredSamples": 20,
   "grammars": ["java", "scala", "html", "swift", "json"],
   "fixtures": {
+    "construction": "The test builds deterministic source from fixed per-language one-line units. It truncates 100 KiB and maximum fixtures by UTF-8 byte count.",
     "malformed": "unterminated and structurally malformed source per grammar",
-    "representativeBlocks": 100,
+    "representativeBlocks": "20 repetitions of the five normal per-language fences",
     "hundredKiBBytes": 102400,
     "maximumAcceptedBytes": 262144
   },
@@ -21,4 +24,3 @@
     "releaseConfiguration": "swift test -c release --filter CodeHighlightPerformanceTests"
   }
 }
-

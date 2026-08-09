@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "phase": "Phase 1 ordinary fenced code and native Tree-sitter highlighting",
+  "base": "14f07d60093daf25596522924a77b6fa0742a23d",
+  "reviewedImplementationHead": "e18c9f62230076954a9424b0a800210611ee3041",
+  "priorAudit": {
+    "path": "/Users/wsargent/.paseo/worktrees/3d2txdt2/markdown-renderers-01-audit-a40156d/tmp/orchestration/markdown-renderer-embeds/audit/phase1-independent-audit-a40156d.md",
+    "sha256": "1b7a3d78a1ffb48d8da5f78e23661b7014d1da02b12110fa75b3ad5f8adebb00"
+  },
+  "freshAudit": {
+    "path": "/Users/wsargent/.paseo/worktrees/3d2txdt2/markdown-renderers-01-audit-e18c9f62/tmp/orchestration/markdown-renderer-embeds/audit/phase1-independent-audit-e18c9f62.md",
+    "sha256": "391f363c01c92f3e9f9075548c7c834f1173610127b93655f1303c0e8eefdc70"
+  },
+  "allowedStatuses": ["fixed", "discharged", "architect-or-operator-owned"],
+  "dispositions": [
+    { "id": "M1", "status": "discharged", "basis": "Fresh release maximum-block probe measured all five 256 KiB fixtures. Scala was worst at 31.19 MiB RSS delta, below the 32 MiB criterion." },
+    { "id": "M2", "status": "fixed", "basis": "CodeSyntaxHighlighterSecurityTests anchors AC.2 at the public boundary: capture-shaped adversarial text stays inert, has exact textContent, and output classes remain within the closed palette." },
+    { "id": "M3", "status": "architect-or-operator-owned", "basis": "The ChatWebView boundary remains outside Phase 1. No CSS or ChatWebView change is authorized." },
+    { "id": "M4", "status": "architect-or-operator-owned", "basis": "The checked-in corpus is now explicitly deterministic fixture metadata, but release-probe versioning and representative-corpus policy require an architect decision." },
+    { "id": "M5", "status": "fixed", "basis": "The diagnostic is stamped non-gating, uses its actual measurement role, and no longer carries a hard-coded uncommitted head." },
+    { "id": "M6", "status": "discharged", "basis": "Fresh release maximum-block evidence places the worst parse-plus-query p95 at 31.527 ms, inside the plan's 100 ms cancellation-observation window. The existing cancellation seam remains covered without a blocking timing test." },
+    { "id": "L1", "status": "discharged", "basis": "Validated C-order tokens are not sorted. The builder preserves first-range precedence and rejects an unexpected order fail closed." },
+    { "id": "L2", "status": "discharged", "basis": "Out-of-order untrusted ranges return nil and use escaped fallback; they are not repaired or reordered." },
+    { "id": "L3", "status": "architect-or-operator-owned", "basis": "Reader contrast policy is not changed in this pass. The requested CSS change is outside the authorized scope." },
+    { "id": "L4", "status": "architect-or-operator-owned", "basis": "Renderer-wide block accounting and ChatWebView scope remain the F5 architecture decision." },
+    { "id": "L5", "status": "discharged", "basis": "The direct byte builder rejects non-contiguous UTF-8 storage and conversion failure, then uses the inert escaped fallback." },
+    { "id": "L6", "status": "fixed", "basis": "The include-closure manifest records all nine compilation roots with upstream and candidate blobs, as well as the complete local include closure." },
+    { "id": "L7", "status": "fixed", "basis": "The security suite asserts that every closed palette class has the existing reader stylesheet rule." },
+    { "id": "L8", "status": "architect-or-operator-owned", "basis": "Typed input and attachment lifecycle work belongs to later phases and is unchanged." },
+    { "id": "L9", "status": "architect-or-operator-owned", "basis": "Stacked-review ownership is an orchestrator process concern, not a Phase 1 implementation change." },
+    { "id": "L10", "status": "discharged", "basis": "No history rewrite is proposed or needed; the current branch retains the audited commit chain." },
+    { "id": "L11", "status": "fixed", "basis": "The 32-call concurrency fixture now uses distinct language and source invocations and compares every result with its serial expected output." },
+    { "id": "F1", "status": "discharged", "basis": "The fresh Claude audit produced retained release evidence at the accepted 256 KiB maximum for every grammar." },
+    { "id": "F2", "status": "architect-or-operator-owned", "basis": "Scala's worst observed maximum-block RSS delta is 31.19 MiB, 97.5% of the 32 MiB budget. The measurement passes, but margin disposition remains architect-owned." },
+    { "id": "F3", "status": "fixed", "basis": "This finite, machine-readable inventory dispositions every prior M1-M6 and L1-L11 finding and every fresh F1-F10 finding." },
+    { "id": "F4", "status": "fixed", "basis": "CodeSyntaxHighlighterSecurityTests adds the named AC.2 closed-palette and inert-output regression anchor." },
+    { "id": "F5", "status": "architect-or-operator-owned", "basis": "The source reader's per-renderer block policy versus ChatWebView is a scope decision. This pass makes no ChatWebView or CSS change." },
+    { "id": "F6", "status": "discharged", "basis": "The existing cancellation closure has focused coverage, and exact release maximum-block parse-plus-query p95 is below 100 ms without adding a scheduler-sensitive assertion." },
+    { "id": "F7", "status": "architect-or-operator-owned", "basis": "Fixture metadata now states deterministic construction and representative blocks. Tracking or governing the ignored release probe remains an architect decision." },
+    { "id": "F8", "status": "fixed", "basis": "The debug evidence schema labels RSS as process-wide ru_maxrss diagnostic data, not highlighter-attributable memory." },
+    { "id": "F9", "status": "fixed", "basis": "The closure manifest now includes the complete blob and candidate-byte verification for runtime lib.c and all eight grammar parser or scanner roots." },
+    { "id": "F10", "status": "fixed", "basis": "Design, inventory, and fixture metadata now state the reviewed evidence boundaries, deterministic fixture source, and closure-root accounting." }
+  ],
+  "unresolved": ["F2", "F5"]
+}

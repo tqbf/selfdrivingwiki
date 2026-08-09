@@ -53,10 +53,11 @@ remains recorded as `tree-sitter/tree-sitter-swift`
 `82ad68d4ed1c8e4415452cd4d7f8c658148736d0`, and MIT license.
 
 `tmp/orchestration/markdown-renderer-embeds/include-closure-manifest.json`
-records nine parser/scanner roots, ten non-system local includes, fourteen
-include edges, complete blob hashes, licenses, candidate-byte verification, and
-zero escalations. Grammar-local support headers preserve exact HTML and Scala
-closures without adding runtime behavior.
+records one runtime root and eight grammar parser or scanner roots, ten
+non-system local includes, fourteen include edges, complete blob hashes,
+licenses, candidate-byte verification, and zero escalations. Grammar-local
+support headers preserve exact HTML and Scala closures without adding runtime
+behavior.
 
 ## Performance and validation evidence
 
@@ -67,7 +68,8 @@ Its SHA-256 is
 It records three warmups and twenty release samples for each 100 KiB grammar
 fixture. The total p95 values are Java 9.920 ms, Scala 12.185 ms, HTML 8.406
 ms, Swift 11.725 ms, and JSON 8.729 ms. The largest RSS delta is Scala at
-20.39 MiB. Every result meets the 50 ms and 32 MiB requirements.
+20.39 MiB. These samples establish the 100 KiB 50 ms latency criterion; the
+maximum-size RSS criterion is established separately below.
 
 The aggregate helper records parser, query, range-validation, HTML-assembly,
 and total timings. It also records capture and emitted normalized-token counts;
@@ -105,9 +107,22 @@ artifact. The remaining 14,335 bundle bytes come from exact-head version data,
 ad-hoc signatures, and one-byte MLX cache metadata variation. This measured
 exception does not change the five-language set or any security policy.
 
-The debug performance test is a serialized diagnostic. It records samples but
-does not assert release latency or process-wide RSS budgets. The release
-aggregate record remains the performance gate.
+The independent Claude audit at `e18c9f62230076954a9424b0a800210611ee3041`
+also retained release measurements at the accepted 256 KiB maximum in
+`tmp/orchestration/markdown-renderer-embeds/audit/maxblock-{java,scala,html,swift,json}.json`.
+The p95 parse-plus-query values were Java 22.162 ms, Scala 31.527 ms, HTML
+19.986 ms, Swift 28.799 ms, and JSON 22.927 ms. The largest observed RSS delta
+was Scala at 31.19 MiB, below the 32 MiB requirement. Scala used 97.5% of that
+budget, so F2 remains an architect-owned margin disposition rather than an
+implementation claim of extra headroom.
+
+The checked-in benchmark JSON is deterministic fixture metadata. It identifies
+the source constructor, fixed units, byte truncation, and representative block
+shape; ignored release records hold samples. The debug performance test is a
+serialized diagnostic. Its `ru_maxrss` delta is process-wide and not
+attributable solely to the highlighter, so it does not assert release latency
+or RSS budgets. The release aggregate and maximum-block records remain the
+performance evidence.
 
 The supported SwiftPM sanitizer commands passed the focused six-test
 highlighter suite. They were `WIKIFS_APP_TESTS=1 swift test --sanitize address
@@ -117,6 +132,15 @@ process emitted host CoreData XPC connection warnings during test-host
 initialization, but no ThreadSanitizer fault; both selected suites passed. The
 earlier manual `-Xlinker -fsanitize=address` command remains an Apple linker
 limitation. It is not sanitizer success evidence.
+
+## Review disposition
+
+[`plans/markdown-renderer-code-highlighting-review-dispositions.json`](markdown-renderer-code-highlighting-review-dispositions.json)
+is the finite disposition matrix for the earlier M1–M6 and L1–L11 findings and
+the fresh F1–F10 findings. It binds both independent audit reports by SHA-256.
+F2, the Scala maximum-block RSS margin, and F5, the reader versus ChatWebView
+block-policy boundary, remain architect or operator owned. This Phase 1 pass
+does not change either boundary.
 
 ## Maintenance and known limitation
 

@@ -25,6 +25,8 @@ The design and full immutable source/license provenance are in
 [`plans/markdown-renderer-code-highlighting.md`](../plans/markdown-renderer-code-highlighting.md).
 The tracked production-symbol and decision/error-branch inventory is
 [`plans/markdown-renderer-code-highlighting-inventory.json`](../plans/markdown-renderer-code-highlighting-inventory.json).
+The tracked finite review-disposition matrix is
+[`plans/markdown-renderer-code-highlighting-review-dispositions.json`](../plans/markdown-renderer-code-highlighting-review-dispositions.json).
 The ignored retained include-closure evidence is
 `tmp/orchestration/markdown-renderer-embeds/include-closure-manifest.json`.
 
@@ -53,3 +55,13 @@ was 21.36 MiB. `make build`, `make test`, app-enabled and bare SwiftPM tests,
 and focused AddressSanitizer and ThreadSanitizer highlighter suites passed.
 The TSan host emitted CoreData XPC environment warnings without a sanitizer
 fault. Delivery readiness, push, and pull request actions remain stopped.
+
+The independent `e18c9f62` audit measured every grammar at the accepted 256 KiB
+maximum. Its worst parse-plus-query p95 was Scala at 31.527 ms and its highest
+RSS delta was Scala at 31.19 MiB. The accepted criterion passed, but the 97.5%
+Scala RSS margin is F2 and remains architect-owned. F5, the reader versus
+ChatWebView block-policy boundary, also remains architect-owned. The
+disposition pass adds AC.2 public-boundary inert-output coverage, distinct
+32-call inputs, deterministic fixture metadata, process-wide RSS labeling, and
+nine recorded compilation-root blobs. It does not change production rendering,
+the five grammars, or later-phase scope.

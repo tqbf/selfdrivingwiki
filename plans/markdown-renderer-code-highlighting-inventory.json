@@ -3,6 +3,7 @@
   "phase": "Phase 1 ordinary fenced code and native Tree-sitter highlighting",
   "base": "14f07d60093daf25596522924a77b6fa0742a23d",
   "headBinding": "tmp/orchestration/markdown-renderer-embeds/phase1-exact-head-evidence.json",
+  "reviewDispositionInventory": "plans/markdown-renderer-code-highlighting-review-dispositions.json",
   "productionSymbols": [
     { "path": "Sources/CTreeSitterHighlighting/TreeSitterHighlighting.c", "symbols": ["definition_for", "wiki_tree_sitter_highlight", "wiki_tree_sitter_highlight_result_count", "wiki_tree_sitter_highlight_result_tokens", "wiki_tree_sitter_highlight_result_timing", "wiki_tree_sitter_highlight_result_delete"] },
     { "path": "Sources/WikiFS/Reader/CodeSyntaxHighlighter.swift", "symbols": ["CodeLanguage.fromFenceInfo(_:)", "CodeHighlightingPolicy", "CodeHighlightMeasurement", "CodeSyntaxHighlighter.highlightedHTML(source:language:isCancelled:measurement:)", "CodeSyntaxHighlighter.validateTokenStream(_:count:sourceBytes:)", "CodeSyntaxHighlighter.escapedHTML(sourceBytes:tokenPointer:count:)"] },
@@ -21,6 +22,12 @@
     "the direct UTF-8 builder rejects invalid conversion or capacity overflow and uses escaped fallback"
   ],
   "tests": [
+    "CodeSyntaxHighlighterTests.testHostileHTMLAndMultibyteSourceStayInertAndTextEquivalent()",
+    "CodeSyntaxHighlighterTests.testCancellationFallsBackBetweenBlocks()",
+    "CodeSyntaxHighlighterTests.testConcurrentHighlightCallsAreThreadConfined()",
+    "CodeSyntaxHighlighterSecurityTests.testHTMLAndScriptPayloadsRemainInertAndTextEquivalent()",
+    "CodeSyntaxHighlighterSecurityTests.testCaptureNamesCannotInjectAttributesOrClasses()",
+    "CodeSyntaxHighlighterSecurityTests.testReaderStylesheetDefinesEveryClosedPaletteClass()",
     "MarkdownHTMLRendererTests.fencedCodeBlockWithLanguage()",
     "MarkdownHTMLRendererTests.highlightedHTMLFenceRemainsInertAndTextEquivalent()",
     "MarkdownHTMLRendererTests.approvedFenceLanguagesHighlightWithoutChangingText()",

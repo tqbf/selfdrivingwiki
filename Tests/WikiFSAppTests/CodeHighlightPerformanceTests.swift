@@ -58,7 +58,8 @@ struct CodeHighlightPerformanceTests {
             hundredKiB: Self.summary(hundredKiBSamples),
             maximum: Self.summary(maximumSamples),
             hundredBlocks: Self.summary(hundredBlockSamples),
-            maximumRSSDeltaBytes: maxAfterRSS >= maxBeforeRSS ? maxAfterRSS - maxBeforeRSS : 0)
+            rssScope: "process-wide ru_maxrss diagnostic; not attributable to the highlighter",
+            processWideMaximumRSSDeltaBytes: maxAfterRSS >= maxBeforeRSS ? maxAfterRSS - maxBeforeRSS : 0)
         try Self.writeEvidence(evidence)
 
         #expect(evidence.hundredKiB.p95Milliseconds >= 0)
@@ -83,7 +84,8 @@ struct CodeHighlightPerformanceTests {
         let hundredKiB: Summary
         let maximum: Summary
         let hundredBlocks: Summary
-        let maximumRSSDeltaBytes: UInt64
+        let rssScope: String
+        let processWideMaximumRSSDeltaBytes: UInt64
     }
 
     private static func fixtures() -> (smallAndMalformed: [Fixture], hundredKiB: String, maximum: String, hundredBlocks: String) {
@@ -143,6 +145,8 @@ struct CodeHighlightPerformanceTests {
         let data = try Data(contentsOf: corpusURL)
         let object = try JSONSerialization.jsonObject(with: data)
         guard let corpus = object as? [String: Any],
+              corpus["artifactKind"] as? String == "deterministic-fixture-metadata",
+              corpus["fixtureSource"] as? String == "CodeHighlightPerformanceTests.fixtures()",
               corpus["warmupRuns"] as? Int == warmupRuns,
               corpus["measuredSamples"] as? Int == measuredSamples
         else {
