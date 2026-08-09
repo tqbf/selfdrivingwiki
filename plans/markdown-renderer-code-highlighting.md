@@ -169,9 +169,11 @@ slot after eligibility. This cosmetic limitation does not affect fail-closed
 output. Query compilation failure remains a permanent fail-closed degradation:
 the affected fence emits escaped plain code.
 
-The independent Claude audit at `e18c9f62230076954a9424b0a800210611ee3041`
-also retained release measurements at the accepted 256 KiB maximum in
-`tmp/orchestration/markdown-renderer-embeds/audit/maxblock-{java,scala,html,swift,json}.json`.
+The retained `e18c9f62` audit corroborates the accepted 256 KiB figures at
+`tmp/orchestration/markdown-renderer-embeds/audit/phase1-independent-audit-e18c9f62.md`
+(SHA-256 `391f363c01c92f3e9f9075548c7c834f1173610127b93655f1303c0e8eefdc70`).
+The former per-grammar `maxblock-*.json` records are not retained or hash-bound.
+The aggregate-probe retirement remains in effect.
 The p95 parse-plus-query values were Java 22.162 ms, Scala 31.527 ms, HTML
 19.986 ms, Swift 28.799 ms, and JSON 22.927 ms. The largest observed RSS delta
 was Scala at 31.19 MiB, below the 32 MiB requirement. A later regular-SwiftPM

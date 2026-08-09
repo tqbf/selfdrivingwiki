@@ -4,16 +4,27 @@
   "base": "14f07d60093daf25596522924a77b6fa0742a23d",
   "historicalReviewedImplementationHead": "e18c9f62230076954a9424b0a800210611ee3041",
   "currentExactHeadEvidence": "tmp/orchestration/markdown-renderer-embeds/phase1-r1-final-head-evidence-f6cd101d.json",
-  "currentExactHead": "f6cd101df847b92f2a439cabfbb1d7dd404d28c1",
-  "currentExactTree": "dfd81201b736fa82c7a14291858c22efe8698717",
+  "currentExactHead": "dd0ac890112c8e557cb36dde560d370695b89a36",
+  "currentExactTree": "80768f7a152f33f9cea1f8121f8aa8fe1537e394",
   "currentExactBase": "14f07d60093daf25596522924a77b6fa0742a23d",
   "priorAudit": {
-    "path": "/Users/wsargent/.paseo/worktrees/3d2txdt2/markdown-renderers-01-audit-a40156d/tmp/orchestration/markdown-renderer-embeds/audit/phase1-independent-audit-a40156d.md",
+    "path": "tmp/orchestration/markdown-renderer-embeds/audit/phase1-independent-audit-a40156d.md",
     "sha256": "1b7a3d78a1ffb48d8da5f78e23661b7014d1da02b12110fa75b3ad5f8adebb00"
   },
   "freshAudit": {
     "path": "tmp/orchestration/markdown-renderer-embeds/audit/phase1-independent-audit-f6cd101d-r3.md",
     "sha256": "2c1a83eec0dc2b338d86bccee701f0f83026fe64f8bf1e10fbbfcfc935d262d5"
+  },
+  "finalDocumentationAudit": {
+    "path": "tmp/orchestration/markdown-renderer-embeds/audit/phase1-independent-audit-dd0ac890.md",
+    "sha256": "4bba73445875156dc7f6d2c6cd32aec4013feadd435ac29919cc85e0d3ee4bf8",
+    "inputManifest": "tmp/orchestration/markdown-renderer-embeds/measured-input-manifest-875a2438.json",
+    "inputManifestSHA256": "e4c330ef9b623621c2b52c639a54fc29cc33b901f466af684af840a9f126542e"
+  },
+  "measurementManifestCompleteness": {
+    "status": "forward-correction-required",
+    "omittedInputs": ["Sources/CodeHighlightBenchmark/BenchmarkCommand.swift", "Sources/CodeHighlightBenchmark/BenchmarkReport.swift", "Sources/CodeHighlightBenchmark/BenchmarkRunner.swift", "Sources/CodeHighlightBenchmark/main.swift"],
+    "basis": "Do not change the current immutable digest in this documentation-only revision. Add these harness inputs before the next measurement-affecting revision, then rebind measurement evidence. The current unchanged-tree proof preserves the approved production highlighter, app, and fixture-generator binding."
   },
   "operatorExceptions": [
     {

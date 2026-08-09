@@ -111,6 +111,19 @@ process-wide RSS delta. It does not change the five grammars, thresholds,
 security policy, or later-phase scope. A fresh heterogeneous audit remains
 required after the corrective commit.
 
+The retained audit corroboration is
+`tmp/orchestration/markdown-renderer-embeds/audit/phase1-independent-audit-e18c9f62.md`
+(SHA-256 `391f363c01c92f3e9f9075548c7c834f1173610127b93655f1303c0e8eefdc70`).
+The former per-grammar maxblock JSON files are not retained. The aggregate probe
+remains retired. The `dd0ac890` documentation audit is
+`tmp/orchestration/markdown-renderer-embeds/audit/phase1-independent-audit-dd0ac890.md`
+(SHA-256 `4bba73445875156dc7f6d2c6cd32aec4013feadd435ac29919cc85e0d3ee4bf8`).
+Its 99-input manifest remains `measured-input-manifest-875a2438.json`
+(SHA-256 `e4c330ef9b623621c2b52c639a54fc29cc33b901f466af684af840a9f126542e`).
+The four standalone benchmark harness sources are a required manifest addition
+before the next measurement-affecting revision. They are not added now because
+that would change the immutable measurement identity and require fresh evidence.
+
 The app-enabled full SwiftPM suite is a documented non-pass. The approved base
 `14f07d60093daf25596522924a77b6fa0742a23d` and candidate
 `74079438437ad3177671285c4993392c6c135b9f` both exit 1 for
