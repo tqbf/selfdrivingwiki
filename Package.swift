@@ -118,6 +118,23 @@ let package = Package(
                 .unsafeFlags(["-UDEBUG"]),
             ]
         ),
+        // The native ordinary-fence highlighter is a leaf library so the app
+        // and the release benchmark link the exact same Swift/C implementation.
+        // It deliberately owns no UI, renderer, parser, tree, or cursor state.
+        .target(
+            name: "WikiFSCodeHighlighting",
+            dependencies: ["CTreeSitterHighlighting"],
+            path: "Sources/WikiFSCodeHighlighting",
+            swiftSettings: strictSwiftSettings
+        ),
+        // Thin process shell for the opt-in, fresh-process release measurement.
+        // It is not a WikiFS app resource or a shipping product.
+        .executableTarget(
+            name: "CodeHighlightBenchmark",
+            dependencies: ["WikiFSCodeHighlighting"],
+            path: "Sources/CodeHighlightBenchmark",
+            swiftSettings: strictSwiftSettings
+        ),
         // Shared leaf types (PageID, ULID, ResourceKind, EmbedTarget, ParsedLink)
         // — Foundation-only, depended on by WikiFSLinks and WikiFSCore. Extracted
         // from WikiFSCore in module restructuring Phase 1 (#532) so the pure-logic
@@ -265,7 +282,7 @@ let package = Package(
             name: "WikiFS",
             dependencies: [
                 "WikiFSCore",
-                "CTreeSitterHighlighting",
+                "WikiFSCodeHighlighting",
                 // The XPC contract — the app implements WikiDaemonEventSink
                 // (DaemonQueueEventSink). Empty on Linux; harmless there.
                 "WikiDaemonContract",
@@ -454,6 +471,7 @@ let package = Package(
             name: "WikiFSAppTests",
             dependencies: [
                 "WikiFSCore", "WikiCtlCore", "WikiDaemonContract",
+                "WikiFSCodeHighlighting",
                 .target(name: "WikiFSEngine", condition: .when(platforms: [.macOS])),
                 .target(name: "WikiFS", condition: .when(platforms: [.macOS])),
                 .target(name: "WikiFSMLX", condition: .when(platforms: [.macOS])),
@@ -468,6 +486,12 @@ let package = Package(
             // fixture construction remains outside timed samples; it is not a
             // SwiftPM runtime resource.
             exclude: ["Fixtures"],
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "CodeHighlightBenchmarkTests",
+            dependencies: ["CodeHighlightBenchmark", "WikiFSCodeHighlighting"],
+            path: "Tests/CodeHighlightBenchmarkTests",
             swiftSettings: strictSwiftSettings
         ),
         // The File Provider extension binary. build.sh repackages this into a

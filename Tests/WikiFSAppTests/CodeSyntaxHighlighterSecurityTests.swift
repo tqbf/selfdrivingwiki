@@ -1,6 +1,7 @@
 #if os(macOS)
 import Testing
 @testable import WikiFS
+@testable import WikiFSCodeHighlighting
 
 struct CodeSyntaxHighlighterSecurityTests {
     private static let paletteClasses: Set<String> = [

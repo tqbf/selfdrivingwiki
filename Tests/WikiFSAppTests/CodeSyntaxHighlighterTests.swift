@@ -3,6 +3,7 @@ import Foundation
 import Synchronization
 import Testing
 @testable import WikiFS
+@testable import WikiFSCodeHighlighting
 
 struct CodeSyntaxHighlighterTests {
     @Test("all approved languages produce escaped allowlisted spans")

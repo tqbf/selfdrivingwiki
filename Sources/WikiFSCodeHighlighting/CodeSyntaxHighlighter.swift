@@ -1,19 +1,18 @@
 import CTreeSitterHighlighting
 import Foundation
-import WikiFSMarkdown
 
 // pattern: Functional Core
 
 /// The closed set of ordinary fenced-code languages supported by the reader.
 /// Renderer packages and rich-fence aliases are intentionally absent.
-enum CodeLanguage: String, CaseIterable, Sendable {
+public enum CodeLanguage: String, CaseIterable, Sendable {
     case java
     case scala
     case html
     case swift
     case json
 
-    static func fromFenceInfo(_ info: String?) -> Self? {
+    public static func fromFenceInfo(_ info: String?) -> Self? {
         guard let normalized = info?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
             return nil
         }
@@ -39,20 +38,20 @@ enum CodeLanguage: String, CaseIterable, Sendable {
 }
 
 /// Named resource limits for the synchronous, thread-confined highlighter.
-enum CodeHighlightingPolicy {
-    static let maximumHighlightedSourceBytes = 256 * 1024
-    static let maximumHighlightedBlockCount = 100
+public enum CodeHighlightingPolicy {
+    public static let maximumHighlightedSourceBytes = 256 * 1024
+    public static let maximumHighlightedBlockCount = 100
 }
 
-struct CodeHighlightMeasurement: Sendable {
-    let setupNanoseconds: UInt64
-    let parserNanoseconds: UInt64
-    let queryNanoseconds: UInt64
-    let rangeValidationNanoseconds: UInt64
-    let htmlAssemblyNanoseconds: UInt64
-    let totalNanoseconds: UInt64
-    let captureCount: UInt32
-    let tokenCount: UInt32
+public struct CodeHighlightMeasurement: Sendable {
+    public let setupNanoseconds: UInt64
+    public let parserNanoseconds: UInt64
+    public let queryNanoseconds: UInt64
+    public let rangeValidationNanoseconds: UInt64
+    public let htmlAssemblyNanoseconds: UInt64
+    public let totalNanoseconds: UInt64
+    public let captureCount: UInt32
+    public let tokenCount: UInt32
 }
 
 private enum CodeSyntaxTokenPalette: UInt8 {
@@ -97,8 +96,8 @@ private enum CodeSyntaxTokenPalette: UInt8 {
 /// Converts a bounded ordinary-code fence into escaped, allowlisted token spans.
 /// Every parser, tree, query, cursor, and C result is allocated and released in
 /// the same synchronous call. No mutable Tree-sitter object crosses a task.
-enum CodeSyntaxHighlighter {
-    static func highlightedHTML(
+public enum CodeSyntaxHighlighter {
+    public static func highlightedHTML(
         source: String,
         language: CodeLanguage?,
         isCancelled: @Sendable () -> Bool,

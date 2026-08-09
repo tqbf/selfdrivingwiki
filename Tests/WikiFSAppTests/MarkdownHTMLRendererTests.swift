@@ -1,6 +1,7 @@
 #if os(macOS)
 import Testing
 @testable import WikiFS
+@testable import WikiFSCodeHighlighting
 @testable import WikiFSEngine
 @testable import WikiFSCore
 

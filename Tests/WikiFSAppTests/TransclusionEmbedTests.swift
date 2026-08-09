@@ -6,6 +6,7 @@ import WikiFSCore
 import WikiFSLinks
 import WikiFSTypes
 @testable import WikiFS
+@testable import WikiFSCodeHighlighting
 
 /// Plan v2 transclusion tests: linkify dispatch, pure fetch+render, and the
 /// Coordinator handler's cycle-marker / safe-injection paths. See

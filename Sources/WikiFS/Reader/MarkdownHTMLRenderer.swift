@@ -1,5 +1,6 @@
 import Foundation
 import Markdown
+import WikiFSCodeHighlighting
 import Synchronization
 import WikiFSCore
 

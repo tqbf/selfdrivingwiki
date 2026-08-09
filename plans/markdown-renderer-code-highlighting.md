@@ -120,9 +120,15 @@ also retained release measurements at the accepted 256 KiB maximum in
 `tmp/orchestration/markdown-renderer-embeds/audit/maxblock-{java,scala,html,swift,json}.json`.
 The p95 parse-plus-query values were Java 22.162 ms, Scala 31.527 ms, HTML
 19.986 ms, Swift 28.799 ms, and JSON 22.927 ms. The largest observed RSS delta
-was Scala at 31.19 MiB, below the 32 MiB requirement. Scala used 97.5% of that
-budget, so F2 remains an architect-owned margin disposition rather than an
-implementation claim of extra headroom.
+was Scala at 31.19 MiB, below the 32 MiB requirement. A later regular-SwiftPM
+fresh process measured the committed `nested-scala-maximum-v1` fixture at
+36,306,944 bytes (34.625 MiB), 2,752,512 bytes above the criterion. Operator
+exception `operator-exception-phase-1-f2-memory-budget-20260809-001` accepts
+only that exact five-grammar/fixture/256 KiB result. Its ignored evidence is
+`tmp/orchestration/markdown-renderer-embeds/benchmark/f2-harness-74079438-validation.json`
+(SHA-256 `ea1b9bbde0ee4cc0987bc85d3ff2262e12e9461f94b5bacae332953d14666e45`).
+The exception does not alter the threshold, permit larger inputs, or apply to
+another grammar, fixture family, dependency, or product.
 
 The checked-in benchmark JSON is deterministic fixture metadata. It identifies
 the source constructor, fixed units, byte truncation, and representative block
@@ -132,20 +138,19 @@ attributable solely to the highlighter, so it does not assert release latency
 or RSS budgets. The release aggregate and maximum-block records remain the
 performance evidence.
 
-The committed `CodeHighlightBenchmarkFixtures` constructor supplies the
+The committed `WikiFSCodeHighlighting.CodeHighlightBenchmarkFixtures` constructor supplies the
 maximum-size nested Scala input. It repeats syntactically complete objects with
 nested expressions, generic `Box[Map[String, List[Int]]]` values,
 interpolation, and collection transformations, then finishes the exact byte
-budget with a legal Scala line comment. The opt-in
-`CodeHighlightPerformanceTests.releaseMaximumNestedScalaProbe` is the
-reproducible fresh-process shell: each
-`swift test -c release --filter CodeHighlightPerformanceTests.releaseMaximumNestedScalaProbe` invocation
-performs three warmups and twenty measured calls after fixture construction.
-It records parser, query, range-validation, HTML-assembly, and total p50/p95,
-capture and emitted-token (validated-range) counts, and a clearly limited
-process-wide RSS delta to the ignored benchmark directory. The exact-head
-records are generated only after the corrective commit and are not shipped in
-the app.
+budget with a legal Scala line comment. `CodeHighlightBenchmark` is the
+reproducible fresh-process shell. Its only mode is `probe-nested-scala`;
+`swift run -c release CodeHighlightBenchmark` requires a caller-selected
+ignored JSON path and exact head, tree, and base SHAs. Each process constructs
+the fixture before its RSS baseline. It runs three warmups and twenty samples.
+It writes p50/p95 stage times, capture and token counts, platform metadata, a
+fixture digest, and a process-wide RSS delta. Build and JSON serialization are
+outside samples. The executable links the same `WikiFSCodeHighlighting` and
+`CTreeSitterHighlighting` targets as the app. It is not a shipped app resource.
 
 The supported SwiftPM sanitizer commands passed the focused six-test
 highlighter suite. They were `WIKIFS_APP_TESTS=1 swift test --sanitize address
@@ -163,14 +168,26 @@ is the finite disposition matrix for the earlier M1–M6 and L1–L11 findings a
 the fresh F1–F10 findings. It binds both independent audit reports by SHA-256.
 The F5 boundary is corrected by the explicit reader/chat policy and shared
 reader-document budget. M4 and F7 are corrected by the committed deterministic
-fixture constructor and fresh-process schema. F2 remains pending the new
-exact-head maximum-size RSS evidence and a fresh independent audit; no margin
-or threshold is claimed before that evidence exists.
+fixture constructor and fresh-process schema. F2 is discharged only by the
+narrow recorded operator exception; no margin, threshold, or accepted-size
+change is claimed.
 
 ## Maintenance and known limitation
 
-All source is committed; builds neither fetch grammars nor use upstream `main`.
+Source is vendored and pinned. Builds neither fetch grammars nor use upstream `main`.
 A refresh must pin immutable sources, repeat the closure audit, preserve
 licenses, verify ABI compatibility, and update the inventory. Seven upstream
 ICU macro-collision warnings from pinned Unicode headers are retained on this
 macOS SDK. The vendor code is not suppressed or edited.
+
+The app-enabled full SwiftPM suite has a retained baseline limitation. The
+approved base and Phase 1 candidate both exit 1 for
+`LauncherChatAgentRuntimeTests.acpToolOutputKeepsTheDescriptorAndRendersRawOutputSafely`.
+Both runs report the same two provider-wrapper assertions. `ChatWebView`
+intentionally removes a complete provider-added Markdown fence from a tool
+detail payload before it escapes the payload. Phase 1 only selects the disabled
+`.chat` Markdown policy. It does not change the tool-detail path. The candidate
+log is `tmp/test-logs/swift-test-20260809-073422.log` with SHA-256
+`d6f938a46816ea0d1bf647037a416c58900ac8f9e27f4d4da68cb7a4e0e3eceb`.
+The control manifest retains the exact base/candidate comparison. Do not claim
+that the app-enabled full suite passed.

@@ -6,10 +6,10 @@ import Foundation
 /// The maximum Scala fixture is syntactically complete at the accepted byte
 /// limit and contains nested expressions, generics, interpolation, and
 /// collection transformations.
-enum CodeHighlightBenchmarkFixtures {
-    static let nestedScalaMaximumID = "nested-scala-maximum-v1"
+public enum CodeHighlightBenchmarkFixtures {
+    public static let nestedScalaMaximumID = "nested-scala-maximum-v1"
 
-    static func source(language: CodeLanguage, bytes: Int) -> String {
+    public static func source(language: CodeLanguage, bytes: Int) -> String {
         switch language {
         case .scala:
             return nestedScalaMaximum(bytes: bytes)
@@ -24,7 +24,7 @@ enum CodeHighlightBenchmarkFixtures {
         }
     }
 
-    static func nestedScalaMaximum(
+    public static func nestedScalaMaximum(
         bytes: Int = CodeHighlightingPolicy.maximumHighlightedSourceBytes
     ) -> String {
         precondition(bytes >= 2, "nested Scala fixture needs space for a closing comment")
@@ -45,7 +45,7 @@ enum CodeHighlightBenchmarkFixtures {
         return units.joined() + "//" + String(repeating: "x", count: commentBytes - 2)
     }
 
-    static func representativeFencedBlocks() -> String {
+    public static func representativeFencedBlocks() -> String {
         let fixtures: [(CodeLanguage, String)] = [
             (.java, "class Example { int value = 1; }"),
             (.scala, nestedScalaUnit(index: 0)),

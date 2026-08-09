@@ -3,6 +3,7 @@ import Darwin
 import Foundation
 import Testing
 @testable import WikiFS
+@testable import WikiFSCodeHighlighting
 
 @Suite(.serialized, .timeLimit(.minutes(3)))
 struct CodeHighlightDiagnosticProbeTests {

@@ -3,6 +3,7 @@
   "artifactKind": "deterministic-fixture-metadata",
   "fixtureSource": "CodeHighlightBenchmarkFixtures",
   "representativeScalaFixture": "nested-scala-maximum-v1",
+  "representativeScalaFixtureDigestSHA256": "2eb53bd571b7491b37080b27b5d0f927f6551168ee94e4d47b574f3363360f75",
   "warmupRuns": 3,
   "measuredSamples": 20,
   "grammars": ["java", "scala", "html", "swift", "json"],
@@ -22,6 +23,6 @@
   "measurement": {
     "clock": "DispatchTime.uptimeNanoseconds",
     "rss": "Darwin getrusage(RUSAGE_SELF).ru_maxrss",
-    "releaseConfiguration": "swift test -c release --filter CodeHighlightPerformanceTests"
+    "releaseConfiguration": "swift run -c release CodeHighlightBenchmark probe-nested-scala --output tmp/orchestration/markdown-renderer-embeds/benchmark/<caller-selected>.json --head <40-hex> --tree <40-hex> --base <40-hex>"
   }
 }

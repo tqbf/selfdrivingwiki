@@ -55,20 +55,38 @@ work binds normal-gate evidence to the exact remediation head. A release
 aggregate rerun using the unchanged production highlighter source recorded
 100 KiB p95 totals of 9.043 ms (Java), 12.229 ms (Scala), 8.654 ms (HTML),
 11.521 ms (Swift), and 8.650 ms (JSON); its largest fresh-process RSS delta
-was 21.36 MiB. `make build`, `make test`, app-enabled and bare SwiftPM tests,
-and focused AddressSanitizer and ThreadSanitizer highlighter suites passed.
+was 21.36 MiB. `make build`, `make test`, bare SwiftPM tests, and focused
+AddressSanitizer and ThreadSanitizer highlighter suites passed.
 The TSan host emitted CoreData XPC environment warnings without a sanitizer
 fault. Delivery readiness, push, and pull request actions remain stopped.
 
 The independent `e18c9f62` audit measured every grammar at the accepted 256 KiB
 maximum. Its worst parse-plus-query p95 was Scala at 31.527 ms and its highest
-RSS delta was Scala at 31.19 MiB. The accepted criterion passed, but the 97.5%
-Scala RSS margin is F2 and remains pending a new exact-head 256 KiB nested
-Scala fresh-process measurement. The corrective pass fixes F5 by separating
+RSS delta was Scala at 31.19 MiB. The regular `CodeHighlightBenchmark` fresh
+process later measured the committed nested Scala fixture at 36,306,944 bytes
+(34.625 MiB), 2,752,512 bytes above the 32 MiB criterion. Operator exception
+`operator-exception-phase-1-f2-memory-budget-20260809-001` accepts only this
+exact five-grammar, 256 KiB, `nested-scala-maximum-v1` result. Its ignored
+evidence is `tmp/orchestration/markdown-renderer-embeds/benchmark/f2-harness-74079438-validation.json`
+(SHA-256 `ea1b9bbde0ee4cc0987bc85d3ff2262e12e9461f94b5bacae332953d14666e45`).
+It does not change the 256 KiB pre-parse fallback, language set, query/runtime,
+or general 32 MiB rule. The corrective pass fixes F5 by separating
 the reader and chat policies and sharing the reader's budget with
 TransclusionEmbedder. It also fixes M4/F7 with a committed deterministic nested
-Scala fixture generator and release-test measurement schema. The ignored probe
+Scala fixture generator and regular SwiftPM executable measurement schema. The ignored probe
 records stage timings, capture/token/range counts, and the explicitly limited
 process-wide RSS delta. It does not change the five grammars, thresholds,
 security policy, or later-phase scope. A fresh heterogeneous audit remains
 required after the corrective commit.
+
+The app-enabled full SwiftPM suite is a documented non-pass. The approved base
+`14f07d60093daf25596522924a77b6fa0742a23d` and candidate
+`74079438437ad3177671285c4993392c6c135b9f` both exit 1 for
+`LauncherChatAgentRuntimeTests.acpToolOutputKeepsTheDescriptorAndRendersRawOutputSafely`.
+Each run has the same two wrapper assertions. The existing tool-detail helper
+removes a complete provider-added Markdown fence before it escapes the payload.
+The Phase 1 `.chat` option does not use that helper. The candidate log is
+`tmp/test-logs/swift-test-20260809-073422.log` with SHA-256
+`d6f938a46816ea0d1bf647037a416c58900ac8f9e27f4d4da68cb7a4e0e3eceb`.
+The control manifest retains the exact-base comparison. This record does not
+claim an app-enabled full-suite pass.
