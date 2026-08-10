@@ -72,14 +72,24 @@
   "provenance": {
     "includeClosureManifest": "tmp/orchestration/markdown-renderer-embeds/include-closure-manifest.json",
     "designRecord": "plans/markdown-renderer-code-highlighting.md",
-    "vendoredLicenseDirectory": "Sources/CTreeSitterHighlighting/Licenses"
+    "vendoredLicenseDirectory": "Sources/CTreeSitterHighlighting/Licenses",
+    "finalEvidenceGovernanceAudit": "tmp/orchestration/markdown-renderer-embeds/audit/phase1-independent-audit-bad19a04-r3.md",
+    "finalEvidenceGovernanceAuditSHA256": "8cd7eea56aa9e6028a2483cff93b1b12e8a902793007c045a2ce2718266268c3"
   },
   "directCoverageLimits": [
     "The C allocation-failure branch is not deterministically injectable through the production ABI.",
     "Sanitizer support depends on the local Swift/Clang linker toolchain; command output is retained separately from functional test results."
   ],
+  "aggregateEvidenceDisposition": {
+    "record": "tmp/orchestration/markdown-renderer-embeds/benchmark/release-byte-buffer-aggregate-record.json",
+    "recordSHA256": "8e08a7b88c5dc6a098d723d9f8282992ca2789744bba98444204e34411154055",
+    "status": "historical-base-plus-working-tree-only",
+    "retiredPerGrammarArtifactHashes": ["2176d283e6d33f5070dc0cc1192a0c6b617bd5b69961bfbf64308e1f8e2b3761", "9a1f42b3b7c0f0a5355f0f6dd8890c712e2347b7a6f02865a9f26349889164c5", "7dc068814ed480f2709094c4686b2c881c08aab28309c374b67c88d2b4c32cc0", "fa5ffb5d05e51652a99130963ed4e6c7a5e76987fd186bb44ce8c67285f936ed", "a6baa34df3e8d5e4a9c1965181b17c7e20595e2c83bec047050d4909b6254349"],
+    "authoritativeCorroboration": "The approved decision contains inlined gate values. The current release-aggregate files independently corroborate them but do not re-derive the retired hashes.",
+    "nextMeasurementRequirement": "Regenerate and hash-bind per-grammar artifacts before the next measurement-affecting revision uses them as gate evidence."
+  },
   "historicalEvidenceLimitations": [
-    "release-byte-buffer-aggregate-record.json captured head equal to base from an out-of-tree probe harness; it is retained as a historical performance record, not exact-head identity evidence.",
+    "release-byte-buffer-aggregate-record.json captured head equal to base from an out-of-tree probe harness. It is historical base-plus-working-tree evidence, not exact-head identity evidence. Its five original per-grammar artifact hashes are retired because later probe runs overwrote their source files.",
     "F2, G1, H1, and sanitizer records retain their original immutable heads. The final H1 decision is a separate exact-head exception record. The M-2 corrective cycle writes separate ignored exact-head records and does not rewrite historical evidence."
   ],
   "baselineGateLimitations": [

@@ -60,6 +60,13 @@ AddressSanitizer and ThreadSanitizer highlighter suites passed.
 The TSan host emitted CoreData XPC environment warnings without a sanitizer
 fault. Delivery readiness, push, and pull request actions remain stopped.
 
+The 100 KiB aggregate record is historical base-plus-working-tree evidence.
+It is not candidate-head evidence. Its five original per-grammar artifact
+hashes are retired because later probe runs overwrote the source files. The
+decision-inlined values and the current independent aggregate files corroborate
+the gate. A later measurement-affecting revision must regenerate and hash-bind
+per-grammar artifacts before it uses them as gate evidence.
+
 The operator reaffirmed the final exact-head H1 exception. The release
 executable is 96,056,944 bytes. The final delta is 8,384,864 bytes. The prior
 delta was 8,251,456 bytes. The additional approved growth is 133,408 bytes.
@@ -131,6 +138,13 @@ The four standalone benchmark harness sources are a required manifest addition
 before the next measurement-affecting revision. They are not added now because
 that would change the immutable measurement identity and require fresh evidence.
 
+The final `bad19a04` Claude audit is retained at
+`tmp/orchestration/markdown-renderer-embeds/audit/phase1-independent-audit-bad19a04-r3.md`
+with SHA-256
+`8cd7eea56aa9e6028a2483cff93b1b12e8a902793007c045a2ce2718266268c3`.
+It records the aggregate-hash retirement and the historical base-plus-working-tree
+identity. It does not claim that either aggregate run measured `bad19a04`.
+
 The app-enabled full SwiftPM suite is a documented non-pass. The approved base
 `14f07d60093daf25596522924a77b6fa0742a23d` and candidate
 `74079438437ad3177671285c4993392c6c135b9f` both exit 1 for
@@ -149,7 +163,7 @@ highlighting, and reserves the shared document budget only after language,
 size, cancellation, and basic highlighter eligibility pass. It also represents
 the checked C ranges with a private validated-token stream before byte-buffer
 assembly. The historical aggregate probe records `head == base` because its
-out-of-tree harness captured identity incorrectly; it remains retained as
-historical performance evidence and not exact-head proof. A new ignored
+out-of-tree harness captured identity incorrectly. It remains historical
+base-plus-working-tree performance evidence and not exact-head proof. A new ignored
 exact-head record binds this correction's F2, G1, app-size, sanitizer, and
 normal-gate evidence without rewriting the historical artifacts.

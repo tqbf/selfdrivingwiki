@@ -4,8 +4,8 @@
   "base": "14f07d60093daf25596522924a77b6fa0742a23d",
   "historicalReviewedImplementationHead": "e18c9f62230076954a9424b0a800210611ee3041",
   "acceptedMeasurementHeadEvidence": "tmp/orchestration/markdown-renderer-embeds/phase1-r1-final-head-evidence-f6cd101d.json",
-  "documentationCandidateHead": "7cfac57166090cbaf3879acd797a07fafe489651",
-  "documentationCandidateTree": "b3d8068daf77c04ca0ad17b20e2ed3b9ba71add6",
+  "documentationCandidateHead": "bad19a04ae3b8d8185b9c5f6881fff471539a30f",
+  "documentationCandidateTree": "3eb99438273f322ef6eb031de95503d421822b40",
   "currentExactBase": "14f07d60093daf25596522924a77b6fa0742a23d",
   "priorAudit": {
     "path": "tmp/orchestration/markdown-renderer-embeds/audit/phase1-independent-audit-a40156d.md",
@@ -21,7 +21,14 @@
     "inputManifest": "tmp/orchestration/markdown-renderer-embeds/measured-input-manifest-875a2438.json",
     "inputManifestSHA256": "e4c330ef9b623621c2b52c639a54fc29cc33b901f466af684af840a9f126542e"
   },
+  "finalEvidenceGovernanceAudit": {
+    "path": "tmp/orchestration/markdown-renderer-embeds/audit/phase1-independent-audit-bad19a04-r3.md",
+    "sha256": "8cd7eea56aa9e6028a2483cff93b1b12e8a902793007c045a2ce2718266268c3",
+    "reviewer": "claude-opus-5",
+    "provenance": "The orchestrator audit checkout supplied the byte-identical report. The implementation workspace preserves a canonical copy."
+  },
   "evidenceRoots": {
+    "canonicalProjectRelativeRoot": "tmp/orchestration/markdown-renderer-embeds",
     "orchestratorAuditReports": "tmp/orchestration/markdown-renderer-embeds/audit",
     "implementationBuildBenchmarkGateAndManifestArtifacts": "tmp/orchestration/markdown-renderer-embeds",
     "basis": "Ignored artifacts are not one clone-complete bundle. SHA-256 and recorded recovery-workspace identity are authoritative. Project-relative paths are stable hints."
@@ -30,6 +37,14 @@
     "status": "forward-correction-required",
     "omittedInputs": ["Sources/CodeHighlightBenchmark/BenchmarkCommand.swift", "Sources/CodeHighlightBenchmark/BenchmarkReport.swift", "Sources/CodeHighlightBenchmark/BenchmarkRunner.swift", "Sources/CodeHighlightBenchmark/main.swift"],
     "basis": "Do not change the current immutable digest in this documentation-only revision. Add these harness inputs before the next measurement-affecting revision, then rebind measurement evidence. The current unchanged-tree proof preserves the approved production highlighter, app, and fixture-generator binding."
+  },
+  "aggregateEvidenceDisposition": {
+    "record": "tmp/orchestration/markdown-renderer-embeds/benchmark/release-byte-buffer-aggregate-record.json",
+    "recordSHA256": "8e08a7b88c5dc6a098d723d9f8282992ca2789744bba98444204e34411154055",
+    "status": "historical-base-plus-working-tree-only",
+    "retiredArtifactHashes": ["2176d283e6d33f5070dc0cc1192a0c6b617bd5b69961bfbf64308e1f8e2b3761", "9a1f42b3b7c0f0a5355f0f6dd8890c712e2347b7a6f02865a9f26349889164c5", "7dc068814ed480f2709094c4686b2c881c08aab28309c374b67c88d2b4c32cc0", "fa5ffb5d05e51652a99130963ed4e6c7a5e76987fd186bb44ce8c67285f936ed", "a6baa34df3e8d5e4a9c1965181b17c7e20595e2c83bec047050d4909b6254349"],
+    "basis": "Later probe runs overwrote the source artifacts. The inlined decision values and current independent aggregate files corroborate the gate. The historical record cannot prove a committed candidate head.",
+    "nextMeasurementRequirement": "Regenerate and hash-bind each per-grammar artifact before the next measurement-affecting revision uses aggregate artifacts as gate evidence."
   },
   "operatorExceptions": [
     {
@@ -57,6 +72,7 @@
       "The prior delta was 8,251,456 bytes. The operator approved the additional 133,408 bytes.",
       "The exception applies only to the exact five-grammar implementation and unchanged 124-file app attribution.",
       "The G1 app-enabled test remains a base-equivalent non-pass. The full app-enabled suite is not claimed passed.",
+      "The 100 KiB aggregate record is historical base-plus-working-tree evidence. Its retired per-grammar artifact hashes do not establish candidate-head identity.",
       "Later identity, bundle, dependency, grammar, source-maximum, or unexplained size changes invalidate the H1 exception."
     ]
   },
@@ -69,6 +85,9 @@
     { "id": "L-C", "status": "fixed", "basis": "The production-source hash and historical-versus-current evidence roles are recorded accurately in the design and inventory." },
     { "id": "L-E", "status": "fixed", "basis": "The matrix preserves prior audit identity as historical and points current review to the final f6cd101d exact-head evidence record." },
     { "id": "L-F", "status": "discharged", "basis": "The aggregate identity anomaly is retained honestly as an out-of-tree harness-capture limitation and is excluded from exact-head proof." },
+    { "id": "A-1", "status": "discharged", "basis": "The five dangling aggregate child hashes are explicitly retired. The approved decision-inlined values and current independent aggregate files corroborate the gate. A future measurement must regenerate and hash-bind each artifact before it uses them as gate evidence." },
+    { "id": "A-2", "status": "discharged", "basis": "The aggregate record is explicitly limited to historical base-plus-working-tree evidence. Retained F2 and H1 records and the immutable measured-input manifest provide current claims." },
+    { "id": "A-4", "status": "fixed", "basis": "Tracked project records use the canonical singular tmp/orchestration/markdown-renderer-embeds path. Historical plural-path control-plane provenance is not a live evidence path." },
     { "id": "M1", "status": "discharged", "basis": "Fresh release maximum-block probe measured all five 256 KiB fixtures. Scala was worst at 31.19 MiB RSS delta, below the 32 MiB criterion." },
     { "id": "M2", "status": "fixed", "basis": "CodeSyntaxHighlighterSecurityTests anchors AC.2 at the public boundary: capture-shaped adversarial text stays inert, has exact textContent, and output classes remain within the closed palette." },
     { "id": "M3", "status": "fixed", "basis": "ChatWebView now passes MarkdownRenderOptions.chat. Fenced chat code remains escaped inert plain code, preserves its language class, and cannot emit an sdw-code token span; no chat CSS was added." },

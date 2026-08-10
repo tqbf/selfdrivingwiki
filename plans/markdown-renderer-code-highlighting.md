@@ -75,6 +75,13 @@ The release aggregate record is
 `tmp/orchestration/markdown-renderer-embeds/benchmark/release-byte-buffer-aggregate-record.json`.
 Its SHA-256 is
 `8e08a7b88c5dc6a098d723d9f8282992ca2789744bba98444204e34411154055`.
+It is historical base-plus-working-tree evidence, not committed candidate-head
+evidence. Its five per-grammar artifact hashes are retired. Later probe runs
+overwrote those artifact files, so they cannot re-derive the pinned hashes.
+The decision-inlined aggregate values and the current independent
+`release-aggregate-{java,scala,html,swift,json}.json` files are authoritative
+corroboration. A measurement-affecting revision must regenerate and hash-bind
+new per-grammar artifacts before it uses them as gate evidence.
 It records three warmups and twenty release samples for each 100 KiB grammar
 fixture. The total p95 values are Java 9.920 ms, Scala 12.185 ms, HTML 8.406
 ms, Swift 11.725 ms, and JSON 8.729 ms. The largest RSS delta is Scala at
@@ -199,8 +206,9 @@ the source constructor, fixed units, byte truncation, and representative block
 shape; ignored release records hold samples. The debug performance test is a
 serialized diagnostic. Its `ru_maxrss` delta is process-wide and not
 attributable solely to the highlighter, so it does not assert release latency
-or RSS budgets. The release aggregate and maximum-block records remain the
-performance evidence.
+or RSS budgets. The retained aggregate record and independent maximum-block
+audit corroboration remain historical performance evidence. Exact current
+claims use the retained F2 and H1 records and the measured-input manifest.
 
 The committed `WikiFSCodeHighlighting.CodeHighlightBenchmarkFixtures` constructor supplies the
 maximum-size nested Scala input. It repeats syntactically complete objects with
@@ -244,7 +252,9 @@ assembler's validated-range precondition explicit without allocating a second
 per-token collection. The subsequent M-2 validation binds the correction to a
 new ignored exact-head record; historical F2, G1, H1, sanitizer, and aggregate
 records remain unchanged. The aggregate record's `head == base` identity is a
-known out-of-tree harness-capture anomaly and is not used as exact-head proof.
+known out-of-tree harness-capture anomaly. It represents base-plus-working-tree
+evidence and is not used as exact-head proof. Its unresolved per-grammar child
+hashes are retired. A later measurement must regenerate and hash-bind them.
 
 ## Maintenance and known limitation
 
