@@ -1,6 +1,10 @@
 // pattern: Imperative Shell
 
+#if canImport(Darwin)
 import Darwin
+#else
+import Glibc
+#endif
 import Foundation
 
 do {
