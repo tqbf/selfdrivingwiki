@@ -113,6 +113,13 @@ and make-test log `tmp/orchestration/markdown-renderer-embeds/gates/make-test-87
 The nonempty prerequisite record is `gates/prerequisites-f6cd101d-r4.log`
 (SHA-256 `115fc2d1c271aacc399f3e9131ae6d929cfe4c792c6882ea70034046512a9c1f`).
 
+The 100 KiB aggregate record is historical base-plus-working-tree evidence.
+It is not candidate-head evidence. Its five original per-grammar artifact
+hashes are retired because later probe runs overwrote the source files. The
+decision-inlined values and the current independent aggregate files corroborate
+the gate. A later measurement-affecting revision must regenerate and hash-bind
+per-grammar artifacts before it uses them as gate evidence.
+
 The operator reaffirmed the final exact-head H1 exception. The release
 executable is 96,056,944 bytes. The final delta is 8,384,864 bytes. The prior
 delta was 8,251,456 bytes. The additional approved growth is 133,408 bytes.
