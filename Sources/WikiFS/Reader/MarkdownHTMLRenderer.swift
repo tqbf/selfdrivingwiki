@@ -1,6 +1,50 @@
 import Foundation
 import Markdown
+import WikiFSCodeHighlighting
+import Synchronization
 import WikiFSCore
+
+/// Selects whether one Markdown conversion may use native ordinary-code
+/// highlighting. Chat explicitly disables this policy to keep transcript fences
+/// as inert escaped plain code.
+enum MarkdownCodeHighlightingPolicy: Sendable {
+    case enabled(HighlightedCodeBlockBudget)
+    case disabled
+}
+
+/// Immutable inputs for one Markdown conversion. A reader document shares its
+/// budget with lazily rendered transclusions. Other callers receive an explicit
+/// policy instead of inheriting highlighting accidentally.
+struct MarkdownRenderOptions: Sendable {
+    let codeHighlighting: MarkdownCodeHighlightingPolicy
+
+    static var reader: Self {
+        Self(codeHighlighting: .enabled(HighlightedCodeBlockBudget()))
+    }
+
+    /// Fail-closed policy for callers without an authoritative reader context.
+    static let disabled = Self(codeHighlighting: .disabled)
+    static let chat = Self(codeHighlighting: .disabled)
+}
+
+/// A document-scoped fence budget. The mutex protects only the remaining
+/// count. It never contains mutable Tree-sitter parser, tree, query-cursor, or
+/// result state.
+final class HighlightedCodeBlockBudget: Sendable {
+    private let remaining: Mutex<Int>
+
+    init(limit: Int = CodeHighlightingPolicy.maximumHighlightedBlockCount) {
+        remaining = Mutex(limit)
+    }
+
+    func claim() -> Bool {
+        remaining.withLock { value in
+            guard value > 0 else { return false }
+            value -= 1
+            return true
+        }
+    }
+}
 
 /// Renders Markdown → HTML for the source web reader (the `WKWebView` path).
 /// Walks a swift-markdown `Document` with a `MarkupVisitor`, emitting faithful
@@ -27,10 +71,14 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
     /// unresolved relatives are left verbatim. Phase 4 sibling resolution.
     static func render(
         _ markdown: String,
-        imageResolver: ((String) -> String?)? = nil
+        imageResolver: ((String) -> String?)? = nil,
+        options: MarkdownRenderOptions,
+        isCancelled: @escaping @Sendable () -> Bool = { Task.isCancelled }
     ) -> String {
         var renderer = MarkdownHTMLRenderer()
         renderer.imageResolver = imageResolver
+        renderer.codeHighlighting = options.codeHighlighting
+        renderer.isCancelled = isCancelled
         return renderer.visit(Document(parsing: markdown))
     }
 
@@ -41,6 +89,8 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
     /// Phase 4: optional resolver that rewrites a relative image src to a
     /// `wiki-blob://source/<id>` URL. Set by the static `render` before visiting.
     private var imageResolver: ((String) -> String?)?
+    private var codeHighlighting: MarkdownCodeHighlightingPolicy = .disabled
+    private var isCancelled: @Sendable () -> Bool = { Task.isCancelled }
 
     private mutating func visitChildren(_ markup: Markup) -> String {
         var s = ""
@@ -72,7 +122,22 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         let cls = (codeBlock.language ?? "").isEmpty
             ? ""
             : " class=\"language-\(escapeAttribute(codeBlock.language ?? ""))\""
-        return "<pre><code\(cls)>\(escape(codeBlock.code))</code></pre>"
+        let highlighted: String?
+        if case .enabled(let budget) = codeHighlighting,
+           let language = CodeLanguage.fromFenceInfo(codeBlock.language),
+           CodeSyntaxHighlighter.isEligibleSource(
+               codeBlock.code,
+               language: language,
+               isCancelled: isCancelled),
+           budget.claim() {
+            highlighted = CodeSyntaxHighlighter.highlightedHTML(
+                source: codeBlock.code,
+                language: language,
+                isCancelled: isCancelled)
+        } else {
+            highlighted = nil
+        }
+        return "<pre><code\(cls)>\(highlighted ?? escape(codeBlock.code))</code></pre>"
     }
 
     mutating func visitThematicBreak(_ thematicBreak: ThematicBreak) -> String { "<hr>" }

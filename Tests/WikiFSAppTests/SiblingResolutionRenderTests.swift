@@ -17,7 +17,7 @@ struct SiblingResolutionRenderTests {
             return nil
         }
         let md = "![foo](images/foo.png)"
-        let html = MarkdownHTMLRenderer.render(md, imageResolver: resolver)
+        let html = MarkdownHTMLRenderer.render(md, imageResolver: resolver, options: .disabled)
         #expect(html.contains(#"src="wiki-blob://source/ABC123""#))
         #expect(!html.contains("images/foo.png"))
     }
@@ -25,7 +25,7 @@ struct SiblingResolutionRenderTests {
     @Test func absoluteSrcLeftUntouched() {
         let resolver: (String) -> String? = { _ in "wiki-blob://source/SHOULD_NOT_APPEAR" }
         let md = "![logo](https://cdn.example.com/logo.png)"
-        let html = MarkdownHTMLRenderer.render(md, imageResolver: resolver)
+        let html = MarkdownHTMLRenderer.render(md, imageResolver: resolver, options: .disabled)
         #expect(html.contains("https://cdn.example.com/logo.png"))
         #expect(!html.contains("SHOULD_NOT_APPEAR"))
     }
@@ -33,20 +33,20 @@ struct SiblingResolutionRenderTests {
     @Test func dataUriLeftUntouched() {
         let resolver: (String) -> String? = { _ in "wiki-blob://source/NO" }
         let md = "![tiny](data:image/png;base64,iVBOR=)"
-        let html = MarkdownHTMLRenderer.render(md, imageResolver: resolver)
+        let html = MarkdownHTMLRenderer.render(md, imageResolver: resolver, options: .disabled)
         #expect(html.contains("data:image/png"))
     }
 
     @Test func unresolvedRelativeLeftVerbatim() {
         let resolver: (String) -> String? = { _ in nil }
         let md = "![missing](images/not-stored.png)"
-        let html = MarkdownHTMLRenderer.render(md, imageResolver: resolver)
+        let html = MarkdownHTMLRenderer.render(md, imageResolver: resolver, options: .disabled)
         #expect(html.contains("images/not-stored.png"))
     }
 
     @Test func nilResolverLeavesAllVerbatim() {
         let md = "![foo](images/foo.png)"
-        let html = MarkdownHTMLRenderer.render(md)
+        let html = MarkdownHTMLRenderer.render(md, options: .disabled)
         #expect(html.contains("images/foo.png"))
     }
 }

@@ -220,6 +220,16 @@ struct WikiReaderView: View {
             --muted: rgba(60, 60, 67, 0.6);
             --code-bg: rgba(0, 0, 0, 0.06);
             --border: rgba(0, 0, 0, 0.12);
+            --code-keyword: #8b3a65;
+            --code-string: #0b6e4f;
+            --code-comment: #6e6e73;
+            --code-type: #0a5f9e;
+            --code-function: #7a4d00;
+            --code-property: #6d3c91;
+            --code-number: #9a3d00;
+            --code-operator: #505050;
+            --code-punctuation: #505050;
+            --code-constant: #7a4d00;
           }
           @media (prefers-color-scheme: dark) {
             :root {
@@ -227,6 +237,16 @@ struct WikiReaderView: View {
               --muted: rgba(235, 235, 245, 0.6);
               --code-bg: rgba(255, 255, 255, 0.08);
               --border: rgba(255, 255, 255, 0.16);
+              --code-keyword: #ff7ab2;
+              --code-string: #8bd5a8;
+              --code-comment: #a1a1a6;
+              --code-type: #7dcfff;
+              --code-function: #ffd580;
+              --code-property: #c6a0f6;
+              --code-number: #f5a97f;
+              --code-operator: #d0d0d5;
+              --code-punctuation: #d0d0d5;
+              --code-constant: #ffd580;
             }
           }
           /* color-scheme above drives the page canvas (light/dark background). */
@@ -300,6 +320,16 @@ struct WikiReaderView: View {
             font-size: 13px; line-height: 1.45;
           }
           pre code { background: none; padding: 0; font-size: inherit; }
+          .sdw-code-keyword { color: var(--code-keyword); }
+          .sdw-code-string { color: var(--code-string); }
+          .sdw-code-comment { color: var(--code-comment); }
+          .sdw-code-type { color: var(--code-type); }
+          .sdw-code-function { color: var(--code-function); }
+          .sdw-code-property { color: var(--code-property); }
+          .sdw-code-number { color: var(--code-number); }
+          .sdw-code-operator { color: var(--code-operator); }
+          .sdw-code-punctuation { color: var(--code-punctuation); }
+          .sdw-code-constant { color: var(--code-constant); }
           hr { border: none; border-top: 1px solid var(--border); margin: 1.5em 0; }
           table { border-collapse: collapse; margin: 0 0 1em; }
           th, td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; vertical-align: top; }
@@ -1020,6 +1050,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         /// the pure WKWebView parse/layout (loadHTMLString→didFinish).
         private var htmlLoadStart: DispatchTime?
         private var isLoadingBinding: Binding<Bool>?
+        private var renderOptions: MarkdownRenderOptions?
 
         func startLoad(markdown: String, isLoading: Binding<Bool>) {
             convertTask?.cancel()  // drop any in-flight conversion for stale markdown
@@ -1037,6 +1068,8 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 Task { @MainActor in isLoading.wrappedValue = true }
             }
             loadStart = DispatchTime.now()
+            let renderOptions = MarkdownRenderOptions.reader
+            self.renderOptions = renderOptions
             // Measure the synchronous click→startLoad window: openTab →
             // loadDrafts (getPage + stripped) → SwiftUI re-render → this
             // updateNSView→startLoad dispatch. This is the gap NOT covered by
@@ -1114,7 +1147,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     // absolute/data:/wiki: srcs before calling us.
                     guard let map = renderedSourceMap, let siblingID = map[src] else { return nil }
                     return "\(WikiLinkMarkdown.blobScheme)://source/\(siblingID.rawValue)"
-                })
+                }, options: renderOptions)
                 let html = WikiReaderView.documentHTML(body)
                 let convertMs = Self.elapsedMs(since: t0)
                 let convertDone = DispatchTime.now()
@@ -1434,6 +1467,15 @@ internal struct WikiReaderRep: NSViewRepresentable {
 
             // 4. Fresh render context (memoized, event-bus-invalidated).
             let context = store.renderContext()
+            let renderOptions: MarkdownRenderOptions
+            if let configuredOptions = self.renderOptions {
+                renderOptions = configuredOptions
+            } else {
+                // A lazy embed without the root document's policy must never
+                // acquire reader highlighting implicitly.
+                DebugLog.reader("embed-fetch missing document render policy; using disabled highlighting")
+                renderOptions = .disabled
+            }
 
             // 5. Off-main fetch + render. `readPool` is `nil` for in-memory
             //    stores (a separate `:memory:` connection sees a different,
@@ -1445,12 +1487,12 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 if let pool = store.readPool {
                     raw = try await pool.asyncRead { roStore in
                         try TransclusionEmbedder.renderEmbedBody(
-                            store: roStore, target: target, context: context)
+                            store: roStore, target: target, context: context, options: renderOptions)
                     }
                 } else if let grdb = store.internalStore as? GRDBWikiStore {
                     // Main-actor fallback (in-memory tests; rare in prod).
                     raw = try TransclusionEmbedder.renderEmbedBody(
-                        store: grdb, target: target, context: context)
+                        store: grdb, target: target, context: context, options: renderOptions)
                 } else {
                     raw = TransclusionEmbedder.emptySentinel
                 }

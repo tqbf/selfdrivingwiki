@@ -45,7 +45,7 @@ struct ReaderRenderPerfTests {
         }
 
         // Warm up (regex caches, swift-markdown) before timing.
-        _ = MarkdownHTMLRenderer.render(preprocess(raw))
+        _ = MarkdownHTMLRenderer.render(preprocess(raw), options: .disabled)
 
         // Preprocess: median of 5 runs (median ignores GC/scheduling spikes).
         var preprocessSamples: [Double] = []
@@ -64,7 +64,7 @@ struct ReaderRenderPerfTests {
         var convertSamples: [Double] = []
         for _ in 0..<5 {
             let start = DispatchTime.now().uptimeNanoseconds
-            _ = MarkdownHTMLRenderer.render(rendered)
+            _ = MarkdownHTMLRenderer.render(rendered, options: .disabled)
             let elapsedNs = DispatchTime.now().uptimeNanoseconds - start
             convertSamples.append(Double(elapsedNs) / 1_000_000)
         }
@@ -72,7 +72,7 @@ struct ReaderRenderPerfTests {
         let convertMs = convertSamples[convertSamples.count / 2]
 
         // Sanity: the full pipeline produced a non-empty document.
-        let html = MarkdownHTMLRenderer.render(rendered)
+        let html = MarkdownHTMLRenderer.render(rendered, options: .disabled)
         #expect(html.isEmpty == false)
 
         let kb = Double(bytes) / 1024.0

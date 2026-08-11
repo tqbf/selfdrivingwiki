@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "artifactKind": "deterministic-fixture-metadata",
+  "fixtureSource": "CodeHighlightBenchmarkFixtures",
+  "representativeScalaFixture": "nested-scala-maximum-v1",
+  "representativeScalaFixtureDigestSHA256": "2eb53bd571b7491b37080b27b5d0f927f6551168ee94e4d47b574f3363360f75",
+  "warmupRuns": 3,
+  "measuredSamples": 20,
+  "grammars": ["java", "scala", "html", "swift", "json"],
+  "fixtures": {
+    "construction": "CodeHighlightBenchmarkFixtures builds ordinary-language units and a syntactically complete nested Scala maximum fixture. The Scala fixture has nested expressions, generic types, interpolation, collections, and an exact UTF-8 byte count.",
+    "malformed": "unterminated and structurally malformed source per grammar",
+    "representativeBlocks": "20 repetitions of the five fixed per-language fences, with the nested Scala fixture as the Scala input",
+    "hundredKiBBytes": 102400,
+    "maximumAcceptedBytes": 262144
+  },
+  "budgets": {
+    "maximumBlockP95Milliseconds": 250,
+    "hundredKiBBlockP95Milliseconds": 50,
+    "hundredBlockDocumentP95Milliseconds": 500,
+    "maximumBlockPeakRSSDeltaBytes": 33554432
+  },
+  "measurement": {
+    "clock": "DispatchTime.uptimeNanoseconds",
+    "rss": "Darwin getrusage(RUSAGE_SELF).ru_maxrss",
+    "releaseConfiguration": "swift run -c release CodeHighlightBenchmark probe-nested-scala --output tmp/orchestration/markdown-renderer-embeds/benchmark/<caller-selected>.json --head <40-hex> --tree <40-hex> --base <40-hex>"
+  }
+}

@@ -1,6 +1,8 @@
 #if os(macOS)
+import Foundation
 import Testing
 @testable import WikiFS
+@testable import WikiFSCodeHighlighting
 @testable import WikiFSEngine
 @testable import WikiFSCore
 
@@ -35,7 +37,7 @@ struct MarkdownHTMLRendererTests {
         let prepared = ReaderMarkdown.prepared(sentences.joined(separator: "\n\n")) { name, kind in
             name == projectionFilename && kind == .source
         }
-        let html = MarkdownHTMLRenderer.render(prepared)
+        let html = MarkdownHTMLRenderer.render(prepared, options: .disabled)
 
         #expect(html.components(separatedBy: "wiki://source").count - 1 == 4)
         #expect(!html.contains("for test directory organization and sbt console commands. See"),
@@ -59,7 +61,7 @@ struct MarkdownHTMLRendererTests {
         let prepared = ReaderMarkdown.prepared(sentences.joined(separator: "\n\n")) { name, kind in
             name == projectionFilename && kind == .source
         }
-        let html = MarkdownHTMLRenderer.render(prepared)
+        let html = MarkdownHTMLRenderer.render(prepared, options: .disabled)
 
         for sentence in [
             "for test directory organization and sbt console commands.",
@@ -90,42 +92,151 @@ struct MarkdownHTMLRendererTests {
             markdown,
             contentKind: .source,
             isResolved: { _, _ in true })
-        let html = MarkdownHTMLRenderer.render(prepared)
+        let html = MarkdownHTMLRenderer.render(prepared, options: .disabled)
 
         #expect(html == "<h1 id=\"hello\">Hello</h1><p>This is the source body.</p>")
     }
 
     @Test func headingWithSlug() {
-        #expect(MarkdownHTMLRenderer.render("# Hello") == "<h1 id=\"hello\">Hello</h1>")
+        #expect(MarkdownHTMLRenderer.render("# Hello", options: .disabled) == "<h1 id=\"hello\">Hello</h1>")
     }
 
     @Test func headingSlugLowercasesAndDashes() {
-        #expect(MarkdownHTMLRenderer.render("## My Section") == "<h2 id=\"my-section\">My Section</h2>")
+        #expect(MarkdownHTMLRenderer.render("## My Section", options: .disabled) == "<h2 id=\"my-section\">My Section</h2>")
     }
 
     @Test func paragraphWithInline() {
-        let html = MarkdownHTMLRenderer.render("This is **bold** and *italic*.")
+        let html = MarkdownHTMLRenderer.render("This is **bold** and *italic*.", options: .disabled)
         #expect(html == "<p>This is <strong>bold</strong> and <em>italic</em>.</p>")
     }
 
     @Test func strikethrough() {
-        #expect(MarkdownHTMLRenderer.render("~~done~~") == "<p><del>done</del></p>")
+        #expect(MarkdownHTMLRenderer.render("~~done~~", options: .disabled) == "<p><del>done</del></p>")
     }
 
     @Test func inlineCode() {
-        let html = MarkdownHTMLRenderer.render("Use `swift build` now.")
+        let html = MarkdownHTMLRenderer.render("Use `swift build` now.", options: .disabled)
         #expect(html == "<p>Use <code>swift build</code> now.</p>")
     }
 
     @Test func fencedCodeBlockWithLanguage() {
         let md = "```swift\nlet x = 1\n```"
-        let html = MarkdownHTMLRenderer.render(md)
-        // cmark keeps the trailing newline in the code content.
-        #expect(html == "<pre><code class=\"language-swift\">let x = 1\n</code></pre>")
+        let html = MarkdownHTMLRenderer.render(md, options: .reader)
+        #expect(html.contains("<pre><code class=\"language-swift\">"))
+        #expect(html.contains("<span class=\"sdw-code-keyword\">let</span> x"))
+        #expect(html.contains("<span class=\"sdw-code-number\">1</span>"))
+    }
+
+    @Test func highlightedHTMLFenceRemainsInertAndTextEquivalent() {
+        let source = "<script>alert('x')</script>\n"
+        let html = MarkdownHTMLRenderer.render("```html\n\(source)```", options: .reader)
+        #expect(html.contains("class=\"language-html\""))
+        #expect(html.contains("&lt;"))
+        #expect(html.contains("script"))
+        #expect(!html.contains("<script>alert"))
+        #expect(html.contains("sdw-code-"))
+        #expect(codeTextContent(in: html) == source)
+    }
+
+    @Test("all five approved fenced-code languages produce closed-palette spans")
+    func approvedFenceLanguagesHighlightWithoutChangingText() {
+        let cases = [
+            ("java", "class Example { int value = 1; }\n"),
+            ("scala", "object Example { val value = 1 }\n"),
+            ("html", "<div class=\"example\">value</div>\n"),
+            ("swift", "let value = 1\n"),
+            ("json", "{\"value\": 1}\n"),
+        ]
+
+        for (language, source) in cases {
+            let html = MarkdownHTMLRenderer.render("```\(language)\n\(source)```", options: .reader)
+            #expect(html.contains("class=\"language-\(language)\""), "Missing language class for \(language)")
+            #expect(html.contains("sdw-code-"), "No highlighted token for \(language)")
+            #expect(codeTextContent(in: html) == source, "Changed code text for \(language)")
+        }
+    }
+
+    @Test("only approved fence-info aliases select a grammar")
+    func closedFenceLanguageAliasesPreserveOriginalClass() {
+        let aliases = [
+            ("xml", "<node>text</node>\n"),
+            ("jsonc", "// comment\n{\"value\": 1}\n"),
+        ]
+        for (alias, source) in aliases {
+            let html = MarkdownHTMLRenderer.render("```\(alias)\n\(source)```", options: .reader)
+            #expect(html.contains("class=\"language-\(alias)\""))
+            #expect(html.contains("sdw-code-"))
+            #expect(codeTextContent(in: html) == source)
+        }
+
+        let unsupported = MarkdownHTMLRenderer.render("```javascript\nconst value = '<script>';\n```", options: .reader)
+        #expect(unsupported.contains("class=\"language-javascript\""))
+        #expect(!unsupported.contains("sdw-code-"))
+        #expect(!unsupported.contains("<script>"))
+    }
+
+    @Test("render entry points require an explicit typed policy")
+    func renderEntryPointsRequireExplicitPolicy() throws {
+        let repository = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let renderer = try String(
+            contentsOf: repository.appending(path: "Sources/WikiFS/Reader/MarkdownHTMLRenderer.swift"),
+            encoding: .utf8)
+        let embedder = try String(
+            contentsOf: repository.appending(path: "Sources/WikiFS/Reader/TransclusionEmbedder.swift"),
+            encoding: .utf8)
+
+        #expect(renderer.contains("options: MarkdownRenderOptions,"))
+        #expect(!renderer.contains("options: MarkdownRenderOptions ="))
+        #expect(embedder.contains("options: MarkdownRenderOptions\n"))
+        #expect(!embedder.contains("options: MarkdownRenderOptions ="))
+    }
+
+    @Test("highlighting limits and cancellation fail closed to ordinary escaped code")
+    func highlightingLimitsAndCancellationFallBackToPlainCode() {
+        let oversized = String(repeating: "x", count: CodeHighlightingPolicy.maximumHighlightedSourceBytes + 1)
+        #expect(CodeSyntaxHighlighter.highlightedHTML(
+            source: oversized,
+            language: .swift,
+            isCancelled: { false }) == nil)
+        #expect(CodeSyntaxHighlighter.highlightedHTML(
+            source: "let value = 1",
+            language: .swift,
+            isCancelled: { true }) == nil)
+
+        let fence = "```swift\nlet value = 1\n```"
+        let markdown = Array(repeating: fence, count: CodeHighlightingPolicy.maximumHighlightedBlockCount + 1)
+            .joined(separator: "\n\n")
+        let html = MarkdownHTMLRenderer.render(markdown, options: .reader)
+        let marker = "<span class=\"sdw-code-keyword\">let</span>"
+        #expect(html.components(separatedBy: marker).count - 1 == CodeHighlightingPolicy.maximumHighlightedBlockCount)
+    }
+
+    @Test("ineligible fences do not consume a document highlight budget")
+    func ineligibleFencesDoNotConsumeDocumentHighlightBudget() {
+        let oversized = String(
+            repeating: "x",
+            count: CodeHighlightingPolicy.maximumHighlightedSourceBytes + 1)
+        let fence = "```swift\nlet value = 1\n```"
+        let options = MarkdownRenderOptions(
+            codeHighlighting: .enabled(HighlightedCodeBlockBudget(limit: 1)))
+
+        let html = MarkdownHTMLRenderer.render(
+            "```swift\n\(oversized)\n```\n\n\(fence)",
+            options: options)
+
+        let oversizedIsEligible = CodeSyntaxHighlighter.isEligibleSource(
+            oversized,
+            language: .swift,
+            isCancelled: { false })
+        #expect(!oversizedIsEligible)
+        #expect(html.components(separatedBy: "<span class=\"sdw-code-keyword\">let</span>").count - 1 == 1)
     }
 
     @Test func regularLink() {
-        let html = MarkdownHTMLRenderer.render("[ex](https://example.com)")
+        let html = MarkdownHTMLRenderer.render("[ex](https://example.com)", options: .disabled)
         #expect(html == "<p><a href=\"https://example.com\" title=\"https://example.com\">ex</a></p>")
     }
 
@@ -133,31 +244,31 @@ struct MarkdownHTMLRendererTests {
         // After the pre-pass, a wiki link is an ordinary markdown link with a
         // wiki:// destination. The renderer must pass it through verbatim so the
         // navigation delegate can route it.
-        let html = MarkdownHTMLRenderer.render("[Page](wiki://page/Page)")
+        let html = MarkdownHTMLRenderer.render("[Page](wiki://page/Page)", options: .disabled)
         #expect(html == "<p><a href=\"wiki://page/Page\" title=\"wiki://page/Page\">Page</a></p>")
     }
 
     @Test func unorderedList() {
-        let html = MarkdownHTMLRenderer.render("- a\n- b")
+        let html = MarkdownHTMLRenderer.render("- a\n- b", options: .disabled)
         #expect(html == "<ul><li>a</li><li>b</li></ul>")
     }
 
     @Test func orderedList() {
-        let html = MarkdownHTMLRenderer.render("1. one\n2. two")
+        let html = MarkdownHTMLRenderer.render("1. one\n2. two", options: .disabled)
         #expect(html == "<ol><li>one</li><li>two</li></ol>")
     }
 
     @Test func blockquote() {
-        let html = MarkdownHTMLRenderer.render("> quote")
+        let html = MarkdownHTMLRenderer.render("> quote", options: .disabled)
         #expect(html == "<blockquote><p>quote</p></blockquote>")
     }
 
     @Test func thematicBreak() {
-        #expect(MarkdownHTMLRenderer.render("---") == "<hr>")
+        #expect(MarkdownHTMLRenderer.render("---", options: .disabled) == "<hr>")
     }
 
     @Test func escapesHTMLSpecialCharacters() {
-        let html = MarkdownHTMLRenderer.render("a < b > c & d")
+        let html = MarkdownHTMLRenderer.render("a < b > c & d", options: .disabled)
         #expect(html == "<p>a &lt; b &gt; c &amp; d</p>")
     }
 
@@ -167,15 +278,43 @@ struct MarkdownHTMLRendererTests {
         | --- | --- |
         | 1   | 2   |
         """
-        let html = MarkdownHTMLRenderer.render(md)
+        let html = MarkdownHTMLRenderer.render(md, options: .disabled)
         #expect(html == "<table><thead><tr><th>A</th><th>B</th></tr></thead><tbody><tr><td>1</td><td>2</td></tr></tbody></table>")
     }
 
     @Test func headingSlugDedupMatchesAnchorBlock() {
         // Duplicate headings must dedup the same way AnchorBlock.makeSlug does,
         // so #fragment resolution stays consistent between the two readers.
-        let html = MarkdownHTMLRenderer.render("# Overview\n\n# Overview")
+        let html = MarkdownHTMLRenderer.render("# Overview\n\n# Overview", options: .disabled)
         #expect(html == "<h1 id=\"overview\">Overview</h1><h1 id=\"overview-1\">Overview</h1>")
+    }
+
+    private func codeTextContent(in html: String) -> String {
+        guard let codeStart = html.range(of: ">"),
+              let codeEnd = html.range(of: "</code>")
+        else {
+            Issue.record("Expected a code element: \(html)")
+            return ""
+        }
+        let content = html[codeStart.upperBound..<codeEnd.lowerBound]
+        var text = ""
+        var insideTag = false
+        for character in content {
+            switch character {
+            case "<": insideTag = true
+            case ">" where insideTag: insideTag = false
+            default:
+                if !insideTag {
+                    text.append(character)
+                }
+            }
+        }
+        return text
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#39;", with: "'")
     }
 
     // MARK: Mermaid
@@ -185,7 +324,7 @@ struct MarkdownHTMLRendererTests {
         // `class="language-mermaid"` and HTML-escaping the body (so textContent
         // un-escapes it back to the diagram source). Uses `contains` rather than
         // == because cmark keeps the trailing newline in fenced code.
-        let html = MarkdownHTMLRenderer.render("```mermaid\ngraph TD\nA-->B\n```")
+        let html = MarkdownHTMLRenderer.render("```mermaid\ngraph TD\nA-->B\n```", options: .disabled)
         #expect(html.contains(#"class="language-mermaid""#))
         #expect(html.contains("A--&gt;B"))   // escape(): > → &gt;
     }
@@ -212,7 +351,7 @@ struct MarkdownHTMLRendererTests {
             isResolved: { _, _ in true },
             embedInfo: { _ in WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "image/png") }
         )
-        let html = MarkdownHTMLRenderer.render(prepared)
+        let html = MarkdownHTMLRenderer.render(prepared, options: .disabled)
         #expect(html.contains(#"<img src="wiki-blob://source/\#(id.rawValue)""#))
         #expect(html.contains("wiki-embed"))
     }
@@ -258,7 +397,7 @@ struct MarkdownHTMLRendererTests {
                     )
                 }
             )
-            let html = MarkdownHTMLRenderer.render(prepared)
+            let html = MarkdownHTMLRenderer.render(prepared, options: .disabled)
             // Exactly one mermaid code element survives.
             let mermaidCount = html.components(
                 separatedBy: "class=\"language-mermaid\"").count - 1
@@ -300,7 +439,7 @@ struct MarkdownHTMLRendererTests {
                 )
             }
         )
-        let html = MarkdownHTMLRenderer.render(prepared)
+        let html = MarkdownHTMLRenderer.render(prepared, options: .disabled)
         // The 3-backtick run inside the body is preserved verbatim, AND the
         // outer fence (4+ backticks) keeps the block intact.
         #expect(html.contains("\"has ``` triple backticks\""))

@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "phase": "Phase 1 ordinary fenced code and native Tree-sitter highlighting",
+  "base": "14f07d60093daf25596522924a77b6fa0742a23d",
+  "headBinding": "tmp/orchestration/markdown-renderer-embeds/phase1-r1-final-head-evidence-f6cd101d.json",
+  "currentExactHead": {
+    "head": "f6cd101df847b92f2a439cabfbb1d7dd404d28c1",
+    "tree": "dfd81201b736fa82c7a14291858c22efe8698717",
+    "parent": "e80f138bf8417c1e656bff9c6119ab5cd343c2a8",
+    "base": "14f07d60093daf25596522924a77b6fa0742a23d",
+    "mergeBase": "14f07d60093daf25596522924a77b6fa0742a23d",
+    "evidenceSHA256": "88c68d53a82bd4134cd69178cfe0c999c3af7cece0662af394b590a3c444fd8d",
+    "h1": {
+      "measurementCommand": "make release",
+      "finalExecutableBytes": 96056944,
+      "finalDeltaBytes": 8384864,
+      "priorDeltaBytes": 8251456,
+      "additionalApprovedGrowthBytes": 133408,
+      "bundleFileCount": 124,
+      "attribution": "Same 124-file app bundle. No new dependency or shipped test, benchmark, or fixture artifact.",
+      "operatorException": "operator-exception-phase-1-h1-exact-head-size-20260809-001"
+    }
+  },
+  "reviewDispositionInventory": "plans/markdown-renderer-code-highlighting-review-dispositions.json",
+  "productionSymbols": [
+    { "path": "Sources/CTreeSitterHighlighting/TreeSitterHighlighting.c", "symbols": ["definition_for", "wiki_tree_sitter_highlight", "wiki_tree_sitter_highlight_result_count", "wiki_tree_sitter_highlight_result_tokens", "wiki_tree_sitter_highlight_result_timing", "wiki_tree_sitter_highlight_result_delete"] },
+    { "path": "Sources/WikiFSCodeHighlighting/CodeSyntaxHighlighter.swift", "sha256": "a4a46dd8aee0b39882792d62c657a07f00fbe37805744bab0932e90499c730a5", "symbols": ["CodeLanguage.fromFenceInfo(_:)", "CodeHighlightingPolicy", "CodeHighlightMeasurement", "CodeSyntaxHighlighter.isEligibleSource(_:language:isCancelled:)", "CodeSyntaxHighlighter.highlightedHTML(source:language:isCancelled:measurement:)", "CodeSyntaxHighlighter.ValidatedTokenStream", "CodeSyntaxHighlighter.validatedTokenStream(_:count:sourceBytes:)", "CodeSyntaxHighlighter.escapedHTML(sourceBytes:tokens:)"] },
+    { "path": "Sources/WikiFSCodeHighlighting/CodeHighlightBenchmarkFixtures.swift", "symbols": ["CodeHighlightBenchmarkFixtures.nestedScalaMaximum(bytes:)", "CodeHighlightBenchmarkFixtures.representativeFencedBlocks()"] },
+    { "path": "Sources/CodeHighlightBenchmark", "symbols": ["CodeHighlightBenchmarkCommand.parse(arguments:)", "BenchmarkReportBuilder.make(options:system:fixtureID:fixtureDigestSHA256:sourceBytes:warmupRuns:samples:rssDeltaBytes:)", "CodeHighlightBenchmarkRunner.run(options:)"] },
+    { "path": "Sources/WikiFS/Reader/MarkdownHTMLRenderer.swift", "symbols": ["MarkdownCodeHighlightingPolicy", "MarkdownRenderOptions.reader", "MarkdownRenderOptions.disabled", "MarkdownRenderOptions.chat", "HighlightedCodeBlockBudget.claim()", "MarkdownHTMLRenderer.render(_:imageResolver:options:isCancelled:)", "MarkdownHTMLRenderer.visitCodeBlock(_)"] },
+    { "path": "Sources/WikiFS/Reader/TransclusionEmbedder.swift", "symbols": ["TransclusionEmbedder.renderEmbedBody(store:target:context:options:)"] },
+    { "path": "Sources/WikiFS/Reader/WikiReaderView.swift", "symbols": ["WikiReaderRep.Coordinator.startLoad(markdown:isLoading:)", "WikiReaderRep.Coordinator.processEmbedFetch(_:)", "WikiReaderView.documentHTML(_:) code token CSS"] },
+    { "path": "Sources/WikiFS/Chats/ChatWebView.swift", "symbols": ["ChatWebView.Coordinator.renderedMarkdown(_:context:)"] }
+  ],
+  "decisionAndErrorBranches": [
+    "closed language and two accepted aliases select one of five native grammars",
+    "unknown, rich, and ordinary non-approved fences use pre-existing escaped fallback",
+    "source larger than 256 KiB and document block 101+ use escaped fallback",
+    "cancellation before or after C work uses escaped fallback",
+    "C allocation, parser, language, query, cursor, capture, token-category, range, UTF-8-boundary, and overlap anomalies fail closed",
+    "only closed palette spans are emitted; source slices are HTML escaped",
+    "query compilation and ignored-capture filtering finish before pthread_once publication",
+    "Tree-sitter parser, tree, cursor, and result state is created and freed in the invoking C call",
+    "the direct UTF-8 builder rejects invalid conversion or capacity overflow and uses escaped fallback",
+    "render entry points require an explicit typed policy; an absent reader context fails closed to disabled highlighting",
+    "only language-, size-, cancellation-, and basic-feasibility-eligible fences claim a shared document budget slot",
+    "the byte assembler accepts only a private validated token stream whose ranges were checked against the active UTF-8 buffer",
+    "reader policy shares one synchronized highlighted-fence budget across root conversion and transclusions",
+    "chat policy disables native token spans and retains escaped ordinary fenced code",
+    "the CodeHighlightBenchmark release probe accepts only its closed nested-Scala mode and ignored benchmark-directory JSON output path, then records a process-wide RSS limitation"
+  ],
+  "tests": [
+    "CodeSyntaxHighlighterTests.testHostileHTMLAndMultibyteSourceStayInertAndTextEquivalent()",
+    "CodeSyntaxHighlighterTests.testCancellationFallsBackBetweenBlocks()",
+    "CodeSyntaxHighlighterTests.testConcurrentHighlightCallsAreThreadConfined()",
+    "CodeSyntaxHighlighterSecurityTests.testHTMLAndScriptPayloadsRemainInertAndTextEquivalent()",
+    "CodeSyntaxHighlighterSecurityTests.testCaptureNamesCannotInjectAttributesOrClasses()",
+    "CodeSyntaxHighlighterSecurityTests.testReaderStylesheetDefinesEveryClosedPaletteClass()",
+    "MarkdownHTMLRendererTests.fencedCodeBlockWithLanguage()",
+    "MarkdownHTMLRendererTests.highlightedHTMLFenceRemainsInertAndTextEquivalent()",
+    "MarkdownHTMLRendererTests.approvedFenceLanguagesHighlightWithoutChangingText()",
+    "MarkdownHTMLRendererTests.closedFenceLanguageAliasesPreserveOriginalClass()",
+    "MarkdownHTMLRendererTests.highlightingLimitsAndCancellationFallBackToPlainCode()",
+    "MarkdownHTMLRendererTests.mermaidFenceEmitsLanguageClassAndEscaping()",
+    "ChatTranscriptPresentationTests.fencedCodeStaysEscapedAndUnhighlightedInChat()",
+    "TransclusionEmbedTests.rootAndTransclusionShareTheDocumentHighlightedFenceBudget()",
+    "CodeHighlightPerformanceTests.nestedScalaMaximumFixtureIsDeterministic()",
+    "CodeHighlightBenchmarkTests.parsesClosedNestedScalaCommand()",
+    "CodeHighlightBenchmarkTests.nestedScalaFixtureIsExactAndStable()",
+    "CodeHighlightBenchmarkTests.reportSchemaIsDeterministic()"
+  ],
+  "provenance": {
+    "includeClosureManifest": "tmp/orchestration/markdown-renderer-embeds/include-closure-manifest.json",
+    "designRecord": "plans/markdown-renderer-code-highlighting.md",
+    "vendoredLicenseDirectory": "Sources/CTreeSitterHighlighting/Licenses",
+    "finalEvidenceGovernanceAudit": "tmp/orchestration/markdown-renderer-embeds/audit/phase1-independent-audit-bad19a04-r3.md",
+    "finalEvidenceGovernanceAuditSHA256": "8cd7eea56aa9e6028a2483cff93b1b12e8a902793007c045a2ce2718266268c3"
+  },
+  "directCoverageLimits": [
+    "The C allocation-failure branch is not deterministically injectable through the production ABI.",
+    "Sanitizer support depends on the local Swift/Clang linker toolchain; command output is retained separately from functional test results."
+  ],
+  "aggregateEvidenceDisposition": {
+    "record": "tmp/orchestration/markdown-renderer-embeds/benchmark/release-byte-buffer-aggregate-record.json",
+    "recordSHA256": "8e08a7b88c5dc6a098d723d9f8282992ca2789744bba98444204e34411154055",
+    "status": "historical-base-plus-working-tree-only",
+    "retiredPerGrammarArtifactHashes": ["2176d283e6d33f5070dc0cc1192a0c6b617bd5b69961bfbf64308e1f8e2b3761", "9a1f42b3b7c0f0a5355f0f6dd8890c712e2347b7a6f02865a9f26349889164c5", "7dc068814ed480f2709094c4686b2c881c08aab28309c374b67c88d2b4c32cc0", "fa5ffb5d05e51652a99130963ed4e6c7a5e76987fd186bb44ce8c67285f936ed", "a6baa34df3e8d5e4a9c1965181b17c7e20595e2c83bec047050d4909b6254349"],
+    "authoritativeCorroboration": "The approved decision contains inlined gate values. The current release-aggregate files independently corroborate them but do not re-derive the retired hashes.",
+    "nextMeasurementRequirement": "Regenerate and hash-bind per-grammar artifacts before the next measurement-affecting revision uses them as gate evidence."
+  },
+  "historicalEvidenceLimitations": [
+    "release-byte-buffer-aggregate-record.json captured head equal to base from an out-of-tree probe harness. It is historical base-plus-working-tree evidence, not exact-head identity evidence. Its five original per-grammar artifact hashes are retired because later probe runs overwrote their source files.",
+    "F2, G1, H1, and sanitizer records retain their original immutable heads. The final H1 decision is a separate exact-head exception record. The M-2 corrective cycle writes separate ignored exact-head records and does not rewrite historical evidence."
+  ],
+  "baselineGateLimitations": [
+    {
+      "id": "app-enabled-launcher-chat-wrapper-expectation",
+      "status": "base-equivalent-non-pass",
+      "command": "WIKIFS_APP_TESTS=1 swift test --filter LauncherChatAgentRuntimeTests.acpToolOutputKeepsTheDescriptorAndRendersRawOutputSafely --jobs 4",
+      "base": "14f07d60093daf25596522924a77b6fa0742a23d",
+      "candidate": "f6cd101df847b92f2a439cabfbb1d7dd404d28c1",
+      "result": "Both exits are 1 with the same two provider-wrapper assertions.",
+      "cause": "ChatWebView.toolDetailPayload intentionally removes a complete provider-added Markdown fence before escaping the tool detail. The Phase 1 .chat Markdown policy does not change this path.",
+      "baseLog": "tmp/orchestration/markdown-renderer-embeds/baseline/swift-test-base-20260809-074808.log",
+      "baseLogSHA256": "83cfaf605a1dd46632c321e74d8faae65cf05ee39e778357d8447c81f4f0d6f9",
+      "candidateLog": "tmp/orchestration/markdown-renderer-embeds/gates/g1-f6cd101d.log",
+      "candidateLogSHA256": "d71cf809d7e74dd09739c95c281cd6ce32e1f6288a75ce7251e53e510c3961fe",
+      "disposition": "Retain as a baseline limitation. Do not claim that the app-enabled full suite passed or modify ChatWebView.toolDetailPayload or LauncherChatAgentRuntimeTests in Phase 1."
+    }
+  ]
+}

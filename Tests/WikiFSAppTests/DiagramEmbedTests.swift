@@ -302,7 +302,7 @@ struct DiagramEmbedTests {
                     )
                 }
             )
-            let html = MarkdownHTMLRenderer.render(prepared)
+            let html = MarkdownHTMLRenderer.render(prepared, options: .disabled)
             // The result contains exactly ONE mermaid code element.
             let mermaidCodeCount = html.components(
                 separatedBy: "class=\"language-mermaid\"").count - 1

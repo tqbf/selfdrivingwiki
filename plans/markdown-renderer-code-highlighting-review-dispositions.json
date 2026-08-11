@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 1,
+  "phase": "Phase 1 ordinary fenced code and native Tree-sitter highlighting",
+  "base": "14f07d60093daf25596522924a77b6fa0742a23d",
+  "historicalReviewedImplementationHead": "e18c9f62230076954a9424b0a800210611ee3041",
+  "acceptedMeasurementHeadEvidence": "tmp/orchestration/markdown-renderer-embeds/phase1-r1-final-head-evidence-f6cd101d.json",
+  "documentationCandidateHead": "bad19a04ae3b8d8185b9c5f6881fff471539a30f",
+  "documentationCandidateTree": "3eb99438273f322ef6eb031de95503d421822b40",
+  "currentExactBase": "14f07d60093daf25596522924a77b6fa0742a23d",
+  "priorAudit": {
+    "path": "tmp/orchestration/markdown-renderer-embeds/audit/phase1-independent-audit-a40156d.md",
+    "sha256": "1b7a3d78a1ffb48d8da5f78e23661b7014d1da02b12110fa75b3ad5f8adebb00"
+  },
+  "freshAudit": {
+    "path": "tmp/orchestration/markdown-renderer-embeds/audit/phase1-independent-audit-f6cd101d-r3.md",
+    "sha256": "2c1a83eec0dc2b338d86bccee701f0f83026fe64f8bf1e10fbbfcfc935d262d5"
+  },
+  "finalDocumentationAudit": {
+    "path": "tmp/orchestration/markdown-renderer-embeds/audit/phase1-independent-audit-dd0ac890.md",
+    "sha256": "4bba73445875156dc7f6d2c6cd32aec4013feadd435ac29919cc85e0d3ee4bf8",
+    "inputManifest": "tmp/orchestration/markdown-renderer-embeds/measured-input-manifest-875a2438.json",
+    "inputManifestSHA256": "e4c330ef9b623621c2b52c639a54fc29cc33b901f466af684af840a9f126542e"
+  },
+  "finalEvidenceGovernanceAudit": {
+    "path": "tmp/orchestration/markdown-renderer-embeds/audit/phase1-independent-audit-bad19a04-r3.md",
+    "sha256": "8cd7eea56aa9e6028a2483cff93b1b12e8a902793007c045a2ce2718266268c3",
+    "reviewer": "claude-opus-5",
+    "provenance": "The orchestrator audit checkout supplied the byte-identical report. The implementation workspace preserves a canonical copy."
+  },
+  "evidenceRoots": {
+    "canonicalProjectRelativeRoot": "tmp/orchestration/markdown-renderer-embeds",
+    "orchestratorAuditReports": "tmp/orchestration/markdown-renderer-embeds/audit",
+    "implementationBuildBenchmarkGateAndManifestArtifacts": "tmp/orchestration/markdown-renderer-embeds",
+    "basis": "Ignored artifacts are not one clone-complete bundle. SHA-256 and recorded recovery-workspace identity are authoritative. Project-relative paths are stable hints."
+  },
+  "measurementManifestCompleteness": {
+    "status": "forward-correction-required",
+    "omittedInputs": ["Sources/CodeHighlightBenchmark/BenchmarkCommand.swift", "Sources/CodeHighlightBenchmark/BenchmarkReport.swift", "Sources/CodeHighlightBenchmark/BenchmarkRunner.swift", "Sources/CodeHighlightBenchmark/main.swift"],
+    "basis": "Do not change the current immutable digest in this documentation-only revision. Add these harness inputs before the next measurement-affecting revision, then rebind measurement evidence. The current unchanged-tree proof preserves the approved production highlighter, app, and fixture-generator binding."
+  },
+  "aggregateEvidenceDisposition": {
+    "record": "tmp/orchestration/markdown-renderer-embeds/benchmark/release-byte-buffer-aggregate-record.json",
+    "recordSHA256": "8e08a7b88c5dc6a098d723d9f8282992ca2789744bba98444204e34411154055",
+    "status": "historical-base-plus-working-tree-only",
+    "retiredArtifactHashes": ["2176d283e6d33f5070dc0cc1192a0c6b617bd5b69961bfbf64308e1f8e2b3761", "9a1f42b3b7c0f0a5355f0f6dd8890c712e2347b7a6f02865a9f26349889164c5", "7dc068814ed480f2709094c4686b2c881c08aab28309c374b67c88d2b4c32cc0", "fa5ffb5d05e51652a99130963ed4e6c7a5e76987fd186bb44ce8c67285f936ed", "a6baa34df3e8d5e4a9c1965181b17c7e20595e2c83bec047050d4909b6254349"],
+    "basis": "Later probe runs overwrote the source artifacts. The inlined decision values and current independent aggregate files corroborate the gate. The historical record cannot prove a committed candidate head.",
+    "nextMeasurementRequirement": "Regenerate and hash-bind each per-grammar artifact before the next measurement-affecting revision uses aggregate artifacts as gate evidence."
+  },
+  "operatorExceptions": [
+    {
+      "id": "H1",
+      "status": "accepted",
+      "exceptionId": "operator-exception-phase-1-h1-exact-head-size-20260809-001",
+      "head": "f6cd101df847b92f2a439cabfbb1d7dd404d28c1",
+      "tree": "dfd81201b736fa82c7a14291858c22efe8698717",
+      "base": "14f07d60093daf25596522924a77b6fa0742a23d",
+      "measurementCommand": "make release",
+      "finalExecutableBytes": 96056944,
+      "finalDeltaBytes": 8384864,
+      "priorDeltaBytes": 8251456,
+      "additionalApprovedGrowthBytes": 133408,
+      "evidence": "tmp/orchestration/markdown-renderer-embeds/phase1-r1-final-head-evidence-f6cd101d.json",
+      "evidenceSHA256": "88c68d53a82bd4134cd69178cfe0c999c3af7cece0662af394b590a3c444fd8d",
+      "boundaries": "Exact five-grammar implementation, unchanged 124-file attribution, no new dependency, and no shipped test, benchmark, or fixture artifact.",
+      "invalidation": "Any later head, bundle, dependency, grammar, source-maximum, or unexplained size change needs fresh evidence and a new decision."
+    }
+  ],
+  "prDisclosure": {
+    "status": "required_before_pr1",
+    "statements": [
+      "The final H1 exception accepts a 96,056,944-byte executable and an 8,384,864-byte delta.",
+      "The prior delta was 8,251,456 bytes. The operator approved the additional 133,408 bytes.",
+      "The exception applies only to the exact five-grammar implementation and unchanged 124-file app attribution.",
+      "The G1 app-enabled test remains a base-equivalent non-pass. The full app-enabled suite is not claimed passed.",
+      "The 100 KiB aggregate record is historical base-plus-working-tree evidence. Its retired per-grammar artifact hashes do not establish candidate-head identity.",
+      "Later identity, bundle, dependency, grammar, source-maximum, or unexplained size changes invalidate the H1 exception."
+    ]
+  },
+  "allowedStatuses": ["fixed", "discharged", "architect-or-operator-owned"],
+  "dispositions": [
+    { "id": "M-1", "status": "fixed", "basis": "Both MarkdownHTMLRenderer.render and TransclusionEmbedder.renderEmbedBody require MarkdownRenderOptions. WikiReader retains its one explicit reader option; an unexpected absent context logs and uses .disabled. The API-shape test and all compiled call sites anchor this contract." },
+    { "id": "M-2", "status": "discharged", "basis": "The original M-1/M-2 corrective record covers final-head F2, G1, and the earlier H1 release-size evidence. The final H1 exception is recorded separately at f6cd101d. Exact-head sanitizer, make build, and make test evidence remain separately owned. Historical artifacts retain their original identities. G1 remains a candidate-no-worse-than-base non-pass, and the app-enabled full suite is not claimed passed." },
+    { "id": "L-A", "status": "fixed", "basis": "The renderer checks language, source size, cancellation, and basic highlighter eligibility before claiming the synchronized document budget. An oversized fence followed by a valid fence regression anchors the behavior." },
+    { "id": "L-B", "status": "fixed", "basis": "escapedHTML accepts only a private ValidatedTokenStream created after palette, order, bounds, and UTF-8 boundary checks against the active source buffer." },
+    { "id": "L-C", "status": "fixed", "basis": "The production-source hash and historical-versus-current evidence roles are recorded accurately in the design and inventory." },
+    { "id": "L-E", "status": "fixed", "basis": "The matrix preserves prior audit identity as historical and points current review to the final f6cd101d exact-head evidence record." },
+    { "id": "L-F", "status": "discharged", "basis": "The aggregate identity anomaly is retained honestly as an out-of-tree harness-capture limitation and is excluded from exact-head proof." },
+    { "id": "A-1", "status": "discharged", "basis": "The five dangling aggregate child hashes are explicitly retired. The approved decision-inlined values and current independent aggregate files corroborate the gate. A future measurement must regenerate and hash-bind each artifact before it uses them as gate evidence." },
+    { "id": "A-2", "status": "discharged", "basis": "The aggregate record is explicitly limited to historical base-plus-working-tree evidence. Retained F2 and H1 records and the immutable measured-input manifest provide current claims." },
+    { "id": "A-4", "status": "fixed", "basis": "Tracked project records use the canonical singular tmp/orchestration/markdown-renderer-embeds path. Historical plural-path control-plane provenance is not a live evidence path." },
+    { "id": "M1", "status": "discharged", "basis": "Fresh release maximum-block probe measured all five 256 KiB fixtures. Scala was worst at 31.19 MiB RSS delta, below the 32 MiB criterion." },
+    { "id": "M2", "status": "fixed", "basis": "CodeSyntaxHighlighterSecurityTests anchors AC.2 at the public boundary: capture-shaped adversarial text stays inert, has exact textContent, and output classes remain within the closed palette." },
+    { "id": "M3", "status": "fixed", "basis": "ChatWebView now passes MarkdownRenderOptions.chat. Fenced chat code remains escaped inert plain code, preserves its language class, and cannot emit an sdw-code token span; no chat CSS was added." },
+    { "id": "M4", "status": "fixed", "basis": "CodeHighlightBenchmarkFixtures is committed, creates deterministic exact-size fixtures, and its checked-in corpus metadata names the constructor and representative nested Scala shape." },
+    { "id": "M5", "status": "fixed", "basis": "The diagnostic is stamped non-gating, uses its actual measurement role, and no longer carries a hard-coded uncommitted head." },
+    { "id": "M6", "status": "discharged", "basis": "Fresh release maximum-block evidence places the worst parse-plus-query p95 at 31.527 ms, inside the plan's 100 ms cancellation-observation window. The existing cancellation seam remains covered without a blocking timing test." },
+    { "id": "L1", "status": "discharged", "basis": "Validated C-order tokens are not sorted. The builder preserves first-range precedence and rejects an unexpected order fail closed." },
+    { "id": "L2", "status": "discharged", "basis": "Out-of-order untrusted ranges return nil and use escaped fallback; they are not repaired or reordered." },
+    { "id": "L3", "status": "architect-or-operator-owned", "basis": "Reader contrast policy is not changed in this pass. The requested CSS change is outside the authorized scope." },
+    { "id": "L4", "status": "fixed", "basis": "MarkdownRenderOptions carries one synchronized HighlightedCodeBlockBudget from the root reader conversion to transclusion rendering, while the explicit chat policy disables highlighting." },
+    { "id": "L5", "status": "discharged", "basis": "The direct byte builder rejects non-contiguous UTF-8 storage and conversion failure, then uses the inert escaped fallback." },
+    { "id": "L6", "status": "fixed", "basis": "The include-closure manifest records all nine compilation roots with upstream and candidate blobs, as well as the complete local include closure." },
+    { "id": "L7", "status": "fixed", "basis": "The security suite asserts that every closed palette class has the existing reader stylesheet rule." },
+    { "id": "L8", "status": "architect-or-operator-owned", "basis": "Typed input and attachment lifecycle work belongs to later phases and is unchanged." },
+    { "id": "L9", "status": "architect-or-operator-owned", "basis": "Stacked-review ownership is an orchestrator process concern, not a Phase 1 implementation change." },
+    { "id": "L10", "status": "discharged", "basis": "No history rewrite is proposed or needed; the current branch retains the audited commit chain." },
+    { "id": "L11", "status": "fixed", "basis": "The 32-call concurrency fixture now uses distinct language and source invocations and compares every result with its serial expected output." },
+    { "id": "F1", "status": "discharged", "basis": "The fresh Claude audit produced retained release evidence at the accepted 256 KiB maximum for every grammar." },
+    { "id": "F2", "status": "discharged", "basis": "Operator exception operator-exception-phase-1-f2-memory-budget-20260809-001 accepts exactly the 36,306,944-byte (34.625 MiB) fresh-process nested-scala-maximum-v1 result at the existing 256 KiB limit. Evidence is tmp/orchestration/markdown-renderer-embeds/benchmark/f2-harness-74079438-validation.json (SHA-256 ea1b9bbde0ee4cc0987bc85d3ff2262e12e9461f94b5bacae332953d14666e45). The 32 MiB criterion remains unchanged for every other scope." },
+    { "id": "F3", "status": "fixed", "basis": "This finite, machine-readable inventory dispositions every prior M1-M6 and L1-L11 finding and every fresh F1-F10 finding." },
+    { "id": "F4", "status": "fixed", "basis": "CodeSyntaxHighlighterSecurityTests adds the named AC.2 closed-palette and inert-output regression anchor." },
+    { "id": "F5", "status": "fixed", "basis": "The typed reader/chat policy is explicit. WikiReader shares a document-wide budget with TransclusionEmbedder; ChatWebView disables highlighting and retains inert escaped fences without token CSS." },
+    { "id": "F6", "status": "discharged", "basis": "The existing cancellation closure has focused coverage, and exact release maximum-block parse-plus-query p95 is below 100 ms without adding a scheduler-sensitive assertion." },
+    { "id": "F7", "status": "fixed", "basis": "The committed fixture generator and release-test measurement schema make the nested Scala maximum input and representative blocks reproducible. Ignored JSON records are restricted to the benchmark evidence directory." },
+    { "id": "F8", "status": "fixed", "basis": "The debug evidence schema labels RSS as process-wide ru_maxrss diagnostic data, not highlighter-attributable memory." },
+    { "id": "F9", "status": "fixed", "basis": "The closure manifest now includes the complete blob and candidate-byte verification for runtime lib.c and all eight grammar parser or scanner roots." },
+    { "id": "F10", "status": "fixed", "basis": "Design, inventory, and fixture metadata now state the reviewed evidence boundaries, deterministic fixture source, and closure-root accounting." }
+  ],
+  "unresolved": [],
+  "baselineGateLimitations": [
+    {
+      "id": "G1",
+      "status": "base-equivalent-non-pass",
+      "basis": "The approved base 14f07d60093daf25596522924a77b6fa0742a23d and final candidate f6cd101df847b92f2a439cabfbb1d7dd404d28c1 both exit 1 for the filtered LauncherChatAgentRuntimeTests wrapper assertion. ChatWebView.toolDetailPayload intentionally removes a complete provider-added fence. Phase 1 only passes .chat to MarkdownHTMLRenderer and does not change that path.",
+      "baseLog": "tmp/orchestration/markdown-renderer-embeds/baseline/swift-test-base-20260809-074808.log",
+      "baseLogSHA256": "83cfaf605a1dd46632c321e74d8faae65cf05ee39e778357d8447c81f4f0d6f9",
+      "candidateLog": "tmp/orchestration/markdown-renderer-embeds/gates/g1-f6cd101d.log",
+      "candidateLogSHA256": "d71cf809d7e74dd09739c95c281cd6ce32e1f6288a75ce7251e53e510c3961fe",
+      "disposition": "Keep this result as PR evidence. Do not claim the app-enabled full suite passed."
+    }
+  ]
+}

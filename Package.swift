@@ -89,6 +89,52 @@ let package = Package(
             path: "Sources/CRendererPackageMove",
             publicHeadersPath: "include"
         ),
+        // Pinned local Tree-sitter runtime and generated parser sources for the
+        // reader's inert fenced-code syntax highlighting. This C target has no
+        // package-manager, system-package, or runtime-download dependency.
+        .target(
+            name: "CTreeSitterHighlighting",
+            path: "Sources/CTreeSitterHighlighting",
+            exclude: [
+                "Runtime/alloc.c",
+                "Runtime/get_changed_ranges.c",
+                "Runtime/language.c",
+                "Runtime/lexer.c",
+                "Runtime/node.c",
+                "Runtime/parser.c",
+                "Runtime/query.c",
+                "Runtime/stack.c",
+                "Runtime/subtree.c",
+                "Runtime/tree.c",
+                "Runtime/tree_cursor.c",
+                "Runtime/wasm_store.c",
+                "Runtime/wasm/stdlib.c",
+            ],
+            publicHeadersPath: "include",
+            cSettings: [
+                // The pinned Scala scanner has optional stderr diagnostics behind
+                // DEBUG. Keep generated vendor bytes intact and prevent project
+                // build settings from enabling those diagnostics at runtime.
+                .unsafeFlags(["-UDEBUG"]),
+            ]
+        ),
+        // The native ordinary-fence highlighter is a leaf library so the app
+        // and the release benchmark link the exact same Swift/C implementation.
+        // It deliberately owns no UI, renderer, parser, tree, or cursor state.
+        .target(
+            name: "WikiFSCodeHighlighting",
+            dependencies: ["CTreeSitterHighlighting"],
+            path: "Sources/WikiFSCodeHighlighting",
+            swiftSettings: strictSwiftSettings
+        ),
+        // Thin process shell for the opt-in, fresh-process release measurement.
+        // It is not a WikiFS app resource or a shipping product.
+        .executableTarget(
+            name: "CodeHighlightBenchmark",
+            dependencies: ["WikiFSCodeHighlighting"],
+            path: "Sources/CodeHighlightBenchmark",
+            swiftSettings: strictSwiftSettings
+        ),
         // Shared leaf types (PageID, ULID, ResourceKind, EmbedTarget, ParsedLink)
         // — Foundation-only, depended on by WikiFSLinks and WikiFSCore. Extracted
         // from WikiFSCore in module restructuring Phase 1 (#532) so the pure-logic
@@ -195,7 +241,7 @@ let package = Package(
                 .copy("Resources/Prompts"),
                 .copy("../../docs/skills/renderer-package-maintainer/references/wiki-state-chat-reference.md"),
             ],
-            swiftSettings: strictSwiftSettings,
+            swiftSettings: strictSwiftSettings
         ),
         // MLX on-device MiniLM embeddings. Kept out of WikiFSCore so the File
         // Provider extension never links MLX/Metal (com.apple.fileprovider-nonui
@@ -236,6 +282,7 @@ let package = Package(
             name: "WikiFS",
             dependencies: [
                 "WikiFSCore",
+                "WikiFSCodeHighlighting",
                 // The XPC contract — the app implements WikiDaemonEventSink
                 // (DaemonQueueEventSink). Empty on Linux; harmless there.
                 "WikiDaemonContract",
@@ -424,6 +471,7 @@ let package = Package(
             name: "WikiFSAppTests",
             dependencies: [
                 "WikiFSCore", "WikiCtlCore", "WikiDaemonContract",
+                "WikiFSCodeHighlighting",
                 .target(name: "WikiFSEngine", condition: .when(platforms: [.macOS])),
                 .target(name: "WikiFS", condition: .when(platforms: [.macOS])),
                 .target(name: "WikiFSMLX", condition: .when(platforms: [.macOS])),
@@ -434,6 +482,16 @@ let package = Package(
                 .product(name: "ACPModel", package: "swift-acp"),
             ],
             path: "Tests/WikiFSAppTests",
+            // The deterministic benchmark corpus is read through #filePath so
+            // fixture construction remains outside timed samples; it is not a
+            // SwiftPM runtime resource.
+            exclude: ["Fixtures"],
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "CodeHighlightBenchmarkTests",
+            dependencies: ["CodeHighlightBenchmark", "WikiFSCodeHighlighting"],
+            path: "Tests/CodeHighlightBenchmarkTests",
             swiftSettings: strictSwiftSettings
         ),
         // The File Provider extension binary. build.sh repackages this into a

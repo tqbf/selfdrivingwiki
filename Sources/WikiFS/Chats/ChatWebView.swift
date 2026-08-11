@@ -527,9 +527,11 @@ struct ChatWebView: NSViewRepresentable {
                     embedInfo: embedInfo,
                     displayName: context.displayName,
                     pinnedExtractionID: context.pinnedExtractionID)
-                return MarkdownHTMLRenderer.render(prepared)
+                return MarkdownHTMLRenderer.render(prepared, options: .chat)
             }
-            return MarkdownHTMLRenderer.render(ReaderMarkdown.prepared(presentationMarkdown) { _, _ in true })
+            return MarkdownHTMLRenderer.render(
+                ReaderMarkdown.prepared(presentationMarkdown) { _, _ in true },
+                options: .chat)
         }
 
         /// Direct typed chat markup used by the Phase 4 transcript surface.
