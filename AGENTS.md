@@ -313,8 +313,11 @@ agents, NOT Polytoken):
   why.
 
 * Never commit or push directly to `main`. Always work on a feature branch, push
-  the branch, and open a PR. You may push PR branches but MUST NOT merge them to
-  main yourself.
+  the branch, and open a PR. Agents may prepare, push, open, review, and report
+  PR readiness. The operator owns the merge decision. Only the operator may
+  enqueue the exact approved PR head in the GitHub merge queue. Agents MUST NOT
+  enqueue a PR, enable auto-merge, merge directly, or change issue state. GitHub
+  may merge only after the operator enqueues the approved PR head.
 
 * When creating or naming a branch, follow
   [`docs/skills/conventional-branch/SKILL.md`](docs/skills/conventional-branch/SKILL.md).
