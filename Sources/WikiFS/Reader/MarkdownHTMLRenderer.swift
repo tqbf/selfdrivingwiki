@@ -17,14 +17,19 @@ enum MarkdownCodeHighlightingPolicy: Sendable {
 /// policy instead of inheriting highlighting accidentally.
 struct MarkdownRenderOptions: Sendable {
     let codeHighlighting: MarkdownCodeHighlightingPolicy
+    let rendererEmbedProjection: RendererEmbedProjection?
+    let documentIdentity: MarkdownDocumentIdentity?
 
     static var reader: Self {
-        Self(codeHighlighting: .enabled(HighlightedCodeBlockBudget()))
+        Self(
+            codeHighlighting: .enabled(HighlightedCodeBlockBudget()),
+            rendererEmbedProjection: nil,
+            documentIdentity: nil)
     }
 
     /// Fail-closed policy for callers without an authoritative reader context.
-    static let disabled = Self(codeHighlighting: .disabled)
-    static let chat = Self(codeHighlighting: .disabled)
+    static let disabled = Self(codeHighlighting: .disabled, rendererEmbedProjection: nil, documentIdentity: nil)
+    static let chat = Self(codeHighlighting: .disabled, rendererEmbedProjection: nil, documentIdentity: nil)
 }
 
 /// A document-scoped fence budget. The mutex protects only the remaining
@@ -78,6 +83,8 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         var renderer = MarkdownHTMLRenderer()
         renderer.imageResolver = imageResolver
         renderer.codeHighlighting = options.codeHighlighting
+        renderer.rendererEmbedProjection = options.rendererEmbedProjection
+        renderer.documentIdentity = options.documentIdentity
         renderer.isCancelled = isCancelled
         return renderer.visit(Document(parsing: markdown))
     }
@@ -85,11 +92,14 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
     /// Per-render slug dedup counts, mirroring `AnchorBlock.makeSlug` so heading
     /// ids match the native reader's resolution list.
     private var slugCounts: [String: Int] = [:]
+    private var fenceOrdinal = 0
 
     /// Phase 4: optional resolver that rewrites a relative image src to a
     /// `wiki-blob://source/<id>` URL. Set by the static `render` before visiting.
     private var imageResolver: ((String) -> String?)?
     private var codeHighlighting: MarkdownCodeHighlightingPolicy = .disabled
+    private var rendererEmbedProjection: RendererEmbedProjection?
+    private var documentIdentity: MarkdownDocumentIdentity?
     private var isCancelled: @Sendable () -> Bool = { Task.isCancelled }
 
     private mutating func visitChildren(_ markup: Markup) -> String {
@@ -119,9 +129,38 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
     }
 
     mutating func visitCodeBlock(_ codeBlock: CodeBlock) -> String {
+        let parserOrdinal = fenceOrdinal
+        fenceOrdinal += 1
+        let fenced: MarkdownFencedBlock
+        do {
+            fenced = try MarkdownFencedBlock(
+                documentIdentity: documentIdentity,
+                parserOrdinal: parserOrdinal,
+                rawInfoString: codeBlock.language,
+                bytes: Data(codeBlock.code.utf8))
+        } catch {
+            let cls = (codeBlock.language ?? "").isEmpty
+                ? ""
+                : " class=\"language-\(escapeAttribute(codeBlock.language ?? ""))\""
+            return plainCodeBlockHTML(codeBlock.code, cls: cls)
+        }
         let cls = (codeBlock.language ?? "").isEmpty
             ? ""
             : " class=\"language-\(escapeAttribute(codeBlock.language ?? ""))\""
+        switch fenced.presentationPolicy {
+        case .hostApprovedRichRequest(.mermaid):
+            return plainCodeBlockHTML(codeBlock.code, cls: cls)
+        case .hostApprovedRichRequest(.jsoncanvas):
+            return rendererCardHTML(
+                plan: rendererEmbedPlan(for: fenced, alias: .jsoncanvas),
+                fallbackHTML: plainCodeBlockHTML(codeBlock.code, cls: cls))
+        case .hostApprovedRichRequest(.excalidraw):
+            return rendererCardHTML(
+                plan: rendererEmbedPlan(for: fenced, alias: .excalidraw),
+                fallbackHTML: plainCodeBlockHTML(codeBlock.code, cls: cls))
+        case .typedRawCodeFallback, .ordinaryCode:
+            break
+        }
         let highlighted: String?
         if case .enabled(let budget) = codeHighlighting,
            let language = CodeLanguage.fromFenceInfo(codeBlock.language),
@@ -254,5 +293,183 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
 
     private func escapeAttribute(_ s: String) -> String {
         escape(s).replacingOccurrences(of: "\"", with: "&quot;")
+    }
+
+    private func plainCodeBlockHTML(_ code: String, cls: String) -> String {
+        "<pre><code\(cls)>\(escape(code))</code></pre>"
+    }
+
+    private func rendererCardHTML(plan: RendererEmbedPlan?, fallbackHTML: String) -> String {
+        guard let plan else { return fallbackHTML }
+        let ref = plan.rendererReference
+        let refValue = "\(ref.packageID.rawValue)/\(ref.version.rawValue)/\(ref.registrationID.rawValue)"
+        let title: String = {
+            switch plan.rendererReference.registrationID.rawValue {
+            case "json-canvas": return "JSON Canvas"
+            case "excalidraw": return "Excalidraw"
+            default: return plan.rendererReference.registrationID.rawValue
+            }
+        }()
+        let placeholderID = escapeAttribute(plan.placeholderID)
+        let summary = escape(plan.semanticContent)
+        let fallback = escape(plan.fallbackReason?.rawValue ?? "static preview")
+        let control = escape(plan.activationMetadata?.controlLabel ?? "Open")
+        let aria = escapeAttribute(plan.activationMetadata?.accessibilityLabel ?? "renderer preview")
+        let inputJSON: String
+        if let input = plan.input {
+            do {
+                inputJSON = try String(decoding: JSONEncoder().encode(input), as: UTF8.self)
+            } catch {
+                inputJSON = "null"
+            }
+        } else {
+            inputJSON = "null"
+        }
+        let actionHTML: String
+        if plan.activationMetadata != nil, plan.input != nil {
+            let actionURL = Self.rendererActionURL(
+                packageID: ref.packageID.rawValue,
+                version: ref.version.rawValue,
+                registrationID: ref.registrationID.rawValue,
+                inputJSON: inputJSON
+            )
+            actionHTML = #"<a class="sdw-renderer-card__action" href="\#(escapeAttribute(actionURL))">\#(control)</a>"#
+        } else {
+            actionHTML = ""
+        }
+        return """
+        <section class="sdw-renderer-card" id="\(placeholderID)" role="group" aria-label="\(aria)" data-renderer-reference="\(escapeAttribute(refValue))" data-renderer-input="\(escapeAttribute(inputJSON))">
+          <header class="sdw-renderer-card__header">\(title)</header>
+          <p class="sdw-renderer-card__summary">\(summary)</p>
+          <p class="sdw-renderer-card__fallback">\(fallback)</p>
+          \(actionHTML)
+        </section>
+        """
+    }
+
+    private func rendererEmbedPlan(for block: MarkdownFencedBlock, alias: MarkdownRichFenceAlias) -> RendererEmbedPlan? {
+        guard rendererEmbedProjection?.allowsRichFence(alias) == true else { return nil }
+        let reference = Self.rendererReference(for: alias)
+        let placeholderID = Self.placeholderID(for: block)
+        let summary = Self.semanticSummary(for: alias)
+        guard let identity = documentIdentity,
+              let blockID = block.blockID,
+              let mime = Self.inlineArtifactMIME(for: alias)
+        else {
+            return RendererEmbedPlan(
+                placeholderID: placeholderID,
+                rendererReference: reference,
+                semanticContent: summary,
+                fallbackReason: .missingDocumentIdentity,
+                activationMetadata: nil)
+        }
+        let artifact: RendererEmbeddedContent.InlineArtifact
+        do {
+            artifact = try RendererEmbeddedContent.InlineArtifact(
+                pageID: identity.pageID,
+                pageVersionID: identity.pageVersionID,
+                blockID: blockID,
+                fenceKind: alias,
+                mimeType: mime,
+                bytes: block.bytes)
+        } catch {
+            return RendererEmbedPlan(
+                placeholderID: placeholderID,
+                rendererReference: reference,
+                semanticContent: summary,
+                fallbackReason: .missingDocumentIdentity,
+                activationMetadata: nil)
+        }
+        return RendererEmbedPlan(
+            placeholderID: placeholderID,
+            rendererReference: reference,
+            input: .inlineArtifact(artifact),
+            semanticContent: summary,
+            activationMetadata: Self.activationMetadata(for: alias))
+    }
+
+    private static func placeholderID(for block: MarkdownFencedBlock) -> String {
+        "sdw-renderer-\(block.digest.hex.prefix(16))-\(block.parserOrdinal)"
+    }
+
+    private static func semanticSummary(for alias: MarkdownRichFenceAlias) -> String {
+        switch alias {
+        case .mermaid:
+            return "Mermaid diagram fence"
+        case .jsoncanvas:
+            return "JSON Canvas document fence"
+        case .excalidraw:
+            return "Excalidraw document fence"
+        }
+    }
+
+    private static func activationMetadata(for alias: MarkdownRichFenceAlias) -> RendererEmbedActivationMetadata {
+        switch alias {
+        case .mermaid:
+            return RendererEmbedActivationMetadata(
+                controlLabel: "Open",
+                accessibilityLabel: "Open mermaid renderer",
+                summary: "Preview diagram code in the renderer pane.")
+        case .jsoncanvas:
+            return RendererEmbedActivationMetadata(
+                controlLabel: "Open",
+                accessibilityLabel: "Open JSON Canvas renderer",
+                summary: "Open the static canvas in the renderer pane.")
+        case .excalidraw:
+            return RendererEmbedActivationMetadata(
+                controlLabel: "Interact",
+                accessibilityLabel: "Open Excalidraw renderer",
+                summary: "Open the static Excalidraw card in the renderer pane.")
+        }
+    }
+
+    private static func inlineArtifactMIME(for alias: MarkdownRichFenceAlias) -> RendererMIMEType? {
+        switch alias {
+        case .mermaid:
+            return RendererMIMEType(rawValue: "text/mermaid")
+        case .jsoncanvas, .excalidraw:
+            return RendererMIMEType(rawValue: "application/json")
+        }
+    }
+
+    private static func rendererReference(for alias: MarkdownRichFenceAlias) -> RendererReference {
+        switch alias {
+        case .mermaid:
+            guard let packageID = RendererPackageID(rawValue: "org.selfdrivingwiki.builtin"),
+                  let version = RendererPackageVersion(rawValue: "1.0.0"),
+                  let registrationID = RendererRegistrationID(rawValue: "mermaid")
+            else { preconditionFailure("approved mermaid renderer reference must remain valid") }
+            return RendererReference(packageID: packageID, version: version, registrationID: registrationID)
+        case .jsoncanvas:
+            guard let packageID = RendererPackageID(rawValue: "org.selfdrivingwiki.builtin"),
+                  let version = RendererPackageVersion(rawValue: "1.0.0"),
+                  let registrationID = RendererRegistrationID(rawValue: "json-canvas")
+            else { preconditionFailure("approved jsoncanvas renderer reference must remain valid") }
+            return RendererReference(packageID: packageID, version: version, registrationID: registrationID)
+        case .excalidraw:
+            guard let packageID = RendererPackageID(rawValue: "org.selfdrivingwiki.excalidraw-readonly"),
+                  let version = RendererPackageVersion(rawValue: "1.0.0"),
+                  let registrationID = RendererRegistrationID(rawValue: "excalidraw")
+            else { preconditionFailure("approved excalidraw renderer reference must remain valid") }
+            return RendererReference(packageID: packageID, version: version, registrationID: registrationID)
+        }
+    }
+
+    private static func rendererActionURL(
+        packageID: String,
+        version: String,
+        registrationID: String,
+        inputJSON: String
+    ) -> String {
+        var components = URLComponents()
+        components.scheme = "renderer-action"
+        components.host = "open"
+        components.queryItems = [
+            URLQueryItem(name: "package", value: packageID),
+            URLQueryItem(name: "version", value: version),
+            URLQueryItem(name: "registration", value: registrationID),
+            URLQueryItem(name: "input", value: inputJSON)
+        ]
+        return components.url?.absoluteString ?? "renderer-action://open"
     }
 }

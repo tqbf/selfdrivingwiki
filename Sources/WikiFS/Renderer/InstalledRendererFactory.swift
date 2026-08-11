@@ -56,7 +56,9 @@ struct InstalledRendererFactory {
         else { return nil }
 
         do {
-            try inputReader.validateInput(maximumByteCount: descriptor.sizeLimits.maximumInputByteCount)
+            try inputReader.validateInput(
+                maximumInputByteCount: descriptor.sizeLimits.maximumInputByteCount,
+                maximumDecodedByteCount: descriptor.sizeLimits.maximumDecodedByteCount)
         } catch {
             DebugLog.reader("Installed renderer input was unavailable or exceeded its declared bound; using Source fallback.")
             return nil

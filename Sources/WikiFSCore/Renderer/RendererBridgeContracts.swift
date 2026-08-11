@@ -19,10 +19,12 @@ public enum RendererBridgeMethod: String, Codable, Sendable {
 }
 
 /// The only bridge input targets. A page cannot name a source, file path, URL,
-/// or arbitrary artifact; it can only ask for the pin selected by its session.
+/// or arbitrary artifact; it can only ask for the pin selected by its session
+/// or a host-owned inline artifact.
 public enum RendererBridgeInput: Codable, Equatable, Sendable {
     case source(versionID: SourceVersionID)
     case markdown(versionID: SourceMarkdownVersionID)
+    case inlineArtifact(RendererEmbeddedContent.InlineArtifact)
 }
 
 public struct RendererBridgeRequest: Codable, Equatable, Sendable {

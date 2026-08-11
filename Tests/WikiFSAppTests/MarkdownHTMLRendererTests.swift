@@ -221,7 +221,9 @@ struct MarkdownHTMLRendererTests {
             count: CodeHighlightingPolicy.maximumHighlightedSourceBytes + 1)
         let fence = "```swift\nlet value = 1\n```"
         let options = MarkdownRenderOptions(
-            codeHighlighting: .enabled(HighlightedCodeBlockBudget(limit: 1)))
+            codeHighlighting: .enabled(HighlightedCodeBlockBudget(limit: 1)),
+            rendererEmbedProjection: nil,
+            documentIdentity: nil)
 
         let html = MarkdownHTMLRenderer.render(
             "```swift\n\(oversized)\n```\n\n\(fence)",
@@ -327,6 +329,74 @@ struct MarkdownHTMLRendererTests {
         let html = MarkdownHTMLRenderer.render("```mermaid\ngraph TD\nA-->B\n```", options: .disabled)
         #expect(html.contains(#"class="language-mermaid""#))
         #expect(html.contains("A--&gt;B"))   // escape(): > → &gt;
+    }
+
+    @Test func richFenceCardsRenderStaticMarkupWhenProjectionAllowsThem() {
+        let projection = RendererEmbedProjection(
+            sourceEmbeds: [:],
+            richFenceAliases: Set(MarkdownRichFenceAlias.allCases))
+        let document = MarkdownDocumentIdentity(
+            pageID: .init(rawValue: "01HTESTPAGE000000000000001"),
+            pageVersionID: .init(rawValue: "01HTESTPV00000000000000001"))
+        let options = MarkdownRenderOptions(
+            codeHighlighting: .disabled,
+            rendererEmbedProjection: projection,
+            documentIdentity: document)
+
+        let jsonCanvas = MarkdownHTMLRenderer.render("```jsoncanvas\n{\"nodes\":[],\"edges\":[]}\n```", options: options)
+        #expect(jsonCanvas.contains("sdw-renderer-card"))
+        #expect(jsonCanvas.contains("JSON Canvas"))
+        #expect(jsonCanvas.contains("renderer-action://open"))
+        #expect(jsonCanvas.contains("package=org.selfdrivingwiki.builtin"))
+        #expect(jsonCanvas.contains("registration=json-canvas"))
+        #expect(jsonCanvas.contains("input="))
+        #expect(jsonCanvas.contains("application/json"))
+
+        let excalidraw = MarkdownHTMLRenderer.render("```excalidraw\n{\"type\":\"excalidraw\",\"version\":2,\"elements\":[]}\n```", options: options)
+        #expect(excalidraw.contains("sdw-renderer-card"))
+        #expect(excalidraw.contains("Excalidraw"))
+        #expect(excalidraw.contains("Interact"))
+
+        let mermaid = MarkdownHTMLRenderer.render("```mermaid\ngraph TD\nA-->B\n```", options: options)
+        #expect(mermaid.contains(#"class="language-mermaid""#))
+        #expect(!mermaid.contains("sdw-renderer-card"))
+    }
+
+    @Test("renderer action URLs decode the exact typed input")
+    func rendererActionURLDecodesTypedInput() throws {
+        let bytes = Data("{\"nodes\":[],\"edges\":[]}".utf8)
+        let pageID = PageID(rawValue: "01HTESTPAGE000000000000001")
+        let pageVersionID = PageVersionID(rawValue: "01HTESTPV00000000000000001")
+        let blockID = try MarkdownBlockID(
+            pageID: pageID,
+            pageVersionID: pageVersionID,
+            parserOrdinal: 0,
+            digest: RendererSHA256.digest(bytes))
+        let artifact = try RendererEmbeddedContent.InlineArtifact(
+            pageID: pageID,
+            pageVersionID: pageVersionID,
+            blockID: blockID,
+            fenceKind: .jsoncanvas,
+            mimeType: .init(rawValue: "application/json")!,
+            bytes: bytes)
+        let input = RendererBridgeInput.inlineArtifact(artifact)
+        let encodedInput = try String(decoding: JSONEncoder().encode(input), as: UTF8.self)
+        var components = URLComponents()
+        components.scheme = "renderer-action"
+        components.host = "open"
+        components.queryItems = [
+            URLQueryItem(name: "package", value: "org.selfdrivingwiki.builtin"),
+            URLQueryItem(name: "version", value: "1.0.0"),
+            URLQueryItem(name: "registration", value: "json-canvas"),
+            URLQueryItem(name: "input", value: encodedInput)
+        ]
+        let url = try #require(components.url)
+
+        let route = try #require(WikiReaderView.rendererActivationRoute(for: url))
+        #expect(route.reference.packageID.rawValue == "org.selfdrivingwiki.builtin")
+        #expect(route.reference.version.rawValue == "1.0.0")
+        #expect(route.reference.registrationID.rawValue == "json-canvas")
+        #expect(route.input == input)
     }
 
     @Test func documentHTMLEmbedsNoScriptWhenLibAbsent() {

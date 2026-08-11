@@ -38,6 +38,9 @@ struct WikiReaderView: View {
     /// context-menu item through `WikiLinkMenuNSItems`.
     @Environment(\.addURLHandler) private var addURLHandler
     @Environment(\.addBookmarkHandler) private var addBookmarkHandler
+    /// Hosts that own the full renderer pane can route a typed activation here.
+    /// Readers without that pane leave this nil and the card stays inert.
+    var onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)? = nil
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
     @State private var isLoading = true
 
@@ -61,6 +64,7 @@ struct WikiReaderView: View {
                           isLoading: $isLoading,
                           addURLHandler: addURLHandler,
                           addBookmarkHandler: addBookmarkHandler,
+                          onRendererActivation: onRendererActivation,
                           findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
             if isLoading {
                 ProgressView()
@@ -69,6 +73,33 @@ struct WikiReaderView: View {
                     .background(.regularMaterial)
             }
         }
+    }
+
+    nonisolated static func rendererActivationRoute(
+        for url: URL
+    ) -> (reference: RendererReference, input: RendererBridgeInput)? {
+        guard url.scheme == "renderer-action",
+              url.host == "open",
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        else { return nil }
+        let items = (components.queryItems ?? []).reduce(into: [String: String]()) { result, item in
+            if let value = item.value { result[item.name] = value }
+        }
+        guard let packageID = RendererPackageID(rawValue: items["package"] ?? ""),
+              let version = RendererPackageVersion(rawValue: items["version"] ?? ""),
+              let registrationID = RendererRegistrationID(rawValue: items["registration"] ?? ""),
+              let inputJSON = items["input"]
+        else { return nil }
+        let input: RendererBridgeInput
+        do {
+            input = try JSONDecoder().decode(RendererBridgeInput.self, from: Data(inputJSON.utf8))
+        } catch {
+            return nil
+        }
+        return (
+            reference: RendererReference(packageID: packageID, version: version, registrationID: registrationID),
+            input: input
+        )
     }
 
     /// Resolve a consumed anchor fragment to a scroll target: a section anchor
@@ -405,6 +436,7 @@ final class WikiReaderWebView: WKWebView {
     var currentSelection: WikiSelection?
     var addURLHandler: (@MainActor @Sendable (String) -> Void)?
     var addBookmarkHandler: (@MainActor @Sendable (BookmarkTargetPickerContext) -> Void)?
+    var onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)?
     /// The href under the cursor, kept current by the injected `mouseover`
     /// listener. Read synchronously in `willOpenMenu`. `fileprivate(set)` so the
     /// in-file message-handler proxy can write it without exposing a public setter.
@@ -980,6 +1012,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
     @Binding var isLoading: Bool
     let addURLHandler: (@MainActor @Sendable (String) -> Void)?
     let addBookmarkHandler: (@MainActor @Sendable (BookmarkTargetPickerContext) -> Void)?
+    let onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)?
     let findText: String?
     let findVersion: Int
     let findOccurrence: Int
@@ -993,6 +1026,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         webView.currentSelection = currentSelection
         webView.addURLHandler = addURLHandler
         webView.addBookmarkHandler = addBookmarkHandler
+        webView.onRendererActivation = onRendererActivation
         webView.navigationDelegate = context.coordinator
         webView.coordinator = context.coordinator
         context.coordinator.webView = webView
@@ -1010,6 +1044,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         webView.currentSelection = currentSelection
         webView.addURLHandler = addURLHandler
         webView.addBookmarkHandler = addBookmarkHandler
+        webView.onRendererActivation = onRendererActivation
         context.coordinator.store = store
         context.coordinator.currentSelection = currentSelection
         if context.coordinator.loadedMarkdown != markdown {
@@ -1031,6 +1066,10 @@ internal struct WikiReaderRep: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
+    static func dismantleNSView(_ webView: WikiReaderWebView, coordinator: Coordinator) {
+        coordinator.teardown()
+    }
+
     @MainActor
     final class Coordinator: NSObject, WKNavigationDelegate {
         weak var webView: WKWebView?
@@ -1045,6 +1084,8 @@ internal struct WikiReaderRep: NSViewRepresentable {
         var appliedFindVersion = 0
         private var convertTask: Task<Void, Never>?
         private var loadStart: DispatchTime?
+        private var loadGeneration = 0
+        private var isDismantled = false
         /// Timestamp captured right before `loadHTMLString`, to split
         /// `appear-to-painted` into the async hop (startLoad→loadHTMLString) vs.
         /// the pure WKWebView parse/layout (loadHTMLString→didFinish).
@@ -1054,6 +1095,8 @@ internal struct WikiReaderRep: NSViewRepresentable {
 
         func startLoad(markdown: String, isLoading: Binding<Bool>) {
             convertTask?.cancel()  // drop any in-flight conversion for stale markdown
+            loadGeneration += 1
+            let generation = loadGeneration
             loadedMarkdown = markdown
             pageLoaded = false
             isLoadingBinding = isLoading
@@ -1087,7 +1130,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
             // off-main, the same compute-once/capture-pure-data discipline as
             // before, just lifted to a shared seam (so chat transcripts can
             // render through it too in Phase A.2).
-            let context: WikiRenderContext? = store.map { WikiRenderContext.build(from: $0) }
+            let context: WikiRenderContext? = store.map { $0.renderContext() }
             // The rendered source's own sibling map (nil for pages — no sibling
             // images). Selection-specific, so it stays here, not in the context.
             var renderedSourceMap: [String: SourceID]? = nil
@@ -1098,6 +1141,17 @@ internal struct WikiReaderRep: NSViewRepresentable {
             } else {
                 contentKind = .document
             }
+            let documentIdentity: MarkdownDocumentIdentity? = {
+                guard case .page(let pageID) = currentSelection,
+                      let pageVersionID = store?.pageOrigin(for: pageID)?.versionID
+                else { return nil }
+                return MarkdownDocumentIdentity(pageID: pageID, pageVersionID: pageVersionID)
+            }()
+            let documentRenderOptions = MarkdownRenderOptions(
+                codeHighlighting: .enabled(HighlightedCodeBlockBudget()),
+                rendererEmbedProjection: context?.rendererEmbedProjection,
+                documentIdentity: documentIdentity)
+            self.renderOptions = documentRenderOptions
 
             let loadStartVal = loadStart
             convertTask = Task.detached(priority: .userInitiated) { [weak self] in
@@ -1106,6 +1160,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 if let ls = loadStartVal {
                     ReaderTiming.point("webview.task-start", ms: Self.elapsedMs(since: ls))
                 }
+                guard Task.isCancelled == false else { return }
                 // Shared pre-pass (footnotes + wiki links) + swift-markdown HTML
                 // render, both off the main actor. The context's closures resolve
                 // against the precomputed existence sets so missing links style as
@@ -1140,6 +1195,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     displayName: displayName,
                     pinnedExtractionID: pinnedExtractionID
                 )
+                guard Task.isCancelled == false else { return }
                 let body = MarkdownHTMLRenderer.render(prepared, imageResolver: { src in
                     // Phase 4: rewrite a relative image src to its stored blob.
                     // Only the rendered source's own sibling map is consulted
@@ -1148,12 +1204,16 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     guard let map = renderedSourceMap, let siblingID = map[src] else { return nil }
                     return "\(WikiLinkMarkdown.blobScheme)://source/\(siblingID.rawValue)"
                 }, options: renderOptions)
+                guard Task.isCancelled == false else { return }
                 let html = WikiReaderView.documentHTML(body)
                 let convertMs = Self.elapsedMs(since: t0)
                 let convertDone = DispatchTime.now()
                 await MainActor.run { [weak self] in
                     guard let self, let webView = self.webView,
-                          self.loadedMarkdown == markdown else { return }
+                          self.loadedMarkdown == markdown,
+                          self.loadGeneration == generation,
+                          self.isDismantled == false,
+                          Task.isCancelled == false else { return }
                     // How long did MainActor.run wait to get back on the main
                     // actor? Large value ⇒ main thread is busy (SwiftUI layout).
                     ReaderTiming.point("webview.main-hop", ms: Self.elapsedMs(since: convertDone))
@@ -1169,6 +1229,13 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     webView.loadHTMLString(html, baseURL: WikiReaderOrigin.url)
                 }
             }
+        }
+
+        func teardown() {
+            isDismantled = true
+            loadGeneration += 1
+            convertTask?.cancel()
+            convertTask = nil
         }
 
         // MARK: - Pending-anchor / quote-highlight flow
@@ -1308,6 +1375,11 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     // tab in place; ⌘-click opens the target in a new tab.
                     let openInNewTab = navigationAction.modifierFlags.contains(.command)
                     route(url, openInNewTab: openInNewTab)
+                    decisionHandler(.cancel)
+                    return
+                }
+                if let activation = WikiReaderView.rendererActivationRoute(for: url) {
+                    (webView as? WikiReaderWebView)?.onRendererActivation?(activation.reference, activation.input)
                     decisionHandler(.cancel)
                     return
                 }

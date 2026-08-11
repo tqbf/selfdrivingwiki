@@ -4557,6 +4557,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                     """,
                     arguments: [versionID.rawValue]
                 )
+            case .inlineArtifact(let artifact):
+                return artifact.bytes.count
             }
         }
     }

@@ -86,6 +86,35 @@ struct RendererBridgeContractsTests {
         #expect(throws: RendererBridgeAuthorizationError.nonMainFrame) { try nonMainFrame.authorize(envelope: envelope, context: childFrame, sessionIsReady: true, sessionIsClosed: false) }
     }
 
+    @Test("inline artifact requests remain typed and replay-safe")
+    func inlineArtifactRequestAuthorization() throws {
+        let capability = RendererSessionCapability(rawValue: "capability")
+        let pageID = PageID(rawValue: "01HTESTPAGE000000000000001")
+        let pageVersionID = PageVersionID(rawValue: "01HTESTPV00000000000000001")
+        let bytes = Data("{\"nodes\":[],\"edges\":[]}".utf8)
+        let blockID = try MarkdownBlockID(
+            pageID: pageID,
+            pageVersionID: pageVersionID,
+            parserOrdinal: 0,
+            digest: RendererSHA256.digest(bytes))
+        let artifact = try RendererEmbeddedContent.InlineArtifact(
+            pageID: pageID,
+            pageVersionID: pageVersionID,
+            blockID: blockID,
+            fenceKind: .jsoncanvas,
+            mimeType: .init(rawValue: "application/json")!,
+            bytes: bytes)
+        let input = RendererBridgeInput.inlineArtifact(artifact)
+        let request = RendererBridgeRequest(id: .init(rawValue: "request-inline"), method: .inputRead, capability: capability, input: input)
+        let envelope = try RendererBridgeEnvelope.encode(request)
+        var authorizer = RendererBridgeAuthorizer(capability: capability)
+
+        #expect(try authorizer.authorize(envelope: envelope, sessionIsReady: true) == request)
+        #expect(throws: RendererBridgeAuthorizationError.duplicateRequestID) {
+            try authorizer.authorize(envelope: envelope, sessionIsReady: true)
+        }
+    }
+
     @Test("request identifiers are bounded before replay retention")
     func requestIdentifiersAreBoundedBeforeReplayRetention() throws {
         let capability = RendererSessionCapability(rawValue: "capability")
