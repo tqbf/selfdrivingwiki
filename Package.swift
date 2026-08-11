@@ -241,7 +241,7 @@ let package = Package(
                 .copy("Resources/Prompts"),
                 .copy("../../docs/skills/renderer-package-maintainer/references/wiki-state-chat-reference.md"),
             ],
-            swiftSettings: strictSwiftSettings,
+            swiftSettings: strictSwiftSettings
         ),
         // MLX on-device MiniLM embeddings. Kept out of WikiFSCore so the File
         // Provider extension never links MLX/Metal (com.apple.fileprovider-nonui
