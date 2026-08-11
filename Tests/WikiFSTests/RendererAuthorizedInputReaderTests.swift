@@ -53,11 +53,12 @@ struct RendererAuthorizedInputReaderTests {
         let pageID = PageID(rawValue: "01HTESTPAGE000000000000001")
         let pageVersionID = PageVersionID(rawValue: "01HTESTPV00000000000000001")
         let bytes = Data("{\"nodes\":[],\"edges\":[]}".utf8)
-        let blockID = try MarkdownBlockID(
-            pageID: pageID,
-            pageVersionID: pageVersionID,
+        let block = try MarkdownFencedBlock(
+            documentIdentity: .init(pageID: pageID, pageVersionID: pageVersionID),
             parserOrdinal: 0,
-            digest: RendererSHA256.digest(bytes))
+            rawInfoString: "jsoncanvas",
+            bytes: bytes)
+        let blockID = try #require(block.blockID)
         let artifact = try RendererEmbeddedContent.InlineArtifact(
             pageID: pageID,
             pageVersionID: pageVersionID,
@@ -78,6 +79,7 @@ struct RendererAuthorizedInputReaderTests {
             }
         )
 
+        #expect(block.digest == artifact.digest)
         let payload = try reader.read(input)
         #expect(payload.mimeType == "application/json")
         #expect(payload.bytes == bytes)

@@ -95,15 +95,18 @@ struct WikiAppWebViewTests {
         #expect(factory.makeView(for: descriptor, inputs: .unavailable, inputReader: nil, onFailure: { _ in }) == nil)
     }
 
-    @Test("an oversized pinned input preserves Source fallback before a session starts")
+    @Test("a bridge-oversized pinned input preserves Source fallback before a session starts")
     func oversizedPinnedInputReturnsNoView() throws {
         let store = try GRDBWikiStore()
-        let source = try store.addSource(filename: "input.txt", data: Data("too large".utf8))
+        let source = try store.addSource(
+            filename: "input.txt",
+            data: Data(repeating: 0x61, count: WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount + 1))
         let version = try #require(try store.activeContentVersion(sourceID: source.id))
         let reader = RendererAuthorizedInputReader(
             store: store,
             authorizedInput: .source(versionID: version.id))
-        let descriptor = try installedDescriptor(maximumInputByteCount: 1)
+        let descriptor = try installedDescriptor(
+            maximumInputByteCount: WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount + 1)
         let configuration = try installedConfiguration(for: descriptor)
         let factory = InstalledRendererFactory(makeSession: { _, _, _ in
             Issue.record("an oversized input must not create a renderer session")

@@ -92,11 +92,12 @@ struct RendererBridgeContractsTests {
         let pageID = PageID(rawValue: "01HTESTPAGE000000000000001")
         let pageVersionID = PageVersionID(rawValue: "01HTESTPV00000000000000001")
         let bytes = Data("{\"nodes\":[],\"edges\":[]}".utf8)
-        let blockID = try MarkdownBlockID(
-            pageID: pageID,
-            pageVersionID: pageVersionID,
+        let block = try MarkdownFencedBlock(
+            documentIdentity: .init(pageID: pageID, pageVersionID: pageVersionID),
             parserOrdinal: 0,
-            digest: RendererSHA256.digest(bytes))
+            rawInfoString: "jsoncanvas",
+            bytes: bytes)
+        let blockID = try #require(block.blockID)
         let artifact = try RendererEmbeddedContent.InlineArtifact(
             pageID: pageID,
             pageVersionID: pageVersionID,
@@ -109,6 +110,7 @@ struct RendererBridgeContractsTests {
         let envelope = try RendererBridgeEnvelope.encode(request)
         var authorizer = RendererBridgeAuthorizer(capability: capability)
 
+        #expect(block.digest == artifact.digest)
         #expect(try authorizer.authorize(envelope: envelope, sessionIsReady: true) == request)
         #expect(throws: RendererBridgeAuthorizationError.duplicateRequestID) {
             try authorizer.authorize(envelope: envelope, sessionIsReady: true)

@@ -104,7 +104,7 @@ public final class RendererAuthorizedInputReader {
             }
             return .init(mimeType: version.mimeType, bytes: Data(version.content.utf8))
         case .inlineArtifact(let artifact):
-            let digest = RendererSHA256.digest(artifact.bytes)
+            let digest = RendererSHA256.digest(artifact.canonicalDigestPayload)
             guard digest == artifact.digest else {
                 throw ReaderError.unavailablePinnedInput
             }

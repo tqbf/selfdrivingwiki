@@ -350,6 +350,8 @@ struct MarkdownHTMLRendererTests {
         #expect(jsonCanvas.contains("package=org.selfdrivingwiki.builtin"))
         #expect(jsonCanvas.contains("registration=json-canvas"))
         #expect(jsonCanvas.contains("input="))
+        #expect(jsonCanvas.contains("data-renderer-input=\"{"))
+        #expect(!jsonCanvas.contains("data-renderer-input=\"null\""))
         #expect(jsonCanvas.contains("application/json"))
 
         let excalidraw = MarkdownHTMLRenderer.render("```excalidraw\n{\"type\":\"excalidraw\",\"version\":2,\"elements\":[]}\n```", options: options)
@@ -367,11 +369,12 @@ struct MarkdownHTMLRendererTests {
         let bytes = Data("{\"nodes\":[],\"edges\":[]}".utf8)
         let pageID = PageID(rawValue: "01HTESTPAGE000000000000001")
         let pageVersionID = PageVersionID(rawValue: "01HTESTPV00000000000000001")
-        let blockID = try MarkdownBlockID(
-            pageID: pageID,
-            pageVersionID: pageVersionID,
+        let block = try MarkdownFencedBlock(
+            documentIdentity: .init(pageID: pageID, pageVersionID: pageVersionID),
             parserOrdinal: 0,
-            digest: RendererSHA256.digest(bytes))
+            rawInfoString: "jsoncanvas",
+            bytes: bytes)
+        let blockID = try #require(block.blockID)
         let artifact = try RendererEmbeddedContent.InlineArtifact(
             pageID: pageID,
             pageVersionID: pageVersionID,

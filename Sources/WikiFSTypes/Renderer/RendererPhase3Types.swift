@@ -271,11 +271,7 @@ public struct MarkdownFencedBlock: Codable, Hashable, Sendable {
             throw RendererValidationError.invalidIdentifier(kind: "markdown fence ordinal", value: String(parserOrdinal))
         }
         let normalized = Self.normalizedInfoString(from: rawInfoString)
-        var payload = Data(bytes)
-        if let normalized, normalized.isEmpty == false {
-            payload.append(Data(normalized.utf8))
-        }
-        let digest = RendererSHA256.digest(payload)
+        let digest = RendererSHA256.digest(Self.makeCanonicalDigestInput(bytes: bytes, normalizedInfoString: normalized))
         let blockID: MarkdownBlockID?
         if let documentIdentity {
             blockID = try MarkdownBlockID(
@@ -312,6 +308,18 @@ public struct MarkdownFencedBlock: Codable, Hashable, Sendable {
             .lowercased()
         guard let normalized, normalized.isEmpty == false else { return nil }
         return normalized
+    }
+
+    public var canonicalDigestPayload: Data {
+        Self.makeCanonicalDigestInput(bytes: bytes, normalizedInfoString: normalizedInfoString)
+    }
+
+    fileprivate static func makeCanonicalDigestInput(bytes: Data, normalizedInfoString: String?) -> Data {
+        var payload = Data(bytes)
+        if let normalizedInfoString, normalizedInfoString.isEmpty == false {
+            payload.append(Data(normalizedInfoString.utf8))
+        }
+        return payload
     }
 
     public static func presentationPolicy(for normalizedInfoString: String?) -> MarkdownFencePresentationPolicy {
@@ -433,7 +441,7 @@ public enum RendererEmbeddedContent: Codable, Hashable, Sendable {
             guard blockID.pageID == pageID, blockID.pageVersionID == pageVersionID else {
                 throw RendererValidationError.invalidIdentifier(kind: "renderer inline artifact", value: "page identity mismatch")
             }
-            let digest = RendererSHA256.digest(bytes)
+            let digest = RendererSHA256.digest(Self.makeCanonicalDigestInput(bytes: bytes, fenceKind: fenceKind))
             guard digest == blockID.digest else {
                 throw RendererValidationError.invalidIdentifier(kind: "renderer inline artifact", value: "digest mismatch")
             }
@@ -444,6 +452,14 @@ public enum RendererEmbeddedContent: Codable, Hashable, Sendable {
             self.mimeType = mimeType
             self.digest = digest
             self.bytes = bytes
+        }
+
+        public var canonicalDigestPayload: Data {
+            Self.makeCanonicalDigestInput(bytes: bytes, fenceKind: fenceKind)
+        }
+
+        private static func makeCanonicalDigestInput(bytes: Data, fenceKind: MarkdownRichFenceAlias) -> Data {
+            MarkdownFencedBlock.makeCanonicalDigestInput(bytes: bytes, normalizedInfoString: fenceKind.rawValue)
         }
     }
 

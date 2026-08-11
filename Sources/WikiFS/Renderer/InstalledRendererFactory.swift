@@ -55,10 +55,16 @@ struct InstalledRendererFactory {
               entryURLMatches(entryPoint: entryPoint, identity: configuration.identity)
         else { return nil }
 
+        let admissionMaximumInputByteCount = min(
+            descriptor.sizeLimits.maximumInputByteCount,
+            WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount)
+        let admissionMaximumDecodedByteCount = min(
+            descriptor.sizeLimits.maximumDecodedByteCount,
+            WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount)
         do {
             try inputReader.validateInput(
-                maximumInputByteCount: descriptor.sizeLimits.maximumInputByteCount,
-                maximumDecodedByteCount: descriptor.sizeLimits.maximumDecodedByteCount)
+                maximumInputByteCount: admissionMaximumInputByteCount,
+                maximumDecodedByteCount: admissionMaximumDecodedByteCount)
         } catch {
             DebugLog.reader("Installed renderer input was unavailable or exceeded its declared bound; using Source fallback.")
             return nil
