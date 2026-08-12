@@ -2,6 +2,8 @@ import SwiftUI
 import WikiFSEngine
 import WikiFSCore
 
+// pattern: Mixed (unavoidable)
+
 /// Unified page surface. The header (title, date, action buttons) stays fixed
 /// regardless of mode. The content area below the divider swaps between rendered
 /// markdown and the monospaced source editor. Save/Cancel appear inline in the
@@ -12,6 +14,9 @@ struct PageDetailView: View {
     /// The per-active-wiki session (store + launchers + descriptor).
     var session: WikiSession
     let fileProvider: FileProviderFacade
+    /// Optional typed renderer admission sink. When absent, rich cards stay
+    /// static and do not expose activation metadata.
+    let onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)? = nil
     @State private var isEditing = false
     /// Pending scroll-to-heading for the editor (outline click while editing).
     @State private var editorScrollRequest: EditorScrollRequest?
@@ -463,6 +468,7 @@ struct PageDetailView: View {
                         currentSelection: store.selection,
                         store: store,
                         fileProvider: fileProvider,
+                        onRendererActivation: onRendererActivation,
                         findText: findText, findVersion: findVersion,
                         findOccurrence: findOccurrence)
             .frame(maxWidth: .infinity)

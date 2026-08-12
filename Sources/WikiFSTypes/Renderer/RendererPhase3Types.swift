@@ -205,6 +205,7 @@ public enum MarkdownFenceFallbackReason: String, Codable, CaseIterable, Hashable
     case unsupportedAlias
     case packageAliasDisallowed
     case missingDocumentIdentity
+    case oversizedInput
 }
 
 /// Closed presentation policy for a fenced markdown block.
@@ -291,6 +292,10 @@ public struct MarkdownFencedBlock: Codable, Hashable, Sendable {
         self.digest = digest
         self.blockID = blockID
         self.presentationPolicy = Self.presentationPolicy(for: normalized)
+    }
+
+    internal static func canonicalDigestInput(bytes: Data, normalizedInfoString: String?) -> Data {
+        makeCanonicalDigestInput(bytes: bytes, normalizedInfoString: normalizedInfoString)
     }
 
     public var rawText: String {
@@ -441,7 +446,7 @@ public enum RendererEmbeddedContent: Codable, Hashable, Sendable {
             guard blockID.pageID == pageID, blockID.pageVersionID == pageVersionID else {
                 throw RendererValidationError.invalidIdentifier(kind: "renderer inline artifact", value: "page identity mismatch")
             }
-            let digest = RendererSHA256.digest(Self.makeCanonicalDigestInput(bytes: bytes, fenceKind: fenceKind))
+            let digest = RendererSHA256.digest(MarkdownFencedBlock.canonicalDigestInput(bytes: bytes, normalizedInfoString: fenceKind.rawValue))
             guard digest == blockID.digest else {
                 throw RendererValidationError.invalidIdentifier(kind: "renderer inline artifact", value: "digest mismatch")
             }
@@ -455,11 +460,7 @@ public enum RendererEmbeddedContent: Codable, Hashable, Sendable {
         }
 
         public var canonicalDigestPayload: Data {
-            Self.makeCanonicalDigestInput(bytes: bytes, fenceKind: fenceKind)
-        }
-
-        private static func makeCanonicalDigestInput(bytes: Data, fenceKind: MarkdownRichFenceAlias) -> Data {
-            MarkdownFencedBlock.makeCanonicalDigestInput(bytes: bytes, normalizedInfoString: fenceKind.rawValue)
+            MarkdownFencedBlock.canonicalDigestInput(bytes: bytes, normalizedInfoString: fenceKind.rawValue)
         }
     }
 

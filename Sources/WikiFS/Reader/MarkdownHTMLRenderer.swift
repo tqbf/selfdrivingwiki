@@ -19,17 +19,19 @@ struct MarkdownRenderOptions: Sendable {
     let codeHighlighting: MarkdownCodeHighlightingPolicy
     let rendererEmbedProjection: RendererEmbedProjection?
     let documentIdentity: MarkdownDocumentIdentity?
+    let rendererActivationAdmission: RendererEmbedActivationAdmission?
 
     static var reader: Self {
         Self(
             codeHighlighting: .enabled(HighlightedCodeBlockBudget()),
             rendererEmbedProjection: nil,
-            documentIdentity: nil)
+            documentIdentity: nil,
+            rendererActivationAdmission: nil)
     }
 
     /// Fail-closed policy for callers without an authoritative reader context.
-    static let disabled = Self(codeHighlighting: .disabled, rendererEmbedProjection: nil, documentIdentity: nil)
-    static let chat = Self(codeHighlighting: .disabled, rendererEmbedProjection: nil, documentIdentity: nil)
+    static let disabled = Self(codeHighlighting: .disabled, rendererEmbedProjection: nil, documentIdentity: nil, rendererActivationAdmission: nil)
+    static let chat = Self(codeHighlighting: .disabled, rendererEmbedProjection: nil, documentIdentity: nil, rendererActivationAdmission: nil)
 }
 
 /// A document-scoped fence budget. The mutex protects only the remaining
@@ -85,6 +87,7 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         renderer.codeHighlighting = options.codeHighlighting
         renderer.rendererEmbedProjection = options.rendererEmbedProjection
         renderer.documentIdentity = options.documentIdentity
+        renderer.rendererActivationAdmission = options.rendererActivationAdmission
         renderer.isCancelled = isCancelled
         return renderer.visit(Document(parsing: markdown))
     }
@@ -100,6 +103,7 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
     private var codeHighlighting: MarkdownCodeHighlightingPolicy = .disabled
     private var rendererEmbedProjection: RendererEmbedProjection?
     private var documentIdentity: MarkdownDocumentIdentity?
+    private var rendererActivationAdmission: RendererEmbedActivationAdmission?
     private var isCancelled: @Sendable () -> Bool = { Task.isCancelled }
 
     private mutating func visitChildren(_ markup: Markup) -> String {
@@ -301,6 +305,9 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
 
     private func rendererCardHTML(plan: RendererEmbedPlan?, fallbackHTML: String) -> String {
         guard let plan else { return fallbackHTML }
+        if plan.fallbackReason == .oversizedInput {
+            return fallbackHTML
+        }
         let ref = plan.rendererReference
         let refValue = "\(ref.packageID.rawValue)/\(ref.version.rawValue)/\(ref.registrationID.rawValue)"
         let title: String = {
@@ -315,30 +322,64 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         let fallback = escape(plan.fallbackReason?.rawValue ?? "static preview")
         let control = escape(plan.activationMetadata?.controlLabel ?? "Open")
         let aria = escapeAttribute(plan.activationMetadata?.accessibilityLabel ?? "renderer preview")
-        let inputJSON: String
-        if let input = plan.input {
+        let mimeType: String? = {
+            guard case .inlineArtifact(let artifact) = plan.input else { return nil }
+            return artifact.mimeType.rawValue
+        }()
+        let activationContext: RendererEmbedActivationContext? = {
+            guard let input = plan.input,
+                  let admission = rendererActivationAdmission,
+                  case .inlineArtifact(let artifact) = input
+            else { return nil }
+            let context = RendererEmbedActivationContext(
+                pageID: artifact.pageID,
+                pageVersionID: artifact.pageVersionID,
+                blockID: artifact.blockID,
+                rendererReference: ref,
+                input: .inlineArtifact(artifact),
+                capability: admission.capability,
+                generation: admission.generation)
+            admission.register(context: context)
+            return context
+        }()
+        let inputAttribute: String
+        let inputJSON: String?
+        if let input = plan.input, activationContext != nil {
             do {
-                inputJSON = try String(decoding: JSONEncoder().encode(input), as: UTF8.self)
+                let encoded = try String(decoding: JSONEncoder().encode(input), as: UTF8.self)
+                inputJSON = encoded
+                inputAttribute = #" data-renderer-input="\#(escapeAttribute(encoded))""#
             } catch {
-                inputJSON = "null"
+                inputJSON = nil
+                inputAttribute = ""
             }
         } else {
-            inputJSON = "null"
+            inputJSON = nil
+            inputAttribute = ""
         }
         let actionHTML: String
-        if plan.activationMetadata != nil, plan.input != nil {
+        if plan.activationMetadata != nil, let activationContext, let inputJSON, let mimeType {
             let actionURL = Self.rendererActionURL(
                 packageID: ref.packageID.rawValue,
                 version: ref.version.rawValue,
                 registrationID: ref.registrationID.rawValue,
-                inputJSON: inputJSON
+                inputJSON: inputJSON,
+                capability: activationContext.capability.rawValue,
+                generation: activationContext.generation,
+                pageID: activationContext.pageID.rawValue,
+                pageVersionID: activationContext.pageVersionID.rawValue,
+                blockID: activationContext.blockID.digest.hex,
+                blockPageID: activationContext.blockID.pageID.rawValue,
+                blockPageVersionID: activationContext.blockID.pageVersionID.rawValue,
+                blockParserOrdinal: activationContext.blockID.parserOrdinal,
+                mimeType: mimeType
             )
             actionHTML = #"<a class="sdw-renderer-card__action" href="\#(escapeAttribute(actionURL))">\#(control)</a>"#
         } else {
             actionHTML = ""
         }
         return """
-        <section class="sdw-renderer-card" id="\(placeholderID)" role="group" aria-label="\(aria)" data-renderer-reference="\(escapeAttribute(refValue))" data-renderer-input="\(escapeAttribute(inputJSON))">
+        <section class="sdw-renderer-card" id="\(placeholderID)" role="group" aria-label="\(aria)" data-renderer-reference="\(escapeAttribute(refValue))"\(inputAttribute)>
           <header class="sdw-renderer-card__header">\(title)</header>
           <p class="sdw-renderer-card__summary">\(summary)</p>
           <p class="sdw-renderer-card__fallback">\(fallback)</p>
@@ -352,6 +393,14 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         let reference = Self.rendererReference(for: alias)
         let placeholderID = Self.placeholderID(for: block)
         let summary = Self.semanticSummary(for: alias)
+        guard block.bytes.count <= WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount else {
+            return RendererEmbedPlan(
+                placeholderID: placeholderID,
+                rendererReference: reference,
+                semanticContent: summary,
+                fallbackReason: .oversizedInput,
+                activationMetadata: nil)
+        }
         guard let identity = documentIdentity,
               let blockID = block.blockID,
               let mime = Self.inlineArtifactMIME(for: alias)
@@ -380,11 +429,23 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
                 fallbackReason: .missingDocumentIdentity,
                 activationMetadata: nil)
         }
+        guard let admission = rendererActivationAdmission,
+              admission.pageID == identity.pageID,
+              admission.pageVersionID == identity.pageVersionID else {
+            return RendererEmbedPlan(
+                placeholderID: placeholderID,
+                rendererReference: reference,
+                input: .inlineArtifact(artifact),
+                semanticContent: summary,
+                fallbackReason: nil,
+                activationMetadata: nil)
+        }
         return RendererEmbedPlan(
             placeholderID: placeholderID,
             rendererReference: reference,
             input: .inlineArtifact(artifact),
             semanticContent: summary,
+            fallbackReason: nil,
             activationMetadata: Self.activationMetadata(for: alias))
     }
 
@@ -459,7 +520,16 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         packageID: String,
         version: String,
         registrationID: String,
-        inputJSON: String
+        inputJSON: String,
+        capability: String,
+        generation: Int,
+        pageID: String,
+        pageVersionID: String,
+        blockID: String,
+        blockPageID: String,
+        blockPageVersionID: String,
+        blockParserOrdinal: Int,
+        mimeType: String
     ) -> String {
         var components = URLComponents()
         components.scheme = "renderer-action"
@@ -468,7 +538,16 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
             URLQueryItem(name: "package", value: packageID),
             URLQueryItem(name: "version", value: version),
             URLQueryItem(name: "registration", value: registrationID),
-            URLQueryItem(name: "input", value: inputJSON)
+            URLQueryItem(name: "input", value: inputJSON),
+            URLQueryItem(name: "capability", value: capability),
+            URLQueryItem(name: "generation", value: String(generation)),
+            URLQueryItem(name: "page", value: pageID),
+            URLQueryItem(name: "pageVersion", value: pageVersionID),
+            URLQueryItem(name: "block", value: blockID),
+            URLQueryItem(name: "blockPage", value: blockPageID),
+            URLQueryItem(name: "blockPageVersion", value: blockPageVersionID),
+            URLQueryItem(name: "blockOrdinal", value: String(blockParserOrdinal)),
+            URLQueryItem(name: "mime", value: mimeType)
         ]
         return components.url?.absoluteString ?? "renderer-action://open"
     }

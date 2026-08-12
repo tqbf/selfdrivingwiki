@@ -1213,10 +1213,12 @@ struct SourceDetailView: View {
 
     @MainActor
     private func activateRendererPane(reference: RendererReference, input: RendererBridgeInput) {
+        guard headVersion != nil else {
+            return
+        }
         // The exact typed input is carried by the markdown card and routed to
         // the current source's renderer pane. The renderer state itself only
         // needs the exact renderer reference to open the pane.
-        _ = input
         persistRendererPreference(reference)
         var lifecycle = rendererPresentationLifecycle
         lifecycle.selectRendered(reference)
@@ -1377,7 +1379,7 @@ struct SourceDetailView: View {
             WikiReaderView(markdown: sourceMarkdown,
                             currentSelection: store.selection,
                             store: store,
-                            onRendererActivation: activateRendererPane(reference:input:),
+                            onRendererActivation: headVersion == nil ? nil : activateRendererPane(reference:input:),
                             findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
                 .zoomShortcuts($readerZoom)
                 .zoomScroll($readerZoom)

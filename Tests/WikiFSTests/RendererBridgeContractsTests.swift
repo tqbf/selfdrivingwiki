@@ -117,6 +117,32 @@ struct RendererBridgeContractsTests {
         }
     }
 
+    @Test("inline artifacts fail closed when the canonical digest does not match the fenced block")
+    func inlineArtifactDigestMismatchFailsClosed() throws {
+        let pageID = PageID(rawValue: "01HTESTPAGE000000000000001")
+        let pageVersionID = PageVersionID(rawValue: "01HTESTPV00000000000000001")
+        let blockBytes = Data("{\"nodes\":[],\"edges\":[]}".utf8)
+        let artifactBytes = Data("{\"nodes\":[1],\"edges\":[]}".utf8)
+        let block = try MarkdownFencedBlock(
+            documentIdentity: .init(pageID: pageID, pageVersionID: pageVersionID),
+            parserOrdinal: 0,
+            rawInfoString: "jsoncanvas",
+            bytes: blockBytes)
+        let blockID = try #require(block.blockID)
+
+        #expect(throws: RendererValidationError.invalidIdentifier(
+            kind: "renderer inline artifact",
+            value: "digest mismatch")) {
+                try RendererEmbeddedContent.InlineArtifact(
+                    pageID: pageID,
+                    pageVersionID: pageVersionID,
+                    blockID: blockID,
+                    fenceKind: .jsoncanvas,
+                    mimeType: .init(rawValue: "application/json")!,
+                    bytes: artifactBytes)
+            }
+    }
+
     @Test("request identifiers are bounded before replay retention")
     func requestIdentifiersAreBoundedBeforeReplayRetention() throws {
         let capability = RendererSessionCapability(rawValue: "capability")

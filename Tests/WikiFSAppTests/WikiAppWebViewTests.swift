@@ -4,7 +4,7 @@ import Foundation
 import SwiftUI
 import Testing
 import WebKit
-import WikiFSCore
+@testable import WikiFSCore
 @testable import WikiFS
 
 @Suite("WikiAppWebView lifecycle")
@@ -123,6 +123,57 @@ struct WikiAppWebViewTests {
             onFailure: { _ in }) == nil)
     }
 
+    @Test("a below-cap pinned input admits the installed renderer before session start")
+    func belowCapPinnedInputReturnsView() throws {
+        let ceiling = WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount
+        let descriptor = try installedDescriptor(maximumInputByteCount: ceiling - 1)
+        let configuration = try installedConfiguration(for: descriptor)
+        let input = RendererBridgeInput.source(versionID: .init(rawValue: "version-1"))
+        let reader = RendererAuthorizedInputReader(
+            authorizedInput: input,
+            inputByteCount: { requested in
+                #expect(requested == input)
+                return ceiling - 1
+            },
+            readPayload: { requested in
+                #expect(requested == input)
+                return .init(
+                    mimeType: "text/plain",
+                    bytes: Data(repeating: 0x61, count: ceiling - 1))
+            }
+        )
+        let factory = InstalledRendererFactory(makeSession: { _, _, _ in
+            Issue.record("a below-cap input should admit the installed renderer and create a session")
+            return RecordingWebViewSession()
+        })
+        let inputs = InstalledRendererFactory.Inputs(
+            enabledDescriptors: [descriptor],
+            resolveConfiguration: { _, _ in configuration })
+
+        #expect(factory.makeView(
+            for: descriptor,
+            inputs: inputs,
+            inputReader: reader,
+            onFailure: { _ in }) != nil)
+    }
+
+    @Test("reader teardown clears host-owned handlers without a SwiftUI state write")
+    func readerTeardownClearsHandlers() {
+        let coordinator = WikiReaderRep.Coordinator()
+        let webView = WikiReaderWebView()
+        webView.addURLHandler = { _ in }
+        webView.addBookmarkHandler = { _ in }
+        webView.onRendererActivation = { _, _ in }
+        coordinator.webView = webView
+
+        coordinator.teardown()
+
+        #expect(webView.addURLHandler == nil)
+        #expect(webView.addBookmarkHandler == nil)
+        #expect(webView.onRendererActivation == nil)
+        #expect(webView.rendererActivationAdmission == nil)
+    }
+
     @Test("factory binds the pinned input, trusted links, and failure recorder to one hosted session")
     func factoryWiresPinnedInputAndLifecycleContracts() async throws {
         let lease = await HostedAppKitTestGate.shared.acquire()
@@ -195,6 +246,30 @@ struct WikiAppWebViewTests {
         #expect(source.contains("installedRendererFactory.makeView"))
         #expect(source.contains("rendererAuthorizedInputReader(for: file.id)"))
         #expect(source.contains("failedInstalledRendererReference"))
+    }
+
+    @Test("source detail keeps renderer activation typed and inert without document identity")
+    func sourceDetailGuardsMissingIdentityBeforeActivation() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Sources/WikiFS/Sources/SourceDetailView.swift"),
+            encoding: .utf8)
+
+        #expect(source.contains("guard headVersion != nil else"))
+        #expect(source.contains("onRendererActivation: headVersion == nil ? nil : activateRendererPane(reference:input:)"))
+    }
+
+    @Test("page detail threads the optional renderer sink through the existing reader host")
+    func pageDetailThreadsOptionalRendererSink() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let page = try String(
+            contentsOf: root.appendingPathComponent("Sources/WikiFS/Pages/PageDetailView.swift"),
+            encoding: .utf8)
+
+        #expect(page.contains("let onRendererActivation"))
+        #expect(page.contains("onRendererActivation: onRendererActivation"))
     }
 
     @Test("hosted SwiftUI mount exposes the session WebView and tears it down")

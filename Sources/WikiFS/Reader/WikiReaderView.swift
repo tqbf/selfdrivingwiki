@@ -4,6 +4,93 @@ import UniformTypeIdentifiers
 import WebKit
 import WikiFSCore
 
+// pattern: Mixed (unavoidable)
+
+internal struct RendererEmbedActivationContext: Hashable, Sendable {
+    let pageID: PageID
+    let pageVersionID: PageVersionID
+    let blockID: MarkdownBlockID
+    let rendererReference: RendererReference
+    let input: RendererBridgeInput
+    let capability: RendererSessionCapability
+    let generation: Int
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.pageID == rhs.pageID &&
+        lhs.pageVersionID == rhs.pageVersionID &&
+        lhs.blockID == rhs.blockID &&
+        lhs.rendererReference == rhs.rendererReference &&
+        lhs.input == rhs.input &&
+        lhs.capability == rhs.capability &&
+        lhs.generation == rhs.generation
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(pageID)
+        hasher.combine(pageVersionID)
+        hasher.combine(blockID)
+        hasher.combine(rendererReference)
+        hasher.combine(capability)
+        hasher.combine(generation)
+        switch input {
+        case .source(let versionID):
+            hasher.combine(0)
+            hasher.combine(versionID)
+        case .markdown(let versionID):
+            hasher.combine(1)
+            hasher.combine(versionID)
+        case .inlineArtifact(let artifact):
+            hasher.combine(2)
+            hasher.combine(artifact)
+        }
+    }
+}
+
+// registeredContexts is the only mutable state, and every access is protected by lock.
+// swiftlint:disable:next unchecked_sendable
+internal final class RendererEmbedActivationAdmission: @unchecked Sendable {
+    let pageID: PageID
+    let pageVersionID: PageVersionID
+    let capability: RendererSessionCapability
+    let generation: Int
+    private let lock = NSLock()
+    private var registeredContexts: Set<RendererEmbedActivationContext> = []
+
+    init(
+        pageID: PageID,
+        pageVersionID: PageVersionID,
+        capability: RendererSessionCapability,
+        generation: Int
+    ) {
+        self.pageID = pageID
+        self.pageVersionID = pageVersionID
+        self.capability = capability
+        self.generation = generation
+    }
+
+    func register(context: RendererEmbedActivationContext) {
+        guard context.pageID == pageID,
+              context.pageVersionID == pageVersionID,
+              context.capability == capability,
+              context.generation == generation
+        else { return }
+        lock.lock()
+        registeredContexts.insert(context)
+        lock.unlock()
+    }
+
+    func authorizes(context: RendererEmbedActivationContext) -> Bool {
+        guard context.pageID == pageID,
+              context.pageVersionID == pageVersionID,
+              context.capability == capability,
+              context.generation == generation
+        else { return false }
+        lock.lock()
+        defer { lock.unlock() }
+        return registeredContexts.contains(context)
+    }
+}
+
 // MARK: - WikiReaderView
 
 /// Renders markdown in a `WKWebView` via `MarkdownHTMLRenderer` — the single
@@ -76,18 +163,30 @@ struct WikiReaderView: View {
     }
 
     nonisolated static func rendererActivationRoute(
-        for url: URL
+        for url: URL,
+        admission: RendererEmbedActivationAdmission?,
+        isMainFrame: Bool
     ) -> (reference: RendererReference, input: RendererBridgeInput)? {
-        guard url.scheme == "renderer-action",
+        guard isMainFrame,
+              let admission,
+              url.scheme == "renderer-action",
               url.host == "open",
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
         else { return nil }
         let items = (components.queryItems ?? []).reduce(into: [String: String]()) { result, item in
             if let value = item.value { result[item.name] = value }
         }
+        let pageID = PageID(rawValue: items["page"] ?? "")
+        let pageVersionID = PageVersionID(rawValue: items["pageVersion"] ?? "")
         guard let packageID = RendererPackageID(rawValue: items["package"] ?? ""),
               let version = RendererPackageVersion(rawValue: items["version"] ?? ""),
               let registrationID = RendererRegistrationID(rawValue: items["registration"] ?? ""),
+              let capability = items["capability"],
+              let generation = Int(items["generation"] ?? ""),
+              capability == admission.capability.rawValue,
+              generation == admission.generation,
+              pageID == admission.pageID,
+              pageVersionID == admission.pageVersionID,
               let inputJSON = items["input"]
         else { return nil }
         let input: RendererBridgeInput
@@ -96,10 +195,52 @@ struct WikiReaderView: View {
         } catch {
             return nil
         }
-        return (
-            reference: RendererReference(packageID: packageID, version: version, registrationID: registrationID),
-            input: input
-        )
+        let blockPageID = PageID(rawValue: items["blockPage"] ?? "")
+        let blockPageVersionID = PageVersionID(rawValue: items["blockPageVersion"] ?? "")
+        guard case .inlineArtifact(let artifact) = input,
+              let blockDigest = items["block"],
+              let blockOrdinal = Int(items["blockOrdinal"] ?? ""),
+              let mimeType = items["mime"],
+              blockPageID == admission.pageID,
+              blockPageVersionID == admission.pageVersionID,
+              artifact.pageID == admission.pageID,
+              artifact.pageVersionID == admission.pageVersionID,
+              artifact.blockID.pageID == admission.pageID,
+              artifact.blockID.pageVersionID == admission.pageVersionID,
+              artifact.blockID.parserOrdinal == blockOrdinal,
+              artifact.blockID.digest.hex == blockDigest,
+              artifact.digest.hex == blockDigest,
+              artifact.mimeType.rawValue == mimeType
+        else { return nil }
+        do {
+            let revalidated = try RendererEmbeddedContent.InlineArtifact(
+                pageID: artifact.pageID,
+                pageVersionID: artifact.pageVersionID,
+                blockID: artifact.blockID,
+                fenceKind: artifact.fenceKind,
+                mimeType: artifact.mimeType,
+                bytes: artifact.bytes)
+            guard revalidated == artifact else { return nil }
+            let reference = RendererReference(
+                packageID: packageID,
+                version: version,
+                registrationID: registrationID)
+            let activationContext = RendererEmbedActivationContext(
+                pageID: admission.pageID,
+                pageVersionID: admission.pageVersionID,
+                blockID: revalidated.blockID,
+                rendererReference: reference,
+                input: .inlineArtifact(revalidated),
+                capability: admission.capability,
+                generation: admission.generation)
+            guard admission.authorizes(context: activationContext) else { return nil }
+            return (
+                reference: reference,
+                input: .inlineArtifact(revalidated)
+            )
+        } catch {
+            return nil
+        }
     }
 
     /// Resolve a consumed anchor fragment to a scroll target: a section anchor
@@ -437,6 +578,7 @@ final class WikiReaderWebView: WKWebView {
     var addURLHandler: (@MainActor @Sendable (String) -> Void)?
     var addBookmarkHandler: (@MainActor @Sendable (BookmarkTargetPickerContext) -> Void)?
     var onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)?
+    var rendererActivationAdmission: RendererEmbedActivationAdmission?
     /// The href under the cursor, kept current by the injected `mouseover`
     /// listener. Read synchronously in `willOpenMenu`. `fileprivate(set)` so the
     /// in-file message-handler proxy can write it without exposing a public setter.
@@ -1072,7 +1214,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, WKNavigationDelegate {
-        weak var webView: WKWebView?
+        weak var webView: WikiReaderWebView?
         var store: WikiStoreModel?
         var currentSelection: WikiSelection?
         var loadedMarkdown: String?
@@ -1147,11 +1289,23 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 else { return nil }
                 return MarkdownDocumentIdentity(pageID: pageID, pageVersionID: pageVersionID)
             }()
+            let rendererActivationAdmission: RendererEmbedActivationAdmission? = {
+                guard webView?.onRendererActivation != nil,
+                      let documentIdentity
+                else { return nil }
+                return RendererEmbedActivationAdmission(
+                    pageID: documentIdentity.pageID,
+                    pageVersionID: documentIdentity.pageVersionID,
+                    capability: RendererSessionCapability(rawValue: UUID().uuidString),
+                    generation: generation)
+            }()
             let documentRenderOptions = MarkdownRenderOptions(
                 codeHighlighting: .enabled(HighlightedCodeBlockBudget()),
                 rendererEmbedProjection: context?.rendererEmbedProjection,
-                documentIdentity: documentIdentity)
+                documentIdentity: documentIdentity,
+                rendererActivationAdmission: rendererActivationAdmission)
             self.renderOptions = documentRenderOptions
+            webView?.rendererActivationAdmission = rendererActivationAdmission
 
             let loadStartVal = loadStart
             convertTask = Task.detached(priority: .userInitiated) { [weak self] in
@@ -1236,6 +1390,16 @@ internal struct WikiReaderRep: NSViewRepresentable {
             loadGeneration += 1
             convertTask?.cancel()
             convertTask = nil
+            webView?.addURLHandler = nil
+            webView?.addBookmarkHandler = nil
+            webView?.onRendererActivation = nil
+            webView?.rendererActivationAdmission = nil
+            isLoadingBinding = nil
+            renderOptions = nil
+            webView = nil
+            store = nil
+            currentSelection = nil
+            loadedMarkdown = nil
         }
 
         // MARK: - Pending-anchor / quote-highlight flow
@@ -1378,7 +1542,11 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     decisionHandler(.cancel)
                     return
                 }
-                if let activation = WikiReaderView.rendererActivationRoute(for: url) {
+                if let activation = WikiReaderView.rendererActivationRoute(
+                    for: url,
+                    admission: (webView as? WikiReaderWebView)?.rendererActivationAdmission,
+                    isMainFrame: navigationAction.targetFrame?.isMainFrame ?? false
+                ) {
                     (webView as? WikiReaderWebView)?.onRendererActivation?(activation.reference, activation.input)
                     decisionHandler(.cancel)
                     return
