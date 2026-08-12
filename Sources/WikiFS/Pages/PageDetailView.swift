@@ -16,7 +16,7 @@ struct PageDetailView: View {
     let fileProvider: FileProviderFacade
     /// Optional typed renderer admission sink. When absent, rich cards stay
     /// static and do not expose activation metadata.
-    let onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)? = nil
+    let onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)?
     @State private var isEditing = false
     /// Pending scroll-to-heading for the editor (outline click while editing).
     @State private var editorScrollRequest: EditorScrollRequest?
@@ -57,6 +57,20 @@ struct PageDetailView: View {
     /// Opens the value-driven Versions `WindowGroup` (#817). Captured from the
     /// environment (only available inside a `WindowGroup`'s view hierarchy).
     @Environment(\.openWindow) private var openWindow
+
+    init(
+        store: WikiStoreModel,
+        launcher: AgentLauncher,
+        session: WikiSession,
+        fileProvider: FileProviderFacade,
+        onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)? = nil
+    ) {
+        self._store = Bindable(wrappedValue: store)
+        self._launcher = Bindable(wrappedValue: launcher)
+        self.session = session
+        self.fileProvider = fileProvider
+        self.onRendererActivation = onRendererActivation
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {

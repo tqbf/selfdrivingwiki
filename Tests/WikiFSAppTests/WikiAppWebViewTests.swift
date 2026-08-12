@@ -4,6 +4,7 @@ import Foundation
 import SwiftUI
 import Testing
 import WebKit
+@testable import WikiFSEngine
 @testable import WikiFSCore
 @testable import WikiFS
 
@@ -260,16 +261,38 @@ struct WikiAppWebViewTests {
         #expect(source.contains("onRendererActivation: headVersion == nil ? nil : activateRendererPane(reference:input:)"))
     }
 
-    @Test("page detail threads the optional renderer sink through the existing reader host")
-    func pageDetailThreadsOptionalRendererSink() throws {
-        let root = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let page = try String(
-            contentsOf: root.appendingPathComponent("Sources/WikiFS/Pages/PageDetailView.swift"),
-            encoding: .utf8)
+    @Test("page detail accepts an injected renderer sink and preserves the nil default")
+    func pageDetailConstructsOptionalRendererSink() throws {
+        let store = try makePageDetailModel()
+        let session = try makePageDetailSession()
+        let nullView = PageDetailView(
+            store: store,
+            launcher: AgentLauncher(),
+            session: session,
+            fileProvider: FileProviderFacade())
+        #expect(nullView.onRendererActivation == nil)
 
-        #expect(page.contains("let onRendererActivation"))
-        #expect(page.contains("onRendererActivation: onRendererActivation"))
+        var forwarded = 0
+        let packageID = try #require(RendererPackageID(rawValue: "org.selfdrivingwiki.builtin"))
+        let version = try #require(RendererPackageVersion(rawValue: "1.0.0"))
+        let registrationID = try #require(RendererRegistrationID(rawValue: "page-detail"))
+        let reference = RendererReference(
+            packageID: packageID,
+            version: version,
+            registrationID: registrationID)
+        let sinkView = PageDetailView(
+            store: store,
+            launcher: AgentLauncher(),
+            session: session,
+            fileProvider: FileProviderFacade(),
+            onRendererActivation: { activatedReference, input in
+                forwarded += 1
+                #expect(activatedReference == reference)
+                #expect(input == RendererBridgeInput.source(versionID: .init(rawValue: "version-1")))
+            })
+        #expect(sinkView.onRendererActivation != nil)
+        sinkView.onRendererActivation?(reference, RendererBridgeInput.source(versionID: .init(rawValue: "version-1")))
+        #expect(forwarded == 1)
     }
 
     @Test("hosted SwiftUI mount exposes the session WebView and tears it down")
@@ -313,6 +336,54 @@ struct WikiAppWebViewTests {
                 registrationID: registrationID),
             entryURL: entryURL)
     }
+}
+
+@MainActor
+private func makePageDetailModel() throws -> WikiStoreModel {
+    let dir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("page-detail-webview-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let store = try StoreBackend.current.makeStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+    let model = WikiStoreModel(store: store)
+    model.reloadFromStore()
+    return model
+}
+
+@MainActor
+private func makePageDetailSession() throws -> WikiSession {
+    let dir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("page-detail-session-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let descriptor = WikiDescriptor.make(displayName: "Test")
+    let coordinator = ExtractionCoordinator(
+        containerDirectory: dir,
+        localExtractorFactory: { StubExtractor() })
+    return try WikiSession(
+        wikiID: descriptor.id,
+        descriptor: descriptor,
+        containerDirectory: dir,
+        extractionCoordinator: coordinator,
+        queueEngine: try makePageDetailQueueEngine(),
+        extractionProvider: StubExtractionProvider())
+}
+
+@MainActor
+private final class StubExtractor: MarkdownExtractor {
+    nonisolated var displayName: String { "Stub" }
+    func readiness() async -> ExtractionReadiness { .ready }
+    func convert(pdfData: Data, filename: String, onProgress: (@Sendable (String) -> Void)?) async throws -> String { "" }
+}
+
+private struct StubExtractionProvider: QueueExtractionProvider {
+    func resolveExtraction(wikiID: WikiID, sourceID: SourceID, backendOverride: ExtractionBackend?) async throws -> ExtractionResolution? { nil }
+    func persistExtraction(wikiID: WikiID, sourceID: SourceID, markdown: String, backend: ExtractionBackend, modelVersion: String?, technique: String?) async throws {}
+}
+
+private func makePageDetailQueueEngine() throws -> QueueEngine {
+    let store = try QueueStore(databaseURL: URL(fileURLWithPath: ":memory:"))
+    let provider = StubExtractionProvider()
+    let factory = QueueExtractionWorkerFactory(provider: provider, emitProgress: { _, _ in })
+    return QueueEngine(store: store, workerFactory: factory)
 }
 
 @MainActor
