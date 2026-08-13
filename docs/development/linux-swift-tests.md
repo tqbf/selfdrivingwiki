@@ -13,9 +13,10 @@ available. Otherwise, it selects Docker.
 The default image is `swift:6.3.3-noble` with an immutable manifest digest. It
 uses the `linux/amd64` platform, Swift 6.3.3, and Ubuntu 24.04. The local
 runner fixes the architecture, patch release, and base image for repeatable
-results. This optional diagnostic reproduces the former `linux-swift` contract
-with the corrected `WikiFSCoreTests` pasteboard suite name; it does not rely on
-or report a present-day GitHub Ubuntu runner.
+results. This optional diagnostic reproduces the former `linux-swift` contract.
+The corrected `SidebarDragPasteboardBridgeTests` name refers to a `WikiFSAppTests`
+suite in the shared diagnostic skip list; it is not part of the `WikiFSCoreTests`
+filter. The repository has no current GitHub-hosted Ubuntu runner.
 
 Do not install a Linux runtime only for this command. macOS command-line SwiftPM
 and hosted macOS checks remain the required validation path. This diagnostic is
@@ -38,7 +39,7 @@ The diagnostic command uses the shared configuration in
 `scripts/lib/linux-swift-test-config.sh`:
 
 ```sh
-swift test --parallel --num-workers 1 --filter WikiFSCoreTests --skip <former Linux diagnostic skip list>
+swift test -v --parallel --num-workers 1 --filter WikiFSCoreTests --skip <former Linux diagnostic skip list>
 ```
 
 The `WikiFSCoreTests` filter is required. An unfiltered SwiftPM test command
