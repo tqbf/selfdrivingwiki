@@ -26,7 +26,8 @@ portability is an optional, nonblocking diagnostic through `make test-linux`; it
 not a per-PR or release acceptance gate. This is a prospective operator-approved
 platform policy change, not a waiver or reclassification of any prior Linux result.
 Prior Linux evidence, including EINTR failures, remains evidence of failure and is
-not described as a pass.
+not described as a pass. See the dated failure record
+[`progress/2026-08-09T000000Z-linux-swift-eintr-failure-record.md`](../progress/2026-08-09T000000Z-linux-swift-eintr-failure-record.md).
 
 The native provenance, closure audit, resource limits, semantic palette,
 thread-confinement rule, update process, licenses, and known sanitizer/toolchain

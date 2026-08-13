@@ -8,6 +8,10 @@ phase: 1
 
 # Markdown renderer Phase 1 native fenced-code highlighting
 
+> **Amendment (2026-08-09):** The macOS-only required-gate policy is
+> prospective. It preserves prior Linux diagnostic failures, including EINTR,
+> as failures; see `progress/2026-08-09T000000Z-linux-swift-eintr-failure-record.md`.
+
 ## Progress
 
 Phase 1 adds native, vendored Tree-sitter token spans for ordinary Java, Scala,

@@ -17,7 +17,8 @@ patch release, and base image for repeatable results.
 
 Do not install a Linux runtime only for this command. macOS command-line SwiftPM
 and hosted macOS checks remain the required validation path. This diagnostic is
-optional and nonblocking.
+optional and nonblocking. The retained EINTR failure record is
+[`progress/2026-08-09T000000Z-linux-swift-eintr-failure-record.md`](../../progress/2026-08-09T000000Z-linux-swift-eintr-failure-record.md).
 
 ## Run the suite
 
@@ -29,13 +30,13 @@ make test-linux
 
 The command starts a Linux container. It installs `libsqlite3-dev` and `make`,
 creates a container-local copy of the checkout, generates required files, builds
-`WikiFSCoreTests`, and runs the CI test command.
+`WikiFSCoreTests`, and runs the former CI test command as an optional diagnostic.
 
-The test command uses the shared configuration in
+The diagnostic command uses the shared configuration in
 `scripts/lib/linux-swift-test-config.sh`:
 
 ```sh
-swift test --parallel --num-workers 1 --filter WikiFSCoreTests --skip <Linux CI skip list>
+swift test --parallel --num-workers 1 --filter WikiFSCoreTests --skip <former Linux diagnostic skip list>
 ```
 
 The `WikiFSCoreTests` filter is required. An unfiltered SwiftPM test command
@@ -48,7 +49,7 @@ make test-linux-focus TEST_FILTER=WikiFSCoreTests.RendererStoreTests
 ```
 
 The focused filter must start with `WikiFSCoreTests`. The runner still applies
-the Linux CI skip list and uses one worker.
+the former CI skip list and uses one worker.
 
 ## Select a runtime or image
 

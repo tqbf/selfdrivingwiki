@@ -172,6 +172,24 @@ struct DocumentationContractTests {
         #expect(workflow.contains("WIKIFS_RENDERER_HOSTED_NETWORK_TESTS") == false)
     }
 
+    @Test func macOSOnlyRequiredGateWorkflowInvariantIsPreserved() throws {
+        let root = try #require(Self.locateRepositoryRoot())
+        let workflow = try String(
+            contentsOf: root.appendingPathComponent(".github/workflows/ci.yml"),
+            encoding: .utf8
+        )
+        let swiftJob = try #require(
+            workflow.range(of: "\n  swift:\n"),
+            "workflow must retain the macOS Swift job"
+        )
+        let remainder = workflow[swiftJob.upperBound...]
+        let nextJob = remainder.range(of: "\n  python:\n")
+        let swiftBlock = nextJob.map { String(remainder[..<$0.lowerBound]) } ?? String(remainder)
+
+        #expect(workflow.contains("\n  linux-swift:\n") == false)
+        #expect(swiftBlock.contains("runs-on: macos-latest"))
+    }
+
     @Test func dynamicRendererInventoryMapsEveryExistingProductionPathToResolvedTests() throws {
         let root = try #require(Self.locateRepositoryRoot())
         let data = try Data(contentsOf: root.appendingPathComponent(Self.dynamicRendererInventoryPath))

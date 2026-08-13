@@ -7,8 +7,9 @@ supports macOS only. Linux source portability is best-effort and is not a pull-r
 or release gate. The diagnostic preserves the prior Linux test contract and its
 retained evidence, including failures such as EINTR; a failure is not a pass.
 
-Issue #1077 added a local command that reproduced the former `linux-swift` CI test
-contract before a pull request was pushed.
+Issue #1077 added a local command that reproduced the former `linux-swift` diagnostic
+contract before a pull request was pushed. The EINTR history is retained in
+[`progress/2026-08-09T000000Z-linux-swift-eintr-failure-record.md`](../progress/2026-08-09T000000Z-linux-swift-eintr-failure-record.md).
 
 ## Design
 
@@ -40,6 +41,6 @@ It keeps the runtime and verbose test logs after all outcomes.
 
 ## Non-goals
 
-This support does not replace GitHub Actions. It does not change production
-targets, SQLite behavior, renderer-store behavior, `make build`, `make test`,
-or bare SwiftPM commands.
+This support does not change production targets, SQLite behavior, renderer-store
+behavior, `make build`, `make test`, or bare SwiftPM commands. It has no CI
+equivalent and remains an optional local diagnostic.
