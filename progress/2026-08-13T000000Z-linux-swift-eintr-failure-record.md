@@ -1,5 +1,5 @@
 ---
-timestamp: 2026-08-12T000000Z
+timestamp: 2026-08-13T000000Z
 title: Linux SwiftPM EINTR diagnostic failure record
 branch: chore/macos-only-required-gates
 status: historical
@@ -45,15 +45,14 @@ These remain failed optional diagnostics, not passing portability evidence.
 
 The latest recorded run passed dependency resolution and failed during
 `swift build --target WikiFSCoreTests`; tests never started. Do not interpret
-this as a failure during `make version prompts keychain`. Representative exact
-failures included generated `.build` resources:
+this as a failure during `make version prompts keychain`. The retained six run
+directories show one actual error path:
 
-- `.build/.../WikiFS_WikiFSCore.resources/wiki-state-chat-reference.md`;
-- `.build/.../WikiFS_FuzzHarness.resources/fuzz-dict.txt`;
-- Core Prompts resources under the generated/build resource paths.
+- `/work/.build/x86_64-unknown-linux-gnu/debug/WikiFS_WikiFSCore.resources/wiki-state-chat-reference.md`.
 
-The repeated failures occurred while SwiftPM read or wrote generated/build
-resources. The record does not claim that the optional diagnostic passed.
+Other resources, including `WikiFS_FuzzHarness.resources/fuzz-dict.txt` and Core
+Prompts, appeared only in successful `Copying` lines while scheduling progressed;
+they were not error victims. The optional diagnostic remains failed.
 
 ## Retained lifecycle evidence
 

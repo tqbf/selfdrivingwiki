@@ -58,8 +58,8 @@ unused_import:
   # (arm64-apple-macosx15.0), where AppKit and SwiftUI transitively re-export
   # Foundation. Those re-exports do
   # not exist on Linux, and this package retains an opt-in Linux diagnostic. An
-  # import this rule calls redundant on macOS can be load-bearing in that diagnostic, so
-  # Foundation is pinned rather than reported.
+  # import this rule calls redundant on macOS can be load-bearing in that
+  # diagnostic, so Foundation is pinned rather than reported.
   always_keep_imports:
     - Foundation
   # NOT needed, though it looked like it would be: the `@_exported import`

@@ -10,7 +10,7 @@ phase: 1
 
 > **Amendment (2026-08-09):** The macOS-only required-gate policy is
 > prospective. It preserves prior Linux diagnostic failures, including EINTR,
-> as failures; see `progress/2026-08-12T000000Z-linux-swift-eintr-failure-record.md`.
+> as failures; see `progress/2026-08-13T000000Z-linux-swift-eintr-failure-record.md`.
 
 ## Progress
 

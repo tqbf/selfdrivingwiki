@@ -178,16 +178,50 @@ struct DocumentationContractTests {
             contentsOf: root.appendingPathComponent(".github/workflows/ci.yml"),
             encoding: .utf8
         )
-        let swiftJob = try #require(
-            workflow.range(of: "\n  swift:\n"),
-            "workflow must retain the macOS Swift job"
-        )
-        let remainder = workflow[swiftJob.upperBound...]
-        let nextJob = remainder.range(of: "\n  python:\n")
-        let swiftBlock = nextJob.map { String(remainder[..<$0.lowerBound]) } ?? String(remainder)
+        let jobs = Self.workflowJobBlocks(workflow)
+        let swiftBlock = try #require(jobs["swift"], "workflow must retain the macOS Swift job")
 
-        #expect(workflow.contains("\n  linux-swift:\n") == false)
         #expect(swiftBlock.contains("runs-on: macos-latest"))
+        #expect(jobs["linux-swift"] == nil)
+
+        for (jobName, block) in jobs {
+            let isLinux = block.contains("runs-on: ubuntu-") || block.contains("runs-on: linux")
+            let invokesSwiftBuildOrTest = block.range(
+                of: #"(?m)\b(?:xcrun\s+)?swift\s+(?:build|test)\b"#,
+                options: .regularExpression
+            ) != nil
+            #expect(
+                !(isLinux && invokesSwiftBuildOrTest),
+                "Linux job must not invoke Swift build/test commands: \(jobName)"
+            )
+        }
+    }
+
+    private static func workflowJobBlocks(_ workflow: String) -> [String: String] {
+        guard let jobsRange = workflow.range(of: "\njobs:\n") else { return [:] }
+        let lines = workflow[jobsRange.upperBound...].split(separator: "\n", omittingEmptySubsequences: false)
+        var jobs: [String: String] = [:]
+        var currentName: String?
+        var currentLines: [Substring] = []
+
+        func flush() {
+            guard let currentName else { return }
+            jobs[currentName] = currentLines.joined(separator: "\n")
+        }
+
+        for line in lines {
+            let isTopLevelJob = line.hasPrefix("  ") && !line.hasPrefix("    ") &&
+                line.dropFirst(2).first != "#" && line.hasSuffix(":")
+            if isTopLevelJob {
+                flush()
+                currentName = String(line.dropFirst(2).dropLast())
+                currentLines = []
+            } else if currentName != nil {
+                currentLines.append(line)
+            }
+        }
+        flush()
+        return jobs
     }
 
     @Test func dynamicRendererInventoryMapsEveryExistingProductionPathToResolvedTests() throws {
