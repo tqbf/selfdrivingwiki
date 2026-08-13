@@ -27,8 +27,13 @@ EXT_NAME      := WikiFSFileProvider
 LOCAL_CONFIG := signing/local.config
 cfg = $(shell . $(LOCAL_CONFIG) >/dev/null 2>&1 && printf '%s' "$$$(1)")
 
+BUNDLE_ID     := $(or $(call cfg,BUNDLE_ID),org.sockpuppet.WikiFS)
 EXT_BUNDLE_ID := $(or $(call cfg,EXT_BUNDLE_ID),org.sockpuppet.WikiFS.FileProvider)
 APP_GROUP      := $(or $(call cfg,APP_GROUP),group.org.sockpuppet.wiki)
+# wikid's XPC service name / App ID. Derived from BUNDLE_ID, matching build.sh
+# and WikiIdentifiers.daemonServiceID — see the note in build.sh for why this
+# cannot be a shared constant.
+DAEMON_BUNDLE_ID := $(or $(call cfg,DAEMON_BUNDLE_ID),$(BUNDLE_ID).wikid)
 # Shared keychain access group (app + wikid daemon). Derived per-developer from
 # TEAM_ID + APP_GROUP (the App Group minus its "group." prefix, team-prefixed —
 # Apple requires the Team ID prefix on keychain-access-groups). Override with
@@ -125,6 +130,7 @@ PROVISION_PROFILE ?=
 NOTES_FILE       ?=
 
 .PHONY: all deps build check check-release test test-watchdog test-fast test-fast-release test-linux test-linux-focus release run reload clean install uninstall register help prune-provider-registrations \
+        signing-preflight signing-status signing-repair signing-repair-dry-run \
         check-version notary-setup sign zip-notary notarize staple zip-release \
         checksum verify-release dist github-release print-version icon prompts \
         version keychain mutate mutate-scope check-mutate-tool lint lint-baseline lint-analyze hooks
@@ -169,6 +175,12 @@ help:
 	@echo "  install           Copy $(APP_NAME).app to /Applications/ and register app + File Provider"
 	@echo "  uninstall         Remove /Applications/$(APP_NAME).app"
 	@echo "  register          Same as install; File Provider must run from /Applications"
+	@echo ""
+	@echo "Signing (runs automatically before build; see plans/signing-preflight.md):"
+	@echo "  signing-status    Report this Mac's certs, profiles, and identifiers"
+	@echo "  signing-repair    Provision whatever is missing against your Apple account"
+	@echo "  signing-repair-dry-run"
+	@echo "                    Show the Apple API calls a repair would make"
 	@echo ""
 	@echo "Release pipeline (require an exact 'vX.Y.Z' git tag):"
 	@echo "  notary-setup      One-time: store notary creds in keychain ($(NOTARY_PROFILE))"
@@ -241,7 +253,11 @@ $(APP_ICON): $(ICON_SCRIPT)
 
 icon: $(APP_ICON)
 
-build: deps bun-check $(APP_ICON) prompts version keychain
+# signing-preflight comes FIRST, before `keychain`: a repair can write
+# signing/local.config (a new laptop infers all of it from the Apple account),
+# and GeneratedKeychain.swift is derived from that file. Prerequisites run left
+# to right in a serial make, so the generator sees the repaired config.
+build: signing-preflight deps bun-check $(APP_ICON) prompts version keychain
 	SIGN_IDENTITY="$(DEV_IDENTITY)" PROVISION_PROFILE="$(PROVISION_PROFILE)" ./build.sh $(CONFIG)
 
 # Release signs with DIST_IDENTITY (Developer ID Application) so every nested
@@ -515,6 +531,32 @@ version:
 keychain:
 	@swift $(KEYCHAINGEN_SCRIPT)
 
+# ---------------------------------------------------------------------------
+# Signing preflight (signing/preflight.py — see plans/signing-preflight.md)
+# ---------------------------------------------------------------------------
+# `build` runs signing-preflight first. The healthy path is offline and costs
+# about 0.2s; it only talks to Apple when a profile is missing, expired, or
+# does not cover this Mac, and it never fails the build — a machine with no
+# Apple account falls back to ad-hoc signing exactly as before.
+#
+# Escape hatches: WIKI_SIGNING_PREFLIGHT=0 skips it entirely, and CI=1 (set by
+# every CI runner) does the same.
+SIGNING_PREFLIGHT := signing/preflight.py
+
+signing-preflight:
+	@python3 $(SIGNING_PREFLIGHT) --check
+
+# A report, not a gate — `|| true` keeps an unhealthy setup from reading as a
+# make failure. Call signing/preflight.py --status directly for the exit code.
+signing-status:
+	@python3 $(SIGNING_PREFLIGHT) --status || true
+
+signing-repair:
+	@python3 $(SIGNING_PREFLIGHT) --repair
+
+signing-repair-dry-run:
+	@python3 $(SIGNING_PREFLIGHT) --repair --dry-run
+
 print-version:
 	@echo "VERSION=$(VERSION)"
 	@echo "  git tag at HEAD: $(if $(GIT_TAG_VERSION),$(GIT_TAG_VERSION),(none))"
@@ -675,7 +717,7 @@ install-daemon:
 	@mkdir -p "$(WIKID_CONTAINER_DIR)"
 	@cp "$(WIKID_BIN)" "$(WIKID_CONTAINER_DIR)/wikid"
 	@echo "→ Codesigning wikid (identity: $(WIKID_SIGN_IDENTITY))…"
-	@codesign --force --timestamp=none --identifier com.selfdrivingwiki.wikid \
+	@codesign --force --timestamp=none --identifier "$(DAEMON_BUNDLE_ID)" \
 		--sign "$(WIKID_SIGN_IDENTITY)" "$(WIKID_CONTAINER_DIR)/wikid" 2>/dev/null \
 		|| codesign --force --timestamp=none --sign - "$(WIKID_CONTAINER_DIR)/wikid"
 	@echo "✓ wikid binary copied to container dir (dev mode)."

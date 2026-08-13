@@ -57,8 +57,12 @@ private final class HealthCheckResumeBox: @unchecked Sendable {
 public final class WikiDaemonConnection: @unchecked Sendable {
 
     /// The XPC service name — must match the `CFBundleIdentifier` in the
-    /// wikid.xpc Info.plist.
-    public static let serviceName = "com.selfdrivingwiki.wikid"
+    /// wikid.xpc Info.plist, which `build.sh` writes from the same resolved
+    /// value. Per-developer (see ``WikiIdentifiers/daemonServiceID``): the
+    /// daemon needs its own explicit App ID to carry the App Group + keychain
+    /// entitlements, and App IDs are globally unique across App Store Connect,
+    /// so this cannot be a shared constant.
+    public static let serviceName = WikiIdentifiers.daemonServiceID
 
     private let connection: NSXPCConnection
 

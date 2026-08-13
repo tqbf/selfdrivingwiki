@@ -10,7 +10,11 @@ import WikiFSEngine
 /// resolves this to `Contents/XPCServices/wikid.xpc` in the app bundle and
 /// launches the service on-demand when a client connects via
 /// `NSXPCConnection(serviceName:)`.
-let WikiDaemonServiceName = "com.selfdrivingwiki.wikid"
+///
+/// Per-developer, resolved from the same sidecar/Info.plist the app reads, so
+/// all three agree without anything per-user in committed source. See
+/// ``WikiIdentifiers/daemonServiceID``.
+let WikiDaemonServiceName = WikiIdentifiers.daemonServiceID
 
 #if os(macOS)
 
