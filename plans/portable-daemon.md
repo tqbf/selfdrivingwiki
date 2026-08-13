@@ -1,6 +1,6 @@
 # Plan — Issue #754: Portable Daemon + Fuzzer Core
 
-> **Historical plan and superseded gate policy (2026-08-09).** The portability
+> **Historical plan and superseded gate policy (2026-08-13).** The portability
 > analysis and Linux results below remain historical facts. Linux is not a
 > supported product platform or a required product gate. Use the optional
 > Apple Container/Docker diagnostic policy in `plans/linux-local-test-support.md`

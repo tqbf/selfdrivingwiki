@@ -1,4 +1,4 @@
-Last verified: 2026-07-27
+Last verified: 2026-08-13
 
 * Running `/graphify` is always permitted, including from read-only branches or other read-only repository states, when `tmp/graphify-out` is specified as the output directory.
 

@@ -8,7 +8,7 @@ phase: 1
 
 # Markdown renderer Phase 1 native fenced-code highlighting
 
-> **Amendment (2026-08-09):** The macOS-only required-gate policy is
+> **Amendment (2026-08-13):** The macOS-only required-gate policy is
 > prospective. It preserves prior Linux diagnostic failures, including EINTR,
 > as failures; see `progress/2026-08-13T000000Z-linux-swift-eintr-failure-record.md`.
 

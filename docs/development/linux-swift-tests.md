@@ -11,9 +11,11 @@ Install one OCI runtime. The runner selects Apple `container` first when it is
 available. Otherwise, it selects Docker.
 
 The default image is `swift:6.3.3-noble` with an immutable manifest digest. It
-uses the `linux/amd64` platform, Swift 6.3.3, and Ubuntu 24.04. GitHub-hosted
-Ubuntu is x86_64 and uses Swift 6.3. The local runner fixes the architecture,
-patch release, and base image for repeatable results.
+uses the `linux/amd64` platform, Swift 6.3.3, and Ubuntu 24.04. The local
+runner fixes the architecture, patch release, and base image for repeatable
+results. This optional diagnostic reproduces the former `linux-swift` contract
+with the corrected `WikiFSCoreTests` pasteboard suite name; it does not rely on
+or report a present-day GitHub Ubuntu runner.
 
 Do not install a Linux runtime only for this command. macOS command-line SwiftPM
 and hosted macOS checks remain the required validation path. This diagnostic is
@@ -116,8 +118,8 @@ If Apple `container` reports a machine, image, or virtualization error, run
 `container --version` and check the Apple Container requirements. Use Docker
 with `LINUX_TEST_RUNTIME=docker` when Docker is available.
 
-The runner uses the `linux/amd64` image to match GitHub-hosted Ubuntu. Apple
-Container uses Rosetta for this image on Apple Silicon.
+The runner uses the digest-pinned `linux/amd64` image. Apple Container uses
+Rosetta for this image on Apple Silicon.
 
 Do not restart Paseo, the app daemon, or unrelated services. This runner uses
 only a temporary Linux container and a read-only checkout mount.
