@@ -481,6 +481,7 @@ struct PageDetailView: View {
         WikiReaderView(markdown: store.draftBody,
                         currentSelection: store.selection,
                         store: store,
+                        documentIdentity: currentPageDocumentIdentity,
                         fileProvider: fileProvider,
                         onRendererActivation: onRendererActivation,
                         findText: findText, findVersion: findVersion,
@@ -545,6 +546,13 @@ struct PageDetailView: View {
     private var currentPageID: PageID? {
         guard case .page(let id) = store.selection else { return nil }
         return id
+    }
+
+    private var currentPageDocumentIdentity: MarkdownDocumentIdentity? {
+        guard let pageID = currentPageID,
+              let pageVersionID = store.loadedPageHeadVersionID(for: pageID)
+        else { return nil }
+        return MarkdownDocumentIdentity(pageID: pageID, pageVersionID: pageVersionID)
     }
 
     /// Open the Versions window for the current page (#817). Injected into the

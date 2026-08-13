@@ -117,6 +117,10 @@ struct WikiReaderView: View {
     let markdown: String
     var currentSelection: WikiSelection? = nil
     let store: WikiStoreModel
+    /// Optional typed page identity for rendered page-version content.
+    /// Page surfaces pass this so load-time identity stays pinned to the
+    /// version already owned by the host instead of re-querying HEAD.
+    var documentIdentity: MarkdownDocumentIdentity? = nil
     /// The File Provider spike, for "Copy File Path" on wiki links. Only page
     /// readers (which own a spike) pass it; `nil` elsewhere omits that item.
     var fileProvider: FileProviderFacade? = nil
@@ -147,6 +151,7 @@ struct WikiReaderView: View {
                           fileProvider: fileProvider,
                           readerZoom: readerZoom,
                           currentSelection: currentSelection,
+                          documentIdentity: documentIdentity,
                           anchorVersion: store.pendingScrollAnchorVersion,
                           isLoading: $isLoading,
                           addURLHandler: addURLHandler,
@@ -241,6 +246,10 @@ struct WikiReaderView: View {
         } catch {
             return nil
         }
+    }
+
+    nonisolated static func rendererActionNavigationPolicy(for url: URL) -> WKNavigationActionPolicy {
+        url.scheme == "renderer-action" ? .cancel : .allow
     }
 
     /// Resolve a consumed anchor fragment to a scroll target: a section anchor
@@ -1148,6 +1157,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
     let readerZoom: Double
     /// The selection this reader renders — used to match a pending scroll anchor.
     let currentSelection: WikiSelection?
+    let documentIdentity: MarkdownDocumentIdentity?
     /// Mirrors `store.pendingScrollAnchorVersion`; passed in so a bump causes an
     /// `updateNSView` (the Coordinator consumes + applies it once the page loads).
     let anchorVersion: Int
@@ -1174,7 +1184,10 @@ internal struct WikiReaderRep: NSViewRepresentable {
         context.coordinator.webView = webView
         context.coordinator.store = store
         context.coordinator.currentSelection = currentSelection
-        context.coordinator.startLoad(markdown: markdown, isLoading: $isLoading)
+        context.coordinator.startLoad(
+            markdown: markdown,
+            documentIdentity: documentIdentity,
+            isLoading: $isLoading)
         return webView
     }
 
@@ -1189,8 +1202,12 @@ internal struct WikiReaderRep: NSViewRepresentable {
         webView.onRendererActivation = onRendererActivation
         context.coordinator.store = store
         context.coordinator.currentSelection = currentSelection
-        if context.coordinator.loadedMarkdown != markdown {
-            context.coordinator.startLoad(markdown: markdown, isLoading: $isLoading)
+        if context.coordinator.loadedMarkdown != markdown ||
+            context.coordinator.loadedDocumentIdentity != documentIdentity {
+            context.coordinator.startLoad(
+                markdown: markdown,
+                documentIdentity: documentIdentity,
+                isLoading: $isLoading)
         }
         // Consume + apply any pending scroll anchor (handles re-clicks on an
         // already-loaded doc; a fresh load is handled in `didFinish`). Reads the
@@ -1218,6 +1235,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         var store: WikiStoreModel?
         var currentSelection: WikiSelection?
         var loadedMarkdown: String?
+        var loadedDocumentIdentity: MarkdownDocumentIdentity?
         var pageLoaded = false
         /// The last `store.pendingScrollAnchorVersion` this coordinator applied.
         /// Drives `consumeAndApplyPendingAnchor` off the STORE's version (which
@@ -1235,11 +1253,16 @@ internal struct WikiReaderRep: NSViewRepresentable {
         private var isLoadingBinding: Binding<Bool>?
         private var renderOptions: MarkdownRenderOptions?
 
-        func startLoad(markdown: String, isLoading: Binding<Bool>) {
+        func startLoad(
+            markdown: String,
+            documentIdentity: MarkdownDocumentIdentity?,
+            isLoading: Binding<Bool>
+        ) {
             convertTask?.cancel()  // drop any in-flight conversion for stale markdown
             loadGeneration += 1
             let generation = loadGeneration
             loadedMarkdown = markdown
+            loadedDocumentIdentity = documentIdentity
             pageLoaded = false
             isLoadingBinding = isLoading
             // Never write this binding synchronously: `startLoad` is called from
@@ -1253,8 +1276,6 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 Task { @MainActor in isLoading.wrappedValue = true }
             }
             loadStart = DispatchTime.now()
-            let renderOptions = MarkdownRenderOptions.reader
-            self.renderOptions = renderOptions
             // Measure the synchronous click→startLoad window: openTab →
             // loadDrafts (getPage + stripped) → SwiftUI re-render → this
             // updateNSView→startLoad dispatch. This is the gap NOT covered by
@@ -1283,12 +1304,6 @@ internal struct WikiReaderRep: NSViewRepresentable {
             } else {
                 contentKind = .document
             }
-            let documentIdentity: MarkdownDocumentIdentity? = {
-                guard case .page(let pageID) = currentSelection,
-                      let pageVersionID = store?.pageOrigin(for: pageID)?.versionID
-                else { return nil }
-                return MarkdownDocumentIdentity(pageID: pageID, pageVersionID: pageVersionID)
-            }()
             let rendererActivationAdmission: RendererEmbedActivationAdmission? = {
                 guard webView?.onRendererActivation != nil,
                       let documentIdentity
@@ -1357,7 +1372,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     // absolute/data:/wiki: srcs before calling us.
                     guard let map = renderedSourceMap, let siblingID = map[src] else { return nil }
                     return "\(WikiLinkMarkdown.blobScheme)://source/\(siblingID.rawValue)"
-                }, options: renderOptions)
+                }, options: documentRenderOptions)
                 guard Task.isCancelled == false else { return }
                 let html = WikiReaderView.documentHTML(body)
                 let convertMs = Self.elapsedMs(since: t0)
@@ -1400,6 +1415,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
             store = nil
             currentSelection = nil
             loadedMarkdown = nil
+            loadedDocumentIdentity = nil
         }
 
         // MARK: - Pending-anchor / quote-highlight flow
@@ -1548,6 +1564,10 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     isMainFrame: navigationAction.targetFrame?.isMainFrame ?? false
                 ) {
                     (webView as? WikiReaderWebView)?.onRendererActivation?(activation.reference, activation.input)
+                    decisionHandler(.cancel)
+                    return
+                }
+                if WikiReaderView.rendererActionNavigationPolicy(for: url) == .cancel {
                     decisionHandler(.cancel)
                     return
                 }

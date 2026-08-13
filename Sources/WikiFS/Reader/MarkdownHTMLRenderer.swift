@@ -401,15 +401,21 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
                 fallbackReason: .oversizedInput,
                 activationMetadata: nil)
         }
-        guard let identity = documentIdentity,
-              let blockID = block.blockID,
-              let mime = Self.inlineArtifactMIME(for: alias)
-        else {
+        guard let mime = Self.inlineArtifactMIME(for: alias) else {
             return RendererEmbedPlan(
                 placeholderID: placeholderID,
                 rendererReference: reference,
                 semanticContent: summary,
                 fallbackReason: .missingDocumentIdentity,
+                activationMetadata: nil)
+        }
+        guard let identity = documentIdentity,
+              let blockID = block.blockID else {
+            return RendererEmbedPlan(
+                placeholderID: placeholderID,
+                rendererReference: reference,
+                semanticContent: summary,
+                fallbackReason: nil,
                 activationMetadata: nil)
         }
         let artifact: RendererEmbeddedContent.InlineArtifact

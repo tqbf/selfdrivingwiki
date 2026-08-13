@@ -125,7 +125,10 @@ struct WikiAppWebViewTests {
     }
 
     @Test("a below-cap pinned input admits the installed renderer before session start")
-    func belowCapPinnedInputReturnsView() throws {
+    func belowCapPinnedInputReturnsView() async throws {
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        defer { lease.release() }
+        _ = NSApplication.shared
         let ceiling = WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount
         let descriptor = try installedDescriptor(maximumInputByteCount: ceiling - 1)
         let configuration = try installedConfiguration(for: descriptor)
@@ -143,19 +146,34 @@ struct WikiAppWebViewTests {
                     bytes: Data(repeating: 0x61, count: ceiling - 1))
             }
         )
+        var makeSessionCount = 0
+        let session = RecordingWebViewSession()
         let factory = InstalledRendererFactory(makeSession: { _, _, _ in
-            Issue.record("a below-cap input should admit the installed renderer and create a session")
-            return RecordingWebViewSession()
+            makeSessionCount += 1
+            return session
         })
         let inputs = InstalledRendererFactory.Inputs(
             enabledDescriptors: [descriptor],
             resolveConfiguration: { _, _ in configuration })
 
-        #expect(factory.makeView(
+        guard let view = factory.makeView(
             for: descriptor,
             inputs: inputs,
             inputReader: reader,
-            onFailure: { _ in }) != nil)
+            onFailure: { _ in }) else {
+            Issue.record("a below-cap input should admit the installed renderer and construct one hosted session")
+            return
+        }
+        let hosting = NSHostingController(rootView: view)
+        let window = NSWindow(contentViewController: hosting)
+        window.orderFront(nil)
+        defer { window.orderOut(nil) }
+
+        for _ in 0..<20 where makeSessionCount == 0 {
+            await Task.yield()
+        }
+
+        #expect(makeSessionCount == 1)
     }
 
     @Test("reader teardown clears host-owned handlers without a SwiftUI state write")
@@ -295,6 +313,108 @@ struct WikiAppWebViewTests {
         #expect(forwarded == 1)
     }
 
+    @Test("page detail keeps the loaded page version identity stable for reader renders")
+    func pageDetailUsesLoadedPageVersionIdentity() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("page-detail-version-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        let page = try store.createPage(title: "Versioned Page")
+        _ = try store.appendPageVersion(
+            pageID: page.id,
+            title: "Versioned Page",
+            body: "body one",
+            expectedHeadVersionID: nil)
+        let model = WikiStoreModel(store: store)
+        model.reloadFromStore()
+        model.openTab(.page(page.id))
+
+        let head = try #require(try store.pageHeadVersionID(pageID: page.id))
+        #expect(model.loadedPageHeadVersionID(for: page.id) == head)
+        #expect(model.loadedPageHeadVersionID(for: PageID(rawValue: "01JVERSIONMISSING000000000")) == nil)
+    }
+
+    @Test("hosted production root opens a renderer presentation surface from a rich fence card")
+    func productionRootOpensRendererPresentationForRichFenceCards() async throws {
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        defer { lease.release() }
+        _ = NSApplication.shared
+
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wiki-detail-renderer-route-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let descriptor = WikiDescriptor.make(displayName: "Test")
+        let store = try GRDBWikiStore(
+            databaseURL: dir.appendingPathComponent("\(descriptor.id.rawValue).sqlite"))
+        let page = try store.createPage(title: "Renderer Route")
+        _ = try store.appendPageVersion(
+            pageID: page.id,
+            title: "Renderer Route",
+            body: """
+            ```jsoncanvas
+            {"nodes":[],"edges":[]}
+            ```
+            """,
+            expectedHeadVersionID: nil)
+
+        let coordinator = ExtractionCoordinator(
+            containerDirectory: dir,
+            localExtractorFactory: { StubExtractor() })
+        let session = try WikiSession(
+            wikiID: descriptor.id,
+            descriptor: descriptor,
+            containerDirectory: dir,
+            extractionCoordinator: coordinator,
+            queueEngine: try makePageDetailQueueEngine(),
+            extractionProvider: StubExtractionProvider())
+        session.store.openTab(.page(page.id))
+        let registry = WikiRegistryClient(containerDirectory: dir)
+        let root = RootView(
+            session: session,
+            registry: registry,
+            fileProvider: FileProviderFacade(),
+            installedRendererHost: InstalledRendererHost(machineStore: nil, layout: nil)
+        )
+        .environment(FindModel())
+        .environment(QueueActivityTracker())
+        .environment(WindowRightInspectorController())
+
+        let hosting = NSHostingController(rootView: AnyView(root))
+        let window = NSWindow(contentViewController: hosting)
+        window.orderFrontRegardless()
+        defer {
+            hosting.rootView = AnyView(EmptyView())
+            window.orderOut(nil as Any?)
+        }
+
+        let webView = try await waitForWikiDetailWebView(in: hosting.view)
+        let bodyHTML = try await waitForPositiveJavaScriptString(
+            "document.body.innerHTML || ''",
+            in: webView)
+        #expect(bodyHTML.contains("sdw-renderer-card"))
+        let actionURLString = await evaluateJavaScriptWithTimeout(
+            webView,
+            "document.querySelector('a.sdw-renderer-card__action')?.href || ''",
+            timeout: .seconds(5)
+        ) ?? ""
+        #expect(actionURLString.contains("renderer-action://open"))
+
+        let sheetCountBeforePresentation = window.sheets.count
+
+        _ = await evaluateJavaScriptWithTimeout(
+            webView,
+            "document.querySelector('a.sdw-renderer-card__action')?.click(); 'clicked'",
+            timeout: .seconds(5)
+        )
+
+        let presentedSheet = try await waitForPresentedSheet(
+            attachedTo: window,
+            baselineSheetCount: sheetCountBeforePresentation,
+            timeout: .seconds(10))
+        #expect(presentedSheet.contentView != nil)
+        #expect(presentedSheet.isVisible)
+    }
+
     @Test("hosted SwiftUI mount exposes the session WebView and tears it down")
     func hostedMountAndDismantle() async throws {
         let lease = await HostedAppKitTestGate.shared.acquire()
@@ -387,6 +507,59 @@ private func makePageDetailQueueEngine() throws -> QueueEngine {
 }
 
 @MainActor
+private func waitForWikiDetailWebView(
+    in view: NSView,
+    timeout: Duration = .seconds(15)
+) async throws -> WKWebView {
+    let deadline = ContinuousClock.now + timeout
+    while ContinuousClock.now < deadline {
+        if let webView = findWebView(in: view) {
+            return webView
+        }
+        try Task.checkCancellation()
+        try await Task.sleep(for: .milliseconds(25))
+    }
+    throw WikiDetailHostedRouteError.timeout("hosted wiki detail WKWebView")
+}
+
+@MainActor
+private func waitForPositiveJavaScriptString(
+    _ javaScript: String,
+    in webView: WKWebView,
+    timeout: Duration = .seconds(15)
+) async throws -> String {
+    let deadline = ContinuousClock.now + timeout
+    while ContinuousClock.now < deadline {
+        if let value = await evaluateJavaScriptWithTimeout(webView, javaScript),
+           value.isEmpty == false {
+            return value
+        }
+        try Task.checkCancellation()
+        try await Task.sleep(for: .milliseconds(25))
+    }
+    throw WikiDetailHostedRouteError.timeout("wiki detail JavaScript value")
+}
+
+@MainActor
+private func waitForPresentedSheet(
+    attachedTo window: NSWindow,
+    baselineSheetCount: Int,
+    timeout: Duration = .seconds(15)
+) async throws -> NSWindow {
+    let deadline = ContinuousClock.now + timeout
+    while ContinuousClock.now < deadline {
+        let sheets = window.sheets
+        if sheets.count > baselineSheetCount,
+           let sheet = sheets.first(where: { $0.contentView != nil }) {
+            return sheet
+        }
+        try Task.checkCancellation()
+        try await Task.sleep(for: .milliseconds(25))
+    }
+    throw WikiDetailHostedRouteError.timeout("renderer presentation sheet")
+}
+
+@MainActor
 private final class ManualMainActorScheduler {
     private var operations: [@MainActor () -> Void] = []
 
@@ -442,6 +615,17 @@ private func findWebView(in view: NSView) -> WKWebView? {
         if let webView = findWebView(in: subview) { return webView }
     }
     return nil
+}
+
+private enum WikiDetailHostedRouteError: LocalizedError {
+    case timeout(String)
+
+    var errorDescription: String? {
+        switch self {
+        case let .timeout(description):
+            return "timed out waiting for \(description)"
+        }
+    }
 }
 
 private func installedDescriptor(

@@ -332,7 +332,10 @@ struct PageVersionCompareSheet: View {
             if !body.isEmpty {
                 // R8: pass the LIVE store so wiki/ghost links resolve against
                 // current state. The historical version is just the markdown.
-                WikiReaderView(markdown: body, store: store)
+                WikiReaderView(
+                    markdown: body,
+                    store: store,
+                    documentIdentity: version.map { MarkdownDocumentIdentity(pageID: pageID, pageVersionID: $0.versionID) })
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ContentUnavailableView("Pick a version for \(tag)",

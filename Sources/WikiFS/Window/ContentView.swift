@@ -2,6 +2,8 @@ import SwiftUI
 import WikiFSEngine
 import WikiFSCore
 
+// pattern: Mixed (unavoidable)
+
 /// The active wiki's shell: a sidebar (wiki switcher + pages + files) and a
 /// detail pane that edits the selected page, the system prompt, or shows a
 /// designed empty state (§7.1 ContentUnavailableView). Hosted by `RootView`,
@@ -19,6 +21,8 @@ struct ContentView: View {
     let queueEngine: any QueueEngineClient
     let extractionProvider: any QueueExtractionProvider
     let installedRendererHost: InstalledRendererHost
+    /// Optional typed renderer activation sink for page detail routes.
+    let onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)?
     @State private var pendingAddURL: PendingAddURL?
     /// Driven by `.dropDestination`'s `isTargeted` callback to fade in a subtle
     /// accent border while a drag hovers the window (set via the closure param —
@@ -54,6 +58,30 @@ struct ContentView: View {
     @State private var findModel = FindModel()
     @State private var rightInspector = WindowRightInspectorController()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(
+        store: WikiStoreModel,
+        session: WikiSession,
+        registry: WikiRegistryClient,
+        fileProvider: FileProviderFacade,
+        agentLauncher: AgentLauncher,
+        extractionCoordinator: ExtractionCoordinator,
+        queueEngine: any QueueEngineClient,
+        extractionProvider: any QueueExtractionProvider,
+        installedRendererHost: InstalledRendererHost,
+        onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)? = nil
+    ) {
+        self._store = Bindable(wrappedValue: store)
+        self.session = session
+        self._registry = Bindable(wrappedValue: registry)
+        self.fileProvider = fileProvider
+        self._agentLauncher = Bindable(wrappedValue: agentLauncher)
+        self.extractionCoordinator = extractionCoordinator
+        self.queueEngine = queueEngine
+        self.extractionProvider = extractionProvider
+        self.installedRendererHost = installedRendererHost
+        self.onRendererActivation = onRendererActivation
+    }
 
     var body: some View {
         baseContent
@@ -95,9 +123,7 @@ struct ContentView: View {
         // sidebar reveal a page/source. Un-collapse the sidebar so the target list
         // is actually mounted (SidebarView only mounts the active section).
         .onChange(of: store.pendingSidebarRevealVersion) { _, _ in
-            if columnVisibility == .detailOnly {
-                columnVisibility = .all
-            }
+            handleSidebarRevealVersionChange()
         }
         // Close-while-editing guard: fires for any tab with isEditing set.
         .onChange(of: store.pendingCloseTabID) { _, id in
@@ -316,6 +342,7 @@ struct ContentView: View {
             queueEngine: queueEngine,
             extractionProvider: extractionProvider,
             installedRendererHost: installedRendererHost,
+            onRendererActivation: onRendererActivation,
             runIngest: { id in runIngest(sourceID: id) },
             showingImportMarkdown: $showingImportMarkdown,
             showingAddFromZotero: $showingAddFromZotero,
@@ -339,6 +366,12 @@ struct ContentView: View {
                 store: store,
                 wikiID: session.wikiID,
                 queueEngine: queueEngine)
+        }
+    }
+
+    private func handleSidebarRevealVersionChange() {
+        if columnVisibility == .detailOnly {
+            columnVisibility = .all
         }
     }
 
@@ -410,6 +443,134 @@ struct ContentView: View {
         }
     }
 
+}
+
+struct RendererActivationPresentation: Identifiable, Equatable {
+    let reference: RendererReference
+    let input: RendererBridgeInput
+    let id: String
+
+    init(reference: RendererReference, input: RendererBridgeInput) {
+        self.reference = reference
+        self.input = input
+        let encodedInput: String
+        switch input {
+        case .inlineArtifact(let artifact):
+            encodedInput = artifact.bytes.base64EncodedString()
+        case .source(let versionID):
+            encodedInput = "source:\(versionID.rawValue)"
+        case .markdown(let versionID):
+            encodedInput = "markdown:\(versionID.rawValue)"
+        }
+        id = [
+            reference.packageID.rawValue,
+            reference.version.rawValue,
+            reference.registrationID.rawValue,
+            encodedInput
+        ].joined(separator: "|")
+    }
+}
+
+struct RendererActivationPresentationSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @Bindable var store: WikiStoreModel
+    let installedRendererHost: InstalledRendererHost
+    let request: RendererActivationPresentation
+
+    var body: some View {
+        NavigationStack {
+            rendererContent
+                .navigationTitle(title)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Close") { dismiss() }
+                    }
+                }
+        }
+        .frame(minWidth: 520, minHeight: 420)
+    }
+
+    @ViewBuilder
+    private var rendererContent: some View {
+        if let descriptor = rendererDescriptor {
+            if let builtInView = BuiltInRendererFactoryMap.makeView(
+                for: descriptor,
+                inputs: builtInInputs) {
+                builtInView
+            } else if let packageView = packageRendererView(for: descriptor) {
+                packageView
+            } else {
+                unavailableView(reason: "The renderer could not be presented.")
+            }
+        } else {
+            unavailableView(reason: "The selected renderer is unavailable.")
+        }
+    }
+
+    private var title: String {
+        switch request.reference.registrationID.rawValue {
+        case "json-canvas": return "JSON Canvas"
+        case "excalidraw": return "Excalidraw"
+        default: return request.reference.registrationID.rawValue
+        }
+    }
+
+    private var rendererDescriptor: RendererDescriptor? {
+        BuiltInRendererDescriptors.all.first(where: { $0.reference == request.reference })
+        ?? installedRendererHost.inputs.enabledDescriptors.first(where: { $0.reference == request.reference })
+    }
+
+    private var builtInInputs: BuiltInRendererFactoryInputs {
+        let inputBytes: Data?
+        let mermaidMarkdown: String?
+        switch request.input {
+        case .inlineArtifact(let artifact):
+            inputBytes = artifact.bytes
+            let rawMarkdown = String(decoding: artifact.bytes, as: UTF8.self)
+            mermaidMarkdown = MermaidSourceDetector.renderableMarkdown(from: rawMarkdown)
+        case .source:
+            inputBytes = nil
+            mermaidMarkdown = nil
+        case .markdown:
+            inputBytes = nil
+            mermaidMarkdown = nil
+        }
+        return BuiltInRendererFactoryInputs(
+            sourceBytes: inputBytes,
+            pdfQuote: nil,
+            htmlSource: nil,
+            mermaidMarkdown: mermaidMarkdown,
+            mediaTarget: nil,
+            selection: store.selection,
+            store: store,
+            readerZoom: .constant(Double(ZoomScale.defaultScale)))
+    }
+
+    private func packageRendererView(for descriptor: RendererDescriptor) -> AnyView? {
+        guard case .inlineArtifact = request.input else {
+            return nil
+        }
+        let inputReader = RendererAuthorizedInputReader(
+            store: store.internalStore,
+            authorizedInput: request.input)
+        return installedRendererHost.factory.makeView(
+            for: descriptor,
+            inputs: installedRendererHost.inputs,
+            inputReader: inputReader,
+            onFailure: { failure in
+                DebugLog.reader("Installed renderer presentation failed: \(failure.kind)")
+            })
+    }
+
+    @ViewBuilder
+    private func unavailableView(reason: String) -> some View {
+        ContentUnavailableView {
+            Label("Renderer Unavailable", systemImage: "rectangle.slash")
+        } description: {
+            Text(reason)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
 }
 
 private struct RightSidebarHostView: View {

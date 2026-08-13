@@ -253,6 +253,8 @@ public struct MarkdownDocumentIdentity: Codable, Hashable, Sendable {
 /// One fenced markdown block with immutable bytes and a typed presentation
 /// policy.
 public struct MarkdownFencedBlock: Codable, Hashable, Sendable {
+    private static let canonicalDigestDomain = Data("sdw.markdown.fence.v1".utf8)
+
     public let documentIdentity: MarkdownDocumentIdentity?
     public let parserOrdinal: Int
     public let rawInfoString: String?
@@ -320,11 +322,20 @@ public struct MarkdownFencedBlock: Codable, Hashable, Sendable {
     }
 
     fileprivate static func makeCanonicalDigestInput(bytes: Data, normalizedInfoString: String?) -> Data {
-        var payload = Data(bytes)
-        if let normalizedInfoString, normalizedInfoString.isEmpty == false {
-            payload.append(Data(normalizedInfoString.utf8))
-        }
+        var payload = Data()
+        payload.append(canonicalDigestDomain)
+        payload.append(0)
+        payload.append(lengthPrefix(for: bytes.count))
+        payload.append(bytes)
+        let normalizedBytes = Data((normalizedInfoString ?? "").utf8)
+        payload.append(lengthPrefix(for: normalizedBytes.count))
+        payload.append(normalizedBytes)
         return payload
+    }
+
+    private static func lengthPrefix(for count: Int) -> Data {
+        var bigEndian = UInt64(count).bigEndian
+        return withUnsafeBytes(of: &bigEndian) { Data($0) }
     }
 
     public static func presentationPolicy(for normalizedInfoString: String?) -> MarkdownFencePresentationPolicy {

@@ -445,6 +445,38 @@ struct MarkdownHTMLRendererTests {
         #expect(route.input == fixture.input)
     }
 
+    @Test("renderer action URLs preserve plus-bearing base64 through URLComponents round-trip")
+    func rendererActionURLPreservesPlusBearingBase64RoundTrip() throws {
+        let fixture = try makeRendererActivationFixture(bytes: Data("~~~\n".utf8))
+        let projection = RendererEmbedProjection(
+            sourceEmbeds: [:],
+            richFenceAliases: Set(MarkdownRichFenceAlias.allCases))
+        let document = MarkdownDocumentIdentity(
+            pageID: .init(rawValue: "01HTESTPAGE000000000000001"),
+            pageVersionID: .init(rawValue: "01HTESTPV00000000000000001"))
+        let options = MarkdownRenderOptions(
+            codeHighlighting: .disabled,
+            rendererEmbedProjection: projection,
+            documentIdentity: document,
+            rendererActivationAdmission: fixture.admission)
+
+        let html = MarkdownHTMLRenderer.render("```jsoncanvas\n~~~\n```", options: options)
+        let actionURL = try #require(rendererActionURL(in: html))
+        let components = try #require(URLComponents(url: actionURL, resolvingAgainstBaseURL: false))
+        let encodedInput = try #require(components.queryItems?.first(where: { $0.name == "input" })?.value)
+        let decodedInput = try JSONDecoder().decode(RendererBridgeInput.self, from: Data(encodedInput.utf8))
+        #expect(decodedInput == fixture.input)
+        #expect(actionURL.absoluteString.contains("+"))
+
+        let route = try #require(
+            WikiReaderView.rendererActivationRoute(
+                for: actionURL,
+                admission: fixture.admission,
+                isMainFrame: true))
+        #expect(route.reference == fixture.reference)
+        #expect(route.input == fixture.input)
+    }
+
     @Test("renderer action URLs reject forged HTML, stale admissions, and field substitutions")
     func rendererActionURLRejectsForgedEnvelope() throws {
         let fixture = try makeRendererActivationFixture()
@@ -479,6 +511,24 @@ struct MarkdownHTMLRendererTests {
             let forgedURL = try #require(components.url)
             #expect(WikiReaderView.rendererActivationRoute(for: forgedURL, admission: fixture.admission, isMainFrame: true) == nil)
         }
+    }
+
+    @Test("renderer-action URLs that fail admission stay cancelled by policy")
+    func rendererActionURLsFailClosedByPolicy() throws {
+        let fixture = try makeRendererActivationFixture()
+        guard var components = URLComponents(url: fixture.url, resolvingAgainstBaseURL: false) else {
+            Issue.record("expected forged URL components to be constructible")
+            return
+        }
+        components.queryItems = (components.queryItems ?? []).map { item in
+            if item.name == "registration" {
+                return URLQueryItem(name: item.name, value: "other")
+            }
+            return item
+        }
+        let forgedURL = try #require(components.url)
+        #expect(WikiReaderView.rendererActivationRoute(for: forgedURL, admission: fixture.admission, isMainFrame: true) == nil)
+        #expect(WikiReaderView.rendererActionNavigationPolicy(for: forgedURL) == .cancel)
     }
 
     @Test("rich fences stay static when no host admission exists")
@@ -631,6 +681,17 @@ struct MarkdownHTMLRendererTests {
             .replacingOccurrences(of: "&amp;", with: "&")
         return try? JSONDecoder().decode(RendererBridgeInput.self, from: Data(json.utf8))
     }
+
+    private func rendererActionURL(in html: String) -> URL? {
+        guard let start = html.range(of: #"href=""#),
+              let end = html[start.upperBound...].firstIndex(of: "\"")
+        else { return nil }
+        let encoded = String(html[start.upperBound..<end])
+        let urlString = encoded
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&amp;", with: "&")
+        return URL(string: urlString)
+    }
 }
 
 private struct RendererActivationFixture {
@@ -641,8 +702,7 @@ private struct RendererActivationFixture {
 }
 
 private extension MarkdownHTMLRendererTests {
-    func makeRendererActivationFixture() throws -> RendererActivationFixture {
-        let bytes = Data("{\"nodes\":[],\"edges\":[]}".utf8)
+    func makeRendererActivationFixture(bytes: Data = Data("{\"nodes\":[],\"edges\":[]}".utf8)) throws -> RendererActivationFixture {
         let pageID = PageID(rawValue: "01HTESTPAGE000000000000001")
         let pageVersionID = PageVersionID(rawValue: "01HTESTPV00000000000000001")
         let block = try MarkdownFencedBlock(

@@ -74,7 +74,12 @@ enum TransclusionEmbedder {
             embedInfo: context.embedInfo,
             displayName: context.displayName,
             pinnedExtractionID: context.pinnedExtractionID)
-        return MarkdownHTMLRenderer.render(prepared, options: options)
+        let nestedOptions = MarkdownRenderOptions(
+            codeHighlighting: options.codeHighlighting,
+            rendererEmbedProjection: options.rendererEmbedProjection,
+            documentIdentity: nil,
+            rendererActivationAdmission: nil)
+        return MarkdownHTMLRenderer.render(prepared, options: nestedOptions)
     }
 
     /// Pure read against a read-only store: source-derived markdown HEAD if

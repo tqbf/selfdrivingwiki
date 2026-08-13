@@ -24,6 +24,7 @@ struct RootView: View {
     @Bindable var registry: WikiRegistryClient
     let fileProvider: FileProviderFacade
     let installedRendererHost: InstalledRendererHost
+    @State private var activeRendererPresentation: RendererActivationPresentation?
 
     var body: some View {
         ContentView(
@@ -35,9 +36,16 @@ struct RootView: View {
             extractionCoordinator: session.extractionCoordinator,
             queueEngine: session.queueEngine,
             extractionProvider: session.extractionProvider,
-            installedRendererHost: installedRendererHost
+            installedRendererHost: installedRendererHost,
+            onRendererActivation: presentRendererActivation
         )
         .id(session.wikiID)
+        .sheet(item: $activeRendererPresentation) { request in
+            RendererActivationPresentationSheet(
+                store: session.store,
+                installedRendererHost: installedRendererHost,
+                request: request)
+        }
         // Consume a deferred cross-window `wiki://` navigation (set on the
         // session by `SessionManager.applyOrStashWikiLink` when a link was
         // clicked in the Activity window while THIS wiki's window was closed).
@@ -47,6 +55,13 @@ struct RootView: View {
         // Deferred by one runloop tick so `ContentView` has mounted and the
         // tab/selection change diff is observed by the sidebar + detail.
         .onAppear { consumePendingWikiLink() }
+    }
+
+    @MainActor
+    private func presentRendererActivation(reference: RendererReference, input: RendererBridgeInput) {
+        activeRendererPresentation = RendererActivationPresentation(
+            reference: reference,
+            input: input)
     }
 
     /// Deliver the stashed `wiki://` link (if any) to the app-layer router
