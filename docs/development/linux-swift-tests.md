@@ -18,7 +18,7 @@ patch release, and base image for repeatable results.
 Do not install a Linux runtime only for this command. macOS command-line SwiftPM
 and hosted macOS checks remain the required validation path. This diagnostic is
 optional and nonblocking. The retained EINTR failure record is
-[`progress/2026-08-09T000000Z-linux-swift-eintr-failure-record.md`](../../progress/2026-08-09T000000Z-linux-swift-eintr-failure-record.md).
+[`progress/2026-08-12T000000Z-linux-swift-eintr-failure-record.md`](../../progress/2026-08-12T000000Z-linux-swift-eintr-failure-record.md).
 
 ## Run the suite
 

@@ -5,7 +5,7 @@
 > supported product platform or a required product gate. Use the optional
 > Apple Container/Docker diagnostic policy in `plans/linux-local-test-support.md`
 > and the retained EINTR record in
-> `progress/2026-08-09T000000Z-linux-swift-eintr-failure-record.md`.
+> `progress/2026-08-12T000000Z-linux-swift-eintr-failure-record.md`.
 >
 **Goal:** Split macOS-only dependencies behind conditional compilation so `WikiFSCore` + `wikid` build and the `WikiFSCoreTests` suite runs on Linux, with **zero macOS regression**.
 

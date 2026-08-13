@@ -9,7 +9,7 @@ retained evidence, including failures such as EINTR; a failure is not a pass.
 
 Issue #1077 added a local command that reproduced the former `linux-swift` diagnostic
 contract before a pull request was pushed. The EINTR history is retained in
-[`progress/2026-08-09T000000Z-linux-swift-eintr-failure-record.md`](../progress/2026-08-09T000000Z-linux-swift-eintr-failure-record.md).
+[`progress/2026-08-12T000000Z-linux-swift-eintr-failure-record.md`](../progress/2026-08-12T000000Z-linux-swift-eintr-failure-record.md).
 
 ## Design
 
