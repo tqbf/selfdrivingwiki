@@ -18,6 +18,16 @@ iframes, rewrite the reader document, or attach native views. Those alternatives
 would change the reader isolation/lifecycle boundary and require their own
 approved implementation phase.
 
+## Platform and gate policy
+
+Self Driving Wiki supports macOS only. Every phase in this renderer series requires
+macOS command-line SwiftPM gates and the required hosted macOS checks. Linux source
+portability is an optional, nonblocking diagnostic through `make test-linux`; it is
+not a per-PR or release acceptance gate. This is a prospective operator-approved
+platform policy change, not a waiver or reclassification of any prior Linux result.
+Prior Linux evidence, including EINTR failures, remains evidence of failure and is
+not described as a pass.
+
 The native provenance, closure audit, resource limits, semantic palette,
 thread-confinement rule, update process, licenses, and known sanitizer/toolchain
 limits are recorded in

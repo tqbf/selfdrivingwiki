@@ -1,6 +1,8 @@
 # Build environment
 
-How Self Driving Wiki is compiled, bundled, signed, and run. This is the source of truth
+How Self Driving Wiki is compiled, bundled, signed, and run. Self Driving Wiki supports
+macOS only. macOS command-line SwiftPM and required hosted macOS checks are the
+product gates; Linux is best-effort diagnostic work only. This is the source of truth
 for *how we build*; `plans/INITIAL.md` is the source of truth for *what we
 build*.
 

@@ -1,5 +1,9 @@
 # Plan: Make WikiFSEngine Linux-buildable (conditional ACP dep)
 
+> **Historical plan.** Superseded by the operator-approved macOS-only platform
+> policy. Linux is now an optional, nonblocking diagnostic; the former Linux CI
+> checks are not current product gates. Historical results remain unchanged.
+
 ## Goal
 Make the Linux CI job (#780) pass by making the `ACP` product from `swift-acp` a macOS-only dependency of `WikiFSEngine`, and guarding the source files that import `ACP` (and the cascading files that reference ACP-only types) with `#if os(macOS)`.
 

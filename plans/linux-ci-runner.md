@@ -1,5 +1,10 @@
 # Linux GitHub Runner CI Job
 
+> **Historical plan.** Superseded by the operator-approved macOS-only platform
+> policy. Linux is now an optional, nonblocking diagnostic; the former job and
+> Linux acceptance checks are not current product gates. Historical results remain
+> unchanged.
+
 ## Goal
 Add a Linux CI job that builds the portable Swift targets (`WikiFSCoreTests`)
 and runs the portable test suite on `ubuntu-latest`. This validates the #754

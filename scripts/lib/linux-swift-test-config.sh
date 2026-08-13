@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Shared by the linux-swift CI job and scripts/test-linux.sh.
+# Shared by the retained opt-in Linux diagnostic and scripts/test-linux.sh.
+# Linux is best-effort only; this configuration is not a product gate.
 
 LINUX_SWIFT_TEST_FILTER='WikiFSCoreTests'
 LINUX_SWIFT_TEST_NUM_WORKERS='1'

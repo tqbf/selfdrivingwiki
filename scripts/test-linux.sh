@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Run the Linux-portable Swift suite in an OCI runtime. This script never uses
-# the host Swift toolchain for code generation, building, or testing.
+# Run the optional, nonblocking Linux source-portability diagnostic in an OCI
+# runtime. Linux is not a supported product platform. This script never uses the
+# host Swift toolchain for code generation, building, or testing.
 
 set -euo pipefail
 

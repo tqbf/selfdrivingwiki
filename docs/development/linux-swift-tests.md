@@ -1,7 +1,9 @@
-# Run the portable Swift tests on Linux
+# Run the optional Linux Swift diagnostic
 
-Use this procedure to reproduce the `linux-swift` GitHub Actions job on your
-machine. This procedure tests the portable `WikiFSCoreTests` target only.
+Self Driving Wiki supports macOS only. Use this procedure only as a best-effort
+Linux source-portability diagnostic. It is not a pull-request or release gate,
+and its failure must not block macOS readiness. It tests the portable
+`WikiFSCoreTests` target only and reproduces the former `linux-swift` job contract.
 
 ## Requirements
 
@@ -13,8 +15,9 @@ uses the `linux/amd64` platform, Swift 6.3.3, and Ubuntu 24.04. GitHub-hosted
 Ubuntu is x86_64 and uses Swift 6.3. The local runner fixes the architecture,
 patch release, and base image for repeatable results.
 
-Do not install a Linux runtime only for this command. GitHub Actions remains a
-supported validation path for macOS-only development.
+Do not install a Linux runtime only for this command. macOS command-line SwiftPM
+and hosted macOS checks remain the required validation path. This diagnostic is
+optional and nonblocking.
 
 ## Run the suite
 

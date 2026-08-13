@@ -2,14 +2,19 @@
 
 ## Goal
 
-Issue #1077 adds a local command that reproduces the portable `linux-swift`
-CI test contract before a pull request is pushed.
+This document describes an opt-in Linux portability diagnostic. Self Driving Wiki
+supports macOS only. Linux source portability is best-effort and is not a pull-request
+or release gate. The diagnostic preserves the prior Linux test contract and its
+retained evidence, including failures such as EINTR; a failure is not a pass.
+
+Issue #1077 added a local command that reproduced the former `linux-swift` CI test
+contract before a pull request was pushed.
 
 ## Design
 
-`scripts/lib/linux-swift-test-config.sh` is the single source for the Linux
-test filter, worker count, and skip list. The GitHub workflow sources it. The
-local runner sources it before it starts a container.
+`scripts/lib/linux-swift-test-config.sh` is the single source for the optional
+Linux diagnostic test filter, worker count, and skip list. The local runner
+sources it before it starts a container. No GitHub required check sources it.
 
 `scripts/test-linux.sh` selects Apple `container` when it is installed. It
 uses Docker when Apple `container` is unavailable. An explicit runtime request

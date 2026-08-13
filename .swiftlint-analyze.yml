@@ -56,8 +56,8 @@ unused_import:
   # unused_import hits on the first run, and acting on them would be actively
   # dangerous here: the analysis is macOS-only (arm64-apple-macosx15.0), where
   # AppKit and SwiftUI transitively re-export Foundation. Those re-exports do
-  # not exist on Linux, and this package has a real `linux-swift` CI job. An
-  # import this rule calls redundant on macOS can be load-bearing on Linux, so
+  # not exist on Linux, and this package retains an opt-in Linux diagnostic. An
+  # import this rule calls redundant on macOS can be load-bearing in that diagnostic, so
   # Foundation is pinned rather than reported.
   always_keep_imports:
     - Foundation
