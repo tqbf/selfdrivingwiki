@@ -516,24 +516,24 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
           var card = document.querySelector('\(Self.cardSelector)');
           var scrollY = window.scrollY || document.documentElement.scrollTop || 0;
           if(!card){
-            return {
+            return JSON.stringify({
               present: false,
               placeholderID: "",
               centerHit: false,
               scrollY: scrollY
-            };
+            });
           }
           var rect = card.getBoundingClientRect();
           var centerNode = document.elementFromPoint(
             rect.left + rect.width / 2,
             rect.top + rect.height / 2);
-          return {
+          return JSON.stringify({
             present: true,
             placeholderID: card.id || "",
             cssRect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
             centerHit: centerNode === card || (!!centerNode && card.contains(centerNode)),
             scrollY: scrollY
-          };
+          });
         })()
         """)
         guard let measurement = RendererAttachmentSpikeDOMMeasurement(body: body) else {
@@ -853,7 +853,7 @@ private struct RendererAttachmentSpikeDOMMeasurement: Sendable, Equatable {
     }
 
     init?(body: Any?) {
-        guard let dict = body as? [String: Any],
+        guard let dict = Self.dictionary(body),
               let present = dict["present"] as? Bool,
               let placeholderID = dict["placeholderID"] as? String else {
             return nil
@@ -872,6 +872,21 @@ private struct RendererAttachmentSpikeDOMMeasurement: Sendable, Equatable {
         self.cssRect = rect
         self.centerHit = centerHit
         self.scrollY = scrollY
+    }
+
+    private static func dictionary(_ value: Any?) -> [String: Any]? {
+        if let dict = value as? [String: Any] {
+            return dict
+        }
+        guard let string = value as? String,
+              let data = string.data(using: .utf8) else {
+            return nil
+        }
+        do {
+            return try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        } catch {
+            return nil
+        }
     }
 
     private static func rect(_ value: Any?) -> CGRect? {
