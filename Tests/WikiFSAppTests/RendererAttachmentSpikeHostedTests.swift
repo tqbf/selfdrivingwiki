@@ -10,6 +10,8 @@ import WebKit
 @Suite("Renderer attachment spike hosted tests", .serialized, .timeLimit(.minutes(5)))
 @MainActor
 struct RendererAttachmentSpikeHostedTests {
+    private static let bottomSpacerParagraphCount = 24
+
     @Test
     func testScrollZoomResizeAndHeightMutationStayAligned() async throws {
         for _ in 0..<20 {
@@ -205,7 +207,9 @@ struct RendererAttachmentSpikeHostedTests {
             "Paragraph \(index): " + String(repeating: "This keeps the document tall enough for scroll alignment. ", count: 2)
         }.joined(separator: "\n\n")
         let bottom = includeBottomSpacer
-            ? String(repeating: "Trailing content keeps the placeholder in flow.\n\n", count: 8)
+            ? String(
+                repeating: "Trailing content keeps the placeholder in flow.\n\n",
+                count: bottomSpacerParagraphCount)
             : ""
         let placeholder = includePlaceholder
             ? """
