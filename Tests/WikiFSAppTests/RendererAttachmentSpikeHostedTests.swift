@@ -515,11 +515,52 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
         (function(){
           var card = document.querySelector('\(Self.cardSelector)');
           var scrollY = window.scrollY || document.documentElement.scrollTop || 0;
-          var viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
-          var viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+          var viewport = (function(){
+            var visual = window.visualViewport;
+            var left = visual ? visual.offsetLeft : 0;
+            var top = visual ? visual.offsetTop : 0;
+            var width = visual ? visual.width : (window.innerWidth || document.documentElement.clientWidth || 0);
+            var height = visual ? visual.height : (window.innerHeight || document.documentElement.clientHeight || 0);
+            return { left: left, top: top, right: left + width, bottom: top + height };
+          })();
           function hitAt(x, y) {
-            var node = document.elementFromPoint(x, y);
-            return !!node && (node === card || card.contains(node));
+            var nodes = document.elementsFromPoint(x, y) || [];
+            for(var i = 0; i < nodes.length; i++){
+              var node = nodes[i];
+              if(node === card || card.contains(node)){
+                return true;
+              }
+            }
+            return false;
+          }
+          function visibleHit(rect) {
+            var left = Math.max(rect.left, viewport.left);
+            var top = Math.max(rect.top, viewport.top);
+            var right = Math.min(rect.right, viewport.right);
+            var bottom = Math.min(rect.bottom, viewport.bottom);
+            if(!(right > left && bottom > top)){
+              return false;
+            }
+            var xCandidates = [
+              left + (right - left) / 2,
+              left + 1,
+              right - 1
+            ];
+            var yCandidates = [
+              top + (bottom - top) / 2,
+              top + 1,
+              bottom - 1
+            ];
+            for(var yi = 0; yi < yCandidates.length; yi++){
+              for(var xi = 0; xi < xCandidates.length; xi++){
+                var x = Math.max(viewport.left, Math.min(xCandidates[xi], viewport.right - 0.5));
+                var y = Math.max(viewport.top, Math.min(yCandidates[yi], viewport.bottom - 0.5));
+                if(hitAt(x, y)){
+                  return true;
+                }
+              }
+            }
+            return false;
           }
           if(!card){
             return JSON.stringify({
@@ -530,19 +571,11 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
             });
           }
           var rect = card.getBoundingClientRect();
-          var left = Math.max(rect.left, 0);
-          var top = Math.max(rect.top, 0);
-          var right = Math.min(rect.right, viewportWidth);
-          var bottom = Math.min(rect.bottom, viewportHeight);
-          var centerHit = false;
-          if(right > left && bottom > top){
-            centerHit = hitAt(left + (right - left) / 2, top + (bottom - top) / 2);
-          }
           return JSON.stringify({
             present: true,
             placeholderID: card.id || "",
             cssRect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
-            centerHit: centerHit,
+            centerHit: visibleHit(rect),
             scrollY: scrollY
           });
         })()
@@ -664,6 +697,46 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
             var r = el.getBoundingClientRect();
             return { x: r.left, y: r.top, width: r.width, height: r.height };
           }
+          function viewportBounds(){
+            var visual = window.visualViewport;
+            var left = visual ? visual.offsetLeft : 0;
+            var top = visual ? visual.offsetTop : 0;
+            var width = visual ? visual.width : (window.innerWidth || document.documentElement.clientWidth || 0);
+            var height = visual ? visual.height : (window.innerHeight || document.documentElement.clientHeight || 0);
+            return { left: left, top: top, right: left + width, bottom: top + height };
+          }
+          function cardHitAt(card, x, y){
+            var nodes = document.elementsFromPoint(x, y) || [];
+            for(var i = 0; i < nodes.length; i++){
+              var node = nodes[i];
+              if(node === card || card.contains(node)){
+                return true;
+              }
+            }
+            return false;
+          }
+          function visibleCardHit(card, rect){
+            var viewport = viewportBounds();
+            var left = Math.max(rect.left, viewport.left);
+            var top = Math.max(rect.top, viewport.top);
+            var right = Math.min(rect.right, viewport.right);
+            var bottom = Math.min(rect.bottom, viewport.bottom);
+            if(!(right > left && bottom > top)){
+              return false;
+            }
+            var xCandidates = [left + (right - left) / 2, left + 1, right - 1];
+            var yCandidates = [top + (bottom - top) / 2, top + 1, bottom - 1];
+            for(var yi = 0; yi < yCandidates.length; yi++){
+              for(var xi = 0; xi < xCandidates.length; xi++){
+                var x = Math.max(viewport.left, Math.min(xCandidates[xi], viewport.right - 0.5));
+                var y = Math.max(viewport.top, Math.min(yCandidates[yi], viewport.bottom - 0.5));
+                if(cardHitAt(card, x, y)){
+                  return true;
+                }
+              }
+            }
+            return false;
+          }
           function report(){
             var state = window.__rendererAttachmentSpikeState || { generation: 0, revision: 0 };
             state.revision = Number(state.revision || 0) + 1;
@@ -681,17 +754,13 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
               return "missing";
             }
             var cardRect = rectFor(card);
-            var centerNode = document.elementFromPoint(
-              cardRect.x + cardRect.width / 2,
-              cardRect.y + cardRect.height / 2);
-            var centerHit = centerNode === card || (!!centerNode && card.contains(centerNode));
             window.webkit.messageHandlers.\(Self.messageName).postMessage({
                 generation: state.generation,
                 revision: state.revision,
                 placeholderID: card.id || "",
                 present: true,
                 cssRect: cardRect,
-                centerHit: centerHit,
+                centerHit: visibleCardHit(card, cardRect),
                 scrollY: window.scrollY || document.documentElement.scrollTop || 0
             });
             return "posted";
