@@ -319,6 +319,28 @@ test-linux-focus:
 	@LINUX_TEST_FILTER="$(TEST_FILTER)" scripts/test-linux.sh
 
 # ---------------------------------------------------------------------------
+# VM-isolated test run (Tart macOS VM)
+# ---------------------------------------------------------------------------
+#
+# Runs the full test suite inside a Tart macOS VM to contain the blast radius
+# of the swiftpm-testing-helper kill-all-processes bug. The VM boots, receives
+# the repo via rsync, runs swift test, and shuts down.
+#
+# Prerequisites:
+#   brew install cirruslabs/cli/tart
+#   brew install hudochenkov/sshpass/sshpass
+#   tart pull ghcr.io/cirruslabs/macos-tahoe-xcode:latest
+#
+# The first run clones the OCI image to a local VM (sdw-test-runner). Later
+# runs reuse the clone and only rsync changed files.
+test-vm:
+	@scripts/test-vm.sh
+
+test-vm-focus:
+	@[ -n "$(TEST_FILTER)" ] || { echo "✗ TEST_FILTER is required (example: make test-vm-focus TEST_FILTER=RendererAttachmentSpikeHostedTests)" >&2; exit 2; }
+	@scripts/test-vm.sh --filter "$(TEST_FILTER)"
+
+# ---------------------------------------------------------------------------
 # Mutation testing (swift-mutation-testing — schematized mutator runs)
 # ---------------------------------------------------------------------------
 #
