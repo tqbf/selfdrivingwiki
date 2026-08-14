@@ -38,8 +38,8 @@ struct LauncherChatAgentRuntimeTests {
     }
 
     @Test(arguments: [
-        ("```console\n<command-output>\n```", "```console\n&lt;command-output&gt;\n```"),
-        ("```json\n{\"ok\": true}\n```", "```json\n{\"ok\": true}\n```"),
+        ("```console\n<command-output>\n```", "&lt;command-output&gt;"),
+        ("```json\n{\"ok\": true}\n```", "{\"ok\": true}"),
         ("build completed", "build completed"),
     ])
     @MainActor
