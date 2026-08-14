@@ -371,7 +371,15 @@ read the DB.
 2. Info.plist key `WIKIAppGroupID` (injected by `build.sh`)
 3. sidecar `wiki-identifiers.env` beside the executable
 4. `signing/local.config` key `APP_GROUP` (gitignored, per-developer)
-5. compiled default `group.org.sockpuppet.wiki`
+5. compiled default `group.org.sockpuppet.wiki` — **reaching this leg is a
+   hard error, not a fallback.** Legs 1–4 are each somebody stating an id; leg
+   5 is nobody having stated one, and the constant is the upstream author's
+   real registered App Group. `DatabaseLocation.appGroupContainerDirectory()`
+   throws `WikiIdentifiersError.unconfiguredAppGroupID` rather than creating a
+   container under it. It used to create one silently, which read an empty
+   registry and wrote config to the wrong place — see
+   `progress/2026-08-14T010000Z-app-group-fail-fast.md`.
+   `wikictl version` prints the resolved id and which leg produced it.
 
 So the literal path is `~/Library/Group Containers/<that id>/<ulid>.sqlite`.
 `wikis.json` in the same container is the registry: it maps display name → ULID
