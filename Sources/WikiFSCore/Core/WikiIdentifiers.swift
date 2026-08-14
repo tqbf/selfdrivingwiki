@@ -86,9 +86,31 @@ public enum WikiIdentifiers {
 
     /// The running executable's directory, resolved from `Bundle.main` (preferred)
     /// or, failing that, from `argv[0]`.
+    ///
+    /// **Symlinks are resolved first.** `Bundle.main.executableURL` reports the
+    /// path the process was EXEC'd through, not the real file, so invoking the
+    /// bundled `wikictl` through a symlink on `PATH` (`~/.local/bin/wikictl`, a
+    /// Nix/Homebrew/`ln -s` shim → `…/Self Driving Wiki.app/Contents/Helpers/
+    /// wikictl`) yields `~/.local/bin` here. None of the sidecar candidates
+    /// below exist there and the `signing/local.config` walk-up finds no repo,
+    /// so `appGroupID` silently fell back to the compiled-in
+    /// `group.org.sockpuppet.wiki` — a DIFFERENT, empty container. The symptom
+    /// is bizarre: the exact same binary resolves every wiki when called by its
+    /// bundle path and reports "no wiki matching <id> in the registry" when
+    /// called through the symlink. Resolving to the real path first puts the
+    /// bundled sidecar back in reach, so a `PATH` shim behaves identically to
+    /// the in-bundle path and no `WIKI_APP_GROUP_ID` override is needed.
     private static var executableDir: URL? {
-        Bundle.main.executableURL?.deletingLastPathComponent()
-            ?? CommandLine.arguments.first.map { URL(fileURLWithPath: $0).deletingLastPathComponent() }
+        let executable = Bundle.main.executableURL
+            ?? CommandLine.arguments.first.map { URL(fileURLWithPath: $0) }
+        return executable.map(directoryOfRealExecutable(at:))
+    }
+
+    /// The directory holding the REAL file behind `executable`, following any
+    /// symlink first. Split out from ``executableDir`` so it is testable without
+    /// a `Bundle.main` that only exists inside a real `.app`.
+    static func directoryOfRealExecutable(at executable: URL) -> URL {
+        executable.resolvingSymlinksInPath().deletingLastPathComponent()
     }
 
     /// `KEY=VALUE` pairs parsed once from `wiki-identifiers.env`. The keys match
