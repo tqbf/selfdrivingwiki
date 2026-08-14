@@ -484,13 +484,13 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
             var r = el.getBoundingClientRect();
             return { x: r.left, y: r.top, width: r.width, height: r.height };
           }
+          var referenceProbe = document.createElement('div');
+          referenceProbe.id = 'renderer-attachment-spike-reference';
+          referenceProbe.setAttribute('aria-hidden', 'true');
+          referenceProbe.style.cssText = 'position:fixed;left:-10000px;top:-10000px;width:100px;height:1px;visibility:hidden;pointer-events:none;';
+          document.documentElement.appendChild(referenceProbe);
           function referenceRect(){
-            var probe = document.createElement('div');
-            probe.style.cssText = 'position:fixed;left:-10000px;top:-10000px;width:100px;height:1px;visibility:hidden;pointer-events:none;';
-            document.documentElement.appendChild(probe);
-            var rect = rectFor(probe);
-            probe.remove();
-            return rect;
+            return rectFor(referenceProbe);
           }
           function report(){
             var state = window.__rendererAttachmentSpikeState || { generation: 0, pageZoom: 1, revision: 0 };
