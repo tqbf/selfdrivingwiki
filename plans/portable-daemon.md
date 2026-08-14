@@ -1,5 +1,12 @@
 # Plan — Issue #754: Portable Daemon + Fuzzer Core
 
+> **Historical plan and superseded gate policy (2026-08-13).** The portability
+> analysis and Linux results below remain historical facts. Linux is not a
+> supported product platform or a required product gate. Use the optional
+> Apple Container/Docker diagnostic policy in `plans/linux-local-test-support.md`
+> and the retained EINTR record in
+> `progress/2026-08-13T000000Z-linux-swift-eintr-failure-record.md`.
+>
 **Goal:** Split macOS-only dependencies behind conditional compilation so `WikiFSCore` + `wikid` build and the `WikiFSCoreTests` suite runs on Linux, with **zero macOS regression**.
 
 ---

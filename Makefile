@@ -141,8 +141,8 @@ help:
 	@echo "  test-watchdog     Same as test, but with a wall-clock timeout + hang/slow-test report"
 	@echo "  test-fast         Fast test tier (debug) — skips slow SQLite integration suites"
 	@echo "  test-fast-release Fast test tier in release mode (faster runtime, slower compile)"
-	@echo "  test-linux        Run the CI-equivalent portable Swift suite in Linux"
-	@echo "  test-linux-focus  Run one portable suite in Linux (TEST_FILTER=WikiFSCoreTests...)"
+	@echo "  test-linux        Run the optional, nonblocking Linux Swift diagnostic"
+	@echo "  test-linux-focus  Run one optional Linux diagnostic suite (TEST_FILTER=WikiFSCoreTests...)"
 	@echo "  lint              SwiftLint: fail on NEW bare try? in Sources/ + tools/"
 	@echo "  lint-baseline     Re-snapshot .swiftlint-baseline.json (run after fixing try?s)"
 	@echo "  lint-analyze      SwiftLint analyzer: unused decls/imports (advisory, slow, not in CI)"
@@ -308,8 +308,9 @@ test-fast-release: deps prompts version keychain
 	swift test -c release --parallel --num-workers $(SWIFT_TEST_NUM_WORKERS) --skip $(FAST_TEST_SKIP)
 	@echo "✓ fast tests pass (release)"
 
-# Linux portability validation (#1077). The script deliberately does not use
-# the host Swift toolchain or the macOS-only `deps` target.
+# Optional Linux portability diagnostic (#1077). This is nonblocking and does not
+# define product support. The script deliberately does not use the host Swift
+# toolchain or the macOS-only `deps` target.
 test-linux:
 	@scripts/test-linux.sh
 

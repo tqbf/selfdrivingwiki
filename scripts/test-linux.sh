@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Run the Linux-portable Swift suite in an OCI runtime. This script never uses
-# the host Swift toolchain for code generation, building, or testing.
+# Run the optional, nonblocking Linux source-portability diagnostic in an OCI
+# runtime. Linux is not a supported product platform. This script never uses the
+# host Swift toolchain for code generation, building, or testing.
 
 set -euo pipefail
 
@@ -36,7 +37,7 @@ case "$REQUESTED_RUNTIME" in
         elif command -v docker >/dev/null 2>&1; then
             RUNTIME='docker'
         else
-            echo "failed to select Linux runtime: install Apple container or Docker, or use GitHub CI" >&2
+            echo "failed to select Linux runtime: install Apple container or Docker; this optional diagnostic has no CI equivalent" >&2
             exit 2
         fi
         ;;

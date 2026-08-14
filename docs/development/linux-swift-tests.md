@@ -1,7 +1,9 @@
-# Run the portable Swift tests on Linux
+# Run the optional Linux Swift diagnostic
 
-Use this procedure to reproduce the `linux-swift` GitHub Actions job on your
-machine. This procedure tests the portable `WikiFSCoreTests` target only.
+Self Driving Wiki supports macOS only. Use this procedure only as a best-effort
+Linux source-portability diagnostic. It is not a pull-request or release gate,
+and its failure must not block macOS readiness. It tests the portable
+`WikiFSCoreTests` target only and reproduces the former `linux-swift` job contract.
 
 ## Requirements
 
@@ -9,12 +11,17 @@ Install one OCI runtime. The runner selects Apple `container` first when it is
 available. Otherwise, it selects Docker.
 
 The default image is `swift:6.3.3-noble` with an immutable manifest digest. It
-uses the `linux/amd64` platform, Swift 6.3.3, and Ubuntu 24.04. GitHub-hosted
-Ubuntu is x86_64 and uses Swift 6.3. The local runner fixes the architecture,
-patch release, and base image for repeatable results.
+uses the `linux/amd64` platform, Swift 6.3.3, and Ubuntu 24.04. The local
+runner fixes the architecture, patch release, and base image for repeatable
+results. This optional diagnostic reproduces the former `linux-swift` contract.
+The corrected `SidebarDragPasteboardBridgeTests` name refers to a `WikiFSAppTests`
+suite in the shared diagnostic skip list; it is not part of the `WikiFSCoreTests`
+filter. The repository has no current GitHub-hosted Ubuntu runner.
 
-Do not install a Linux runtime only for this command. GitHub Actions remains a
-supported validation path for macOS-only development.
+Do not install a Linux runtime only for this command. macOS command-line SwiftPM
+and hosted macOS checks remain the required validation path. This diagnostic is
+optional and nonblocking. The retained EINTR failure record is
+[`progress/2026-08-13T000000Z-linux-swift-eintr-failure-record.md`](../../progress/2026-08-13T000000Z-linux-swift-eintr-failure-record.md).
 
 ## Run the suite
 
@@ -26,13 +33,13 @@ make test-linux
 
 The command starts a Linux container. It installs `libsqlite3-dev` and `make`,
 creates a container-local copy of the checkout, generates required files, builds
-`WikiFSCoreTests`, and runs the CI test command.
+`WikiFSCoreTests`, and runs the former CI test command as an optional diagnostic.
 
-The test command uses the shared configuration in
+The diagnostic command uses the shared configuration in
 `scripts/lib/linux-swift-test-config.sh`:
 
 ```sh
-swift test --parallel --num-workers 1 --filter WikiFSCoreTests --skip <Linux CI skip list>
+swift test -v --parallel --num-workers 1 --filter WikiFSCoreTests --skip <former Linux diagnostic skip list>
 ```
 
 The `WikiFSCoreTests` filter is required. An unfiltered SwiftPM test command
@@ -45,7 +52,7 @@ make test-linux-focus TEST_FILTER=WikiFSCoreTests.RendererStoreTests
 ```
 
 The focused filter must start with `WikiFSCoreTests`. The runner still applies
-the Linux CI skip list and uses one worker.
+the former CI skip list and uses one worker.
 
 ## Select a runtime or image
 
@@ -112,8 +119,8 @@ If Apple `container` reports a machine, image, or virtualization error, run
 `container --version` and check the Apple Container requirements. Use Docker
 with `LINUX_TEST_RUNTIME=docker` when Docker is available.
 
-The runner uses the `linux/amd64` image to match GitHub-hosted Ubuntu. Apple
-Container uses Rosetta for this image on Apple Silicon.
+The runner uses the digest-pinned `linux/amd64` image. Apple Container uses
+Rosetta for this image on Apple Silicon.
 
 Do not restart Paseo, the app daemon, or unrelated services. This runner uses
 only a temporary Linux container and a read-only checkout mount.

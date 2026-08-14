@@ -8,6 +8,10 @@ phase: 1
 
 # Markdown renderer Phase 1 native fenced-code highlighting
 
+> **Amendment (2026-08-13):** The macOS-only required-gate policy is
+> prospective. It preserves prior Linux diagnostic failures, including EINTR,
+> as failures; see `progress/2026-08-13T000000Z-linux-swift-eintr-failure-record.md`.
+
 ## Progress
 
 Phase 1 adds native, vendored Tree-sitter token spans for ordinary Java, Scala,
@@ -58,7 +62,10 @@ aggregate rerun using the unchanged production highlighter source recorded
 was 21.36 MiB. `make build`, `make test`, bare SwiftPM tests, and focused
 AddressSanitizer and ThreadSanitizer highlighter suites passed.
 The TSan host emitted CoreData XPC environment warnings without a sanitizer
-fault. Delivery readiness, push, and pull request actions remain stopped.
+fault. Delivery readiness, push, and pull request actions remain stopped. The prospective
+operator-approved platform policy records macOS as the sole supported platform;
+Linux portability is optional diagnostic evidence and is not a renderer-series gate.
+This does not waive or relabel prior Linux failures, including EINTR evidence.
 
 The 100 KiB aggregate record is historical base-plus-working-tree evidence.
 It is not candidate-head evidence. Its five original per-grammar artifact
