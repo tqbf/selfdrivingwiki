@@ -515,6 +515,12 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
         (function(){
           var card = document.querySelector('\(Self.cardSelector)');
           var scrollY = window.scrollY || document.documentElement.scrollTop || 0;
+          var viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+          var viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+          function hitAt(x, y) {
+            var node = document.elementFromPoint(x, y);
+            return !!node && (node === card || card.contains(node));
+          }
           if(!card){
             return JSON.stringify({
               present: false,
@@ -524,14 +530,19 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
             });
           }
           var rect = card.getBoundingClientRect();
-          var centerNode = document.elementFromPoint(
-            rect.left + rect.width / 2,
-            rect.top + rect.height / 2);
+          var left = Math.max(rect.left, 0);
+          var top = Math.max(rect.top, 0);
+          var right = Math.min(rect.right, viewportWidth);
+          var bottom = Math.min(rect.bottom, viewportHeight);
+          var centerHit = false;
+          if(right > left && bottom > top){
+            centerHit = hitAt(left + (right - left) / 2, top + (bottom - top) / 2);
+          }
           return JSON.stringify({
             present: true,
             placeholderID: card.id || "",
             cssRect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
-            centerHit: centerNode === card || (!!centerNode && card.contains(centerNode)),
+            centerHit: centerHit,
             scrollY: scrollY
           });
         })()
