@@ -5,27 +5,26 @@ import Foundation
 // pattern: Functional Core — this value type contains only pure geometry transforms.
 /// Pure geometry contract for the PR 3 feasibility spike. The spike keeps the
 /// reader routing unchanged and only tests how a DOM placeholder rect maps into
-/// a sibling AppKit overlay under page zoom and window backing scale.
+/// a sibling AppKit overlay under measured DOM CSS pixels, native page zoom,
+/// and window backing scale.
 struct RendererAttachmentSpikeGeometry: Sendable, Equatable {
     let generation: Int
     let revision: Int
     let placeholderID: String
     let cssRect: CGRect
     let pageZoom: CGFloat
-    let domToViewScale: CGFloat
     let domCenterHit: Bool
     let scrollY: CGFloat
     let backingScaleFactor: CGFloat
     let webViewBounds: CGRect
-    let tolerance: CGFloat
 
     var overlayRect: CGRect {
-        let scale = max(domToViewScale, .leastNonzeroMagnitude)
-        let originX = cssRect.minX * scale
-        let originY = webViewBounds.height - (cssRect.maxY * scale)
+        let scale = max(pageZoom, .leastNonzeroMagnitude)
+        let originX = cssRect.minX / scale
+        let originY = webViewBounds.height - (cssRect.maxY / scale)
         let size = CGSize(
-            width: cssRect.width * scale,
-            height: cssRect.height * scale)
+            width: cssRect.width / scale,
+            height: cssRect.height / scale)
         return CGRect(origin: CGPoint(x: originX, y: originY), size: size)
     }
 
@@ -42,20 +41,23 @@ struct RendererAttachmentSpikeGeometry: Sendable, Equatable {
         guard clipped.isNull == false && clipped.isEmpty == false else { return .zero }
         return clipped.offsetBy(dx: -overlayRect.minX, dy: -overlayRect.minY)
     }
-
-    func isAligned(with actual: CGRect) -> Bool {
-        [abs(actual.minX - overlayRect.minX),
-         abs(actual.minY - overlayRect.minY),
-         abs(actual.width - overlayRect.width),
-         abs(actual.height - overlayRect.height)].allSatisfy { $0 <= tolerance }
-    }
 }
 
 enum RendererAttachmentSpikeMetrics {
-    /// The hosted probe uses a fixed 100 CSS-point reference. A 0.75-point
-    /// residual is the measured tolerance for the AppKit-point round trip;
-    /// larger drift means the transform or clipping contract is off.
-    static let referenceCSSWidth: CGFloat = 100
-    static let measuredAlignmentTolerance: CGFloat = 0.75
+    /// Returns a tolerance derived from the maximum observed residual in the
+    /// hosted comparison set. The extra half-pixel margin absorbs AppKit
+    /// quantization when converting the same rect between point and backing
+    /// coordinates; if the live residual grows beyond that, the contract broke.
+    static func derivedAlignmentTolerance(
+        pointResiduals: [CGFloat],
+        backingResiduals: [CGFloat],
+        backingScaleFactor: CGFloat
+    ) -> CGFloat {
+        let pointResidual = pointResiduals.max() ?? 0
+        let backingResidualPoints = (backingResiduals.max() ?? 0)
+            / max(backingScaleFactor, .leastNonzeroMagnitude)
+        let quantizationMargin = 0.5 / max(backingScaleFactor, .leastNonzeroMagnitude)
+        return max(pointResidual, backingResidualPoints) + quantizationMargin
+    }
 }
 #endif

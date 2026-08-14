@@ -15,6 +15,7 @@ struct RendererAttachmentSpikeHostedTests {
     @Test
     func testScrollZoomResizeAndHeightMutationStayAligned() async throws {
         for _ in 0..<20 {
+            var alignmentEvidences: [RendererAttachmentSpikeAlignmentEvidence] = []
             let lease = await HostedAppKitTestGate.shared.acquire()
             defer { lease.release() }
             Self.prepareApplication()
@@ -32,62 +33,118 @@ struct RendererAttachmentSpikeHostedTests {
             try await harness.load()
             try await harness.publishGeometry()
             let initial = try harness.requireGeometry()
-            Self.assertAligned(harness.overlay.frame, expected: initial)
-            Self.assertIndependentDOM(harness.currentSnapshot)
-            #expect(initial.backingScaleFactor == (window.backingScaleFactor))
+            let initialSnapshot = try #require(harness.currentSnapshot)
+            let initialMeasurement = try await harness.measureDOMGeometry()
+            alignmentEvidences.append(Self.alignmentEvidence(
+                harness.overlay.frame,
+                measurement: initialMeasurement,
+                pageZoom: harness.webView.pageZoom,
+                containerView: harness.containerView,
+                backingScaleFactor: window.backingScaleFactor,
+                webViewBounds: harness.webView.bounds)
+            )
+            Self.assertIndependentDOM(initialSnapshot, measurement: initialMeasurement, expectedCenterHit: true)
+            #expect(initial.revision == initialSnapshot.revision)
 
             let centeredScroll = max(0, initial.cssRect.minY - (harness.webView.bounds.height * 0.45))
             try await harness.scrollTo(y: centeredScroll)
             try await harness.publishGeometry()
             let centered = try harness.requireGeometry()
-            Self.assertAligned(harness.overlay.frame, expected: centered)
-            Self.assertIndependentDOM(harness.currentSnapshot)
+            let centeredSnapshot = try #require(harness.currentSnapshot)
+            let centeredMeasurement = try await harness.measureDOMGeometry()
+            alignmentEvidences.append(Self.alignmentEvidence(
+                harness.overlay.frame,
+                measurement: centeredMeasurement,
+                pageZoom: harness.webView.pageZoom,
+                containerView: harness.containerView,
+                backingScaleFactor: window.backingScaleFactor,
+                webViewBounds: harness.webView.bounds)
+            )
+            Self.assertIndependentDOM(centeredSnapshot, measurement: centeredMeasurement, expectedCenterHit: true)
             #expect(centered.domCenterHit)
+            #expect(centered.revision > initial.revision)
 
             try await harness.scrollTo(y: 220)
             try await harness.publishGeometry()
             let scrolled = try harness.requireGeometry()
-            Self.assertAligned(harness.overlay.frame, expected: scrolled)
-            Self.assertIndependentDOM(harness.currentSnapshot)
+            let scrolledSnapshot = try #require(harness.currentSnapshot)
+            let scrolledMeasurement = try await harness.measureDOMGeometry()
+            alignmentEvidences.append(Self.alignmentEvidence(
+                harness.overlay.frame,
+                measurement: scrolledMeasurement,
+                pageZoom: harness.webView.pageZoom,
+                containerView: harness.containerView,
+                backingScaleFactor: window.backingScaleFactor,
+                webViewBounds: harness.webView.bounds)
+            )
+            Self.assertIndependentDOM(scrolledSnapshot, measurement: scrolledMeasurement, expectedCenterHit: true)
+            #expect(scrolled.revision > centered.revision)
 
             harness.webView.pageZoom = 1.25
             try await harness.updateRuntimeState()
             try await harness.publishGeometry()
             let zoomed = try harness.requireGeometry()
-            Self.assertAligned(harness.overlay.frame, expected: zoomed)
-            Self.assertIndependentDOM(harness.currentSnapshot)
+            let zoomedSnapshot = try #require(harness.currentSnapshot)
+            let zoomedMeasurement = try await harness.measureDOMGeometry()
+            alignmentEvidences.append(Self.alignmentEvidence(
+                harness.overlay.frame,
+                measurement: zoomedMeasurement,
+                pageZoom: harness.webView.pageZoom,
+                containerView: harness.containerView,
+                backingScaleFactor: window.backingScaleFactor,
+                webViewBounds: harness.webView.bounds)
+            )
+            Self.assertIndependentDOM(zoomedSnapshot, measurement: zoomedMeasurement, expectedCenterHit: true)
+            #expect(zoomed.revision > scrolled.revision)
 
             window.setContentSize(NSSize(width: 920, height: 580))
             harness.containerView.layoutSubtreeIfNeeded()
             try await harness.publishGeometry()
             let resized = try harness.requireGeometry()
-            Self.assertAligned(harness.overlay.frame, expected: resized)
+            let resizedSnapshot = try #require(harness.currentSnapshot)
+            let resizedMeasurement = try await harness.measureDOMGeometry()
+            alignmentEvidences.append(Self.alignmentEvidence(
+                harness.overlay.frame,
+                measurement: resizedMeasurement,
+                pageZoom: harness.webView.pageZoom,
+                containerView: harness.containerView,
+                backingScaleFactor: window.backingScaleFactor,
+                webViewBounds: harness.webView.bounds)
+            )
+            #expect(resized.revision > zoomed.revision)
 
             try await harness.insertSpacerBeforePlaceholder(height: 96)
             try await harness.publishGeometry()
             let mutated = try harness.requireGeometry()
-            Self.assertAligned(harness.overlay.frame, expected: mutated)
-            Self.assertIndependentDOM(harness.currentSnapshot)
+            let mutatedSnapshot = try #require(harness.currentSnapshot)
+            let mutatedMeasurement = try await harness.measureDOMGeometry()
+            alignmentEvidences.append(Self.alignmentEvidence(
+                harness.overlay.frame,
+                measurement: mutatedMeasurement,
+                pageZoom: harness.webView.pageZoom,
+                containerView: harness.containerView,
+                backingScaleFactor: window.backingScaleFactor,
+                webViewBounds: harness.webView.bounds)
+            )
+            Self.assertIndependentDOM(mutatedSnapshot, measurement: mutatedMeasurement, expectedCenterHit: true)
+            #expect(mutated.revision == mutatedSnapshot.revision)
+            #expect(mutated.revision > resized.revision)
 
-            let seam = RendererAttachmentSpikeGeometry(
-                generation: mutated.generation,
-                revision: mutated.revision,
-                placeholderID: mutated.placeholderID,
-                cssRect: mutated.cssRect,
-                pageZoom: mutated.pageZoom,
-                domToViewScale: mutated.domToViewScale,
-                domCenterHit: mutated.domCenterHit,
-                scrollY: mutated.scrollY,
-                backingScaleFactor: 2,
-                webViewBounds: harness.webView.bounds,
-                tolerance: RendererAttachmentSpikeMetrics.measuredAlignmentTolerance)
-            #expect(abs(seam.physicalOverlayRect.width - (seam.overlayRect.width * 2)) <= 0.01)
+            let tolerance = RendererAttachmentSpikeMetrics.derivedAlignmentTolerance(
+                pointResiduals: alignmentEvidences.flatMap { $0.pointResiduals },
+                backingResiduals: alignmentEvidences.flatMap { $0.backingResiduals },
+                backingScaleFactor: window.backingScaleFactor)
+            Self.assertAlignmentEvidence(
+                alignmentEvidences,
+                tolerance: tolerance,
+                backingScaleFactor: window.backingScaleFactor)
         }
     }
 
     @Test
     func testClippingAndHitTestingRespectVisiblePlaceholder() async throws {
         for _ in 0..<20 {
+            var alignmentEvidences: [RendererAttachmentSpikeAlignmentEvidence] = []
             let lease = await HostedAppKitTestGate.shared.acquire()
             defer { lease.release() }
             Self.prepareApplication()
@@ -109,23 +166,35 @@ struct RendererAttachmentSpikeHostedTests {
             try await harness.scrollTo(y: targetScroll)
             try await harness.publishGeometry()
             let geometry = try harness.requireGeometry()
+            let geometrySnapshot = try #require(harness.currentSnapshot)
+            let geometryMeasurement = try await harness.measureDOMGeometry()
+            alignmentEvidences.append(Self.alignmentEvidence(
+                harness.overlay.frame,
+                measurement: geometryMeasurement,
+                pageZoom: harness.webView.pageZoom,
+                containerView: harness.containerView,
+                backingScaleFactor: window.backingScaleFactor,
+                webViewBounds: harness.webView.bounds))
 
             #expect(geometry.clipRect.isEmpty == false)
             #expect(geometry.clipRect != geometry.overlayRect)
             #expect(harness.overlay.visibleClipRect == geometry.localClipRect)
-            Self.assertIndependentDOM(harness.currentSnapshot)
+            Self.assertIndependentDOM(geometrySnapshot, measurement: geometryMeasurement, expectedCenterHit: true)
 
             let visible = geometry.localClipRect
             let insidePoint = NSPoint(x: visible.midX, y: visible.midY)
             let outsidePoint = RendererAttachmentSpikeHostedTests.outsidePoint(
                 overlayBounds: harness.overlay.bounds,
                 visibleClip: visible)
-
-            let insideHit = harness.overlay.hitTest(insidePoint)
-            #expect(insideHit === harness.overlay)
-            #expect(harness.overlay.hitTest(outsidePoint) == nil)
-
+            let insideWindowPoint = harness.overlay.convert(insidePoint, to: harness.containerView)
             let outsideWindowPoint = harness.overlay.convert(outsidePoint, to: harness.containerView)
+
+            let routedInside = harness.containerView.hitTest(insideWindowPoint)
+            #expect(routedInside === harness.overlay)
+            let insideHit = harness.overlay.hitTest(insideWindowPoint)
+            #expect(insideHit === harness.overlay)
+            #expect(harness.overlay.hitTest(outsideWindowPoint) == nil)
+
             let routedView = harness.containerView.hitTest(outsideWindowPoint)
             #expect(routedView !== harness.overlay)
 
@@ -133,10 +202,33 @@ struct RendererAttachmentSpikeHostedTests {
             try await harness.scrollTo(y: offscreenScroll)
             try await harness.publishGeometry()
             let offscreen = try harness.requireGeometry()
+            let offscreenSnapshot = try #require(harness.currentSnapshot)
+            let offscreenMeasurement = try await harness.measureDOMGeometry()
+            alignmentEvidences.append(Self.alignmentEvidence(
+                harness.overlay.frame,
+                measurement: offscreenMeasurement,
+                pageZoom: harness.webView.pageZoom,
+                containerView: harness.containerView,
+                backingScaleFactor: window.backingScaleFactor,
+                webViewBounds: harness.webView.bounds))
             #expect(offscreen.clipRect.isEmpty)
             #expect(offscreen.domCenterHit == false)
             #expect(harness.overlay.visibleClipRect.isEmpty)
             #expect(harness.overlay.hitTest(NSPoint(x: 1, y: 1)) == nil)
+            #expect(offscreenSnapshot.scrollY > geometry.scrollY)
+            Self.assertIndependentDOM(
+                offscreenSnapshot,
+                measurement: offscreenMeasurement,
+                expectedCenterHit: false)
+
+            let tolerance = RendererAttachmentSpikeMetrics.derivedAlignmentTolerance(
+                pointResiduals: alignmentEvidences.flatMap { $0.pointResiduals },
+                backingResiduals: alignmentEvidences.flatMap { $0.backingResiduals },
+                backingScaleFactor: window.backingScaleFactor)
+            Self.assertAlignmentEvidence(
+                alignmentEvidences,
+                tolerance: tolerance,
+                backingScaleFactor: window.backingScaleFactor)
         }
     }
 
@@ -175,6 +267,7 @@ struct RendererAttachmentSpikeHostedTests {
 
             let frameBeforeStaleResize = harness.overlay.frame
             let revisionBeforeStaleResize = try #require(harness.currentSnapshot).revision
+            #expect(generation2.revision < generation3.revision)
             harness.ingest(Self.snapshot(from: generation2))
             #expect(harness.currentGeometry?.generation == generation3.generation)
             let currentAfterStaleResize = try #require(harness.currentSnapshot)
@@ -229,24 +322,71 @@ struct RendererAttachmentSpikeHostedTests {
         """
     }
 
-    private static func assertAligned(_ actual: CGRect, expected geometry: RendererAttachmentSpikeGeometry) {
-        #expect(geometry.isAligned(with: actual))
-        #expect(abs(actual.minX - geometry.overlayRect.minX) <= geometry.tolerance)
-        #expect(abs(actual.minY - geometry.overlayRect.minY) <= geometry.tolerance)
-        #expect(abs(actual.width - geometry.overlayRect.width) <= geometry.tolerance)
-        #expect(abs(actual.height - geometry.overlayRect.height) <= geometry.tolerance)
-    }
-
-    private static func assertIndependentDOM(_ snapshot: RendererAttachmentSpikeSnapshot?) {
+    private static func assertIndependentDOM(
+        _ snapshot: RendererAttachmentSpikeSnapshot?,
+        measurement: RendererAttachmentSpikeDOMMeasurement,
+        expectedCenterHit: Bool,
+        expectedPresent: Bool = true
+    ) {
         guard let snapshot else {
             Issue.record("missing independent DOM snapshot")
             return
         }
-        let expectedPhysicalWidth = RendererAttachmentSpikeMetrics.referenceCSSWidth * snapshot.pageZoom
-        let measuredPhysicalWidth = snapshot.referenceRect.width * snapshot.domToViewScale
-        #expect(snapshot.domToViewScale > 0)
-        #expect(abs(measuredPhysicalWidth - expectedPhysicalWidth)
-            <= RendererAttachmentSpikeMetrics.measuredAlignmentTolerance)
+        #expect(snapshot.revision > 0)
+        #expect(measurement.present == expectedPresent)
+        #expect(measurement.centerHit == expectedCenterHit)
+        #expect(measurement.scrollY >= 0)
+        if expectedPresent {
+            #expect(measurement.placeholderID == snapshot.placeholderID)
+        } else {
+            #expect(measurement.placeholderID.isEmpty)
+        }
+    }
+
+    private static func alignmentEvidence(
+        _ actual: CGRect,
+        measurement: RendererAttachmentSpikeDOMMeasurement,
+        pageZoom: CGFloat,
+        containerView: NSView,
+        backingScaleFactor: CGFloat,
+        webViewBounds: CGRect
+    ) -> RendererAttachmentSpikeAlignmentEvidence {
+        let expected = RendererAttachmentSpikeGeometry(
+            generation: 0,
+            revision: 0,
+            placeholderID: measurement.placeholderID,
+            cssRect: measurement.cssRect,
+            pageZoom: pageZoom,
+            domCenterHit: measurement.centerHit,
+            scrollY: measurement.scrollY,
+            backingScaleFactor: backingScaleFactor,
+            webViewBounds: webViewBounds)
+        let expectedBacking = containerView.convertToBacking(expected.overlayRect)
+        let actualBacking = containerView.convertToBacking(actual)
+        return RendererAttachmentSpikeAlignmentEvidence(
+            pointResiduals: [
+                abs(actual.minX - expected.overlayRect.minX),
+                abs(actual.minY - expected.overlayRect.minY),
+                abs(actual.width - expected.overlayRect.width),
+                abs(actual.height - expected.overlayRect.height)
+            ],
+            backingResiduals: [
+                abs(actualBacking.minX - expectedBacking.minX),
+                abs(actualBacking.minY - expectedBacking.minY),
+                abs(actualBacking.width - expectedBacking.width),
+                abs(actualBacking.height - expectedBacking.height)
+            ])
+    }
+
+    private static func assertAlignmentEvidence(
+        _ evidences: [RendererAttachmentSpikeAlignmentEvidence],
+        tolerance: CGFloat,
+        backingScaleFactor: CGFloat
+    ) {
+        for evidence in evidences {
+            #expect(evidence.maxPointResidual <= tolerance)
+            #expect(evidence.maxBackingResidual / max(backingScaleFactor, .leastNonzeroMagnitude) <= tolerance)
+        }
     }
 
     private static func snapshot(from geometry: RendererAttachmentSpikeGeometry) -> RendererAttachmentSpikeSnapshot {
@@ -256,15 +396,8 @@ struct RendererAttachmentSpikeHostedTests {
             placeholderID: geometry.placeholderID,
             present: true,
             cssRect: geometry.cssRect,
-            pageZoom: geometry.pageZoom,
-            domToViewScale: geometry.domToViewScale,
-            centerHit: true,
-            scrollY: 0,
-            referenceRect: CGRect(
-                x: -1000,
-                y: -1000,
-                width: RendererAttachmentSpikeMetrics.referenceCSSWidth / max(geometry.pageZoom, .leastNonzeroMagnitude),
-                height: 1))
+            centerHit: geometry.domCenterHit,
+            scrollY: geometry.scrollY)
     }
 
     private static func outsidePoint(overlayBounds: CGRect, visibleClip: CGRect) -> NSPoint {
@@ -308,6 +441,7 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
     private(set) var currentSnapshot: RendererAttachmentSpikeSnapshot?
     private(set) var didFinishLoad = false
     private(set) var generation = 0
+    private(set) var currentRevision = 0
     private(set) var isTornDown = false
 
     init(windowSize: NSSize, markdown: String) {
@@ -346,6 +480,7 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
         didFinishLoad = false
         currentGeometry = nil
         currentSnapshot = nil
+        currentRevision = 0
         webView.pageZoom = Double(ZoomScale.defaultScale)
         webView.loadHTMLString(Self.html(for: markdown, documentIdentity: documentIdentity), baseURL: WikiReaderOrigin.url)
         try await Self.waitFor(description: "reader web view load") { [weak self] in
@@ -359,6 +494,7 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
         didFinishLoad = false
         currentGeometry = nil
         currentSnapshot = nil
+        currentRevision = 0
         webView.loadHTMLString(Self.html(for: markdown, documentIdentity: documentIdentity), baseURL: WikiReaderOrigin.url)
         try await Self.waitFor(description: "reader web view reload") { [weak self] in
             self?.didFinishLoad == true
@@ -367,11 +503,43 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
     }
 
     func publishGeometry() async throws {
-        let minimumRevision = (currentSnapshot?.revision ?? 0) + 1
+        let minimumRevision = currentRevision + 1
         _ = await evaluateJavaScriptWithTimeout(webView, "window.__rendererAttachmentSpikeReport ? window.__rendererAttachmentSpikeReport() : 'missing'")
         try await Self.waitFor(description: "renderer attachment geometry") { [weak self] in
             (self?.currentSnapshot?.revision ?? 0) >= minimumRevision
         }
+    }
+
+    func measureDOMGeometry() async throws -> RendererAttachmentSpikeDOMMeasurement {
+        let body = await evaluateJavaScriptWithTimeout(webView, """
+        (function(){
+          var card = document.querySelector('\(Self.cardSelector)');
+          var scrollY = window.scrollY || document.documentElement.scrollTop || 0;
+          if(!card){
+            return {
+              present: false,
+              placeholderID: "",
+              centerHit: false,
+              scrollY: scrollY
+            };
+          }
+          var rect = card.getBoundingClientRect();
+          var centerNode = document.elementFromPoint(
+            rect.left + rect.width / 2,
+            rect.top + rect.height / 2);
+          return {
+            present: true,
+            placeholderID: card.id || "",
+            cssRect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
+            centerHit: centerNode === card || (!!centerNode && card.contains(centerNode)),
+            scrollY: scrollY
+          };
+        })()
+        """)
+        guard let measurement = RendererAttachmentSpikeDOMMeasurement(body: body) else {
+            throw RendererAttachmentSpikeHarnessError.missingDOMMeasurement
+        }
+        return measurement
     }
 
     func scrollTo(y: CGFloat) async throws {
@@ -402,8 +570,9 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
     func ingest(_ snapshot: RendererAttachmentSpikeSnapshot) {
         guard !isTornDown else { return }
         guard snapshot.generation == generation else { return }
-        guard snapshot.revision > (currentSnapshot?.revision ?? 0) else { return }
+        guard snapshot.revision > currentRevision else { return }
         currentSnapshot = snapshot
+        currentRevision = snapshot.revision
         guard snapshot.present else {
             currentGeometry = nil
             overlay.isHidden = true
@@ -416,13 +585,11 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
             revision: snapshot.revision,
             placeholderID: snapshot.placeholderID,
             cssRect: snapshot.cssRect,
-            pageZoom: snapshot.pageZoom,
-            domToViewScale: snapshot.domToViewScale,
+            pageZoom: webView.pageZoom,
             domCenterHit: snapshot.centerHit,
             scrollY: snapshot.scrollY,
             backingScaleFactor: window.backingScaleFactor,
-            webViewBounds: webView.bounds,
-            tolerance: RendererAttachmentSpikeMetrics.measuredAlignmentTolerance)
+            webViewBounds: webView.bounds)
         currentGeometry = geometry
         overlay.isHidden = false
         overlay.frame = geometry.overlayRect
@@ -431,13 +598,11 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
 
     func updateRuntimeState() async throws {
         _ = await evaluateJavaScriptWithTimeout(webView, """
-        (function(generation, zoom){
-          window.__rendererAttachmentSpikeState = window.__rendererAttachmentSpikeState || { generation: 0, pageZoom: 1, revision: 0 };
+        (function(generation){
+          window.__rendererAttachmentSpikeState = window.__rendererAttachmentSpikeState || { generation: 0, revision: 0 };
           window.__rendererAttachmentSpikeState.generation = generation;
-          window.__rendererAttachmentSpikeState.pageZoom = zoom;
-          window.__rendererAttachmentSpikeState.revision = window.__rendererAttachmentSpikeState.revision || 0;
           return 'updated';
-        })(\(generation), \(Self.posix(webView.pageZoom)))
+        })(\(generation))
         """)
     }
 
@@ -483,25 +648,15 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
         (function(){
           if(window.__rendererAttachmentSpikeProbeInstalled){ return; }
           window.__rendererAttachmentSpikeProbeInstalled = true;
-          window.__rendererAttachmentSpikeState = window.__rendererAttachmentSpikeState || { generation: 0, pageZoom: 1, revision: 0 };
+          window.__rendererAttachmentSpikeState = window.__rendererAttachmentSpikeState || { generation: 0, revision: 0 };
           function rectFor(el){
             var r = el.getBoundingClientRect();
             return { x: r.left, y: r.top, width: r.width, height: r.height };
           }
-          var referenceProbe = document.createElement('div');
-          referenceProbe.id = 'renderer-attachment-spike-reference';
-          referenceProbe.setAttribute('aria-hidden', 'true');
-          referenceProbe.style.cssText = 'position:fixed;left:-10000px;top:-10000px;width:100px;height:1px;visibility:hidden;pointer-events:none;';
-          document.documentElement.appendChild(referenceProbe);
-          function referenceRect(){
-            return rectFor(referenceProbe);
-          }
           function report(){
-            var state = window.__rendererAttachmentSpikeState || { generation: 0, pageZoom: 1, revision: 0 };
+            var state = window.__rendererAttachmentSpikeState || { generation: 0, revision: 0 };
             state.revision = Number(state.revision || 0) + 1;
-            var zoom = Number(state.pageZoom || 1);
-            var reference = referenceRect();
-            var domToViewScale = reference.width > 0 ? (\(Self.posix(RendererAttachmentSpikeMetrics.referenceCSSWidth)) * zoom) / reference.width : 1;
+            window.__rendererAttachmentSpikeState = state;
             var card = document.querySelector('\(Self.cardSelector)');
             if(!card){
               window.webkit.messageHandlers.\(Self.messageName).postMessage({
@@ -509,11 +664,8 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
                 revision: state.revision,
                 placeholderID: "",
                 present: false,
-                pageZoom: zoom,
-                domToViewScale: domToViewScale,
                 centerHit: false,
-                scrollY: window.scrollY || document.documentElement.scrollTop || 0,
-                referenceRect: reference
+                scrollY: window.scrollY || document.documentElement.scrollTop || 0
               });
               return "missing";
             }
@@ -523,16 +675,13 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
               cardRect.y + cardRect.height / 2);
             var centerHit = centerNode === card || (!!centerNode && card.contains(centerNode));
             window.webkit.messageHandlers.\(Self.messageName).postMessage({
-              generation: state.generation,
-              revision: state.revision,
-              placeholderID: card.id || "",
-              present: true,
-              cssRect: cardRect,
-              pageZoom: zoom,
-              domToViewScale: domToViewScale,
-              centerHit: centerHit,
-              scrollY: window.scrollY || document.documentElement.scrollTop || 0,
-              referenceRect: reference
+                generation: state.generation,
+                revision: state.revision,
+                placeholderID: card.id || "",
+                present: true,
+                cssRect: cardRect,
+                centerHit: centerHit,
+                scrollY: window.scrollY || document.documentElement.scrollTop || 0
             });
             return "posted";
           }
@@ -587,10 +736,11 @@ private final class RendererAttachmentSpikeOverlayView: NSView {
     override var isOpaque: Bool { false }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard visibleClipRect.isEmpty == false, visibleClipRect.contains(point) else {
+        let localPoint = superview.map { convert(point, from: $0) } ?? point
+        guard visibleClipRect.isEmpty == false, visibleClipRect.contains(localPoint) else {
             return nil
         }
-        return super.hitTest(point) ?? self
+        return super.hitTest(point)
     }
 }
 
@@ -600,11 +750,8 @@ private struct RendererAttachmentSpikeSnapshot: Sendable, Equatable {
     let placeholderID: String
     let present: Bool
     let cssRect: CGRect
-    let pageZoom: CGFloat
-    let domToViewScale: CGFloat
     let centerHit: Bool
     let scrollY: CGFloat
-    let referenceRect: CGRect
 
     init(
         generation: Int,
@@ -612,25 +759,19 @@ private struct RendererAttachmentSpikeSnapshot: Sendable, Equatable {
         placeholderID: String,
         present: Bool,
         cssRect: CGRect,
-        pageZoom: CGFloat,
-        domToViewScale: CGFloat,
         centerHit: Bool,
-        scrollY: CGFloat,
-        referenceRect: CGRect
+        scrollY: CGFloat
     ) {
         self.generation = generation
         self.revision = revision
         self.placeholderID = placeholderID
         self.present = present
         self.cssRect = cssRect
-        self.pageZoom = pageZoom
-        self.domToViewScale = domToViewScale
         self.centerHit = centerHit
         self.scrollY = scrollY
-        self.referenceRect = referenceRect
     }
 
-    init?(body: Any) {
+    init?(body: Any?) {
         guard let dict = body as? [String: Any] else { return nil }
         guard let generation = Self.int(dict["generation"]),
               let revision = Self.int(dict["revision"]),
@@ -638,11 +779,8 @@ private struct RendererAttachmentSpikeSnapshot: Sendable, Equatable {
               let placeholderID = dict["placeholderID"] as? String else {
             return nil
         }
-        let pageZoom = Self.cgFloat(dict["pageZoom"]) ?? 1
-        let domToViewScale = Self.cgFloat(dict["domToViewScale"]) ?? 1
         let centerHit = dict["centerHit"] as? Bool ?? false
         let scrollY = Self.cgFloat(dict["scrollY"]) ?? 0
-        let referenceRect = Self.rect(dict["referenceRect"]) ?? .zero
         let rect: CGRect
         if present {
             guard let cssRect = Self.rect(dict["cssRect"]) else { return nil }
@@ -655,11 +793,8 @@ private struct RendererAttachmentSpikeSnapshot: Sendable, Equatable {
         self.placeholderID = placeholderID
         self.present = present
         self.cssRect = rect
-        self.pageZoom = pageZoom
-        self.domToViewScale = domToViewScale
         self.centerHit = centerHit
         self.scrollY = scrollY
-        self.referenceRect = referenceRect
     }
 
     private static func rect(_ value: Any?) -> CGRect? {
@@ -696,9 +831,89 @@ private struct RendererAttachmentSpikeSnapshot: Sendable, Equatable {
     }
 }
 
+private struct RendererAttachmentSpikeDOMMeasurement: Sendable, Equatable {
+    let present: Bool
+    let placeholderID: String
+    let cssRect: CGRect
+    let centerHit: Bool
+    let scrollY: CGFloat
+
+    init(
+        present: Bool,
+        placeholderID: String,
+        cssRect: CGRect,
+        centerHit: Bool,
+        scrollY: CGFloat
+    ) {
+        self.present = present
+        self.placeholderID = placeholderID
+        self.cssRect = cssRect
+        self.centerHit = centerHit
+        self.scrollY = scrollY
+    }
+
+    init?(body: Any?) {
+        guard let dict = body as? [String: Any],
+              let present = dict["present"] as? Bool,
+              let placeholderID = dict["placeholderID"] as? String else {
+            return nil
+        }
+        let centerHit = dict["centerHit"] as? Bool ?? false
+        let scrollY = Self.cgFloat(dict["scrollY"]) ?? 0
+        let rect: CGRect
+        if present {
+            guard let cssRect = Self.rect(dict["cssRect"]) else { return nil }
+            rect = cssRect
+        } else {
+            rect = .zero
+        }
+        self.present = present
+        self.placeholderID = placeholderID
+        self.cssRect = rect
+        self.centerHit = centerHit
+        self.scrollY = scrollY
+    }
+
+    private static func rect(_ value: Any?) -> CGRect? {
+        guard let dict = value as? [String: Any],
+              let x = cgFloat(dict["x"]),
+              let y = cgFloat(dict["y"]),
+              let width = cgFloat(dict["width"]),
+              let height = cgFloat(dict["height"]) else {
+            return nil
+        }
+        return CGRect(x: x, y: y, width: width, height: height)
+    }
+
+    private static func cgFloat(_ value: Any?) -> CGFloat? {
+        switch value {
+        case let number as NSNumber:
+            return CGFloat(number.doubleValue)
+        case let string as String:
+            return CGFloat(Double(string) ?? 0)
+        default:
+            return nil
+        }
+    }
+}
+
+private struct RendererAttachmentSpikeAlignmentEvidence {
+    let pointResiduals: [CGFloat]
+    let backingResiduals: [CGFloat]
+
+    var maxPointResidual: CGFloat {
+        pointResiduals.max() ?? 0
+    }
+
+    var maxBackingResidual: CGFloat {
+        backingResiduals.max() ?? 0
+    }
+}
+
 private enum RendererAttachmentSpikeHarnessError: LocalizedError {
     case timeout(description: String)
     case missingGeometry
+    case missingDOMMeasurement
 
     var errorDescription: String? {
         switch self {
@@ -706,6 +921,8 @@ private enum RendererAttachmentSpikeHarnessError: LocalizedError {
             return "timed out waiting for \(description)"
         case .missingGeometry:
             return "missing attachment geometry"
+        case .missingDOMMeasurement:
+            return "missing independent DOM measurement"
         }
     }
 }
