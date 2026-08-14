@@ -573,6 +573,30 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// CAS-moves) that databases at every intermediate version depend on running
     /// in order. The `if version < N` guards keep a re-open idempotent.
     private func migrate(from version: inout Int, in db: Database) throws {
+        // PRE-FLIGHT (issue: FTS5 desync blocks the ladder). Drop the dead FTS5
+        // objects BEFORE any step runs, not at v37→v38 where the drop used to
+        // live.
+        //
+        // `pages_fts` is an external-content FTS5 index over `pages`. Its
+        // `pages_fts_au` trigger issues an FTS `'delete'` with the OLD row
+        // values; when the index rows do not match the content table, FTS5
+        // raises `SQLITE_CORRUPT` ("database disk image is malformed") — even
+        // though `PRAGMA integrity_check` says `ok` and no page content is
+        // damaged. Before #634 an on-open `rebuildFTS()` resynced the index and
+        // hid the desync; #634 removed that rebuild but left this v13 step
+        // creating the triggers and the v37→v38 step dropping them, so every
+        // ladder step BETWEEN those two now runs with a live, unrepaired
+        // trigger. Any such step that writes `pages` dies, the `user_version`
+        // stamp never lands, and the wiki is unopenable — `migrateV22ToV23`
+        // (the `[[…]]` canonicalize sweep) is the one that fires in practice.
+        //
+        // Dropping first is safe and loses nothing: post-#634 Tantivy is the
+        // sole BM25 leg and NOTHING reads these tables — the v37→v38 step would
+        // drop them a few steps later anyway. All statements are `IF EXISTS`,
+        // so this is a no-op for a DB that never had them. The v12→v13 step
+        // below no longer re-creates them, which is what keeps a DB entering
+        // the ladder below v13 FTS-free the whole way up.
+        try Self.dropFTS5TablesAndTriggers(in: db)
 
         // Step 0 → 1: the original v0 schema — pages, the unique slug index,
         // attachments, page_links. UNCHANGED from the v0 cut.
@@ -843,11 +867,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
         // v12 → v13: FTS5/BM25 full-text search over title + body.
         // HISTORICAL: this step shipped FTS5 (phase 1 of the original search
-        // stack). #634 dropped FTS5 — the v37→v38 migration step now `DROP`s
-        // these tables + triggers on existing DBs, and `createFreshSchema`
-        // never creates them. The historical step is preserved verbatim so a
-        // DB at v12 follows the proven upgrade path; the v38 cleanup then
-        // takes them away cleanly. The prose below describes the historical
+        // stack). #634 dropped FTS5 — the ladder's pre-flight `DROP`s these
+        // tables + triggers on existing DBs, and `createFreshSchema` never
+        // creates them. The prose below describes the historical
         // intent — FTS5 is GONE post-#634 (Tantivy is the sole BM25 leg), and
         // the semantic cosine leg is now Swift-side (`VectorCosine`,
         // issue #628). `RankFusion.rrf` fuses the two legs unchanged.
@@ -867,66 +889,30 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         // renameSource via upsertSourceSearch(). The trigger kept sources_fts
         // in sync; deleting a source cascaded to source_search (FK ON DELETE
         // CASCADE) whose trigger removed the FTS row.
+        //
+        // POST-#634 the FTS5 half of this step is GONE (it used to create
+        // `pages_fts` / `sources_fts` + their six AFTER INSERT/UPDATE/DELETE
+        // triggers here). Creating them was not merely wasted work — it was
+        // actively harmful: a freshly-created external-content FTS5 index is
+        // EMPTY, so the first later ladder step to write `pages` fires
+        // `pages_fts_au`, whose FTS `'delete'` finds no matching index row and
+        // raises `SQLITE_CORRUPT`. The `rebuildFTS()` that used to backfill the
+        // index right after this step went away with #634, so a DB entering the
+        // ladder at v12 or below would break exactly like the already-desynced
+        // v17/v22 DBs this fix targets. `createChatSearchTables` had its
+        // `chats_fts` half removed for the same reason; this is that change
+        // applied to the pages/sources half.
+        //
+        // What remains is `source_search`, which is NOT derived FTS state: it
+        // is an ordinary content sidecar still written by `upsertSourceSearch`
+        // / `renameSource`, so it must keep being created here.
         if version < 13 {
-            try db.execute(sql: """
-            CREATE VIRTUAL TABLE pages_fts USING fts5(
-                title, body_markdown,
-                content='pages', content_rowid='rowid',
-                tokenize='porter');
-            """)
-            try db.execute(sql: """
-            CREATE TRIGGER pages_fts_ai AFTER INSERT ON pages BEGIN
-              INSERT INTO pages_fts(rowid, title, body_markdown)
-                VALUES (new.rowid, new.title, new.body_markdown);
-            END;
-            """)
-            try db.execute(sql: """
-            CREATE TRIGGER pages_fts_ad AFTER DELETE ON pages BEGIN
-              INSERT INTO pages_fts(pages_fts, rowid, title, body_markdown)
-                VALUES ('delete', old.rowid, old.title, old.body_markdown);
-            END;
-            """)
-            try db.execute(sql: """
-            CREATE TRIGGER pages_fts_au AFTER UPDATE ON pages BEGIN
-              INSERT INTO pages_fts(pages_fts, rowid, title, body_markdown)
-                VALUES ('delete', old.rowid, old.title, old.body_markdown);
-              INSERT INTO pages_fts(rowid, title, body_markdown)
-                VALUES (new.rowid, new.title, new.body_markdown);
-            END;
-            """)
-
             try db.execute(sql: """
             CREATE TABLE source_search (
                 source_id TEXT PRIMARY KEY REFERENCES sources(id) ON DELETE CASCADE,
                 title     TEXT NOT NULL,
                 body      TEXT NOT NULL
             );
-            """)
-            try db.execute(sql: """
-            CREATE VIRTUAL TABLE sources_fts USING fts5(
-                title, body,
-                content='source_search', content_rowid='rowid',
-                tokenize='porter');
-            """)
-            try db.execute(sql: """
-            CREATE TRIGGER sources_fts_ai AFTER INSERT ON source_search BEGIN
-              INSERT INTO sources_fts(rowid, title, body)
-                VALUES (new.rowid, new.title, new.body);
-            END;
-            """)
-            try db.execute(sql: """
-            CREATE TRIGGER sources_fts_ad AFTER DELETE ON source_search BEGIN
-              INSERT INTO sources_fts(sources_fts, rowid, title, body)
-                VALUES ('delete', old.rowid, old.title, old.body);
-            END;
-            """)
-            try db.execute(sql: """
-            CREATE TRIGGER sources_fts_au AFTER UPDATE ON source_search BEGIN
-              INSERT INTO sources_fts(sources_fts, rowid, title, body)
-                VALUES ('delete', old.rowid, old.title, old.body);
-              INSERT INTO sources_fts(rowid, title, body)
-                VALUES (new.rowid, new.title, new.body);
-            END;
             """)
             try db.execute(sql: "PRAGMA user_version = 13;")
             version = 13
@@ -1258,6 +1244,13 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         // `DROP TRIGGER IF EXISTS` so a fresh-DB forced through the ladder (which
         // never created them at v13/v28) is a no-op. Mirrors the SQLiteWikiStore
         // ladder's v37→v38 step.
+        //
+        // In practice this is now a NO-OP: the ladder's pre-flight already ran
+        // the same drop before step 1, because a desynced `pages_fts` made the
+        // steps between v13 and here unrunnable (see the pre-flight comment).
+        // It is kept so the step keeps its historical shape and so the version
+        // stamp still lands, and because it is the catch-all fallback's drop
+        // too — do NOT delete it.
         if version < 38 {
             try Self.dropFTS5TablesAndTriggers(in: db)
             try db.execute(sql: "PRAGMA user_version = 38;")
