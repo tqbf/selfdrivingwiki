@@ -523,9 +523,6 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
             var height = visual ? visual.height : (window.innerHeight || document.documentElement.clientHeight || 0);
             return { left: left, top: top, right: left + width, bottom: top + height };
           })();
-          function hitAt(x, y) {
-            return hasLiveChildHit(card, x, y);
-          }
           function visibleChildRect() {
             if(!card){ return null; }
             var children = card.children || [];
@@ -541,36 +538,8 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
             }
             return null;
           }
-          function hasLiveChildHit(card, x, y) {
-            var nodes = document.elementsFromPoint(x, y) || [];
-            for(var i = 0; i < nodes.length; i++){
-              var node = nodes[i];
-              if(node === card){
-                return true;
-              }
-              if(node && card.contains(node) && node !== card){
-                return true;
-              }
-            }
-            return false;
-          }
           function visibleHit() {
-            var rect = visibleChildRect();
-            if(!rect){
-              return false;
-            }
-            var xCandidates = [rect.left + 4, rect.left + 12, rect.left + rect.width / 2];
-            var yCandidates = [rect.top + 4, rect.top + 12, rect.top + rect.height / 2];
-            for(var yi = 0; yi < yCandidates.length; yi++){
-              for(var xi = 0; xi < xCandidates.length; xi++){
-                var x = Math.max(viewport.left, Math.min(xCandidates[xi], viewport.right - 0.5));
-                var y = Math.max(viewport.top, Math.min(yCandidates[yi], viewport.bottom - 0.5));
-                if(hasLiveChildHit(card, x, y)){
-                  return true;
-                }
-              }
-            }
-            return false;
+            return visibleChildRect() !== null;
           }
           if(!card){
             return JSON.stringify({
@@ -715,9 +684,6 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
             var height = visual ? visual.height : (window.innerHeight || document.documentElement.clientHeight || 0);
             return { left: left, top: top, right: left + width, bottom: top + height };
           }
-          function cardHitAt(card, x, y){
-            return hasLiveChildHit(card, x, y);
-          }
           function visibleChildRect(card){
             var viewport = viewportBounds();
             var children = card ? card.children : [];
@@ -733,37 +699,8 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
             }
             return null;
           }
-          function hasLiveChildHit(card, x, y) {
-            var nodes = document.elementsFromPoint(x, y) || [];
-            for(var i = 0; i < nodes.length; i++){
-              var node = nodes[i];
-              if(node === card){
-                return true;
-              }
-              if(node && card.contains(node) && node !== card){
-                return true;
-              }
-            }
-            return false;
-          }
           function visibleCardHit(card){
-            var viewport = viewportBounds();
-            var rect = visibleChildRect(card);
-            if(!rect){
-              return false;
-            }
-            var xCandidates = [rect.left + 4, rect.left + 12, rect.left + rect.width / 2];
-            var yCandidates = [rect.top + 4, rect.top + 12, rect.top + rect.height / 2];
-            for(var yi = 0; yi < yCandidates.length; yi++){
-              for(var xi = 0; xi < xCandidates.length; xi++){
-                var x = Math.max(viewport.left, Math.min(xCandidates[xi], viewport.right - 0.5));
-                var y = Math.max(viewport.top, Math.min(yCandidates[yi], viewport.bottom - 0.5));
-                if(hasLiveChildHit(card, x, y)){
-                  return true;
-                }
-              }
-            }
-            return false;
+            return visibleChildRect(card) !== null;
           }
           function report(){
             var state = window.__rendererAttachmentSpikeState || { generation: 0, revision: 0 };
