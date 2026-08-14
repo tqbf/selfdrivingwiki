@@ -516,12 +516,10 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
           var card = document.querySelector('\(Self.cardSelector)');
           var scrollY = window.scrollY || document.documentElement.scrollTop || 0;
           var viewport = (function(){
-            var visual = window.visualViewport;
-            var left = visual ? visual.offsetLeft : 0;
-            var top = visual ? visual.offsetTop : 0;
-            var width = visual ? visual.width : (window.innerWidth || document.documentElement.clientWidth || 0);
-            var height = visual ? visual.height : (window.innerHeight || document.documentElement.clientHeight || 0);
-            return { left: left, top: top, right: left + width, bottom: top + height };
+            var docEl = document.documentElement;
+            var width = (docEl && docEl.clientWidth) || window.innerWidth || 0;
+            var height = (docEl && docEl.clientHeight) || window.innerHeight || 0;
+            return { left: 0, top: 0, right: width, bottom: height };
           })();
           function visibleCardRect() {
             if(!card){ return null; }
@@ -674,12 +672,10 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
             return { x: r.left, y: r.top, width: r.width, height: r.height };
           }
           function viewportBounds(){
-            var visual = window.visualViewport;
-            var left = visual ? visual.offsetLeft : 0;
-            var top = visual ? visual.offsetTop : 0;
-            var width = visual ? visual.width : (window.innerWidth || document.documentElement.clientWidth || 0);
-            var height = visual ? visual.height : (window.innerHeight || document.documentElement.clientHeight || 0);
-            return { left: left, top: top, right: left + width, bottom: top + height };
+            var docEl = document.documentElement;
+            var width = (docEl && docEl.clientWidth) || window.innerWidth || 0;
+            var height = (docEl && docEl.clientHeight) || window.innerHeight || 0;
+            return { left: 0, top: 0, right: width, bottom: height };
           }
           function visibleCardRect(card){
             var viewport = viewportBounds();
