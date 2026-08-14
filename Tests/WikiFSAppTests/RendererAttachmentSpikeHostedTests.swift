@@ -524,42 +524,53 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
             return { left: left, top: top, right: left + width, bottom: top + height };
           })();
           function hitAt(x, y) {
-            var rect = paintedTextRect();
-            return !!rect && x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+            return hasLiveChildHit(card, x, y);
           }
-          function paintedTextRect() {
+          function visibleChildRect() {
             if(!card){ return null; }
-            var walker = document.createTreeWalker(card, NodeFilter.SHOW_TEXT);
-            while(walker.nextNode()){
-              var textNode = walker.currentNode;
-              if(!textNode || !textNode.textContent || !textNode.textContent.trim()){
-                continue;
-              }
-              var range = document.createRange();
-              range.selectNodeContents(textNode);
-              var rects = range.getClientRects();
-              for(var i = 0; i < rects.length; i++){
-                var rect = rects[i];
-                var left = Math.max(rect.left, viewport.left);
-                var top = Math.max(rect.top, viewport.top);
-                var right = Math.min(rect.right, viewport.right);
-                var bottom = Math.min(rect.bottom, viewport.bottom);
-                if(right > left && bottom > top){
-                  return rect;
-                }
+            var children = card.children || [];
+            for(var i = 0; i < children.length; i++){
+              var rect = children[i].getBoundingClientRect();
+              var left = Math.max(rect.left, viewport.left);
+              var top = Math.max(rect.top, viewport.top);
+              var right = Math.min(rect.right, viewport.right);
+              var bottom = Math.min(rect.bottom, viewport.bottom);
+              if(right > left && bottom > top){
+                return rect;
               }
             }
             return null;
           }
+          function hasLiveChildHit(card, x, y) {
+            var nodes = document.elementsFromPoint(x, y) || [];
+            for(var i = 0; i < nodes.length; i++){
+              var node = nodes[i];
+              if(node === card){
+                return true;
+              }
+              if(node && card.contains(node) && node !== card){
+                return true;
+              }
+            }
+            return false;
+          }
           function visibleHit() {
-            var textRect = paintedTextRect();
-            if(!textRect){
+            var rect = visibleChildRect();
+            if(!rect){
               return false;
             }
-            return textRect.right > viewport.left &&
-                   textRect.left < viewport.right &&
-                   textRect.bottom > viewport.top &&
-                   textRect.top < viewport.bottom;
+            var xCandidates = [rect.left + 4, rect.left + 12, rect.left + rect.width / 2];
+            var yCandidates = [rect.top + 4, rect.top + 12, rect.top + rect.height / 2];
+            for(var yi = 0; yi < yCandidates.length; yi++){
+              for(var xi = 0; xi < xCandidates.length; xi++){
+                var x = Math.max(viewport.left, Math.min(xCandidates[xi], viewport.right - 0.5));
+                var y = Math.max(viewport.top, Math.min(yCandidates[yi], viewport.bottom - 0.5));
+                if(hasLiveChildHit(card, x, y)){
+                  return true;
+                }
+              }
+            }
+            return false;
           }
           if(!card){
             return JSON.stringify({
@@ -705,43 +716,54 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
             return { left: left, top: top, right: left + width, bottom: top + height };
           }
           function cardHitAt(card, x, y){
-            var rect = paintedTextRect(card);
-            return !!rect && x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+            return hasLiveChildHit(card, x, y);
           }
-          function paintedTextRect(card){
+          function visibleChildRect(card){
             var viewport = viewportBounds();
-            var walker = document.createTreeWalker(card, NodeFilter.SHOW_TEXT);
-            while(walker.nextNode()){
-              var textNode = walker.currentNode;
-              if(!textNode || !textNode.textContent || !textNode.textContent.trim()){
-                continue;
-              }
-              var range = document.createRange();
-              range.selectNodeContents(textNode);
-              var rects = range.getClientRects();
-              for(var i = 0; i < rects.length; i++){
-                var rect = rects[i];
-                var left = Math.max(rect.left, viewport.left);
-                var top = Math.max(rect.top, viewport.top);
-                var right = Math.min(rect.right, viewport.right);
-                var bottom = Math.min(rect.bottom, viewport.bottom);
-                if(right > left && bottom > top){
-                  return rect;
-                }
+            var children = card ? card.children : [];
+            for(var i = 0; i < children.length; i++){
+              var rect = children[i].getBoundingClientRect();
+              var left = Math.max(rect.left, viewport.left);
+              var top = Math.max(rect.top, viewport.top);
+              var right = Math.min(rect.right, viewport.right);
+              var bottom = Math.min(rect.bottom, viewport.bottom);
+              if(right > left && bottom > top){
+                return rect;
               }
             }
             return null;
           }
+          function hasLiveChildHit(card, x, y) {
+            var nodes = document.elementsFromPoint(x, y) || [];
+            for(var i = 0; i < nodes.length; i++){
+              var node = nodes[i];
+              if(node === card){
+                return true;
+              }
+              if(node && card.contains(node) && node !== card){
+                return true;
+              }
+            }
+            return false;
+          }
           function visibleCardHit(card){
             var viewport = viewportBounds();
-            var textRect = paintedTextRect(card);
-            if(!textRect){
+            var rect = visibleChildRect(card);
+            if(!rect){
               return false;
             }
-            return textRect.right > viewport.left &&
-                   textRect.left < viewport.right &&
-                   textRect.bottom > viewport.top &&
-                   textRect.top < viewport.bottom;
+            var xCandidates = [rect.left + 4, rect.left + 12, rect.left + rect.width / 2];
+            var yCandidates = [rect.top + 4, rect.top + 12, rect.top + rect.height / 2];
+            for(var yi = 0; yi < yCandidates.length; yi++){
+              for(var xi = 0; xi < xCandidates.length; xi++){
+                var x = Math.max(viewport.left, Math.min(xCandidates[xi], viewport.right - 0.5));
+                var y = Math.max(viewport.top, Math.min(yCandidates[yi], viewport.bottom - 0.5));
+                if(hasLiveChildHit(card, x, y)){
+                  return true;
+                }
+              }
+            }
+            return false;
           }
           function report(){
             var state = window.__rendererAttachmentSpikeState || { generation: 0, revision: 0 };
