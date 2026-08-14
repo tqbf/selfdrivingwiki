@@ -523,23 +523,20 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
             var height = visual ? visual.height : (window.innerHeight || document.documentElement.clientHeight || 0);
             return { left: left, top: top, right: left + width, bottom: top + height };
           })();
-          function visibleChildRect() {
+          function visibleCardRect() {
             if(!card){ return null; }
-            var children = card.children || [];
-            for(var i = 0; i < children.length; i++){
-              var rect = children[i].getBoundingClientRect();
-              var left = Math.max(rect.left, viewport.left);
-              var top = Math.max(rect.top, viewport.top);
-              var right = Math.min(rect.right, viewport.right);
-              var bottom = Math.min(rect.bottom, viewport.bottom);
-              if(right > left && bottom > top){
-                return rect;
-              }
+            var rect = card.getBoundingClientRect();
+            var left = Math.max(rect.left, viewport.left);
+            var top = Math.max(rect.top, viewport.top);
+            var right = Math.min(rect.right, viewport.right);
+            var bottom = Math.min(rect.bottom, viewport.bottom);
+            if(right > left && bottom > top){
+              return rect;
             }
             return null;
           }
           function visibleHit() {
-            return visibleChildRect() !== null;
+            return visibleCardRect() !== null;
           }
           if(!card){
             return JSON.stringify({
@@ -684,23 +681,21 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
             var height = visual ? visual.height : (window.innerHeight || document.documentElement.clientHeight || 0);
             return { left: left, top: top, right: left + width, bottom: top + height };
           }
-          function visibleChildRect(card){
+          function visibleCardRect(card){
             var viewport = viewportBounds();
-            var children = card ? card.children : [];
-            for(var i = 0; i < children.length; i++){
-              var rect = children[i].getBoundingClientRect();
-              var left = Math.max(rect.left, viewport.left);
-              var top = Math.max(rect.top, viewport.top);
-              var right = Math.min(rect.right, viewport.right);
-              var bottom = Math.min(rect.bottom, viewport.bottom);
-              if(right > left && bottom > top){
-                return rect;
-              }
+            if(!card){ return null; }
+            var rect = card.getBoundingClientRect();
+            var left = Math.max(rect.left, viewport.left);
+            var top = Math.max(rect.top, viewport.top);
+            var right = Math.min(rect.right, viewport.right);
+            var bottom = Math.min(rect.bottom, viewport.bottom);
+            if(right > left && bottom > top){
+              return rect;
             }
             return null;
           }
           function visibleCardHit(card){
-            return visibleChildRect(card) !== null;
+            return visibleCardRect(card) !== null;
           }
           function report(){
             var state = window.__rendererAttachmentSpikeState || { generation: 0, revision: 0 };
