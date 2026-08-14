@@ -533,34 +533,29 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
             }
             return false;
           }
-          function visibleHit(rect) {
-            var left = Math.max(rect.left, viewport.left);
-            var top = Math.max(rect.top, viewport.top);
-            var right = Math.min(rect.right, viewport.right);
-            var bottom = Math.min(rect.bottom, viewport.bottom);
-            if(!(right > left && bottom > top)){
-              return false;
-            }
-            var xCandidates = [
-              left + (right - left) / 2,
-              left + 1,
-              right - 1
-            ];
-            var yCandidates = [
-              top + (bottom - top) / 2,
-              top + 1,
-              bottom - 1
-            ];
-            for(var yi = 0; yi < yCandidates.length; yi++){
-              for(var xi = 0; xi < xCandidates.length; xi++){
-                var x = Math.max(viewport.left, Math.min(xCandidates[xi], viewport.right - 0.5));
-                var y = Math.max(viewport.top, Math.min(yCandidates[yi], viewport.bottom - 0.5));
-                if(hitAt(x, y)){
-                  return true;
-                }
+          function visibleChildRect() {
+            if(!card){ return null; }
+            var children = card.children || [];
+            for(var i = 0; i < children.length; i++){
+              var childRect = children[i].getBoundingClientRect();
+              var left = Math.max(childRect.left, viewport.left);
+              var top = Math.max(childRect.top, viewport.top);
+              var right = Math.min(childRect.right, viewport.right);
+              var bottom = Math.min(childRect.bottom, viewport.bottom);
+              if(right > left && bottom > top){
+                return childRect;
               }
             }
-            return false;
+            return null;
+          }
+          function visibleHit() {
+            var childRect = visibleChildRect();
+            if(!childRect){
+              return false;
+            }
+            var x = Math.max(viewport.left, Math.min(childRect.left + childRect.width / 2, viewport.right - 0.5));
+            var y = Math.max(viewport.top, Math.min(childRect.top + childRect.height / 2, viewport.bottom - 0.5));
+            return hitAt(x, y);
           }
           if(!card){
             return JSON.stringify({
@@ -575,7 +570,7 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
             present: true,
             placeholderID: card.id || "",
             cssRect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
-            centerHit: visibleHit(rect),
+            centerHit: visibleHit(),
             scrollY: scrollY
           });
         })()
@@ -715,27 +710,30 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
             }
             return false;
           }
-          function visibleCardHit(card, rect){
+          function visibleChildRect(card){
             var viewport = viewportBounds();
-            var left = Math.max(rect.left, viewport.left);
-            var top = Math.max(rect.top, viewport.top);
-            var right = Math.min(rect.right, viewport.right);
-            var bottom = Math.min(rect.bottom, viewport.bottom);
-            if(!(right > left && bottom > top)){
-              return false;
-            }
-            var xCandidates = [left + (right - left) / 2, left + 1, right - 1];
-            var yCandidates = [top + (bottom - top) / 2, top + 1, bottom - 1];
-            for(var yi = 0; yi < yCandidates.length; yi++){
-              for(var xi = 0; xi < xCandidates.length; xi++){
-                var x = Math.max(viewport.left, Math.min(xCandidates[xi], viewport.right - 0.5));
-                var y = Math.max(viewport.top, Math.min(yCandidates[yi], viewport.bottom - 0.5));
-                if(cardHitAt(card, x, y)){
-                  return true;
-                }
+            var children = card ? card.children : [];
+            for(var i = 0; i < children.length; i++){
+              var childRect = children[i].getBoundingClientRect();
+              var left = Math.max(childRect.left, viewport.left);
+              var top = Math.max(childRect.top, viewport.top);
+              var right = Math.min(childRect.right, viewport.right);
+              var bottom = Math.min(childRect.bottom, viewport.bottom);
+              if(right > left && bottom > top){
+                return childRect;
               }
             }
-            return false;
+            return null;
+          }
+          function visibleCardHit(card){
+            var viewport = viewportBounds();
+            var childRect = visibleChildRect(card);
+            if(!childRect){
+              return false;
+            }
+            var x = Math.max(viewport.left, Math.min(childRect.left + childRect.width / 2, viewport.right - 0.5));
+            var y = Math.max(viewport.top, Math.min(childRect.top + childRect.height / 2, viewport.bottom - 0.5));
+            return cardHitAt(card, x, y);
           }
           function report(){
             var state = window.__rendererAttachmentSpikeState || { generation: 0, revision: 0 };
@@ -760,7 +758,7 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
                 placeholderID: card.id || "",
                 present: true,
                 cssRect: cardRect,
-                centerHit: visibleCardHit(card, cardRect),
+                centerHit: visibleCardHit(card),
                 scrollY: window.scrollY || document.documentElement.scrollTop || 0
             });
             return "posted";
