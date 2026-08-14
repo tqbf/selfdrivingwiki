@@ -74,8 +74,19 @@ The symptom misleads. The same binary resolves every wiki when called by its
 bundle path. It reports `no wiki matching <id> in the registry` when called
 through the symlink.
 
-`executableDir` now resolves symlinks first. A PATH shim behaves the same as the
+`WikiIdentifiers` now searches two candidate directories: the invoked directory
+first, then the symlink-resolved directory. A PATH shim behaves the same as the
 in-bundle path, and no `WIKI_APP_GROUP_ID` override is needed.
+
+The change is additive on purpose. The invoked directory keeps its priority, so
+a sidecar placed beside a shim still wins. A resolve-only fix would search the
+target directory instead of the shim directory and would silently ignore that
+config.
+
+This approach comes from the earlier branch `fix/wikictl-symlink-app-group`
+(commit 1b38c343, 2026-07-18), which diagnosed the same bug. That branch predates
+the `.app`-ancestor sidecar candidate that #887 added, so this work applies the
+same idea to the current three-candidate lookup.
 
 This also removes `signing/wikictl.entitlements`. No build step referenced it.
 `build.sh` states that `wikictl` needs no entitlements. The file also held a
@@ -85,14 +96,15 @@ sent the first diagnosis toward a missing entitlement.
 ## Verification
 
 - `make build` — clean.
-- `make test` — 3280 tests in 296 suites pass.
+- `make test` — 3282 tests in 296 suites pass.
 - `Tests/WikiFSTests/FTS5DesyncMigrationTests.swift` — 7 new tests. They stage a
   desynced `pages_fts` on a database rewound to v22 and to v17, then check the
   ladder finishes, the page content survives, no FTS5 object remains, and a
   reopen is a no-op. One test pins the hazard itself. It shows that a new empty
   external-content index makes the next `UPDATE pages` raise `SQLITE_CORRUPT`.
-- `Tests/WikiFSTests/WikiIdentifiersSymlinkTests.swift` — 5 new tests. They cover
-  a single symlink, a symlink chain, a plain executable, a missing path, and the
+- `Tests/WikiFSTests/WikiIdentifiersSymlinkTests.swift` — 7 new tests. They cover
+  a single symlink, invoked-before-resolved priority, a symlink chain, a plain
+  executable, a symlinked parent directory, a missing path, and the
   enclosing-`.app` walk that the bundled `wikictl` and the `wikid.xpc` daemon
   use.
 - Checked against real data. A read-only `VACUUM INTO` snapshot of the OAuth2
