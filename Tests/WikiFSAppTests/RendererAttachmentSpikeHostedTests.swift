@@ -101,7 +101,7 @@ struct RendererAttachmentSpikeHostedTests {
             harness.containerView.layoutSubtreeIfNeeded()
             try await harness.publishGeometry()
             let resized = try harness.requireGeometry()
-            let resizedSnapshot = try #require(harness.currentSnapshot)
+            _ = try #require(harness.currentSnapshot)
             let resizedMeasurement = try await harness.measureDOMGeometry()
             alignmentEvidences.append(Self.alignmentEvidence(
                 harness.overlay.frame,
