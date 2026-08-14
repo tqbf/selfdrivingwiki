@@ -524,15 +524,8 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
             return { left: left, top: top, right: left + width, bottom: top + height };
           })();
           function hitAt(x, y) {
-            var position = document.caretPositionFromPoint
-              ? document.caretPositionFromPoint(x, y)
-              : (document.caretRangeFromPoint ? document.caretRangeFromPoint(x, y) : null);
-            var node = position && position.offsetNode
-              ? position.offsetNode
-              : (position && position.startContainer ? position.startContainer : null);
-            if(!node){ return false; }
-            if(node.nodeType === Node.TEXT_NODE){ node = node.parentNode; }
-            return !!node && (node === card || card.contains(node));
+            var rect = paintedTextRect();
+            return !!rect && x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
           }
           function paintedTextRect() {
             if(!card){ return null; }
@@ -563,9 +556,10 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
             if(!textRect){
               return false;
             }
-            var x = Math.max(viewport.left, Math.min(textRect.left + textRect.width / 2, viewport.right - 0.5));
-            var y = Math.max(viewport.top, Math.min(textRect.top + textRect.height / 2, viewport.bottom - 0.5));
-            return hitAt(x, y);
+            return textRect.right > viewport.left &&
+                   textRect.left < viewport.right &&
+                   textRect.bottom > viewport.top &&
+                   textRect.top < viewport.bottom;
           }
           if(!card){
             return JSON.stringify({
@@ -711,15 +705,8 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
             return { left: left, top: top, right: left + width, bottom: top + height };
           }
           function cardHitAt(card, x, y){
-            var position = document.caretPositionFromPoint
-              ? document.caretPositionFromPoint(x, y)
-              : (document.caretRangeFromPoint ? document.caretRangeFromPoint(x, y) : null);
-            var node = position && position.offsetNode
-              ? position.offsetNode
-              : (position && position.startContainer ? position.startContainer : null);
-            if(!node){ return false; }
-            if(node.nodeType === Node.TEXT_NODE){ node = node.parentNode; }
-            return !!node && (node === card || card.contains(node));
+            var rect = paintedTextRect(card);
+            return !!rect && x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
           }
           function paintedTextRect(card){
             var viewport = viewportBounds();
@@ -751,9 +738,10 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
             if(!textRect){
               return false;
             }
-            var x = Math.max(viewport.left, Math.min(textRect.left + textRect.width / 2, viewport.right - 0.5));
-            var y = Math.max(viewport.top, Math.min(textRect.top + textRect.height / 2, viewport.bottom - 0.5));
-            return cardHitAt(card, x, y);
+            return textRect.right > viewport.left &&
+                   textRect.left < viewport.right &&
+                   textRect.bottom > viewport.top &&
+                   textRect.top < viewport.bottom;
           }
           function report(){
             var state = window.__rendererAttachmentSpikeState || { generation: 0, revision: 0 };
