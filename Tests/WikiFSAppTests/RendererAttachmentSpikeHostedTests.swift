@@ -74,6 +74,17 @@ struct RendererAttachmentSpikeHostedTests {
                 expectedCenterHit: true,
                 expectedFullyInsideLayoutViewport: true,
                 stage: "initial iteration \(iteration)")
+            #expect(initialMeasurement.centerHit)
+            let occluderResult = try await harness.installDOMOccluder()
+            #expect(occluderResult == "installed")
+            try await harness.publishGeometry()
+            let occludedMeasurement = try await harness.measureDOMGeometry()
+            #expect(occludedMeasurement.centerHit == false)
+            let removalResult = try await harness.removeDOMOccluder()
+            #expect(removalResult == "removed")
+            try await harness.publishGeometry()
+            let restoredMeasurement = try await harness.measureDOMGeometry()
+            #expect(restoredMeasurement.centerHit)
             let initialAccessibility = try await harness.measureDOMAccessibility()
             Self.assertAutomatedAccessibilityEvidence(
                 overlay: harness.overlay,
@@ -264,15 +275,10 @@ struct RendererAttachmentSpikeHostedTests {
             let insideWindowPoint = harness.overlay.convert(insidePoint, to: harness.containerView)
             let outsideWindowPoint = harness.overlay.convert(outsidePoint, to: harness.containerView)
 
-            let occluderResult = try await harness.installDOMOccluder()
-            #expect(occluderResult == "installed")
-            try await harness.publishGeometry()
-            let occludedMeasurement = try await harness.measureDOMGeometry()
-            #expect(occludedMeasurement.centerHit == false)
+            // Phase 3 demonstrates clip-based hit relinquishment. Phase 4 owns
+            // the policy that maps DOM occlusion into an overlay clip.
             harness.overlay.visibleClipRect = .zero
             #expect(harness.overlay.hitTest(insideWindowPoint) == nil)
-            let removalResult = try await harness.removeDOMOccluder()
-            #expect(removalResult == "removed")
             try await harness.publishGeometry()
 
             let routedInside = harness.containerView.hitTest(insideWindowPoint)
@@ -538,7 +544,7 @@ struct RendererAttachmentSpikeHostedTests {
         #expect(overlay.isAccessibilityElement())
         #expect(overlay.accessibilityRole() == .group)
         #expect(overlay.accessibilityLabel() == expectedOverlayLabel)
-        #expect(overlay.accessibilityIdentifier() == RendererAttachmentSpikeOverlayView.accessibilityIdentifier(for: placeholderID))
+        #expect(overlay.accessibilityIdentifier() == "renderer-attachment-overlay-\(placeholderID)")
         #expect(dom.present)
         #expect(dom.role == "group")
         #expect(dom.label.isEmpty == false)
