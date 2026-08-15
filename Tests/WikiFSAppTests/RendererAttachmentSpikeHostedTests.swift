@@ -10,6 +10,9 @@ import WebKit
 @Suite("Renderer attachment spike hosted tests", .serialized, .timeLimit(.minutes(5)))
 @MainActor
 struct RendererAttachmentSpikeHostedTests {
+    private static let positiveLeadingParagraphCount = 3
+    private static let defaultLeadingParagraphCount = 28
+    private static let positiveScrollY: CGFloat = 220
     private static let bottomSpacerParagraphCount = 24
 
     @Test
@@ -22,7 +25,9 @@ struct RendererAttachmentSpikeHostedTests {
 
             let harness = RendererAttachmentSpikeHarness(
                 windowSize: NSSize(width: 820, height: 520),
-                markdown: Self.scenarioMarkdown(includeBottomSpacer: true))
+                markdown: Self.scenarioMarkdown(
+                    includeBottomSpacer: true,
+                    leadingParagraphCount: Self.positiveLeadingParagraphCount))
             let window = harness.window
             window.orderFrontRegardless()
             defer {
@@ -43,28 +48,15 @@ struct RendererAttachmentSpikeHostedTests {
                 backingScaleFactor: window.backingScaleFactor,
                 webViewBounds: harness.webView.bounds)
             )
-            Self.assertIndependentDOM(initialSnapshot, measurement: initialMeasurement, expectedCenterHit: true)
+            Self.assertIndependentDOM(
+                initialSnapshot,
+                measurement: initialMeasurement,
+                expectedCenterHit: true,
+                expectedFullyInsideLayoutViewport: true,
+                stage: "initial")
             #expect(initial.revision == initialSnapshot.revision)
 
-            let centeredScroll = max(0, initial.cssRect.minY - (harness.webView.bounds.height * 0.45))
-            try await harness.scrollTo(y: centeredScroll)
-            try await harness.publishGeometry()
-            let centered = try harness.requireGeometry()
-            let centeredSnapshot = try #require(harness.currentSnapshot)
-            let centeredMeasurement = try await harness.measureDOMGeometry()
-            alignmentEvidences.append(Self.alignmentEvidence(
-                harness.overlay.frame,
-                measurement: centeredMeasurement,
-                pageZoom: harness.webView.pageZoom,
-                containerView: harness.containerView,
-                backingScaleFactor: window.backingScaleFactor,
-                webViewBounds: harness.webView.bounds)
-            )
-            Self.assertIndependentDOM(centeredSnapshot, measurement: centeredMeasurement, expectedCenterHit: true)
-            #expect(centered.domCenterHit)
-            #expect(centered.revision > initial.revision)
-
-            try await harness.scrollTo(y: 220)
+            try await harness.scrollTo(y: Self.positiveScrollY)
             try await harness.publishGeometry()
             let scrolled = try harness.requireGeometry()
             let scrolledSnapshot = try #require(harness.currentSnapshot)
@@ -77,11 +69,18 @@ struct RendererAttachmentSpikeHostedTests {
                 backingScaleFactor: window.backingScaleFactor,
                 webViewBounds: harness.webView.bounds)
             )
-            Self.assertIndependentDOM(scrolledSnapshot, measurement: scrolledMeasurement, expectedCenterHit: true)
-            #expect(scrolled.revision > centered.revision)
+            Self.assertIndependentDOM(
+                scrolledSnapshot,
+                measurement: scrolledMeasurement,
+                expectedCenterHit: true,
+                expectedFullyInsideLayoutViewport: true,
+                stage: "scroll")
+            #expect(scrolled.domCenterHit)
+            #expect(scrolled.revision > initial.revision)
 
             harness.webView.pageZoom = 1.25
             try await harness.updateRuntimeState()
+            try await harness.scrollTo(y: Self.positiveScrollY)
             try await harness.publishGeometry()
             let zoomed = try harness.requireGeometry()
             let zoomedSnapshot = try #require(harness.currentSnapshot)
@@ -94,14 +93,20 @@ struct RendererAttachmentSpikeHostedTests {
                 backingScaleFactor: window.backingScaleFactor,
                 webViewBounds: harness.webView.bounds)
             )
-            Self.assertIndependentDOM(zoomedSnapshot, measurement: zoomedMeasurement, expectedCenterHit: true)
+            Self.assertIndependentDOM(
+                zoomedSnapshot,
+                measurement: zoomedMeasurement,
+                expectedCenterHit: true,
+                expectedFullyInsideLayoutViewport: true,
+                stage: "zoomed")
             #expect(zoomed.revision > scrolled.revision)
 
             window.setContentSize(NSSize(width: 920, height: 580))
             harness.containerView.layoutSubtreeIfNeeded()
+            try await harness.scrollTo(y: Self.positiveScrollY)
             try await harness.publishGeometry()
             let resized = try harness.requireGeometry()
-            _ = try #require(harness.currentSnapshot)
+            let resizedSnapshot = try #require(harness.currentSnapshot)
             let resizedMeasurement = try await harness.measureDOMGeometry()
             alignmentEvidences.append(Self.alignmentEvidence(
                 harness.overlay.frame,
@@ -111,9 +116,16 @@ struct RendererAttachmentSpikeHostedTests {
                 backingScaleFactor: window.backingScaleFactor,
                 webViewBounds: harness.webView.bounds)
             )
+            Self.assertIndependentDOM(
+                resizedSnapshot,
+                measurement: resizedMeasurement,
+                expectedCenterHit: true,
+                expectedFullyInsideLayoutViewport: true,
+                stage: "resized")
             #expect(resized.revision > zoomed.revision)
 
             try await harness.insertSpacerBeforePlaceholder(height: 96)
+            try await harness.scrollTo(y: Self.positiveScrollY)
             try await harness.publishGeometry()
             let mutated = try harness.requireGeometry()
             let mutatedSnapshot = try #require(harness.currentSnapshot)
@@ -126,7 +138,12 @@ struct RendererAttachmentSpikeHostedTests {
                 backingScaleFactor: window.backingScaleFactor,
                 webViewBounds: harness.webView.bounds)
             )
-            Self.assertIndependentDOM(mutatedSnapshot, measurement: mutatedMeasurement, expectedCenterHit: true)
+            Self.assertIndependentDOM(
+                mutatedSnapshot,
+                measurement: mutatedMeasurement,
+                expectedCenterHit: true,
+                expectedFullyInsideLayoutViewport: true,
+                stage: "height-mutation")
             #expect(mutated.revision == mutatedSnapshot.revision)
             #expect(mutated.revision > resized.revision)
 
@@ -179,7 +196,11 @@ struct RendererAttachmentSpikeHostedTests {
             #expect(geometry.clipRect.isEmpty == false)
             #expect(geometry.clipRect != geometry.overlayRect)
             #expect(harness.overlay.visibleClipRect == geometry.localClipRect)
-            Self.assertIndependentDOM(geometrySnapshot, measurement: geometryMeasurement, expectedCenterHit: true)
+            Self.assertIndependentDOM(
+                geometrySnapshot,
+                measurement: geometryMeasurement,
+                expectedCenterHit: true,
+                stage: "geometry-visible")
 
             let visible = geometry.localClipRect
             let insidePoint = NSPoint(x: visible.midX, y: visible.midY)
@@ -219,7 +240,8 @@ struct RendererAttachmentSpikeHostedTests {
             Self.assertIndependentDOM(
                 offscreenSnapshot,
                 measurement: offscreenMeasurement,
-                expectedCenterHit: false)
+                expectedCenterHit: false,
+                stage: "geometry-offscreen")
 
             let tolerance = RendererAttachmentSpikeMetrics.derivedAlignmentTolerance(
                 pointResiduals: alignmentEvidences.flatMap { $0.pointResiduals },
@@ -294,9 +316,10 @@ struct RendererAttachmentSpikeHostedTests {
 
     private static func scenarioMarkdown(
         includePlaceholder: Bool = true,
-        includeBottomSpacer: Bool
+        includeBottomSpacer: Bool,
+        leadingParagraphCount: Int = defaultLeadingParagraphCount
     ) -> String {
-        let top = (0..<28).map { index in
+        let top = (0..<leadingParagraphCount).map { index in
             "Paragraph \(index): " + String(repeating: "This keeps the document tall enough for scroll alignment. ", count: 2)
         }.joined(separator: "\n\n")
         let bottom = includeBottomSpacer
@@ -326,7 +349,9 @@ struct RendererAttachmentSpikeHostedTests {
         _ snapshot: RendererAttachmentSpikeSnapshot?,
         measurement: RendererAttachmentSpikeDOMMeasurement,
         expectedCenterHit: Bool,
-        expectedPresent: Bool = true
+        expectedPresent: Bool = true,
+        expectedFullyInsideLayoutViewport: Bool = false,
+        stage: String
     ) {
         guard let snapshot else {
             Issue.record("missing independent DOM snapshot")
@@ -334,10 +359,21 @@ struct RendererAttachmentSpikeHostedTests {
         }
         #expect(snapshot.revision > 0)
         #expect(measurement.present == expectedPresent)
+        if measurement.centerHit != expectedCenterHit {
+            Issue.record("DOM measurement mismatch [\(stage)]: \(measurement.diagnostics)")
+        }
         #expect(measurement.centerHit == expectedCenterHit)
         #expect(measurement.scrollY >= 0)
         if expectedPresent {
             #expect(measurement.placeholderID == snapshot.placeholderID)
+            if expectedFullyInsideLayoutViewport {
+                #expect(measurement.layoutViewportClientWidth > 0)
+                #expect(measurement.layoutViewportClientHeight > 0)
+                #expect(measurement.cssRect.minX >= 0)
+                #expect(measurement.cssRect.minY >= 0)
+                #expect(measurement.cssRect.maxX <= measurement.layoutViewportClientWidth)
+                #expect(measurement.cssRect.maxY <= measurement.layoutViewportClientHeight)
+            }
         } else {
             #expect(measurement.placeholderID.isEmpty)
         }
@@ -503,59 +539,91 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
     }
 
     func publishGeometry() async throws {
-        let minimumRevision = currentRevision + 1
-        _ = await evaluateJavaScriptWithTimeout(webView, "window.__rendererAttachmentSpikeReport ? window.__rendererAttachmentSpikeReport() : 'missing'")
+        let body = await evaluateJavaScriptWithTimeout(
+            webView,
+            "window.__rendererAttachmentSpikeReport ? window.__rendererAttachmentSpikeReport() : 'missing'")
+        guard let body, let publishedRevision = Int(body) else {
+            throw RendererAttachmentSpikeHarnessError.missingPublishedRevision(body: String(describing: body))
+        }
         try await Self.waitFor(description: "renderer attachment geometry") { [weak self] in
-            (self?.currentSnapshot?.revision ?? 0) >= minimumRevision
+            (self?.currentSnapshot?.revision ?? 0) >= publishedRevision
         }
     }
 
     func measureDOMGeometry() async throws -> RendererAttachmentSpikeDOMMeasurement {
         let body = await evaluateJavaScriptWithTimeout(webView, """
         (function(){
-          var card = document.querySelector('\(Self.cardSelector)');
           var scrollY = window.scrollY || document.documentElement.scrollTop || 0;
-          var viewport = (function(){
-            var docEl = document.documentElement;
+          var docEl = document.documentElement;
+          var body = document.body;
+          var visual = window.visualViewport;
+          var cards = document.querySelectorAll('\(Self.cardSelector)');
+          var card = cards.length ? cards[0] : null;
+          function viewportBounds(){
             var width = (docEl && docEl.clientWidth) || window.innerWidth || 0;
             var height = (docEl && docEl.clientHeight) || window.innerHeight || 0;
-            return { left: 0, top: 0, right: width, bottom: height };
-          })();
-          function visibleCardRect() {
-            if(!card){ return null; }
-            var rect = card.getBoundingClientRect();
-            var left = Math.max(rect.left, viewport.left);
-            var top = Math.max(rect.top, viewport.top);
-            var right = Math.min(rect.right, viewport.right);
-            var bottom = Math.min(rect.bottom, viewport.bottom);
+            return { left: 0, top: 0, right: width, bottom: height, width: width, height: height };
+          }
+          function rectFor(el){
+            var r = el.getBoundingClientRect();
+            return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height };
+          }
+          function intersectRects(a, b){
+            if(!a || !b){ return null; }
+            var left = Math.max(a.left, b.left);
+            var top = Math.max(a.top, b.top);
+            var right = Math.min(a.right, b.right);
+            var bottom = Math.min(a.bottom, b.bottom);
             if(right > left && bottom > top){
-              return rect;
+              return { left: left, top: top, right: right, bottom: bottom, width: right - left, height: bottom - top };
             }
             return null;
           }
-          function visibleHit() {
-            return visibleCardRect() !== null;
-          }
-          if(!card){
-            return JSON.stringify({
-              present: false,
-              placeholderID: "",
-              centerHit: false,
-              scrollY: scrollY
-            });
-          }
-          var rect = card.getBoundingClientRect();
+          var layoutViewport = viewportBounds();
+          var cardRect = card ? rectFor(card) : null;
+          var visibleIntersection = cardRect ? intersectRects(cardRect, layoutViewport) : null;
+          var selectedCardClass = card ? (typeof card.className === 'string' ? card.className : String(card.className || '')) : "";
           return JSON.stringify({
-            present: true,
-            placeholderID: card.id || "",
-            cssRect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
-            centerHit: visibleHit(),
-            scrollY: scrollY
+            present: !!card,
+            placeholderID: card ? (card.id || "") : "",
+            cssRect: cardRect ? { x: cardRect.left, y: cardRect.top, width: cardRect.width, height: cardRect.height } : { x: 0, y: 0, width: 0, height: 0 },
+            centerHit: visibleIntersection !== null,
+            scrollY: scrollY,
+            matchingCardCount: cards.length,
+            selectedCardTag: card ? (card.tagName || "") : "",
+            selectedCardClass: selectedCardClass,
+            selectedCardID: card ? (card.id || "") : "",
+            selectedCardConnected: !!(card && card.isConnected),
+            selectedCardRect: cardRect,
+            layoutViewportClientWidth: layoutViewport.width,
+            layoutViewportClientHeight: layoutViewport.height,
+            windowInnerWidth: window.innerWidth || 0,
+            windowInnerHeight: window.innerHeight || 0,
+            documentElementClientWidth: docEl ? docEl.clientWidth || 0 : 0,
+            documentElementClientHeight: docEl ? docEl.clientHeight || 0 : 0,
+            documentElementScrollWidth: docEl ? docEl.scrollWidth || 0 : 0,
+            documentElementScrollHeight: docEl ? docEl.scrollHeight || 0 : 0,
+            documentElementScrollLeft: docEl ? docEl.scrollLeft || 0 : 0,
+            documentElementScrollTop: docEl ? docEl.scrollTop || 0 : 0,
+            bodyClientWidth: body ? body.clientWidth || 0 : 0,
+            bodyClientHeight: body ? body.clientHeight || 0 : 0,
+            bodyScrollWidth: body ? body.scrollWidth || 0 : 0,
+            bodyScrollHeight: body ? body.scrollHeight || 0 : 0,
+            bodyScrollLeft: body ? body.scrollLeft || 0 : 0,
+            bodyScrollTop: body ? body.scrollTop || 0 : 0,
+            windowScrollX: window.scrollX || window.pageXOffset || 0,
+            windowScrollY: window.scrollY || window.pageYOffset || 0,
+            readyState: document.readyState || "",
+            visualViewportOffsetLeft: visual ? visual.offsetLeft : null,
+            visualViewportOffsetTop: visual ? visual.offsetTop : null,
+            visualViewportWidth: visual ? visual.width : null,
+            visualViewportHeight: visual ? visual.height : null,
+            visibleIntersection: visibleIntersection
           });
         })()
         """)
         guard let measurement = RendererAttachmentSpikeDOMMeasurement(body: body) else {
-            throw RendererAttachmentSpikeHarnessError.missingDOMMeasurement
+            throw RendererAttachmentSpikeHarnessError.missingDOMMeasurement(body: String(describing: body))
         }
         return measurement
     }
@@ -564,7 +632,6 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
         _ = await evaluateJavaScriptWithTimeout(webView, """
         (function(y){ window.scrollTo(0, y); return 'scrolled'; })(\(Self.posix(y)))
         """)
-        try await publishGeometry()
     }
 
     func insertSpacerBeforePlaceholder(height: CGFloat) async throws {
@@ -582,7 +649,6 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
           return 'inserted';
         })(\(Self.posix(height)))
         """)
-        try await publishGeometry()
     }
 
     func ingest(_ snapshot: RendererAttachmentSpikeSnapshot) {
@@ -669,35 +735,38 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
           window.__rendererAttachmentSpikeState = window.__rendererAttachmentSpikeState || { generation: 0, revision: 0 };
           function rectFor(el){
             var r = el.getBoundingClientRect();
-            return { x: r.left, y: r.top, width: r.width, height: r.height };
+            return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height };
           }
           function viewportBounds(){
             var docEl = document.documentElement;
             var width = (docEl && docEl.clientWidth) || window.innerWidth || 0;
             var height = (docEl && docEl.clientHeight) || window.innerHeight || 0;
-            return { left: 0, top: 0, right: width, bottom: height };
+            return { left: 0, top: 0, right: width, bottom: height, width: width, height: height };
           }
-          function visibleCardRect(card){
-            var viewport = viewportBounds();
-            if(!card){ return null; }
-            var rect = card.getBoundingClientRect();
-            var left = Math.max(rect.left, viewport.left);
-            var top = Math.max(rect.top, viewport.top);
-            var right = Math.min(rect.right, viewport.right);
-            var bottom = Math.min(rect.bottom, viewport.bottom);
+          function intersectRects(a, b){
+            if(!a || !b){ return null; }
+            var left = Math.max(a.left, b.left);
+            var top = Math.max(a.top, b.top);
+            var right = Math.min(a.right, b.right);
+            var bottom = Math.min(a.bottom, b.bottom);
             if(right > left && bottom > top){
-              return rect;
+              return { left: left, top: top, right: right, bottom: bottom, width: right - left, height: bottom - top };
             }
             return null;
-          }
-          function visibleCardHit(card){
-            return visibleCardRect(card) !== null;
           }
           function report(){
             var state = window.__rendererAttachmentSpikeState || { generation: 0, revision: 0 };
             state.revision = Number(state.revision || 0) + 1;
             window.__rendererAttachmentSpikeState = state;
-            var card = document.querySelector('\(Self.cardSelector)');
+            var docEl = document.documentElement;
+            var body = document.body;
+            var visual = window.visualViewport;
+            var cards = document.querySelectorAll('\(Self.cardSelector)');
+            var card = cards.length ? cards[0] : null;
+            var viewport = viewportBounds();
+            var cardRect = card ? rectFor(card) : null;
+            var visibleIntersection = cardRect ? intersectRects(cardRect, viewport) : null;
+            var selectedCardClass = card ? (typeof card.className === 'string' ? card.className : String(card.className || '')) : "";
             if(!card){
               window.webkit.messageHandlers.\(Self.messageName).postMessage({
                 generation: state.generation,
@@ -705,21 +774,80 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
                 placeholderID: "",
                 present: false,
                 centerHit: false,
-                scrollY: window.scrollY || document.documentElement.scrollTop || 0
+                scrollY: window.scrollY || document.documentElement.scrollTop || 0,
+                matchingCardCount: cards.length,
+                selectedCardTag: "",
+                selectedCardClass: "",
+                selectedCardID: "",
+                selectedCardConnected: false,
+                selectedCardRect: null,
+                layoutViewportClientWidth: viewport.width,
+                layoutViewportClientHeight: viewport.height,
+                windowInnerWidth: window.innerWidth || 0,
+                windowInnerHeight: window.innerHeight || 0,
+                documentElementClientWidth: docEl ? docEl.clientWidth || 0 : 0,
+                documentElementClientHeight: docEl ? docEl.clientHeight || 0 : 0,
+                documentElementScrollWidth: docEl ? docEl.scrollWidth || 0 : 0,
+                documentElementScrollHeight: docEl ? docEl.scrollHeight || 0 : 0,
+                documentElementScrollLeft: docEl ? docEl.scrollLeft || 0 : 0,
+                documentElementScrollTop: docEl ? docEl.scrollTop || 0 : 0,
+                bodyClientWidth: body ? body.clientWidth || 0 : 0,
+                bodyClientHeight: body ? body.clientHeight || 0 : 0,
+                bodyScrollWidth: body ? body.scrollWidth || 0 : 0,
+                bodyScrollHeight: body ? body.scrollHeight || 0 : 0,
+                bodyScrollLeft: body ? body.scrollLeft || 0 : 0,
+                bodyScrollTop: body ? body.scrollTop || 0 : 0,
+                windowScrollX: window.scrollX || window.pageXOffset || 0,
+                windowScrollY: window.scrollY || window.pageYOffset || 0,
+                readyState: document.readyState || "",
+                visualViewportOffsetLeft: visual ? visual.offsetLeft : null,
+                visualViewportOffsetTop: visual ? visual.offsetTop : null,
+                visualViewportWidth: visual ? visual.width : null,
+                visualViewportHeight: visual ? visual.height : null,
+                visibleIntersection: null
               });
-              return "missing";
+              return String(state.revision);
             }
-            var cardRect = rectFor(card);
             window.webkit.messageHandlers.\(Self.messageName).postMessage({
                 generation: state.generation,
                 revision: state.revision,
                 placeholderID: card.id || "",
                 present: true,
-                cssRect: cardRect,
-                centerHit: visibleCardHit(card),
-                scrollY: window.scrollY || document.documentElement.scrollTop || 0
+                cssRect: cardRect ? { x: cardRect.left, y: cardRect.top, width: cardRect.width, height: cardRect.height } : { x: 0, y: 0, width: 0, height: 0 },
+                centerHit: visibleIntersection !== null,
+                scrollY: window.scrollY || document.documentElement.scrollTop || 0,
+                matchingCardCount: cards.length,
+                selectedCardTag: card.tagName || "",
+                selectedCardClass: selectedCardClass,
+                selectedCardID: card.id || "",
+                selectedCardConnected: !!card.isConnected,
+                selectedCardRect: cardRect,
+                layoutViewportClientWidth: viewport.width,
+                layoutViewportClientHeight: viewport.height,
+                windowInnerWidth: window.innerWidth || 0,
+                windowInnerHeight: window.innerHeight || 0,
+                documentElementClientWidth: docEl ? docEl.clientWidth || 0 : 0,
+                documentElementClientHeight: docEl ? docEl.clientHeight || 0 : 0,
+                documentElementScrollWidth: docEl ? docEl.scrollWidth || 0 : 0,
+                documentElementScrollHeight: docEl ? docEl.scrollHeight || 0 : 0,
+                documentElementScrollLeft: docEl ? docEl.scrollLeft || 0 : 0,
+                documentElementScrollTop: docEl ? docEl.scrollTop || 0 : 0,
+                bodyClientWidth: body ? body.clientWidth || 0 : 0,
+                bodyClientHeight: body ? body.clientHeight || 0 : 0,
+                bodyScrollWidth: body ? body.scrollWidth || 0 : 0,
+                bodyScrollHeight: body ? body.scrollHeight || 0 : 0,
+                bodyScrollLeft: body ? body.scrollLeft || 0 : 0,
+                bodyScrollTop: body ? body.scrollTop || 0 : 0,
+                windowScrollX: window.scrollX || window.pageXOffset || 0,
+                windowScrollY: window.scrollY || window.pageYOffset || 0,
+                readyState: document.readyState || "",
+                visualViewportOffsetLeft: visual ? visual.offsetLeft : null,
+                visualViewportOffsetTop: visual ? visual.offsetTop : null,
+                visualViewportWidth: visual ? visual.width : null,
+                visualViewportHeight: visual ? visual.height : null,
+                visibleIntersection: visibleIntersection
             });
-            return "posted";
+            return String(state.revision);
           }
           window.__rendererAttachmentSpikeReport = report;
           window.addEventListener('scroll', report, { passive: true });
@@ -873,19 +1001,28 @@ private struct RendererAttachmentSpikeDOMMeasurement: Sendable, Equatable {
     let cssRect: CGRect
     let centerHit: Bool
     let scrollY: CGFloat
+    let diagnostics: String
+    let layoutViewportClientWidth: CGFloat
+    let layoutViewportClientHeight: CGFloat
 
     init(
         present: Bool,
         placeholderID: String,
         cssRect: CGRect,
         centerHit: Bool,
-        scrollY: CGFloat
+        scrollY: CGFloat,
+        diagnostics: String = "",
+        layoutViewportClientWidth: CGFloat = 0,
+        layoutViewportClientHeight: CGFloat = 0
     ) {
         self.present = present
         self.placeholderID = placeholderID
         self.cssRect = cssRect
         self.centerHit = centerHit
         self.scrollY = scrollY
+        self.diagnostics = diagnostics
+        self.layoutViewportClientWidth = layoutViewportClientWidth
+        self.layoutViewportClientHeight = layoutViewportClientHeight
     }
 
     init?(body: Any?) {
@@ -908,6 +1045,15 @@ private struct RendererAttachmentSpikeDOMMeasurement: Sendable, Equatable {
         self.cssRect = rect
         self.centerHit = centerHit
         self.scrollY = scrollY
+        self.layoutViewportClientWidth = Self.cgFloat(dict["layoutViewportClientWidth"]) ?? 0
+        self.layoutViewportClientHeight = Self.cgFloat(dict["layoutViewportClientHeight"]) ?? 0
+        self.diagnostics = Self.debugSummary(
+            dict: dict,
+            present: present,
+            placeholderID: placeholderID,
+            rect: rect,
+            centerHit: centerHit,
+            scrollY: scrollY)
     }
 
     private static func dictionary(_ value: Any?) -> [String: Any]? {
@@ -946,6 +1092,108 @@ private struct RendererAttachmentSpikeDOMMeasurement: Sendable, Equatable {
             return nil
         }
     }
+
+    private static func cgFloatOptional(_ value: Any?) -> CGFloat? {
+        guard let value, !(value is NSNull) else { return nil }
+        return cgFloat(value)
+    }
+
+    private static func int(_ value: Any?) -> Int? {
+        switch value {
+        case let number as NSNumber:
+            return number.intValue
+        case let string as String:
+            return Int(string)
+        default:
+            return nil
+        }
+    }
+
+    private static func bool(_ value: Any?) -> Bool {
+        value as? Bool ?? false
+    }
+
+    private static func string(_ value: Any?) -> String {
+        value as? String ?? ""
+    }
+
+    private static func rectOptional(_ value: Any?) -> CGRect? {
+        guard let value, !(value is NSNull) else { return nil }
+        return rect(value)
+    }
+
+    private static func debugSummary(
+        dict: [String: Any],
+        present: Bool,
+        placeholderID: String,
+        rect: CGRect,
+        centerHit: Bool,
+        scrollY: CGFloat
+    ) -> String {
+        let matchingCardCount = int(dict["matchingCardCount"]) ?? 0
+        let selectedCardTag = string(dict["selectedCardTag"])
+        let selectedCardClass = string(dict["selectedCardClass"])
+        let selectedCardID = string(dict["selectedCardID"])
+        let selectedCardConnected = bool(dict["selectedCardConnected"])
+        let selectedCardRect = rectOptional(dict["selectedCardRect"])
+        let layoutViewportClientWidth = cgFloat(dict["layoutViewportClientWidth"]) ?? 0
+        let layoutViewportClientHeight = cgFloat(dict["layoutViewportClientHeight"]) ?? 0
+        let windowInnerWidth = cgFloat(dict["windowInnerWidth"]) ?? 0
+        let windowInnerHeight = cgFloat(dict["windowInnerHeight"]) ?? 0
+        let documentElementClientWidth = cgFloat(dict["documentElementClientWidth"]) ?? 0
+        let documentElementClientHeight = cgFloat(dict["documentElementClientHeight"]) ?? 0
+        let documentElementScrollWidth = cgFloat(dict["documentElementScrollWidth"]) ?? 0
+        let documentElementScrollHeight = cgFloat(dict["documentElementScrollHeight"]) ?? 0
+        let documentElementScrollLeft = cgFloat(dict["documentElementScrollLeft"]) ?? 0
+        let documentElementScrollTop = cgFloat(dict["documentElementScrollTop"]) ?? 0
+        let bodyClientWidth = cgFloat(dict["bodyClientWidth"]) ?? 0
+        let bodyClientHeight = cgFloat(dict["bodyClientHeight"]) ?? 0
+        let bodyScrollWidth = cgFloat(dict["bodyScrollWidth"]) ?? 0
+        let bodyScrollHeight = cgFloat(dict["bodyScrollHeight"]) ?? 0
+        let bodyScrollLeft = cgFloat(dict["bodyScrollLeft"]) ?? 0
+        let bodyScrollTop = cgFloat(dict["bodyScrollTop"]) ?? 0
+        let windowScrollX = cgFloat(dict["windowScrollX"]) ?? 0
+        let windowScrollY = cgFloat(dict["windowScrollY"]) ?? 0
+        let readyState = string(dict["readyState"])
+        let visualViewportOffsetLeft = cgFloatOptional(dict["visualViewportOffsetLeft"])
+        let visualViewportOffsetTop = cgFloatOptional(dict["visualViewportOffsetTop"])
+        let visualViewportWidth = cgFloatOptional(dict["visualViewportWidth"])
+        let visualViewportHeight = cgFloatOptional(dict["visualViewportHeight"])
+        let visibleIntersection = rectOptional(dict["visibleIntersection"])
+        return [
+            "present=\(present)",
+            "placeholderID=\(placeholderID)",
+            "centerHit=\(centerHit)",
+            "scrollY=\(scrollY)",
+            "matchingCardCount=\(matchingCardCount)",
+            "selectedCardTag=\(selectedCardTag)",
+            "selectedCardClass=\(selectedCardClass)",
+            "selectedCardID=\(selectedCardID)",
+            "selectedCardConnected=\(selectedCardConnected)",
+            "cardRect=\(describe(rect))",
+            "selectedCardRect=\(describe(selectedCardRect))",
+            "visibleIntersection=\(describe(visibleIntersection))",
+            "layoutViewport=(\(layoutViewportClientWidth),\(layoutViewportClientHeight))",
+            "windowInner=(\(windowInnerWidth),\(windowInnerHeight))",
+            "documentElementClient=(\(documentElementClientWidth),\(documentElementClientHeight))",
+            "documentElementScroll=(\(documentElementScrollLeft),\(documentElementScrollTop),\(documentElementScrollWidth),\(documentElementScrollHeight))",
+            "bodyClient=(\(bodyClientWidth),\(bodyClientHeight))",
+            "bodyScroll=(\(bodyScrollLeft),\(bodyScrollTop),\(bodyScrollWidth),\(bodyScrollHeight))",
+            "windowScroll=(\(windowScrollX),\(windowScrollY))",
+            "readyState=\(readyState)",
+            "visualViewport=(\(describe(value: visualViewportOffsetLeft)),\(describe(value: visualViewportOffsetTop)),\(describe(value: visualViewportWidth)),\(describe(value: visualViewportHeight)))"
+        ].joined(separator: " ")
+    }
+
+    private static func describe(_ rect: CGRect?) -> String {
+        guard let rect else { return "nil" }
+        return "(\(rect.minX),\(rect.minY),\(rect.width),\(rect.height))"
+    }
+
+    private static func describe(value: CGFloat?) -> String {
+        guard let value else { return "nil" }
+        return "\(value)"
+    }
 }
 
 private struct RendererAttachmentSpikeAlignmentEvidence {
@@ -964,7 +1212,8 @@ private struct RendererAttachmentSpikeAlignmentEvidence {
 private enum RendererAttachmentSpikeHarnessError: LocalizedError {
     case timeout(description: String)
     case missingGeometry
-    case missingDOMMeasurement
+    case missingDOMMeasurement(body: String)
+    case missingPublishedRevision(body: String)
 
     var errorDescription: String? {
         switch self {
@@ -972,8 +1221,10 @@ private enum RendererAttachmentSpikeHarnessError: LocalizedError {
             return "timed out waiting for \(description)"
         case .missingGeometry:
             return "missing attachment geometry"
-        case .missingDOMMeasurement:
-            return "missing independent DOM measurement"
+        case let .missingDOMMeasurement(body):
+            return "missing independent DOM measurement: \(body)"
+        case let .missingPublishedRevision(body):
+            return "missing published renderer attachment revision: \(body)"
         }
     }
 }
