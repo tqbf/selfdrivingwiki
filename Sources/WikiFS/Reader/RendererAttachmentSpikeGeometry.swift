@@ -3,10 +3,12 @@ import CoreGraphics
 import Foundation
 
 // pattern: Functional Core — this value type contains only pure geometry transforms.
-/// Pure geometry contract for the PR 3 feasibility spike. The spike keeps the
-/// reader routing unchanged and only tests how a DOM placeholder rect maps into
-/// a sibling AppKit overlay under measured DOM CSS pixels, native page zoom,
-/// and window backing scale.
+/// Pure geometry contract for the PR 3 feasibility spike. `cssRect` is a DOM
+/// client rectangle in CSS pixels. `overlayRect` is in AppKit points in an
+/// unflipped overlay superview whose origin coincides with the WebView bounds
+/// origin. The mapping therefore flips Y within the shared bounds and assumes
+/// no additional WebView frame offset. `physicalOverlayRect` is in backing
+/// pixels. Phase 4 owns any non-coincident or transformed container contract.
 struct RendererAttachmentSpikeGeometry: Sendable, Equatable {
     let generation: Int
     let revision: Int
