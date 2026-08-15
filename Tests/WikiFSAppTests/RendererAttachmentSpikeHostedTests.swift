@@ -14,10 +14,13 @@ struct RendererAttachmentSpikeHostedTests {
     private static let defaultLeadingParagraphCount = 28
     private static let positiveScrollY: CGFloat = 220
     private static let bottomSpacerParagraphCount = 24
+    /// Fixed from the retained exact-head hosted evidence. This is deliberately
+    /// independent of the residuals produced by the run under judgment.
+    private static let fixedAlignmentTolerancePoints: CGFloat = 1
 
     @Test
     func testScrollZoomResizeAndHeightMutationStayAligned() async throws {
-        for _ in 0..<20 {
+        for iteration in 1...20 {
             var alignmentEvidences: [RendererAttachmentSpikeAlignmentEvidence] = []
             let lease = await HostedAppKitTestGate.shared.acquire()
             defer { lease.release() }
@@ -40,41 +43,43 @@ struct RendererAttachmentSpikeHostedTests {
             let initial = try harness.requireGeometry()
             let initialSnapshot = try #require(harness.currentSnapshot)
             let initialMeasurement = try await harness.measureDOMGeometry()
+            let initialRenderedRect = try await harness.captureSentinelRect()
             alignmentEvidences.append(Self.alignmentEvidence(
                 harness.overlay.frame,
-                measurement: initialMeasurement,
-                pageZoom: harness.webView.pageZoom,
+                renderedRect: try #require(initialRenderedRect),
                 containerView: harness.containerView,
-                backingScaleFactor: window.backingScaleFactor,
-                webViewBounds: harness.webView.bounds)
+                backingScaleFactor: window.backingScaleFactor)
             )
             Self.assertIndependentDOM(
                 initialSnapshot,
                 measurement: initialMeasurement,
                 expectedCenterHit: true,
                 expectedFullyInsideLayoutViewport: true,
-                stage: "initial")
-            #expect(initial.revision == initialSnapshot.revision)
+                stage: "initial iteration \(iteration)")
+            let initialAccessibility = try await harness.measureDOMAccessibility()
+            Self.assertAutomatedAccessibilityEvidence(
+                overlay: harness.overlay,
+                placeholderID: initialSnapshot.placeholderID,
+                dom: initialAccessibility)
 
             try await harness.scrollTo(y: Self.positiveScrollY)
             try await harness.publishGeometry()
             let scrolled = try harness.requireGeometry()
             let scrolledSnapshot = try #require(harness.currentSnapshot)
             let scrolledMeasurement = try await harness.measureDOMGeometry()
+            let scrolledRenderedRect = try await harness.captureSentinelRect()
             alignmentEvidences.append(Self.alignmentEvidence(
                 harness.overlay.frame,
-                measurement: scrolledMeasurement,
-                pageZoom: harness.webView.pageZoom,
+                renderedRect: try #require(scrolledRenderedRect),
                 containerView: harness.containerView,
-                backingScaleFactor: window.backingScaleFactor,
-                webViewBounds: harness.webView.bounds)
+                backingScaleFactor: window.backingScaleFactor)
             )
             Self.assertIndependentDOM(
                 scrolledSnapshot,
                 measurement: scrolledMeasurement,
                 expectedCenterHit: true,
                 expectedFullyInsideLayoutViewport: true,
-                stage: "scroll")
+                stage: "scroll iteration \(iteration)")
             #expect(scrolled.domCenterHit)
             #expect(scrolled.revision > initial.revision)
 
@@ -85,20 +90,21 @@ struct RendererAttachmentSpikeHostedTests {
             let zoomed = try harness.requireGeometry()
             let zoomedSnapshot = try #require(harness.currentSnapshot)
             let zoomedMeasurement = try await harness.measureDOMGeometry()
+            let zoomedRenderedRect = try await harness.captureSentinelRect()
             alignmentEvidences.append(Self.alignmentEvidence(
                 harness.overlay.frame,
-                measurement: zoomedMeasurement,
-                pageZoom: harness.webView.pageZoom,
+                renderedRect: try #require(zoomedRenderedRect),
                 containerView: harness.containerView,
-                backingScaleFactor: window.backingScaleFactor,
-                webViewBounds: harness.webView.bounds)
+                backingScaleFactor: window.backingScaleFactor)
             )
             Self.assertIndependentDOM(
                 zoomedSnapshot,
                 measurement: zoomedMeasurement,
                 expectedCenterHit: true,
                 expectedFullyInsideLayoutViewport: true,
-                stage: "zoomed")
+                stage: "zoomed iteration \(iteration)")
+            #expect(zoomedMeasurement.cssRect.width < scrolledMeasurement.cssRect.width,
+                    "pageZoom observation iteration \(iteration): DOM CSS width shrinks at 1.25x")
             #expect(zoomed.revision > scrolled.revision)
 
             window.setContentSize(NSSize(width: 920, height: 580))
@@ -108,20 +114,19 @@ struct RendererAttachmentSpikeHostedTests {
             let resized = try harness.requireGeometry()
             let resizedSnapshot = try #require(harness.currentSnapshot)
             let resizedMeasurement = try await harness.measureDOMGeometry()
+            let resizedRenderedRect = try await harness.captureSentinelRect()
             alignmentEvidences.append(Self.alignmentEvidence(
                 harness.overlay.frame,
-                measurement: resizedMeasurement,
-                pageZoom: harness.webView.pageZoom,
+                renderedRect: try #require(resizedRenderedRect),
                 containerView: harness.containerView,
-                backingScaleFactor: window.backingScaleFactor,
-                webViewBounds: harness.webView.bounds)
+                backingScaleFactor: window.backingScaleFactor)
             )
             Self.assertIndependentDOM(
                 resizedSnapshot,
                 measurement: resizedMeasurement,
                 expectedCenterHit: true,
                 expectedFullyInsideLayoutViewport: true,
-                stage: "resized")
+                stage: "resized iteration \(iteration)")
             #expect(resized.revision > zoomed.revision)
 
             try await harness.insertSpacerBeforePlaceholder(height: 96)
@@ -130,37 +135,31 @@ struct RendererAttachmentSpikeHostedTests {
             let mutated = try harness.requireGeometry()
             let mutatedSnapshot = try #require(harness.currentSnapshot)
             let mutatedMeasurement = try await harness.measureDOMGeometry()
+            let mutatedRenderedRect = try await harness.captureSentinelRect()
             alignmentEvidences.append(Self.alignmentEvidence(
                 harness.overlay.frame,
-                measurement: mutatedMeasurement,
-                pageZoom: harness.webView.pageZoom,
+                renderedRect: try #require(mutatedRenderedRect),
                 containerView: harness.containerView,
-                backingScaleFactor: window.backingScaleFactor,
-                webViewBounds: harness.webView.bounds)
+                backingScaleFactor: window.backingScaleFactor)
             )
             Self.assertIndependentDOM(
                 mutatedSnapshot,
                 measurement: mutatedMeasurement,
                 expectedCenterHit: true,
                 expectedFullyInsideLayoutViewport: true,
-                stage: "height-mutation")
-            #expect(mutated.revision == mutatedSnapshot.revision)
+                stage: "height-mutation iteration \(iteration)")
             #expect(mutated.revision > resized.revision)
 
-            let tolerance = RendererAttachmentSpikeMetrics.derivedAlignmentTolerance(
-                pointResiduals: alignmentEvidences.flatMap { $0.pointResiduals },
-                backingResiduals: alignmentEvidences.flatMap { $0.backingResiduals },
-                backingScaleFactor: window.backingScaleFactor)
             Self.assertAlignmentEvidence(
                 alignmentEvidences,
-                tolerance: tolerance,
+                tolerance: Self.fixedAlignmentTolerancePoints,
                 backingScaleFactor: window.backingScaleFactor)
         }
     }
 
     @Test
     func testClippingAndHitTestingRespectVisiblePlaceholder() async throws {
-        for _ in 0..<20 {
+        for iteration in 1...20 {
             var alignmentEvidences: [RendererAttachmentSpikeAlignmentEvidence] = []
             let lease = await HostedAppKitTestGate.shared.acquire()
             defer { lease.release() }
@@ -185,13 +184,12 @@ struct RendererAttachmentSpikeHostedTests {
             let geometry = try harness.requireGeometry()
             let geometrySnapshot = try #require(harness.currentSnapshot)
             let geometryMeasurement = try await harness.measureDOMGeometry()
+            let geometryRenderedRect = try await harness.captureSentinelRect()
             alignmentEvidences.append(Self.alignmentEvidence(
-                harness.overlay.frame,
-                measurement: geometryMeasurement,
-                pageZoom: harness.webView.pageZoom,
+                harness.overlay.frame.intersection(harness.webView.bounds),
+                renderedRect: try #require(geometryRenderedRect),
                 containerView: harness.containerView,
-                backingScaleFactor: window.backingScaleFactor,
-                webViewBounds: harness.webView.bounds))
+                backingScaleFactor: window.backingScaleFactor))
 
             #expect(geometry.clipRect.isEmpty == false)
             #expect(geometry.clipRect != geometry.overlayRect)
@@ -199,14 +197,16 @@ struct RendererAttachmentSpikeHostedTests {
             Self.assertIndependentDOM(
                 geometrySnapshot,
                 measurement: geometryMeasurement,
-                expectedCenterHit: true,
-                stage: "geometry-visible")
+                expectedCenterHit: false,
+                stage: "geometry-visible iteration \(iteration)")
 
             let visible = geometry.localClipRect
             let insidePoint = NSPoint(x: visible.midX, y: visible.midY)
-            let outsidePoint = RendererAttachmentSpikeHostedTests.outsidePoint(
+            let outsidePoint = try #require(RendererAttachmentSpikeHostedTests.outsidePoint(
                 overlayBounds: harness.overlay.bounds,
-                visibleClip: visible)
+                visibleClip: visible))
+            #expect(harness.overlay.bounds.contains(outsidePoint))
+            #expect(visible.contains(outsidePoint) == false)
             let insideWindowPoint = harness.overlay.convert(insidePoint, to: harness.containerView)
             let outsideWindowPoint = harness.overlay.convert(outsidePoint, to: harness.containerView)
 
@@ -219,19 +219,21 @@ struct RendererAttachmentSpikeHostedTests {
             let routedView = harness.containerView.hitTest(outsideWindowPoint)
             #expect(routedView !== harness.overlay)
 
+            let containerOutsidePoint = try #require(Self.outsideContainerPoint(
+                webViewBounds: harness.webView.bounds,
+                attachmentClip: geometry.clipRect))
+            let containerRoutedView = harness.containerView.hitTest(containerOutsidePoint)
+            #expect(containerRoutedView !== harness.overlay)
+            #expect(harness.isWebViewOrDescendant(containerRoutedView))
+
             let offscreenScroll = max(0, geometry.scrollY + geometry.cssRect.maxY + 80)
             try await harness.scrollTo(y: offscreenScroll)
             try await harness.publishGeometry()
             let offscreen = try harness.requireGeometry()
             let offscreenSnapshot = try #require(harness.currentSnapshot)
             let offscreenMeasurement = try await harness.measureDOMGeometry()
-            alignmentEvidences.append(Self.alignmentEvidence(
-                harness.overlay.frame,
-                measurement: offscreenMeasurement,
-                pageZoom: harness.webView.pageZoom,
-                containerView: harness.containerView,
-                backingScaleFactor: window.backingScaleFactor,
-                webViewBounds: harness.webView.bounds))
+            let offscreenRenderedRect = try await harness.captureSentinelRect()
+            #expect(offscreenRenderedRect == nil)
             #expect(offscreen.clipRect.isEmpty)
             #expect(offscreen.domCenterHit == false)
             #expect(harness.overlay.visibleClipRect.isEmpty)
@@ -241,22 +243,18 @@ struct RendererAttachmentSpikeHostedTests {
                 offscreenSnapshot,
                 measurement: offscreenMeasurement,
                 expectedCenterHit: false,
-                stage: "geometry-offscreen")
+                stage: "geometry-offscreen iteration \(iteration)")
 
-            let tolerance = RendererAttachmentSpikeMetrics.derivedAlignmentTolerance(
-                pointResiduals: alignmentEvidences.flatMap { $0.pointResiduals },
-                backingResiduals: alignmentEvidences.flatMap { $0.backingResiduals },
-                backingScaleFactor: window.backingScaleFactor)
             Self.assertAlignmentEvidence(
                 alignmentEvidences,
-                tolerance: tolerance,
+                tolerance: Self.fixedAlignmentTolerancePoints,
                 backingScaleFactor: window.backingScaleFactor)
         }
     }
 
     @Test
     func testStaleGenerationAndTeardownCannotReviveAttachment() async throws {
-        for _ in 0..<20 {
+        for iteration in 1...20 {
             let lease = await HostedAppKitTestGate.shared.acquire()
             defer { lease.release() }
             Self.prepareApplication()
@@ -280,7 +278,8 @@ struct RendererAttachmentSpikeHostedTests {
             let generation2 = try harness.requireGeometry()
 
             harness.ingest(Self.snapshot(from: generation1))
-            #expect(harness.currentGeometry?.generation == generation2.generation)
+            #expect(harness.currentGeometry?.generation == generation2.generation,
+                    "stale-generation iteration \(iteration)")
 
             window.setContentSize(NSSize(width: 860, height: 500))
             harness.containerView.layoutSubtreeIfNeeded()
@@ -291,7 +290,8 @@ struct RendererAttachmentSpikeHostedTests {
             let revisionBeforeStaleResize = try #require(harness.currentSnapshot).revision
             #expect(generation2.revision < generation3.revision)
             harness.ingest(Self.snapshot(from: generation2))
-            #expect(harness.currentGeometry?.generation == generation3.generation)
+            #expect(harness.currentGeometry?.generation == generation3.generation,
+                    "stale-resize iteration \(iteration)")
             let currentAfterStaleResize = try #require(harness.currentSnapshot)
             #expect(currentAfterStaleResize.revision == revisionBeforeStaleResize)
             #expect(harness.overlay.frame == frameBeforeStaleResize)
@@ -381,30 +381,18 @@ struct RendererAttachmentSpikeHostedTests {
 
     private static func alignmentEvidence(
         _ actual: CGRect,
-        measurement: RendererAttachmentSpikeDOMMeasurement,
-        pageZoom: CGFloat,
+        renderedRect: CGRect,
         containerView: NSView,
-        backingScaleFactor: CGFloat,
-        webViewBounds: CGRect
+        backingScaleFactor: CGFloat
     ) -> RendererAttachmentSpikeAlignmentEvidence {
-        let expected = RendererAttachmentSpikeGeometry(
-            generation: 0,
-            revision: 0,
-            placeholderID: measurement.placeholderID,
-            cssRect: measurement.cssRect,
-            pageZoom: pageZoom,
-            domCenterHit: measurement.centerHit,
-            scrollY: measurement.scrollY,
-            backingScaleFactor: backingScaleFactor,
-            webViewBounds: webViewBounds)
-        let expectedBacking = containerView.convertToBacking(expected.overlayRect)
+        let expectedBacking = containerView.convertToBacking(renderedRect)
         let actualBacking = containerView.convertToBacking(actual)
         return RendererAttachmentSpikeAlignmentEvidence(
             pointResiduals: [
-                abs(actual.minX - expected.overlayRect.minX),
-                abs(actual.minY - expected.overlayRect.minY),
-                abs(actual.width - expected.overlayRect.width),
-                abs(actual.height - expected.overlayRect.height)
+                abs(actual.minX - renderedRect.minX),
+                abs(actual.minY - renderedRect.minY),
+                abs(actual.width - renderedRect.width),
+                abs(actual.height - renderedRect.height)
             ],
             backingResiduals: [
                 abs(actualBacking.minX - expectedBacking.minX),
@@ -436,7 +424,7 @@ struct RendererAttachmentSpikeHostedTests {
             scrollY: geometry.scrollY)
     }
 
-    private static func outsidePoint(overlayBounds: CGRect, visibleClip: CGRect) -> NSPoint {
+    private static func outsidePoint(overlayBounds: CGRect, visibleClip: CGRect) -> NSPoint? {
         let probes: [NSPoint] = [
             NSPoint(x: visibleClip.midX, y: visibleClip.minY - 2),
             NSPoint(x: visibleClip.midX, y: visibleClip.maxY + 2),
@@ -448,7 +436,38 @@ struct RendererAttachmentSpikeHostedTests {
                 return probe
             }
         }
-        return NSPoint(x: max(0, visibleClip.maxX + 2), y: max(0, visibleClip.minY + 2))
+        return nil
+    }
+
+    private static func outsideContainerPoint(webViewBounds: CGRect, attachmentClip: CGRect) -> NSPoint? {
+        let inset: CGFloat = 8
+        let probes = [
+            NSPoint(x: webViewBounds.minX + inset, y: webViewBounds.minY + inset),
+            NSPoint(x: webViewBounds.maxX - inset, y: webViewBounds.minY + inset),
+            NSPoint(x: webViewBounds.minX + inset, y: webViewBounds.maxY - inset),
+            NSPoint(x: webViewBounds.maxX - inset, y: webViewBounds.maxY - inset)
+        ]
+        return probes.first { webViewBounds.contains($0) && attachmentClip.contains($0) == false }
+    }
+
+    /// This checks automated attributes only. It does not certify spoken VoiceOver output.
+    private static func assertAutomatedAccessibilityEvidence(
+        overlay: RendererAttachmentSpikeOverlayView,
+        placeholderID: String,
+        dom: RendererAttachmentSpikeDOMAccessibility
+    ) {
+        let expectedOverlayLabel = RendererAttachmentSpikeOverlayView.accessibilityLabel(for: placeholderID)
+        #expect(overlay.isAccessibilityElement())
+        #expect(overlay.accessibilityRole() == .group)
+        #expect(overlay.accessibilityLabel() == expectedOverlayLabel)
+        #expect(overlay.accessibilityIdentifier() == RendererAttachmentSpikeOverlayView.accessibilityIdentifier(for: placeholderID))
+        #expect(dom.present)
+        #expect(dom.role == "group")
+        #expect(dom.label.isEmpty == false)
+        #expect(dom.actionRole.isEmpty || dom.actionRole == "link")
+        if dom.actionRole == "link" {
+            #expect(dom.actionName.isEmpty == false)
+        }
     }
 
     private static func prepareApplication() {
@@ -461,10 +480,13 @@ struct RendererAttachmentSpikeHostedTests {
 private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelegate {
     static let messageName = "rendererAttachmentSpike"
     private static let cardSelector = "section.sdw-renderer-card"
+    private static let sentinelColor = "rgb(1, 2, 3)"
+    private static let snapshotTimeout: Duration = .seconds(15)
     private static let probeScript = makeProbeScript()
 
     let containerView: NSView
     let webView: WikiReaderWebView
+    private let readerRouteProbe = RendererAttachmentSpikeReaderRouteProbe(frame: .zero)
     let overlay = RendererAttachmentSpikeOverlayView(frame: .zero)
     private let bridge = RendererAttachmentSpikeBridge()
     let window: NSWindow
@@ -502,9 +524,12 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
         webView.navigationDelegate = self
         webView.pageZoom = Double(ZoomScale.defaultScale)
         webView.autoresizingMask = [.width, .height]
-        overlay.autoresizingMask = [.width, .height]
+        readerRouteProbe.autoresizingMask = [.width, .height]
+        overlay.autoresizingMask = []
         overlay.isHidden = true
         containerView.addSubview(webView)
+        readerRouteProbe.frame = webView.bounds
+        webView.addSubview(readerRouteProbe)
         containerView.addSubview(overlay)
         webView.frame = containerView.bounds
         overlay.frame = containerView.bounds
@@ -551,14 +576,17 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
     }
 
     func measureDOMGeometry() async throws -> RendererAttachmentSpikeDOMMeasurement {
+        guard let placeholderID = currentSnapshot?.placeholderID, placeholderID.isEmpty == false else {
+            throw RendererAttachmentSpikeHarnessError.missingDOMMeasurement(body: "missing stable placeholder ID")
+        }
         let body = await evaluateJavaScriptWithTimeout(webView, """
         (function(){
           var scrollY = window.scrollY || document.documentElement.scrollTop || 0;
           var docEl = document.documentElement;
           var body = document.body;
           var visual = window.visualViewport;
-          var cards = document.querySelectorAll('\(Self.cardSelector)');
-          var card = cards.length ? cards[0] : null;
+          var card = document.getElementById('\(placeholderID)');
+          var cards = card ? [card] : [];
           function viewportBounds(){
             var width = (docEl && docEl.clientWidth) || window.innerWidth || 0;
             var height = (docEl && docEl.clientHeight) || window.innerHeight || 0;
@@ -582,12 +610,14 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
           var layoutViewport = viewportBounds();
           var cardRect = card ? rectFor(card) : null;
           var visibleIntersection = cardRect ? intersectRects(cardRect, layoutViewport) : null;
+          var centerTarget = cardRect ? document.elementFromPoint(cardRect.left + (cardRect.width / 2), cardRect.top + (cardRect.height / 2)) : null;
+          var centerHit = !!(card && centerTarget && (centerTarget === card || card.contains(centerTarget)));
           var selectedCardClass = card ? (typeof card.className === 'string' ? card.className : String(card.className || '')) : "";
           return JSON.stringify({
             present: !!card,
             placeholderID: card ? (card.id || "") : "",
             cssRect: cardRect ? { x: cardRect.left, y: cardRect.top, width: cardRect.width, height: cardRect.height } : { x: 0, y: 0, width: 0, height: 0 },
-            centerHit: visibleIntersection !== null,
+            centerHit: centerHit,
             scrollY: scrollY,
             matchingCardCount: cards.length,
             selectedCardTag: card ? (card.tagName || "") : "",
@@ -626,6 +656,66 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
             throw RendererAttachmentSpikeHarnessError.missingDOMMeasurement(body: String(describing: body))
         }
         return measurement
+    }
+
+    /// Captures browser pixels after temporarily painting only the selected
+    /// placeholder. This must stay separate from all DOM and production geometry.
+    func captureSentinelRect() async throws -> CGRect? {
+        let placeholderID = try requiredPlaceholderID()
+        let selector = "#\(placeholderID)"
+        let styleID = "renderer-attachment-spike-sentinel-style"
+        let setup = """
+        (function(){
+          var card = document.querySelector(\(Self.javaScriptString(selector)));
+          if (!card) { return 'missing'; }
+          var existing = document.getElementById(\(Self.javaScriptString(styleID)));
+          if (existing) { existing.remove(); }
+          var style = document.createElement('style');
+          style.id = \(Self.javaScriptString(styleID));
+          style.textContent = \(Self.javaScriptString("\(selector) { background: \(Self.sentinelColor) !important; border-radius: 0 !important; } \(selector) * { visibility: hidden !important; }"));
+          document.head.appendChild(style);
+          return 'styled';
+        })()
+        """
+        guard await evaluateJavaScriptWithTimeout(webView, setup) == "styled" else {
+            throw RendererAttachmentSpikeHarnessError.missingSentinelPlaceholder
+        }
+        let removal = "document.getElementById(\(Self.javaScriptString(styleID)))?.remove(); 'restored'"
+        let image: NSImage
+        do {
+            image = try await Self.takeSnapshot(of: webView, timeout: Self.snapshotTimeout)
+        } catch {
+            _ = await evaluateJavaScriptWithTimeout(webView, removal)
+            throw error
+        }
+        _ = await evaluateJavaScriptWithTimeout(webView, removal)
+        return Self.sentinelRect(in: image, webViewBounds: webView.bounds)
+    }
+
+    func measureDOMAccessibility() async throws -> RendererAttachmentSpikeDOMAccessibility {
+        let placeholderID = try requiredPlaceholderID()
+        let body = await evaluateJavaScriptWithTimeout(webView, """
+        (function(){
+          var card = document.getElementById(\(Self.javaScriptString(placeholderID)));
+          var action = card ? card.querySelector('a.sdw-renderer-card__action') : null;
+          return JSON.stringify({
+            present: !!card,
+            role: card ? (card.getAttribute('role') || '') : '',
+            label: card ? (card.getAttribute('aria-label') || '') : '',
+            actionRole: action ? (action.getAttribute('role') || 'link') : '',
+            actionName: action ? (action.getAttribute('aria-label') || action.textContent || '').trim() : ''
+          });
+        })()
+        """)
+        guard let accessibility = RendererAttachmentSpikeDOMAccessibility(body: body) else {
+            throw RendererAttachmentSpikeHarnessError.missingDOMAccessibility(body: String(describing: body))
+        }
+        return accessibility
+    }
+
+    func isWebViewOrDescendant(_ view: NSView?) -> Bool {
+        guard let view else { return false }
+        return view === webView || view.isDescendant(of: webView)
     }
 
     func scrollTo(y: CGFloat) async throws {
@@ -678,6 +768,7 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
         overlay.isHidden = false
         overlay.frame = geometry.overlayRect
         overlay.visibleClipRect = geometry.localClipRect
+        overlay.configureAccessibility(placeholderID: snapshot.placeholderID)
     }
 
     func updateRuntimeState() async throws {
@@ -712,6 +803,103 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
             throw RendererAttachmentSpikeHarnessError.missingGeometry
         }
         return geometry
+    }
+
+    private func requiredPlaceholderID() throws -> String {
+        guard let placeholderID = currentSnapshot?.placeholderID, placeholderID.isEmpty == false else {
+            throw RendererAttachmentSpikeHarnessError.missingDOMMeasurement(body: "missing stable placeholder ID")
+        }
+        return placeholderID
+    }
+
+    private static func takeSnapshot(of webView: WKWebView, timeout: Duration) async throws -> NSImage {
+        final class Once: @unchecked Sendable {
+            private var fired = false
+            private let lock = NSLock()
+
+            func fire(_ body: () -> Void) {
+                lock.lock()
+                defer { lock.unlock() }
+                guard fired == false else { return }
+                fired = true
+                body()
+            }
+        }
+
+        let configuration = WKSnapshotConfiguration()
+        configuration.rect = webView.bounds
+        configuration.afterScreenUpdates = true
+        let once = Once()
+        return try await withCheckedThrowingContinuation { continuation in
+            webView.takeSnapshot(with: configuration) { image, error in
+                once.fire {
+                    if let image {
+                        continuation.resume(returning: image)
+                    } else {
+                        continuation.resume(throwing: error ?? RendererAttachmentSpikeHarnessError.missingSnapshot)
+                    }
+                }
+            }
+            Task { @MainActor in
+                do {
+                    try await Task.sleep(for: timeout)
+                    once.fire {
+                        continuation.resume(throwing: RendererAttachmentSpikeHarnessError.snapshotTimeout)
+                    }
+                } catch {
+                    // The enclosing test owns cancellation. The WebKit completion can still finish safely.
+                }
+            }
+        }
+    }
+
+    private static func sentinelRect(in image: NSImage, webViewBounds: CGRect) -> CGRect? {
+        var proposedRect = CGRect(origin: .zero, size: image.size)
+        guard let cgImage = image.cgImage(forProposedRect: &proposedRect, context: nil, hints: nil) else {
+            return nil
+        }
+        let bitmap = NSBitmapImageRep(cgImage: cgImage)
+        guard bitmap.pixelsWide > 0, bitmap.pixelsHigh > 0,
+              webViewBounds.width > 0, webViewBounds.height > 0 else {
+            return nil
+        }
+        var minX = bitmap.pixelsWide
+        var minY = bitmap.pixelsHigh
+        var maxX = -1
+        var maxY = -1
+        for y in 0..<bitmap.pixelsHigh {
+            for x in 0..<bitmap.pixelsWide {
+                guard let color = bitmap.colorAt(x: x, y: y) else { continue }
+                let red = Int((color.redComponent * 255).rounded())
+                let green = Int((color.greenComponent * 255).rounded())
+                let blue = Int((color.blueComponent * 255).rounded())
+                if red == 1, green == 2, blue == 3, color.alphaComponent > 0.99 {
+                    minX = min(minX, x)
+                    minY = min(minY, y)
+                    maxX = max(maxX, x)
+                    maxY = max(maxY, y)
+                }
+            }
+        }
+        guard maxX >= minX, maxY >= minY else { return nil }
+        let pixelsPerPointX = CGFloat(bitmap.pixelsWide) / webViewBounds.width
+        let pixelsPerPointY = CGFloat(bitmap.pixelsHigh) / webViewBounds.height
+        let width = CGFloat(maxX - minX + 1) / pixelsPerPointX
+        let height = CGFloat(maxY - minY + 1) / pixelsPerPointY
+        return CGRect(
+            x: CGFloat(minX) / pixelsPerPointX,
+            y: webViewBounds.height - (CGFloat(maxY + 1) / pixelsPerPointY),
+            width: width,
+            height: height)
+    }
+
+    private static func javaScriptString(_ value: String) -> String {
+        let escaped = value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+        return "\"" + escaped + "\""
     }
 
     private static func html(for markdown: String, documentIdentity: MarkdownDocumentIdentity) -> String {
@@ -766,6 +954,8 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
             var viewport = viewportBounds();
             var cardRect = card ? rectFor(card) : null;
             var visibleIntersection = cardRect ? intersectRects(cardRect, viewport) : null;
+            var centerTarget = cardRect ? document.elementFromPoint(cardRect.left + (cardRect.width / 2), cardRect.top + (cardRect.height / 2)) : null;
+            var centerHit = !!(card && centerTarget && (centerTarget === card || card.contains(centerTarget)));
             var selectedCardClass = card ? (typeof card.className === 'string' ? card.className : String(card.className || '')) : "";
             if(!card){
               window.webkit.messageHandlers.\(Self.messageName).postMessage({
@@ -814,7 +1004,7 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
                 placeholderID: card.id || "",
                 present: true,
                 cssRect: cardRect ? { x: cardRect.left, y: cardRect.top, width: cardRect.width, height: cardRect.height } : { x: 0, y: 0, width: 0, height: 0 },
-                centerHit: visibleIntersection !== null,
+                centerHit: centerHit,
                 scrollY: window.scrollY || document.documentElement.scrollTop || 0,
                 matchingCardCount: cards.length,
                 selectedCardTag: card.tagName || "",
@@ -906,6 +1096,28 @@ private final class RendererAttachmentSpikeOverlayView: NSView {
         }
         return super.hitTest(point)
     }
+
+    static func accessibilityLabel(for placeholderID: String) -> String {
+        "Renderer attachment overlay \(placeholderID)"
+    }
+
+    static func accessibilityIdentifier(for placeholderID: String) -> String {
+        "renderer-attachment-overlay-\(placeholderID)"
+    }
+
+    func configureAccessibility(placeholderID: String) {
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
+        setAccessibilityLabel(Self.accessibilityLabel(for: placeholderID))
+        setAccessibilityIdentifier(Self.accessibilityIdentifier(for: placeholderID))
+    }
+}
+
+/// Test-only transparent reader descendant. It makes AppKit's route target
+/// observable without adding production event-routing behavior.
+@MainActor
+private final class RendererAttachmentSpikeReaderRouteProbe: NSView {
+    override var isOpaque: Bool { false }
 }
 
 private struct RendererAttachmentSpikeSnapshot: Sendable, Equatable {
@@ -1209,11 +1421,48 @@ private struct RendererAttachmentSpikeAlignmentEvidence {
     }
 }
 
+private struct RendererAttachmentSpikeDOMAccessibility: Sendable, Equatable {
+    let present: Bool
+    let role: String
+    let label: String
+    let actionRole: String
+    let actionName: String
+
+    init?(body: String?) {
+        guard let body, let data = body.data(using: .utf8) else {
+            return nil
+        }
+        let object: Any
+        do {
+            object = try JSONSerialization.jsonObject(with: data)
+        } catch {
+            return nil
+        }
+        guard let dictionary = object as? [String: Any],
+              let present = dictionary["present"] as? Bool,
+              let role = dictionary["role"] as? String,
+              let label = dictionary["label"] as? String,
+              let actionRole = dictionary["actionRole"] as? String,
+              let actionName = dictionary["actionName"] as? String else {
+            return nil
+        }
+        self.present = present
+        self.role = role
+        self.label = label
+        self.actionRole = actionRole
+        self.actionName = actionName
+    }
+}
+
 private enum RendererAttachmentSpikeHarnessError: LocalizedError {
     case timeout(description: String)
     case missingGeometry
     case missingDOMMeasurement(body: String)
+    case missingDOMAccessibility(body: String)
     case missingPublishedRevision(body: String)
+    case missingSentinelPlaceholder
+    case missingSnapshot
+    case snapshotTimeout
 
     var errorDescription: String? {
         switch self {
@@ -1223,8 +1472,16 @@ private enum RendererAttachmentSpikeHarnessError: LocalizedError {
             return "missing attachment geometry"
         case let .missingDOMMeasurement(body):
             return "missing independent DOM measurement: \(body)"
+        case let .missingDOMAccessibility(body):
+            return "missing independent DOM accessibility evidence: \(body)"
         case let .missingPublishedRevision(body):
             return "missing published renderer attachment revision: \(body)"
+        case .missingSentinelPlaceholder:
+            return "missing sentinel placeholder"
+        case .missingSnapshot:
+            return "missing web view snapshot"
+        case .snapshotTimeout:
+            return "timed out waiting for web view snapshot"
         }
     }
 }

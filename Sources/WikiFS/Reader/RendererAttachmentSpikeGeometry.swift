@@ -20,11 +20,11 @@ struct RendererAttachmentSpikeGeometry: Sendable, Equatable {
 
     var overlayRect: CGRect {
         let scale = max(pageZoom, .leastNonzeroMagnitude)
-        let originX = cssRect.minX / scale
-        let originY = webViewBounds.height - (cssRect.maxY / scale)
+        let originX = cssRect.minX * scale
+        let originY = webViewBounds.height - (cssRect.maxY * scale)
         let size = CGSize(
-            width: cssRect.width / scale,
-            height: cssRect.height / scale)
+            width: cssRect.width * scale,
+            height: cssRect.height * scale)
         return CGRect(origin: CGPoint(x: originX, y: originY), size: size)
     }
 
@@ -43,21 +43,4 @@ struct RendererAttachmentSpikeGeometry: Sendable, Equatable {
     }
 }
 
-enum RendererAttachmentSpikeMetrics {
-    /// Returns a tolerance derived from the maximum observed residual in the
-    /// hosted comparison set. The extra half-pixel margin absorbs AppKit
-    /// quantization when converting the same rect between point and backing
-    /// coordinates; if the live residual grows beyond that, the contract broke.
-    static func derivedAlignmentTolerance(
-        pointResiduals: [CGFloat],
-        backingResiduals: [CGFloat],
-        backingScaleFactor: CGFloat
-    ) -> CGFloat {
-        let pointResidual = pointResiduals.max() ?? 0
-        let backingResidualPoints = (backingResiduals.max() ?? 0)
-            / max(backingScaleFactor, .leastNonzeroMagnitude)
-        let quantizationMargin = 0.5 / max(backingScaleFactor, .leastNonzeroMagnitude)
-        return max(pointResidual, backingResidualPoints) + quantizationMargin
-    }
-}
 #endif
