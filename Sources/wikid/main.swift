@@ -513,15 +513,20 @@ if let argPath = CommandLine.arguments.dropFirst().first(where: { !$0.hasPrefix(
     containerDirectory = try DatabaseLocation.appGroupContainerDirectory()
 }
 
-// Diagnostic: log the RESOLVED App Group id + container the daemon will use.
-// The group id comes from `WikiIdentifiers.appGroupID` (read from the id sidecar
-// bundled in the daemon's own Contents/Resources). If that sidecar is missing,
-// resolution falls back to the `group.org.sockpuppet.wiki` default → a container
-// with NO wikis → "No store for wikiID" at ingest. This line is the fastest way
-// to see that mismatch: grep for `appGroup=` and confirm it matches the app's
-// real group, and `container=` points at ~/Library/Group Containers (not a
-// sandbox-local path). (#887.)
-DebugLog.store("wikid: resolved appGroup=\(WikiIdentifiers.appGroupID) container=\(containerDirectory.path)")
+// Diagnostic: log the RESOLVED App Group id, WHERE it came from, and the
+// container the daemon will use. The group id comes from
+// `WikiIdentifiers.appGroupID` (read from the id sidecar bundled in the
+// daemon's own Contents/Resources). If that sidecar is missing, resolution has
+// no configured source left — `appGroupContainerDirectory()` now refuses rather
+// than manufacturing a `group.org.sockpuppet.wiki` container with NO wikis, so
+// the daemon fails above instead of reaching this line. `source=` records which
+// leg won, which is the fastest way to spot a container that resolves but
+// resolves WRONG. (#887.)
+DebugLog.store("""
+wikid: resolved appGroup=\(WikiIdentifiers.appGroupID) \
+source=\(WikiIdentifiers.appGroupIDSource.rawValue) \
+container=\(containerDirectory.path)
+""")
 
 let daemon = WikiDaemon(containerDirectory: containerDirectory)
 

@@ -15,16 +15,74 @@ import Foundation
 ///  3. **Sidecar `wiki-identifiers.env` next to the executable** — covers
 ///     `wikictl`, a plain CLI with no Info.plist; `build.sh` drops the file
 ///     beside the binary (both in `build/` and in the app's `Contents/Helpers`).
-///  4. **Compiled-in default** — so a fresh `swift build` / `swift test` works
-///     with no signing setup at all.
+///  4. **Compiled-in default** — so a fresh `swift build` / `swift test` links
+///     and runs with no signing setup at all.
 ///
 /// `signing/setup.sh` provisions the ids against the cloner's account and writes
 /// `signing/local.config`; `build.sh` reads that and propagates the values into
 /// (2) and (3). See `plans/signing.md`.
+///
+/// **The compiled-in default is not a usable App Group.** Legs 1–3 are each a
+/// deliberate statement by somebody; the default is the absence of one, and the
+/// constant is the upstream author's real registered App Group rather than an
+/// obviously-wrong sentinel. Anything that ACTS on ``appGroupID`` must check
+/// ``appGroupIDIsConfigured`` first —
+/// ``DatabaseLocation/appGroupContainerDirectory()`` does, and throws rather
+/// than manufacturing a container nobody chose. ``appGroupIDSource`` records
+/// which leg won so a wrong container is visible in `wikictl version` and the
+/// `wikid` startup log.
 public enum WikiIdentifiers {
+
+    /// Which leg of the resolution ladder produced a value.
+    ///
+    /// The distinction that matters is ``compiledDefault`` versus everything
+    /// else. The first four legs are all a DELIBERATE statement of intent by
+    /// somebody: a developer exported an env var, `build.sh` injected an
+    /// Info.plist key, `build.sh` wrote a sidecar, or `signing/setup.sh` wrote
+    /// `signing/local.config`. `compiledDefault` is the absence of such a
+    /// statement — nobody said which container to use, and the constant is the
+    /// original author's real registered App ID rather than an obviously-wrong
+    /// sentinel. Callers that would ACT on the id must be able to tell those
+    /// apart. See ``DatabaseLocation/appGroupContainerDirectory()``.
+    public enum ResolutionSource: String, Sendable {
+        case environment
+        case infoPlist
+        case sidecar
+        case localConfig
+        case compiledDefault
+
+        /// Whether somebody actually stated this value.
+        public var isExplicit: Bool { self != .compiledDefault }
+
+        /// Human-readable origin, for diagnostics.
+        public var description: String {
+            switch self {
+            case .environment: "environment variable"
+            case .infoPlist: "Info.plist key"
+            case .sidecar: "wiki-identifiers.env sidecar"
+            case .localConfig: "signing/local.config"
+            case .compiledDefault: "compiled-in default (NOT configured)"
+            }
+        }
+    }
+
     /// The App Group container both sides of the projection share
     /// (`~/Library/Group Containers/<appGroupID>/`). See ``DatabaseLocation``.
-    public static let appGroupID = resolve(
+    ///
+    /// Prefer ``appGroupIDIsConfigured`` before using this to touch the
+    /// filesystem — an unconfigured value points at a container that is not
+    /// this installation's.
+    public static var appGroupID: String { appGroupResolution.value }
+
+    /// Whether ``appGroupID`` came from a real configuration source rather than
+    /// the compiled-in fallback.
+    public static var appGroupIDIsConfigured: Bool { appGroupResolution.source.isExplicit }
+
+    /// Where ``appGroupID`` came from. Reported by `wikictl version --json` and
+    /// the `wikid` startup log so a wrong container is visible immediately.
+    public static var appGroupIDSource: ResolutionSource { appGroupResolution.source }
+
+    private static let appGroupResolution = resolve(
         env: "WIKI_APP_GROUP_ID",
         infoKey: "WIKIAppGroupID",
         localConfigKey: "APP_GROUP",
@@ -36,7 +94,7 @@ public enum WikiIdentifiers {
         env: "WIKI_FILE_PROVIDER_ID",
         infoKey: "WIKIFileProviderID",
         localConfigKey: "EXT_BUNDLE_ID",
-        default: "org.sockpuppet.WikiFS.FileProvider")
+        default: "org.sockpuppet.WikiFS.FileProvider").value
 
     /// The `wikid` XPC service's bundle id — the name clients pass to
     /// `NSXPCConnection(serviceName:)`, and the `CFBundleIdentifier` of
@@ -88,12 +146,12 @@ public enum WikiIdentifiers {
         infoKey: String,
         localConfigKey: String,
         default fallback: String
-    ) -> String {
-        if let v = ProcessInfo.processInfo.environment[env], !v.isEmpty { return v }
-        if let v = Bundle.main.object(forInfoDictionaryKey: infoKey) as? String, !v.isEmpty { return v }
-        if let v = sidecar[env], !v.isEmpty { return v }
-        if let v = localConfig[localConfigKey], !v.isEmpty { return v }
-        return fallback
+    ) -> (value: String, source: ResolutionSource) {
+        if let v = ProcessInfo.processInfo.environment[env], !v.isEmpty { return (v, .environment) }
+        if let v = Bundle.main.object(forInfoDictionaryKey: infoKey) as? String, !v.isEmpty { return (v, .infoPlist) }
+        if let v = sidecar[env], !v.isEmpty { return (v, .sidecar) }
+        if let v = localConfig[localConfigKey], !v.isEmpty { return (v, .localConfig) }
+        return (fallback, .compiledDefault)
     }
 
     /// Parse shell-style `KEY=VALUE` lines (comments `#…` skipped, surrounding

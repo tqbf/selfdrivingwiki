@@ -29,15 +29,54 @@ public enum DatabaseLocation {
     /// The App Group container directory as seen by the **un-sandboxed app**.
     ///
     /// Built from the LITERAL path
-    /// `~/Library/Group Containers/group.org.sockpuppet.wiki/` (NOT
-    /// `containerURL(...)`), so the writer needs no app-groups entitlement.
-    /// Creates the directory if needed.
+    /// `~/Library/Group Containers/<appGroupID>/` (NOT `containerURL(...)`), so
+    /// the writer needs no app-groups entitlement. Creates the directory if
+    /// needed.
+    ///
+    /// **Throws when the App Group id was never configured.** This function is
+    /// the one place that turns the id into filesystem state, and it calls
+    /// `createDirectory(withIntermediateDirectories:)` — so an unresolved id
+    /// did not fail, it MANUFACTURED a second, empty container and carried on.
+    /// The process then read an empty registry ("no wiki matching <id>") and
+    /// wrote real config into the wrong place, which is indistinguishable from
+    /// a first run. That has happened in at least four launch contexts: a
+    /// `.build/debug` dev CLI, the nested `wikid.xpc` daemon (#887), a `PATH`
+    /// symlink shim, and a search reindex. Each was fixed by adding another
+    /// resolution leg, which cannot stop the next context from silently
+    /// forking.
+    ///
+    /// There is no correct behavior when the id is unknown: reading or writing
+    /// somebody else's container is strictly worse than refusing to start. Any
+    /// explicit source counts as configured — an env var, the Info.plist key
+    /// `build.sh` injects, the sidecar, or `signing/local.config`. Only the
+    /// compiled-in fallback is treated as unconfigured, because it is the one
+    /// value nobody chose. See ``WikiIdentifiers/ResolutionSource``.
     public static func appGroupContainerDirectory() throws -> URL {
-        let home = FileManager.default.homeDirectoryForCurrentUser
+        try appGroupContainerDirectory(
+            id: appGroupID,
+            isConfigured: WikiIdentifiers.appGroupIDIsConfigured,
+            home: FileManager.default.homeDirectoryForCurrentUser)
+    }
+
+    /// The seam behind ``appGroupContainerDirectory()``. Takes the id, whether it
+    /// was configured, and the home directory as parameters so a test can drive
+    /// the refusal path — the real resolution is a `static let` fixed at process
+    /// start and cannot be re-pointed once loaded.
+    ///
+    /// The guard runs BEFORE `createDirectory`, which is the whole point: the
+    /// old behavior created the directory first and asked no questions.
+    static func appGroupContainerDirectory(
+        id: String,
+        isConfigured: Bool,
+        home: URL
+    ) throws -> URL {
+        guard isConfigured else {
+            throw WikiIdentifiersError.unconfiguredAppGroupID(fallback: id)
+        }
         let dir = home
             .appendingPathComponent("Library", isDirectory: true)
             .appendingPathComponent("Group Containers", isDirectory: true)
-            .appendingPathComponent(appGroupID, isDirectory: true)
+            .appendingPathComponent(id, isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }

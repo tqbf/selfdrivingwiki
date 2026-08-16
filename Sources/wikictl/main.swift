@@ -32,9 +32,17 @@ func run() async -> Int32 {
 
     // `version` doesn't need a wiki — print and exit before wiki resolution.
     if case .version(let json) = invocation.command {
+        // The App Group id and WHERE it came from are reported here on purpose.
+        // A wrong container is otherwise invisible: the CLI just says "no wiki
+        // matching <id> in the registry", which reads as an empty registry
+        // rather than as reading the wrong one. `version` needs no wiki, so it
+        // still answers when everything else fails — which makes it the right
+        // place to look first.
+        let group = WikiIdentifiers.appGroupID
+        let source = WikiIdentifiers.appGroupIDSource
         if json {
             print("""
-            {"appVersion":"\(GeneratedVersion.appVersion)","gitSHA":"\(GeneratedVersion.gitSHA)","commitCount":\(GeneratedVersion.gitCommitCount),"buildVersion":"\(GeneratedVersion.buildVersion)","fullVersion":"\(GeneratedVersion.fullVersionString)"}
+            {"appVersion":"\(GeneratedVersion.appVersion)","gitSHA":"\(GeneratedVersion.gitSHA)","commitCount":\(GeneratedVersion.gitCommitCount),"buildVersion":"\(GeneratedVersion.buildVersion)","fullVersion":"\(GeneratedVersion.fullVersionString)","appGroupID":"\(group)","appGroupIDSource":"\(source.rawValue)","appGroupIDConfigured":\(WikiIdentifiers.appGroupIDIsConfigured)}
             """)
         } else {
             print("wikictl \(GeneratedVersion.fullVersionString)")
@@ -42,6 +50,14 @@ func run() async -> Int32 {
             print("  git SHA:     \(GeneratedVersion.gitSHA)")
             print("  commit:      \(GeneratedVersion.gitCommitCount)")
             print("  build:       \(GeneratedVersion.buildVersion)")
+            print("  app group:   \(group)")
+            print("  group from:  \(source.description)")
+            if !WikiIdentifiers.appGroupIDIsConfigured {
+                print("")
+                print("  ⚠ The App Group id is NOT configured — no wiki can be opened.")
+                print("    Run signing/setup.sh, launch from inside the built .app,")
+                print("    or export WIKI_APP_GROUP_ID=<your group id>.")
+            }
         }
         return 0
     }
