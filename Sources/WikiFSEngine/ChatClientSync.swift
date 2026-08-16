@@ -112,9 +112,13 @@ public enum ChatClientSyncReducer {
         }
 
         let preservedProjection = validatingActiveContentBlock(
-            in: preservingLoadedHistory(
-            snapshot.projection,
-            loadedCommittedCursor: state.loadedCommittedCursor
+            in: preservingOverlayForStaleCommittedItems(
+                currentOverlay: state.projection?.transcriptOverlay ?? [],
+                incomingProjection: preservingLoadedHistory(
+                    snapshot.projection,
+                    loadedCommittedCursor: state.loadedCommittedCursor
+                ),
+                committedItems: state.committedItems
             ),
             committedItems: state.committedItems
         )
@@ -468,8 +472,50 @@ public enum ChatClientSyncReducer {
             committedItems: committedItems
         )
         return validatingActiveContentBlock(
-            in: terminalNormalized,
+            in: preservingOverlayForStaleCommittedItems(
+                currentOverlay: currentProjection.transcriptOverlay,
+                incomingProjection: terminalNormalized,
+                committedItems: committedItems
+            ),
             committedItems: committedItems
+        )
+    }
+
+    /// A committed transcript row is rewritten IN PLACE while its message
+    /// streams — the same cursor grows from the first chunk to the final text.
+    /// The wire's committed cursor does not advance for such a rewrite, so a
+    /// client that loaded that row mid-stream never reloads it and holds a
+    /// prefix of the final text. While the row is also in the overlay that
+    /// staleness is invisible; the moment an incoming projection drops the
+    /// overlay (turn completion, a re-hydrated snapshot, gap recovery) the
+    /// display would fall back to the prefix and the response would appear cut
+    /// off. Retain such an overlay item until the committed copy the client
+    /// holds agrees with it — `pruningCommittedOverlay` then drops it for real
+    /// once a reloaded page carries the final text.
+    private static func preservingOverlayForStaleCommittedItems(
+        currentOverlay: [ChatTranscriptItem],
+        incomingProjection: ChatSyncProjection,
+        committedItems: [PersistedChatTranscriptItem]
+    ) -> ChatSyncProjection {
+        guard currentOverlay.isEmpty == false else { return incomingProjection }
+
+        let incomingIdentities = Set(incomingProjection.transcriptOverlay.map(transcriptIdentity(for:)))
+        let retained = currentOverlay.filter { overlayItem in
+            let identity = transcriptIdentity(for: overlayItem)
+            guard incomingIdentities.contains(identity) == false else { return false }
+            guard let committedItem = committedItems.last(where: {
+                transcriptIdentity(for: $0.item) == identity
+            })?.item else {
+                // No committed copy is loaded, so nothing stale can surface.
+                return false
+            }
+            return transcriptItemsMatchForDisplay(committedItem, overlayItem) == false
+        }
+        guard retained.isEmpty == false else { return incomingProjection }
+
+        return replacingOverlay(
+            in: incomingProjection,
+            with: mergingOverlay(retained, with: incomingProjection.transcriptOverlay)
         )
     }
 
