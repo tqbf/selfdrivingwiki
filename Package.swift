@@ -112,6 +112,14 @@ let package = Package(
             ],
             publicHeadersPath: "include",
             cSettings: [
+                // Upstream Tree-sitter compiles its runtime with `-Isrc`, and its
+                // vendored ICU subset relies on it: Runtime/unicode/utf8.h asks for
+                // "unicode/umachine.h" and "unicode/utf.h", which only resolve to
+                // the pinned copies when Runtime/ is a header search root. Without
+                // this the includes fall through to the SDK's system ICU — dragging
+                // in urename.h and the deprecated utf_old.h, and silently swapping
+                // the pinned U8_*/U16_* decoding macros for the platform's.
+                .headerSearchPath("Runtime"),
                 // The pinned Scala scanner has optional stderr diagnostics behind
                 // DEBUG. Keep generated vendor bytes intact and prevent project
                 // build settings from enabling those diagnostics at runtime.
