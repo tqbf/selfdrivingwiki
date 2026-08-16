@@ -28,17 +28,12 @@ struct JSONCanvasRendererTests {
     @Test("native attachment factory never resolves fenced inline artifact bytes")
     func nativeAttachmentFactoryDoesNotLookUpFencedArtifact() throws {
         let fencedInput = try Self.fencedInput(bytes: Self.validCanvas)
-        var sourceLookupCount = 0
-        let factory = NativeJSONCanvasAttachmentFactory { _ in
-            sourceLookupCount += 1
-            return Self.validCanvas
-        }
+        let factory = NativeJSONCanvasAttachmentFactory.fencedOnly()
 
         let document = try factory.document(for: .fenced(fencedInput))
         let expectedDocument = try JSONCanvasDocument.decode(Self.validCanvas)
 
         #expect(document == expectedDocument)
-        #expect(sourceLookupCount == 0)
     }
 
     @Test("native attachment factory retains the authorized input form in failures")
@@ -283,8 +278,11 @@ struct JSONCanvasRendererTests {
         #expect(source.contains(".transaction { transaction in"))
         #expect(source.contains("transaction.animation = nil"))
         #expect(source.contains("transaction.disablesAnimations = true"))
-        #expect(source.contains("List(document.outline)") == false)
-        #expect(source.contains("Divider()") == false)
+        #expect(source.contains("case fullRenderer"))
+        #expect(source.contains("case inlineAttachment"))
+        #expect(source.contains("if presentation == .fullRenderer"))
+        #expect(source.contains("List(document.outline)"))
+        #expect(source.contains("Divider()"))
         #expect(source.contains("lineWidth: viewport.selectedNodeID == node.id ? 2 : 1"))
         #expect(source.contains("withAnimation") == false)
         #expect(source.contains(".animation(") == false)

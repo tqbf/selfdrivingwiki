@@ -60,6 +60,11 @@ final class WikiReaderContainerView: NSView {
         window?.makeFirstResponder(webView)
     }
 
+    /// The mounted child is the sole native attachment shown by this container.
+    func ownsMountedAttachment(named placeholderID: RendererAttachmentPlaceholderID) -> Bool {
+        attachmentChild?.placeholderID == placeholderID
+    }
+
     private func removeAttachmentChild() {
         attachmentChild?.removeFromSuperview()
         attachmentChild = nil
@@ -89,7 +94,7 @@ private final class RendererAttachmentOverlayView: NSView {
 
 @MainActor
 private final class RendererAttachmentNativeChildView: NSView {
-    private let placeholderID: RendererAttachmentPlaceholderID
+    let placeholderID: RendererAttachmentPlaceholderID
     private let onExit: () -> Void
     private let hostedContent: NSHostingView<AnyView>?
 

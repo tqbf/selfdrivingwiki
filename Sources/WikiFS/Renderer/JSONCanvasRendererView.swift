@@ -17,8 +17,15 @@ struct JSONCanvasInteractionSnapshot: Equatable {
     }
 }
 
+/// Distinguishes the compact inline attachment from the full renderer surface.
+enum JSONCanvasRendererPresentation: Equatable, Sendable {
+    case fullRenderer
+    case inlineAttachment
+}
+
 struct JSONCanvasRendererView: View {
     let document: JSONCanvasDocument
+    let presentation: JSONCanvasRendererPresentation
     private let hostActionDispatcher: JSONCanvasHostActionDispatcher
     private let interactionObserver: (JSONCanvasInteractionSnapshot) -> Void
 
@@ -30,15 +37,65 @@ struct JSONCanvasRendererView: View {
 
     init(
         document: JSONCanvasDocument,
+        presentation: JSONCanvasRendererPresentation = .fullRenderer,
         onHostAction: @escaping (JSONCanvasHostAction) -> Void = { _ in },
         onInteractionChange: @escaping (JSONCanvasInteractionSnapshot) -> Void = { _ in }
     ) {
         self.document = document
+        self.presentation = presentation
         hostActionDispatcher = .init(onHostAction)
         interactionObserver = onInteractionChange
     }
 
     var body: some View {
+        HStack(spacing: 0) {
+            if presentation == .fullRenderer {
+                outline
+                Divider()
+            }
+            canvas
+        }
+        // Pan, zoom, focus, and selection are direct manipulation. This renderer
+        // does not add visual motion and also blocks inherited implicit animation.
+        .transaction { transaction in
+            transaction.animation = nil
+            transaction.disablesAnimations = true
+        }
+    }
+
+    private var outline: some View {
+        List(document.outline) { entry in
+            Button(entry.label) {
+                selectOutlineEntry(entry)
+            }
+            .buttonStyle(.plain)
+            .font(.body)
+            .lineLimit(1)
+            .listRowBackground(viewport.selectedNodeID == entry.nodeID ? Color.accentColor.opacity(0.16) : .clear)
+            .accessibilityLabel("Outline node: \(entry.label)")
+            .accessibilityValue(viewport.selectedNodeID == entry.nodeID ? "Selected" : "Not selected")
+            .accessibilityHint("Press Return to select this read-only canvas node.")
+            .accessibilityAction(named: Text("Select")) {
+                selectOutlineEntry(entry)
+            }
+            .onMoveCommand { handleMoveCommand($0, from: .outline) }
+            .contextMenu {
+                if document.hostAction(for: entry.nodeID) != nil {
+                    Button("Open Internal Link") {
+                        requestHostAction(for: entry.nodeID)
+                    }
+                }
+            }
+        }
+        .frame(minWidth: 180, idealWidth: 220, maxWidth: 280)
+        .focusable()
+        .focused($focusedSurface, equals: .outline)
+        .onMoveCommand { handleMoveCommand($0, from: .outline) }
+        .accessibilityLabel("JSON Canvas outline")
+        .accessibilityHint("Use the Up and Down Arrow keys to select an outline node.")
+    }
+
+    private var canvas: some View {
         GeometryReader { _ in
                 ZStack {
                     Canvas { context, _ in
@@ -119,15 +176,10 @@ struct JSONCanvasRendererView: View {
                 .accessibilityLabel("JSON Canvas nodes")
                 .accessibilityHint("Use the Up and Down Arrow keys to select a canvas node.")
             }
-        // Pan, zoom, focus, and selection are direct manipulation. This renderer
-        // does not add visual motion and also blocks inherited implicit animation.
-        .transaction { transaction in
-            transaction.animation = nil
-            transaction.disablesAnimations = true
-        }
     }
 
     private enum FocusSurface: Hashable {
+        case outline
         case canvas
     }
 
@@ -174,6 +226,12 @@ struct JSONCanvasRendererView: View {
         (point.x * point.x + point.y * point.y).squareRoot()
     }
 
+    private func selectOutlineEntry(_ entry: JSONCanvasOutlineEntry) {
+        viewport.selectOutlineEntry(entry)
+        focusedSurface = .outline
+        reportInteraction()
+    }
+
     private func selectCanvasNode(_ nodeID: JSONCanvasNodeID) {
         viewport.select(nodeID: nodeID)
         focusedSurface = .canvas
@@ -192,7 +250,8 @@ struct JSONCanvasRendererView: View {
         case .down:
             viewport.traverseOutline(.next, in: document)
         case .left, .right:
-            focusedSurface = .canvas
+            guard presentation == .fullRenderer else { return }
+            focusedSurface = surface == .outline ? .canvas : .outline
         default:
             break
         }

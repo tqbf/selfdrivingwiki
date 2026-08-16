@@ -58,6 +58,46 @@ struct RendererAttachmentCoordinatorTests {
         #expect(window.firstResponder === webView)
     }
 
+    @Test("removing an inactive placeholder preserves the active native attachment")
+    @MainActor
+    func removingInactivePlaceholderPreservesActiveAttachment() throws {
+        let webView = WikiReaderWebView()
+        let container = WikiReaderContainerView(webView: webView)
+        container.frame = .init(x: 0, y: 0, width: 400, height: 300)
+        let window = NSWindow(contentRect: container.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        defer { container.teardown(); window.orderOut(nil) }
+
+        let coordinator = WikiReaderRep.Coordinator()
+        coordinator.webView = webView
+        coordinator.attachmentContainer = container
+        coordinator.startLoad(markdown: "# Reader", documentIdentity: nil, isLoading: .constant(true))
+        let generation = try #require(coordinator.attachmentGeneration)
+        let active = try RendererAttachmentPlaceholderID(validating: "active-canvas")
+        let inactive = try RendererAttachmentPlaceholderID(validating: "inactive-canvas")
+        let geometry = { (placeholderID: RendererAttachmentPlaceholderID) in
+            RendererAttachmentGeometryMessage(
+                generation: generation,
+                placeholderID: placeholderID,
+                cssRect: .init(x: 20, y: 20, width: 160, height: 96),
+                visible: true,
+                revision: 1)
+        }
+        coordinator.handleAttachmentGeometry(geometry(active))
+        coordinator.handleAttachmentGeometry(geometry(inactive))
+        #expect(coordinator.activateAttachment(active) == .activate)
+
+        coordinator.handleAttachmentRemoval(inactive, generation: generation)
+
+        #expect(coordinator.attachmentState(for: active) == .active)
+        #expect(coordinator.attachmentState(for: inactive) == .closed)
+        #expect(container.subviews.flatMap(\.subviews).contains {
+            $0.accessibilityIdentifier() == "renderer-attachment-active-canvas"
+        })
+        #expect((window.firstResponder as? NSView)?.accessibilityIdentifier() == "renderer-attachment-active-canvas")
+    }
+
     @MainActor private static func runJS(_ source: String, in webView: WKWebView) async throws {
         _ = try await runJavaScript(source, in: webView) { _ in () }
     }
@@ -371,6 +411,14 @@ struct RendererAttachmentCoordinatorTests {
         #expect(coordinator.state(for: second) == .card)
     }
 
+    @Test("attachment FSM does not expose synchronous transient states")
+    func attachmentFSMDropsSynchronousTransientStates() throws {
+        let source = try Self.attachmentCoordinatorSource()
+
+        #expect(source.contains("case activating") == false)
+        #expect(source.contains("case collapsing") == false)
+    }
+
     @MainActor
     private static func containsHostingView(in view: NSView) -> Bool {
         String(describing: type(of: view)).contains("NSHostingView") ||
@@ -380,5 +428,15 @@ struct RendererAttachmentCoordinatorTests {
     private static let jsonCanvasBytes = Data("""
     {"nodes":[{"id":"first","type":"text","x":0,"y":0,"width":80,"height":40,"text":"First"}],"edges":[]}
     """.utf8)
+
+    private static func attachmentCoordinatorSource() throws -> String {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        return try String(
+            contentsOf: root.appendingPathComponent("Sources/WikiFS/Reader/RendererAttachmentCoordinator.swift"),
+            encoding: .utf8)
+    }
 }
 #endif

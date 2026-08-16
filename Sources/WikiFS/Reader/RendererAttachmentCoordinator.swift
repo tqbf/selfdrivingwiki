@@ -98,10 +98,8 @@ enum RendererAttachmentGeometry {
 enum RendererAttachmentState: Equatable {
     case unresolved
     case card
-    case activating
     case active
     case failed
-    case collapsing
     case closed
 }
 
@@ -166,10 +164,8 @@ final class RendererAttachmentCoordinator {
 
     func activate(_ placeholderID: RendererAttachmentPlaceholderID) -> RendererAttachmentActivationResult {
         guard var record = records[placeholderID], record.state == .card else { return .rejected }
-        let activeCount = records.values.filter { $0.state == .active || $0.state == .activating }.count
+        let activeCount = records.values.filter { $0.state == .active }.count
         guard activeCount < activeLimit else { return .showInFullRenderer }
-        record.state = .activating
-        records[placeholderID] = record
         record.state = .active
         records[placeholderID] = record
         return .activate
@@ -177,8 +173,6 @@ final class RendererAttachmentCoordinator {
 
     func collapse(_ placeholderID: RendererAttachmentPlaceholderID) {
         guard var record = records[placeholderID], record.state == .active else { return }
-        record.state = .collapsing
-        records[placeholderID] = record
         record.state = .card
         records[placeholderID] = record
     }

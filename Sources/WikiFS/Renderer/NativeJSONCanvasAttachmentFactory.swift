@@ -63,13 +63,23 @@ enum NativeJSONCanvasAttachmentFailure: Error, Equatable {
 }
 
 /// Creates a bounded native JSON Canvas document from one typed authorization form.
-/// The source resolver is intentionally keyed by SourcePin rather than a live source.
+/// A source-capable factory is keyed by `SourcePin` rather than a live source.
 struct NativeJSONCanvasAttachmentFactory {
     typealias SourceResolver = (NativeJSONCanvasAttachmentInput.SourcePin) throws -> Data
 
-    private let resolveSource: SourceResolver
+    private let resolveSource: SourceResolver?
 
     init(_ resolveSource: @escaping SourceResolver) {
+        self.resolveSource = resolveSource
+    }
+
+    /// Creates a factory for fenced inline artifacts only. It intentionally has
+    /// no source resolver, so future source-pin routing cannot use this path.
+    static func fencedOnly() -> Self {
+        Self(resolveSource: nil)
+    }
+
+    private init(resolveSource: SourceResolver?) {
         self.resolveSource = resolveSource
     }
 
@@ -90,6 +100,7 @@ struct NativeJSONCanvasAttachmentFactory {
     ) throws -> AnyView {
         AnyView(JSONCanvasRendererView(
             document: try document(for: input),
+            presentation: .inlineAttachment,
             onHostAction: onHostAction,
             onInteractionChange: onInteractionChange))
     }
@@ -97,6 +108,9 @@ struct NativeJSONCanvasAttachmentFactory {
     private func document(for pin: NativeJSONCanvasAttachmentInput.SourcePin) throws -> JSONCanvasDocument {
         guard pin.mimeType.rawValue == BuiltInRendererMIME.json else {
             throw NativeJSONCanvasAttachmentFailure.source(input: pin, reason: .invalidMIMEType)
+        }
+        guard let resolveSource else {
+            throw NativeJSONCanvasAttachmentFailure.source(input: pin, reason: .resolverUnavailable)
         }
         let bytes: Data
         do {

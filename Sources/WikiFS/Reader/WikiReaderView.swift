@@ -1653,8 +1653,9 @@ internal struct WikiReaderRep: NSViewRepresentable {
 
         func handleAttachmentRemoval(_ placeholderID: RendererAttachmentPlaceholderID, generation: Int) {
             guard let attachmentCoordinator, attachmentCoordinator.generation == generation else { return }
+            let removedMountedChild = attachmentContainer?.ownsMountedAttachment(named: placeholderID) == true
             attachmentCoordinator.close(placeholderID)
-            attachmentContainer?.collapseAttachment()
+            if removedMountedChild { attachmentContainer?.collapseAttachment() }
         }
 
         func activateAttachment(_ placeholderID: RendererAttachmentPlaceholderID) -> RendererAttachmentActivationResult {
@@ -1690,9 +1691,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                   case .inlineArtifact(let artifact) = context.input
             else { return .fallback }
             do {
-                let factory = NativeJSONCanvasAttachmentFactory { _ in
-                    throw NativeJSONCanvasAttachmentFailure.invalidSourceIdentity
-                }
+                let factory = NativeJSONCanvasAttachmentFactory.fencedOnly()
                 return .canvas(try factory.makeView(for: .fenced(artifact)))
             } catch {
                 DebugLog.reader("native JSON Canvas attachment failed for \(placeholderID.rawValue): \(error)")
