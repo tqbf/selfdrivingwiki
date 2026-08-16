@@ -115,7 +115,7 @@ public enum WikiIdentifiers {
         env: "WIKI_DAEMON_SERVICE_ID",
         infoKey: "WIKIDaemonServiceID",
         localConfigKey: "DAEMON_BUNDLE_ID",
-        default: derivedDaemonServiceID)
+        default: derivedDaemonServiceID).value
 
     /// `<app bundle id>.wikid` — the fallback used when nothing sets the daemon
     /// id explicitly. Mirrors `DAEMON_BUNDLE_ID="${BUNDLE_ID}.wikid"` in
