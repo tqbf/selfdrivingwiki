@@ -334,8 +334,8 @@ struct WikiAppWebViewTests {
         #expect(model.loadedPageHeadVersionID(for: PageID(rawValue: "01JVERSIONMISSING000000000")) == nil)
     }
 
-    @Test("hosted production root opens a renderer presentation surface from a rich fence card")
-    func productionRootOpensRendererPresentationForRichFenceCards() async throws {
+    @Test("hosted production root opens an inline renderer attachment from a rich fence card")
+    func productionRootOpensInlineRendererForRichFenceCards() async throws {
         let lease = await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = NSApplication.shared
@@ -407,12 +407,9 @@ struct WikiAppWebViewTests {
             timeout: .seconds(5)
         )
 
-        let presentedSheet = try await waitForPresentedSheet(
-            attachedTo: window,
-            baselineSheetCount: sheetCountBeforePresentation,
-            timeout: .seconds(10))
-        #expect(presentedSheet.contentView != nil)
-        #expect(presentedSheet.isVisible)
+        let attachment = try await waitForNativeRendererAttachment(in: hosting.view, timeout: .seconds(10))
+        #expect(attachment.isHidden == false)
+        #expect(window.sheets.count == sheetCountBeforePresentation)
     }
 
     @Test("hosted SwiftUI mount exposes the session WebView and tears it down")
@@ -541,22 +538,30 @@ private func waitForPositiveJavaScriptString(
 }
 
 @MainActor
-private func waitForPresentedSheet(
-    attachedTo window: NSWindow,
-    baselineSheetCount: Int,
+private func waitForNativeRendererAttachment(
+    in view: NSView,
     timeout: Duration = .seconds(15)
-) async throws -> NSWindow {
+) async throws -> NSView {
     let deadline = ContinuousClock.now + timeout
     while ContinuousClock.now < deadline {
-        let sheets = window.sheets
-        if sheets.count > baselineSheetCount,
-           let sheet = sheets.first(where: { $0.contentView != nil }) {
-            return sheet
+        if let attachment = findView(in: view, where: {
+            $0.accessibilityIdentifier().hasPrefix("renderer-attachment-")
+        }) {
+            return attachment
         }
         try Task.checkCancellation()
         try await Task.sleep(for: .milliseconds(25))
     }
-    throw WikiDetailHostedRouteError.timeout("renderer presentation sheet")
+    throw WikiDetailHostedRouteError.timeout("native renderer attachment")
+}
+
+@MainActor
+private func findView(in view: NSView, where predicate: (NSView) -> Bool) -> NSView? {
+    if predicate(view) { return view }
+    for child in view.subviews {
+        if let match = findView(in: child, where: predicate) { return match }
+    }
+    return nil
 }
 
 @MainActor
