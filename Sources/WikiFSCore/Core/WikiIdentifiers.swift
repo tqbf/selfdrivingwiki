@@ -114,11 +114,41 @@ public enum WikiIdentifiers {
         return out
     }
 
-    /// The running executable's directory, resolved from `Bundle.main` (preferred)
-    /// or, failing that, from `argv[0]`.
-    private static var executableDir: URL? {
-        Bundle.main.executableURL?.deletingLastPathComponent()
-            ?? CommandLine.arguments.first.map { URL(fileURLWithPath: $0).deletingLastPathComponent() }
+    /// The running executable's path, resolved from `Bundle.main` (preferred)
+    /// or, failing that, from `argv[0]`. May be a symlink — neither source
+    /// resolves links.
+    private static var executableURL: URL? {
+        Bundle.main.executableURL
+            ?? CommandLine.arguments.first.map { URL(fileURLWithPath: $0) }
+    }
+
+    /// The directories to search for per-executable config, in order: the
+    /// directory the binary was INVOKED from, then — when the invocation path is
+    /// a symlink — the directory of the resolved TARGET.
+    ///
+    /// The resolved entry is what makes a symlinked install work.
+    /// `Bundle.main.executableURL` reports the path the process was EXEC'd
+    /// through, not the real file, so invoking the bundled `wikictl` through a
+    /// `PATH` shim (`~/.local/bin/wikictl` → `…/Self Driving Wiki.app/Contents/
+    /// Helpers/wikictl`, as Nix/Homebrew/`ln -s` all create) yielded only
+    /// `~/.local/bin`. No sidecar exists there and the `signing/local.config`
+    /// walk-up finds no repo, so `appGroupID` silently fell back to the
+    /// compiled-in `group.org.sockpuppet.wiki` — a DIFFERENT, empty container.
+    /// The symptom misleads: the exact same binary resolves every wiki when
+    /// called by its bundle path and reports "no wiki matching <id> in the
+    /// registry" through the symlink.
+    ///
+    /// The invoked directory is searched FIRST and is never dropped, so a
+    /// sidecar deliberately placed beside a shim still wins over the target's.
+    /// Adding the resolved directory is purely additive.
+    static func candidateExecutableDirectories(for executable: URL) -> [URL] {
+        let invoked = executable.deletingLastPathComponent()
+        let resolved = executable.resolvingSymlinksInPath().deletingLastPathComponent()
+        // Compare with the invoked dir itself resolved, so a plain (non-symlink)
+        // executable under a symlinked PARENT (`/var` → `/private/var`) yields
+        // one directory rather than two spellings of the same place.
+        if invoked.resolvingSymlinksInPath().path == resolved.path { return [invoked] }
+        return [invoked, resolved]
     }
 
     /// `KEY=VALUE` pairs parsed once from `wiki-identifiers.env`. The keys match
@@ -126,7 +156,8 @@ public enum WikiIdentifiers {
     /// file is absent — i.e. for the `.app`/`.appex` (which use the Info.plist
     /// path) and for plain test runs.
     ///
-    /// Locations checked, in order, relative to the running executable:
+    /// Locations checked, in order, per candidate executable directory (invoked,
+    /// then symlink-resolved — see ``candidateExecutableDirectories(for:)``):
     /// `build/wikictl` reads it from its own directory (the Phase A gate copy);
     /// the bundled `Contents/Helpers/wikictl` reads it from `../Resources`
     /// (build.sh can't leave plain files in the code-only Helpers dir); and the
@@ -140,14 +171,17 @@ public enum WikiIdentifiers {
     /// reading the WRONG App Group container (empty registry → "No store for
     /// wikiID" at ingest, and a stale 1-provider agent config). #887 follow-up.
     private static let sidecar: [String: String] = {
-        guard let exeDir = executableDir else { return [:] }
-        var candidates = [
-            exeDir.appendingPathComponent("wiki-identifiers.env"),
-            exeDir.deletingLastPathComponent()
-                .appendingPathComponent("Resources/wiki-identifiers.env"),
-        ]
-        if let appResources = enclosingAppResourcesDirectory(from: exeDir) {
-            candidates.append(appResources.appendingPathComponent("wiki-identifiers.env"))
+        guard let exe = executableURL else { return [:] }
+        let candidates = candidateExecutableDirectories(for: exe).flatMap { exeDir -> [URL] in
+            var perDir = [
+                exeDir.appendingPathComponent("wiki-identifiers.env"),
+                exeDir.deletingLastPathComponent()
+                    .appendingPathComponent("Resources/wiki-identifiers.env"),
+            ]
+            if let appResources = enclosingAppResourcesDirectory(from: exeDir) {
+                perDir.append(appResources.appendingPathComponent("wiki-identifiers.env"))
+            }
+            return perDir
         }
         guard let text = candidates.lazy
             .compactMap({ (url: URL) -> String? in
@@ -178,23 +212,27 @@ public enum WikiIdentifiers {
     /// `signing/local.config` (gitignored, per-developer) parsed once — the SAME
     /// file `build.sh` reads to build the `.app`. Keys are the build.sh names
     /// (`APP_GROUP`, `EXT_BUNDLE_ID`, …), NOT the env-var names. Found by
-    /// walking UP from the running executable until a repo root containing
-    /// `signing/local.config` is located, so a SwiftPM CLI at `.build/debug/`
-    /// reaches it two levels up.
+    /// walking UP from each candidate executable directory (invoked, then
+    /// symlink-resolved) until a repo root containing `signing/local.config` is
+    /// located, so a SwiftPM CLI at `.build/debug/` reaches it two levels up —
+    /// including when invoked through a symlink from elsewhere.
     ///
     /// This lets a plain CLI (no Info.plist, no sidecar) resolve the developer's
     /// REAL ids, matching the built `.app`, without any env var. Absent for fresh
     /// clones / CI → `[:]` → resolution falls through to the compiled default.
     private static let localConfig: [String: String] = {
-        guard var dir = executableDir else { return [:] }
-        for _ in 0..<10 {
-            let candidate = dir.appendingPathComponent("signing/local.config")
-            if let text = DebugLog.trying("resolveAppGroupIDFromSidecar", operation: { try String(contentsOf: candidate, encoding: .utf8) }) {
-                return parseKV(text)
+        guard let exe = executableURL else { return [:] }
+        for start in candidateExecutableDirectories(for: exe) {
+            var dir = start
+            for _ in 0..<10 {
+                let candidate = dir.appendingPathComponent("signing/local.config")
+                if let text = DebugLog.trying("resolveAppGroupIDFromSidecar", operation: { try String(contentsOf: candidate, encoding: .utf8) }) {
+                    return parseKV(text)
+                }
+                let parent = dir.deletingLastPathComponent()
+                if parent.path == dir.path { break }   // reached filesystem root
+                dir = parent
             }
-            let parent = dir.deletingLastPathComponent()
-            if parent.path == dir.path { break }   // reached filesystem root
-            dir = parent
         }
         return [:]
     }()
