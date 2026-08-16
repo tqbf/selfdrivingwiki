@@ -478,12 +478,15 @@ public enum PdfExtractionService {
     private static func candidateLocations() -> [URL] {
         var dirs: [URL] = []
 
-        // 1. Bundled in the signed app (Contents/Helpers/pdf2md).
-        dirs.append(
-            Bundle.main.bundleURL
-                .appendingPathComponent("Contents", isDirectory: true)
-                .appendingPathComponent("Helpers", isDirectory: true)
-        )
+        // 1. Bundled in the signed app (Contents/Helpers/pdf2md). Resolved via
+        //    `HelpersLocation` rather than `Bundle.main` directly: in the bundled
+        //    `wikid` XPC service `Bundle.main` is `wikid.xpc`, so a naive
+        //    `bundleURL/Contents/Helpers` pointed inside the `.xpc` (no pdf2md
+        //    there) and `checkReady()` reported the ~2 GB deps as "not installed"
+        //    even on a fully provisioned machine. Same #887 nesting bug that #889
+        //    fixed for bun/wikictl — `HelpersLocation` walks up to the enclosing
+        //    `.app` so the app and the daemon share one Helpers dir.
+        dirs.append(URL(fileURLWithPath: HelpersLocation.wikictlDirectory, isDirectory: true))
 
         // 2. Dev build output dir (`build/pdf2md`), relative to cwd.
         dirs.append(URL(fileURLWithPath: "build", isDirectory: true))
