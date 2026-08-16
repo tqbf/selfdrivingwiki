@@ -46,7 +46,6 @@ CTL_NAME="wikictl"
 # embed profiles in bundles, not bare Mach-Os), so the daemon can carry
 # App Group + keychain entitlements — no AMFI kills, no TCC prompts.
 DAEMON_NAME="wikid"
-DAEMON_BUNDLE_ID="${DAEMON_BUNDLE_ID:-com.selfdrivingwiki.wikid}"
 # podcast-token-helper: the FairPlay/Mescal signer for Apple Podcasts transcripts
 # (dlopens the private PodcastsFoundation framework in an isolated process). Bundled
 # under Contents/Helpers beside wikictl; WikiFSCore spawns it via Process. Private
@@ -67,6 +66,15 @@ BUNDLE_ID="${BUNDLE_ID:-org.sockpuppet.WikiFS}"
 EXT_BUNDLE_ID="${EXT_BUNDLE_ID:-org.sockpuppet.WikiFS.FileProvider}"
 APP_GROUP="${APP_GROUP:-group.org.sockpuppet.wiki}"
 TEAM_ID="${TEAM_ID:-KK7E9G89GW}"
+# wikid's bundle id — the XPC service name clients connect to AND the App ID its
+# provisioning profile is issued against. Derived from BUNDLE_ID, NOT a shared
+# constant: the daemon needs an explicit App ID to carry the App Group +
+# keychain entitlements, and App IDs are globally unique across App Store
+# Connect, so a hardcoded id is unprovisionable by every team except the one
+# that registered it (their wikid.xpc then signs with NO entitlements and can't
+# reach the shared keychain). WikiIdentifiers.daemonServiceID derives the same
+# value, so client and service agree. Override in local.config if needed.
+DAEMON_BUNDLE_ID="${DAEMON_BUNDLE_ID:-${BUNDLE_ID}.wikid}"
 # Shared keychain access group (app + wikid daemon). Derived from the per-
 # developer signing/local.config values (TEAM_ID + APP_GROUP): the App Group
 # minus its "group." prefix, team-prefixed (keychain-access-groups REQUIRES the
@@ -227,6 +235,7 @@ write_id_sidecar () {
   cat > "$1/wiki-identifiers.env" <<EOF
 WIKI_APP_GROUP_ID=${APP_GROUP}
 WIKI_FILE_PROVIDER_ID=${EXT_BUNDLE_ID}
+WIKI_DAEMON_SERVICE_ID=${DAEMON_BUNDLE_ID}
 EOF
 }
 write_id_sidecar "${RESOURCES_DIR}"
@@ -411,9 +420,13 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
 	<key>NSHighResolutionCapable</key><true/>
 	<key>NSPrincipalClass</key><string>NSApplication</string>
 	<key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
-	<!-- Per-developer ids read at runtime by WikiIdentifiers (Bundle.main path). -->
+	<!-- Per-developer ids read at runtime by WikiIdentifiers (Bundle.main path).
+	     WIKIDaemonServiceID is the name the app passes to
+	     NSXPCConnection(serviceName:) — it MUST match wikid.xpc's
+	     CFBundleIdentifier below or the daemon never launches. -->
 	<key>WIKIAppGroupID</key><string>${APP_GROUP}</string>
 	<key>WIKIFileProviderID</key><string>${EXT_BUNDLE_ID}</string>
+	<key>WIKIDaemonServiceID</key><string>${DAEMON_BUNDLE_ID}</string>
 	<!-- Internal pasteboard type for sidebar drag-and-drop onto the welcome
 	     screen / detail view (#133). Conforms to public.item (NOT public.data):
 	     WKWebView and its internal subviews auto-register broad types like
@@ -504,6 +517,7 @@ cat > "${DAEMON_XPC_CONTENTS}/Info.plist" <<PLIST
 	<!-- WRONG App Group container ("No store for wikiID …" at ingest). -->
 	<key>WIKIAppGroupID</key><string>${APP_GROUP}</string>
 	<key>WIKIFileProviderID</key><string>${EXT_BUNDLE_ID}</string>
+	<key>WIKIDaemonServiceID</key><string>${DAEMON_BUNDLE_ID}</string>
 	<key>XPCService</key>
 	<dict>
 		<key>ServiceType</key>
@@ -543,6 +557,37 @@ REAL_SIGNING=0
 if [ "${IDENTITY}" != "-" ] && [ -f "${APP_PROFILE}" ] && [ -f "${EXT_PROFILE}" ]; then
   REAL_SIGNING=1
 fi
+
+# This Mac's Provisioning UDID — the value the Apple portal registers devices
+# by (NOT the Hardware UUID `ioreg` reports). Read once, lazily, because it
+# costs a system_profiler call. See plans/signing.md.
+THIS_UDID=""
+this_udid () {
+  if [ -z "${THIS_UDID}" ]; then
+    THIS_UDID="$(system_profiler SPHardwareDataType 2>/dev/null \
+      | awk -F': ' '/Provisioning UDID/{print $2}' | tr -d '[:space:]')"
+    THIS_UDID="${THIS_UDID:-none}"
+  fi
+  printf '%s' "${THIS_UDID}"
+}
+
+# profile_usable <profile-path> <expected application-identifier>
+#
+# 0 when the profile can actually sign on THIS machine: it is issued for the
+# expected App ID, authorizes the App Group we put in the entitlements, and
+# lists this Mac as a provisioned device. An entitlement the embedded profile
+# does not authorize is not a soft failure — AMFI SIGKILLs the process at exec,
+# far from this cause. `signing/preflight.sh` repairs the profile set (expiry
+# included); this is the last-line check before we bake one in.
+profile_usable () {
+  local prof="$1" appid="$2" plist
+  [ -f "${prof}" ] || return 1
+  plist="$(security cms -D -i "${prof}" 2>/dev/null)" || return 1
+  case "${plist}" in *"<string>${appid}</string>"*) ;; *) return 1 ;; esac
+  case "${plist}" in *"<string>${APP_GROUP}</string>"*) ;; *) return 1 ;; esac
+  case "${plist}" in *"<string>$(this_udid)</string>"*) ;; *) return 1 ;; esac
+  return 0
+}
 
 if [ "${REAL_SIGNING}" = "1" ]; then
   # Generate entitlements from the resolved identifiers. Each entitlement MUST be
@@ -637,20 +682,31 @@ PLIST
   echo "→ embedding provisioning profiles"
   cp "${APP_PROFILE}" "${CONTENTS}/embedded.provisionprofile"
   cp "${EXT_PROFILE}" "${APPEX_CONTENTS}/embedded.provisionprofile"
-  # Embed the daemon profile if it exists (same pattern as the appex profile —
-  # codesign embeds it into the .xpc bundle, which AMFI checks at exec).
-  if [ -f "${DAEMON_PROFILE}" ]; then
+  # Embed the daemon profile when it is usable on this machine (same pattern as
+  # the appex profile — codesign embeds it into the .xpc bundle, which AMFI
+  # checks at exec). A profile that exists but does NOT authorize this App ID +
+  # App Group + Mac is worse than none: the entitlements below would then exceed
+  # what the profile grants, and AMFI SIGKILLs the daemon at launch instead of
+  # merely denying it the keychain.
+  DAEMON_PROFILE_OK=0
+  if profile_usable "${DAEMON_PROFILE}" "${TEAM_ID}.${DAEMON_BUNDLE_ID}"; then
+    DAEMON_PROFILE_OK=1
     cp "${DAEMON_PROFILE}" "${DAEMON_XPC_CONTENTS}/embedded.provisionprofile"
   else
-    # LOUD warning: without the daemon profile the sandbox + App Group +
-    # keychain entitlements below can't be signed in, so the fallback signs
-    # the .xpc WITHOUT entitlements. The daemon then runs un-sandboxed AND
-    # can't reach the App Group container / shared keychain — failing far from
-    # this cause. See signing/README.md for generating wikid.provisionprofile.
-    echo "⚠️  ${DAEMON_PROFILE} missing — wikid.xpc will be signed WITHOUT"
-    echo "⚠️  entitlements (not sandboxed, no App Group / keychain access)."
-    echo "⚠️  Run signing/setup.sh to generate it, or the daemon will fail to"
-    echo "⚠️  reach the shared container at runtime."
+    # LOUD warning: without a usable daemon profile the App Group + keychain
+    # entitlements below can't be signed in, so the fallback signs the .xpc
+    # WITHOUT entitlements. The daemon can then still reach the App Group
+    # container by literal path (it is un-sandboxed) but NOT the shared
+    # keychain — so agent credentials read back empty, failing far from this
+    # cause. `make signing-repair` provisions it; see signing/README.md.
+    if [ -f "${DAEMON_PROFILE}" ]; then
+      echo "⚠️  ${DAEMON_PROFILE} does not cover ${TEAM_ID}.${DAEMON_BUNDLE_ID}"
+      echo "⚠️  + ${APP_GROUP} on this Mac — ignoring it."
+    else
+      echo "⚠️  ${DAEMON_PROFILE} missing."
+    fi
+    echo "⚠️  wikid.xpc will be signed WITHOUT entitlements (no shared keychain)."
+    echo "⚠️  Run 'make signing-repair' to provision it."
   fi
 
   # Inside-out: sign nested Mach-O (the wikictl helper + the .appex) first, then
@@ -664,7 +720,7 @@ PLIST
   # App Group container + shared keychain WITHOUT TCC prompts or AMFI kills.
   # Inside-out: sign wikid.xpc BEFORE the outer app (same as the .appex).
   echo "→ codesign wikid.xpc (${IDENTITY})"
-  if [ -f "${DAEMON_PROFILE}" ]; then
+  if [ "${DAEMON_PROFILE_OK}" = "1" ]; then
     codesign --force --timestamp=none \
       --entitlements "${DAEMON_ENTITLEMENTS}" \
       --sign "${IDENTITY}" \

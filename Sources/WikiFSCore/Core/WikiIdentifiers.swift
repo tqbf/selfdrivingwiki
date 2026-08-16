@@ -38,6 +38,36 @@ public enum WikiIdentifiers {
         localConfigKey: "EXT_BUNDLE_ID",
         default: "org.sockpuppet.WikiFS.FileProvider")
 
+    /// The `wikid` XPC service's bundle id — the name clients pass to
+    /// `NSXPCConnection(serviceName:)`, and the `CFBundleIdentifier` of
+    /// `Contents/XPCServices/wikid.xpc`.
+    ///
+    /// Per-developer for the same reason as the ids above, and the reason is
+    /// load-bearing: the daemon needs an **explicit App ID** to carry the App
+    /// Group + keychain entitlements (a wildcard App ID cannot hold App
+    /// Groups), and App IDs are globally unique across App Store Connect. A
+    /// shared constant is therefore unprovisionable by anyone except the one
+    /// team that registered it — every other developer gets a `wikid.xpc`
+    /// signed with no entitlements, which cannot reach the shared keychain.
+    ///
+    /// Defaults to `<app bundle id>.wikid`, matching `build.sh`'s derivation,
+    /// so the id tracks whatever namespace the developer provisioned. Set
+    /// `DAEMON_BUNDLE_ID` in `signing/local.config` to override.
+    public static let daemonServiceID = resolve(
+        env: "WIKI_DAEMON_SERVICE_ID",
+        infoKey: "WIKIDaemonServiceID",
+        localConfigKey: "DAEMON_BUNDLE_ID",
+        default: derivedDaemonServiceID)
+
+    /// `<app bundle id>.wikid` — the fallback used when nothing sets the daemon
+    /// id explicitly. Mirrors `DAEMON_BUNDLE_ID="${BUNDLE_ID}.wikid"` in
+    /// `build.sh`, including the compiled-in app-id default for fresh clones.
+    private static var derivedDaemonServiceID: String {
+        let appID = localConfig["BUNDLE_ID"].flatMap { $0.isEmpty ? nil : $0 }
+            ?? "org.sockpuppet.WikiFS"
+        return appID + ".wikid"
+    }
+
     // MARK: - Resolution
 
     /// Resolve a per-developer id, first hit wins:

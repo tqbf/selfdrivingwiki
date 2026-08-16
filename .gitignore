@@ -6,6 +6,10 @@ dist/
 .DS_Store
 signing/*.provisionprofile
 signing/local.config
+# Records which bundle ids await the portal-only App Group binding, so the
+# build-time preflight stops retrying a repair only a human can finish.
+signing/.portal-pending
+__pycache__/
 # Vendored JS tooling — reproduction is `npm ci` from the pinned lockfile.
 tools/markdownlint-vendor/node_modules/
 # MLX MiniLM model — downloaded on demand (not committed). Regenerate via

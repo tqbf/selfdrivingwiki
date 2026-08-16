@@ -308,7 +308,36 @@ struct WikiDaemonConnectionHealthTests {
         // wikid.xpc Info.plist and the WikiDaemonServiceName in wikid/main.swift.
         // This invariant ensures the client connection resolves to the
         // correct XPC service bundle.
-        #expect(WikiDaemonConnection.serviceName == "com.selfdrivingwiki.wikid")
+        //
+        // It is no longer a fixed string: the daemon needs its own App ID to
+        // carry the App Group + keychain entitlements, and App IDs are globally
+        // unique across App Store Connect, so a shared constant is
+        // unprovisionable by every team except the one that registered it. What
+        // must hold is that client, service, and build.sh all read the id from
+        // the SAME resolver — build.sh writes it into the wikid.xpc
+        // CFBundleIdentifier and the sidecar that WikiIdentifiers reads back.
+        #expect(WikiDaemonConnection.serviceName == WikiIdentifiers.daemonServiceID)
+        #expect(!WikiDaemonConnection.serviceName.isEmpty)
+        #expect(WikiDaemonConnection.serviceName.contains("."))
+    }
+
+    @Test func daemonServiceIDDefaultsToAppBundleIDSuffix() {
+        // build.sh derives DAEMON_BUNDLE_ID as "${BUNDLE_ID}.wikid" when the
+        // config does not name one. WikiIdentifiers must derive the same value
+        // or the app connects to a service name the bundle does not publish.
+        // An explicit DAEMON_BUNDLE_ID in signing/local.config legitimately
+        // overrides this, so only assert the derivation when none is set.
+        let cfg = try? String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("signing/local.config"),
+            encoding: .utf8)
+        let hasExplicit = cfg?.contains("DAEMON_BUNDLE_ID=") ?? false
+        if !hasExplicit {
+            #expect(WikiIdentifiers.daemonServiceID.hasSuffix(".wikid"))
+        }
     }
 }
 #endif

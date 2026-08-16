@@ -150,10 +150,30 @@ account. Signing is now **parameterized** instead of hardcoded:
   per-user committed. `DatabaseLocation.appGroupID` /
   `FileProviderSetupVerifier.providerID` delegate to it.
 - **`signing/setup.sh`** automates provisioning via the `asc` CLI: discover team
-  + dev cert (mint one if absent), register this Mac, create both bundle ids +
-  the App Groups capability, pause for the **one** portal step the API can't do
-  (creating + binding the App Group), then create + download both profiles and
-  write `local.config`. Re-runnable.
+  + dev cert (mint one if absent), register this Mac, create the three bundle ids
+  + the App Groups capability, pause for the **one** portal step the API can't do
+  (creating + binding the App Group), then write `local.config`. Re-runnable.
+  It is now only the **first-run** path for a new Apple account.
+
+### Superseded: per-machine profiles (fixed 2026-08-13)
+
+`setup.sh` used to create the profiles itself, deleting each by name and
+recreating it with **only the Mac it ran on**. With two laptops that is a loop
+with no exit: provisioning A removes B from the profile, provisioning B removes
+A again. The failure is silent — a profile that omits your Mac still signs, and
+AMFI then kills the app at launch with no crash report.
+
+Profiles now come from **`signing/preflight.py`**, which runs before every
+`make build` and carries every registered Mac + every development certificate in
+one profile set. A second or third laptop needs no `setup.sh` run at all: it
+infers the identifiers from the Apple account and downloads a profile that
+already covers it. See [`plans/signing-preflight.md`](signing-preflight.md).
+
+The same change made `DAEMON_BUNDLE_ID` per-developer (`<BUNDLE_ID>.wikid`). The
+old fixed `com.selfdrivingwiki.wikid` is globally unique across App Store
+Connect, so only the team that registered it could ever issue a profile for it —
+every other developer's `wikid.xpc` was signed with no entitlements and read the
+shared keychain back empty.
 
 ### Cert minting gotchas (when `asc certificates create` → keychain)
 

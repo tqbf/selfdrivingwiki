@@ -6,10 +6,15 @@
 # their own values here. The committed defaults in build.sh / the Makefile are
 # the upstream author's and will NOT sign with your cert.
 #
-# Two ways to produce this file:
-#   1. Run  ./signing/setup.sh   — discovers your team/cert and provisions the
-#      bundle ids, device, and profiles via the `asc` CLI, then writes this file.
-#   2. Copy this file to signing/local.config and fill each value by hand
+# Three ways to produce this file:
+#   1. Just run `make`. On a machine whose Apple account already has the WikiFS
+#      bundle ids, signing/preflight.py reads the identifiers back from the
+#      account and writes this file for you. This is the second-laptop path —
+#      you do not need setup.sh. See plans/signing-preflight.md.
+#   2. Run  ./signing/setup.sh   — first-run bootstrap against a NEW Apple
+#      account: discovers your team/cert, provisions the bundle ids and device,
+#      then hands the profiles to preflight.py.
+#   3. Copy this file to signing/local.config and fill each value by hand
 #      (see plans/signing.md for the manual portal checklist).
 #
 # Shell syntax: KEY="value", no spaces around '='.
@@ -38,6 +43,19 @@ DIST_IDENTITY="Developer ID Application: Your Name (XXXXXXXXXX)"
 # the extension id MUST be the app id + ".FileProvider".
 BUNDLE_ID="com.example.WikiFS"
 EXT_BUNDLE_ID="com.example.WikiFS.FileProvider"
+
+# The wikid XPC service's bundle id — the name clients pass to
+# NSXPCConnection(serviceName:) AND the App ID its provisioning profile is
+# issued against. Defaults to BUNDLE_ID + ".wikid" in build.sh, the Makefile,
+# and WikiIdentifiers.daemonServiceID, so you normally leave this COMMENTED OUT.
+#
+# It is per-developer for a reason that bites: the daemon needs an explicit App
+# ID to carry the App Group + keychain entitlements (a wildcard App ID cannot
+# hold App Groups), and App IDs are globally unique across App Store Connect. A
+# shared constant is therefore provisionable by exactly one team; everyone else
+# gets a wikid.xpc signed with NO entitlements, which starts fine and then reads
+# the shared keychain back empty. See plans/signing-preflight.md.
+# DAEMON_BUNDLE_ID="com.example.WikiFS.wikid"
 
 # App Group shared by the app and the extension. Must be created in the Apple
 # Developer portal (the App Store Connect API can't) and associated with BOTH
