@@ -6,6 +6,69 @@ import WikiFSTypes
 
 @Suite("JSON Canvas native renderer", .serialized, .timeLimit(.minutes(1)))
 struct JSONCanvasRendererTests {
+    @Test("native attachment factory resolves the exact source pin and matches equivalent fenced bytes")
+    func nativeAttachmentFactoryResolvesPinnedSourceAndMatchesFence() throws {
+        let source = try Self.sourceInput(bytes: Self.validCanvas)
+        let sourcePin = try NativeJSONCanvasAttachmentInput.SourcePin(validating: source)
+        let fencedInput = try Self.fencedInput(bytes: Self.validCanvas)
+        var resolvedPins: [NativeJSONCanvasAttachmentInput.SourcePin] = []
+        let factory = NativeJSONCanvasAttachmentFactory { pin in
+            resolvedPins.append(pin)
+            return Self.validCanvas
+        }
+
+        let sourceDocument = try factory.document(for: .source(sourcePin))
+        let fencedDocument = try factory.document(for: .fenced(fencedInput))
+
+        #expect(sourceDocument == fencedDocument)
+        #expect(resolvedPins == [sourcePin])
+        #expect(NativeJSONCanvasAttachmentInput.source(sourcePin) != .fenced(fencedInput))
+    }
+
+    @Test("native attachment factory never resolves fenced inline artifact bytes")
+    func nativeAttachmentFactoryDoesNotLookUpFencedArtifact() throws {
+        let fencedInput = try Self.fencedInput(bytes: Self.validCanvas)
+        var sourceLookupCount = 0
+        let factory = NativeJSONCanvasAttachmentFactory { _ in
+            sourceLookupCount += 1
+            return Self.validCanvas
+        }
+
+        let document = try factory.document(for: .fenced(fencedInput))
+        let expectedDocument = try JSONCanvasDocument.decode(Self.validCanvas)
+
+        #expect(document == expectedDocument)
+        #expect(sourceLookupCount == 0)
+    }
+
+    @Test("native attachment factory retains the authorized input form in failures")
+    func nativeAttachmentFactoryRetainsInputFormInFailures() throws {
+        let source = try Self.sourceInput(bytes: Self.validCanvas)
+        let sourcePin = try NativeJSONCanvasAttachmentInput.SourcePin(validating: source)
+        let sourceFactory = NativeJSONCanvasAttachmentFactory { _ in Data("mismatched".utf8) }
+
+        do {
+            _ = try sourceFactory.document(for: .source(sourcePin))
+            Issue.record("expected the mismatched source response to fail")
+        } catch let failure as NativeJSONCanvasAttachmentFailure {
+            #expect(failure == .source(input: sourcePin, reason: .digestMismatch))
+        }
+
+        let oversizedFence = try Self.fencedInput(
+            bytes: Data(repeating: 0, count: JSONCanvasLimits.maximumInputByteCount + 1))
+        let fencedFactory = NativeJSONCanvasAttachmentFactory { _ in
+            Issue.record("fenced input must not perform source lookup")
+            return Data()
+        }
+
+        do {
+            _ = try fencedFactory.document(for: .fenced(oversizedFence))
+            Issue.record("expected the oversized fenced artifact to fail")
+        } catch let failure as NativeJSONCanvasAttachmentFailure {
+            #expect(failure == .fenced(input: oversizedFence, reason: .oversizedInput))
+        }
+    }
+
     @Test("decoder accepts a bounded text-node Canvas and creates a deterministic projection")
     func decoderCreatesDeterministicProjection() throws {
         let document = try JSONCanvasDocument.decode(Self.validCanvas)
@@ -14,6 +77,18 @@ struct JSONCanvasRendererTests {
         #expect(document.outline.map(\.label) == ["First note", "Second note"])
         #expect(document.renderProjection.edges.map(\.id) == ["edge-1"])
         #expect(document.renderProjection.nodes.map(\.id.rawValue) == ["first", "second"])
+    }
+
+    @Test("edge geometry clips to node boundaries and points its arrow at the destination")
+    func edgeGeometryClipsToNodeBoundaries() throws {
+        let geometry = JSONCanvasEdgeGeometry(
+            source: .init(origin: .init(x: 20, y: 10), width: 180, height: 80),
+            destination: .init(origin: .init(x: 240, y: 10), width: 180, height: 80))
+
+        #expect(geometry.start == .init(x: 200, y: 50))
+        #expect(geometry.end == .init(x: 240, y: 50))
+        #expect(geometry.arrowBaseLeft.x < geometry.end.x)
+        #expect(geometry.arrowBaseRight.x < geometry.end.x)
     }
 
     @Test("decoder models only typed internal file and wiki links")
@@ -198,7 +273,6 @@ struct JSONCanvasRendererTests {
         let source = try Self.rendererViewSource()
 
         for semanticStyle in [
-            "Color.accentColor.opacity(0.16)",
             ".color(.secondary.opacity(0.08))",
             ".color(.secondary)",
             ".background(.background)",
@@ -209,6 +283,8 @@ struct JSONCanvasRendererTests {
         #expect(source.contains(".transaction { transaction in"))
         #expect(source.contains("transaction.animation = nil"))
         #expect(source.contains("transaction.disablesAnimations = true"))
+        #expect(source.contains("List(document.outline)") == false)
+        #expect(source.contains("Divider()") == false)
         #expect(source.contains("lineWidth: viewport.selectedNodeID == node.id ? 2 : 1"))
         #expect(source.contains("withAnimation") == false)
         #expect(source.contains(".animation(") == false)
@@ -224,6 +300,31 @@ struct JSONCanvasRendererTests {
         return try String(
             contentsOf: root.appendingPathComponent("Sources/WikiFS/Renderer/JSONCanvasRendererView.swift"),
             encoding: .utf8)
+    }
+
+    private static func sourceInput(bytes: Data) throws -> RendererEmbeddedContent.Source {
+        try .init(
+            sourceID: SourceID(rawValue: "01J00000000000000000000011"),
+            sourceVersionID: SourceVersionID(rawValue: "01J00000000000000000000012"),
+            mimeType: try RendererMIMEType(validating: "application/json"),
+            bytes: bytes)
+    }
+
+    private static func fencedInput(bytes: Data) throws -> RendererEmbeddedContent.InlineArtifact {
+        let pageID = PageID(rawValue: "01J00000000000000000000021")
+        let pageVersionID = PageVersionID(rawValue: "01J00000000000000000000022")
+        let fence = try MarkdownFencedBlock(
+            documentIdentity: .init(pageID: pageID, pageVersionID: pageVersionID),
+            parserOrdinal: 0,
+            rawInfoString: "jsoncanvas",
+            bytes: bytes)
+        return try .init(
+            pageID: pageID,
+            pageVersionID: pageVersionID,
+            blockID: try #require(fence.blockID),
+            fenceKind: .jsoncanvas,
+            mimeType: try RendererMIMEType(validating: "application/json"),
+            bytes: bytes)
     }
 
     private static func canvasData(

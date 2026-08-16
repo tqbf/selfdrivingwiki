@@ -55,6 +55,7 @@ internal final class RendererEmbedActivationAdmission: @unchecked Sendable {
     let generation: Int
     private let lock = NSLock()
     private var registeredContexts: Set<RendererEmbedActivationContext> = []
+    private var attachmentContexts: [RendererAttachmentPlaceholderID: RendererEmbedActivationContext] = [:]
 
     init(
         pageID: PageID,
@@ -68,7 +69,10 @@ internal final class RendererEmbedActivationAdmission: @unchecked Sendable {
         self.generation = generation
     }
 
-    func register(context: RendererEmbedActivationContext) {
+    func register(
+        context: RendererEmbedActivationContext,
+        attachmentPlaceholderID: RendererAttachmentPlaceholderID? = nil
+    ) {
         guard context.pageID == pageID,
               context.pageVersionID == pageVersionID,
               context.capability == capability,
@@ -76,6 +80,9 @@ internal final class RendererEmbedActivationAdmission: @unchecked Sendable {
         else { return }
         lock.lock()
         registeredContexts.insert(context)
+        if let attachmentPlaceholderID {
+            attachmentContexts[attachmentPlaceholderID] = context
+        }
         lock.unlock()
     }
 
@@ -88,6 +95,15 @@ internal final class RendererEmbedActivationAdmission: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return registeredContexts.contains(context)
+    }
+
+    func attachmentContext(for placeholderID: RendererAttachmentPlaceholderID) -> RendererEmbedActivationContext? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let context = attachmentContexts[placeholderID], registeredContexts.contains(context) else {
+            return nil
+        }
+        return context
     }
 }
 
@@ -629,12 +645,20 @@ final class WikiReaderWebView: WKWebView {
         // references this view, same pattern as the hover handler.
         let embedProxy = EmbedFetchMessageHandler(target: nil)
         cc.add(embedProxy, name: Self.embedFetchName)
+        let attachmentProxy = RendererAttachmentGeometryMessageHandler(target: nil)
+        cc.add(attachmentProxy, name: "rendererAttachmentGeometry")
+        let attachmentActionProxy = RendererAttachmentActionMessageHandler(target: nil)
+        cc.add(attachmentActionProxy, name: "rendererAttachmentAction")
         cc.addUserScript(WKUserScript(
             source: Self.hoverListenerJS,
             injectionTime: .atDocumentEnd,
             forMainFrameOnly: true))
         cc.addUserScript(WKUserScript(
             source: Self.embedBootstrapJS,
+            injectionTime: .atDocumentEnd,
+            forMainFrameOnly: true))
+        cc.addUserScript(WKUserScript(
+            source: Self.rendererAttachmentGeometryJS,
             injectionTime: .atDocumentEnd,
             forMainFrameOnly: true))
         config.userContentController = cc
@@ -645,7 +669,22 @@ final class WikiReaderWebView: WKWebView {
         super.init(frame: .zero, configuration: config)
         proxy.target = self
         embedProxy.target = self
+        attachmentProxy.target = self
+        attachmentActionProxy.target = self
     }
+
+    private static let rendererAttachmentGeometryJS = """
+    (function(){
+      var known={}; function report(){ var g=window.__sdwRendererAttachmentGeneration; if(typeof g!=='number')return; var current={};
+        document.querySelectorAll('.sdw-renderer-card[id]').forEach(function(e,i){current[e.id]=true;var r=e.getBoundingClientRect();
+          window.webkit.messageHandlers.rendererAttachmentGeometry.postMessage({generation:g,placeholderID:e.id,x:r.x,y:r.y,width:r.width,height:r.height,visible:r.bottom>0&&r.right>0&&r.top<innerHeight&&r.left<innerWidth,revision:(window.__sdwRendererAttachmentRevision||0)});});
+        Object.keys(known).forEach(function(id){if(!current[id])window.webkit.messageHandlers.rendererAttachmentGeometry.postMessage({kind:'removed',generation:g,placeholderID:id});}); known=current; }
+      window.__sdwRendererAttachmentReport=function(g){window.__sdwRendererAttachmentGeneration=g;window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();};
+      window.__sdwRendererAttachmentReserve=function(id,height){var e=document.getElementById(id); if(!e||!Number.isFinite(height))return; e.style.minHeight=height+'px'; window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1; report();};
+      document.addEventListener('click',function(event){var control=event.target.closest('.sdw-renderer-card__action,.sdw-renderer-card__collapse');if(!control)return;var card=control.closest('.sdw-renderer-card[id]');if(!card)return;event.preventDefault();var collapse=control.classList.contains('sdw-renderer-card__collapse');window.webkit.messageHandlers.rendererAttachmentAction.postMessage({action:collapse?'collapse':'activate',placeholderID:card.id});if(!collapse&&!card.querySelector('.sdw-renderer-card__collapse')){var b=document.createElement('button');b.className='sdw-renderer-card__collapse';b.type='button';b.textContent='Collapse';b.setAttribute('aria-label','Collapse interactive renderer');card.appendChild(b);}});
+      addEventListener('scroll',report,{passive:true}); addEventListener('resize',report); new MutationObserver(report).observe(document.documentElement,{childList:true,subtree:true,attributes:true});
+    })();
+    """
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -1150,6 +1189,40 @@ internal final class EmbedFetchMessageHandler: NSObject, WKScriptMessageHandler 
     }
 }
 
+@MainActor
+private final class RendererAttachmentGeometryMessageHandler: NSObject, WKScriptMessageHandler {
+    weak var target: WikiReaderWebView?
+    init(target: WikiReaderWebView?) { self.target = target }
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == "rendererAttachmentGeometry", let body = message.body as? [String: Any] else { return }
+        if body["kind"] as? String == "removed", let generation = body["generation"] as? Int,
+           let rawID = body["placeholderID"] as? String,
+           let id = RendererAttachmentPlaceholderID.validatedOrNil(rawID) {
+            target?.coordinator?.handleAttachmentRemoval(id, generation: generation); return
+        }
+        guard let geometry = RendererAttachmentGeometryMessage(body: body) else { return }
+        target?.coordinator?.handleAttachmentGeometry(geometry)
+    }
+}
+
+@MainActor
+private final class RendererAttachmentActionMessageHandler: NSObject, WKScriptMessageHandler {
+    weak var target: WikiReaderWebView?
+    init(target: WikiReaderWebView?) { self.target = target }
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard let body = message.body as? [String: Any], let action = body["action"] as? String,
+              let rawID = body["placeholderID"] as? String,
+              let placeholderID = RendererAttachmentPlaceholderID.validatedOrNil(rawID)
+        else { return }
+        switch action {
+        case "activate": _ = target?.coordinator?.activateAttachment(placeholderID)
+        case "collapse": target?.coordinator?.collapseAttachment(placeholderID)
+        default: break
+        }
+    }
+}
+
 internal struct WikiReaderRep: NSViewRepresentable {
     let markdown: String
     let store: WikiStoreModel
@@ -1169,8 +1242,9 @@ internal struct WikiReaderRep: NSViewRepresentable {
     let findVersion: Int
     let findOccurrence: Int
 
-    func makeNSView(context: Context) -> WikiReaderWebView {
+    func makeNSView(context: Context) -> WikiReaderContainerView {
         let webView = WikiReaderWebView()
+        let container = WikiReaderContainerView(webView: webView)
         webView.pageZoom = readerZoom
         webView.store = store
         webView.blobHandler.store = store
@@ -1182,16 +1256,18 @@ internal struct WikiReaderRep: NSViewRepresentable {
         webView.navigationDelegate = context.coordinator
         webView.coordinator = context.coordinator
         context.coordinator.webView = webView
+        context.coordinator.attachmentContainer = container
         context.coordinator.store = store
         context.coordinator.currentSelection = currentSelection
         context.coordinator.startLoad(
             markdown: markdown,
             documentIdentity: documentIdentity,
             isLoading: $isLoading)
-        return webView
+        return container
     }
 
-    func updateNSView(_ webView: WikiReaderWebView, context: Context) {
+    func updateNSView(_ container: WikiReaderContainerView, context: Context) {
+        let webView = container.webView
         webView.pageZoom = readerZoom
         webView.store = store
         webView.blobHandler.store = store
@@ -1225,13 +1301,16 @@ internal struct WikiReaderRep: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
-    static func dismantleNSView(_ webView: WikiReaderWebView, coordinator: Coordinator) {
+    static func dismantleNSView(_ container: WikiReaderContainerView, coordinator: Coordinator) {
         coordinator.teardown()
+        container.teardown()
     }
 
     @MainActor
     final class Coordinator: NSObject, WKNavigationDelegate {
         weak var webView: WikiReaderWebView?
+        weak var attachmentContainer: WikiReaderContainerView?
+        private var attachmentCoordinator: RendererAttachmentCoordinator?
         var store: WikiStoreModel?
         var currentSelection: WikiSelection?
         var loadedMarkdown: String?
@@ -1261,6 +1340,9 @@ internal struct WikiReaderRep: NSViewRepresentable {
             convertTask?.cancel()  // drop any in-flight conversion for stale markdown
             loadGeneration += 1
             let generation = loadGeneration
+            attachmentCoordinator?.closeAll()
+            attachmentContainer?.collapseAttachment()
+            attachmentCoordinator = RendererAttachmentCoordinator(generation: generation)
             loadedMarkdown = markdown
             loadedDocumentIdentity = documentIdentity
             pageLoaded = false
@@ -1411,6 +1493,9 @@ internal struct WikiReaderRep: NSViewRepresentable {
             webView?.rendererActivationAdmission = nil
             isLoadingBinding = nil
             renderOptions = nil
+            attachmentCoordinator?.closeAll()
+            attachmentCoordinator = nil
+            attachmentContainer = nil
             webView = nil
             store = nil
             currentSelection = nil
@@ -1540,7 +1625,90 @@ internal struct WikiReaderRep: NSViewRepresentable {
             }
             pageLoaded = true
             isLoadingBinding?.wrappedValue = false
+            webView.evaluateJavaScript("window.__sdwRendererAttachmentReport && window.__sdwRendererAttachmentReport(\(loadGeneration));")
             consumeAndApplyPendingAnchor(in: webView)
+        }
+
+        // WebKit's delegate protocol requires an implicitly unwrapped navigation argument.
+        // swiftlint:disable:next implicitly_unwrapped_optional
+        func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            // A real reload begins a new document generation before didFinish;
+            // no native child may survive while WebKit replaces its DOM.
+            attachmentCoordinator?.closeAll()
+            attachmentContainer?.collapseAttachment()
+        }
+
+        func handleAttachmentGeometry(_ message: RendererAttachmentGeometryMessage) {
+            guard let attachmentCoordinator, attachmentCoordinator.ingest(message),
+                  let webView, let attachmentContainer else { return }
+            if message.revision == 1 {
+                let reservedHeight = attachmentCoordinator.reserveHeight(
+                    RendererAttachmentHostPolicy.minimumReservedHeight, for: message.placeholderID)
+                let identifier = WikiReaderRep.jsString(message.placeholderID.rawValue)
+                webView.evaluateJavaScript("window.__sdwRendererAttachmentReserve && window.__sdwRendererAttachmentReserve(\(identifier), \(reservedHeight));")
+            }
+            let rect = RendererAttachmentGeometry.overlayRect(cssRect: message.cssRect, pageZoom: webView.pageZoom, readerBounds: webView.bounds)
+            attachmentContainer.updateAttachmentViewport(message.visible ? rect : .zero)
+        }
+
+        func handleAttachmentRemoval(_ placeholderID: RendererAttachmentPlaceholderID, generation: Int) {
+            guard let attachmentCoordinator, attachmentCoordinator.generation == generation else { return }
+            attachmentCoordinator.close(placeholderID)
+            attachmentContainer?.collapseAttachment()
+        }
+
+        func activateAttachment(_ placeholderID: RendererAttachmentPlaceholderID) -> RendererAttachmentActivationResult {
+            guard let attachmentCoordinator, let attachmentContainer else { return .rejected }
+            switch nativeAttachmentContent(for: placeholderID) {
+            case .failed:
+                attachmentCoordinator.fail(placeholderID)
+                attachmentContainer.collapseAttachment()
+                return .rejected
+            case .canvas(let content):
+                let result = attachmentCoordinator.activate(placeholderID)
+                if result == .activate {
+                    attachmentContainer.activateAttachment(named: placeholderID, content: content)
+                }
+                return result
+            case .fallback:
+                break
+            }
+            let result = attachmentCoordinator.activate(placeholderID)
+            if result == .activate { attachmentContainer.activateAttachment(named: placeholderID) }
+            return result
+        }
+
+        private enum NativeAttachmentContent {
+            case fallback
+            case canvas(AnyView)
+            case failed
+        }
+
+        private func nativeAttachmentContent(for placeholderID: RendererAttachmentPlaceholderID) -> NativeAttachmentContent {
+            guard let context = webView?.rendererActivationAdmission?.attachmentContext(for: placeholderID),
+                  context.rendererReference == BuiltInRendererReference.reference(for: .jsonCanvas),
+                  case .inlineArtifact(let artifact) = context.input
+            else { return .fallback }
+            do {
+                let factory = NativeJSONCanvasAttachmentFactory { _ in
+                    throw NativeJSONCanvasAttachmentFailure.invalidSourceIdentity
+                }
+                return .canvas(try factory.makeView(for: .fenced(artifact)))
+            } catch {
+                DebugLog.reader("native JSON Canvas attachment failed for \(placeholderID.rawValue): \(error)")
+                return .failed
+            }
+        }
+
+        func attachmentState(for placeholderID: RendererAttachmentPlaceholderID) -> RendererAttachmentState {
+            attachmentCoordinator?.state(for: placeholderID) ?? .unresolved
+        }
+
+        var attachmentGeneration: Int? { attachmentCoordinator?.generation }
+
+        func collapseAttachment(_ placeholderID: RendererAttachmentPlaceholderID) {
+            attachmentCoordinator?.collapse(placeholderID)
+            attachmentContainer?.collapseAttachment()
         }
 
         func webView(

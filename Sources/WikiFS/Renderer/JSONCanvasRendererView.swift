@@ -5,9 +5,22 @@ import SwiftUI
 // Reason: This native surface binds SwiftUI gesture state to the functional
 // JSON Canvas document and viewport projection types.
 
+struct JSONCanvasInteractionSnapshot: Equatable {
+    let selectedNodeID: JSONCanvasNodeID?
+    let scale: Double
+    let translation: JSONCanvasPoint
+
+    init(viewport: JSONCanvasViewportState) {
+        selectedNodeID = viewport.selectedNodeID
+        scale = viewport.scale
+        translation = viewport.translation
+    }
+}
+
 struct JSONCanvasRendererView: View {
     let document: JSONCanvasDocument
     private let hostActionDispatcher: JSONCanvasHostActionDispatcher
+    private let interactionObserver: (JSONCanvasInteractionSnapshot) -> Void
 
     @State private var viewport = JSONCanvasViewportState()
     @State private var dragStart: JSONCanvasPoint?
@@ -17,47 +30,16 @@ struct JSONCanvasRendererView: View {
 
     init(
         document: JSONCanvasDocument,
-        onHostAction: @escaping (JSONCanvasHostAction) -> Void = { _ in }
+        onHostAction: @escaping (JSONCanvasHostAction) -> Void = { _ in },
+        onInteractionChange: @escaping (JSONCanvasInteractionSnapshot) -> Void = { _ in }
     ) {
         self.document = document
         hostActionDispatcher = .init(onHostAction)
+        interactionObserver = onInteractionChange
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            List(document.outline) { entry in
-                Button(entry.label) {
-                    selectOutlineEntry(entry)
-                }
-                .buttonStyle(.plain)
-                .font(.body)
-                .lineLimit(1)
-                .listRowBackground(viewport.selectedNodeID == entry.nodeID ? Color.accentColor.opacity(0.16) : .clear)
-                .accessibilityLabel("Outline node: \(entry.label)")
-                .accessibilityValue(viewport.selectedNodeID == entry.nodeID ? "Selected" : "Not selected")
-                .accessibilityHint("Press Return to select this read-only canvas node.")
-                .accessibilityAction(named: Text("Select")) {
-                    selectOutlineEntry(entry)
-                }
-                .onMoveCommand { handleMoveCommand($0, from: .outline) }
-                .contextMenu {
-                    if document.hostAction(for: entry.nodeID) != nil {
-                        Button("Open Internal Link") {
-                            requestHostAction(for: entry.nodeID)
-                        }
-                    }
-                }
-            }
-            .frame(minWidth: 180, idealWidth: 220, maxWidth: 280)
-            .focusable()
-            .focused($focusedSurface, equals: .outline)
-            .onMoveCommand { handleMoveCommand($0, from: .outline) }
-            .accessibilityLabel("JSON Canvas outline")
-            .accessibilityHint("Use the Up and Down Arrow keys to select an outline node.")
-
-            Divider()
-
-            GeometryReader { _ in
+        GeometryReader { _ in
                 ZStack {
                     Canvas { context, _ in
                         context.concatenate(CGAffineTransform(
@@ -66,10 +48,20 @@ struct JSONCanvasRendererView: View {
                         context.concatenate(CGAffineTransform(scaleX: viewport.scale, y: viewport.scale))
 
                         for edge in document.renderProjection.edges {
+                            let geometry = JSONCanvasEdgeGeometry(
+                                source: edge.sourceFrame,
+                                destination: edge.destinationFrame)
                             var path = Path()
-                            path.move(to: CGPoint(x: edge.start.x, y: edge.start.y))
-                            path.addLine(to: CGPoint(x: edge.end.x, y: edge.end.y))
+                            path.move(to: CGPoint(x: geometry.start.x, y: geometry.start.y))
+                            path.addLine(to: CGPoint(x: geometry.end.x, y: geometry.end.y))
                             context.stroke(path, with: .color(.secondary), lineWidth: 1)
+
+                            var arrowhead = Path()
+                            arrowhead.move(to: CGPoint(x: geometry.end.x, y: geometry.end.y))
+                            arrowhead.addLine(to: CGPoint(x: geometry.arrowBaseLeft.x, y: geometry.arrowBaseLeft.y))
+                            arrowhead.addLine(to: CGPoint(x: geometry.arrowBaseRight.x, y: geometry.arrowBaseRight.y))
+                            arrowhead.closeSubpath()
+                            context.fill(arrowhead, with: .color(.secondary))
                         }
 
                         for node in document.renderProjection.nodes {
@@ -100,6 +92,7 @@ struct JSONCanvasRendererView: View {
                             width: node.frame.width * viewport.scale,
                             height: node.frame.height * viewport.scale)
                         .position(nodePosition(for: node))
+                        .accessibilityIdentifier("json-canvas-node-\(node.id.rawValue)")
                         .accessibilityLabel("Canvas node: \(accessibilityLabel(for: node))")
                         .accessibilityValue(viewport.selectedNodeID == node.id ? "Selected" : "Not selected")
                         .accessibilityHint("Press Return to select this read-only canvas node.")
@@ -126,7 +119,6 @@ struct JSONCanvasRendererView: View {
                 .accessibilityLabel("JSON Canvas nodes")
                 .accessibilityHint("Use the Up and Down Arrow keys to select a canvas node.")
             }
-        }
         // Pan, zoom, focus, and selection are direct manipulation. This renderer
         // does not add visual motion and also blocks inherited implicit animation.
         .transaction { transaction in
@@ -136,7 +128,6 @@ struct JSONCanvasRendererView: View {
     }
 
     private enum FocusSurface: Hashable {
-        case outline
         case canvas
     }
 
@@ -152,6 +143,7 @@ struct JSONCanvasRendererView: View {
                 let delta = JSONCanvasPoint(x: location.x - dragStart.x, y: location.y - dragStart.y)
                 if Self.dragDistance(delta) >= 4 {
                     viewport.setTranslation(dragInitialTranslation + delta)
+                    reportInteraction()
                 }
             }
             .onEnded { value in
@@ -163,6 +155,7 @@ struct JSONCanvasRendererView: View {
                 let point = viewport.documentPoint(screenX: location.x, screenY: location.y)
                 viewport.selectNode(at: point, in: document)
                 focusedSurface = .canvas
+                reportInteraction()
             }
     }
 
@@ -170,6 +163,7 @@ struct JSONCanvasRendererView: View {
         MagnifyGesture()
             .onChanged { value in
                 viewport.setScale(magnificationBaseline * value.magnification)
+                reportInteraction()
             }
             .onEnded { _ in
                 magnificationBaseline = viewport.scale
@@ -180,14 +174,10 @@ struct JSONCanvasRendererView: View {
         (point.x * point.x + point.y * point.y).squareRoot()
     }
 
-    private func selectOutlineEntry(_ entry: JSONCanvasOutlineEntry) {
-        viewport.selectOutlineEntry(entry)
-        focusedSurface = .outline
-    }
-
     private func selectCanvasNode(_ nodeID: JSONCanvasNodeID) {
         viewport.select(nodeID: nodeID)
         focusedSurface = .canvas
+        reportInteraction()
     }
 
     private func requestHostAction(for nodeID: JSONCanvasNodeID) {
@@ -202,10 +192,15 @@ struct JSONCanvasRendererView: View {
         case .down:
             viewport.traverseOutline(.next, in: document)
         case .left, .right:
-            focusedSurface = surface == .outline ? .canvas : .outline
+            focusedSurface = .canvas
         default:
             break
         }
+        reportInteraction()
+    }
+
+    private func reportInteraction() {
+        interactionObserver(.init(viewport: viewport))
     }
 
     private func nodePosition(for node: JSONCanvasRenderProjection.Node) -> CGPoint {

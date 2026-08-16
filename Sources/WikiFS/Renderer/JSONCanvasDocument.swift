@@ -204,10 +204,72 @@ struct JSONCanvasRenderProjection: Sendable, Equatable {
         let id: String
         let start: JSONCanvasPoint
         let end: JSONCanvasPoint
+        let sourceFrame: JSONCanvasRect
+        let destinationFrame: JSONCanvasRect
     }
 
     let nodes: [Node]
     let edges: [Edge]
+}
+
+struct JSONCanvasEdgeGeometry: Sendable, Equatable {
+    let start: JSONCanvasPoint
+    let end: JSONCanvasPoint
+    let arrowBaseLeft: JSONCanvasPoint
+    let arrowBaseRight: JSONCanvasPoint
+
+    static let arrowLength = 14.0
+    static let arrowWidth = 10.0
+
+    init(source: JSONCanvasRect, destination: JSONCanvasRect) {
+        let sourceCenter = source.center
+        let destinationCenter = destination.center
+        let direction = Self.unitVector(from: sourceCenter, to: destinationCenter)
+        let start = Self.intersection(from: sourceCenter, toward: destinationCenter, in: source)
+        let end = Self.intersection(from: destinationCenter, toward: sourceCenter, in: destination)
+        let baseCenter = end - direction * Self.arrowLength
+        let perpendicular = JSONCanvasPoint(x: -direction.y, y: direction.x)
+
+        self.start = start
+        self.end = end
+        arrowBaseLeft = baseCenter + perpendicular * (Self.arrowWidth / 2)
+        arrowBaseRight = baseCenter - perpendicular * (Self.arrowWidth / 2)
+    }
+
+    private static func unitVector(from start: JSONCanvasPoint, to end: JSONCanvasPoint) -> JSONCanvasPoint {
+        let dx = end.x - start.x
+        let dy = end.y - start.y
+        let length = (dx * dx + dy * dy).squareRoot()
+        guard length > 0, length.isFinite else { return .init(x: 1, y: 0) }
+        return .init(x: dx / length, y: dy / length)
+    }
+
+    private static func intersection(
+        from center: JSONCanvasPoint,
+        toward target: JSONCanvasPoint,
+        in rect: JSONCanvasRect
+    ) -> JSONCanvasPoint {
+        let dx = target.x - center.x
+        let dy = target.y - center.y
+        guard dx != 0 || dy != 0 else { return center }
+
+        let halfWidth = rect.width / 2
+        let halfHeight = rect.height / 2
+        let horizontalScale = dx == 0 ? .infinity : halfWidth / abs(dx)
+        let verticalScale = dy == 0 ? .infinity : halfHeight / abs(dy)
+        let scale = min(horizontalScale, verticalScale)
+        return .init(x: center.x + dx * scale, y: center.y + dy * scale)
+    }
+}
+
+private extension JSONCanvasPoint {
+    static func - (lhs: Self, rhs: Self) -> Self {
+        .init(x: lhs.x - rhs.x, y: lhs.y - rhs.y)
+    }
+
+    static func * (lhs: Self, rhs: Double) -> Self {
+        .init(x: lhs.x * rhs, y: lhs.y * rhs)
+    }
 }
 
 struct JSONCanvasDocument: Sendable, Equatable {
@@ -297,7 +359,12 @@ struct JSONCanvasDocument: Sendable, Equatable {
             guard let destination = nodesByID[edge.toNodeID] else {
                 throw JSONCanvasDecodingError.unknownEdgeEndpoint(edge.toNodeID.rawValue)
             }
-            renderEdges.append(.init(id: edge.id, start: source.frame.center, end: destination.frame.center))
+            renderEdges.append(.init(
+                id: edge.id,
+                start: source.frame.center,
+                end: destination.frame.center,
+                sourceFrame: source.frame,
+                destinationFrame: destination.frame))
         }
         renderProjection = .init(nodes: renderNodes, edges: renderEdges)
         outline = renderNodes.map { node in
