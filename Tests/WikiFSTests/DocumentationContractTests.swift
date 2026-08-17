@@ -39,6 +39,8 @@ struct DocumentationContractTests {
         "Polymorphic refs and source-link pins:",
         "Rejected cross-namespace calls:",
     ]
+    private static let markdownRendererPhase5InventoryPath = "plans/markdown-renderer-phase5-package-inline-test-inventory.json"
+    private static let markdownRendererPhase5ProgressHeading = "# Markdown renderer Phase 5 package-inline seam and evidence"
 
     @Test func pageSourceIDPlanIsIndexedAndComplete() throws {
         let root = try #require(Self.locateRepositoryRoot())
@@ -126,6 +128,44 @@ struct DocumentationContractTests {
         #expect(progress.contains(Self.sourceMarkdownVersionProgressHeading))
         #expect(progress.contains("SourceMarkdownVersionAPISignatureManifestTests"))
         #expect(progress.contains("SourceMarkdownVersionIDPersistenceTests"))
+    }
+
+    @Test func markdownRendererPhase5DocumentationIsIndexedAndRecorded() throws {
+        let root = try #require(Self.locateRepositoryRoot())
+        let plan = try String(contentsOf: root.appendingPathComponent("PLAN.md"), encoding: .utf8)
+        let progress = try Self.readProgressEntries(from: root)
+
+        #expect(plan.contains("[`plans/markdown-renderer-embeds.md`](plans/markdown-renderer-embeds.md)"))
+        #expect(progress.contains(Self.markdownRendererPhase5ProgressHeading))
+    }
+
+    @Test func markdownRendererPhase5InventoryMapsExactHeadSeamCoverage() throws {
+        let root = try #require(Self.locateRepositoryRoot())
+        let data = try Data(contentsOf: root.appendingPathComponent(Self.markdownRendererPhase5InventoryPath))
+        let inventory = try #require(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            "inventory must be a JSON object"
+        )
+        let productionPaths = try #require(inventory["productionPaths"] as? [[String: Any]])
+        let testPaths = try #require(inventory["testPaths"] as? [String])
+
+        #expect(inventory["baseSHA"] as? String == "660264209f95a545b823fdb6f459d02239ba96cb")
+        #expect(inventory["headSHA"] as? String == "63657e10b8a278e6c476119eddb2964f0bee75c2")
+        #expect((inventory["scope"] as? String)?.contains("RendererAuthorizedInputResolving") == true)
+        #expect((inventory["scope"] as? String)?.contains("SourceDetailView") == true)
+
+        let productionSymbols = productionPaths.flatMap { $0["symbols"] as? [String] ?? [] }
+        let productionTests = productionPaths.flatMap { $0["tests"] as? [String] ?? [] }
+
+        #expect(productionSymbols.contains("RendererAuthorizedInputResolving"))
+        #expect(productionSymbols.contains("WikiStoreModel.rendererAuthorizedInputReader"))
+        #expect(productionSymbols.contains("SourceDetailView.rendererAuthorizedInputResolver"))
+        #expect(productionTests.contains("RendererAuthorizedInputReaderTests.resolverSeamReturnsTheExactPinnedReader"))
+        #expect(productionTests.contains("RendererAuthorizedInputReaderTests.storeBackedMarkdownReadUsesPinnedBlobBytes"))
+        #expect(productionTests.contains("WikiAppWebViewTests.factoryWiresPinnedInputAndLifecycleContracts"))
+        #expect(testPaths.contains("Tests/WikiFSTests/RendererAuthorizedInputReaderTests.swift"))
+        #expect(testPaths.contains("Tests/WikiFSAppTests/WikiAppWebViewTests.swift"))
+        #expect(testPaths.contains("Tests/WikiFSTests/DocumentationContractTests.swift"))
     }
 
     @Test func dynamicRendererBridgeContractIsVersionPinnedAndNavigationScoped() throws {
