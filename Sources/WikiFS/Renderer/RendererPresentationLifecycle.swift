@@ -42,6 +42,10 @@ struct RendererPresentationLifecycle: Sendable, Equatable {
         state.selectSplit(reference)
     }
 
+    mutating func selectRendered(_ reference: RendererReference) {
+        state.selectRendered(reference)
+    }
+
     mutating func selectFallback(reason: String) {
         state.selectFallback(reason: reason)
     }

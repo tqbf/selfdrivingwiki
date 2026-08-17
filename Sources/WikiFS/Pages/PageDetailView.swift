@@ -2,6 +2,8 @@ import SwiftUI
 import WikiFSEngine
 import WikiFSCore
 
+// pattern: Mixed (unavoidable)
+
 /// Unified page surface. The header (title, date, action buttons) stays fixed
 /// regardless of mode. The content area below the divider swaps between rendered
 /// markdown and the monospaced source editor. Save/Cancel appear inline in the
@@ -12,6 +14,9 @@ struct PageDetailView: View {
     /// The per-active-wiki session (store + launchers + descriptor).
     var session: WikiSession
     let fileProvider: FileProviderFacade
+    /// Optional typed renderer admission sink. When absent, rich cards stay
+    /// static and do not expose activation metadata.
+    let onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)?
     @State private var isEditing = false
     /// Pending scroll-to-heading for the editor (outline click while editing).
     @State private var editorScrollRequest: EditorScrollRequest?
@@ -52,6 +57,20 @@ struct PageDetailView: View {
     /// Opens the value-driven Versions `WindowGroup` (#817). Captured from the
     /// environment (only available inside a `WindowGroup`'s view hierarchy).
     @Environment(\.openWindow) private var openWindow
+
+    init(
+        store: WikiStoreModel,
+        launcher: AgentLauncher,
+        session: WikiSession,
+        fileProvider: FileProviderFacade,
+        onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)? = nil
+    ) {
+        self._store = Bindable(wrappedValue: store)
+        self._launcher = Bindable(wrappedValue: launcher)
+        self.session = session
+        self.fileProvider = fileProvider
+        self.onRendererActivation = onRendererActivation
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -462,7 +481,9 @@ struct PageDetailView: View {
         WikiReaderView(markdown: store.draftBody,
                         currentSelection: store.selection,
                         store: store,
+                        documentIdentity: currentPageDocumentIdentity,
                         fileProvider: fileProvider,
+                        onRendererActivation: onRendererActivation,
                         findText: findText, findVersion: findVersion,
                         findOccurrence: findOccurrence)
             .frame(maxWidth: .infinity)
@@ -525,6 +546,13 @@ struct PageDetailView: View {
     private var currentPageID: PageID? {
         guard case .page(let id) = store.selection else { return nil }
         return id
+    }
+
+    private var currentPageDocumentIdentity: MarkdownDocumentIdentity? {
+        guard let pageID = currentPageID,
+              let pageVersionID = store.loadedPageHeadVersionID(for: pageID)
+        else { return nil }
+        return MarkdownDocumentIdentity(pageID: pageID, pageVersionID: pageVersionID)
     }
 
     /// Open the Versions window for the current page (#817). Injected into the

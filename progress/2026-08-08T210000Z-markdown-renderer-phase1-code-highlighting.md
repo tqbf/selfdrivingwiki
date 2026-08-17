@@ -113,6 +113,52 @@ and make-test log `tmp/orchestration/markdown-renderer-embeds/gates/make-test-87
 The nonempty prerequisite record is `gates/prerequisites-f6cd101d-r4.log`
 (SHA-256 `115fc2d1c271aacc399f3e9131ae6d929cfe4c792c6882ea70034046512a9c1f`).
 
+The 100 KiB aggregate record is historical base-plus-working-tree evidence.
+It is not candidate-head evidence. Its five original per-grammar artifact
+hashes are retired because later probe runs overwrote the source files. The
+decision-inlined values and the current independent aggregate files corroborate
+the gate. A later measurement-affecting revision must regenerate and hash-bind
+per-grammar artifacts before it uses them as gate evidence.
+
+The operator reaffirmed the final exact-head H1 exception. The release
+executable is 96,056,944 bytes. The final delta is 8,384,864 bytes. The prior
+delta was 8,251,456 bytes. The additional approved growth is 133,408 bytes.
+The final head is `f6cd101df847b92f2a439cabfbb1d7dd404d28c1`. The final tree is
+`dfd81201b736fa82c7a14291858c22efe8698717`. The base and merge base are
+`14f07d60093daf25596522924a77b6fa0742a23d`. The measurement used `make release`.
+The final evidence record is
+`tmp/orchestration/markdown-renderer-embeds/phase1-r1-final-head-evidence-f6cd101d.json`
+with SHA-256
+`88c68d53a82bd4134cd69178cfe0c999c3af7cece0662af394b590a3c444fd8d`.
+The exception applies only to the five-grammar implementation and the same
+124-file app attribution. It does not allow a new dependency, grammar, source
+maximum, shipped test, benchmark, fixture, unrelated growth, or future waiver.
+Any later identity, bundle, dependency, grammar, or unexplained size change
+invalidates the exception and needs fresh evidence. PR 1 must disclose this
+decision and its evidence.
+
+The documentation-only successor may inherit F2 and H1 only while the canonical
+measured-input manifest remains unchanged: `tmp/orchestration/markdown-renderer-embeds/measured-input-manifest-875a2438.json`
+(SHA-256 `e4c330ef9b623621c2b52c639a54fc29cc33b901f466af684af840a9f126542e`).
+The f6cd101d-to-875a2438 source/build-input diff is empty. Any manifest input,
+bundle, dependency, grammar, query, fixture, build setting, or base change ends
+this inheritance and requires new measurement and operator approval.
+
+The accepted H1 measurement remains at `f6cd101d`; `7cfac571` is a
+documentation candidate and claims no new measurement. Canonical audit reports
+are retained in the orchestrator checkout. Build, benchmark, gate, and manifest
+artifacts are retained in the implementation workspace. Both use the same
+project-relative evidence-root hint. SHA-256 and recovery-workspace identity,
+not a clone-complete artifact bundle, are authoritative.
+
+Canonical final-head evidence names the focused log
+`tmp/orchestration/markdown-renderer-embeds/gates/focused-875a2438.log`
+(SHA-256 `0fd1a3d085e8a92d4019aa9553d130e20e3ce317845fcdbfd12221d0cfd4dbf0`)
+and make-test log `tmp/orchestration/markdown-renderer-embeds/gates/make-test-875a2438.log`
+(SHA-256 `2bfc205bf508efa94fdb1e9ad0eb1e1ed04704dd770f404bd1dd6e25d14a779b`).
+The nonempty prerequisite record is `gates/prerequisites-f6cd101d-r4.log`
+(SHA-256 `115fc2d1c271aacc399f3e9131ae6d929cfe4c792c6882ea70034046512a9c1f`).
+
 The independent `e18c9f62` audit measured every grammar at the accepted 256 KiB
 maximum. Its worst parse-plus-query p95 was Scala at 31.527 ms and its highest
 RSS delta was Scala at 31.19 MiB. The regular `CodeHighlightBenchmark` fresh

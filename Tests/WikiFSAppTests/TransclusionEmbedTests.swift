@@ -275,6 +275,87 @@ struct TransclusionEmbedTests {
         #expect(!TransclusionEmbedder.isEmpty(html))
     }
 
+    @Test func renderEmbedBodyRichFencesStayStaticWithoutOuterAdmission() throws {
+        let store = try TestStoreFactory.inMemory()
+        let outer = try store.createPage(title: "Outer")
+        let embedded = try store.createPage(title: "Embedded")
+        try store.updatePage(
+            id: embedded.id,
+            title: "Embedded",
+            body: """
+            ```jsoncanvas
+            {"nodes":[],"edges":[]}
+            ```
+            """)
+        let context = contextFor(
+            store: store,
+            pages: [(outer.id.rawValue, "Outer"), (embedded.id.rawValue, "Embedded")])
+        let projection = RendererEmbedProjection(
+            sourceEmbeds: [:],
+            richFenceAliases: Set(MarkdownRichFenceAlias.allCases))
+        let options = MarkdownRenderOptions(
+            codeHighlighting: .disabled,
+            rendererEmbedProjection: projection,
+            documentIdentity: MarkdownDocumentIdentity(
+                pageID: outer.id,
+                pageVersionID: .init(rawValue: "outer-version")),
+            rendererActivationAdmission: RendererEmbedActivationAdmission(
+                pageID: outer.id,
+                pageVersionID: .init(rawValue: "outer-version"),
+                capability: .init(rawValue: "capability"),
+                generation: 1))
+
+        let html = try TransclusionEmbedder.renderEmbedBody(
+            store: store, target: .page(embedded.id), context: context, options: options)
+
+        #expect(html.contains("sdw-renderer-card"))
+        #expect(html.contains("JSON Canvas"))
+        #expect(!html.contains("renderer-action://open"))
+        #expect(!html.contains("data-renderer-input="))
+        #expect(!html.contains("data-renderer-input=\"null\""))
+    }
+
+    @Test func duplicateTranscludedOrdinalsRemainStaticAndDoNotCollideActively() throws {
+        let store = try TestStoreFactory.inMemory()
+        let firstPage = try store.createPage(title: "First")
+        let secondPage = try store.createPage(title: "Second")
+        let body = """
+        ```jsoncanvas
+        {"nodes":[],"edges":[]}
+        ```
+        """
+        try store.updatePage(id: firstPage.id, title: "First", body: body)
+        try store.updatePage(id: secondPage.id, title: "Second", body: body)
+        let context = contextFor(
+            store: store,
+            pages: [(firstPage.id.rawValue, "First"), (secondPage.id.rawValue, "Second")])
+        let projection = RendererEmbedProjection(
+            sourceEmbeds: [:],
+            richFenceAliases: Set(MarkdownRichFenceAlias.allCases))
+        let options = MarkdownRenderOptions(
+            codeHighlighting: .disabled,
+            rendererEmbedProjection: projection,
+            documentIdentity: MarkdownDocumentIdentity(
+                pageID: firstPage.id,
+                pageVersionID: .init(rawValue: "outer-version")),
+            rendererActivationAdmission: RendererEmbedActivationAdmission(
+                pageID: firstPage.id,
+                pageVersionID: .init(rawValue: "outer-version"),
+                capability: .init(rawValue: "capability"),
+                generation: 1))
+
+        let firstHTML = try TransclusionEmbedder.renderEmbedBody(
+            store: store, target: .page(firstPage.id), context: context, options: options)
+        let secondHTML = try TransclusionEmbedder.renderEmbedBody(
+            store: store, target: .page(secondPage.id), context: context, options: options)
+
+        #expect(firstHTML == secondHTML)
+        #expect(firstHTML.contains("sdw-renderer-card"))
+        #expect(firstHTML.contains("JSON Canvas"))
+        #expect(!firstHTML.contains("renderer-action://open"))
+        #expect(!secondHTML.contains("renderer-action://open"))
+    }
+
     @Test func rootAndTransclusionShareTheDocumentHighlightedFenceBudget() throws {
         let store = try TestStoreFactory.inMemory()
         let embedded = try store.createPage(title: "Embedded")

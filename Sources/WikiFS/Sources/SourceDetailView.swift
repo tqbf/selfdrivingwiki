@@ -1211,6 +1211,21 @@ struct SourceDetailView: View {
         store.setRendererSourcePreference(sourceID: file.id, preference: .exact(reference))
     }
 
+    @MainActor
+    private func activateRendererPane(reference: RendererReference, input: RendererBridgeInput) {
+        guard headVersion != nil else {
+            return
+        }
+        // The exact typed input is carried by the markdown card and routed to
+        // the current source's renderer pane. The renderer state itself only
+        // needs the exact renderer reference to open the pane.
+        persistRendererPreference(reference)
+        var lifecycle = rendererPresentationLifecycle
+        lifecycle.selectRendered(reference)
+        rendererPresentationLifecycle = lifecycle
+        store.setRendererSourcePresentation(sourceID: file.id, presentation: .rendered)
+    }
+
     private func rendererPlanner() throws -> SourceRendererPresentationPlanner {
         try SourceRendererPresentationPlanner(
             installedDescriptors: installedRendererFactoryInputs.enabledDescriptors)
@@ -1349,6 +1364,7 @@ struct SourceDetailView: View {
             WikiReaderView(markdown: pinnedExtraction?.content ?? head.content,
                             currentSelection: store.selection,
                             store: store,
+                            onRendererActivation: activateRendererPane(reference:input:),
                             findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
                 .zoomShortcuts($readerZoom)
                 .zoomScroll($readerZoom)
@@ -1363,6 +1379,7 @@ struct SourceDetailView: View {
             WikiReaderView(markdown: sourceMarkdown,
                             currentSelection: store.selection,
                             store: store,
+                            onRendererActivation: headVersion == nil ? nil : activateRendererPane(reference:input:),
                             findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
                 .zoomShortcuts($readerZoom)
                 .zoomScroll($readerZoom)

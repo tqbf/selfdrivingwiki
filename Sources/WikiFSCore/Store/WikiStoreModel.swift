@@ -3098,6 +3098,14 @@ public final class WikiStoreModel {
         DebugLog.trying("pageOrigin", operation: { try store.pageOrigin(pageID: id) })
     }
 
+    /// The page version that the active page editor loaded for `pageID`.
+    /// Readers use this to bind render identity to the exact version state the
+    /// view already owns, instead of re-querying HEAD during conversion.
+    public func loadedPageHeadVersionID(for pageID: PageID) -> PageVersionID? {
+        guard loadedPage == pageID else { return nil }
+        return loadedPageHeadVersionID
+    }
+
     /// The full edit history for a page — every `page_versions` row joined to
     /// its activity + agent, oldest-first. `nil`/empty when the read fails or
     /// the page has no versions. Drives the expandable "Edit history" list in

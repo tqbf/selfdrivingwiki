@@ -86,6 +86,103 @@ struct RendererBridgeContractsTests {
         #expect(throws: RendererBridgeAuthorizationError.nonMainFrame) { try nonMainFrame.authorize(envelope: envelope, context: childFrame, sessionIsReady: true, sessionIsClosed: false) }
     }
 
+    @Test("inline artifact requests remain typed and replay-safe")
+    func inlineArtifactRequestAuthorization() throws {
+        let capability = RendererSessionCapability(rawValue: "capability")
+        let pageID = PageID(rawValue: "01HTESTPAGE000000000000001")
+        let pageVersionID = PageVersionID(rawValue: "01HTESTPV00000000000000001")
+        let bytes = Data("{\"nodes\":[],\"edges\":[]}".utf8)
+        let block = try MarkdownFencedBlock(
+            documentIdentity: .init(pageID: pageID, pageVersionID: pageVersionID),
+            parserOrdinal: 0,
+            rawInfoString: "jsoncanvas",
+            bytes: bytes)
+        let blockID = try #require(block.blockID)
+        let artifact = try RendererEmbeddedContent.InlineArtifact(
+            pageID: pageID,
+            pageVersionID: pageVersionID,
+            blockID: blockID,
+            fenceKind: .jsoncanvas,
+            mimeType: .init(rawValue: "application/json")!,
+            bytes: bytes)
+        let input = RendererBridgeInput.inlineArtifact(artifact)
+        let request = RendererBridgeRequest(id: .init(rawValue: "request-inline"), method: .inputRead, capability: capability, input: input)
+        let envelope = try RendererBridgeEnvelope.encode(request)
+        var authorizer = RendererBridgeAuthorizer(capability: capability)
+
+        #expect(block.digest == artifact.digest)
+        #expect(try authorizer.authorize(envelope: envelope, sessionIsReady: true) == request)
+        #expect(throws: RendererBridgeAuthorizationError.duplicateRequestID) {
+            try authorizer.authorize(envelope: envelope, sessionIsReady: true)
+        }
+    }
+
+    @Test("inline artifacts fail closed when the canonical digest does not match the fenced block")
+    func inlineArtifactDigestMismatchFailsClosed() throws {
+        let pageID = PageID(rawValue: "01HTESTPAGE000000000000001")
+        let pageVersionID = PageVersionID(rawValue: "01HTESTPV00000000000000001")
+        let blockBytes = Data("{\"nodes\":[],\"edges\":[]}".utf8)
+        let artifactBytes = Data("{\"nodes\":[1],\"edges\":[]}".utf8)
+        let block = try MarkdownFencedBlock(
+            documentIdentity: .init(pageID: pageID, pageVersionID: pageVersionID),
+            parserOrdinal: 0,
+            rawInfoString: "jsoncanvas",
+            bytes: blockBytes)
+        let blockID = try #require(block.blockID)
+
+        #expect(throws: RendererValidationError.invalidIdentifier(
+            kind: "renderer inline artifact",
+            value: "digest mismatch")) {
+                try RendererEmbeddedContent.InlineArtifact(
+                    pageID: pageID,
+                    pageVersionID: pageVersionID,
+                    blockID: blockID,
+                    fenceKind: .jsoncanvas,
+                    mimeType: .init(rawValue: "application/json")!,
+                    bytes: artifactBytes)
+                }
+    }
+
+    @Test("canonical fence digests are domain-separated and collision resistant")
+    func canonicalFenceDigestsAreDomainSeparated() throws {
+        let first = try MarkdownFencedBlock(
+            documentIdentity: nil,
+            parserOrdinal: 0,
+            rawInfoString: "c",
+            bytes: Data("ab".utf8))
+        let second = try MarkdownFencedBlock(
+            documentIdentity: nil,
+            parserOrdinal: 1,
+            rawInfoString: "bc",
+            bytes: Data("a".utf8))
+
+        #expect(first.canonicalDigestPayload != second.canonicalDigestPayload)
+        #expect(first.digest != second.digest)
+    }
+
+    @Test("inline artifacts use the same framed canonical payload as fenced blocks")
+    func inlineArtifactsUseSameFramedCanonicalPayload() throws {
+        let pageID = PageID(rawValue: "01HTESTPAGE000000000000001")
+        let pageVersionID = PageVersionID(rawValue: "01HTESTPV00000000000000001")
+        let bytes = Data("{\"nodes\":[],\"edges\":[]}".utf8)
+        let block = try MarkdownFencedBlock(
+            documentIdentity: .init(pageID: pageID, pageVersionID: pageVersionID),
+            parserOrdinal: 0,
+            rawInfoString: "jsoncanvas",
+            bytes: bytes)
+        let blockID = try #require(block.blockID)
+        let artifact = try RendererEmbeddedContent.InlineArtifact(
+            pageID: pageID,
+            pageVersionID: pageVersionID,
+            blockID: blockID,
+            fenceKind: .jsoncanvas,
+            mimeType: .init(rawValue: "application/json")!,
+            bytes: bytes)
+
+        #expect(block.digest == artifact.digest)
+        #expect(block.canonicalDigestPayload == artifact.canonicalDigestPayload)
+    }
+
     @Test("request identifiers are bounded before replay retention")
     func requestIdentifiersAreBoundedBeforeReplayRetention() throws {
         let capability = RendererSessionCapability(rawValue: "capability")

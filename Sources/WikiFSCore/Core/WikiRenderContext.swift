@@ -84,6 +84,10 @@ public struct WikiRenderContext: Sendable {
     // depends on *which* document is being rendered.
     public let siblingMaps: [SourceID: [String: SourceID]]
 
+    /// Immutable renderer-facing projection built on the main actor and handed
+    /// to the detached markdown conversion path.
+    public let rendererEmbedProjection: RendererEmbedProjection
+
     /// The `wiki-blob://` scheme string, captured on the main actor (the static
     /// property is main-actor-isolated; the detached task can't read it). Exposed
     /// so a transcript render (Phase A.2) can rewrite relative image srcs the same
@@ -116,6 +120,9 @@ public struct WikiRenderContext: Sendable {
         self.embedMap = embedMap
         self.sourceDerivedChain = sourceDerivedChain
         self.siblingMaps = siblingMaps
+        self.rendererEmbedProjection = RendererEmbedProjection(
+            sourceEmbeds: embedMap,
+            richFenceAliases: Set(MarkdownRichFenceAlias.allCases))
         self.blobScheme = blobScheme
     }
 
@@ -294,5 +301,28 @@ public struct WikiRenderContext: Sendable {
             let idx = ordinal - 1
             return idx < chain.count ? chain[idx] : nil
         }
+    }
+}
+
+/// Host-built projection of renderer-facing embed facts. It mirrors the source
+/// embed map and the closed rich-fence alias set.
+public struct RendererEmbedProjection: Sendable {
+    public let sourceEmbeds: [String: WikiLinkMarkdown.SourceEmbedInfo]
+    public let richFenceAliases: Set<MarkdownRichFenceAlias>
+
+    public init(
+        sourceEmbeds: [String: WikiLinkMarkdown.SourceEmbedInfo],
+        richFenceAliases: Set<MarkdownRichFenceAlias>
+    ) {
+        self.sourceEmbeds = sourceEmbeds
+        self.richFenceAliases = richFenceAliases
+    }
+
+    public func sourceEmbedInfo(for name: String) -> WikiLinkMarkdown.SourceEmbedInfo? {
+        sourceEmbeds[name.lowercased()]
+    }
+
+    public func allowsRichFence(_ alias: MarkdownRichFenceAlias) -> Bool {
+        richFenceAliases.contains(alias)
     }
 }

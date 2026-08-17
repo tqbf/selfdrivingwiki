@@ -189,6 +189,317 @@ public struct RendererEventPolicy: Equatable, Sendable {
     )
 }
 
+/// The host-approved aliases that can request a richer fence presentation.
+/// Package manifests cannot extend this closed set.
+public enum MarkdownRichFenceAlias: String, Codable, CaseIterable, Hashable, Sendable {
+    case mermaid
+    case jsoncanvas
+    case excalidraw
+}
+
+/// Typed reasons a fenced block stays as raw code instead of becoming a richer
+/// host presentation.
+public enum MarkdownFenceFallbackReason: String, Codable, CaseIterable, Hashable, Sendable {
+    case emptyInfoString
+    case malformedInfoString
+    case unsupportedAlias
+    case packageAliasDisallowed
+    case missingDocumentIdentity
+    case oversizedInput
+}
+
+/// Closed presentation policy for a fenced markdown block.
+public enum MarkdownFencePresentationPolicy: Codable, Hashable, Sendable {
+    case ordinaryCode
+    case hostApprovedRichRequest(MarkdownRichFenceAlias)
+    case typedRawCodeFallback(MarkdownFenceFallbackReason)
+}
+
+/// Stable identity for one fenced block in one page version.
+public struct MarkdownBlockID: Codable, Hashable, Sendable, Comparable {
+    public let pageID: PageID
+    public let pageVersionID: PageVersionID
+    public let parserOrdinal: Int
+    public let digest: RendererSHA256Digest
+
+    public init(pageID: PageID, pageVersionID: PageVersionID, parserOrdinal: Int, digest: RendererSHA256Digest) throws {
+        guard parserOrdinal >= 0 else {
+            throw RendererValidationError.invalidIdentifier(kind: "markdown block ordinal", value: String(parserOrdinal))
+        }
+        self.pageID = pageID
+        self.pageVersionID = pageVersionID
+        self.parserOrdinal = parserOrdinal
+        self.digest = digest
+    }
+
+    public static func < (lhs: Self, rhs: Self) -> Bool {
+        (lhs.pageID.rawValue, lhs.pageVersionID.rawValue, lhs.parserOrdinal, lhs.digest.hex) <
+            (rhs.pageID.rawValue, rhs.pageVersionID.rawValue, rhs.parserOrdinal, rhs.digest.hex)
+    }
+}
+
+/// The page identity needed to assign a block id to markdown parsed from the
+/// page reader.
+public struct MarkdownDocumentIdentity: Codable, Hashable, Sendable {
+    public let pageID: PageID
+    public let pageVersionID: PageVersionID
+
+    public init(pageID: PageID, pageVersionID: PageVersionID) {
+        self.pageID = pageID
+        self.pageVersionID = pageVersionID
+    }
+}
+
+/// One fenced markdown block with immutable bytes and a typed presentation
+/// policy.
+public struct MarkdownFencedBlock: Codable, Hashable, Sendable {
+    private static let canonicalDigestDomain = Data("sdw.markdown.fence.v1".utf8)
+
+    public let documentIdentity: MarkdownDocumentIdentity?
+    public let parserOrdinal: Int
+    public let rawInfoString: String?
+    public let normalizedInfoString: String?
+    public let bytes: Data
+    public let digest: RendererSHA256Digest
+    public let blockID: MarkdownBlockID?
+    public let presentationPolicy: MarkdownFencePresentationPolicy
+
+    public init(
+        documentIdentity: MarkdownDocumentIdentity?,
+        parserOrdinal: Int,
+        rawInfoString: String?,
+        bytes: Data
+    ) throws {
+        guard parserOrdinal >= 0 else {
+            throw RendererValidationError.invalidIdentifier(kind: "markdown fence ordinal", value: String(parserOrdinal))
+        }
+        let normalized = Self.normalizedInfoString(from: rawInfoString)
+        let digest = RendererSHA256.digest(Self.makeCanonicalDigestInput(bytes: bytes, normalizedInfoString: normalized))
+        let blockID: MarkdownBlockID?
+        if let documentIdentity {
+            blockID = try MarkdownBlockID(
+                pageID: documentIdentity.pageID,
+                pageVersionID: documentIdentity.pageVersionID,
+                parserOrdinal: parserOrdinal,
+                digest: digest
+            )
+        } else {
+            blockID = nil
+        }
+        self.documentIdentity = documentIdentity
+        self.parserOrdinal = parserOrdinal
+        self.rawInfoString = rawInfoString
+        self.normalizedInfoString = normalized
+        self.bytes = bytes
+        self.digest = digest
+        self.blockID = blockID
+        self.presentationPolicy = Self.presentationPolicy(for: normalized)
+    }
+
+    internal static func canonicalDigestInput(bytes: Data, normalizedInfoString: String?) -> Data {
+        makeCanonicalDigestInput(bytes: bytes, normalizedInfoString: normalizedInfoString)
+    }
+
+    public var rawText: String {
+        String(decoding: bytes, as: UTF8.self)
+    }
+
+    public var richAlias: MarkdownRichFenceAlias? {
+        guard case .hostApprovedRichRequest(let alias) = presentationPolicy else { return nil }
+        return alias
+    }
+
+    public static func normalizedInfoString(from rawInfoString: String?) -> String? {
+        let normalized = rawInfoString?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard let normalized, normalized.isEmpty == false else { return nil }
+        return normalized
+    }
+
+    public var canonicalDigestPayload: Data {
+        Self.makeCanonicalDigestInput(bytes: bytes, normalizedInfoString: normalizedInfoString)
+    }
+
+    fileprivate static func makeCanonicalDigestInput(bytes: Data, normalizedInfoString: String?) -> Data {
+        var payload = Data()
+        payload.append(canonicalDigestDomain)
+        payload.append(0)
+        payload.append(lengthPrefix(for: bytes.count))
+        payload.append(bytes)
+        let normalizedBytes = Data((normalizedInfoString ?? "").utf8)
+        payload.append(lengthPrefix(for: normalizedBytes.count))
+        payload.append(normalizedBytes)
+        return payload
+    }
+
+    private static func lengthPrefix(for count: Int) -> Data {
+        var bigEndian = UInt64(count).bigEndian
+        return withUnsafeBytes(of: &bigEndian) { Data($0) }
+    }
+
+    public static func presentationPolicy(for normalizedInfoString: String?) -> MarkdownFencePresentationPolicy {
+        guard let normalizedInfoString else {
+            return .typedRawCodeFallback(.emptyInfoString)
+        }
+        let components = normalizedInfoString.split(whereSeparator: \.isWhitespace)
+        guard let first = components.first else {
+            return .typedRawCodeFallback(.emptyInfoString)
+        }
+        guard components.count == 1 else {
+            return .typedRawCodeFallback(.malformedInfoString)
+        }
+        switch first {
+        case "mermaid":
+            return .hostApprovedRichRequest(.mermaid)
+        case "jsoncanvas":
+            return .hostApprovedRichRequest(.jsoncanvas)
+        case "excalidraw":
+            return .hostApprovedRichRequest(.excalidraw)
+        case "html", "scala", "java", "swift", "json":
+            return .ordinaryCode
+        default:
+            return .typedRawCodeFallback(.unsupportedAlias)
+        }
+    }
+}
+
+/// Optional host-owned activation metadata for a richer fence card.
+public struct RendererEmbedActivationMetadata: Codable, Hashable, Sendable {
+    public let controlLabel: String
+    public let accessibilityLabel: String
+    public let summary: String
+
+    public init(controlLabel: String, accessibilityLabel: String, summary: String) {
+        self.controlLabel = controlLabel
+        self.accessibilityLabel = accessibilityLabel
+        self.summary = summary
+    }
+}
+
+/// Immutable semantic data describing one markdown-fence render target.
+public struct RendererEmbedPlan: Codable, Hashable, Sendable {
+    public let placeholderID: String
+    public let rendererReference: RendererReference
+    public let input: RendererEmbeddedContent?
+    public let semanticContent: String
+    public let fallbackReason: MarkdownFenceFallbackReason?
+    public let activationMetadata: RendererEmbedActivationMetadata?
+
+    public init(
+        placeholderID: String,
+        rendererReference: RendererReference,
+        input: RendererEmbeddedContent? = nil,
+        semanticContent: String,
+        fallbackReason: MarkdownFenceFallbackReason? = nil,
+        activationMetadata: RendererEmbedActivationMetadata? = nil
+    ) {
+        self.placeholderID = placeholderID
+        self.rendererReference = rendererReference
+        self.input = input
+        self.semanticContent = semanticContent
+        self.fallbackReason = fallbackReason
+        self.activationMetadata = activationMetadata
+    }
+
+    public var isStatic: Bool { activationMetadata == nil }
+}
+
+/// Immutable source or inline-artifact payload for the renderer bridge.
+public enum RendererEmbeddedContent: Codable, Hashable, Sendable {
+    public struct Source: Codable, Hashable, Sendable {
+        public let sourceID: SourceID
+        public let sourceVersionID: SourceVersionID?
+        public let sourceMarkdownVersionID: SourceMarkdownVersionID?
+        public let mimeType: RendererMIMEType
+        public let digest: RendererSHA256Digest
+        public let bytes: Data
+
+        public init(
+            sourceID: SourceID,
+            sourceVersionID: SourceVersionID? = nil,
+            sourceMarkdownVersionID: SourceMarkdownVersionID? = nil,
+            mimeType: RendererMIMEType,
+            bytes: Data
+        ) throws {
+            guard sourceVersionID != nil || sourceMarkdownVersionID != nil else {
+                throw RendererValidationError.invalidIdentifier(kind: "renderer embedded source", value: "missing version identity")
+            }
+            guard sourceVersionID == nil || sourceMarkdownVersionID == nil else {
+                throw RendererValidationError.invalidIdentifier(kind: "renderer embedded source", value: "ambiguous version identity")
+            }
+            self.sourceID = sourceID
+            self.sourceVersionID = sourceVersionID
+            self.sourceMarkdownVersionID = sourceMarkdownVersionID
+            self.mimeType = mimeType
+            self.digest = RendererSHA256.digest(bytes)
+            self.bytes = bytes
+        }
+    }
+
+    public struct InlineArtifact: Codable, Hashable, Sendable {
+        public let pageID: PageID
+        public let pageVersionID: PageVersionID
+        public let blockID: MarkdownBlockID
+        public let fenceKind: MarkdownRichFenceAlias
+        public let mimeType: RendererMIMEType
+        public let digest: RendererSHA256Digest
+        public let bytes: Data
+
+        public init(
+            pageID: PageID,
+            pageVersionID: PageVersionID,
+            blockID: MarkdownBlockID,
+            fenceKind: MarkdownRichFenceAlias,
+            mimeType: RendererMIMEType,
+            bytes: Data
+        ) throws {
+            guard blockID.pageID == pageID, blockID.pageVersionID == pageVersionID else {
+                throw RendererValidationError.invalidIdentifier(kind: "renderer inline artifact", value: "page identity mismatch")
+            }
+            let digest = RendererSHA256.digest(MarkdownFencedBlock.canonicalDigestInput(bytes: bytes, normalizedInfoString: fenceKind.rawValue))
+            guard digest == blockID.digest else {
+                throw RendererValidationError.invalidIdentifier(kind: "renderer inline artifact", value: "digest mismatch")
+            }
+            self.pageID = pageID
+            self.pageVersionID = pageVersionID
+            self.blockID = blockID
+            self.fenceKind = fenceKind
+            self.mimeType = mimeType
+            self.digest = digest
+            self.bytes = bytes
+        }
+
+        public var canonicalDigestPayload: Data {
+            MarkdownFencedBlock.canonicalDigestInput(bytes: bytes, normalizedInfoString: fenceKind.rawValue)
+        }
+    }
+
+    case source(Source)
+    case inlineArtifact(InlineArtifact)
+
+    public var mimeType: RendererMIMEType {
+        switch self {
+        case .source(let source): source.mimeType
+        case .inlineArtifact(let artifact): artifact.mimeType
+        }
+    }
+
+    public var bytes: Data {
+        switch self {
+        case .source(let source): source.bytes
+        case .inlineArtifact(let artifact): artifact.bytes
+        }
+    }
+
+    public var digest: RendererSHA256Digest {
+        switch self {
+        case .source(let source): source.digest
+        case .inlineArtifact(let artifact): artifact.digest
+        }
+    }
+}
+
 /// RFC 3339 timestamp that requires an explicit numeric UTC offset.
 public struct RFC3339Timestamp: RawRepresentable, Codable, Hashable, Sendable, Comparable {
     public let rawValue: String

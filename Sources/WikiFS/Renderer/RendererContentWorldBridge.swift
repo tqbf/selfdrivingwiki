@@ -113,7 +113,10 @@ final class RendererContentWorldBroker {
         return response
     }
 
-    func close() { isClosed = true }
+    func close() {
+        isClosed = true
+        inputReader.close()
+    }
 }
 
 /// Receives only messages registered in the session's isolated content world.

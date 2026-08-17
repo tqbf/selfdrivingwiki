@@ -221,7 +221,10 @@ struct MarkdownHTMLRendererTests {
             count: CodeHighlightingPolicy.maximumHighlightedSourceBytes + 1)
         let fence = "```swift\nlet value = 1\n```"
         let options = MarkdownRenderOptions(
-            codeHighlighting: .enabled(HighlightedCodeBlockBudget(limit: 1)))
+            codeHighlighting: .enabled(HighlightedCodeBlockBudget(limit: 1)),
+            rendererEmbedProjection: nil,
+            documentIdentity: nil,
+            rendererActivationAdmission: nil)
 
         let html = MarkdownHTMLRenderer.render(
             "```swift\n\(oversized)\n```\n\n\(fence)",
@@ -327,6 +330,225 @@ struct MarkdownHTMLRendererTests {
         let html = MarkdownHTMLRenderer.render("```mermaid\ngraph TD\nA-->B\n```", options: .disabled)
         #expect(html.contains(#"class="language-mermaid""#))
         #expect(html.contains("A--&gt;B"))   // escape(): > → &gt;
+    }
+
+    @Test func richFenceCardsRenderStaticMarkupWhenProjectionAllowsThem() throws {
+        let projection = RendererEmbedProjection(
+            sourceEmbeds: [:],
+            richFenceAliases: Set(MarkdownRichFenceAlias.allCases))
+        let document = MarkdownDocumentIdentity(
+            pageID: .init(rawValue: "01HTESTPAGE000000000000001"),
+            pageVersionID: .init(rawValue: "01HTESTPV00000000000000001"))
+        let admission = RendererEmbedActivationAdmission(
+            pageID: document.pageID,
+            pageVersionID: document.pageVersionID,
+            capability: .init(rawValue: "capability"),
+            generation: 1)
+        let options = MarkdownRenderOptions(
+            codeHighlighting: .disabled,
+            rendererEmbedProjection: projection,
+            documentIdentity: document,
+            rendererActivationAdmission: admission)
+
+        let bytes = Data("{\"nodes\":[],\"edges\":[]}".utf8)
+        let expectedBlock = try! MarkdownFencedBlock(
+            documentIdentity: document,
+            parserOrdinal: 0,
+            rawInfoString: "jsoncanvas",
+            bytes: bytes)
+        guard let blockID = expectedBlock.blockID else {
+            Issue.record("expected a block ID for the document-backed JSON Canvas fence")
+            return
+        }
+        let expectedArtifact = try! RendererEmbeddedContent.InlineArtifact(
+            pageID: document.pageID,
+            pageVersionID: document.pageVersionID,
+            blockID: blockID,
+            fenceKind: .jsoncanvas,
+            mimeType: .init(rawValue: "application/json")!,
+            bytes: bytes)
+        let expectedPackageID = try #require(RendererPackageID(rawValue: "org.selfdrivingwiki.builtin"))
+        let expectedVersion = try #require(RendererPackageVersion(rawValue: "1.0.0"))
+        let expectedRegistrationID = try #require(RendererRegistrationID(rawValue: "json-canvas"))
+        let expectedReference = RendererReference(
+            packageID: expectedPackageID,
+            version: expectedVersion,
+            registrationID: expectedRegistrationID)
+        admission.register(context: RendererEmbedActivationContext(
+            pageID: document.pageID,
+            pageVersionID: document.pageVersionID,
+            blockID: blockID,
+            rendererReference: expectedReference,
+            input: .inlineArtifact(expectedArtifact),
+            capability: admission.capability,
+            generation: admission.generation))
+
+        let jsonCanvas = MarkdownHTMLRenderer.render("```jsoncanvas\n{\"nodes\":[],\"edges\":[]}\n```", options: options)
+        #expect(jsonCanvas.contains("sdw-renderer-card"))
+        #expect(jsonCanvas.contains("JSON Canvas"))
+        #expect(jsonCanvas.contains("renderer-action://open"))
+        #expect(jsonCanvas.contains("package=org.selfdrivingwiki.builtin"))
+        #expect(jsonCanvas.contains("registration=json-canvas"))
+        #expect(jsonCanvas.contains("input="))
+        #expect(jsonCanvas.contains("data-renderer-input=\"{"))
+        #expect(!jsonCanvas.contains("data-renderer-input=\"null\""))
+        guard case let .inlineArtifact(artifact) = rendererBridgeInput(in: jsonCanvas) else {
+            Issue.record("expected an inline artifact renderer input")
+            return
+        }
+        #expect(artifact.mimeType.rawValue == "application/json")
+
+        let excalidraw = MarkdownHTMLRenderer.render("```excalidraw\n{\"type\":\"excalidraw\",\"version\":2,\"elements\":[]}\n```", options: options)
+        #expect(excalidraw.contains("sdw-renderer-card"))
+        #expect(excalidraw.contains("Excalidraw"))
+        #expect(excalidraw.contains("Interact"))
+
+        let mermaid = MarkdownHTMLRenderer.render("```mermaid\ngraph TD\nA-->B\n```", options: options)
+        #expect(mermaid.contains(#"class="language-mermaid""#))
+        #expect(!mermaid.contains("sdw-renderer-card"))
+    }
+
+    @Test("oversized rich fences fall back to escaped code without renderer metadata")
+    func oversizedRichFencesUseEscapedFallbackWithoutRendererMetadata() {
+        let projection = RendererEmbedProjection(
+            sourceEmbeds: [:],
+            richFenceAliases: Set(MarkdownRichFenceAlias.allCases))
+        let document = MarkdownDocumentIdentity(
+            pageID: .init(rawValue: "01HTESTPAGE000000000000001"),
+            pageVersionID: .init(rawValue: "01HTESTPV00000000000000001"))
+        let options = MarkdownRenderOptions(
+            codeHighlighting: .disabled,
+            rendererEmbedProjection: projection,
+            documentIdentity: document,
+            rendererActivationAdmission: nil)
+        let oversized = String(
+            repeating: "x",
+            count: WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount + 1)
+
+        let html = MarkdownHTMLRenderer.render("```jsoncanvas\n\(oversized)\n```", options: options)
+
+        #expect(html.contains("<pre><code class=\"language-jsoncanvas\">"))
+        #expect(!html.contains("sdw-renderer-card"))
+        #expect(!html.contains("renderer-action://open"))
+        #expect(!html.contains("data-renderer-input=\"null\""))
+    }
+
+    @Test("renderer action URLs decode the exact typed input under the current admission")
+    func rendererActionURLDecodesTypedInput() throws {
+        let fixture = try makeRendererActivationFixture()
+        let route = try #require(
+            WikiReaderView.rendererActivationRoute(
+                for: fixture.url,
+                admission: fixture.admission,
+                isMainFrame: true))
+        #expect(route.reference == fixture.reference)
+        #expect(route.input == fixture.input)
+    }
+
+    @Test("renderer action URLs preserve plus-bearing base64 through URLComponents round-trip")
+    func rendererActionURLPreservesPlusBearingBase64RoundTrip() throws {
+        let fixture = try makeRendererActivationFixture(bytes: Data("~~~\n".utf8))
+        let projection = RendererEmbedProjection(
+            sourceEmbeds: [:],
+            richFenceAliases: Set(MarkdownRichFenceAlias.allCases))
+        let document = MarkdownDocumentIdentity(
+            pageID: .init(rawValue: "01HTESTPAGE000000000000001"),
+            pageVersionID: .init(rawValue: "01HTESTPV00000000000000001"))
+        let options = MarkdownRenderOptions(
+            codeHighlighting: .disabled,
+            rendererEmbedProjection: projection,
+            documentIdentity: document,
+            rendererActivationAdmission: fixture.admission)
+
+        let html = MarkdownHTMLRenderer.render("```jsoncanvas\n~~~\n```", options: options)
+        let actionURL = try #require(rendererActionURL(in: html))
+        let components = try #require(URLComponents(url: actionURL, resolvingAgainstBaseURL: false))
+        let encodedInput = try #require(components.queryItems?.first(where: { $0.name == "input" })?.value)
+        let decodedInput = try JSONDecoder().decode(RendererBridgeInput.self, from: Data(encodedInput.utf8))
+        #expect(decodedInput == fixture.input)
+        #expect(actionURL.absoluteString.contains("+"))
+
+        let route = try #require(
+            WikiReaderView.rendererActivationRoute(
+                for: actionURL,
+                admission: fixture.admission,
+                isMainFrame: true))
+        #expect(route.reference == fixture.reference)
+        #expect(route.input == fixture.input)
+    }
+
+    @Test("renderer action URLs reject forged HTML, stale admissions, and field substitutions")
+    func rendererActionURLRejectsForgedEnvelope() throws {
+        let fixture = try makeRendererActivationFixture()
+        #expect(WikiReaderView.rendererActivationRoute(for: URL(string: "https://example.com")!, admission: fixture.admission, isMainFrame: true) == nil)
+        #expect(WikiReaderView.rendererActivationRoute(for: fixture.url, admission: nil, isMainFrame: true) == nil)
+        #expect(WikiReaderView.rendererActivationRoute(for: fixture.url, admission: fixture.admission, isMainFrame: false) == nil)
+
+        for mutate in [
+            ("generation", "99"),
+            ("page", "01HTESTPAGE000000000000099"),
+            ("pageVersion", "01HTESTPV00000000000000099"),
+            ("blockPage", "01HTESTPAGE000000000000099"),
+            ("blockPageVersion", "01HTESTPV00000000000000099"),
+            ("blockOrdinal", "9"),
+            ("block", "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
+            ("package", "org.selfdrivingwiki.other"),
+            ("version", "2.0.0"),
+            ("registration", "other"),
+            ("mime", "text/plain")
+        ] {
+            guard var components = URLComponents(url: fixture.url, resolvingAgainstBaseURL: false) else {
+                Issue.record("expected forged URL components to be constructible")
+                continue
+            }
+            let queryItems = components.queryItems ?? []
+            components.queryItems = queryItems.map { item in
+                if item.name == mutate.0 {
+                    return URLQueryItem(name: item.name, value: mutate.1)
+                }
+                return item
+            }
+            let forgedURL = try #require(components.url)
+            #expect(WikiReaderView.rendererActivationRoute(for: forgedURL, admission: fixture.admission, isMainFrame: true) == nil)
+        }
+    }
+
+    @Test("renderer-action URLs that fail admission stay cancelled by policy")
+    func rendererActionURLsFailClosedByPolicy() throws {
+        let fixture = try makeRendererActivationFixture()
+        guard var components = URLComponents(url: fixture.url, resolvingAgainstBaseURL: false) else {
+            Issue.record("expected forged URL components to be constructible")
+            return
+        }
+        components.queryItems = (components.queryItems ?? []).map { item in
+            if item.name == "registration" {
+                return URLQueryItem(name: item.name, value: "other")
+            }
+            return item
+        }
+        let forgedURL = try #require(components.url)
+        #expect(WikiReaderView.rendererActivationRoute(for: forgedURL, admission: fixture.admission, isMainFrame: true) == nil)
+        #expect(WikiReaderView.rendererActionNavigationPolicy(for: forgedURL) == .cancel)
+    }
+
+    @Test("rich fences stay static when no host admission exists")
+    func rendererActionURLStaysStaticWithoutAdmission() throws {
+        let projection = RendererEmbedProjection(
+            sourceEmbeds: [:],
+            richFenceAliases: [.jsoncanvas])
+        let document = MarkdownDocumentIdentity(
+            pageID: PageID(rawValue: "01HTESTPAGE000000000000001"),
+            pageVersionID: PageVersionID(rawValue: "01HTESTPV00000000000000001"))
+        let options = MarkdownRenderOptions(
+            codeHighlighting: .disabled,
+            rendererEmbedProjection: projection,
+            documentIdentity: document,
+            rendererActivationAdmission: nil)
+        let html = MarkdownHTMLRenderer.render("```jsoncanvas\n{\"nodes\":[],\"edges\":[]}\n```", options: options)
+
+        #expect(html.contains("sdw-renderer-card"))
+        #expect(!html.contains("renderer-action://open"))
+        #expect(!html.contains("data-renderer-input="))
     }
 
     @Test func documentHTMLEmbedsNoScriptWhenLibAbsent() {
@@ -448,6 +670,100 @@ struct MarkdownHTMLRendererTests {
         let count = html.components(
             separatedBy: "class=\"language-mermaid\"").count - 1
         #expect(count == 1)
+    }
+
+    private func rendererBridgeInput(in html: String) -> RendererBridgeInput? {
+        guard let start = html.range(of: #"data-renderer-input=""#) else { return nil }
+        guard let end = html[start.upperBound...].firstIndex(of: "\"") else { return nil }
+        let encoded = String(html[start.upperBound..<end])
+        let json = encoded
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&amp;", with: "&")
+        return try? JSONDecoder().decode(RendererBridgeInput.self, from: Data(json.utf8))
+    }
+
+    private func rendererActionURL(in html: String) -> URL? {
+        guard let start = html.range(of: #"href=""#),
+              let end = html[start.upperBound...].firstIndex(of: "\"")
+        else { return nil }
+        let encoded = String(html[start.upperBound..<end])
+        let urlString = encoded
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&amp;", with: "&")
+        return URL(string: urlString)
+    }
+}
+
+private struct RendererActivationFixture {
+    let admission: RendererEmbedActivationAdmission
+    let reference: RendererReference
+    let input: RendererBridgeInput
+    let url: URL
+}
+
+private extension MarkdownHTMLRendererTests {
+    func makeRendererActivationFixture(bytes: Data = Data("{\"nodes\":[],\"edges\":[]}".utf8)) throws -> RendererActivationFixture {
+        let pageID = PageID(rawValue: "01HTESTPAGE000000000000001")
+        let pageVersionID = PageVersionID(rawValue: "01HTESTPV00000000000000001")
+        let block = try MarkdownFencedBlock(
+            documentIdentity: .init(pageID: pageID, pageVersionID: pageVersionID),
+            parserOrdinal: 0,
+            rawInfoString: "jsoncanvas",
+            bytes: bytes)
+        let blockID = try #require(block.blockID)
+        let artifact = try RendererEmbeddedContent.InlineArtifact(
+            pageID: pageID,
+            pageVersionID: pageVersionID,
+            blockID: blockID,
+            fenceKind: .jsoncanvas,
+            mimeType: .init(rawValue: "application/json")!,
+            bytes: bytes)
+        let input = RendererBridgeInput.inlineArtifact(artifact)
+        let encodedInput = try String(decoding: JSONEncoder().encode(input), as: UTF8.self)
+        let admission = RendererEmbedActivationAdmission(
+            pageID: pageID,
+            pageVersionID: pageVersionID,
+            capability: .init(rawValue: "capability"),
+            generation: 7)
+        let packageID = try #require(RendererPackageID(rawValue: "org.selfdrivingwiki.builtin"))
+        let version = try #require(RendererPackageVersion(rawValue: "1.0.0"))
+        let registrationID = try #require(RendererRegistrationID(rawValue: "json-canvas"))
+        let reference = RendererReference(
+            packageID: packageID,
+            version: version,
+            registrationID: registrationID)
+        let activationContext = RendererEmbedActivationContext(
+            pageID: pageID,
+            pageVersionID: pageVersionID,
+            blockID: blockID,
+            rendererReference: reference,
+            input: input,
+            capability: admission.capability,
+            generation: admission.generation)
+        admission.register(context: activationContext)
+        var components = URLComponents()
+        components.scheme = "renderer-action"
+        components.host = "open"
+        components.queryItems = [
+            URLQueryItem(name: "package", value: "org.selfdrivingwiki.builtin"),
+            URLQueryItem(name: "version", value: "1.0.0"),
+            URLQueryItem(name: "registration", value: "json-canvas"),
+            URLQueryItem(name: "input", value: encodedInput),
+            URLQueryItem(name: "capability", value: admission.capability.rawValue),
+            URLQueryItem(name: "generation", value: String(admission.generation)),
+            URLQueryItem(name: "page", value: pageID.rawValue),
+            URLQueryItem(name: "pageVersion", value: pageVersionID.rawValue),
+            URLQueryItem(name: "block", value: blockID.digest.hex),
+            URLQueryItem(name: "blockPage", value: blockID.pageID.rawValue),
+            URLQueryItem(name: "blockPageVersion", value: blockID.pageVersionID.rawValue),
+            URLQueryItem(name: "blockOrdinal", value: String(blockID.parserOrdinal)),
+            URLQueryItem(name: "mime", value: artifact.mimeType.rawValue)
+        ]
+        return RendererActivationFixture(
+            admission: admission,
+            reference: reference,
+            input: input,
+            url: try #require(components.url))
     }
 }
 #endif

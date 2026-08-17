@@ -2,6 +2,8 @@ import SwiftUI
 import WikiFSEngine
 import WikiFSCore
 
+// pattern: Mixed (unavoidable)
+
 /// The main content pane for the current selection. Kept separate from
 /// `ContentView` so the app shell owns layout/chrome while this view owns the
 /// selected document/source surface.
@@ -17,11 +19,44 @@ struct WikiDetailView: View {
     let queueEngine: any QueueEngineClient
     let extractionProvider: any QueueExtractionProvider
     let installedRendererHost: InstalledRendererHost
+    /// Optional typed renderer activation sink for page detail routes.
+    /// When absent, the reader stays static and emits no activation metadata.
+    let onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)?
     let runIngest: (SourceID) -> Void
     @Binding var showingImportMarkdown: Bool
     @Binding var showingAddFromZotero: Bool
     let isZoteroConfigured: Bool
     @Environment(\.addURLHandler) private var addURLHandler
+
+    init(
+        store: WikiStoreModel,
+        launcher: AgentLauncher,
+        session: WikiSession,
+        fileProvider: FileProviderFacade,
+        extractionCoordinator: ExtractionCoordinator,
+        queueEngine: any QueueEngineClient,
+        extractionProvider: any QueueExtractionProvider,
+        installedRendererHost: InstalledRendererHost,
+        onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)? = nil,
+        runIngest: @escaping (SourceID) -> Void,
+        showingImportMarkdown: Binding<Bool>,
+        showingAddFromZotero: Binding<Bool>,
+        isZoteroConfigured: Bool
+    ) {
+        self._store = Bindable(wrappedValue: store)
+        self._launcher = Bindable(wrappedValue: launcher)
+        self.session = session
+        self.fileProvider = fileProvider
+        self.extractionCoordinator = extractionCoordinator
+        self.queueEngine = queueEngine
+        self.extractionProvider = extractionProvider
+        self.installedRendererHost = installedRendererHost
+        self.onRendererActivation = onRendererActivation
+        self.runIngest = runIngest
+        self._showingImportMarkdown = showingImportMarkdown
+        self._showingAddFromZotero = showingAddFromZotero
+        self.isZoteroConfigured = isZoteroConfigured
+    }
 
     /// Highlights the welcome screen as a drop target while an internal
     /// sidebar row (page/source/bookmark) is dragged over it.
@@ -168,7 +203,8 @@ struct WikiDetailView: View {
                 store: store,
                 launcher: launcher,
                 session: session,
-                fileProvider: fileProvider)
+                fileProvider: fileProvider,
+                onRendererActivation: onRendererActivation)
         case .source(let id):
             if let file = store.sources.first(where: { $0.id == id }) {
                 SourceDetailView(
