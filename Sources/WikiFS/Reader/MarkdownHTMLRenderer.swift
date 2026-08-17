@@ -339,7 +339,8 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
                 input: .inlineArtifact(artifact),
                 capability: admission.capability,
                 generation: admission.generation)
-            admission.register(context: context)
+            let placeholder = RendererAttachmentPlaceholderID.validatedOrNil(plan.placeholderID)
+            admission.register(context: context, attachmentPlaceholderID: placeholder)
             return context
         }()
         let inputAttribute: String
