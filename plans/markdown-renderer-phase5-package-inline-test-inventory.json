@@ -3,8 +3,8 @@
   "branch": "feature/markdown-renderers-05-package-inline",
   "baseSHA": "660264209f95a545b823fdb6f459d02239ba96cb",
   "headSHA": "63657e10b8a278e6c476119eddb2964f0bee75c2",
-  "headSHASemantics": "This is the exact implementation head for the package-inline seam work. The retained documentation entry and inventory record the branch evidence without changing production or test code.",
-  "scope": "RendererAuthorizedInputResolving adds a main-actor composition seam for the exact version-pinned reader, WikiStoreModel resolves the authorized input through the seam, and SourceDetailView routes its installed-renderer lookup through the seam instead of the concrete model method.",
+  "headSHASemantics": "This is the exact implementation head for the package-inline protocol boundary work. The retained documentation entry and inventory record the branch evidence from the post-head documentation-only evidence commit without changing production or test code.",
+  "scope": "RendererAuthorizedInputResolving adds a main-actor protocol boundary for the exact version-pinned reader, WikiStoreModel resolves the authorized input through that boundary, and SourceDetailView routes its installed-renderer lookup through the boundary instead of the concrete model method.",
   "ciCoverage": "The focused seam test runs alongside the repository build/test/lint gates already verified on this branch. This inventory records the exact pinned-reader seam and the SourceDetailView wiring that consumes it.",
   "productionPaths": [
     {
@@ -23,8 +23,7 @@
         "WikiStoreModel:RendererAuthorizedInputResolving"
       ],
       "tests": [
-        "RendererAuthorizedInputReaderTests.resolverSeamReturnsTheExactPinnedReader",
-        "RendererAuthorizedInputReaderTests.storeBackedMarkdownReadUsesPinnedBlobBytes"
+        "RendererAuthorizedInputReaderTests.resolverSeamReturnsTheExactPinnedReader"
       ]
     },
     {
@@ -34,8 +33,7 @@
         "SourceDetailView.renderedContent"
       ],
       "tests": [
-        "WikiAppWebViewTests.sourceDetailKeepsInstalledFactoryOutsideBuiltInMap",
-        "WikiAppWebViewTests.factoryWiresPinnedInputAndLifecycleContracts"
+        "WikiAppWebViewTests.sourceDetailKeepsInstalledFactoryOutsideBuiltInMap"
       ]
     }
   ],

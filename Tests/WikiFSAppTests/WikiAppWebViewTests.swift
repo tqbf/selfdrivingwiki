@@ -263,7 +263,7 @@ struct WikiAppWebViewTests {
 
         #expect(source.contains("BuiltInRendererFactoryMap.makeView"))
         #expect(source.contains("installedRendererFactory.makeView"))
-        #expect(source.contains("rendererAuthorizedInputReader(for: file.id)"))
+        #expect(source.contains("rendererAuthorizedInputResolver.rendererAuthorizedInputReader(for: file.id)"))
         #expect(source.contains("failedInstalledRendererReference"))
     }
 

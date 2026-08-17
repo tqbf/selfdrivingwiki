@@ -95,7 +95,7 @@ struct RendererAuthorizedInputReaderTests {
     func resolverSeamReturnsTheExactPinnedReader() throws {
         let store = try GRDBWikiStore()
         let source = try store.addSource(filename: "reader-seam.md", data: Data("# seam".utf8))
-        let resolver = WikiStoreModel(store: store) as RendererAuthorizedInputResolving
+        let resolver: any RendererAuthorizedInputResolving = WikiStoreModel(store: store)
         let reader = try #require(resolver.rendererAuthorizedInputReader(for: source.id))
         let version = try #require(try store.activeContentVersion(sourceID: source.id))
 
