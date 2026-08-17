@@ -44,10 +44,15 @@ final class WikiReaderContainerView: NSView {
         attachmentChild?.frame = attachmentOverlay.attachmentClipRect
     }
 
-    func activateAttachment(named placeholderID: RendererAttachmentPlaceholderID, content: AnyView? = nil) {
+    func activateAttachment(
+        named placeholderID: RendererAttachmentPlaceholderID,
+        content: AnyView? = nil,
+        onExit: (() -> Void)? = nil
+    ) {
         removeAttachmentChild()
         let child = RendererAttachmentNativeChildView(placeholderID: placeholderID, content: content) { [weak self] in
-            self?.collapseAttachment()
+            if let onExit { onExit() }
+            else { self?.collapseAttachment() }
         }
         attachmentOverlay.addSubview(child)
         attachmentChild = child

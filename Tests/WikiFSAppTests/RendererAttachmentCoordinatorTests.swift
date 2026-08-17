@@ -32,6 +32,45 @@ struct RendererAttachmentCoordinatorTests {
         #expect(container.subviews.flatMap(\.subviews).contains { $0 === child } == false)
         #expect(window.firstResponder === webView)
     }
+
+    @Test("Escape synchronizes the coordinator before allowing attachment reactivation")
+    @MainActor
+    func escapeSynchronizesCoordinatorBeforeReactivation() throws {
+        let webView = WikiReaderWebView()
+        let container = WikiReaderContainerView(webView: webView)
+        container.frame = .init(x: 0, y: 0, width: 400, height: 300)
+        let window = NSWindow(contentRect: container.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        defer { container.teardown(); window.orderOut(nil) }
+
+        let coordinator = WikiReaderRep.Coordinator()
+        coordinator.webView = webView
+        coordinator.attachmentContainer = container
+        coordinator.startLoad(markdown: "# Reader", documentIdentity: nil, isLoading: .constant(true))
+        let generation = try #require(coordinator.attachmentGeneration)
+        let placeholder = try RendererAttachmentPlaceholderID(validating: "escape-synchronized-canvas")
+        coordinator.handleAttachmentGeometry(.init(
+            generation: generation,
+            placeholderID: placeholder,
+            cssRect: .init(x: 20, y: 20, width: 160, height: 96),
+            visible: true,
+            revision: 1))
+        #expect(coordinator.activateAttachment(placeholder) == .activate)
+
+        let escape = try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil,
+            characters: "\u{1B}", charactersIgnoringModifiers: "\u{1B}",
+            isARepeat: false, keyCode: 53))
+        window.sendEvent(escape)
+
+        #expect(coordinator.attachmentState(for: placeholder) == .card)
+        #expect(coordinator.activateAttachment(placeholder) == .activate)
+        #expect(container.subviews.flatMap(\.subviews).contains {
+            $0.accessibilityIdentifier() == "renderer-attachment-escape-synchronized-canvas"
+        })
+    }
     private static let javaScriptTimeout = Duration.seconds(5)
     @Test("DOM placeholder removal closes its admitted native attachment")
     @MainActor
@@ -96,6 +135,46 @@ struct RendererAttachmentCoordinatorTests {
             $0.accessibilityIdentifier() == "renderer-attachment-active-canvas"
         })
         #expect((window.firstResponder as? NSView)?.accessibilityIdentifier() == "renderer-attachment-active-canvas")
+    }
+
+    @Test("collapse and failure for another placeholder preserve the active native attachment")
+    @MainActor
+    func wrongPlaceholderCollapseAndFailurePreserveActiveAttachment() throws {
+        let webView = WikiReaderWebView()
+        let container = WikiReaderContainerView(webView: webView)
+        container.frame = .init(x: 0, y: 0, width: 400, height: 300)
+        let window = NSWindow(contentRect: container.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        defer { container.teardown(); window.orderOut(nil) }
+
+        let coordinator = WikiReaderRep.Coordinator()
+        coordinator.webView = webView
+        coordinator.attachmentContainer = container
+        coordinator.startLoad(markdown: "# Reader", documentIdentity: nil, isLoading: .constant(true))
+        let generation = try #require(coordinator.attachmentGeneration)
+        let active = try RendererAttachmentPlaceholderID(validating: "active-ownership-canvas")
+        let inactive = try RendererAttachmentPlaceholderID(validating: "inactive-ownership-canvas")
+        let geometry = { (placeholderID: RendererAttachmentPlaceholderID) in
+            RendererAttachmentGeometryMessage(
+                generation: generation,
+                placeholderID: placeholderID,
+                cssRect: .init(x: 20, y: 20, width: 160, height: 96),
+                visible: true,
+                revision: 1)
+        }
+        coordinator.handleAttachmentGeometry(geometry(active))
+        coordinator.handleAttachmentGeometry(geometry(inactive))
+        #expect(coordinator.activateAttachment(active) == .activate)
+
+        coordinator.collapseAttachment(inactive)
+        coordinator.failAttachment(inactive)
+
+        #expect(coordinator.attachmentState(for: active) == .active)
+        #expect(coordinator.attachmentState(for: inactive) == .failed)
+        #expect(container.subviews.flatMap(\.subviews).contains {
+            $0.accessibilityIdentifier() == "renderer-attachment-active-ownership-canvas"
+        })
     }
 
     @MainActor private static func runJS(_ source: String, in webView: WKWebView) async throws {

@@ -1662,20 +1662,26 @@ internal struct WikiReaderRep: NSViewRepresentable {
             guard let attachmentCoordinator, let attachmentContainer else { return .rejected }
             switch nativeAttachmentContent(for: placeholderID) {
             case .failed:
-                attachmentCoordinator.fail(placeholderID)
-                attachmentContainer.collapseAttachment()
+                failAttachment(placeholderID)
                 return .rejected
             case .canvas(let content):
                 let result = attachmentCoordinator.activate(placeholderID)
                 if result == .activate {
-                    attachmentContainer.activateAttachment(named: placeholderID, content: content)
+                    attachmentContainer.activateAttachment(
+                        named: placeholderID,
+                        content: content,
+                        onExit: { [weak self] in self?.collapseAttachment(placeholderID) })
                 }
                 return result
             case .fallback:
                 break
             }
             let result = attachmentCoordinator.activate(placeholderID)
-            if result == .activate { attachmentContainer.activateAttachment(named: placeholderID) }
+            if result == .activate {
+                attachmentContainer.activateAttachment(
+                    named: placeholderID,
+                    onExit: { [weak self] in self?.collapseAttachment(placeholderID) })
+            }
             return result
         }
 
@@ -1706,7 +1712,18 @@ internal struct WikiReaderRep: NSViewRepresentable {
         var attachmentGeneration: Int? { attachmentCoordinator?.generation }
 
         func collapseAttachment(_ placeholderID: RendererAttachmentPlaceholderID) {
-            attachmentCoordinator?.collapse(placeholderID)
+            guard let attachmentCoordinator,
+                  attachmentCoordinator.state(for: placeholderID) == .active,
+                  let attachmentContainer,
+                  attachmentContainer.ownsMountedAttachment(named: placeholderID)
+            else { return }
+            attachmentCoordinator.collapse(placeholderID)
+            attachmentContainer.collapseAttachment()
+        }
+
+        func failAttachment(_ placeholderID: RendererAttachmentPlaceholderID) {
+            attachmentCoordinator?.fail(placeholderID)
+            guard attachmentContainer?.ownsMountedAttachment(named: placeholderID) == true else { return }
             attachmentContainer?.collapseAttachment()
         }
 
