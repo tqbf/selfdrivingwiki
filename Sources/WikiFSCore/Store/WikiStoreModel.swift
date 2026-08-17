@@ -4657,3 +4657,5 @@ public enum ZoteroFetchError: LocalizedError, Equatable {
         }
     }
 }
+
+extension WikiStoreModel: RendererAuthorizedInputResolving {}
