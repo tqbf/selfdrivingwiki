@@ -89,4 +89,16 @@ struct RendererAuthorizedInputReaderTests {
             try reader.read(input)
         }
     }
+
+    @MainActor
+    @Test("composition seam resolves the exact pinned reader for the requested source")
+    func resolverSeamReturnsTheExactPinnedReader() throws {
+        let store = try GRDBWikiStore()
+        let source = try store.addSource(filename: "reader-seam.md", data: Data("# seam".utf8))
+        let resolver: any RendererAuthorizedInputResolving = WikiStoreModel(store: store)
+        let reader = try #require(resolver.rendererAuthorizedInputReader(for: source.id))
+        let version = try #require(try store.activeContentVersion(sourceID: source.id))
+
+        #expect(reader.authorizedInput == RendererBridgeInput.source(versionID: version.id))
+    }
 }

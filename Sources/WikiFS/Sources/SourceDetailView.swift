@@ -190,6 +190,8 @@ struct SourceDetailView: View {
             readerZoom: $readerZoom)
     }
 
+    private var rendererAuthorizedInputResolver: any RendererAuthorizedInputResolving { store }
+
     private var showsSourceOutlineTab: Bool {
         isOutlineApplicable && currentMarkdownContent != nil
     }
@@ -1194,7 +1196,7 @@ struct SourceDetailView: View {
         return installedRendererFactory.makeView(
             for: descriptor,
             inputs: installedRendererFactoryInputs,
-            inputReader: store.rendererAuthorizedInputReader(for: file.id)) { _ in
+            inputReader: rendererAuthorizedInputResolver.rendererAuthorizedInputReader(for: file.id)) { _ in
                 // The representable already deferred this callback out of its
                 // AppKit/WebKit stack. Keep the detail-state mutation deferred
                 // as well because the rendered closure can run in an update pass.

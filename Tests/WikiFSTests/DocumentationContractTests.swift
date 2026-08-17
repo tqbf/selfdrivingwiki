@@ -39,6 +39,8 @@ struct DocumentationContractTests {
         "Polymorphic refs and source-link pins:",
         "Rejected cross-namespace calls:",
     ]
+    private static let markdownRendererPhase5InventoryPath = "plans/markdown-renderer-phase5-package-inline-test-inventory.json"
+    private static let markdownRendererPhase5ProgressHeading = "# Markdown renderer Phase 5 package-inline seam and evidence"
 
     @Test func pageSourceIDPlanIsIndexedAndComplete() throws {
         let root = try #require(Self.locateRepositoryRoot())
@@ -126,6 +128,45 @@ struct DocumentationContractTests {
         #expect(progress.contains(Self.sourceMarkdownVersionProgressHeading))
         #expect(progress.contains("SourceMarkdownVersionAPISignatureManifestTests"))
         #expect(progress.contains("SourceMarkdownVersionIDPersistenceTests"))
+    }
+
+    @Test func markdownRendererPhase5DocumentationIsIndexedAndRecorded() throws {
+        let root = try #require(Self.locateRepositoryRoot())
+        let plan = try String(contentsOf: root.appendingPathComponent("PLAN.md"), encoding: .utf8)
+        let progress = try Self.readProgressEntries(from: root)
+
+        #expect(plan.contains("[`plans/markdown-renderer-embeds.md`](plans/markdown-renderer-embeds.md)"))
+        #expect(progress.contains(Self.markdownRendererPhase5ProgressHeading))
+    }
+
+    @Test func markdownRendererPhase5InventoryMapsExactHeadSeamCoverage() throws {
+        let root = try #require(Self.locateRepositoryRoot())
+        let data = try Data(contentsOf: root.appendingPathComponent(Self.markdownRendererPhase5InventoryPath))
+        let inventory = try #require(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            "inventory must be a JSON object"
+        )
+        #expect(inventory["baseSHA"] as? String == "660264209f95a545b823fdb6f459d02239ba96cb")
+        #expect(inventory["headSHA"] as? String == "63657e10b8a278e6c476119eddb2964f0bee75c2")
+        #expect((inventory["headSHASemantics"] as? String)?.contains("documentation-only evidence commit") == true)
+        #expect((inventory["headSHASemantics"] as? String)?.contains("protocol boundary") == true)
+        #expect((inventory["scope"] as? String)?.contains("RendererAuthorizedInputResolving") == true)
+        #expect((inventory["scope"] as? String)?.contains("SourceDetailView") == true)
+
+        let productionPaths = try #require(inventory["productionPaths"] as? [[String: Any]])
+        let productionSymbols = productionPaths.flatMap { $0["symbols"] as? [String] ?? [] }
+        let productionTests = productionPaths.flatMap { $0["tests"] as? [String] ?? [] }
+
+        #expect(productionSymbols.contains("RendererAuthorizedInputResolving"))
+        #expect(productionSymbols.contains("WikiStoreModel.rendererAuthorizedInputReader"))
+        #expect(productionSymbols.contains("SourceDetailView.rendererAuthorizedInputResolver"))
+        #expect(productionTests.contains("RendererAuthorizedInputReaderTests.resolverSeamReturnsTheExactPinnedReader"))
+        #expect(productionTests.contains("WikiAppWebViewTests.sourceDetailKeepsInstalledFactoryOutsideBuiltInMap"))
+        try Self.assertInventoryBidirectionalResolution(
+            inventory: inventory,
+            root: root,
+            inventoryPath: Self.markdownRendererPhase5InventoryPath
+        )
     }
 
     @Test func dynamicRendererBridgeContractIsVersionPinnedAndNavigationScoped() throws {
@@ -231,33 +272,11 @@ struct DocumentationContractTests {
             try JSONSerialization.jsonObject(with: data) as? [String: Any],
             "inventory must be a JSON object"
         )
-        let productionPaths = try #require(inventory["productionPaths"] as? [[String: Any]])
-        let testPaths = try #require(inventory["testPaths"] as? [String])
-        try #require(productionPaths.isEmpty == false)
-        try #require(testPaths.isEmpty == false)
-
-        let testURLs = try testPaths.map { path in
-            let url = root.appendingPathComponent(path)
-            try #require(FileManager.default.fileExists(atPath: url.path), "missing listed test path: \(path)")
-            return url
-        }
-
-        for productionPath in productionPaths {
-            let path = try #require(productionPath["path"] as? String)
-            #expect(FileManager.default.fileExists(atPath: root.appendingPathComponent(path).path), "missing listed production path: \(path)")
-            let symbols = try #require(productionPath["symbols"] as? [String])
-            let tests = try #require(productionPath["tests"] as? [String])
-            try #require(symbols.isEmpty == false, "production path has no symbols: \(path)")
-            try #require(tests.isEmpty == false, "production path has no tests: \(path)")
-
-            for testName in tests {
-                let functionName = try #require(testName.split(separator: ".").last)
-                let matches = testURLs.filter { url in
-                    (try? String(contentsOf: url, encoding: .utf8))?.contains("func \(functionName)(") == true
-                }
-                #expect(matches.count == 1, "inventory test must resolve exactly once: \(testName)")
-            }
-        }
+        try Self.assertInventoryBidirectionalResolution(
+            inventory: inventory,
+            root: root,
+            inventoryPath: Self.dynamicRendererInventoryPath
+        )
     }
 
     @Test func rendererBridgeWebKitBoundaryIsExplicitlyScoped() throws {
@@ -359,6 +378,46 @@ struct DocumentationContractTests {
         return try markdownEntries
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
             .map { ProgressEntry(url: $0, contents: try String(contentsOf: $0, encoding: .utf8)) }
+    }
+
+    private static func assertInventoryBidirectionalResolution(
+        inventory: [String: Any],
+        root: URL,
+        inventoryPath: String
+    ) throws {
+        let productionPaths = try #require(inventory["productionPaths"] as? [[String: Any]])
+        let testPaths = try #require(inventory["testPaths"] as? [String])
+        try #require(productionPaths.isEmpty == false, "inventory has no production paths: \(inventoryPath)")
+        try #require(testPaths.isEmpty == false, "inventory has no test paths: \(inventoryPath)")
+
+        let testContentsByPath = try Dictionary(uniqueKeysWithValues: testPaths.map { path in
+            let url = root.appendingPathComponent(path)
+            try #require(
+                FileManager.default.fileExists(atPath: url.path),
+                "missing listed test path in \(inventoryPath): \(path)"
+            )
+            return (path, try String(contentsOf: url, encoding: .utf8))
+        })
+
+        for productionPath in productionPaths {
+            let path = try #require(productionPath["path"] as? String)
+            #expect(
+                FileManager.default.fileExists(atPath: root.appendingPathComponent(path).path),
+                "missing listed production path in \(inventoryPath): \(path)"
+            )
+            let symbols = try #require(productionPath["symbols"] as? [String])
+            let tests = try #require(productionPath["tests"] as? [String])
+            try #require(symbols.isEmpty == false, "production path has no symbols in \(inventoryPath): \(path)")
+            try #require(tests.isEmpty == false, "production path has no tests in \(inventoryPath): \(path)")
+
+            for testName in tests {
+                let functionName = try #require(testName.split(separator: ".").last)
+                let matches = testContentsByPath.values.filter {
+                    $0.contains("func \(functionName)(")
+                }
+                #expect(matches.count == 1, "inventory test must resolve exactly once: \(testName)")
+            }
+        }
     }
 
     private struct ProgressEntry {
