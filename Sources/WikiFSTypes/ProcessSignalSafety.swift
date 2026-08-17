@@ -10,7 +10,7 @@ import Glibc
 /// Validates process signal targets independently of process creation and OS
 /// observation. A numeric PID is never sufficient authority to signal.
 public enum ProcessSignalSafety {
-    public struct PositivePID: Sendable, Equatable {
+    public struct PositivePID: Sendable, Equatable, Hashable {
         public let rawValue: Int32
 
         public init?(rawValue: Int32) {
