@@ -249,7 +249,7 @@ struct ProviderSelector: View {
         .onHover { inside in
             if inside { hoveredRowID = row.id } else if hoveredRowID == row.id { hoveredRowID = nil }
         }
-        .onTapGesture { selectRow(row.id) }
+        .onTapGesture { selectRow(row) }
     }
 
     /// Toggle + persist a model row's favorite state, refreshing local config so
@@ -276,6 +276,9 @@ struct ProviderSelector: View {
         /// Always false for the synthetic "Default" row (not favoritable).
         let isFavorite: Bool
         let id: String
+        /// All agent-advertised model ids represented by this row. A thinking
+        /// effort model family may contain one id for each advertised effort.
+        let modelIDs: Set<ModelID>
 
         /// Primary (bold) line — the model name, paseo-style (e.g. "Opus 4.8",
         /// "GLM-4.7", "Default").
@@ -314,16 +317,24 @@ struct ProviderSelector: View {
                     modelLabel: "Default",
                     modelDescription: nil,
                     isFavorite: false,
-                    id: "\(provider.id.rawValue):default")
+                    id: "\(provider.id.rawValue):default",
+                    modelIDs: [])
             ]
-            for model in models {
+            let thinkingOption = remoteSession.thinkingOption
+            for family in Self.modelFamilies(
+                from: models,
+                thinkingChoices: thinkingOption?.choices ?? [],
+                currentThinkingValue: thinkingOption?.currentValue
+            ) {
+                let model = family.selectedModel
                 rows.append(SelectorRow(
                     provider: provider,
                     modelId: model.modelId,
-                    modelLabel: model.displayLabel,
+                    modelLabel: family.label,
                     modelDescription: model.description,
                     isFavorite: config.isFavoriteModel(model.modelId, forProvider: provider.id),
-                    id: "\(provider.id.rawValue):\(model.modelId.rawValue)"))
+                    id: "\(provider.id.rawValue):\(family.id)",
+                    modelIDs: Set(family.models.map(\.modelId))))
             }
             return rows
         }
@@ -353,13 +364,17 @@ struct ProviderSelector: View {
     private var selectedRowID: String? {
         if let override = chatModelOverride, override.providerId == current.id {
             if let modelId = override.modelId {
-                return "\(current.id.rawValue):\(modelId.rawValue)"
+                return flatRows.first {
+                    $0.provider.id == current.id && $0.modelIDs.contains(modelId)
+                }?.id
             }
             return "\(current.id.rawValue):default"
         }
         let selectedModel = config.selectedModelId(forProvider: current.id)
         if let selectedModel {
-            return "\(current.id.rawValue):\(selectedModel.rawValue)"
+            return flatRows.first {
+                $0.provider.id == current.id && $0.modelIDs.contains(selectedModel)
+            }?.id
         }
         return "\(current.id.rawValue):default"
     }
@@ -408,7 +423,9 @@ struct ProviderSelector: View {
             guard let modelId = override.modelId else { return "default" }
             if let cached = config.cachedModels(forProvider: current.id)
                 .first(where: { $0.modelId == modelId }) {
-                return cached.displayLabel
+                return Self.modelDisplayLabel(
+                    modelName: cached.displayLabel,
+                    thinkingChoices: remoteSession.thinkingOption?.choices ?? [])
             }
             return modelId.rawValue
         }
@@ -423,11 +440,125 @@ struct ProviderSelector: View {
             // Use the cached friendly name when available.
             if let cached = config.cachedModels(forProvider: provider.id)
                 .first(where: { $0.modelId == selected }) {
-                return cached.displayLabel
+                return Self.modelDisplayLabel(
+                    modelName: cached.displayLabel,
+                    thinkingChoices: remoteSession.thinkingOption?.choices ?? [])
             }
             return selected.rawValue
         }
         return "default"
+    }
+
+    /// The agent may include its current thinking level in the advertised
+    /// model name (for example, "GPT-5.6-Luna (Low)"). Thinking effort has a
+    /// separate toolbar control, so remove only a trailing parenthetical that
+    /// matches an advertised thinking choice. Other parenthetical model names
+    /// such as "Model (beta)" remain unchanged.
+    nonisolated static func modelDisplayLabel(
+        modelName: String,
+        thinkingChoices: [ThinkingEffortOption.Choice]
+    ) -> String {
+        modelVariant(modelName: modelName, thinkingChoices: thinkingChoices)?.baseName ?? modelName
+    }
+
+    /// A single base-model choice with all of the agent's effort-specific
+    /// iterations. `selectedModel` is the variant matching the active
+    /// Thinking control, falling back to the first advertised variant.
+    struct ModelFamily: Identifiable, Equatable, Sendable {
+        let id: String
+        let label: String
+        let models: [CachedModelInfo]
+        let selectedModel: CachedModelInfo
+    }
+
+    /// Collapse agent-advertised thinking variants into one picker row per
+    /// base model. An unrecognised parenthetical suffix is not a thinking
+    /// variant, so it remains a separate model and is never silently merged.
+    nonisolated static func modelFamilies(
+        from models: [CachedModelInfo],
+        thinkingChoices: [ThinkingEffortOption.Choice],
+        currentThinkingValue: String?
+    ) -> [ModelFamily] {
+        var groupedModels: [String: [CachedModelInfo]] = [:]
+        var familyLabels: [String: String] = [:]
+        var familyOrder: [String] = []
+
+        for model in models {
+            let variant = modelVariant(
+                modelName: model.displayLabel,
+                thinkingChoices: thinkingChoices
+            )
+            let familyID: String
+            let label: String
+            if let variant {
+                familyID = "thinking:\(variant.baseName.lowercased())"
+                label = variant.baseName
+            } else {
+                familyID = "model:\(model.modelId.rawValue)"
+                label = model.displayLabel
+            }
+
+            if groupedModels[familyID] == nil {
+                familyOrder.append(familyID)
+                familyLabels[familyID] = label
+            }
+            groupedModels[familyID, default: []].append(model)
+        }
+
+        let currentEffort = normalizedThinkingValue(
+            currentThinkingValue,
+            among: thinkingChoices
+        )
+        return familyOrder.compactMap { familyID in
+            guard let familyModels = groupedModels[familyID],
+                  let firstModel = familyModels.first,
+                  let label = familyLabels[familyID] else {
+                return nil
+            }
+            let selectedModel = familyModels.first {
+                modelVariant(modelName: $0.displayLabel, thinkingChoices: thinkingChoices)?.effort == currentEffort
+            } ?? firstModel
+            return ModelFamily(
+                id: familyID,
+                label: label,
+                models: familyModels,
+                selectedModel: selectedModel
+            )
+        }
+    }
+
+    private nonisolated static func modelVariant(
+        modelName: String,
+        thinkingChoices: [ThinkingEffortOption.Choice]
+    ) -> (baseName: String, effort: String)? {
+        let trimmedName = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let openParen = trimmedName.lastIndex(of: "("),
+              trimmedName.last == ")" else {
+            return nil
+        }
+
+        let suffix = trimmedName[trimmedName.index(after: openParen)..<trimmedName.index(before: trimmedName.endIndex)]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let effort = normalizedThinkingValue(String(suffix), among: thinkingChoices) else {
+            return nil
+        }
+
+        let baseName = trimmedName[..<openParen].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !baseName.isEmpty else { return nil }
+        return (String(baseName), effort)
+    }
+
+    private nonisolated static func normalizedThinkingValue(
+        _ value: String?,
+        among choices: [ThinkingEffortOption.Choice]
+    ) -> String? {
+        guard let value else { return nil }
+        let normalizedValue = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !normalizedValue.isEmpty else { return nil }
+        return choices.first(where: {
+            $0.value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalizedValue
+                || $0.label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalizedValue
+        })?.value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
     private var defaultHelpText: String {
@@ -442,13 +573,9 @@ struct ProviderSelector: View {
     /// chat, not the global default (see the type doc comment). For a `.draft`
     /// chat (no row yet), stashes the pick on `remoteSession` for
     /// `ChatDetailView.submitMessage` to seed at creation.
-    private func selectRow(_ rowID: String?) {
-        guard let rowID else { return }
-        // Split "providerId:modelId" (or "providerId:default"). The provider id
-        // never contains a colon, so a first-split is safe.
-        let parts = rowID.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
-        guard parts.count == 2, let provider = config.provider(id: ProviderID(rawValue: String(parts[0]))) else { return }
-        let modelId: ModelID? = parts[1] == "default" ? nil : ModelID(rawValue: String(parts[1]))
+    private func selectRow(_ row: SelectorRow) {
+        let provider = row.provider
+        let modelId = row.modelId
         DebugLog.agent("ProviderSelector.selectRow: provider=\(provider.id.rawValue) modelId=\(modelId?.rawValue ?? "nil") (nil=Default/agent-default)")
         switch remoteSession.chatID {
         case .draft:

@@ -16,6 +16,56 @@ import ACPModel
 /// session's backend). Pure logic only — no live agent subprocess.
 @Suite struct ProviderSelectorDefaultTests {
 
+    // MARK: - Chat model label presentation
+
+    @Test func chatModelLabelRemovesAdvertisedThinkingSuffix() {
+        let choices = [
+            ThinkingEffortOption.Choice(value: "low", label: "Low"),
+            ThinkingEffortOption.Choice(value: "high", label: "High"),
+        ]
+
+        #expect(
+            ProviderSelector.modelDisplayLabel(
+                modelName: "GPT-5.6-Luna (Low)",
+                thinkingChoices: choices
+            ) == "GPT-5.6-Luna"
+        )
+    }
+
+    @Test func chatModelLabelPreservesUnrelatedParentheticalSuffix() {
+        let choices = [
+            ThinkingEffortOption.Choice(value: "low", label: "Low"),
+        ]
+
+        #expect(
+            ProviderSelector.modelDisplayLabel(
+                modelName: "GPT-5.6-Luna (beta)",
+                thinkingChoices: choices
+            ) == "GPT-5.6-Luna (beta)"
+        )
+    }
+
+    @Test func modelFamiliesChooseTheVariantForCurrentThinkingEffort() {
+        let choices = [
+            ThinkingEffortOption.Choice(value: "low", label: "Low"),
+            ThinkingEffortOption.Choice(value: "high", label: "High"),
+        ]
+        let models = [
+            CachedModelInfo(modelId: ModelID(rawValue: "luna-low"), name: "GPT-5.6-Luna (Low)"),
+            CachedModelInfo(modelId: ModelID(rawValue: "luna-high"), name: "GPT-5.6-Luna (High)"),
+        ]
+
+        let families = ProviderSelector.modelFamilies(
+            from: models,
+            thinkingChoices: choices,
+            currentThinkingValue: "high"
+        )
+
+        #expect(families.count == 1)
+        #expect(families[0].label == "GPT-5.6-Luna")
+        #expect(families[0].selectedModel.modelId == ModelID(rawValue: "luna-high"))
+    }
+
     // MARK: - settingDefault (single-default invariant)
 
     /// Setting a provider as default demotes every other provider — exactly one
