@@ -134,8 +134,10 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         // Fetch initial snapshot so the icon reflects any items already
         // in the queue (e.g. rehydrated from a previous session).
         Task {
-            lastSnapshot = await queueEngine.snapshot()
-            updateIcon()
+            if let snapshot = await queueSnapshot() {
+                lastSnapshot = snapshot
+                updateIcon()
+            }
         }
 
         // Observe engine events to update the icon + menu.
@@ -157,6 +159,15 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         // Reflect the initial state immediately.
         if daemonHealthMonitor?.state == .disconnected {
             updateIcon()
+        }
+    }
+
+    private func queueSnapshot() async -> QueueSnapshot? {
+        do {
+            return try await queueEngine.snapshot()
+        } catch {
+            DebugLog.store("MenuBarItemController: queue snapshot failed: \(error)")
+            return nil
         }
     }
 
@@ -678,7 +689,7 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
                 isPaused = true
             } else {
                 Task {
-                    let snapshot = await queueEngine.snapshot()
+                    guard let snapshot = await queueSnapshot() else { return }
                     isPaused = snapshot.runStates.values.contains(.paused)
                     lastSnapshot = snapshot
                     updateIcon()
@@ -689,7 +700,7 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
             hasFailedItems = true
         case .completed, .cancelled:
             Task {
-                let snapshot = await queueEngine.snapshot()
+                guard let snapshot = await queueSnapshot() else { return }
                 hasFailedItems = snapshot.recentItems.contains {
                     $0.state == .failed
                 }
@@ -720,7 +731,8 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
             // the icon stays idle when an item is enqueued but hasn't
             // started yet — giving no feedback that work was queued.
             Task {
-                lastSnapshot = await queueEngine.snapshot()
+                guard let snapshot = await queueSnapshot() else { return }
+                lastSnapshot = snapshot
                 updateIcon()
             }
             return
@@ -728,7 +740,8 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
             // Refresh snapshot + update icon so the menu bar reflects
             // items that have transitioned to running.
             Task {
-                lastSnapshot = await queueEngine.snapshot()
+                guard let snapshot = await queueSnapshot() else { return }
+                lastSnapshot = snapshot
                 updateIcon()
             }
             return
@@ -736,14 +749,16 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
             // A queued item was moved; refresh the snapshot for menu
             // accuracy. No hint popover (this is a reorder, not an enqueue).
             Task {
-                lastSnapshot = await queueEngine.snapshot()
+                guard let snapshot = await queueSnapshot() else { return }
+                lastSnapshot = snapshot
             }
             return
         default:
             break
         }
         Task {
-            lastSnapshot = await queueEngine.snapshot()
+            guard let snapshot = await queueSnapshot() else { return }
+            lastSnapshot = snapshot
             updateIcon()
         }
         updateIcon()

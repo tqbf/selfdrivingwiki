@@ -68,29 +68,29 @@ import Foundation
     /// reply is JSON `{"id": "<itemID>", "error": null}`.
     func enqueueItem(request: Data, reply: @escaping (Data) -> Void)
 
-    /// Cancel a specific item. Reply is always called.
-    func cancelItem(id: String, reply: @escaping () -> Void)
+    /// Cancel a specific item. Reply uses the versioned queue envelope.
+    func cancelItem(id: String, reply: @escaping (Data) -> Void)
 
-    /// Cancel all in-flight items. Reply with the count.
-    func cancelAllInFlight(reply: @escaping (Int) -> Void)
+    /// Cancel all in-flight items. Reply uses the versioned queue envelope.
+    func cancelAllInFlight(reply: @escaping (Data) -> Void)
 
     /// Retry a failed item. Reply is JSON `{"error": null}`.
     func retryItem(id: String, reply: @escaping (Data) -> Void)
 
-    /// Pause a queue. Reply always called.
-    func pauseQueue(queue: String, reply: @escaping () -> Void)
+    /// Pause a queue. Reply uses the versioned queue envelope.
+    func pauseQueue(queue: String, reply: @escaping (Data) -> Void)
 
-    /// Resume a queue. Reply always called.
-    func resumeQueue(queue: String, reply: @escaping () -> Void)
+    /// Resume a queue. Reply uses the versioned queue envelope.
+    func resumeQueue(queue: String, reply: @escaping (Data) -> Void)
 
-    /// Halt a queue. Reply always called.
-    func haltQueue(queue: String, reply: @escaping () -> Void)
+    /// Halt a queue. Reply uses the versioned queue envelope.
+    func haltQueue(queue: String, reply: @escaping (Data) -> Void)
 
-    /// Reorder an item. Reply always called.
-    func reorderItem(id: String, beforeItemID: String?, reply: @escaping () -> Void)
+    /// Reorder an item. Reply uses the versioned queue envelope.
+    func reorderItem(id: String, beforeItemID: String?, reply: @escaping (Data) -> Void)
 
-    /// Check if a wiki has active work. Reply with Bool.
-    func hasActiveWork(wikiID: String, reply: @escaping (Bool) -> Void)
+    /// Check if a wiki has active work. Reply uses the versioned queue envelope.
+    func hasActiveWork(wikiID: String, reply: @escaping (Data) -> Void)
 
     /// Await completion of an item. Reply is JSON `{"success": true}` or
     /// `{"success": false, "error": "..."}`.
@@ -99,9 +99,16 @@ import Foundation
     /// Load transcript items for an item. Reply is JSON-encoded `[ChatTranscriptItem]`.
     func loadTranscript(itemID: String, reply: @escaping (Data) -> Void)
 
-    /// Load all activity snapshots. Reply is JSON-encoded
-    /// `[String: ActivitySnapshotData]`.
+    /// Load all activity snapshots through the versioned queue envelope.
     func loadAllActivitySnapshots(reply: @escaping (Data) -> Void)
+
+    /// Return the daemon queue ownership epoch and host state.
+    /// Reply uses the versioned queue envelope.
+    func queueOwnershipStatus(reply: @escaping (Data) -> Void)
+
+    /// Permanently relinquish queue ownership for the expected epoch.
+    /// Request and reply use versioned queue wire values.
+    func relinquishQueue(request: Data, reply: @escaping (Data) -> Void)
 
     // MARK: - Workload: chat (Phase C)
 

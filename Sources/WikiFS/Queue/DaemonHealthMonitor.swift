@@ -25,6 +25,12 @@ import WikiFSCore
 /// - ``onReconnect`` — swap back to the XPC proxy + re-register the event sink.
 ///
 /// Both fire on the main actor.
+enum DaemonReconnectOutcome: Sendable {
+    case connected
+    case retry
+    case localFallbackReady
+}
+
 @MainActor
 @Observable
 final class DaemonHealthMonitor {
@@ -40,13 +46,13 @@ final class DaemonHealthMonitor {
     /// swaps the queue engine to a local `QueueEngine` so the UI stays
     /// functional. Fires exactly once per disconnect (not on every failed ping
     /// while already disconnected).
-    var onDisconnect: (() -> Void)?
+    var onDisconnect: (@MainActor () async -> Void)?
 
     /// Fired (on the main actor) when the daemon recovers after a disconnect.
     /// The app swaps back to the XPC proxy + re-registers the event sink. The
     /// closure receives the new `WikiDaemonConnection` (the old one is
     /// invalidated).
-    var onReconnect: ((WikiDaemonConnection) -> Void)?
+    var onReconnect: (@MainActor (WikiDaemonConnection) async -> DaemonReconnectOutcome)?
 
     /// Fired (on the main actor) when the daemon *process* is replaced while the
     /// connection stays alive — launchd relaunches the mach service and the
@@ -55,7 +61,7 @@ final class DaemonHealthMonitor {
     /// the app must re-register on the SAME connection or every pushed
     /// chat/queue envelope is silently dropped (#904). State stays `.connected`
     /// — this is not a disconnect. The closure receives the current connection.
-    var onInterrupt: ((WikiDaemonConnection) -> Void)?
+    var onInterrupt: (@MainActor (WikiDaemonConnection) async -> Void)?
 
     /// Fired (on the main actor) on EVERY state transition. Used by observers
     /// that don't need the full disconnect/reconnect flow — e.g. the menu-bar
@@ -115,7 +121,7 @@ final class DaemonHealthMonitor {
     /// menu item — for a bundled XPC service, invalidating the connection +
     /// reconnecting causes the system to relaunch the service. If the daemon
     /// is currently `.connected`, this forces a disconnect→reconnect cycle.
-    func forceReconnect() {
+    func forceReconnect() async {
         DebugLog.store("wikid: forceReconnect requested")
         let wasConnected = (state == .connected)
         if let conn = connection {
@@ -134,7 +140,7 @@ final class DaemonHealthMonitor {
         // contract is: onDisconnect fires exactly once per disconnect).
         if wasConnected {
             setState(.disconnected)
-            onDisconnect?()
+            await onDisconnect?()
         }
         // Kick an immediate reconnect attempt instead of waiting a full ping
         // interval — the whole point of "Restart Daemon" is a prompt recovery.
@@ -171,23 +177,23 @@ final class DaemonHealthMonitor {
     /// In production, `handleInvalidation()` is called by the invalidation
     /// handler installed in ``installInvalidationHandler(_:)``, which fires on
     /// an XPC-internal queue.
-    func _testSimulateInvalidation() {
-        handleInvalidation()
+    func _testSimulateInvalidation() async {
+        await handleInvalidation()
     }
 
     /// Test-only: directly trigger the interruption → re-register path as if the
     /// XPC connection had been interrupted (daemon process replaced). Exposed so
     /// tests can exercise it deterministically without a real `NSXPCConnection`
     /// interruption (which fires asynchronously on an XPC-internal queue).
-    func _testSimulateInterruption() {
-        handleInterruption()
+    func _testSimulateInterruption() async {
+        await handleInterruption()
     }
 
     private func installInvalidationHandler(_ conn: WikiDaemonConnection) {
         conn.setInvalidationHandler { [weak self] in
             // Fires on an XPC-internal queue — hop to the main actor.
             Task { @MainActor [weak self] in
-                self?.handleInvalidation()
+                await self?.handleInvalidation()
             }
         }
     }
@@ -196,7 +202,7 @@ final class DaemonHealthMonitor {
         conn.setInterruptionHandler { [weak self] in
             // Fires on an XPC-internal queue — hop to the main actor.
             Task { @MainActor [weak self] in
-                self?.handleInterruption()
+                await self?.handleInterruption()
             }
         }
     }
@@ -208,10 +214,10 @@ final class DaemonHealthMonitor {
     /// `onInterrupt`. We deliberately stay `.connected` (no banner flap) and do
     /// NOT tear down to the local engine — the daemon is up, just amnesiac about
     /// our sink (#904).
-    private func handleInterruption() {
+    private func handleInterruption() async {
         guard isMonitoring, let conn = connection else { return }
         DebugLog.store("wikid: XPC connection interrupted — daemon replaced; re-registering event sink")
-        onInterrupt?(conn)
+        await onInterrupt?(conn)
     }
 
     /// Called when the XPC connection is invalidated (daemon process exited).
@@ -219,12 +225,12 @@ final class DaemonHealthMonitor {
     /// swaps to a local engine. Does NOT cancel the ping loop — the next
     /// iteration sees `connection == nil` and attempts to reconnect (macOS
     /// auto-launches a fresh embedded XPC service on the new connection).
-    private func handleInvalidation() {
+    private func handleInvalidation() async {
         guard isMonitoring else { return }
         DebugLog.store("wikid: XPC connection invalidated — daemon process exited")
         connection = nil
         setState(.disconnected)
-        onDisconnect?()
+        await onDisconnect?()
     }
 
     // MARK: - Recurring health ping (#878 BLOCKER 1.1)
@@ -269,7 +275,7 @@ final class DaemonHealthMonitor {
                 conn.invalidate()
                 connection = nil
                 setState(.disconnected)
-                onDisconnect?()
+                await onDisconnect?()
             }
             return
         }
@@ -285,11 +291,26 @@ final class DaemonHealthMonitor {
         }
         let healthy = await newConn.healthCheck(timeout: timeout)
         if healthy {
+            let outcome = await onReconnect?(newConn) ?? .retry
+            switch outcome {
+            case .connected:
+                break
+            case .retry:
+                newConn.invalidate()
+                setState(.disconnected)
+                DebugLog.store("wikid: reconnect was not accepted — state=.disconnected")
+                return
+            case .localFallbackReady:
+                newConn.invalidate()
+                stop()
+                setState(.disconnected)
+                DebugLog.store("wikid: queue relinquished — local fallback owns the queue")
+                return
+            }
             connection = newConn
             installInvalidationHandler(newConn)
             installInterruptionHandler(newConn)
             setState(.connected)
-            onReconnect?(newConn)
             DebugLog.store("wikid: reconnected — state=.connected")
         } else {
             newConn.invalidate()

@@ -145,7 +145,6 @@ struct QueueExtractionTests {
     @Test func testProgressEventEmitted() async throws {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
 
-        let progressHolder = ProgressCollector()
         let provider = FakeExtractionProvider(
             resolveResult: .resolved(.localPdf2md),
             convertBehavior: { onProgress in
@@ -155,23 +154,26 @@ struct QueueExtractionTests {
         )
         let factory = QueueExtractionWorkerFactory(
             provider: provider,
-            emitProgress: { id, line in progressHolder.record(id: id, line: line) }
+            emitProgress: { _, _ in }
         )
         let engine = QueueEngine(store: store,
                                  config: QueueEngineConfig(localExtractionLimit: 1),
                                  workerFactory: factory)
+        let events = engine.events
         await engine.start()
 
         let id = try await engine.enqueue(
             QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "wiki1"), payload: makePayload()))
 
-        try await progressHolder.waitForCount(2, timeoutSeconds: 5)
+        let lines = try await progressLines(
+            for: id,
+            count: 2,
+            from: events,
+            timeout: .seconds(5))
 
-        let lines = progressHolder.lines
         #expect(lines.count == 2)
-        #expect(lines[0].line == "Converting page 1...")
-        #expect(lines[1].line == "Converting page 2...")
-        _ = id
+        #expect(lines[0] == "Converting page 1...")
+        #expect(lines[1] == "Converting page 2...")
         store.close()
     }
 
@@ -479,30 +481,39 @@ private struct FakeMarkdownExtractor: MarkdownExtractor {
     }
 }
 
-// MARK: - Progress collector
+// MARK: - Progress event wait
 
-private final class ProgressCollector: @unchecked Sendable {
-    private let lock = OSAllocatedUnfairLock(initialState: [(id: QueueItem.ID, line: String)]())
+private enum ProgressEventWaitError: Error {
+    case streamEnded
+    case timedOut
+}
 
-    var lines: [(id: QueueItem.ID, line: String)] {
-        lock.withLock { $0 }
-    }
-
-    func record(id: QueueItem.ID, line: String) {
-        lock.withLock { $0.append((id, line)) }
-    }
-
-    func waitForCount(_ count: Int, timeoutSeconds: TimeInterval) async throws {
-        let deadline = Date().addingTimeInterval(timeoutSeconds)
-        while true {
-            let current = lines.count
-            if current >= count { return }
-            if Date() > deadline {
-                Issue.record("Timed out waiting for \(count) progress lines, got \(current)")
-                return
+private func progressLines(
+    for itemID: QueueItem.ID,
+    count: Int,
+    from events: AsyncStream<QueueEvent>,
+    timeout: Duration
+) async throws -> [String] {
+    try await withThrowingTaskGroup(of: [String].self) { group in
+        group.addTask {
+            var lines: [String] = []
+            for await event in events {
+                guard case .progress(let eventItemID, let line) = event,
+                      eventItemID == itemID else { continue }
+                lines.append(line)
+                if lines.count == count { return lines }
             }
-            try await Task.sleep(nanoseconds: 50_000_000)
+            throw ProgressEventWaitError.streamEnded
         }
+        group.addTask {
+            try await Task.sleep(for: timeout)
+            throw ProgressEventWaitError.timedOut
+        }
+        guard let lines = try await group.next() else {
+            throw ProgressEventWaitError.streamEnded
+        }
+        group.cancelAll()
+        return lines
     }
 }
 

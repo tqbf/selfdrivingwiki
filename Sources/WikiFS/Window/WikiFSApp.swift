@@ -2,6 +2,7 @@ import SwiftUI
 import WikiFSEngine
 import WikiFSCore
 import WikiCtlCore
+import WikiDaemonContract
 import WikiFSMLX
 
 /// Entry point for the WikiFS macOS app.
@@ -40,6 +41,8 @@ struct WikiFSApp: App {
     /// extraction/ingestion workers off-main. One instance, shared across
     /// sessions via `WikiSession`.
     @State private var queueEngine: QueueEngineHotSwap
+    /// Sole owner of the app-local Cordis queue runtime and all ownership transitions.
+    @State private var localQueueRuntimeController: LocalQueueRuntimeController
     /// App-wide extraction provider. Bridges the headless queue engine to the
     /// `@MainActor` `ExtractionCoordinator` + `WikiStoreModel`. Handles both
     /// bytes-based extraction (PDF, HTML) AND transcript fetching (YouTube
@@ -63,7 +66,7 @@ struct WikiFSApp: App {
     /// an alert over the main window so the user understands ingestion /
     /// extraction are unavailable (instead of silently dropping every
     /// enqueued item on restart).
-    @State private var queueStoreError: String?
+    private var queueStoreError: String? { localQueueRuntimeController.startupError }
     /// Drives the Settings TabView selection so the activity windows can open
     /// Settings on the relevant tab (gear button → extraction/agents config).
     @AppStorage("settings.selectedTab") private var settingsSelectedTabRaw = SettingsTab.zotero.rawValue
@@ -184,26 +187,30 @@ struct WikiFSApp: App {
 
         let activityTracker = QueueActivityTracker()
 
-        // Always construct a local engine first — it's the fallback if the
-        // daemon isn't running (dev mode without `make install-daemon`) AND
-        // the recovery target if the daemon dies mid-session.
-        let localEngineResult = Self.makeLocalQueueEngine(
-            directory: directory,
-            sessionBox: sessionBox,
-            fileProviderBox: fileProviderBox,
-            extractionProvider: extractionProvider)
+        let queueDBURL = DebugLog.trying(
+            "resolve queue database URL",
+            operation: { try DatabaseLocation.queueDatabaseURL() })
+            ?? directory.appendingPathComponent("queue.sqlite", isDirectory: false)
+        let runtimeController = LocalQueueRuntimeController {
+            try await QueueRuntimeAssembly(
+                databaseURL: queueDBURL,
+                extractionProvider: extractionProvider,
+                makeIngestionProvider: { store in
+                    await MainActor.run {
+                        AppQueueIngestionProvider(
+                            sessionBox: sessionBox,
+                            fileProviderBox: fileProviderBox,
+                            wikictlDirectory: HelpersLocation.wikictlDirectory,
+                            queueStore: store)
+                    }
+                })
+                .assemble()
+        }
+        runtimeController.start()
 
-        // Issue #881: surface a user-visible error if `queue.sqlite` could not
-        // be opened (no silent `:memory:` fallback). `localEngine` may be an
-        // `UnavailableQueueEngine` — the app stays usable for browsing, but
-        // ingest/extract throw a clear error.
-        _queueStoreError = State(initialValue: localEngineResult.openError)
-
-        // Wrap in the hot-swap router so a mid-session daemon death can swap
-        // back to a fresh local engine transparently — all consumers
-        // (SessionManager, MenuBarItemController, QueueActivityTracker) hold
-        // the router, never the inner engine.
-        let router = QueueEngineHotSwap(localEngineResult.engine)
+        // All consumers retain one stable facade. The controller owns its local
+        // runtime handle and changes only the facade's admitted inner client.
+        let router = runtimeController.client
         activityTracker.attach(engine: router)
         Task { await activityTracker.rehydrate(from: router) }
         // #871 self-heal: poll the snapshot so a finished item still clears
@@ -214,6 +221,7 @@ struct WikiFSApp: App {
         let queueEngine = router
 
         _queueEngine = State(initialValue: queueEngine)
+        _localQueueRuntimeController = State(initialValue: runtimeController)
         _extractionProvider = State(initialValue: extractionProvider)
         _fileProviderBox = State(initialValue: fileProviderBox)
         _activityTracker = State(initialValue: activityTracker)
@@ -322,6 +330,7 @@ struct WikiFSApp: App {
         bootstrapApp()
         startStatusItem()
         applyAppKitAppearance()
+        await localQueueRuntimeController.awaitSettled()
         connectToDaemon()
     }
 
@@ -364,7 +373,9 @@ struct WikiFSApp: App {
                 // system relaunches the service on the next
                 // NSXPCConnection(serviceName:)). If the daemon is currently
                 // connected, this forces a disconnect→reconnect cycle.
-                healthMonitor?.forceReconnect()
+                Task { @MainActor [weak healthMonitor] in
+                    await healthMonitor?.forceReconnect()
+                }
             },
             daemonHealthMonitor: healthMonitor)
         statusController.start()
@@ -483,19 +494,9 @@ struct WikiFSApp: App {
         guard !Self.didConnectDaemon else { return }
         Self.didConnectDaemon = true
 
-        let directory = containerDirectory
-        guard let sessionBox = sessionLookupBox else { return }
-        let fileProviderBoxValue = fileProviderBox
-        let extractionProviderValue = extractionProvider
-
-        // Wire the health monitor's disconnect/reconnect closures BEFORE the
-        // connection attempt so they're ready whether the initial connect
-        // succeeds or fails (#885 — the retry loop fires onReconnect).
-        configureHealthMonitor(
-            directory: directory,
-            sessionBox: sessionBox,
-            fileProviderBoxValue: fileProviderBoxValue,
-            extractionProviderValue: extractionProviderValue)
+        // Wire health callbacks before the connection attempt so every
+        // invalidation and reconnect flows through the ownership controller.
+        configureHealthMonitor()
 
         Task { [weak healthMonitor] in
             guard let conn = DebugLog.trying("connect daemon", operation: { try WikiDaemonConnection.connect() }) else {
@@ -511,23 +512,35 @@ struct WikiFSApp: App {
                 return
             }
 
-            await MainActor.run {
-                DebugLog.store("WikiFSApp: connected to wikid daemon — swapping to XPC proxy")
-                do {
-                    let workloadClient = try DaemonWorkloadClient(connection: conn)
-                    let eventSink = DaemonQueueEventSink()
-                    workloadClient.registerEventSink(eventSink)
-                    let proxy = XPCQueueEngineProxy(
-                        workloadClient: workloadClient, eventSink: eventSink)
-                    queueEngine.swap(to: proxy)
+            DebugLog.store("WikiFSApp: connected to wikid daemon — swapping to XPC proxy")
+            do {
+                let workloadClient = try DaemonWorkloadClient(connection: conn)
+                let status = try await workloadClient.queueOwnershipStatus()
+                guard status.hostState == .serving else {
+                    throw QueueRPCError(
+                        code: .ownershipTransition,
+                        message: "Daemon queue host is \(status.hostState.rawValue)")
+                }
+                let eventSink = DaemonQueueEventSink()
+                workloadClient.registerEventSink(eventSink)
+                let proxy = XPCQueueEngineProxy(
+                    workloadClient: workloadClient, eventSink: eventSink)
+                guard await localQueueRuntimeController.activateDaemon(.init(
+                    client: proxy,
+                    epoch: status.epoch)) else {
+                    throw QueueRPCError(
+                        code: .ownershipTransition,
+                        message: "Local queue runtime refused daemon takeover")
+                }
+                await MainActor.run {
                     replaceChatDaemonCoordinator(ChatDaemonCoordinator(
                         client: workloadClient, eventSink: eventSink))
                     healthMonitor?.start(connection: conn)
-                } catch {
-                    DebugLog.store("WikiFSApp: failed to create daemon workload client: \(error)")
-                    conn.invalidate()
-                    healthMonitor?.startRetrying()
                 }
+            } catch {
+                DebugLog.store("WikiFSApp: failed to create daemon workload client: \(error)")
+                conn.invalidate()
+                healthMonitor?.startRetrying()
             }
         }
     }
@@ -544,38 +557,93 @@ struct WikiFSApp: App {
     /// swap logic ready. The closures capture the router (a class ref) and
     /// directory/box values by value — WikiFSApp is a struct (no retain cycle).
     @MainActor
-    private func configureHealthMonitor(
-        directory: URL,
-        sessionBox: SessionLookupBox,
-        fileProviderBoxValue: FileProviderBox,
-        extractionProviderValue: any QueueExtractionProvider
-    ) {
+    private func configureHealthMonitor() {
         healthMonitor.onDisconnect = {
-            DebugLog.store("WikiFSApp: daemon disconnected — falling back to local QueueEngine")
-            let local = Self.makeLocalQueueEngine(
-                directory: directory,
-                sessionBox: sessionBox,
-                fileProviderBox: fileProviderBoxValue,
-                extractionProvider: extractionProviderValue)
-            if let disconnectError = local.openError {
-                DebugLog.store("WikiFSApp: local queue engine unavailable after daemon disconnect: \(disconnectError)")
+            DebugLog.store("WikiFSApp: daemon disconnected — queue ownership is unresolved")
+            let expectedEpoch: QueueOwnershipEpoch
+            if case .daemonActive(let epoch) = localQueueRuntimeController.state {
+                expectedEpoch = epoch
+            } else {
+                DebugLog.store("WikiFSApp: disconnect had no active daemon ownership epoch")
+                chatDaemonCoordinator = nil
+                return
             }
+            await localQueueRuntimeController.daemonOwnershipBecameUnresolved(
+                expectedEpoch: expectedEpoch,
+                reason: "Daemon connection was invalidated")
             queueEngine.swap(to: local.engine)
             replaceChatDaemonCoordinator(nil)
         }
         healthMonitor.onReconnect = { newConn in
-            DebugLog.store("WikiFSApp: daemon reconnected — swapping back to XPC proxy")
             do {
                 let workloadClient = try DaemonWorkloadClient(connection: newConn)
-                let eventSink = DaemonQueueEventSink()
-                workloadClient.registerEventSink(eventSink)
-                let proxy = XPCQueueEngineProxy(
-                    workloadClient: workloadClient, eventSink: eventSink)
-                queueEngine.swap(to: proxy)
-                replaceChatDaemonCoordinator(ChatDaemonCoordinator(
-                    client: workloadClient, eventSink: eventSink))
+                let makeEndpoint: @MainActor (QueueOwnershipEpoch) -> (
+                    endpoint: LocalQueueRuntimeController.DaemonEndpoint,
+                    chatCoordinator: ChatDaemonCoordinator
+                ) = { epoch in
+                    let eventSink = DaemonQueueEventSink()
+                    workloadClient.registerEventSink(eventSink)
+                    let proxy = XPCQueueEngineProxy(
+                        workloadClient: workloadClient, eventSink: eventSink)
+                    return (
+                        .init(client: proxy, epoch: epoch),
+                        ChatDaemonCoordinator(client: workloadClient, eventSink: eventSink))
+                }
+
+                if case .shutdownBlocked = localQueueRuntimeController.state {
+                    let status = try await workloadClient.queueOwnershipStatus()
+                    guard status.hostState == .serving else { return .retry }
+                    let daemon = makeEndpoint(status.epoch)
+                    let accepted = await localQueueRuntimeController.retryBlockedShutdownForDaemon(
+                        daemon.endpoint)
+                    if accepted {
+                        queueEngine.swap(to: daemon.endpoint.client)
+                        replaceChatDaemonCoordinator(daemon.chatCoordinator)
+                    }
+                    return accepted ? .connected : .retry
+                }
+
+                if case .daemonOwnershipUnresolved(let expectedEpoch, _) = localQueueRuntimeController.state {
+                    DebugLog.store("WikiFSApp: daemon reconnected — requesting queue relinquishment")
+                    do {
+                        let success = try await workloadClient.relinquishQueue(
+                            expectedEpoch: expectedEpoch)
+                        let fellBack = await localQueueRuntimeController.fallBackAfterRelinquishment(
+                            success,
+                            expectedEpoch: expectedEpoch)
+                        if fellBack {
+                            DebugLog.store("WikiFSApp: daemon relinquished queue ownership — local runtime ready")
+                            return .localFallbackReady
+                        }
+                        return .retry
+                    } catch {
+                        let status = try await workloadClient.queueOwnershipStatus()
+                        guard status.hostState == .serving,
+                              status.epoch != expectedEpoch else { throw error }
+                        let daemon = makeEndpoint(status.epoch)
+                        let accepted = await localQueueRuntimeController.replaceUnresolvedDaemon(
+                            daemon.endpoint,
+                            expectedEpoch: expectedEpoch)
+                        if accepted {
+                            queueEngine.swap(to: daemon.endpoint.client)
+                            replaceChatDaemonCoordinator(daemon.chatCoordinator)
+                        }
+                        return accepted ? .connected : .retry
+                    }
+                }
+
+                let status = try await workloadClient.queueOwnershipStatus()
+                guard status.hostState == .serving else { return .retry }
+                let daemon = makeEndpoint(status.epoch)
+                let accepted = await localQueueRuntimeController.activateDaemon(daemon.endpoint)
+                if accepted {
+                    queueEngine.swap(to: daemon.endpoint.client)
+                    replaceChatDaemonCoordinator(daemon.chatCoordinator)
+                }
+                return accepted ? .connected : .retry
             } catch {
-                DebugLog.store("WikiFSApp: reconnect failed to create workload client: \(error)")
+                DebugLog.store("WikiFSApp: reconnect queue transition failed: \(error)")
+                return .retry
             }
         }
         // #904: on interruption the XPC service was replaced but the connection
@@ -597,75 +665,6 @@ struct WikiFSApp: App {
                 DebugLog.store("WikiFSApp: interrupt re-registration failed: \(error)")
             }
         }
-    }
-
-    /// Construct a local `QueueEngine` as the fallback for when the daemon is
-    /// unavailable or has died mid-session. Extracted from the former inline
-    /// init() block so it can be called on initial launch AND on disconnect.
-    ///
-    /// - Returns: A tuple of the engine to wire into the hot-swap router and an
-    ///   optional user-visible error message. When the on-disk `queue.sqlite`
-    ///   cannot be opened, the engine is an `UnavailableQueueEngine` (so the app
-    ///   stays usable for browsing but ingest/extract throw a clear error) and
-    ///   `openError` carries the failure reason for the app-level alert (issue
-    ///   #881 — no silent `:memory:` fallback that drops every item on restart).
-    @MainActor
-    private static func makeLocalQueueEngine(
-        directory: URL,
-        sessionBox: SessionLookupBox,
-        fileProviderBox: FileProviderBox,
-        extractionProvider: any QueueExtractionProvider
-    ) -> (engine: any QueueEngineClient, openError: String?) {
-        DebugLog.store("WikiFSApp: constructing local QueueEngine fallback")
-        let queueDBURL = DebugLog.trying("resolve queue database URL", operation: { try DatabaseLocation.queueDatabaseURL() })
-            ?? directory.appendingPathComponent("queue.sqlite", isDirectory: false)
-        let queueStore: QueueStore
-        do {
-            queueStore = try QueueStore(databaseURL: queueDBURL)
-        } catch {
-            // Issue #881: no in-memory fallback. Surface a user-visible error
-            // and use an `UnavailableQueueEngine` so the app stays usable for
-            // browsing while ingest/extract throw a clear error (instead of
-            // silently dropping every enqueued item on restart).
-            let reason = "Could not open the queue database at \(queueDBURL.path). Ingestion and extraction will be unavailable until this is resolved. \(error)"
-            DebugLog.store("QueueEngine: failed to open queue.sqlite — queue unavailable: \(error)")
-            return (UnavailableQueueEngine(reason: reason), reason)
-        }
-        let ingestionProvider = AppQueueIngestionProvider(
-            sessionBox: sessionBox,
-            fileProviderBox: fileProviderBox,
-            wikictlDirectory: HelpersLocation.wikictlDirectory,
-            queueStore: queueStore)
-        let progressBox = ProgressEmitBox()
-        let transcriptBox = TranscriptEmitBox()
-        let usageBox = UsageEmitBox()
-        let liveUsageBox = LiveUsageEmitBox()
-        let logPathsBox = LogPathsEmitBox()
-        let pendingPermissionBox = PendingPermissionEmitBox()
-        let extractionFactory = QueueExtractionWorkerFactory(
-            provider: extractionProvider,
-            emitProgress: { id, line in progressBox.emit?(id, line) })
-        let ingestionFactory = QueueIngestionWorkerFactory(
-            provider: ingestionProvider,
-            emitProgress: { id, line in progressBox.emit?(id, line) },
-            emitTranscript: { id, event in transcriptBox.emit(id, event) },
-            emitUsage: { id, usage in usageBox.emit?(id, usage) },
-            emitLiveUsage: { id, usage in liveUsageBox.emit?(id, usage) },
-            emitLogPaths: { id, logURL, debugURL in logPathsBox.emit?(id, logURL, debugURL) },
-            emitPendingPermission: { id, permission in pendingPermissionBox.emit?(id, permission) })
-        let workerFactory = CompositeWorkerFactory(factories: [
-            .extraction: extractionFactory,
-            .ingestion: ingestionFactory,
-        ])
-        let localEngine = QueueEngine(store: queueStore, workerFactory: workerFactory)
-        Task { progressBox.emit = await localEngine.makeEmitProgress() }
-        Task { transcriptBox.install(await localEngine.makeEmitTranscript()) }
-        Task { usageBox.emit = await localEngine.makeEmitUsage() }
-        Task { liveUsageBox.emit = await localEngine.makeEmitLiveUsage() }
-        Task { logPathsBox.emit = await localEngine.makeEmitLogPaths() }
-        Task { pendingPermissionBox.emit = await localEngine.makeEmitPendingPermission() }
-        Task { await localEngine.start() }
-        return (localEngine, nil)
     }
 
     var body: some Scene {
@@ -731,7 +730,7 @@ struct WikiFSApp: App {
                 "Queue Database Unavailable",
                 isPresented: Binding(
                     get: { queueStoreError != nil },
-                    set: { if !$0 { queueStoreError = nil } }
+                    set: { if !$0 { localQueueRuntimeController.dismissStartupError() } }
                 ),
                 presenting: queueStoreError
             ) { _ in

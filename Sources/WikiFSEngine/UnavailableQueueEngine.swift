@@ -62,32 +62,52 @@ public final class UnavailableQueueEngine: QueueEngineClient, @unchecked Sendabl
         throw Error.unavailable(reason: reason)
     }
 
-    public func cancelItem(_ id: QueueItem.ID) async {}
+    public func cancelItem(_ id: QueueItem.ID) async throws {
+        throw Error.unavailable(reason: reason)
+    }
 
     @discardableResult
-    public func cancelAllInFlight() async -> Int { 0 }
+    public func cancelAllInFlight() async throws -> Int {
+        throw Error.unavailable(reason: reason)
+    }
 
     public func retryItem(_ id: QueueItem.ID) async throws {
         throw Error.unavailable(reason: reason)
     }
 
-    public func pause(_ queue: QueueKind) async {}
-
-    public func resume(_ queue: QueueKind) async {}
-
-    public func halt(_ queue: QueueKind) async {}
-
-    public func reorderItem(id: QueueItem.ID, beforeItemID: QueueItem.ID?) async {}
-
-    public func snapshot() async -> QueueSnapshot { QueueSnapshot() }
-
-    public func hasActiveWork(for wikiID: WikiID) async -> Bool { false }
-
-    public func waitForCompletion(of id: QueueItem.ID) async -> Result<Void, Swift.Error> {
-        .failure(Error.unavailable(reason: reason))
+    public func pause(_ queue: QueueKind) async throws {
+        throw Error.unavailable(reason: reason)
     }
 
-    public func loadTranscript(for itemID: QueueItem.ID) async -> [ChatTranscriptItem] { [] }
+    public func resume(_ queue: QueueKind) async throws {
+        throw Error.unavailable(reason: reason)
+    }
 
-    public func loadAllActivitySnapshots() async -> [QueueItem.ID: QueueEngine.ActivitySnapshot] { [:] }
+    public func halt(_ queue: QueueKind) async throws {
+        throw Error.unavailable(reason: reason)
+    }
+
+    public func reorderItem(id: QueueItem.ID, beforeItemID: QueueItem.ID?) async throws {
+        throw Error.unavailable(reason: reason)
+    }
+
+    public func snapshot() async throws -> QueueSnapshot {
+        throw Error.unavailable(reason: reason)
+    }
+
+    public func hasActiveWork(for wikiID: WikiID) async throws -> Bool {
+        throw Error.unavailable(reason: reason)
+    }
+
+    public func waitForCompletion(of id: QueueItem.ID) async throws -> Result<Void, Swift.Error> {
+        throw Error.unavailable(reason: reason)
+    }
+
+    public func loadTranscript(for itemID: QueueItem.ID) async throws -> [ChatTranscriptItem] {
+        throw Error.unavailable(reason: reason)
+    }
+
+    public func loadAllActivitySnapshots() async throws -> [QueueItem.ID: QueueEngine.ActivitySnapshot] {
+        throw Error.unavailable(reason: reason)
+    }
 }

@@ -13,12 +13,12 @@ import Testing
 /// method is added to `QueueEngine` and called from the app, it MUST be added
 /// to `QueueEngineClient` or this test fails.
 ///
-/// Methods intentionally NOT in the protocol (called only on the concrete
-/// owner in `WikiFSApp` / `QueueIngestionHelper`):
-/// - `start()` — called once at app launch on the concrete `@State`
-/// - `makeEmitProgress()` / `makeEmitTranscript()` / etc. — called on the
-///   concrete engine to capture `@Sendable` closures for the worker factory
+/// Methods intentionally NOT in the protocol:
+/// - `start()` — awaited by `QueueRuntimeAssembly` before it publishes a client
+/// - `shutdownForHandoff()` — called only by the runtime owner
 /// - `clearTranscript(for:)` — not called from the app
+///
+/// Worker callbacks come from `QueueWorkerOutputChannel`, not from the engine.
 ///
 /// See `plans/daemon-workloads.md` Phase 0 §4 + correction C2/C5.
 struct QueueEngineClientConformanceTests {
@@ -53,54 +53,54 @@ struct QueueEngineClientConformanceTests {
         #expect(!itemID.rawValue.isEmpty)
 
         // cancelItem
-        await client.cancelItem(itemID)
+        try await client.cancelItem(itemID)
 
         // retryItem
         try await client.retryItem(itemID)
 
         // cancelAllInFlight
-        let cancelled = await client.cancelAllInFlight()
+        let cancelled = try await client.cancelAllInFlight()
         #expect(cancelled == 0)
 
         // pause / resume / halt
-        await client.pause(.extraction)
-        await client.resume(.extraction)
-        await client.halt(.extraction)
+        try await client.pause(.extraction)
+        try await client.resume(.extraction)
+        try await client.halt(.extraction)
 
         // reorderItem
-        await client.reorderItem(id: itemID, beforeItemID: nil)
+        try await client.reorderItem(id: itemID, beforeItemID: nil)
 
         // snapshot — has the enqueued item (still queued since NoopWorkerFactory
         // never dispatches).
-        let snapshot = await client.snapshot()
+        let snapshot = try await client.snapshot()
         #expect(snapshot.activeItems.count == 1)
 
         // hasActiveWork — true because the item is queued for "test-wiki".
-        let hasWork = await client.hasActiveWork(for: WikiID(rawValue: "test-wiki"))
+        let hasWork = try await client.hasActiveWork(for: WikiID(rawValue: "test-wiki"))
         #expect(hasWork)
 
         // Cancel the item so waitForCompletion returns immediately (otherwise
         // it would block forever — NoopWorkerFactory never completes items).
-        await client.cancelItem(itemID)
+        try await client.cancelItem(itemID)
 
         // waitForCompletion — returns .failure (item was cancelled).
-        let result = await client.waitForCompletion(of: itemID)
+        let result = try await client.waitForCompletion(of: itemID)
         switch result {
         case .success, .failure: break // both valid terminal outcomes
         }
 
         // loadTranscript
-        let transcript = await client.loadTranscript(for: itemID)
+        let transcript = try await client.loadTranscript(for: itemID)
         #expect(transcript.isEmpty)
 
         // loadAllActivitySnapshots
-        let snapshots = await client.loadAllActivitySnapshots()
+        let snapshots = try await client.loadAllActivitySnapshots()
         #expect(snapshots.isEmpty)
     }
 
-    @Test func loadTypedTranscriptIsCallable() async {
+    @Test func loadTypedTranscriptIsCallable() async throws {
         let client: any QueueEngineClient = makeEngine()
-        let items = await client.loadTranscript(for: QueueItem.ID(rawValue: "typed-item"))
+        let items = try await client.loadTranscript(for: QueueItem.ID(rawValue: "typed-item"))
         #expect(items.isEmpty)
     }
 

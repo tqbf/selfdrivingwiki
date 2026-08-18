@@ -41,21 +41,22 @@ final class XPCQueueEngineProxy: QueueEngineClient {
         try await workloadClient.enqueue(request)
     }
 
-    func cancelItem(_ id: QueueItem.ID) async {
+    func cancelItem(_ id: QueueItem.ID) async throws {
         do {
             try await workloadClient.cancelItem(id)
         } catch {
             DebugLog.ingest("XPCQueueEngineProxy.cancelItem failed for \(id.rawValue): \(error.localizedDescription)")
+            throw error
         }
     }
 
     @discardableResult
-    func cancelAllInFlight() async -> Int {
+    func cancelAllInFlight() async throws -> Int {
         do {
             return try await workloadClient.cancelAllInFlight()
         } catch {
             DebugLog.ingest("XPCQueueEngineProxy.cancelAllInFlight failed: \(error.localizedDescription)")
-            return 0
+            throw error
         }
     }
 
@@ -68,82 +69,88 @@ final class XPCQueueEngineProxy: QueueEngineClient {
         }
     }
 
-    func pause(_ queue: QueueKind) async {
+    func pause(_ queue: QueueKind) async throws {
         do {
             try await workloadClient.pause(queue)
         } catch {
             DebugLog.ingest("XPCQueueEngineProxy.pause(\(queue)) failed: \(error.localizedDescription)")
+            throw error
         }
     }
 
-    func resume(_ queue: QueueKind) async {
+    func resume(_ queue: QueueKind) async throws {
         do {
             try await workloadClient.resume(queue)
         } catch {
             DebugLog.ingest("XPCQueueEngineProxy.resume(\(queue)) failed: \(error.localizedDescription)")
+            throw error
         }
     }
 
-    func halt(_ queue: QueueKind) async {
+    func halt(_ queue: QueueKind) async throws {
         do {
             try await workloadClient.halt(queue)
         } catch {
             DebugLog.ingest("XPCQueueEngineProxy.halt(\(queue)) failed: \(error.localizedDescription)")
+            throw error
         }
     }
 
-    func reorderItem(id: QueueItem.ID, beforeItemID: QueueItem.ID?) async {
+    func reorderItem(id: QueueItem.ID, beforeItemID: QueueItem.ID?) async throws {
         do {
             try await workloadClient.reorderItem(id: id, beforeItemID: beforeItemID)
         } catch {
             DebugLog.ingest("XPCQueueEngineProxy.reorderItem failed for \(id.rawValue): \(error.localizedDescription)")
+            throw error
         }
     }
 
-    func snapshot() async -> QueueSnapshot {
+    func snapshot() async throws -> QueueSnapshot {
         do {
             return try await workloadClient.queueSnapshot()
         } catch {
             DebugLog.ingest("XPCQueueEngineProxy.snapshot failed: \(error.localizedDescription)")
-            return QueueSnapshot()
+            throw error
         }
     }
 
-    func hasActiveWork(for wikiID: WikiID) async -> Bool {
+    func hasActiveWork(for wikiID: WikiID) async throws -> Bool {
         do {
             return try await workloadClient.hasActiveWork(for: wikiID)
         } catch {
             DebugLog.ingest("XPCQueueEngineProxy.hasActiveWork failed for \(wikiID): \(error.localizedDescription)")
-            return false
+            throw error
         }
     }
 
-    func waitForCompletion(of id: QueueItem.ID) async -> Result<Void, Error> {
+    func waitForCompletion(of id: QueueItem.ID) async throws -> Result<Void, Error> {
         do {
-            try await workloadClient.waitForCompletion(of: id)
-            return .success(())
+            let payload = try await workloadClient.waitForCompletion(of: id)
+            if payload.completed { return .success(()) }
+            return .failure(QueueItemCompletionError(
+                message: payload.errorMessage ?? "Queue item did not complete"))
         } catch {
-            DebugLog.ingest("XPCQueueEngineProxy.waitForCompletion failed for \(id.rawValue): \(error.localizedDescription)")
-            return .failure(error)
+            DebugLog.ingest("XPCQueueEngineProxy.waitForCompletion transport failed for \(id.rawValue): \(error.localizedDescription)")
+            throw error
         }
     }
 
-    func loadTranscript(for itemID: QueueItem.ID) async -> [ChatTranscriptItem] {
+    func loadTranscript(for itemID: QueueItem.ID) async throws -> [ChatTranscriptItem] {
         do {
             return try await workloadClient.loadTranscript(for: itemID)
         } catch {
             DebugLog.ingest("XPCQueueEngineProxy.loadTranscript failed for \(itemID.rawValue): \(error.localizedDescription)")
-            return []
+            throw error
         }
     }
 
-    func loadAllActivitySnapshots() async -> [QueueItem.ID: QueueEngine.ActivitySnapshot] {
+    func loadAllActivitySnapshots() async throws -> [QueueItem.ID: QueueEngine.ActivitySnapshot] {
         let data: [String: QueueEngine.ActivitySnapshotData]
         do {
             data = try await workloadClient.loadAllActivitySnapshots()
         } catch {
             DebugLog.ingest("XPCQueueEngineProxy.loadAllActivitySnapshots failed: \(error.localizedDescription)")
-            data = [:]
+            throw error
         }
         var result: [QueueItem.ID: QueueEngine.ActivitySnapshot] = [:]
             for (id, snapshot) in data {

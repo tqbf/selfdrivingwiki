@@ -122,193 +122,228 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         sinkID = daemon.registerEventSink(sink)
     }
 
-    // MARK: - Workload: queue snapshot (Phase 0 — scaffold)
-
-    func queueSnapshot(reply: @escaping (Data) -> Void) {
-        // XPC reply closures are called exactly once and are safe from any
-        // thread. Wrap in a @unchecked Sendable box so the Task closure
-        // satisfies Swift 6's sending requirement.
-        let sendableReply = SendableDataReply(reply: reply)
-        Task { [daemon] in
-            let data = await daemon.queueSnapshotData()
-            sendableReply.reply(data)
-        }
-    }
-
-    // MARK: - Workload: queue engine (Phase A+B)
+    // MARK: - Workload: queue engine
 
     #if canImport(WikiFSEngine)
-    func enqueueItem(request: Data, reply: @escaping (Data) -> Void) {
-        let sendableReply = SendableDataReply(reply: reply)
-        Task { [daemon] in
-            do {
-                let engine = try await daemon.ensureQueueEngine()
-                let req = try JSONDecoder().decode(QueueItemRequest.self, from: request)
-                let id = try await engine.enqueue(req)
-                // XPC wire boundary: the engine returns a QueueItemID; the reply dict serializes the raw String.
-                let envelope: [String: String?] = ["id": id.rawValue, "error": nil]
-                let data = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data()
-                sendableReply.reply(data)
-            } catch {
-                let envelope: [String: String?] = ["id": nil, "error": error.localizedDescription]
-                let data = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data()
-                sendableReply.reply(data)
+    func queueSnapshot(reply: @escaping (Data) -> Void) {
+        queueReply(reply) { [daemon] in
+            let result = try await daemon.performQueueOperation { engine in
+                let snapshot = await engine.snapshot()
+                return try JSONEncoder().encode(snapshot)
             }
+            return result.map { QueueDataPayload(data: $0) }
         }
     }
 
-    func cancelItem(id: String, reply: @escaping () -> Void) {
-        let sendableReply = SendableVoidReply(reply: reply)
-        Task { [daemon] in
-            if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }) {
+    func enqueueItem(request: Data, reply: @escaping (Data) -> Void) {
+        queueReply(reply) { [daemon] in
+            let decoded: QueueItemRequest
+            do {
+                decoded = try JSONDecoder().decode(QueueItemRequest.self, from: request)
+            } catch {
+                throw QueueRPCError(code: .invalidRequest, message: "Queue request could not be decoded")
+            }
+            let result = try await daemon.performQueueOperation { engine in
+                try await engine.enqueue(decoded)
+            }
+            return result.map { QueueItemIDPayload(itemID: $0.rawValue) }
+        }
+    }
+
+    func cancelItem(id: String, reply: @escaping (Data) -> Void) {
+        queueReply(reply) { [daemon] in
+            let result = try await daemon.performQueueOperation { engine in
                 await engine.cancelItem(QueueItemID(rawValue: id))
             }
-            sendableReply.reply()
+            return result.map { QueueVoidPayload() }
         }
     }
 
-    func cancelAllInFlight(reply: @escaping (Int) -> Void) {
-        let sendableReply = SendableIntReply(reply: reply)
-        Task { [daemon] in
-            if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }) {
-                let count = await engine.cancelAllInFlight()
-                sendableReply.reply(count)
-            } else {
-                sendableReply.reply(0)
+    func cancelAllInFlight(reply: @escaping (Data) -> Void) {
+        queueReply(reply) { [daemon] in
+            let result = try await daemon.performQueueOperation { engine in
+                await engine.cancelAllInFlight()
             }
+            return result.map { QueueCountPayload(count: $0) }
         }
     }
 
     func retryItem(id: String, reply: @escaping (Data) -> Void) {
-        let sendableReply = SendableDataReply(reply: reply)
-        Task { [daemon] in
-            do {
-                let engine = try await daemon.ensureQueueEngine()
+        queueReply(reply) { [daemon] in
+            let result = try await daemon.performQueueOperation { engine in
                 try await engine.retryItem(QueueItemID(rawValue: id))
-                let envelope: [String: String?] = ["error": nil]
-                let data = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data()
-                sendableReply.reply(data)
-            } catch {
-                let envelope: [String: String?] = ["error": error.localizedDescription]
-                let data = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data()
-                sendableReply.reply(data)
             }
+            return result.map { QueueVoidPayload() }
         }
     }
 
-    func pauseQueue(queue: String, reply: @escaping () -> Void) {
-        let sendableReply = SendableVoidReply(reply: reply)
-        Task { [daemon] in
-            if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }),
-               let queueKind = QueueKind(rawValue: queue)?.canonical {
-                await engine.pause(queueKind)
-            }
-            sendableReply.reply()
+    func pauseQueue(queue: String, reply: @escaping (Data) -> Void) {
+        queueControlReply(queue: queue, reply: reply) { engine, queueKind in
+            await engine.pause(queueKind)
         }
     }
 
-    func resumeQueue(queue: String, reply: @escaping () -> Void) {
-        let sendableReply = SendableVoidReply(reply: reply)
-        Task { [daemon] in
-            if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }),
-               let queueKind = QueueKind(rawValue: queue)?.canonical {
-                await engine.resume(queueKind)
-            }
-            sendableReply.reply()
+    func resumeQueue(queue: String, reply: @escaping (Data) -> Void) {
+        queueControlReply(queue: queue, reply: reply) { engine, queueKind in
+            try await engine.resume(queueKind)
         }
     }
 
-    func haltQueue(queue: String, reply: @escaping () -> Void) {
-        let sendableReply = SendableVoidReply(reply: reply)
-        Task { [daemon] in
-            if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }),
-               let queueKind = QueueKind(rawValue: queue)?.canonical {
-                await engine.halt(queueKind)
-            }
-            sendableReply.reply()
+    func haltQueue(queue: String, reply: @escaping (Data) -> Void) {
+        queueControlReply(queue: queue, reply: reply) { engine, queueKind in
+            await engine.halt(queueKind)
         }
     }
 
-    func reorderItem(id: String, beforeItemID: String?, reply: @escaping () -> Void) {
-        let sendableReply = SendableVoidReply(reply: reply)
-        Task { [daemon] in
-            if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }) {
-                await engine.reorderItem(id: QueueItemID(rawValue: id), beforeItemID: beforeItemID.map { QueueItemID(rawValue: $0) })
+    func reorderItem(id: String, beforeItemID: String?, reply: @escaping (Data) -> Void) {
+        queueReply(reply) { [daemon] in
+            let result = try await daemon.performQueueOperation { engine in
+                await engine.reorderItem(
+                    id: QueueItemID(rawValue: id),
+                    beforeItemID: beforeItemID.map(QueueItemID.init(rawValue:)))
             }
-            sendableReply.reply()
+            return result.map { QueueVoidPayload() }
         }
     }
 
-    func hasActiveWork(wikiID: String, reply: @escaping (Bool) -> Void) {
-        let sendableReply = SendableBoolReply(reply: reply)
-        Task { [daemon] in
-            if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }) {
-                let result = await engine.hasActiveWork(for: WikiID(rawValue: wikiID))
-                sendableReply.reply(result)
-            } else {
-                sendableReply.reply(false)
+    func hasActiveWork(wikiID: String, reply: @escaping (Data) -> Void) {
+        queueReply(reply) { [daemon] in
+            let result = try await daemon.performQueueOperation { engine in
+                await engine.hasActiveWork(for: WikiID(rawValue: wikiID))
             }
+            return result.map { QueueBoolPayload(value: $0) }
         }
     }
 
     func waitForCompletion(id: String, reply: @escaping (Data) -> Void) {
-        let sendableReply = SendableDataReply(reply: reply)
-        Task { [daemon] in
-            guard let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }) else {
-                let envelope: [String: Any] = ["success": false,
-                                               "error": "daemon queue engine unavailable"]
-                let data = (DebugLog.trying("JSONSerialization.data", operation: {
-                    try JSONSerialization.data(withJSONObject: envelope)
-                })) ?? Data()
-                sendableReply.reply(data)
-                return
+        queueReply(reply) { [daemon] in
+            let result = try await daemon.performQueueOperation { engine in
+                await engine.waitForCompletion(of: QueueItemID(rawValue: id))
             }
-            let result = await engine.waitForCompletion(of: QueueItemID(rawValue: id))
-            switch result {
-            case .success:
-                let envelope: [String: Any] = ["success": true]
-                let data = (DebugLog.trying("JSONSerialization.data", operation: {
-                    try JSONSerialization.data(withJSONObject: envelope)
-                })) ?? Data()
-                sendableReply.reply(data)
-            case .failure(let error):
-                let envelope: [String: Any] = ["success": false,
-                                               "error": error.localizedDescription]
-                let data = (DebugLog.trying("JSONSerialization.data", operation: {
-                    try JSONSerialization.data(withJSONObject: envelope)
-                })) ?? Data()
-                sendableReply.reply(data)
+            return result.map { completion in
+                switch completion {
+                case .success:
+                    QueueCompletionPayload(completed: true)
+                case .failure(let error):
+                    QueueCompletionPayload(completed: false, errorMessage: error.localizedDescription)
+                }
             }
         }
     }
 
     func loadTranscript(itemID: String, reply: @escaping (Data) -> Void) {
-        let sendableReply = SendableDataReply(reply: reply)
-        Task { [daemon] in
-            if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }) {
+        queueReply(reply) { [daemon] in
+            let result = try await daemon.performQueueOperation { engine in
                 let items = await engine.loadTranscript(for: QueueItemID(rawValue: itemID))
-                let data = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(items) })) ?? Data()
-                sendableReply.reply(data)
-            } else {
-                sendableReply.reply(Data())
+                return try JSONEncoder().encode(items)
             }
+            return result.map { QueueDataPayload(data: $0) }
         }
     }
 
     func loadAllActivitySnapshots(reply: @escaping (Data) -> Void) {
+        queueReply(reply) { [daemon] in
+            let result = try await daemon.performQueueOperation { engine in
+                let snapshots = await engine.loadAllActivitySnapshots()
+                var payload: [String: QueueEngine.ActivitySnapshotData] = [:]
+                for (id, snapshot) in snapshots {
+                    payload[id.rawValue] = QueueEngine.ActivitySnapshotData(from: snapshot)
+                }
+                return try JSONEncoder().encode(payload)
+            }
+            return result.map { QueueDataPayload(data: $0) }
+        }
+    }
+
+    func queueOwnershipStatus(reply: @escaping (Data) -> Void) {
         let sendableReply = SendableDataReply(reply: reply)
         Task { [daemon] in
-            if let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await daemon.ensureQueueEngine() }) {
-                let snapshots = await engine.loadAllActivitySnapshots()
-                var data: [String: QueueEngine.ActivitySnapshotData] = [:]
-                for (id, snapshot) in snapshots {
-                    data[id.rawValue] = QueueEngine.ActivitySnapshotData(from: snapshot)
+            let status = await daemon.queueHostStatus()
+            let payload = QueueOwnershipStatusPayload(
+                epoch: status.epoch,
+                hostState: status.hostState)
+            sendableReply.reply(Self.encodeQueueEnvelope(
+                .success(payload, epoch: status.epoch, hostState: status.hostState)))
+        }
+    }
+
+    func relinquishQueue(request: Data, reply: @escaping (Data) -> Void) {
+        let sendableReply = SendableDataReply(reply: reply)
+        Task { [daemon] in
+            do {
+                let envelope = try QueueRPCWire.decode(
+                    QueueRelinquishmentRequest.self,
+                    from: request)
+                let decoded = try envelope.requirePayload()
+                guard envelope.ownershipEpoch == decoded.expectedEpoch else {
+                    throw QueueRPCError(
+                        code: .invalidEnvelope,
+                        message: "Queue relinquishment request epoch mismatch")
                 }
-                let result = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(data) })) ?? Data()
-                sendableReply.reply(result)
-            } else {
-                sendableReply.reply(Data())
+                let success = try await daemon.relinquishQueue(expectedEpoch: decoded.expectedEpoch)
+                sendableReply.reply(Self.encodeQueueEnvelope(
+                    .success(success, epoch: success.completedEpoch, hostState: .relinquished)))
+            } catch {
+                let status = await daemon.queueHostStatus()
+                let envelope = QueueRPCEnvelope<QueueRelinquishmentSuccess>.failure(
+                    Self.queueRPCError(from: error),
+                    epoch: status.epoch,
+                    hostState: status.hostState)
+                sendableReply.reply(Self.encodeQueueEnvelope(envelope))
             }
+        }
+    }
+
+    private func queueControlReply(
+        queue: String,
+        reply: @escaping (Data) -> Void,
+        operation: @escaping @Sendable (QueueEngine, QueueKind) async throws -> Void
+    ) {
+        queueReply(reply) { [daemon] in
+            guard let queueKind = QueueKind(rawValue: queue)?.canonical else {
+                throw QueueRPCError(code: .invalidRequest, message: "Unknown queue kind: \(queue)")
+            }
+            let result = try await daemon.performQueueOperation { engine in
+                try await operation(engine, queueKind)
+            }
+            return result.map { QueueVoidPayload() }
+        }
+    }
+
+    private func queueReply<Payload: Codable & Sendable>(
+        _ reply: @escaping (Data) -> Void,
+        operation: @escaping @Sendable () async throws -> DaemonQueueOperationResult<Payload>
+    ) {
+        let sendableReply = SendableDataReply(reply: reply)
+        Task { [daemon] in
+            do {
+                let result = try await operation()
+                sendableReply.reply(Self.encodeQueueEnvelope(
+                    .success(result.value, epoch: result.epoch, hostState: result.hostState)))
+            } catch {
+                let status = await daemon.queueHostStatus()
+                let envelope = QueueRPCEnvelope<Payload>.failure(
+                    Self.queueRPCError(from: error),
+                    epoch: status.epoch,
+                    hostState: status.hostState)
+                sendableReply.reply(Self.encodeQueueEnvelope(envelope))
+            }
+        }
+    }
+
+    private static func queueRPCError(from error: Error) -> QueueRPCError {
+        if let queueError = error as? QueueRPCError { return queueError }
+        return QueueRPCError(code: .operationFailed, message: error.localizedDescription)
+    }
+
+    private static func encodeQueueEnvelope<Payload: Codable & Sendable>(
+        _ envelope: QueueRPCEnvelope<Payload>
+    ) -> Data {
+        do {
+            return try QueueRPCWire.encode(envelope)
+        } catch {
+            DebugLog.store("wikid: queue reply encoding failed: \(error)")
+            return Data("{\"version\":1,\"ownershipEpoch\":{\"rawValue\":0},\"hostState\":\"shutdownBlocked\",\"error\":{\"code\":\"invalidEnvelope\",\"message\":\"Queue reply encoding failed\"}}".utf8)
         }
     }
 
@@ -394,38 +429,65 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         }
     }
     #else
-    // Linux stubs — WikiFSEngine is unavailable. Reply with safe defaults.
-    func enqueueItem(request: Data, reply: @escaping (Data) -> Void) {
-        let envelope: [String: String?] = ["id": nil, "error": "queue engine unavailable on Linux"]
-        let data = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data()
-        reply(data)
-    }
-
-    func cancelItem(id: String, reply: @escaping () -> Void) { reply() }
-    func cancelAllInFlight(reply: @escaping (Int) -> Void) { reply(0) }
-
-    func retryItem(id: String, reply: @escaping (Data) -> Void) {
-        let envelope: [String: String?] = ["error": "queue engine unavailable on Linux"]
-        let data = (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data()
-        reply(data)
-    }
-
-    func pauseQueue(queue: String, reply: @escaping () -> Void) { reply() }
-    func resumeQueue(queue: String, reply: @escaping () -> Void) { reply() }
-    func haltQueue(queue: String, reply: @escaping () -> Void) { reply() }
-    func reorderItem(id: String, beforeItemID: String?, reply: @escaping () -> Void) { reply() }
-    func hasActiveWork(wikiID: String, reply: @escaping (Bool) -> Void) { reply(false) }
-
-    func waitForCompletion(id: String, reply: @escaping (Data) -> Void) {
-        let envelope: [String: Any] = ["success": false, "error": "queue engine unavailable on Linux"]
-        let data = (DebugLog.trying("JSONSerialization.data", operation: {
-            try JSONSerialization.data(withJSONObject: envelope)
+    // Engine-less macOS stubs. Every selector still returns a typed envelope.
+    private func unavailableQueueReply<Payload: Codable & Sendable>(
+        _ payload: Payload.Type
+    ) -> Data {
+        let epoch = QueueOwnershipEpoch(rawValue: 0)
+        let envelope = QueueRPCEnvelope<Payload>.failure(
+            QueueRPCError(code: .unavailable, message: "Queue engine is unavailable"),
+            epoch: epoch,
+            hostState: .shutdownBlocked)
+        return (DebugLog.trying("QueueRPCWire.encode", operation: {
+            try QueueRPCWire.encode(envelope)
         })) ?? Data()
-        reply(data)
     }
 
-    func loadTranscript(itemID: String, reply: @escaping (Data) -> Void) { reply(Data()) }
-    func loadAllActivitySnapshots(reply: @escaping (Data) -> Void) { reply(Data()) }
+    func queueSnapshot(reply: @escaping (Data) -> Void) {
+        reply(unavailableQueueReply(QueueDataPayload.self))
+    }
+    func enqueueItem(request: Data, reply: @escaping (Data) -> Void) {
+        reply(unavailableQueueReply(QueueItemIDPayload.self))
+    }
+    func cancelItem(id: String, reply: @escaping (Data) -> Void) {
+        reply(unavailableQueueReply(QueueVoidPayload.self))
+    }
+    func cancelAllInFlight(reply: @escaping (Data) -> Void) {
+        reply(unavailableQueueReply(QueueCountPayload.self))
+    }
+    func retryItem(id: String, reply: @escaping (Data) -> Void) {
+        reply(unavailableQueueReply(QueueVoidPayload.self))
+    }
+    func pauseQueue(queue: String, reply: @escaping (Data) -> Void) {
+        reply(unavailableQueueReply(QueueVoidPayload.self))
+    }
+    func resumeQueue(queue: String, reply: @escaping (Data) -> Void) {
+        reply(unavailableQueueReply(QueueVoidPayload.self))
+    }
+    func haltQueue(queue: String, reply: @escaping (Data) -> Void) {
+        reply(unavailableQueueReply(QueueVoidPayload.self))
+    }
+    func reorderItem(id: String, beforeItemID: String?, reply: @escaping (Data) -> Void) {
+        reply(unavailableQueueReply(QueueVoidPayload.self))
+    }
+    func hasActiveWork(wikiID: String, reply: @escaping (Data) -> Void) {
+        reply(unavailableQueueReply(QueueBoolPayload.self))
+    }
+    func waitForCompletion(id: String, reply: @escaping (Data) -> Void) {
+        reply(unavailableQueueReply(QueueCompletionPayload.self))
+    }
+    func loadTranscript(itemID: String, reply: @escaping (Data) -> Void) {
+        reply(unavailableQueueReply(QueueDataPayload.self))
+    }
+    func loadAllActivitySnapshots(reply: @escaping (Data) -> Void) {
+        reply(unavailableQueueReply(QueueDataPayload.self))
+    }
+    func queueOwnershipStatus(reply: @escaping (Data) -> Void) {
+        reply(unavailableQueueReply(QueueOwnershipStatusPayload.self))
+    }
+    func relinquishQueue(request: Data, reply: @escaping (Data) -> Void) {
+        reply(unavailableQueueReply(QueueRelinquishmentSuccess.self))
+    }
 
     // Chat stubs (Phase C — chat is macOS-only via WikiFSEngine).
     func startChat(request: Data, reply: @escaping (Data) -> Void) {

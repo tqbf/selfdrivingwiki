@@ -49,11 +49,21 @@ final class WikiDaemon: @unchecked Sendable {
     // MARK: - Workload host scaffold (Phase 0)
 
     #if canImport(WikiFSEngine)
-    /// Lazily-constructed queue engine over the container's `queue.sqlite`.
-    /// `nil` until `ensureQueueEngine()` is called. Wired to real extraction +
-    /// ingestion worker factories that talk to `GRDBWikiStore` directly.
-    /// See `plans/daemon-workloads.md`.
-    private var _queueEngine: QueueEngine?
+    /// The sole queue RPC admission and ownership boundary.
+    private let daemonQueueHostBox = DaemonQueueHostBox()
+
+    var daemonQueueHost: DaemonQueueHost {
+        daemonQueueHostBox.getOrCreate { makeDaemonQueueHost() }
+    }
+
+    private func makeDaemonQueueHost() -> DaemonQueueHost {
+        DaemonQueueHost { [weak self] in
+            guard let self else {
+                throw QueueRPCError(code: .unavailable, message: "Daemon queue host was released")
+            }
+            return try await self.buildQueueResources()
+        }
+    }
     #endif
 
     /// Whether the daemon can host workloads (macOS + WikiFSEngine linked).
@@ -142,13 +152,16 @@ final class WikiDaemon: @unchecked Sendable {
         #if canImport(WikiFSEngine)
         let activeCount: Int
         let recentCount: Int
-        if let engine = queue.sync(execute: { _queueEngine }) {
-            let snapshot = await engine.snapshot()
-            activeCount = snapshot.activeItems.count
-            recentCount = snapshot.recentItems.count
-        } else {
+        do {
+            let result = try await daemonQueueHost.perform { engine in
+                await engine.snapshot()
+            }
+            activeCount = result.value.activeItems.count
+            recentCount = result.value.recentItems.count
+        } catch {
             activeCount = 0
             recentCount = 0
+            DebugLog.store("wikid: heartbeat queue unavailable: \(error)")
         }
         DebugLog.store("wikid: heartbeat — active sessions=\(sessionCount), queue=\(activeCount) active / \(recentCount) recent")
         #else
@@ -458,17 +471,26 @@ final class WikiDaemon: @unchecked Sendable {
     }
 
     #if canImport(WikiFSEngine)
-    /// Construct (or return the existing) `QueueEngine` over the container's
-    /// `queue.sqlite`. The engine is wired with real extraction + ingestion
-    /// worker factories backed by `GRDBWikiStore`.
-    ///
-    /// Async because constructing the `ExtractionCoordinator` (`@MainActor`)
-    /// requires a main-actor hop. Thread-safe: double-checked on `queue`.
-    func ensureQueueEngine() async throws -> QueueEngine {
-        if let engine = queue.sync(execute: { _queueEngine }) {
-            return engine
-        }
+    func performQueueOperation<Value: Sendable>(
+        _ operation: @escaping @Sendable (QueueEngine) async throws -> Value
+    ) async throws -> DaemonQueueOperationResult<Value> {
+        try await daemonQueueHost.perform(operation)
+    }
 
+    func relinquishQueue(
+        expectedEpoch: QueueOwnershipEpoch
+    ) async throws -> QueueRelinquishmentSuccess {
+        try await daemonQueueHost.relinquish(expectedEpoch: expectedEpoch)
+    }
+
+    func queueHostStatus() async -> (
+        epoch: QueueOwnershipEpoch,
+        hostState: QueueDaemonHostState
+    ) {
+        await daemonQueueHost.status()
+    }
+
+    private func buildQueueResources() async throws -> DaemonQueueResources {
         let coordinator = await MainActor.run {
             ExtractionCoordinator(
                 containerDirectory: containerDirectory,
@@ -478,14 +500,11 @@ final class WikiDaemon: @unchecked Sendable {
         let storeResolver: @Sendable (WikiID) -> GRDBWikiStore? = { [weak self] wikiID in
             self?.resolveStoreLazily(wikiID: wikiID)
         }
-
         let queueStore = try QueueStore(databaseURL: queueDatabaseURL)
-
         let extractionProvider = DaemonQueueExtractionProvider(
             containerDirectory: containerDirectory,
             extractionCoordinator: coordinator,
             storeResolver: storeResolver)
-
         let dir = containerDirectory
         let ingestionProvider = DaemonQueueIngestionProvider(
             containerDirectory: dir,
@@ -499,68 +518,51 @@ final class WikiDaemon: @unchecked Sendable {
                 AgentProvidersConfig.loadOrSeed(from: dir)
             })
 
-        let progressBox = DaemonEmitBox<(@Sendable (QueueItem.ID, String) -> Void)>()
-        let transcriptBox = DaemonEmitBox<(@Sendable (QueueAttemptID, AgentEvent) -> Void)>()
-        let usageBox = DaemonEmitBox<(@Sendable (QueueItem.ID, SessionUsage) -> Void)>()
-        let liveUsageBox = DaemonEmitBox<(@Sendable (QueueItem.ID, SessionUsage) -> Void)>()
-        let logPathsBox = DaemonEmitBox<(@Sendable (QueueItem.ID, URL?, URL?) -> Void)>()
-        let pendingPermissionBox = DaemonEmitBox<(@Sendable (QueueItem.ID, PendingPermission?) -> Void)>()
-
+        let outputChannel = QueueWorkerOutputChannel(store: queueStore)
         let extractionFactory = QueueExtractionWorkerFactory(
             provider: extractionProvider,
-            emitProgress: { id, line in progressBox.emit?(id, line) })
-
+            emitProgress: { [outputChannel] id, line in
+                outputChannel.emitProgress(itemID: id, line: line)
+            })
         let ingestionFactory = QueueIngestionWorkerFactory(
             provider: ingestionProvider,
-            emitProgress: { id, line in progressBox.emit?(id, line) },
-            emitTranscript: { id, event in transcriptBox.emit?(id, event) },
-            emitUsage: { id, usage in usageBox.emit?(id, usage) },
-            emitLiveUsage: { id, usage in liveUsageBox.emit?(id, usage) },
-            emitLogPaths: { id, logURL, debugURL in logPathsBox.emit?(id, logURL, debugURL) },
-            emitPendingPermission: { id, permission in pendingPermissionBox.emit?(id, permission) })
-
+            emitProgress: { [outputChannel] id, line in
+                outputChannel.emitProgress(itemID: id, line: line)
+            },
+            emitTranscript: { [outputChannel] id, event in
+                outputChannel.emitTranscript(attemptID: id, event: event)
+            },
+            emitUsage: { [outputChannel] id, usage in
+                outputChannel.emitUsage(itemID: id, usage: usage)
+            },
+            emitLiveUsage: { [outputChannel] id, usage in
+                outputChannel.emitLiveUsage(itemID: id, usage: usage)
+            },
+            emitLogPaths: { [outputChannel] id, logURL, debugURL in
+                outputChannel.emitRunPaths(itemID: id, logURL: logURL, debugURL: debugURL)
+            },
+            emitPendingPermission: { [outputChannel] id, permission in
+                outputChannel.emitPendingPermission(itemID: id, permission: permission)
+            })
         let workerFactory = CompositeWorkerFactory(factories: [
             .extraction: extractionFactory,
             .ingestion: ingestionFactory,
         ])
-
-        let engine = QueueEngine(store: queueStore, workerFactory: workerFactory)
-
-        Task { progressBox.emit = await engine.makeEmitProgress() }
-        Task { transcriptBox.emit = await engine.makeEmitTranscript() }
-        Task { usageBox.emit = await engine.makeEmitUsage() }
-        Task { liveUsageBox.emit = await engine.makeEmitLiveUsage() }
-        Task { logPathsBox.emit = await engine.makeEmitLogPaths() }
-        Task { pendingPermissionBox.emit = await engine.makeEmitPendingPermission() }
-
-        let engineRef = engine
-        Task { [weak self] in
-            for await event in engineRef.events {
+        let engine = QueueEngine(
+            store: queueStore,
+            workerFactory: workerFactory,
+            outputChannel: outputChannel)
+        let forwardingStream = outputChannel.events(onSubscribed: {})
+        let forwardingTask = Task { [weak self] in
+            for await event in forwardingStream {
                 self?.pushQueueEvent(event)
             }
         }
-
-        Task { await engine.start() }
-
-        return queue.sync {
-            if let existing = _queueEngine {
-                return existing
-            }
-            _queueEngine = engine
-            return engine
-        }
-    }
-
-    /// Serve a queue snapshot as JSON `Data` for the XPC `queueSnapshot` method.
-    /// The engine's `snapshot()` is async (it's an actor method), so this is
-    /// async too — the exporter wraps it in a `Task` and replies when it
-    /// resolves.
-    func queueSnapshotData() async -> Data {
-        guard let engine = await DebugLog.trying("ensureQueueEngine", operation: { try await ensureQueueEngine() }) else {
-            return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(QueueSnapshot()) })) ?? Data()
-        }
-        let snapshot = await engine.snapshot()
-        return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(snapshot) })) ?? Data()
+        await engine.start()
+        return DaemonQueueResources(
+            engine: engine,
+            store: queueStore,
+            forwardingTask: forwardingTask)
     }
 
     // MARK: - Chat host (Phase C)
@@ -871,13 +873,3 @@ final class WikiDaemon: @unchecked Sendable {
     }
     #endif
 }
-
-#if canImport(WikiFSEngine)
-/// A mutable box for a `@Sendable` emit closure. Used to break the circular
-/// dependency between the worker factories (need the closure) and the engine
-/// (provides it). Generic over the closure type so all six emit boxes share
-/// one implementation.
-final class DaemonEmitBox<T>: @unchecked Sendable {
-    var emit: T?
-}
-#endif

@@ -6,8 +6,8 @@ import Testing
 
 /// `UnavailableQueueEngine` tests (issue #881): when the local `queue.sqlite`
 /// cannot be opened, the app wires this engine in instead of silently falling
-/// back to an in-memory store. Enqueue/retry surface a clear error; reads
-/// return empty; the event stream finishes immediately.
+/// back to an in-memory store. Every operation surfaces a clear error, while
+/// the event stream finishes immediately.
 @Suite(.timeLimit(.minutes(2)))
 struct UnavailableQueueEngineTests {
 
@@ -32,46 +32,43 @@ struct UnavailableQueueEngineTests {
         }
     }
 
-    @Test func waitForCompletionReturnsFailure() async {
+    @Test func unavailableOperationsNeverReturnNormalDefaults() async {
         let engine = UnavailableQueueEngine(reason: reason)
-        let result = await engine.waitForCompletion(of: QueueItem.ID(rawValue: "some-item"))
-        if case .failure(let error) = result {
-            #expect(error is UnavailableQueueEngine.Error)
-        } else {
-            Issue.record("expected .failure")
+        let itemID = QueueItem.ID(rawValue: "item")
+
+        await #expect(throws: UnavailableQueueEngine.Error.self) {
+            try await engine.cancelItem(itemID)
         }
-    }
-
-    @Test func snapshotIsEmpty() async {
-        let engine = UnavailableQueueEngine(reason: reason)
-        let snapshot = await engine.snapshot()
-        #expect(snapshot.activeItems.isEmpty)
-        #expect(snapshot.recentItems.isEmpty)
-        #expect(snapshot.activeIngestionWikis.isEmpty)
-    }
-
-    @Test func hasActiveWorkIsFalse() async {
-        let engine = UnavailableQueueEngine(reason: reason)
-        let hasWork = await engine.hasActiveWork(for: WikiID(rawValue: "wiki"))
-        #expect(hasWork == false)
-    }
-
-    @Test func cancelAndReorderAreNoOps() async {
-        let engine = UnavailableQueueEngine(reason: reason)
-        // These must not throw — they're idempotent no-ops.
-        await engine.cancelItem(QueueItem.ID(rawValue: "item"))
-        let n = await engine.cancelAllInFlight()
-        #expect(n == 0)
-        await engine.pause(.extraction)
-        await engine.resume(.extraction)
-        await engine.halt(.extraction)
-        await engine.reorderItem(id: QueueItem.ID(rawValue: "item"), beforeItemID: nil)
-    }
-
-    @Test func readsReturnEmpty() async {
-        let engine = UnavailableQueueEngine(reason: reason)
-        #expect(await engine.loadTranscript(for: QueueItem.ID(rawValue: "item")).isEmpty)
-        #expect(await engine.loadAllActivitySnapshots().isEmpty)
+        await #expect(throws: UnavailableQueueEngine.Error.self) {
+            _ = try await engine.cancelAllInFlight()
+        }
+        await #expect(throws: UnavailableQueueEngine.Error.self) {
+            try await engine.pause(.extraction)
+        }
+        await #expect(throws: UnavailableQueueEngine.Error.self) {
+            try await engine.resume(.extraction)
+        }
+        await #expect(throws: UnavailableQueueEngine.Error.self) {
+            try await engine.halt(.extraction)
+        }
+        await #expect(throws: UnavailableQueueEngine.Error.self) {
+            try await engine.reorderItem(id: itemID, beforeItemID: nil)
+        }
+        await #expect(throws: UnavailableQueueEngine.Error.self) {
+            _ = try await engine.snapshot()
+        }
+        await #expect(throws: UnavailableQueueEngine.Error.self) {
+            _ = try await engine.hasActiveWork(for: WikiID(rawValue: "wiki"))
+        }
+        await #expect(throws: UnavailableQueueEngine.Error.self) {
+            _ = try await engine.waitForCompletion(of: itemID)
+        }
+        await #expect(throws: UnavailableQueueEngine.Error.self) {
+            _ = try await engine.loadTranscript(for: itemID)
+        }
+        await #expect(throws: UnavailableQueueEngine.Error.self) {
+            _ = try await engine.loadAllActivitySnapshots()
+        }
     }
 
     @Test func reasonIsExposedForUserVisibleError() {

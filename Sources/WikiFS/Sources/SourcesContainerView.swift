@@ -251,7 +251,7 @@ struct SourcesContainerView: View {
                                 wikiID: session.wikiID,
                                 payload: QueueItemPayload(sourceIDs: [item.id]))
                             let itemID = try await queueEngine.enqueue(request)
-                            _ = await queueEngine.waitForCompletion(of: itemID)
+                            _ = try await queueEngine.waitForCompletion(of: itemID)
                         } catch {
                             DebugLog.extraction("SourcesContainerView onExtract failed for \(item.filename): \(error.localizedDescription)")
                         }

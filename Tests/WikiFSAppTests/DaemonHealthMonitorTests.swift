@@ -38,7 +38,7 @@ struct DaemonHealthMonitorTests {
         #expect(observedStates == [.connected])
     }
 
-    @Test func invalidationTransitionsToDisconnected() throws {
+    @Test func invalidationTransitionsToDisconnected() async throws {
         let monitor = DaemonHealthMonitor()
         let conn = try #require(try? WikiDaemonConnection.connect())
 
@@ -57,7 +57,7 @@ struct DaemonHealthMonitorTests {
         // deterministic transition that doesn't race under concurrent test
         // load (#884) — and that no longer depends on a live daemon (the
         // serviceName: connection is never truly established in the test runner).
-        monitor._testSimulateInvalidation()
+        await monitor._testSimulateInvalidation()
 
         #expect(monitor.state == .disconnected)
         #expect(disconnectFired)
@@ -86,7 +86,7 @@ struct DaemonHealthMonitorTests {
         // Simulate the XPC interruption deterministically (mirrors the
         // `_testSimulateInvalidation` pattern; avoids racing the XPC-internal
         // queue under concurrent test load).
-        monitor._testSimulateInterruption()
+        await monitor._testSimulateInterruption()
 
         #expect(interruptFired)          // app was told to re-register its sink
         #expect(!disconnectFired)        // NOT treated as a disconnect
@@ -107,7 +107,7 @@ struct DaemonHealthMonitorTests {
         #expect(!monitor.isMonitoring)
     }
 
-    @Test func onStateChangeFiresOnInvalidation() throws {
+    @Test func onStateChangeFiresOnInvalidation() async throws {
         let monitor = DaemonHealthMonitor()
         let conn = try #require(try? WikiDaemonConnection.connect())
 
@@ -117,7 +117,7 @@ struct DaemonHealthMonitorTests {
         monitor.start(connection: conn)
 
         // Simulate the XPC invalidation deterministically (#884).
-        monitor._testSimulateInvalidation()
+        await monitor._testSimulateInvalidation()
 
         #expect(states.contains(.connected))
         #expect(states.contains(.disconnected))
@@ -206,18 +206,18 @@ struct DaemonHealthMonitorTests {
 
     // MARK: - forceReconnect (Restart Daemon menu item)
 
-    @Test func forceReconnectOnIdleMonitorStartsRetrying() {
+    @Test func forceReconnectOnIdleMonitorStartsRetrying() async {
         let monitor = DaemonHealthMonitor()
         #expect(!monitor.isMonitoring)
 
-        monitor.forceReconnect()
+        await monitor.forceReconnect()
 
         // forceReconnect on an idle monitor starts the retry loop.
         #expect(monitor.isMonitoring)
         #expect(monitor.state == .disconnected)
     }
 
-    @Test func forceReconnectOnDisconnectedMonitorDoesNotRefireOnDisconnect() {
+    @Test func forceReconnectOnDisconnectedMonitorDoesNotRefireOnDisconnect() async {
         let monitor = DaemonHealthMonitor()
         monitor.startRetrying()
         #expect(monitor.isMonitoring)
@@ -226,7 +226,7 @@ struct DaemonHealthMonitorTests {
         var disconnectFired = false
         monitor.onDisconnect = { disconnectFired = true }
 
-        monitor.forceReconnect()
+        await monitor.forceReconnect()
 
         // Already `.disconnected` → onDisconnect must NOT fire again. Re-firing
         // it would tear down the working local fallback engine and open a

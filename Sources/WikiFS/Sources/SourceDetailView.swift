@@ -1414,7 +1414,7 @@ struct SourceDetailView: View {
                 queue: .extraction, wikiID: store.eventBus?.wikiID ?? WikiID(rawValue: ""),
                 payload: QueueItemPayload(sourceIDs: [file.id]))
             let itemID = try await queueEngine.enqueue(request)
-            let result = await queueEngine.waitForCompletion(of: itemID)
+            let result = try await queueEngine.waitForCompletion(of: itemID)
 
             switch result {
             case .success:
@@ -1502,7 +1502,7 @@ struct SourceDetailView: View {
                 queue: .extraction, wikiID: store.eventBus?.wikiID ?? WikiID(rawValue: ""),
                 payload: QueueItemPayload(sourceIDs: [file.id]))
             let itemID = try await queueEngine.enqueue(request)
-            let result = await queueEngine.waitForCompletion(of: itemID)
+            let result = try await queueEngine.waitForCompletion(of: itemID)
 
             switch result {
             case .success:
@@ -1528,7 +1528,7 @@ struct SourceDetailView: View {
                 queue: .extraction, wikiID: store.eventBus?.wikiID ?? WikiID(rawValue: ""),
                 payload: QueueItemPayload(sourceIDs: [file.id]))
             let itemID = try await queueEngine.enqueue(request)
-            let result = await queueEngine.waitForCompletion(of: itemID)
+            let result = try await queueEngine.waitForCompletion(of: itemID)
 
             switch result {
             case .success:
@@ -1698,7 +1698,7 @@ struct SourceDetailView: View {
                     sourceIDs: [file.id],
                     stageRouting: [StageRoutingKey.backend.rawValue: backend.rawValue]))
             let itemID = try await queueEngine.enqueue(request)
-            let result = await queueEngine.waitForCompletion(of: itemID)
+            let result = try await queueEngine.waitForCompletion(of: itemID)
 
             switch result {
             case .success:
@@ -1709,7 +1709,7 @@ struct SourceDetailView: View {
                 break  // Tracker records the error from queue events
             }
         } catch {
-            // Enqueue error — tracker not updated (no queue event). No-op.
+            // Enqueue or transport error. The queue UI reports the unavailable state.
         }
     }
 

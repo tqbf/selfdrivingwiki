@@ -35,12 +35,12 @@ public protocol QueueEngineClient: AnyObject, Sendable {
     func enqueue(_ request: QueueItemRequest) async throws -> QueueItem.ID
 
     /// Cancel a specific queued or running item.
-    func cancelItem(_ id: QueueItem.ID) async
+    func cancelItem(_ id: QueueItem.ID) async throws
 
     /// Cancel ALL in-flight (`.running`) items across every queue kind.
     /// Used by the app's quit path.
     @discardableResult
-    func cancelAllInFlight() async -> Int
+    func cancelAllInFlight() async throws -> Int
 
     /// Retry a failed item: `failed` → `queued`, `attempt + 1`.
     func retryItem(_ id: QueueItem.ID) async throws
@@ -48,35 +48,35 @@ public protocol QueueEngineClient: AnyObject, Sendable {
     // MARK: - Pause / Resume / Halt / Reorder
 
     /// Pause a queue: stop dispatching new items. In-flight items complete.
-    func pause(_ queue: QueueKind) async
+    func pause(_ queue: QueueKind) async throws
 
     /// Resume a queue: restart dispatch.
-    func resume(_ queue: QueueKind) async
+    func resume(_ queue: QueueKind) async throws
 
     /// Halt a queue: pause + cancel all in-flight items for this queue kind.
-    func halt(_ queue: QueueKind) async
+    func halt(_ queue: QueueKind) async throws
 
     /// Move a queued item to a new position (before `beforeItemID`, or end).
-    func reorderItem(id: QueueItem.ID, beforeItemID: QueueItem.ID?) async
+    func reorderItem(id: QueueItem.ID, beforeItemID: QueueItem.ID?) async throws
 
     // MARK: - Snapshot / Status
 
     /// A point-in-time view of the engine's full state.
-    func snapshot() async -> QueueSnapshot
+    func snapshot() async throws -> QueueSnapshot
 
     /// Whether the engine has any queued or running items for the given wiki.
-    func hasActiveWork(for wikiID: WikiID) async -> Bool
+    func hasActiveWork(for wikiID: WikiID) async throws -> Bool
 
     // MARK: - Await / Transcript / Activity
 
     /// Await the completion of a specific item.
-    func waitForCompletion(of id: QueueItem.ID) async -> Result<Void, Error>
+    func waitForCompletion(of id: QueueItem.ID) async throws -> Result<Void, Error>
 
     /// Load persisted typed transcript items for a queue item.
-    func loadTranscript(for itemID: QueueItem.ID) async -> [ChatTranscriptItem]
+    func loadTranscript(for itemID: QueueItem.ID) async throws -> [ChatTranscriptItem]
 
     /// Load persisted activity metadata for all items with recorded activity.
-    func loadAllActivitySnapshots() async -> [QueueItem.ID: QueueEngine.ActivitySnapshot]
+    func loadAllActivitySnapshots() async throws -> [QueueItem.ID: QueueEngine.ActivitySnapshot]
 }
 
 // MARK: - QueueEngine conformance

@@ -172,10 +172,15 @@ struct RootScene: View {
             // flushAllSessions() on app background (plan R3).
             if let wikiID {
                 Task {
-                    let hasWork = await session?.queueEngine.hasActiveWork(for: wikiID) ?? false
-                    if !hasWork {
-                        sessionManager.releaseSession(for: wikiID)
-                        fileProvider.unsubscribeBus(for: wikiID)
+                    guard let queueEngine = session?.queueEngine else { return }
+                    do {
+                        let hasWork = try await queueEngine.hasActiveWork(for: wikiID)
+                        if !hasWork {
+                            sessionManager.releaseSession(for: wikiID)
+                            fileProvider.unsubscribeBus(for: wikiID)
+                        }
+                    } catch {
+                        DebugLog.store("RootScene: queue ownership unresolved for \(wikiID): \(error)")
                     }
                 }
             }
