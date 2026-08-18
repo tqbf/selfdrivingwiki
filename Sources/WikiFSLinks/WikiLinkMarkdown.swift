@@ -106,9 +106,13 @@ public enum WikiLinkMarkdown {
         var cursor = 0
         for match in matches {
             let full = match.range
+            let isEmbedPrefix = WikiLinkSpan.isEmbedPrefix(ns, full)
 
             // Skip — copy verbatim — any match inside a code span/fence.
-            if WikiLinkSpan.isProtected(full, by: codeRanges) {
+            if WikiLinkSpan.isProtected(full, by: codeRanges)
+                || WikiLinkSpan.isLocallyCodeWrapped(
+                    ns, full, includesEmbedPrefix: isEmbedPrefix
+                ) {
                 continue
             }
 
@@ -117,7 +121,6 @@ public enum WikiLinkMarkdown {
             // (copy up to location - 1) so the `!` doesn't appear as literal
             // text — CommonMark would otherwise parse `![display](url)` as an
             // `<img>` node with a `wiki://` src.
-            let isEmbedPrefix = WikiLinkSpan.isEmbedPrefix(ns, full)
             let copyEnd = isEmbedPrefix ? full.location - 1 : full.location
             if copyEnd > cursor {
                 out += ns.substring(with: NSRange(location: cursor, length: copyEnd - cursor))

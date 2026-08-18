@@ -486,6 +486,23 @@ struct WikiLinkMarkdownTests {
         #expect(!out.contains("wiki://page?title=Home"))
     }
 
+    @Test func sourceEmbedExampleRemainsLiteralAfterEarlierUnmatchedBacktick() {
+        let markdown = """
+        - Mermaid diagrams ``, `sequenceDiagram`, and `timeline blocks, as demonstrated in [[SVG]].
+        - Source embeds for images, video, audio, and PDFs using `![[source:Name]]`.
+        """
+
+        let out = WikiLinkMarkdown.linkified(
+            markdown,
+            isResolved: { _, _ in false },
+            embedInfo: { _ in nil }
+        )
+
+        #expect(out.contains("`![[source:Name]]`"))
+        #expect(!out.contains("Source not found: Name"))
+        #expect(!out.contains("sdw-transclusion"))
+    }
+
     // MARK: - Embed rendering `![[source:…]]` (Phase 4a, AC.4)
 
     @Test func embedImageRendersAsImgTag() {

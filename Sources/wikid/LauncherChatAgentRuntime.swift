@@ -31,6 +31,8 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         let handle: ChatRuntimeHandle
         let stream: AsyncStream<ChatAgentRuntimeEventEnvelope>
         let continuation: AsyncStream<ChatAgentRuntimeEventEnvelope>.Continuation
+        let liveEventContinuation: AsyncStream<AgentEvent>.Continuation
+        let liveEventConsumerTask: Task<Void, Never>
         let launcher: AgentLauncher
         var hasSubscriber = false
         var startedInteractiveSession = false
@@ -80,6 +82,10 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
     private let onLiveEvents: @Sendable ([AgentEvent]) async -> Void
     private let onMessageSummary: @MainActor @Sendable (ChatID) -> Void
     private let onStreamingCheckpoint: (@MainActor @Sendable (ChatID, String, AgentEvent, Bool) -> Bool)?
+    /// Internal test seam for configuring the real launcher before it starts.
+    /// Production leaves this as a no-op; tests use it to inject an
+    /// ``AgentBackend`` without replacing the launcher/event bridge.
+    private let launcherConfigurator: @MainActor @Sendable (AgentLauncher) -> Void
 
     private var runtimeState: RuntimeState?
     private var monitorTask: Task<Void, Never>?
@@ -95,7 +101,8 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         onStateUpdate: @escaping @Sendable (ChatStateUpdate) async -> Void,
         onLiveEvents: @escaping @Sendable ([AgentEvent]) async -> Void,
         onMessageSummary: @escaping @MainActor @Sendable (ChatID) -> Void,
-        onStreamingCheckpoint: (@MainActor @Sendable (ChatID, String, AgentEvent, Bool) -> Bool)? = nil
+        onStreamingCheckpoint: (@MainActor @Sendable (ChatID, String, AgentEvent, Bool) -> Bool)? = nil,
+        launcherConfigurator: @escaping @MainActor @Sendable (AgentLauncher) -> Void = { _ in }
     ) {
         self.chatID = chatID
         self.wikiID = wikiID
@@ -108,6 +115,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         self.onLiveEvents = onLiveEvents
         self.onMessageSummary = onMessageSummary
         self.onStreamingCheckpoint = onStreamingCheckpoint
+        self.launcherConfigurator = launcherConfigurator
     }
 
     func start(_ request: ChatRuntimeStartRequest) async throws -> ChatRuntimeHandle {
@@ -117,16 +125,33 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
 
         let launcher = await MainActor.run {
             let launcher = AgentLauncher(generationGate: generationGate, extractionCoordinator: extractionCoordinator)
+            launcherConfigurator(launcher)
             launcher.pdf2mdScriptPathResolver = { PdfExtractionService.resolveScript()?.path }
             return launcher
         }
         let (stream, continuation) = AsyncStream.makeStream(of: ChatAgentRuntimeEventEnvelope.self)
+        // AgentLauncher invokes its callback in provider order. Yield those
+        // events synchronously into one lossless stream so exactly one task
+        // mutates transcript translation state at a time. A bounded policy
+        // would make dropping user-visible transcript bytes legal.
+        let (liveEvents, liveEventContinuation) = AsyncStream.makeStream(
+            of: AgentEvent.self,
+            bufferingPolicy: .unbounded
+        )
+        let liveEventConsumerTask = Task { [weak self] in
+            for await event in liveEvents {
+                guard let self else { return }
+                await self.handleLiveEvent(event)
+            }
+        }
         let handle = ChatRuntimeHandle(rawValue: "chat-runtime-\(chatID.rawValue)")
         runtimeState = RuntimeState(
             request: request,
             handle: handle,
             stream: stream,
             continuation: continuation,
+            liveEventContinuation: liveEventContinuation,
+            liveEventConsumerTask: liveEventConsumerTask,
             launcher: launcher
         )
         return handle
@@ -171,6 +196,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
                 firstMessage = submission.userText
             }
             let firstPrePersisted = historySeed.contains(.userText(firstMessage))
+            let liveEventContinuation = state.liveEventContinuation
 
             await state.launcher.startInteractiveQuery(
                 firstMessage: firstMessage,
@@ -194,10 +220,16 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
                         await self.emit(.resumed(providerSessionID: sessionID))
                     }
                 },
-                onEvent: { [weak self] event in
-                    guard let self else { return }
-                    Task {
-                        await self.handleLiveEvent(event)
+                onEvent: { event in
+                    switch liveEventContinuation.yield(event) {
+                    case .enqueued:
+                        break
+                    case .dropped(let dropped):
+                        DebugLog.agent("LauncherChatAgentRuntime unexpectedly dropped live event: \(dropped)")
+                    case .terminated:
+                        DebugLog.agent("LauncherChatAgentRuntime received a live event after ingress closed")
+                    @unknown default:
+                        DebugLog.agent("LauncherChatAgentRuntime received an unknown ingress yield result")
                     }
                 },
                 onLiveUsage: { [weak self] usage in
@@ -333,6 +365,8 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         await MainActor.run {
             state.launcher.stopAgent()
         }
+        state.liveEventContinuation.finish()
+        state.liveEventConsumerTask.cancel()
         runtimeState = nil
         state.continuation.finish()
     }
@@ -396,11 +430,15 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
     private func handleLiveEvent(_ event: AgentEvent) async {
         guard var state = runtimeState,
               let turnID = state.activeTurnID else { return }
-        await onLiveEvents([event])
         var translator = state.translationStateByTurn[turnID] ?? AgentEventTranscriptTranslator()
         let deltas = translator.translate([event], turnID: turnID)
         state.translationStateByTurn[turnID] = translator
         runtimeState = state
+
+        // Commit actor-owned translation state before crossing either async
+        // callback boundary. This also keeps the method correct if a future
+        // caller bypasses the ordered ingress.
+        await onLiveEvents([event])
         if deltas.isEmpty == false {
             await emit(
                 .transcript(deltas),
