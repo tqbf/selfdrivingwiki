@@ -147,6 +147,9 @@ public enum ArgumentParser {
       chat search --query X [--limit N]      semantic + keyword search of chats
       chat rename (--id X | --title T) --to <new-title>
                                                rename a chat
+      chat repair --id CHAT --updates-file PATH --message-id MESSAGE
+                  [--expected-sha256 HASH] [--apply]
+                                               audit a retained debug trace; dry run by default
       bookmark list [--json]                   list bookmark nodes (TSV, or JSON)
       bookmark create-folder [--parent ID] --name <name>
                                                create a bookmark folder
@@ -431,7 +434,7 @@ public enum ArgumentParser {
     private static func parseChatCommand(_ args: [String]) throws -> Command {
         guard let sub = args.first else { throw Failure.usage("chat: missing subcommand") }
         let rest = Array(args.dropFirst())
-        let options = try Options(rest)
+        let options = try Options(rest, booleanFlags: ["--json", "--apply"])
 
         switch sub {
         case "list":
@@ -461,6 +464,28 @@ public enum ArgumentParser {
                 throw Failure.usage("chat rename: --to <new-title> is required")
             }
             return .chat(.rename(selector, to: newName))
+
+        case "repair":
+            let repairOptions = try Options(rest, booleanFlags: ["--apply"])
+            guard let chatID = repairOptions.value("--id").map(ChatID.init(rawValue:)) else {
+                throw Failure.usage("chat repair: --id <chat-id> is required")
+            }
+            guard let updatesFile = repairOptions.value("--updates-file"), !updatesFile.isEmpty else {
+                throw Failure.usage("chat repair: --updates-file <path> is required")
+            }
+            guard let messageID = repairOptions.value("--message-id").map(ChatMessageID.init(rawValue:)) else {
+                throw Failure.usage("chat repair: --message-id <app-message-id> is required")
+            }
+            let expected = repairOptions.value("--expected-sha256")
+            if repairOptions.flag("--apply") && expected == nil {
+                throw Failure.usage("chat repair: --expected-sha256 is required with --apply")
+            }
+            return .chat(.repair(
+                chatID: chatID,
+                updatesFile: updatesFile,
+                messageID: messageID,
+                expectedSHA256: expected,
+                apply: repairOptions.flag("--apply")))
 
         case "new":
             // Phase C: daemon-XPC chat. Needs a message (positional or --message).

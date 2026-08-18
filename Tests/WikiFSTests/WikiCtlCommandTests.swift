@@ -24,6 +24,38 @@ struct WikiCtlCommandTests {
         #expect(invocation.command == .page(.list(json: false)))
     }
 
+    @Test func parsesChatRepairAsDryRunByDefault() throws {
+        let invocation = try ArgumentParser.parse(
+            ["--wiki", "W", "chat", "repair",
+             "--id", "chat-1",
+             "--updates-file", "turn.jsonl",
+             "--message-id", "assistant-turn-1-block-0"],
+            env: noEnv)
+        #expect(invocation.command == .chat(.repair(
+            chatID: ChatID(rawValue: "chat-1"),
+            updatesFile: "turn.jsonl",
+            messageID: ChatMessageID(rawValue: "assistant-turn-1-block-0"),
+            expectedSHA256: nil,
+            apply: false)))
+    }
+
+    @Test func parsesChatRepairApplyWithCompareAndSwapDigest() throws {
+        let invocation = try ArgumentParser.parse(
+            ["--wiki", "W", "chat", "repair",
+             "--id", "chat-1",
+             "--updates-file", "turn.jsonl",
+             "--message-id", "assistant-turn-1-block-0",
+             "--expected-sha256", String(repeating: "a", count: 64),
+             "--apply"],
+            env: noEnv)
+        #expect(invocation.command == .chat(.repair(
+            chatID: ChatID(rawValue: "chat-1"),
+            updatesFile: "turn.jsonl",
+            messageID: ChatMessageID(rawValue: "assistant-turn-1-block-0"),
+            expectedSHA256: String(repeating: "a", count: 64),
+            apply: true)))
+    }
+
     @Test func parsesWikiFromEnvWhenFlagAbsent() throws {
         let invocation = try ArgumentParser.parse(
             ["page", "list", "--json"],

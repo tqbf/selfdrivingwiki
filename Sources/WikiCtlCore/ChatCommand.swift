@@ -6,10 +6,12 @@ import WikiFSCore
 /// concerns (arg parsing, stdin, opening the DB) so the whole surface is
 /// unit-testable against a temp DB.
 ///
-/// Read-only: `list` prints all chats (TSV or JSON), `get` prints one chat's
-/// transcript as rendered markdown (via `ChatTranscriptRenderer`). `rename`
-/// updates a chat's title. No other write subcommands — chats are
-/// created/appended by the app's chat layer.
+/// `list` prints all chats (TSV or JSON), `get` prints one chat's transcript as
+/// rendered markdown (via `ChatTranscriptRenderer`), and `search` searches
+/// chat summaries. `rename` updates a chat's title. `repair` is a guarded,
+/// dry-run-by-default recovery of one typed assistant message from a retained
+/// debug trace. Other chat messages are created/appended by the app's chat
+/// layer.
 public enum ChatCommand {
 
     /// What a command produced: text to print and whether it COMMITTED a write.
@@ -35,6 +37,13 @@ public enum ChatCommand {
         case get(Selector)
         case search(query: String, limit: Int)
         case rename(Selector, to: String)
+        case repair(
+            chatID: ChatID,
+            updatesFile: String,
+            messageID: ChatMessageID,
+            expectedSHA256: String?,
+            apply: Bool
+        )
     }
 
     public enum Failure: Error, CustomStringConvertible {
@@ -68,6 +77,14 @@ public enum ChatCommand {
             return try search(query: query, limit: limit, bm25Leg: bm25Leg, in: store)
         case .rename(let selector, let newTitle):
             return try rename(selector, to: newTitle, in: store)
+        case .repair(let chatID, let updatesFile, let messageID, let expectedSHA256, let apply):
+            return try repair(
+                chatID: chatID,
+                updatesFile: updatesFile,
+                messageID: messageID,
+                expectedSHA256: expectedSHA256,
+                apply: apply,
+                in: store)
         }
     }
 
@@ -134,6 +151,118 @@ public enum ChatCommand {
         let id = try resolve(selector, in: store)
         try store.renameChat(id: id, to: newTitle)
         return Result(output: "Renamed chat to \"\(newTitle)\".", didCommit: true)
+    }
+
+    // MARK: - repair
+
+    private static func repair(
+        chatID: ChatID,
+        updatesFile: String,
+        messageID: ChatMessageID,
+        expectedSHA256: String?,
+        apply: Bool,
+        in store: WikiStore
+    ) throws -> Result {
+        if apply && expectedSHA256 == nil {
+            throw Failure.message("chat repair: --expected-sha256 is required with --apply")
+        }
+
+        let updates: Data
+        do {
+            updates = try Data(contentsOf: URL(fileURLWithPath: updatesFile))
+        } catch {
+            throw Failure.message("chat repair: cannot read updates file \(updatesFile.debugDescription): \(error.localizedDescription)")
+        }
+        let recovered: ChatRecovery.RecoveredResponse
+        do {
+            recovered = try ChatRecovery.recover(from: updates)
+        } catch let failure as ChatRecovery.Failure {
+            throw Failure.message("chat repair: \(failure)")
+        }
+
+        let typedItems = try readAllTranscriptItems(chatID: chatID, from: store)
+        let legacyMessages = try store.chatMessages(chatID: chatID)
+        let matches = typedItems.compactMap { persisted -> PersistedChatTranscriptItem? in
+            guard case .message(let item) = persisted.item, item.messageID == messageID else { return nil }
+            return persisted
+        }
+        if matches.isEmpty {
+            if typedItems.isEmpty && !legacyMessages.isEmpty {
+                throw Failure.message("chat repair: refusing legacy-only chat; no typed transcript identity is available")
+            }
+            throw Failure.message("chat repair: app message ID not found: \(messageID.rawValue)")
+        }
+        guard matches.count == 1 else {
+            throw Failure.message("chat repair: app message ID is ambiguous: \(messageID.rawValue)")
+        }
+        let persisted = matches[0]
+        guard case .message(let existing) = persisted.item else {
+            throw Failure.message("chat repair: app message ID is not a message: \(messageID.rawValue)")
+        }
+        guard existing.role == .assistant else {
+            throw Failure.message("chat repair: app message ID is not an assistant message: \(messageID.rawValue)")
+        }
+        guard legacyMessages.count == typedItems.count else {
+            throw Failure.message("chat repair: typed transcript and compatibility projection are out of sync")
+        }
+        let compatibilitySequence = Int(persisted.cursor.rawValue - 1)
+        guard let compatibility = legacyMessages.first(where: { $0.seq == compatibilitySequence }),
+              case .assistantText(let currentText) = compatibility.event else {
+            throw Failure.message("chat repair: compatibility assistant row is missing for cursor \(persisted.cursor.rawValue)")
+        }
+        guard existing.text == currentText else {
+            throw Failure.message("chat repair: typed transcript and compatibility assistant text are out of sync")
+        }
+
+        let oldDigest = RendererSHA256.digest(Data(currentText.utf8)).hex
+        let newDigest = RendererSHA256.digest(Data(recovered.text.utf8)).hex
+        if apply {
+            guard let expectedSHA256 else {
+                throw Failure.message("chat repair: --expected-sha256 is required with --apply")
+            }
+            do {
+                _ = try RendererSHA256Digest(hex: expectedSHA256)
+            } catch {
+                throw Failure.message("chat repair: --expected-sha256 must be a lowercase 64-character SHA-256 digest")
+            }
+            guard oldDigest == expectedSHA256 else {
+                throw Failure.message("chat repair: expected SHA-256 \(expectedSHA256), but current text is \(oldDigest); refusing to write")
+            }
+            let replacement = ChatTranscriptItem.message(ChatTranscriptMessageItem(
+                messageID: existing.messageID,
+                turnID: existing.turnID,
+                role: existing.role,
+                text: recovered.text,
+                createdAt: existing.createdAt
+            ))
+            let persisted = try store.appendChatTranscriptItems(chatID: chatID, items: [replacement])
+            guard persisted.count == 1 else {
+                throw Failure.message("chat repair: store did not upsert exactly one transcript item")
+            }
+        }
+
+        let mode = apply ? "repaired" : "dry run; would repair"
+        return Result(
+            output: "\(mode) chat \(chatID.rawValue) message \(messageID.rawValue)\nupdates: \(updatesFile)\nold SHA-256: \(oldDigest)\nnew SHA-256: \(newDigest)\nold characters: \(currentText.count)\nnew characters: \(recovered.text.count)",
+            didCommit: apply)
+    }
+
+    private static func readAllTranscriptItems(
+        chatID: ChatID,
+        from store: WikiStore
+    ) throws -> [PersistedChatTranscriptItem] {
+        let pageSize = 200
+        var items: [PersistedChatTranscriptItem] = []
+        var cursor: ChatTranscriptCursor?
+        while true {
+            let page = try store.readChatTranscriptPage(chatID: chatID, after: cursor, limit: pageSize)
+            items.append(contentsOf: page.items)
+            guard page.items.count == pageSize,
+                  let next = page.nextCursor,
+                  next != cursor else { break }
+            cursor = next
+        }
+        return items
     }
 
     // MARK: - Selector resolution

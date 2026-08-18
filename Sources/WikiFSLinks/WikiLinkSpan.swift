@@ -209,6 +209,44 @@ public enum WikiLinkSpan {
         }
     }
 
+    /// True when a complete wiki-link expression is immediately wrapped in a
+    /// matching run of unescaped backticks. This local check is deliberately
+    /// independent of the document-wide code-span pairing: malformed Markdown
+    /// earlier in the document must not turn a literal `` `![[source:X]]` ``
+    /// example into a live embed.
+    public static func isLocallyCodeWrapped(
+        _ body: NSString,
+        _ span: NSRange,
+        includesEmbedPrefix: Bool
+    ) -> Bool {
+        let expressionStart = includesEmbedPrefix ? span.location - 1 : span.location
+        let expressionEnd = span.location + span.length
+        guard expressionStart > 0, expressionEnd < body.length else { return false }
+
+        var openingStart = expressionStart
+        while openingStart > 0,
+              body.character(at: openingStart - 1) == backtick {
+            openingStart -= 1
+        }
+        let openingLength = expressionStart - openingStart
+        guard openingLength > 0 else { return false }
+
+        var closingEnd = expressionEnd
+        while closingEnd < body.length,
+              body.character(at: closingEnd) == backtick {
+            closingEnd += 1
+        }
+        guard closingEnd - expressionEnd == openingLength else { return false }
+
+        var slashCount = 0
+        var cursor = openingStart
+        while cursor > 0, body.character(at: cursor - 1) == backslash {
+            slashCount += 1
+            cursor -= 1
+        }
+        return slashCount.isMultiple(of: 2)
+    }
+
     private static let backtick: unichar = 0x60 // `
     private static let bang: unichar = 0x21     // !
     private static let backslash: unichar = 0x5C // \
