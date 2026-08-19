@@ -841,6 +841,8 @@ public final class AgentLauncher {
     /// from tearing down the new session. `finish`'s `isRunning` guard alone
     /// can't tell the sessions apart.
     @ObservationIgnored private var currentRunToken: UUID?
+    @ObservationIgnored private var providerOperationToken: AgentProviderAttemptToken?
+    @ObservationIgnored private var providerReleaseTask: Task<Void, Never>?
     /// #813 Phase 3: Queue store and item ID for the current run (used for session ID persistence)
     @ObservationIgnored private var currentQueueStore: QueueStore?
     @ObservationIgnored private var currentQueueItemID: QueueItem.ID?
@@ -1144,12 +1146,95 @@ public final class AgentLauncher {
 
     public let extractionCoordinator: ExtractionCoordinator
 
-    public init(generationGate: GenerationGate = GenerationGate(),
-         extractionCoordinator: ExtractionCoordinator = ExtractionCoordinator(
+    /// The app- or daemon-scoped provider composition facade. The launcher remains
+    /// the owner of active backend sessions and subprocess lifecycle.
+    @ObservationIgnored public let providerServices: (any AgentProviderServices)?
+
+    public init(
+        generationGate: GenerationGate = GenerationGate(),
+        extractionCoordinator: ExtractionCoordinator = ExtractionCoordinator(
             containerDirectory: FileManager.default.temporaryDirectory,
-            localExtractorFactory: { UnavailablePdf2MarkdownExtractor() })) {
+            localExtractorFactory: { UnavailablePdf2MarkdownExtractor() }),
+        providerServices: (any AgentProviderServices)? = nil
+    ) {
         self.generationGate = generationGate
         self.extractionCoordinator = extractionCoordinator
+        self.providerServices = providerServices
+    }
+
+    private var privateProviderServices: (any AgentProviderPrivateServices)? {
+        providerServices as? any AgentProviderPrivateServices
+    }
+
+    private func preparedProvider(
+        for operation: AgentProviderOperationKind,
+        providerOverride: ProviderID? = nil,
+        modelOverride: ModelID? = nil,
+        thinkingOverride: String? = nil
+    ) async throws -> (AgentOperationPreparation, AgentProviderPreparedBackend)? {
+        await awaitProviderRelease()
+        guard let services = privateProviderServices else { return nil }
+        let preparation = try await services.prepare(
+            operation,
+            providerOverride: providerOverride,
+            modelOverride: modelOverride,
+            thinkingOverride: thinkingOverride)
+        providerOperationToken = preparation.selection.token
+        let prepared = try await services.preparedBackend(
+            from: preparation.selection.token,
+            stage: preparation.selection.stage)
+        return (preparation, prepared)
+    }
+
+    private func preparedIngestStage(
+        from originalToken: AgentProviderAttemptToken,
+        stage: ACPIngestStage,
+        providerID: ProviderID? = nil
+    ) async throws -> (AgentOperationPreparation, AgentProviderPreparedBackend, [AgentProviderDescriptor])? {
+        guard let services = privateProviderServices else { return nil }
+        let runtimeStage: AgentProviderStage = switch stage {
+        case .planner: .planner
+        case .executor: .executor
+        case .finalizer: .finalizer
+        }
+        let preparation: AgentOperationPreparation
+        if let providerID {
+            preparation = try await services.fallbackPreparation(
+                from: originalToken,
+                stage: runtimeStage,
+                fallbackProviderID: providerID)
+        } else {
+            preparation = try await services.preparation(from: originalToken, stage: runtimeStage)
+        }
+        let prepared = try await services.preparedBackend(
+            from: preparation.selection.token,
+            stage: runtimeStage)
+        let chain = try await services.frozenProviderDescriptors(
+            from: originalToken,
+            stage: runtimeStage)
+        return (preparation, prepared, chain)
+    }
+
+    /// Applies launcher-owned operation details to a service-owned, secrets-bearing
+    /// prepared profile. The service supplies all provider identity, command,
+    /// credential, model, and policy data; this layer may only add local paths and
+    /// non-secret provenance/workspace environment hints.
+    private func profile(
+        from prepared: AgentProviderPreparedBackend,
+        scratch: URL,
+        executionAccess: AgentExecutionAccess,
+        cli: CLIProfile,
+        adding hints: [String: String] = [:]
+    ) -> BackendProfile {
+        var providerHints = prepared.profile.providerHints
+        for (key, value) in hints { providerHints[key] = value }
+        return BackendProfile(
+            providerHints: providerHints,
+            scratchDirectory: scratch,
+            isReadOnly: false,
+            executionAccess: executionAccess,
+            cli: cli,
+            debugLogURL: debugFolderURL)
     }
 
     /// Wait for the shared generation gate on the given lane, returning `true`
@@ -1324,36 +1409,50 @@ public final class AgentLauncher {
         // ingest returns early at the `isLargeSource` branch below and gets its
         // own per-phase resolution in `runACPIngestPlannerExecutors`.
         let stageKey = Self.stageKey(for: request)
-        let policy: PermissionPolicy = resolvePermissionMode(permissionKind)
+        let operationKind: AgentProviderOperationKind = switch request {
+        case .ingest: .ingest
+        case .lint, .lintPage: .lint
+        case .query: .interactive
+        }
+        let servicePreparation: (AgentOperationPreparation, AgentProviderPreparedBackend)?
+        do {
+            servicePreparation = try await preparedProvider(for: operationKind)
+        } catch {
+            preflightError = error.localizedDescription
+            isRunning = false
+            releaseGenerationSlot()
+            return
+        }
+        defer {
+            if !isRunning { releaseProviderOperation() }
+        }
         let executionAccess: AgentExecutionAccess = switch permissionKind {
         case .ingest, .lint: .fullAccess
         case .chat: .standard
         }
-        // #606: chat is interactive (unbounded — the UI chip is the release
-        // valve); ingest/lint are unattended and MUST auto-reject so a stuck
-        // permission can't burn the 1800s ceiling.
-        let permissionBudget: Duration? = (permissionKind == .chat) ? nil : .seconds(60)
-        // #609: queued-ingestion ceiling is tighter than the interactive
-        // default so a stalled ingest/lint turn burns 10 minutes, not 30.
-        // `runACPIngestPlannerExecutors` (large-source ingest) reuses this
-        // `self.backend` — so the ceiling chosen here is the ceiling that
-        // planner/executor/finalizer phases run under.
-        let turnCeiling = TurnLivenessPolicy.ceiling(for: permissionKind)
-
-        // #324 + agent-settings-tabs: the launcher reads `agent-providers.json`
-        // and resolves the provider + model for THIS operation's stage via
-        // `provider(forStage:)` (pinned provider when set + enabled, else the
-        // global default). The app is ACP-only. Per-stage PROVIDER pinning +
-        // per-stage MODEL selection (chat / planner / executor / finalizer /
-        // lint) resolve through one seam; see
-        // `AgentProvidersConfig.provider(forStage:)` /
-        // `modelId(forStage:fallbackProvider:)`. `permissionKind` is still
-        // computed above to drive permission policy + turn ceiling, NOT to
-        // pick a provider (it happens to map to the same stageKey here, but
-        // the provider comes from the config stage map).
-        let config = providersConfig()
-        let provider = config.provider(forStage: stageKey)
-        let resolvedStageModelId = config.modelId(forStage: stageKey, fallbackProvider: provider.id)
+        let policy: PermissionPolicy
+        let permissionBudget: Duration?
+        let turnCeiling: TimeInterval
+        let provider: AgentProvider
+        let resolvedStageModelId: ModelID?
+        if let (preparation, prepared) = servicePreparation {
+            policy = preparation.policy.permissionPolicy
+            permissionBudget = preparation.policy.permissionBudget
+            turnCeiling = preparation.policy.turnCeiling
+            provider = prepared.provider
+            resolvedStageModelId = preparation.selection.model
+            self.backend = prepared.backend
+        } else {
+            // Legacy seam: retain mutable configuration, permission, backend, and
+            // credential hooks for existing callers/tests until migration completes.
+            policy = resolvePermissionMode(permissionKind)
+            permissionBudget = (permissionKind == .chat) ? nil : .seconds(60)
+            turnCeiling = TurnLivenessPolicy.ceiling(for: permissionKind)
+            let config = providersConfig()
+            provider = config.provider(forStage: stageKey)
+            resolvedStageModelId = config.modelId(forStage: stageKey, fallbackProvider: provider.id)
+            self.backend = resolveBackend(policy, permissionBudget, turnCeiling)
+        }
         // SpawnModelGuard for the shared one-shot path (small-source ingest,
         // one-shot query, lint). Previously only the large-source ingest
         // orchestrator + interactive chat had this guard — a lint run with no
@@ -1369,20 +1468,27 @@ public final class AgentLauncher {
             releaseGenerationSlot()
             return
         }
-        self.backend = resolveBackend(policy, permissionBudget, turnCeiling)
-        let loginShellPath = await PathPreflight.loginShellPATH()
-
-        // Resolve the provider's spawn command (PATH-resolved because the
-        // swift-acp SDK's launch() does NOT do PATH lookup) + the Keychain-backed
-        // API key (keyed by provider id).
-        guard let spawn = resolveACPProviderSpawn(provider, searchPath: loginShellPath) else {
-            isRunning = false
-            releaseGenerationSlot()
-            return
+        // The service preparation already supplied the private spawn hints.
+        // Only the legacy path resolves PATH and credentials at launch time.
+        let baseProviderHints: [String: String]
+        let resolvedPath: String?
+        if let (_, prepared) = servicePreparation {
+            baseProviderHints = prepared.profile.providerHints
+            resolvedPath = nil
+        } else {
+            let loginShellPath = await PathPreflight.loginShellPATH()
+            guard let spawn = resolveACPProviderSpawn(provider, searchPath: loginShellPath) else {
+                isRunning = false
+                releaseGenerationSlot()
+                return
+            }
+            baseProviderHints = AgentBackendFactory.providerHints(
+                provider: provider,
+                resolvedCommand: spawn.command,
+                apiKey: spawn.apiKey,
+                selectedModelId: resolvedStageModelId?.rawValue)
+            resolvedPath = spawn.command.first
         }
-        let resolvedACPCommand = spawn.command
-        let acpAPIKey = spawn.apiKey
-        let resolvedPath = resolvedACPCommand[0]
         preflightError = nil
 
         guard let scratch = makeScratchDirectory(id: queueItemID?.rawValue) else {
@@ -1500,6 +1606,7 @@ public final class AgentLauncher {
         if case .ingest(_, _, _, let plan) = operation, plan.isLargeSource {
             await runACPIngestPlannerExecutors(
                 scratch: scratch,
+                providerAttemptToken: servicePreparation?.0.selection.token,
                 request: request,
                 operation: operation,
                 wikiRoot: wikiRoot,
@@ -1523,11 +1630,7 @@ public final class AgentLauncher {
             onStderrChunk: { [weak self] chunk in
                 Task { @MainActor [weak self] in self?.ingestStderr(chunk) }
             })
-        var providerHints = AgentBackendFactory.providerHints(
-                provider: provider,
-                resolvedCommand: resolvedACPCommand,
-                apiKey: acpAPIKey,
-                selectedModelId: resolvedStageModelId?.rawValue)
+        var providerHints = baseProviderHints
         if let workspaceID {
             providerHints[HintKey.env("WIKI_WORKSPACE")] = workspaceID.rawValue
         }
@@ -1551,7 +1654,8 @@ public final class AgentLauncher {
             debugLogURL: debugFolderURL)
 
         do {
-            DebugLog.agent("run: spawning kind=\(operation.kind.rawValue) wikiID=\(wikiID.rawValue) exe=\(resolvedPath)")
+            let resolvedPathDescription = resolvedPath ?? "provider runtime"
+            DebugLog.agent("run: spawning kind=\(operation.kind.rawValue) wikiID=\(wikiID.rawValue) exe=\(resolvedPathDescription)")
             let runToken = UUID()
             let session: SessionHandle
 
@@ -1697,6 +1801,7 @@ public final class AgentLauncher {
     /// are unchanged.
     private func runACPIngestPlannerExecutors(
         scratch: URL,
+        providerAttemptToken: AgentProviderAttemptToken?,
         request: OperationRequest,
         operation: WikiOperation,
         wikiRoot: String,
@@ -1761,27 +1866,71 @@ public final class AgentLauncher {
         // #727: resolve the provider chain for the planner stage + create the
         // per-run quota fallback coordinator. The chain is the stage-resolved
         // provider first, then the other enabled providers in display order.
-        let config = providersConfig()
-        let plannerChain = config.providerChain(forStage: ACPIngestStage.planner.rawValue)
+        let config = providerAttemptToken == nil ? providersConfig() : nil
         let quotaFallback = makeQuotaFallbackCoordinator()
-        guard let firstProvider = quotaFallback.firstLive(in: plannerChain) else {
-            preflightError = "All configured providers are exhausted. Try again later."
-            finish(status: -1)
-            return
-        }
-        let loginShellPath = await PathPreflight.loginShellPATH()
-        // Resolve spawn config for the first provider (for the model validation
-        // below + the baseHints). Fallback providers' spawn is resolved lazily
-        // by runPhaseWithFallback.
-        let provider = firstProvider
-        let plannerModel = config.modelId(forStage: ACPIngestStage.planner.rawValue)
-        let executorModel = config.modelId(forStage: ACPIngestStage.executor.rawValue)
-        let finalizerModel = config.modelId(forStage: ACPIngestStage.finalizer.rawValue)
-        guard let spawn = resolveACPProviderSpawn(provider, searchPath: loginShellPath) else {
-            DebugLog.agent("runACPIngest: ACP exe missing for provider=\(provider.id) — aborting")
-            preflightError = "The agent executable for ‘\(provider.label)’ was not found on your PATH."
-            finish(status: -1)
-            return
+        let loginShellPath = providerAttemptToken == nil ? await PathPreflight.loginShellPATH() : nil
+
+        let provider: AgentProvider
+        let plannerModel: ModelID?
+        let executorModel: ModelID?
+        let finalizerModel: ModelID?
+        let baseHints: [String: String]
+        let plannerChain: [AgentProviderDescriptor]
+        if let providerAttemptToken {
+            do {
+                guard let planner = try await preparedIngestStage(
+                    from: providerAttemptToken,
+                    stage: .planner),
+                    let executor = try await preparedIngestStage(
+                        from: providerAttemptToken,
+                        stage: .executor),
+                    let finalizer = try await preparedIngestStage(
+                        from: providerAttemptToken,
+                        stage: .finalizer) else {
+                    throw AgentProviderRuntimeError.unavailable
+                }
+                provider = planner.1.provider
+                plannerModel = planner.0.selection.model
+                executorModel = executor.0.selection.model
+                finalizerModel = finalizer.0.selection.model
+                baseHints = planner.1.profile.providerHints
+                plannerChain = planner.2
+                self.backend = planner.1.backend
+            } catch {
+                preflightError = error.localizedDescription
+                finish(status: -1)
+                return
+            }
+        } else {
+            guard let config else {
+                preflightError = AgentProviderRuntimeError.unavailable.description
+                finish(status: -1)
+                return
+            }
+            let legacyPlannerChain = config.providerChain(forStage: ACPIngestStage.planner.rawValue)
+            guard let firstProvider = quotaFallback.firstLive(in: legacyPlannerChain) else {
+                preflightError = "All configured providers are exhausted. Try again later."
+                finish(status: -1)
+                return
+            }
+            provider = firstProvider
+            plannerModel = config.modelId(forStage: ACPIngestStage.planner.rawValue)
+            executorModel = config.modelId(forStage: ACPIngestStage.executor.rawValue)
+            finalizerModel = config.modelId(forStage: ACPIngestStage.finalizer.rawValue)
+            guard let spawn = resolveACPProviderSpawn(provider, searchPath: loginShellPath) else {
+                DebugLog.agent("runACPIngest: ACP exe missing for provider=\(provider.id) — aborting")
+                preflightError = "The agent executable for ‘\(provider.label)’ was not found on your PATH."
+                finish(status: -1)
+                return
+            }
+            baseHints = AgentBackendFactory.providerHints(
+                provider: provider,
+                resolvedCommand: spawn.command,
+                apiKey: spawn.apiKey,
+                selectedModelId: nil)
+            plannerChain = legacyPlannerChain.map {
+                AgentProviderDescriptor(id: $0.id, label: $0.label)
+            }
         }
         // Refuse to spawn without an explicit model on EVERY stage (#704 + this
         // plan's §6). Without this, the ACP subprocess silently falls through
@@ -1810,11 +1959,6 @@ public final class AgentLauncher {
         // model per phase. Keeping the provider/spawn identical across phases
         // means `self.backend` (the warm `ACPBackend` actor `run()` already
         // built at :954) is reused unchanged — no new subprocess.
-        let baseHints = AgentBackendFactory.providerHints(
-            provider: provider,
-            resolvedCommand: spawn.command,
-            apiKey: spawn.apiKey,
-            selectedModelId: nil)
         // Per-phase hint dict: base + the stage's resolved model id. The
         // orchestrator resolved all three stage ids up top (§4.3) —
         // `plannerModel` is the load-bearing baseline for the fork path's
@@ -1861,6 +2005,7 @@ public final class AgentLauncher {
         guard let plannerSession = await runPhaseWithFallback(
             stage: .planner,
             chain: plannerChain,
+            providerAttemptToken: providerAttemptToken,
             quotaFallback: quotaFallback,
             searchPath: loginShellPath,
             systemPrompt: systemPrompt,
@@ -1982,11 +2127,31 @@ public final class AgentLauncher {
                 // runPhase helper falls back to a fresh `backend.start()`.
                 let executorAssignments = assignments
                 let executorProvider = provider
-                let executorChain = config.providerChain(forStage: ACPIngestStage.executor.rawValue)
+                let executorChain: [AgentProviderDescriptor]
+                if let providerAttemptToken {
+                    do {
+                        guard let prepared = try await preparedIngestStage(
+                            from: providerAttemptToken,
+                            stage: .executor) else {
+                            throw AgentProviderRuntimeError.unavailable
+                        }
+                        executorChain = prepared.2
+                    } catch {
+                        DebugLog.agent("runACPIngest: executor frozen chain failed: \(error.localizedDescription)")
+                        finish(status: -1)
+                        return
+                    }
+                } else {
+                    executorChain = (config?.providerChain(
+                        forStage: ACPIngestStage.executor.rawValue) ?? []).map {
+                            AgentProviderDescriptor(id: $0.id, label: $0.label)
+                        }
+                }
                 let forkFrom = (backend as? ACPBackend != nil) ? plannerSessionHandle : nil
                 if let session = await runPhaseWithFallback(
                     stage: .executor,
                     chain: executorChain,
+                    providerAttemptToken: providerAttemptToken,
                     quotaFallback: quotaFallback,
                     searchPath: loginShellPath,
                     systemPrompt: systemPrompt,
@@ -2009,8 +2174,14 @@ public final class AgentLauncher {
                     wikiID: wikiID,
                     phaseName: "executor[\(sourceFile)]"
                 ) {
-                    let execProvider = quotaFallback.plannerProviderId == executorProvider.id ? executorProvider : (quotaFallback.backends.keys.sorted(by: { $0.rawValue < $1.rawValue }).first.map { config.provider(id: $0) ?? executorProvider } ?? executorProvider)
-                    await capturePhaseUsage(backend: backend, session: session, providerLabel: execProvider.label)
+                    let executorProviderLabel = quotaFallback.plannerProviderId == executorProvider.id
+                        ? executorProvider.label
+                        : executorChain.first(where: { quotaFallback.backends[$0.id] != nil })?.label
+                            ?? executorProvider.label
+                    await capturePhaseUsage(
+                        backend: backend,
+                        session: session,
+                        providerLabel: executorProviderLabel)
                     if let acp = backend as? ACPBackend {
                         await acp.closeSession(session)
                     } else {
@@ -2047,11 +2218,31 @@ public final class AgentLauncher {
         // runPhaseWithFallback (per-provider, per-attempt).
         DebugLog.agent("runACPIngest: Phase 3 — Finalizer (model=\(finalizerModel?.rawValue ?? "nil"))")
         currentIngestPhase = "finalizer"
-        let finalizerChain = config.providerChain(forStage: ACPIngestStage.finalizer.rawValue)
+        let finalizerChain: [AgentProviderDescriptor]
+        if let providerAttemptToken {
+            do {
+                guard let prepared = try await preparedIngestStage(
+                    from: providerAttemptToken,
+                    stage: .finalizer) else {
+                    throw AgentProviderRuntimeError.unavailable
+                }
+                finalizerChain = prepared.2
+            } catch {
+                DebugLog.agent("runACPIngest: finalizer frozen chain failed: \(error.localizedDescription)")
+                finish(status: -1)
+                return
+            }
+        } else {
+            finalizerChain = (config?.providerChain(
+                forStage: ACPIngestStage.finalizer.rawValue) ?? []).map {
+                    AgentProviderDescriptor(id: $0.id, label: $0.label)
+                }
+        }
         let finalizerSourceFileNames = sourceFileNames
         if let session = await runPhaseWithFallback(
             stage: .finalizer,
             chain: finalizerChain,
+            providerAttemptToken: providerAttemptToken,
             quotaFallback: quotaFallback,
             searchPath: loginShellPath,
             systemPrompt: systemPrompt,
@@ -2354,7 +2545,8 @@ public final class AgentLauncher {
     /// nil (cross-backend session reference is invalid).
     private func runPhaseWithFallback(
         stage: ACPIngestStage,
-        chain: [AgentProvider],
+        chain: [AgentProviderDescriptor],
+        providerAttemptToken: AgentProviderAttemptToken?,
         quotaFallback: QuotaFallbackCoordinator,
         searchPath: String?,
         systemPrompt: String,
@@ -2371,48 +2563,60 @@ public final class AgentLauncher {
         phaseName: String
     ) async -> SessionHandle? {
         var attemptChain = chain
-        while let provider = quotaFallback.firstLive(in: attemptChain) {
-            // Resolve spawn config for THIS provider.
-            guard let spawn = resolveACPProviderSpawn(provider, searchPath: searchPath) else {
-                DebugLog.agent("runPhaseWithFallback[\(phaseName)]: no spawn for \(provider.id) — skipping")
-                attemptChain = attemptChain.filter { $0.id != provider.id }
-                continue
+        while let descriptor = quotaFallback.firstLiveDescriptor(in: attemptChain) {
+            let provider: AgentProvider
+            let backend: AgentBackend
+            var hints: [String: String]
+            if let providerAttemptToken {
+                do {
+                    guard let prepared = try await preparedIngestStage(
+                        from: providerAttemptToken,
+                        stage: stage,
+                        providerID: descriptor.id) else {
+                        throw AgentProviderRuntimeError.unavailable
+                    }
+                    provider = prepared.1.provider
+                    backend = prepared.1.backend
+                    hints = prepared.1.profile.providerHints
+                } catch {
+                    DebugLog.agent("runPhaseWithFallback[\(phaseName)]: frozen preparation failed for \(descriptor.id): \(error.localizedDescription)")
+                    return nil
+                }
+            } else {
+                let config = providersConfig()
+                guard let legacyProvider = config.provider(id: descriptor.id),
+                      let spawn = resolveACPProviderSpawn(legacyProvider, searchPath: searchPath) else {
+                    DebugLog.agent("runPhaseWithFallback[\(phaseName)]: no spawn for \(descriptor.id) — skipping")
+                    attemptChain.removeAll { $0.id == descriptor.id }
+                    continue
+                }
+                provider = legacyProvider
+                hints = AgentBackendFactory.providerHints(
+                    provider: provider,
+                    resolvedCommand: spawn.command,
+                    apiKey: spawn.apiKey,
+                    selectedModelId: stageModelId)
+                let isInitialPlanner = stage == .planner && attemptChain.first?.id == descriptor.id
+                if isInitialPlanner {
+                    backend = self.backend
+                } else if descriptor.id == quotaFallback.plannerProviderId {
+                    backend = quotaFallback.backends[descriptor.id] ?? self.backend
+                } else {
+                    let policy = resolvePermissionMode(.ingest)
+                    backend = resolveBackend(
+                        policy,
+                        .seconds(60),
+                        TurnLivenessPolicy.ceiling(for: .ingest))
+                }
             }
-            // Build hints + profile for this provider.
-            var hints = AgentBackendFactory.providerHints(
-                provider: provider,
-                resolvedCommand: spawn.command,
-                apiKey: spawn.apiKey,
-                selectedModelId: stageModelId)
-            _ = hints  // keep the var for potential per-stage model injection
-            // Re-inject the stage model id (providerHints already does this
-            // via selectedModelId, but be explicit).
             if let stageModelId, !stageModelId.isEmpty {
                 hints[HintKey.acpSelectedModelId.rawValue] = stageModelId
             }
             hints = Self.ingestProvenanceProviderHints(for: ingestRequest, addingTo: hints)
+            quotaFallback.recordBackend(backend, forProvider: descriptor.id)
 
-            // Decide which backend to use: reuse self.backend for the FIRST
-            // attempt (the planner's provider — warm subprocess), build a
-            // fresh one for fallback providers.
-            let isFirstAttempt = (attemptChain.first?.id == provider.id)
-            let isPlannerBackend = (stage == .planner && isFirstAttempt)
-            let backend: AgentBackend
-            if isPlannerBackend {
-                // Reuse the warm subprocess (self.backend was built by run()).
-                backend = self.backend
-            } else if provider.id == quotaFallback.plannerProviderId {
-                // Reuse the planner's actual backend (post-fallback).
-                backend = quotaFallback.backends[provider.id] ?? self.backend
-            } else {
-                // Fresh backend for a fallback provider.
-                // #727: resolve the same policy/budget/ceiling run() used.
-                let policy = resolvePermissionMode(.ingest)
-                let budget: Duration? = .seconds(60)
-                let ceiling = TurnLivenessPolicy.ceiling(for: .ingest)
-                backend = resolveBackend(policy, budget, ceiling)
-                quotaFallback.recordBackend(backend, forProvider: provider.id)
-            }
+            let isFirstAttempt = attemptChain.first?.id == descriptor.id
+            let isPlannerBackend = stage == .planner && isFirstAttempt
 
             // Fork reconciliation: disable fork when the executor's provider
             // differs from the planner's actual post-fallback provider.
@@ -2470,7 +2674,7 @@ public final class AgentLauncher {
                                             resetTime: signal.resetTime,
                                             kind: signal.kind)
                 // Surface the fallback in the transcript.
-                let nextProvider = quotaFallback.firstLive(in: attemptChain.filter { $0.id != provider.id })
+                let nextProvider = quotaFallback.firstLiveDescriptor(in: attemptChain.filter { $0.id != provider.id })
                 if let next = nextProvider {
                     mergeOrAppend(.raw("⚠️ \(provider.label) quota exhausted — falling back to \(next.label)…"))
                 } else {
@@ -3142,9 +3346,32 @@ public final class AgentLauncher {
         // #609: chat uses the interactive 1800s ceiling — long reasoning
         // chains are legitimate in a user-attended session, and the user can
         // cancel via the UI chip.
-        let policy: PermissionPolicy = resolvePermissionMode(.chat)
-        let permissionBudget: Duration? = nil
-        let turnCeiling = TurnLivenessPolicy.ceiling(for: .chat)
+        let servicePreparation: (AgentOperationPreparation, AgentProviderPreparedBackend)?
+        do {
+            servicePreparation = try await preparedProvider(
+                for: .interactive,
+                providerOverride: chatOverrideProviderId,
+                modelOverride: chatOverrideModelId,
+                thinkingOverride: thinkingConfiguration?.desiredValueID.rawValue)
+        } catch {
+            preflightError = error.localizedDescription
+            return
+        }
+        defer {
+            if !isRunning { releaseProviderOperation() }
+        }
+        let policy: PermissionPolicy
+        let permissionBudget: Duration?
+        let turnCeiling: TimeInterval
+        if let (preparation, _) = servicePreparation {
+            policy = preparation.policy.permissionPolicy
+            permissionBudget = preparation.policy.permissionBudget
+            turnCeiling = preparation.policy.turnCeiling
+        } else {
+            policy = resolvePermissionMode(.chat)
+            permissionBudget = nil
+            turnCeiling = TurnLivenessPolicy.ceiling(for: .chat)
+        }
         DebugLog.agent("startInteractiveQuery: permissionPolicy=\(policy) budget=nil (interactive) ceiling=\(turnCeiling)s")
 
         // #324 + agent-settings-tabs: the launcher reads `agent-providers.json`
@@ -3160,12 +3387,21 @@ public final class AgentLauncher {
         // override, `ChatSummary.modelProviderId`/`.modelId`) outrank the
         // stage pin when set + enabled — see
         // `AgentProvidersConfig.provider(forStage:chatOverrideProviderId:)`.
-        let provider = providersConfig().provider(
-            forStage: "chat", chatOverrideProviderId: chatOverrideProviderId)
-        let resolvedSelectedModel = providersConfig().modelId(
-            forStage: "chat",
-            chatOverrideProviderId: chatOverrideProviderId,
-            chatOverrideModelId: chatOverrideModelId)
+        let provider: AgentProvider
+        let resolvedSelectedModel: ModelID?
+        if let (preparation, prepared) = servicePreparation {
+            provider = prepared.provider
+            resolvedSelectedModel = preparation.selection.model
+            self.backend = prepared.backend
+        } else {
+            provider = providersConfig().provider(
+                forStage: "chat", chatOverrideProviderId: chatOverrideProviderId)
+            resolvedSelectedModel = providersConfig().modelId(
+                forStage: "chat",
+                chatOverrideProviderId: chatOverrideProviderId,
+                chatOverrideModelId: chatOverrideModelId)
+            self.backend = resolveBackend(policy, permissionBudget, turnCeiling)
+        }
         DebugLog.agent("startInteractiveQuery: provider=\(provider.id) selectedModel=\(resolvedSelectedModel?.rawValue ?? "nil")")
 
         // Refuse to spawn without an explicit `selectedModelId`. Mirrors the
@@ -3190,21 +3426,30 @@ public final class AgentLauncher {
             return
         }
 
-        self.backend = resolveBackend(policy, permissionBudget, turnCeiling)
         self.onLiveUsage = onLiveUsage
         self.liveUsageProviderLabel = provider.label
         await installLiveUsageCallback(on: self.backend)
-        let loginShellPath = await PathPreflight.loginShellPATH()
 
-        // Resolve the provider's spawn command (PATH-resolved) + the
-        // Keychain-backed API key (keyed by provider id).
-        guard let spawn = resolveACPProviderSpawn(provider, searchPath: loginShellPath) else {
-            DebugLog.agent("startInteractiveQuery: ACP exe missing — \(preflightError ?? "?")")
-            return
+        // Use the private frozen profile when provider services are present.
+        // The legacy branch retains direct PATH and credential resolution.
+        let baseProviderHints: [String: String]
+        let resolvedPath: String
+        if let (_, prepared) = servicePreparation {
+            baseProviderHints = prepared.profile.providerHints
+            resolvedPath = "provider runtime"
+        } else {
+            let loginShellPath = await PathPreflight.loginShellPATH()
+            guard let spawn = resolveACPProviderSpawn(provider, searchPath: loginShellPath) else {
+                DebugLog.agent("startInteractiveQuery: ACP exe missing — \(preflightError ?? "?")")
+                return
+            }
+            baseProviderHints = AgentBackendFactory.providerHints(
+                provider: provider,
+                resolvedCommand: spawn.command,
+                apiKey: spawn.apiKey,
+                selectedModelId: resolvedSelectedModel?.rawValue)
+            resolvedPath = spawn.command[0]
         }
-        let resolvedACPCommand = spawn.command
-        let acpAPIKey = spawn.apiKey
-        let resolvedPath = resolvedACPCommand[0]
         preflightError = nil
 
         guard let scratch = makeScratchDirectory(id: chatID?.rawValue) else {
@@ -3296,11 +3541,7 @@ public final class AgentLauncher {
             })
         let profile = BackendProfile(
             providerHints: {
-                var hints = AgentBackendFactory.providerHints(
-                    provider: provider,
-                    resolvedCommand: resolvedACPCommand,
-                    apiKey: acpAPIKey,
-                    selectedModelId: resolvedSelectedModel?.rawValue)
+                var hints = baseProviderHints
                 // #397: chat-driven writes carry `chat:<chatID>` as their author
                 // provenance so created_by/last_edited_by points back to the
                 // originating conversation (resolvable via [[chat:…]]). An explicit
@@ -4008,6 +4249,7 @@ public final class AgentLauncher {
         stopPendingPermissionPoller()
         pendingPermissions = []
         retryCeilingKillContext = nil
+        releaseProviderOperation()
 
         // #813 Phase 3: Clear ACP session ID on successful completion
         if status == 0,
@@ -4038,6 +4280,20 @@ public final class AgentLauncher {
         releaseGenerationSlot()
     }
 
+    private func releaseProviderOperation() {
+        guard let token = providerOperationToken,
+              let services = providerServices else { return }
+        providerOperationToken = nil
+        providerReleaseTask = Task {
+            await services.release(token)
+        }
+    }
+
+    public func awaitProviderRelease() async {
+        await providerReleaseTask?.value
+        providerReleaseTask = nil
+    }
+
     /// Release the agent-run lifecycle closure exactly once. Idempotent: clearing the stored
     /// handler makes repeated calls (from `finish()`, a spawn-failure teardown, or
     /// the watchdog) a no-op.
@@ -4051,6 +4307,7 @@ public final class AgentLauncher {
     /// touch `isRunning` — process lifetime is managed explicitly. Called right
     /// before staging/preflight at the top of each launch path.
     private func resetRunArtifacts() {
+        releaseProviderOperation()
         DebugLog.agent("resetRunArtifacts: clearing per-run artifacts (prior activeChatID=\(activeChatID?.rawValue ?? "nil"))")
         watchdogTask?.cancel()
         watchdogTask = nil

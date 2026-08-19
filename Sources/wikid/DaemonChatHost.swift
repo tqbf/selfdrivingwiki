@@ -22,6 +22,7 @@ final class DaemonChatHost: @unchecked Sendable {
     private let storeResolver: @Sendable (WikiID) -> GRDBWikiStore?
     private let pushEvent: @Sendable (QueueEventEnvelope) -> Void
     private let diagnosticTrace: DaemonChatDiagnostics
+    private let providerServices: any AgentProviderServices
 
     private let sharedGate: GenerationGate
     private let registry = ControllerRegistry()
@@ -39,6 +40,7 @@ final class DaemonChatHost: @unchecked Sendable {
         storeResolver: @escaping @Sendable (WikiID) -> GRDBWikiStore?,
         pushEvent: @escaping @Sendable (QueueEventEnvelope) -> Void,
         diagnosticTrace: DaemonChatDiagnostics = DaemonChatDiagnostics(),
+        providerServices: any AgentProviderServices,
         idleEvictionDelay: Duration = DaemonChatHost.defaultIdleEvictionDelay
     ) {
         self.containerDirectory = containerDirectory
@@ -47,6 +49,7 @@ final class DaemonChatHost: @unchecked Sendable {
         self.storeResolver = storeResolver
         self.pushEvent = pushEvent
         self.diagnosticTrace = diagnosticTrace
+        self.providerServices = providerServices
         self.idleEvictionDelay = idleEvictionDelay
     }
 
@@ -299,6 +302,7 @@ final class DaemonChatHost: @unchecked Sendable {
                     await controller.didReceiveLiveEvents(events)
                 }
             },
+            providerServices: providerServices,
             onMessageSummary: { [weak self] chatID in
                 guard let self else { return }
                 self.summarizePendingMessages(chatID: chatID, wikiID: wikiID)
@@ -414,9 +418,6 @@ final class DaemonChatHost: @unchecked Sendable {
     ) {
         guard let store = storeResolver(wikiID) else { return }
 
-        let config = AgentProvidersConfig.loadOrSeed(from: containerDirectory)
-        let mode = MessageSummarizer.mode(for: config)
-
         let messages: [ChatMessage]
         do {
             messages = try store.chatMessages(chatID: chatID)
@@ -434,62 +435,86 @@ final class DaemonChatHost: @unchecked Sendable {
         // The message whose summary doubles as `chats.summary` (issue #411).
         let chatSummaryMessageID = MessageSummarizer.chatSummaryMessageID(in: messages)
 
-        switch mode {
-        case .defaultTruncation:
-            for msg in pending {
-                guard let text = MessageSummarizer.textToSummarize(from: msg.event) else { continue }
-                let summary = MessageSummarizer.defaultSummary(for: text)
-                guard !summary.isEmpty else { continue }
-                do {
-                    try store.updateMessageSummary(
-                        chatID: chatID, messageID: msg.id,
-                        summary: summary, kind: .defaultTruncation)
-                    if msg.id == chatSummaryMessageID {
-                        try store.updateChatSummary(chatID: chatID, summary: summary)
-                    }
-                } catch {
-                    DebugLog.store("DaemonChatHost: summary write failed: \(error)")
+        let services = providerServices
+        Task { @MainActor in
+            do {
+                let preparation = try await services.prepareSummarization()
+                switch preparation {
+                case .defaultTruncation:
+                    Self.writeDefaultSummaries(
+                        chatID: chatID, pending: pending, store: store,
+                        chatSummaryMessageID: chatSummaryMessageID)
+                case .model(let preparation):
+                    await Self.runModelSummarization(
+                        chatID: chatID,
+                        pending: pending,
+                        services: services,
+                        preparation: preparation,
+                        store: store,
+                        chatSummaryMessageID: chatSummaryMessageID)
+                    await services.release(preparation.selection.token)
                 }
-            }
-        case .model:
-            let containerDir = containerDirectory
-            let credentialStore = KeychainACPCredentialStore()
-            Task { @MainActor in
-                await Self.runModelSummarization(
-                    chatID: chatID, pending: pending, config: config,
-                    containerDir: containerDir, credentialStore: credentialStore,
-                    store: store, chatSummaryMessageID: chatSummaryMessageID)
+            } catch AgentProviderRuntimeError.unavailable {
+                Self.writeDefaultSummaries(
+                    chatID: chatID,
+                    pending: pending,
+                    store: store,
+                    chatSummaryMessageID: chatSummaryMessageID)
+            } catch {
+                DebugLog.agent("DaemonChatHost: summarization preparation failed: \(error)")
             }
         }
     }
 
-    /// Drive model-mode summarization for a batch of pending messages.
-    /// Runs off-main for the ACP session(s); marshals each write to the store.
     @MainActor
-    private static func runModelSummarization(
-        chatID: ChatID, pending: [ChatMessage], config: AgentProvidersConfig,
-        containerDir: URL, credentialStore: any ACPCredentialStore,
-        store: GRDBWikiStore, chatSummaryMessageID: PageID?
-    ) async {
-        let loginShellPath = await PathPreflight.loginShellPATH()
-        guard let profile = MessageSummarizer.resolveProfile(
-            config: config,
-            credentialStore: credentialStore,
-            searchPath: loginShellPath) else {
-            DebugLog.agent("DaemonChatHost.runModelSummarization: profile resolution failed")
-            return
-        }
-        let backend = AgentBackendFactory.makeBackend(policy: .bypass)
+    private static func writeDefaultSummaries(
+        chatID: ChatID, pending: [ChatMessage], store: GRDBWikiStore,
+        chatSummaryMessageID: PageID?
+    ) {
         for msg in pending {
             guard let text = MessageSummarizer.textToSummarize(from: msg.event) else { continue }
-            guard let summary = await MessageSummarizer.modelSummary(
-                text: text, backend: backend, profile: profile) else { continue }
+            let summary = MessageSummarizer.defaultSummary(for: text)
+            guard !summary.isEmpty else { continue }
+            do {
+                try store.updateMessageSummary(
+                    chatID: chatID, messageID: msg.id,
+                    summary: summary, kind: .defaultTruncation)
+                if msg.id == chatSummaryMessageID {
+                    try store.updateChatSummary(chatID: chatID, summary: summary)
+                }
+            } catch {
+                DebugLog.store("DaemonChatHost: summary write failed: \(error)")
+            }
+        }
+    }
+
+    /// Drive model-mode summarization with one frozen preparation per batch.
+    @MainActor
+    private static func runModelSummarization(
+        chatID: ChatID,
+        pending: [ChatMessage],
+        services: any AgentProviderServices,
+        preparation: AgentOperationPreparation,
+        store: GRDBWikiStore,
+        chatSummaryMessageID: PageID?
+    ) async {
+        for msg in pending {
+            guard let text = MessageSummarizer.textToSummarize(from: msg.event) else { continue }
+            let summary: String
+            do {
+                guard let value = try await services.modelSummary(
+                    text: text,
+                    preparation: preparation) else { continue }
+                summary = value
+            } catch {
+                DebugLog.agent("DaemonChatHost: model summary failed: \(error.localizedDescription)")
+                continue
+            }
             do {
                 try store.updateMessageSummary(
                     chatID: chatID, messageID: msg.id,
                     summary: summary, kind: .model)
-                // VERBATIM into the chat row — the model already produced a
-                // one-sentence summary; eliding it would chop the answer.
+                // Keep the model's one-sentence result verbatim in chats.summary.
                 if msg.id == chatSummaryMessageID {
                     try store.updateChatSummary(chatID: chatID, summary: summary)
                 }

@@ -19,6 +19,14 @@ final class WikiDaemon: @unchecked Sendable {
     private let containerDirectory: URL
     private let makeStore: (URL) throws -> WikiStore
     private let daemonChatDiagnostics = DaemonChatDiagnostics()
+    #if canImport(WikiFSEngine)
+    /// Stable daemon-scoped facade. It remains unavailable until the isolated
+    /// provider composition has assembled, so XPC/store hosting never depends
+    /// on Cordis availability.
+    private let agentProviderServices = MutableAgentProviderServices()
+    /// Retains the provider composition context for the daemon lifetime.
+    private var agentProviderRuntimeHandle: AgentProviderRuntimeHandle?
+    #endif
 
     // MARK: - State (accessed on `queue`)
 
@@ -86,6 +94,35 @@ final class WikiDaemon: @unchecked Sendable {
         self.containerDirectory = containerDirectory
         self.makeStore = makeStore
         self.registry = WikiRegistry.load(from: containerDirectory)
+        #if canImport(WikiFSEngine)
+        let providerServices = agentProviderServices
+        let providerAssembly = AgentProviderRuntimeAssembly(
+            readConfiguration: {
+                AgentProvidersConfig.loadOrSeed(from: containerDirectory)
+            },
+            resolveCommand: { providers in
+                let searchPath = await PathPreflight.loginShellPATH()
+                return Dictionary(uniqueKeysWithValues: providers.compactMap { provider in
+                    AgentLauncher.resolveCommand(for: provider, searchPath: searchPath)
+                        .map { (provider.id, $0) }
+                })
+            },
+            readCredential: { providerID in
+                KeychainACPCredentialStore().apiKey(forProvider: providerID.rawValue)
+            },
+            resolvePermissionPolicy: { _ in .bypass })
+        Task { [weak self, providerAssembly, providerServices] in
+            do {
+                let handle = try await providerAssembly.assemble()
+                await providerServices.install(handle.services)
+                self?.queue.sync {
+                    self?.agentProviderRuntimeHandle = handle
+                }
+            } catch {
+                DebugLog.agent("wikid: agent provider runtime assembly failed. Agent commands are unavailable: \(error)")
+            }
+        }
+        #endif
     }
 
     // MARK: - Liveness heartbeat (#878 BLOCKER 1.2)
@@ -516,7 +553,8 @@ final class WikiDaemon: @unchecked Sendable {
             },
             resolveProviderConfig: {
                 AgentProvidersConfig.loadOrSeed(from: dir)
-            })
+            },
+            providerServices: agentProviderServices)
 
         let outputChannel = QueueWorkerOutputChannel(store: queueStore)
         let extractionFactory = QueueExtractionWorkerFactory(
@@ -602,7 +640,8 @@ final class WikiDaemon: @unchecked Sendable {
             pushEvent: { [weak self] envelope in
                 self?.pushChatEnvelope(envelope)
             },
-            diagnosticTrace: daemonChatDiagnostics)
+            diagnosticTrace: daemonChatDiagnostics,
+            providerServices: agentProviderServices)
 
         return queue.sync {
             if let existing = _chatHost {

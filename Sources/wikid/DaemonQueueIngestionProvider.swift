@@ -20,6 +20,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
     private let queueStore: QueueStore
     private let resolveSelectedProvider: @Sendable () -> AgentProvider
     private let resolveProviderConfig: @Sendable () -> AgentProvidersConfig
+    private let providerServices: any AgentProviderServices
 
     init(
         containerDirectory: URL,
@@ -27,7 +28,8 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         storeResolver: @escaping @Sendable (WikiID) -> GRDBWikiStore?,
         queueStore: QueueStore,
         resolveSelectedProvider: @escaping @Sendable () -> AgentProvider,
-        resolveProviderConfig: @escaping @Sendable () -> AgentProvidersConfig
+        resolveProviderConfig: @escaping @Sendable () -> AgentProvidersConfig,
+        providerServices: any AgentProviderServices
     ) {
         self.containerDirectory = containerDirectory
         self.extractionCoordinator = extractionCoordinator
@@ -35,6 +37,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         self.queueStore = queueStore
         self.resolveSelectedProvider = resolveSelectedProvider
         self.resolveProviderConfig = resolveProviderConfig
+        self.providerServices = providerServices
     }
 
     // MARK: - Readiness (#440, extended #635)
@@ -45,6 +48,11 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
             let msg = "Agent is not available — no enabled agent provider. Re-enable the agent in Settings → Providers to retry."
             DebugLog.ingest("DaemonQueueIngestionProvider.readiness: NO ENABLED PROVIDER (providers=\(config.providers.count))")
             return msg
+        }
+
+        guard await providerServices.readiness() else {
+            DebugLog.ingest("DaemonQueueIngestionProvider.readiness: provider runtime is unavailable")
+            return "Agent provider runtime is unavailable. Try again after daemon startup, or configure an agent provider in Settings → Providers."
         }
 
         let provider = resolveSelectedProvider()
@@ -138,14 +146,12 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
             onLock: { },
             onUnlock: { DarwinNotifier.postChange(forWikiID: wikiID.rawValue) }
         )
+        await launcher.awaitProviderRelease()
 
         let results = await launcherResults(launcher)
         onUsage?(results.usage)
         onLogPaths?(results.logURL, results.debugURL)
-        if let status = results.exitStatus, status != 0, results.hadTurnFailure {
-            throw QueueIngestionError.spawnFailed(
-                "The agent turn exceeded the time ceiling or failed unexpectedly (exit status \(status)).")
-        }
+        try validateLauncherResults(results)
     }
 
     // MARK: - Lint
@@ -182,10 +188,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         let results = await launcherResults(launcher)
         onUsage?(results.usage)
         onLogPaths?(results.logURL, results.debugURL)
-        if let status = results.exitStatus, status != 0, results.hadTurnFailure {
-            throw QueueIngestionError.spawnFailed(
-                "The agent turn exceeded the time ceiling or failed unexpectedly (exit status \(status)).")
-        }
+        try validateLauncherResults(results)
     }
 
     func runLintPages(
@@ -231,10 +234,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         let results = await launcherResults(launcher)
         onUsage?(results.usage)
         onLogPaths?(results.logURL, results.debugURL)
-        if let status = results.exitStatus, status != 0, results.hadTurnFailure {
-            throw QueueIngestionError.spawnFailed(
-                "The agent turn exceeded the time ceiling or failed unexpectedly (exit status \(status)).")
-        }
+        try validateLauncherResults(results)
     }
 
     // MARK: - Private
@@ -243,7 +243,8 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         await MainActor.run {
             let launcher = AgentLauncher(
                 generationGate: GenerationGate(laneLimits: [.ingest: 1, .interactive: 3]),
-                extractionCoordinator: extractionCoordinator)
+                extractionCoordinator: extractionCoordinator,
+                providerServices: providerServices)
             launcher.pdf2mdScriptPathResolver = { PdfExtractionService.resolveScript()?.path }
             return launcher
         }
@@ -255,6 +256,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         let debugURL: URL?
         let exitStatus: Int32?
         let hadTurnFailure: Bool
+        let preflightError: String?
     }
 
     private func launcherResults(_ launcher: AgentLauncher) async -> LauncherResults {
@@ -264,7 +266,18 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
                 logURL: launcher.logFileURL,
                 debugURL: launcher.debugFolderURL,
                 exitStatus: launcher.exitStatus,
-                hadTurnFailure: launcher.runHadTurnFailure)
+                hadTurnFailure: launcher.runHadTurnFailure,
+                preflightError: launcher.preflightError)
+        }
+    }
+
+    private func validateLauncherResults(_ results: LauncherResults) throws {
+        if let preflightError = results.preflightError {
+            throw QueueIngestionError.spawnFailed(preflightError)
+        }
+        if let status = results.exitStatus, status != 0, results.hadTurnFailure {
+            throw QueueIngestionError.spawnFailed(
+                "The agent turn exceeded the time ceiling or failed unexpectedly (exit status \(status)).")
         }
     }
 
@@ -295,6 +308,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
             onLock: { },
             onUnlock: { DarwinNotifier.postChange(forWikiID: wikiID.rawValue) }
         )
+        await launcher.awaitProviderRelease()
     }
 
     private func daemonStateMarkdown(from store: GRDBWikiStore) -> String {

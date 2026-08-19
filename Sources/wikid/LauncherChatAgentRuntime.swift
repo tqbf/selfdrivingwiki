@@ -82,6 +82,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
     private let onLiveEvents: @Sendable ([AgentEvent]) async -> Void
     private let onMessageSummary: @MainActor @Sendable (ChatID) -> Void
     private let onStreamingCheckpoint: (@MainActor @Sendable (ChatID, String, AgentEvent, Bool) -> Bool)?
+    private let providerServices: any AgentProviderServices
     /// Internal test seam for configuring the real launcher before it starts.
     /// Production leaves this as a no-op; tests use it to inject an
     /// ``AgentBackend`` without replacing the launcher/event bridge.
@@ -100,6 +101,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         onSessionID: @escaping @Sendable (AcpSessionID?) async -> Void,
         onStateUpdate: @escaping @Sendable (ChatStateUpdate) async -> Void,
         onLiveEvents: @escaping @Sendable ([AgentEvent]) async -> Void,
+        providerServices: any AgentProviderServices,
         onMessageSummary: @escaping @MainActor @Sendable (ChatID) -> Void,
         onStreamingCheckpoint: (@MainActor @Sendable (ChatID, String, AgentEvent, Bool) -> Bool)? = nil,
         launcherConfigurator: @escaping @MainActor @Sendable (AgentLauncher) -> Void = { _ in }
@@ -113,6 +115,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         self.onSessionID = onSessionID
         self.onStateUpdate = onStateUpdate
         self.onLiveEvents = onLiveEvents
+        self.providerServices = providerServices
         self.onMessageSummary = onMessageSummary
         self.onStreamingCheckpoint = onStreamingCheckpoint
         self.launcherConfigurator = launcherConfigurator
@@ -124,7 +127,10 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         }
 
         let launcher = await MainActor.run {
-            let launcher = AgentLauncher(generationGate: generationGate, extractionCoordinator: extractionCoordinator)
+            let launcher = AgentLauncher(
+                generationGate: generationGate,
+                extractionCoordinator: extractionCoordinator,
+                providerServices: providerServices)
             launcherConfigurator(launcher)
             launcher.pdf2mdScriptPathResolver = { PdfExtractionService.resolveScript()?.path }
             return launcher
@@ -297,6 +303,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         await MainActor.run {
             state.launcher.stopAgent()
         }
+        await state.launcher.awaitProviderRelease()
     }
 
     func resolvePermission(_ resolution: ChatPermissionResolution, in handle: ChatRuntimeHandle) async throws {
@@ -377,6 +384,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         await MainActor.run {
             state.launcher.stopAgent()
         }
+        await state.launcher.awaitProviderRelease()
         state.liveEventContinuation.finish()
         state.liveEventConsumerTask.cancel()
         runtimeState = nil

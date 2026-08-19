@@ -140,6 +140,31 @@ struct MessageSummaryTests {
         #expect(MessageSummarizer.textToSummarize(from: .messageStop) == nil)
     }
 
+    @Test @MainActor
+    func unavailableProviderRuntimeFallsBackToDefaultSummary() async throws {
+        let store = try TestStoreFactory.inMemory()
+        let model = WikiStoreModel(store: store)
+        let chat = try #require(model.startChat(kind: .edit, firstMessage: "Question"))
+        model.appendChatEvents(
+            chatID: chat.id,
+            events: [.assistantText(String(repeating: "summary source ", count: 20))])
+        let launcher = AgentLauncher(
+            providerServices: UnavailableAgentProviderServices())
+
+        await AgentOperationRunner.summarizePendingMessagesForTesting(
+            chatID: chat.id,
+            store: model,
+            launcher: launcher)
+
+        let summarized = try #require(
+            model.chatMessages(chatID: chat.id).first { message in
+                if case .assistantText = message.event { return true }
+                return false
+            })
+        #expect(summarized.summaryKind == .defaultTruncation)
+        #expect(summarized.summary?.isEmpty == false)
+    }
+
     // MARK: - Model backend (§4.3 — injectable AgentBackend seam, AC.4)
 
     @Test func modelSummary_streamsAssistantTextAsSummary() async {

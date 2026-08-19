@@ -65,6 +65,11 @@ public final class SessionManager {
     /// headless queue engine to `@MainActor` types.
     public let extractionProvider: any QueueExtractionProvider
 
+    /// App-scoped provider composition facade shared by every session launcher.
+    /// The app supplies the runtime services, or an unavailable fallback when
+    /// assembly fails, so non-agent wiki features remain usable.
+    public let providerServices: any AgentProviderServices
+
     /// The App Group container directory holding every `<ulid>.sqlite`.
     public let containerDirectory: URL
 
@@ -113,6 +118,7 @@ public final class SessionManager {
         extractionCoordinator: ExtractionCoordinator,
         queueEngine: any QueueEngineClient,
         extractionProvider: any QueueExtractionProvider,
+        providerServices: any AgentProviderServices = UnavailableAgentProviderServices(),
         pdf2mdScriptPathResolver: @escaping () -> String?,
         htmlMarkdownExtractorFactory: @escaping @MainActor () -> (any HtmlMarkdownExtractor)? = { nil },
         htmlBackendResolver: @escaping @MainActor () -> HtmlExtractionBackend? = { nil },
@@ -124,6 +130,7 @@ public final class SessionManager {
         self.extractionCoordinator = extractionCoordinator
         self.queueEngine = queueEngine
         self.extractionProvider = extractionProvider
+        self.providerServices = providerServices
         self.pdf2mdScriptPathResolver = pdf2mdScriptPathResolver
         self.htmlMarkdownExtractorFactory = htmlMarkdownExtractorFactory
         self.htmlBackendResolver = htmlBackendResolver
@@ -159,6 +166,7 @@ public final class SessionManager {
                 extractionCoordinator: extractionCoordinator,
                 queueEngine: queueEngine,
                 extractionProvider: extractionProvider,
+                providerServices: providerServices,
                 makeStore: makeStore,
                 pdf2mdScriptPathResolver: pdf2mdScriptPathResolver,
                 htmlMarkdownExtractorFactory: htmlMarkdownExtractorFactory,

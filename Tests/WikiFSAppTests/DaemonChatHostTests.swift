@@ -672,6 +672,7 @@ struct DaemonChatHostTests {
                 requestedWikiID == wikiID ? store : nil
             },
             pushEvent: { _ in },
+            providerServices: UnavailableAgentProviderServices(),
             idleEvictionDelay: .zero
         )
 

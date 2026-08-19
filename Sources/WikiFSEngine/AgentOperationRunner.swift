@@ -604,6 +604,19 @@ public enum AgentOperationRunner {
     /// longer computes its own always-truncated version, which is what made the
     /// subtitle abbreviate even in Model mode.
     @MainActor
+    static func summarizePendingMessagesForTesting(
+        chatID: ChatID,
+        store: WikiStoreModel?,
+        launcher: AgentLauncher
+    ) async {
+        guard let store else { return }
+        await summarizePendingMessagesNow(
+            chatID: chatID,
+            store: store,
+            launcher: launcher)
+    }
+
+    @MainActor
     private static func summarizePendingMessages(
         chatID: ChatID, store: WikiStoreModel?, launcher: AgentLauncher
     ) {
@@ -611,97 +624,104 @@ public enum AgentOperationRunner {
             DebugLog.ingest("summarizePendingMessages: store torn down, skipping")
             return
         }
-        let config = AgentProvidersConfig.loadOrSeed(from: launcher.resolveProvidersContainerDirectory())
-        let mode = MessageSummarizer.mode(for: config)
-        let summarizerPin = config.stageProviderIds["summarizer"]?.rawValue ?? "none"
+        Task { @MainActor in
+            await Self.summarizePendingMessagesNow(
+                chatID: chatID,
+                store: store,
+                launcher: launcher)
+        }
+    }
 
+    @MainActor
+    private static func summarizePendingMessagesNow(
+        chatID: ChatID,
+        store: WikiStoreModel,
+        launcher: AgentLauncher
+    ) async {
         let messages = store.chatMessages(chatID: chatID)
         let pending = messages.filter { msg in
             msg.summary == nil
                 && (MessageSummarizer.textToSummarize(from: msg.event)?.isEmpty == false)
         }
-        // The message whose summary doubles as `chats.summary` (issue #411).
         let chatSummaryMessageID = MessageSummarizer.chatSummaryMessageID(in: messages)
-        DebugLog.ingest("summarizePendingMessages: chatID=\(chatID.rawValue) mode=\(mode) pin=\(summarizerPin) pending=\(pending.count)")
-
-        guard !pending.isEmpty else {
-            DebugLog.ingest("summarizePendingMessages: no pending messages after dedup")
+        guard !pending.isEmpty else { return }
+        guard let services = launcher.providerServices else {
+            Self.writeDefaultSummaries(
+                chatID: chatID,
+                pending: pending,
+                store: store,
+                chatSummaryMessageID: chatSummaryMessageID)
             return
         }
+        do {
+            let preparation = try await services.prepareSummarization()
+            switch preparation {
+            case .defaultTruncation:
+                Self.writeDefaultSummaries(
+                    chatID: chatID, pending: pending, store: store,
+                    chatSummaryMessageID: chatSummaryMessageID)
+            case .model(let preparation):
+                await Self.runModelSummarization(
+                    chatID: chatID,
+                    pending: pending,
+                    services: services,
+                    preparation: preparation,
+                    store: store,
+                    chatSummaryMessageID: chatSummaryMessageID)
+                await services.release(preparation.selection.token)
+            }
+        } catch AgentProviderRuntimeError.unavailable {
+            Self.writeDefaultSummaries(
+                chatID: chatID,
+                pending: pending,
+                store: store,
+                chatSummaryMessageID: chatSummaryMessageID)
+        } catch {
+            DebugLog.agent("AgentOperationRunner: summarization preparation failed: \(error)")
+        }
+    }
 
-        switch mode {
-        case .defaultTruncation:
-            // Pure + cheap — run inline on the main actor.
+    @MainActor
+    private static func writeDefaultSummaries(
+        chatID: ChatID, pending: [ChatMessage], store: WikiStoreModel,
+        chatSummaryMessageID: PageID?
+    ) {
         for msg in pending {
             guard let text = MessageSummarizer.textToSummarize(from: msg.event) else { continue }
             let summary = MessageSummarizer.defaultSummary(for: text)
             guard !summary.isEmpty else { continue }
-            store.updateMessageSummary(
-                chatID: chatID, messageID: msg.id,
-                summary: summary, kind: .defaultTruncation)
-            DebugLog.ingest("summarizePendingMessages: wrote summary for id=\(msg.id.rawValue.prefix(8)) kind=defaultTruncation")
-            if msg.id == chatSummaryMessageID {
-                store.updateChatSummary(chatID: chatID, summary: summary)
-                DebugLog.ingest("summarizePendingMessages: mirrored chat summary from first message")
-            }
-        }
-        case .model:
-            // Off-main via a detached Task. The config + pending messages are
-            // captured by value (Sendable) so the Task can cross the actor
-            // boundary cleanly.
-            let containerDir = launcher.resolveProvidersContainerDirectory()
-            let credentialStore = launcher.acpCredentialStore
-            Task { @MainActor in
-                await Self.runModelSummarization(
-                    chatID: chatID, pending: pending, config: config,
-                    containerDir: containerDir, credentialStore: credentialStore,
-                    store: store, chatSummaryMessageID: chatSummaryMessageID)
-            }
+            store.updateMessageSummary(chatID: chatID, messageID: msg.id, summary: summary, kind: .defaultTruncation)
+            if msg.id == chatSummaryMessageID { store.updateChatSummary(chatID: chatID, summary: summary) }
         }
     }
 
-    /// Drive the model-mode summarization for a batch of pending messages
-    /// (chat-summary plan §4.3 + §6.4). Runs off-main for the ACP session(s);
-    /// marshals each write back to the `@MainActor` store. Called from a
-    /// `Task` so it doesn't block `finish()`.
-    ///
-    /// `chatSummaryMessageID` is the message whose summary is also mirrored into
-    /// `chats.summary` — VERBATIM, since the model already wrote a one-sentence
-    /// summary and eliding it would chop the answer.
+    /// Runs one-shot summarizer sessions through one frozen provider preparation.
     @MainActor
     private static func runModelSummarization(
-        chatID: ChatID, pending: [ChatMessage], config: AgentProvidersConfig,
-        containerDir: URL, credentialStore: any ACPCredentialStore,
-        store: WikiStoreModel, chatSummaryMessageID: PageID?
+        chatID: ChatID,
+        pending: [ChatMessage],
+        services: any AgentProviderServices,
+        preparation: AgentOperationPreparation,
+        store: WikiStoreModel,
+        chatSummaryMessageID: PageID?
     ) async {
-        let loginShellPath = await PathPreflight.loginShellPATH()
-        guard let profile = MessageSummarizer.resolveProfile(
-            config: config,
-            credentialStore: credentialStore,
-            searchPath: loginShellPath) else {
-            DebugLog.agent("AgentOperationRunner.runModelSummarization: profile resolution failed — skipping \(pending.count) messages")
-            return
-        }
-        // Construct the backend via the factory (production = ACPBackend with
-        // `.bypass` — the summarizer has no wiki to write to). The backend is
-        // constructed once per batch so a warm subprocess can be reused across
-        // messages in a future iteration; today each `modelSummary` call is a
-        // one-shot session.
-        let backend = AgentBackendFactory.makeBackend(policy: .bypass)
         for msg in pending {
             guard let text = MessageSummarizer.textToSummarize(from: msg.event) else { continue }
-            guard let summary = await MessageSummarizer.modelSummary(
-                text: text, backend: backend, profile: profile) else {
-                DebugLog.ingest("summarizePendingMessages: summarizer returned nil for message id=\(msg.id.rawValue.prefix(8))")
-                continue
-            }
-            store.updateMessageSummary(
-                chatID: chatID, messageID: msg.id,
-                summary: summary, kind: .model)
-            DebugLog.ingest("summarizePendingMessages: wrote summary for id=\(msg.id.rawValue.prefix(8)) kind=model")
-            if msg.id == chatSummaryMessageID {
-                store.updateChatSummary(chatID: chatID, summary: summary)
-                DebugLog.ingest("runModelSummarization: mirrored chat summary from first message")
+            do {
+                guard let summary = try await services.modelSummary(
+                    text: text,
+                    preparation: preparation) else {
+                    DebugLog.ingest("summarizePendingMessages: summarizer returned nil for message id=\(msg.id.rawValue.prefix(8))")
+                    continue
+                }
+                store.updateMessageSummary(
+                    chatID: chatID, messageID: msg.id,
+                    summary: summary, kind: .model)
+                if msg.id == chatSummaryMessageID {
+                    store.updateChatSummary(chatID: chatID, summary: summary)
+                }
+            } catch {
+                DebugLog.agent("AgentOperationRunner: model summary failed: \(error.localizedDescription)")
             }
         }
     }

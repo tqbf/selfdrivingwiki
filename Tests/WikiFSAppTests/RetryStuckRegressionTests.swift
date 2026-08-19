@@ -136,6 +136,31 @@ struct RetryStuckRegressionTests {
         #expect(unwrapped.contains("Settings → Providers"))
     }
 
+    @MainActor
+    @Test("readiness rejects dispatch while the provider runtime is unavailable")
+    func readinessRejectsUnavailableProviderRuntime() async throws {
+        let config = AgentProvidersConfig(providers: [
+            AgentProvider(
+                id: ProviderID(rawValue: "available-provider"),
+                label: "Available",
+                command: ["/usr/bin/true"],
+                enabled: true,
+                isDefault: true),
+        ])
+        let queueStore = try QueueStore(databaseURL: URL(fileURLWithPath: ":memory:"))
+        let provider = AppQueueIngestionProvider(
+            sessionBox: SessionLookupBox(),
+            fileProviderBox: FileProviderBox(),
+            wikictlDirectory: NSTemporaryDirectory(),
+            queueStore: queueStore,
+            providerServices: UnavailableAgentProviderServices(),
+            resolveSelectedProvider: { config.selectedProvider() },
+            resolveProviderConfig: { config })
+
+        let message = try #require(await provider.readiness())
+        #expect(message.contains("provider runtime is unavailable"))
+    }
+
     /// #635: when at least one provider is enabled (the partial-disabled case),
     /// the readiness probe falls through to the existing
     /// `AgentLauncher.readinessMessage(for:)` PATH check. Disabling Claude

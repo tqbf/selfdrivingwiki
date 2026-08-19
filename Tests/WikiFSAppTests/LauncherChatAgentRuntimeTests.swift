@@ -176,6 +176,7 @@ struct LauncherChatAgentRuntimeTests {
             onLiveEvents: { events in
                 await liveSink.receive(events)
             },
+            providerServices: UnavailableAgentProviderServices(),
             onMessageSummary: { _ in },
             launcherConfigurator: { launcher in
                 launcher.resolveBackend = { _, _, _ in backend }

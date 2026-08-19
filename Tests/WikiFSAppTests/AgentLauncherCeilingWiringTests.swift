@@ -86,6 +86,53 @@ struct AgentLauncherCeilingWiringTests {
         return launcher
     }
 
+    @Test("provider service path supplies queued policy and releases its snapshot")
+    func providerServicePathUsesRuntimePolicyAndReleasesSnapshot() async throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("provider-service-path-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let provider = AgentProvider(
+            id: ProviderID(rawValue: "service-provider"),
+            label: "ServiceProvider",
+            command: ["service-provider"],
+            enabled: true,
+            isDefault: true)
+        let configuration = AgentProvidersConfig(
+            providers: [provider],
+            selectedModelIds: [provider.id.rawValue: ModelID(rawValue: "service-model")])
+        let captured = CapturedCeiling()
+        let backend = FakeAgentBackend()
+        let runtime = AgentProviderRuntime(
+            readConfiguration: { configuration },
+            resolveCommand: { _ in [:] },
+            readCredential: { _ in nil },
+            resolvePermissionPolicy: { _ in .bypass },
+            makeBackend: { _, _, ceiling in
+                captured.record(ceiling)
+                return backend
+            })
+        let facade = MutableAgentProviderServices(initial: runtime)
+        let launcher = AgentLauncher(providerServices: facade)
+        launcher.containerDirectory = tempDir
+
+        await launcher.run(
+            request: .lint(stateMarkdown: "# State"),
+            wikiID: WikiID(rawValue: "test-wiki"),
+            wikiRoot: tempDir.path,
+            systemPrompt: "sys",
+            wikictlDirectory: tempDir.path,
+            ingestingSourceIDs: [],
+            onLock: {},
+            onUnlock: {})
+        await launcher.awaitProviderRelease()
+
+        #expect(captured.value == TurnLivenessPolicy.queuedIngestCeiling)
+        #expect(launcher.preflightError == nil)
+        #expect(await backend.startCount == 1)
+        #expect(await runtime.activeSnapshotCount() == 0)
+    }
+
     /// The ingest path (`run(.ingest(...))`) routes to `runACPIngestPlannerExecutors`
     /// for large sources AND stays on the single-session path for small ones —
     /// both reuse the backend `run()` constructed with `permissionKind = .ingest`.

@@ -159,6 +159,7 @@ public final class WikiSession {
         extractionCoordinator: ExtractionCoordinator,
         queueEngine: any QueueEngineClient,
         extractionProvider: any QueueExtractionProvider,
+        providerServices: any AgentProviderServices = UnavailableAgentProviderServices(),
         makeStore: @escaping (URL) throws -> WikiStore = { try StoreBackend.current.makeStore(databaseURL: $0) },
         pdf2mdScriptPathResolver: @escaping () -> String? = { nil },
         htmlMarkdownExtractorFactory: @escaping @MainActor () -> (any HtmlMarkdownExtractor)? = { nil },
@@ -283,7 +284,10 @@ public final class WikiSession {
         // agent-query generations in the SAME wiki coordinate, while a
         // different wiki's session runs independently. (Chat is daemon-hosted
         // after Phase C4 — no per-session chat launcher here.)
-        let agent = AgentLauncher(generationGate: gate, extractionCoordinator: extractionCoordinator)
+        let agent = AgentLauncher(
+            generationGate: gate,
+            extractionCoordinator: extractionCoordinator,
+            providerServices: providerServices)
         agent.pdf2mdScriptPathResolver = pdf2mdScriptPathResolver
         // Interactive (non-queue) query runs via `agentLauncher` also report
         // their per-turn usage delta to the menu bar tracker when wired.
