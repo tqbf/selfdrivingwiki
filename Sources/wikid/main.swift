@@ -591,6 +591,14 @@ container=\(containerDirectory.path)
 """)
 
 let daemon = WikiDaemon(containerDirectory: containerDirectory)
+let processLifetime = DaemonProcessLifetimeCoordinator(
+    shutdown: {
+        await daemon.shutdown()
+    },
+    didShutdown: {
+        Darwin.exit(EXIT_SUCCESS)
+    })
+processLifetime.installSignalHandlers()
 
 let delegate = WikiDaemonListenerDelegate(daemon: daemon)
 

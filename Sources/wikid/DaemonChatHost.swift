@@ -176,6 +176,13 @@ final class DaemonChatHost: @unchecked Sendable {
 
     // MARK: - Stop a chat
 
+    func shutdown() async {
+        let controllers = await registry.removeAllForShutdown()
+        for controller in controllers {
+            await controller.stopSession()
+        }
+    }
+
     /// Stop the active turn and end the session.
     func stopChat(chatID: ChatID) async {
         guard let controller = await registry.controller(for: chatID) else { return }
@@ -568,6 +575,15 @@ actor ControllerRegistry {
 
     func count() -> Int {
         entries.count
+    }
+
+    func removeAllForShutdown() -> [DaemonChatController] {
+        let controllers = entries.values.map(\.controller)
+        entries.removeAll()
+        let tasks = idleEvictionTasks.values.map(\.task)
+        idleEvictionTasks.removeAll()
+        for task in tasks { task.cancel() }
+        return controllers
     }
 
     func insertIfAbsent(

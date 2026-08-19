@@ -54,9 +54,9 @@ public enum ExtractionReadiness: Sendable, Equatable {
 
 /// The user's chosen extraction backend, persisted in `extraction-config.json`
 /// (the single source of truth — `ExtractionSettingsView`'s picker binds to a
-/// draft saved on Save, and `ExtractionCoordinator.current()` reads it).
-/// `ExtractionCoordinator.current()` maps this + config + Keychain to a concrete
-/// `MarkdownExtractor`.
+/// draft saved on Save, and the extraction service reads it for each operation).
+/// The extraction service maps this + config + Keychain to a concrete
+/// operation-scoped `MarkdownExtractor`.
 public enum ExtractionBackend: String, Sendable, CaseIterable, Codable {
     /// The bundled `tools/pdf2md` subprocess (docling + granite-docling VLM).
     case localPdf2md

@@ -89,24 +89,17 @@ public struct ExtractionResolution: Sendable {
 
 // MARK: - QueueExtractionProvider
 
-/// Bridges the `@MainActor ExtractionCoordinator` into the headless queue
-/// engine. The app provides a concrete implementation that hops to the main
-/// actor internally; the engine sees only this `Sendable` protocol.
-///
-/// **Two main-actor hops per extraction:**
-/// - `resolveExtraction` → calls `ExtractionCoordinator.current()` (main actor)
-///   + reads source bytes from the store (main actor).
-/// - `persistExtraction` → calls `store.seedPdfMarkdown` or `reExtractMarkdown`
-///   (main actor).
-///
-/// The actual `convert()` runs off-main (the `MarkdownExtractor` is `Sendable`).
+/// Bridges source storage into the headless queue engine. App implementations
+/// hop to the main actor for model reads and writes, while backend preparation
+/// resolves through the Sendable extraction service. The actual `convert()`
+/// runs off-main because `MarkdownExtractor` is `Sendable`.
 public protocol QueueExtractionProvider: Sendable {
     /// Resolve the extractor + PDF bytes for a source. Returns `nil` if the
     /// source has no PDF bytes (non-PDF or already-extracted — skip extraction).
     ///
     /// - Parameter backendOverride: When non-nil, resolve this specific backend
     ///   instead of the configured default (used by re-extraction with a chosen
-    ///   backend). The provider passes this to `ExtractionCoordinator`.
+    ///   backend). The provider passes this to `ExtractionServices.prepare`.
     func resolveExtraction(
         wikiID: WikiID,
         sourceID: SourceID,

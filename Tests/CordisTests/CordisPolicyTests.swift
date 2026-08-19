@@ -67,6 +67,39 @@ struct CordisSourcePolicyTests {
         }
     }
 
+    @Test("Cordis context APIs stay in approved engine assemblies")
+    func cordisContextAPIsStayInApprovedAssemblies() throws {
+        let root = repositoryRoot()
+        let sources = root.appendingPathComponent("Sources", isDirectory: true)
+        let approved = Set([
+            "Sources/WikiFSEngine/AgentProviderRuntimeAssembly.swift",
+            "Sources/WikiFSEngine/QueueRuntimeAssembly.swift",
+            "Sources/WikiFSEngine/ExtractionRuntimeAssembly.swift",
+        ])
+        let forbiddenPatterns = [
+            "import Cordis", "CordisContext", "ServiceKey<",
+        ]
+        let enumerator = FileManager.default.enumerator(
+            at: sources,
+            includingPropertiesForKeys: nil)
+        let files = (enumerator?.allObjects as? [URL] ?? [])
+            .filter { $0.pathExtension == "swift" }
+
+        for file in files {
+            let relative = file.path.replacingOccurrences(
+                of: root.path + "/",
+                with: "")
+            guard !approved.contains(relative),
+                  !relative.hasPrefix("Sources/Cordis/") else { continue }
+            let source = try String(contentsOf: file, encoding: .utf8)
+            for pattern in forbiddenPatterns {
+                #expect(
+                    !source.contains(pattern),
+                    "Forbidden Cordis API \(pattern) in \(relative)")
+            }
+        }
+    }
+
     @Test("tests have no timing sleeps, polling, or semaphores")
     func testsUseDeterministicSynchronization() throws {
         let root = repositoryRoot()

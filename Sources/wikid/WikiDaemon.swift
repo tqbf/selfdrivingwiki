@@ -26,6 +26,8 @@ final class WikiDaemon: @unchecked Sendable {
     private let agentProviderServices = MutableAgentProviderServices()
     /// Retains the provider composition context for the daemon lifetime.
     private var agentProviderRuntimeHandle: AgentProviderRuntimeHandle?
+    /// Owns the single daemon-scoped extraction context and stable facade.
+    private let extractionCompositionOwner: ExtractionCompositionOwner
     #endif
 
     // MARK: - State (accessed on `queue`)
@@ -33,6 +35,7 @@ final class WikiDaemon: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.selfdrivingwiki.wikid")
     private var registry: WikiRegistry
     private var openStores: [WikiID: GRDBWikiStore] = [:]
+    private var shutdownTask: Task<Void, Never>?
 
     /// The per-connection event-sink proxies the daemon pushes live workload
     /// events to. Populated by `listener(_:shouldAcceptNewConnection:)` when
@@ -89,12 +92,32 @@ final class WikiDaemon: @unchecked Sendable {
     /// Inject `containerDirectory` + `makeStore` for testability.
     init(
         containerDirectory: URL,
-        makeStore: @escaping (URL) throws -> WikiStore = { try GRDBWikiStore(databaseURL: $0) }
+        makeStore: @escaping (URL) throws -> WikiStore = { try GRDBWikiStore(databaseURL: $0) },
+        extractionAssembly: ExtractionCompositionOwner.AssemblyFactory? = nil
     ) {
         self.containerDirectory = containerDirectory
         self.makeStore = makeStore
         self.registry = WikiRegistry.load(from: containerDirectory)
         #if canImport(WikiFSEngine)
+        let extractionCredentialStore = KeychainExtractionCredentialStore()
+        let acpCredentialStore = KeychainACPCredentialStore()
+        self.extractionCompositionOwner = ExtractionCompositionOwner(
+            assemble: extractionAssembly ?? {
+                try await ExtractionRuntimeAssembly(
+                    readConfiguration: { ExtractionConfig.load(from: containerDirectory) },
+                    readCredential: { extractionCredentialStore.secret($0) },
+                    resolveACP: { configuration in
+                        ACPExtractionClient.resolveProvider(
+                            containerDirectory: containerDirectory,
+                            acpProviderId: configuration.acpProviderId,
+                            acpCredentialStore: acpCredentialStore)
+                    },
+                    httpFetcher: URLSessionRequestFetcher(),
+                    makeLocalExtractor: {
+                        await MainActor.run { LocalPdf2MarkdownExtractor() }
+                    })
+                    .assemble()
+            })
         let providerServices = agentProviderServices
         let providerAssembly = AgentProviderRuntimeAssembly(
             readConfiguration: {
@@ -111,6 +134,7 @@ final class WikiDaemon: @unchecked Sendable {
                 KeychainACPCredentialStore().apiKey(forProvider: providerID.rawValue)
             },
             resolvePermissionPolicy: { _ in .bypass })
+        Task { await extractionCompositionOwner.start() }
         Task { [weak self, providerAssembly, providerServices] in
             do {
                 let handle = try await providerAssembly.assemble()
@@ -123,6 +147,38 @@ final class WikiDaemon: @unchecked Sendable {
             }
         }
         #endif
+    }
+
+    func shutdown() async {
+        let task = queue.sync { () -> Task<Void, Never> in
+            if let shutdownTask { return shutdownTask }
+            let task = Task { [weak self] in
+                guard let self else { return }
+                self.stopHeartbeat()
+                #if canImport(WikiFSEngine)
+                let status = await self.daemonQueueHost.status()
+                do {
+                    _ = try await self.daemonQueueHost.relinquish(expectedEpoch: status.epoch)
+                } catch {
+                    DebugLog.store("wikid: queue shutdown did not settle cleanly: \(error)")
+                }
+                if let chatHost = self.queue.sync(execute: { self._chatHost }) {
+                    await chatHost.shutdown()
+                }
+                await self.extractionCompositionOwner.shutdown()
+                if let handle = self.queue.sync(execute: { self.agentProviderRuntimeHandle }) {
+                    do {
+                        try await handle.dispose()
+                    } catch {
+                        DebugLog.agent("wikid: provider runtime disposal failed: \(error)")
+                    }
+                }
+                #endif
+            }
+            shutdownTask = task
+            return task
+        }
+        await task.value
     }
 
     // MARK: - Liveness heartbeat (#878 BLOCKER 1.2)
@@ -528,10 +584,9 @@ final class WikiDaemon: @unchecked Sendable {
     }
 
     private func buildQueueResources() async throws -> DaemonQueueResources {
+        let extractionServices = extractionCompositionOwner.services
         let coordinator = await MainActor.run {
-            ExtractionCoordinator(
-                containerDirectory: containerDirectory,
-                localExtractorFactory: { LocalPdf2MarkdownExtractor() })
+            ExtractionCoordinator(services: extractionServices)
         }
 
         let storeResolver: @Sendable (WikiID) -> GRDBWikiStore? = { [weak self] wikiID in
@@ -539,8 +594,7 @@ final class WikiDaemon: @unchecked Sendable {
         }
         let queueStore = try QueueStore(databaseURL: queueDatabaseURL)
         let extractionProvider = DaemonQueueExtractionProvider(
-            containerDirectory: containerDirectory,
-            extractionCoordinator: coordinator,
+            extractionServices: extractionServices,
             storeResolver: storeResolver)
         let dir = containerDirectory
         let ingestionProvider = DaemonQueueIngestionProvider(
@@ -618,10 +672,9 @@ final class WikiDaemon: @unchecked Sendable {
             return host
         }
 
+        let extractionServices = extractionCompositionOwner.services
         let coordinator = await MainActor.run {
-            ExtractionCoordinator(
-                containerDirectory: containerDirectory,
-                localExtractorFactory: { LocalPdf2MarkdownExtractor() })
+            ExtractionCoordinator(services: extractionServices)
         }
         let generationGate = await MainActor.run {
             GenerationGate(laneLimits: [.ingest: 1, .interactive: 3])

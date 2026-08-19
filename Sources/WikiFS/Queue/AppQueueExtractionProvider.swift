@@ -75,14 +75,14 @@ final class SessionLookupBox: @unchecked Sendable {
 /// the worker (the `MarkdownExtractor` is `Sendable`).
 @MainActor
 final class AppQueueExtractionProvider: QueueExtractionProvider {
-    private let extractionCoordinator: ExtractionCoordinator
+    private let extractionServices: any ExtractionServices
     private let sessionBox: SessionLookupBox
 
     init(
-        extractionCoordinator: ExtractionCoordinator,
+        extractionServices: any ExtractionServices,
         sessionBox: SessionLookupBox
     ) {
-        self.extractionCoordinator = extractionCoordinator
+        self.extractionServices = extractionServices
         self.sessionBox = sessionBox
     }
 
@@ -166,17 +166,15 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
             return nil
         }
 
-        // Resolve the extractor. ExtractionCoordinator.current() re-reads
-        // config each call so a Settings Save is picked up immediately.
-        let extractor = extractionCoordinator.current()
-        let cfg = extractionCoordinator.config
+        let preparation = try await extractionServices.prepare(
+            backendOverride: backendOverride)
 
         return ExtractionResolution(
-            extractor: extractor,
+            extractor: preparation.extractor,
             pdfData: bytes,
             filename: source.filename,
-            backend: cfg.backend,
-            modelVersion: cfg.currentModelVersion
+            backend: preparation.backend,
+            modelVersion: preparation.modelVersion
         )
     }
 
