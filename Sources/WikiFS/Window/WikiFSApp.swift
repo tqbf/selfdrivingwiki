@@ -571,7 +571,6 @@ struct WikiFSApp: App {
             await localQueueRuntimeController.daemonOwnershipBecameUnresolved(
                 expectedEpoch: expectedEpoch,
                 reason: "Daemon connection was invalidated")
-            queueEngine.swap(to: local.engine)
             replaceChatDaemonCoordinator(nil)
         }
         healthMonitor.onReconnect = { newConn in
@@ -597,7 +596,6 @@ struct WikiFSApp: App {
                     let accepted = await localQueueRuntimeController.retryBlockedShutdownForDaemon(
                         daemon.endpoint)
                     if accepted {
-                        queueEngine.swap(to: daemon.endpoint.client)
                         replaceChatDaemonCoordinator(daemon.chatCoordinator)
                     }
                     return accepted ? .connected : .retry
@@ -625,7 +623,6 @@ struct WikiFSApp: App {
                             daemon.endpoint,
                             expectedEpoch: expectedEpoch)
                         if accepted {
-                            queueEngine.swap(to: daemon.endpoint.client)
                             replaceChatDaemonCoordinator(daemon.chatCoordinator)
                         }
                         return accepted ? .connected : .retry
@@ -637,7 +634,6 @@ struct WikiFSApp: App {
                 let daemon = makeEndpoint(status.epoch)
                 let accepted = await localQueueRuntimeController.activateDaemon(daemon.endpoint)
                 if accepted {
-                    queueEngine.swap(to: daemon.endpoint.client)
                     replaceChatDaemonCoordinator(daemon.chatCoordinator)
                 }
                 return accepted ? .connected : .retry
@@ -656,9 +652,6 @@ struct WikiFSApp: App {
                 let workloadClient = try DaemonWorkloadClient(connection: conn)
                 let eventSink = DaemonQueueEventSink()
                 workloadClient.registerEventSink(eventSink)
-                let proxy = XPCQueueEngineProxy(
-                    workloadClient: workloadClient, eventSink: eventSink)
-                queueEngine.swap(to: proxy)
                 replaceChatDaemonCoordinator(ChatDaemonCoordinator(
                     client: workloadClient, eventSink: eventSink))
             } catch {
