@@ -41,6 +41,8 @@ struct WikiFSApp: App {
     /// Serve). Threaded like `settingsLauncher` — one instance, owned by the app,
     /// shared as a ref into each `WikiSession` (it carries no per-wiki state).
     @State private var extractionCoordinator: ExtractionCoordinator
+    /// Owns the app-scoped extraction context and its asynchronous startup.
+    private let extractionCompositionOwner: ExtractionCompositionOwner
     /// App-wide queue engine. Owns the persistent `queue.sqlite` store; drives
     /// extraction/ingestion workers off-main. One instance, shared across
     /// sessions via `WikiSession`.
@@ -194,10 +196,29 @@ struct WikiFSApp: App {
         let r = WikiRegistryClient(containerDirectory: directory)
         r.bootstrap(activateNow: false)
         _registry = State(initialValue: r)
-        let coordinator = ExtractionCoordinator(
-            containerDirectory: directory,
-            localExtractorFactory: { LocalPdf2MarkdownExtractor() })
+        let extractionCredentialStore = KeychainExtractionCredentialStore()
+        let acpCredentialStore = KeychainACPCredentialStore()
+        let extractionOwner = ExtractionCompositionOwner {
+            try await ExtractionRuntimeAssembly(
+                readConfiguration: { ExtractionConfig.load(from: directory) },
+                readCredential: { extractionCredentialStore.secret($0) },
+                resolveACP: { configuration in
+                    ACPExtractionClient.resolveProvider(
+                        containerDirectory: directory,
+                        acpProviderId: configuration.acpProviderId,
+                        acpCredentialStore: acpCredentialStore)
+                },
+                httpFetcher: URLSessionRequestFetcher(),
+                makeLocalExtractor: {
+                    await MainActor.run { LocalPdf2MarkdownExtractor() }
+                })
+                .assemble()
+        }
+        extractionCompositionOwner = extractionOwner
+        let extractionServices = extractionOwner.services
+        let coordinator = ExtractionCoordinator(services: extractionServices)
         _extractionCoordinator = State(initialValue: coordinator)
+        Task { await extractionOwner.start() }
 
         // Queue engine: start with a LOCAL engine as the initial fallback
         // (#878 BLOCKER 2). The daemon connection is deferred to a Task so
@@ -211,7 +232,7 @@ struct WikiFSApp: App {
         let sessionBox = SessionLookupBox()
         sessionLookupBox = sessionBox
         let extractionProvider = AppQueueExtractionProvider(
-            extractionCoordinator: coordinator,
+            extractionServices: extractionServices,
             sessionBox: sessionBox)
         let fileProviderBox = FileProviderBox()
 
@@ -496,6 +517,10 @@ struct WikiFSApp: App {
             // items on ⌘Q — extraction/ingestion survives the app quitting,
             // which is the whole point of the daemon architecture. The daemon
             // re-dispatches on its own when the app reconnects.
+        }
+        appDelegate.shutdownForTermination = { [localQueueRuntimeController, extractionCompositionOwner] in
+            _ = await localQueueRuntimeController.dispose()
+            await extractionCompositionOwner.shutdown()
         }
         appDelegate.unregisterDaemon = {
             // The daemon is a bundled XPC service — the system manages its
@@ -982,6 +1007,7 @@ struct WikiFSApp: App {
 /// lingering in the `SessionManager` cache with unflushed editor drafts.
 /// `applicationWillResignActive` fires when the app loses keyboard focus / is
 /// backgrounded — the closest macOS equivalent to "all windows inactive."
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor weak var sessionManager: SessionManager?
     @MainActor weak var chatDaemonCoordinator: ChatDaemonCoordinator?
@@ -1020,6 +1046,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// them (they're `.cancelled`, not `.running`). Must complete BEFORE
     /// `NSApp.reply(toApplicationShouldTerminate:)` is called.
     var cancelInFlightForQuit: (() async -> Void)?
+
+    /// Runs accepted termination cleanup exactly once before AppKit receives
+    /// the final terminate reply.
+    var shutdownForTermination: (@MainActor @Sendable () async -> Void)?
+    var gracefulShutdownPolicy = GracefulShutdownPolicy.production()
+    private var terminationTask: Task<Void, Never>?
 
     /// Called on the terminate path to (optionally) stop the wikid daemon.
     /// The daemon now survives app quit (launchd-managed LaunchAgent), so
@@ -1145,6 +1177,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
+    private func finishAcceptedTermination() {
+        guard terminationTask == nil else { return }
+        let shutdown = shutdownForTermination
+        let policy = gracefulShutdownPolicy
+        terminationTask = Task { @MainActor [weak self] in
+            let outcome = await policy.run {
+                await shutdown?()
+            }
+            if outcome == .timedOut {
+                DebugLog.extraction(
+                    "App termination cleanup exceeded the \(policy.timeoutDescription) timeout")
+            }
+            guard let self else { return }
+            self.unregisterDaemon?()
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+    }
+
     /// Intercept termination to show a "confirm to quit" dialog (toggleable in
     /// Settings → General). Catches all quit paths: ⌘Q, Apple menu, Dock, and
     /// system shutdown. Returns `.terminateLater` so the system pauses while we
@@ -1165,8 +1215,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // quit now without a dialog. Unregister the daemon first so launchd
         // releases management (#863) — nothing is in flight to cancel.
         guard activeOp != nil || Self.confirmBeforeQuitting else {
-            unregisterDaemon?()
-            return .terminateNow
+            finishAcceptedTermination()
+            return .terminateLater
         }
 
         // Either the user wants confirmation, or there's active work we
@@ -1203,48 +1253,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) {
             window.makeKeyAndOrderFront(nil)
             alert.beginSheetModal(for: window) { response in
-                if response == .alertFirstButtonReturn, let cancel = self.cancelInFlightForQuit {
-                    // Cancel in-flight items BEFORE replying to terminate so
-                    // crash recovery on restart skips them (.cancelled, not
-                    // .running). The Task awaits cancellation, then replies
-                    // on the main actor. The daemon unregister (#863) runs
-                    // AFTER cancellation, while the daemon is still alive to
-                    // process it, and BEFORE the terminate reply.
-                    Task {
+                guard response == .alertFirstButtonReturn else {
+                    NSApp.reply(toApplicationShouldTerminate: false)
+                    return
+                }
+                if let cancel = self.cancelInFlightForQuit {
+                    Task { @MainActor in
                         await cancel()
-                        await MainActor.run {
-                            self.unregisterDaemon?()
-                            NSApp.reply(toApplicationShouldTerminate: true)
-                        }
+                        self.finishAcceptedTermination()
                     }
                 } else {
-                    if response == .alertFirstButtonReturn {
-                        self.unregisterDaemon?()
-                    }
-                    NSApp.reply(
-                        toApplicationShouldTerminate:
-                            response == .alertFirstButtonReturn
-                    )
+                    self.finishAcceptedTermination()
                 }
             }
         } else {
             let response = alert.runModal()
-            if response == .alertFirstButtonReturn, let cancel = self.cancelInFlightForQuit {
-                Task {
+            guard response == .alertFirstButtonReturn else {
+                return .terminateCancel
+            }
+            if let cancel = cancelInFlightForQuit {
+                Task { @MainActor in
                     await cancel()
-                    await MainActor.run {
-                        self.unregisterDaemon?()
-                        NSApp.reply(toApplicationShouldTerminate: true)
-                    }
+                    self.finishAcceptedTermination()
                 }
             } else {
-                if response == .alertFirstButtonReturn {
-                    self.unregisterDaemon?()
-                }
-                NSApp.reply(
-                    toApplicationShouldTerminate:
-                        response == .alertFirstButtonReturn
-                )
+                finishAcceptedTermination()
             }
         }
 

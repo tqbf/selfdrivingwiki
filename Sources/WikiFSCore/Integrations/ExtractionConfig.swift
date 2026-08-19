@@ -11,7 +11,7 @@ import Foundation
 /// pattern exactly (pure value type, explicit injected directory, atomic write),
 /// and `WikiRegistry`'s degrade-to-empty-on-corrupt rule.
 public struct ExtractionConfig: JSONSidecarConfig {
-    /// Which backend `ExtractionCoordinator.current()` resolves to.
+    /// Which backend the next extraction service preparation resolves to.
     public var backend: ExtractionBackend
 
     /// For the `.acp` backend: the provider id (from `AgentProvidersConfig`)

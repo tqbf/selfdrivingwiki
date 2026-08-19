@@ -1713,45 +1713,6 @@ struct SourceDetailView: View {
         }
     }
 
-    /// Resolve a concrete extractor for an arbitrary backend from the shared
-    /// coordinator's config + secrets. Used by the Re-extract menu so the user
-    /// can pick a backend other than the configured default.
-    private func extractorFor(backend: ExtractionBackend, config: ExtractionConfig) -> any MarkdownExtractor {
-        switch backend {
-        case .localPdf2md:
-            return extractionCoordinator.current()
-        case .acp:
-            return extractionCoordinator.current()
-        case .anthropic:
-            let base = config.anthropicBaseURLOverride.flatMap(URL.init(string:))
-                ?? URL(string: ExtractionConfig.defaultAnthropicBaseURL)!
-            return AnthropicExtractionClient(
-                model: config.anthropicModel,
-                apiKey: extractionCoordinator.credentialStore.secret(.anthropicAPIKey) ?? "",
-                baseURL: base, fetcher: extractionCoordinator.fetcher)
-        case .gemini:
-            let base = config.geminiBaseURLOverride.flatMap(URL.init(string:))
-                ?? URL(string: ExtractionConfig.defaultGeminiBaseURL)!
-            return GeminiExtractionClient(
-                model: config.geminiModel,
-                apiKey: extractionCoordinator.credentialStore.secret(.geminiAPIKey) ?? "",
-                baseURL: base, fetcher: extractionCoordinator.fetcher)
-        case .doclingServe:
-            return DoclingServeClient(
-                endpoint: config.doclingServeEndpoint ?? "",
-                apiToken: extractionCoordinator.credentialStore.secret(.doclingServeToken),
-                fetcher: extractionCoordinator.fetcher)
-        }
-    }
-
-    private func modelVersionFor(backend: ExtractionBackend, config: ExtractionConfig) -> String? {
-        switch backend {
-        case .anthropic: return config.anthropicModel
-        case .gemini: return config.geminiModel
-        case .acp, .localPdf2md, .doclingServe: return nil
-        }
-    }
-
     // MARK: Binary fallback
 
     private var binaryFallback: some View {

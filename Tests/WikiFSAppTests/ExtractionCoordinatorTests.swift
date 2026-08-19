@@ -43,67 +43,67 @@ struct ExtractionCoordinatorTests {
 
     // MARK: - Backend resolution
 
-    @Test func defaultsToLocalPdf2md() throws {
+    @Test func defaultsToLocalPdf2md() async throws {
         let coord = try makeCoordinator(dir: tempDirectory())
-        #expect(coord.config.backend == .localPdf2md)
-        #expect(coord.current() is LocalPdf2MarkdownExtractor)
+        #expect((try await coord.prepare()).backend == .localPdf2md)
+        #expect((try await coord.prepare()).extractor is LocalPdf2MarkdownExtractor)
     }
 
-    @Test func resolvesAnthropicBackend() throws {
+    @Test func resolvesAnthropicBackend() async throws {
         let coord = try makeCoordinator(backend: .anthropic, dir: tempDirectory(),
                                         seeds: [.anthropicAPIKey: "k"])
-        #expect(coord.current() is AnthropicExtractionClient)
+        #expect((try await coord.prepare()).extractor is AnthropicExtractionClient)
     }
 
-    @Test func resolvesDoclingBackend() throws {
+    @Test func resolvesDoclingBackend() async throws {
         let coord = try makeCoordinator(backend: .doclingServe, dir: tempDirectory())
-        #expect(coord.current() is DoclingServeClient)
+        #expect((try await coord.prepare()).extractor is DoclingServeClient)
     }
 
-    @Test func resolvesGeminiBackend() throws {
+    @Test func resolvesGeminiBackend() async throws {
         let coord = try makeCoordinator(backend: .gemini, dir: tempDirectory(),
                                         seeds: [.geminiAPIKey: "k"])
-        #expect(coord.current() is GeminiExtractionClient)
+        #expect((try await coord.prepare()).extractor is GeminiExtractionClient)
     }
 
     @Test func geminiNeedsSetupWithoutKey() async throws {
         let coord = try makeCoordinator(backend: .gemini, dir: tempDirectory())
-        let r = await coord.current().readiness()
+        let r = await (try await coord.prepare()).extractor.readiness()
         if case .needsSetup = r { } else { Issue.record("expected .needsSetup") }
     }
 
     @Test func geminiReadyWithKey() async throws {
         let coord = try makeCoordinator(backend: .gemini, dir: tempDirectory(),
                                         seeds: [.geminiAPIKey: "AIza-x"])
-        #expect(await coord.current().readiness() == .ready)
+        #expect(await (try await coord.prepare()).extractor.readiness() == .ready)
     }
 
-    @Test func geminiClientUsesConfiguredModel() throws {
+    @Test func geminiClientUsesConfiguredModel() async throws {
         let coord = try makeCoordinator(backend: .gemini, dir: tempDirectory(),
                                         seeds: [.geminiAPIKey: "k"]) { cfg in
             cfg.geminiModel = "gemini-3.1-flash-lite"
         }
-        #expect((coord.current() as? GeminiExtractionClient)?.model == "gemini-3.1-flash-lite")
+        #expect(((try await coord.prepare()).extractor as? GeminiExtractionClient)?.model == "gemini-3.1-flash-lite")
     }
 
     // MARK: - Readiness mapping
 
     @Test func anthropicNeedsSetupWithoutKey() async throws {
         let coord = try makeCoordinator(backend: .anthropic, dir: tempDirectory())
-        let r = await coord.current().readiness()
+        let r = await (try await coord.prepare()).extractor.readiness()
         if case .needsSetup = r { } else { Issue.record("expected .needsSetup") }
     }
 
     @Test func anthropicReadyWithKey() async throws {
         let coord = try makeCoordinator(backend: .anthropic, dir: tempDirectory(),
                                         seeds: [.anthropicAPIKey: "sk-ant-x"])
-        #expect(await coord.current().readiness() == .ready)
+        #expect(await (try await coord.prepare()).extractor.readiness() == .ready)
     }
 
     @Test func doclingNeedsSetupWithoutEndpoint() async throws {
         // No endpoint in config → coordinator passes "" → readiness .needsSetup.
         let coord = try makeCoordinator(backend: .doclingServe, dir: tempDirectory())
-        let r = await coord.current().readiness()
+        let r = await (try await coord.prepare()).extractor.readiness()
         if case .needsSetup = r { } else { Issue.record("expected .needsSetup") }
     }
 
@@ -111,31 +111,31 @@ struct ExtractionCoordinatorTests {
         let coord = try makeCoordinator(backend: .doclingServe, dir: tempDirectory()) { cfg in
             cfg.doclingServeEndpoint = "http://localhost:5001"
         }
-        #expect(await coord.current().readiness() == .ready)
+        #expect(await (try await coord.prepare()).extractor.readiness() == .ready)
     }
 
     // MARK: - Config reload + default-model wiring
 
     @Test func configReloadsAfterSave() async throws {
         let dir = tempDirectory()
-        let coord = try makeCoordinator(dir: dir)
-        #expect(coord.config.anthropicModel == ExtractionConfig.defaultAnthropicModel)
-        var cfg = coord.config
+        let coord = try makeCoordinator(backend: .anthropic, dir: dir)
+        #expect((try await coord.prepare()).modelVersion == ExtractionConfig.defaultAnthropicModel)
+        var cfg = ExtractionConfig.load(from: dir)
         cfg.anthropicModel = "claude-sonnet-4-6"
         try cfg.save(to: dir)
-        #expect(coord.config.anthropicModel == "claude-sonnet-4-6")
+        #expect((try await coord.prepare()).modelVersion == "claude-sonnet-4-6")
     }
 
-    @Test func anthropicClientUsesConfiguredModel() throws {
+    @Test func anthropicClientUsesConfiguredModel() async throws {
         let coord = try makeCoordinator(backend: .anthropic, dir: tempDirectory(),
                                         seeds: [.anthropicAPIKey: "k"]) { cfg in
             cfg.anthropicModel = "claude-sonnet-4-6"
         }
-        let client = coord.current() as? AnthropicExtractionClient
+        let client = (try await coord.prepare()).extractor as? AnthropicExtractionClient
         #expect(client?.model == "claude-sonnet-4-6")
     }
 
-    @Test func unknownBackendInConfigDegradesToLocal() throws {
+    @Test func unknownBackendInConfigDegradesToLocal() async throws {
         // A corrupt/unknown backend value in the JSON file should never crash a
         // resolve — `ExtractionConfig` degrades it to `.localPdf2md`.
         let dir = tempDirectory()
@@ -146,13 +146,13 @@ struct ExtractionCoordinatorTests {
             credentialStore: InMemoryExtractionCredentialStore(),
             fetcher: FakeHTTPFetcher(body: "x"),
             localExtractorFactory: { LocalPdf2MarkdownExtractor() })
-        #expect(coord.config.backend == .localPdf2md)
-        #expect(coord.current() is LocalPdf2MarkdownExtractor)
+        #expect((try await coord.prepare()).backend == .localPdf2md)
+        #expect((try await coord.prepare()).extractor is LocalPdf2MarkdownExtractor)
     }
 
     // MARK: - ACP backend
 
-    @Test func acpBackendWithNoProviderFallsBackToLocal() throws {
+    @Test func acpBackendWithNoProviderFallsBackToLocal() async throws {
         // When .acp is configured but no ACP provider can be resolved (no
         // command on PATH), the coordinator falls back to the local extractor
         // rather than crashing. The resolveCommand closure returns nil.
@@ -174,9 +174,9 @@ struct ExtractionCoordinatorTests {
             acpCredentialStore: InMemoryACPCredentialStore(),
             fetcher: FakeHTTPFetcher(body: "x"),
             localExtractorFactory: { LocalPdf2MarkdownExtractor() })
-        #expect(coord.config.backend == .acp)
+        #expect((try await coord.prepare()).backend == .acp)
         // Falls back to local because the command can't be resolved on PATH.
-        #expect(coord.current() is LocalPdf2MarkdownExtractor)
+        #expect((try await coord.prepare()).extractor is LocalPdf2MarkdownExtractor)
     }
 }
 #endif

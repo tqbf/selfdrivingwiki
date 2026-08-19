@@ -1,6 +1,6 @@
 # Swift Cordis Components
 
-**Status:** Implemented. The runtime, queue spike, and production app-local migration passed their gates.
+**Status:** Implemented. The runtime, queue, provider, and extraction service migrations passed their gates.
 
 **Provenance-Mode:** `clean-room behavior implementation`
 
@@ -380,7 +380,19 @@ Cordis must not contain these values:
 
 Cordis does not run provider calls off their declared actor.
 
-## 19. Gate results
+## 19. Extraction service boundary
+
+Extraction uses a separate process-scoped Cordis context. See [`cordis-extraction-services.md`](cordis-extraction-services.md) for the full contract.
+
+`ExtractionRuntimeAssembly` registers typed configuration, credential, ACP, HTTP, local factory, backend resolver, runtime, and public service values.
+
+The app and daemon each own one `ExtractionCompositionOwner`. Non-component code receives only `ExtractionServices` or the main-actor adapter.
+
+Each operation gets an immutable preparation and a new extractor. The preparation freezes the effective backend and provenance metadata from one configuration snapshot.
+
+App and daemon shutdown stop queue admission before extraction runtime disposal. Logging remains outside Cordis.
+
+## 20. Gate results
 
 All gates passed in order.
 
@@ -393,7 +405,7 @@ All gates passed in order.
 
 The mutation tool found useful pure-value survivors in `ServiceKey` and `ComponentState`. Tests now cover those cases. The tool could not produce meaningful actor-runtime schemata with version 1.3.0. Those mutants were unviable, not survivors.
 
-## 20. Implemented runtime API
+## 21. Implemented runtime API
 
 The `Cordis` target contains these public contracts:
 
@@ -409,7 +421,7 @@ The `Cordis` target contains these public contracts:
 
 The implementation uses no detached tasks and no `@unchecked Sendable` declarations. User activation and cleanup run outside manual locks. Publication after an `await` requires a current generation and matching provider identities.
 
-## 21. Implemented queue boundary
+## 22. Implemented queue boundary
 
 `QueueWorkerOutputChannel` now exists before the engine and worker factories. Both app-local and daemon assembly use it. It preserves the six output contracts in section 11.
 
@@ -421,7 +433,7 @@ Each worker dispatch receives a `QueueWorkerOutputScope`. Shutdown invalidates i
 
 The daemon does not use Cordis. `DaemonQueueHost` owns daemon queue resources, serializes admission by ownership epoch, and keeps the relinquished state permanent.
 
-## 22. Production app migration
+## 23. Production app migration
 
 `LocalQueueRuntimeController` is the only app-local runtime owner. `WikiFSApp` constructs it synchronously and gives consumers one stable `QueueEngineHotSwap` facade.
 
@@ -435,7 +447,7 @@ After daemon invalidation, the controller marks ownership unresolved. It creates
 
 `QueueEngineHotSwap` owns no runtime resources. Its swap barrier cancels and awaits the old event forwarder and drains old admitted operations before it returns.
 
-## 23. Wire and client behavior
+## 24. Wire and client behavior
 
 Every queue RPC reply uses `QueueRPCEnvelope<Payload>` in JSON `Data`. The envelope carries its version, ownership epoch, host state, payload, or typed error.
 
@@ -443,7 +455,7 @@ Unsupported versions and ownership transitions throw typed errors. `DaemonWorklo
 
 The app treats XPC interruption as sink re-registration. Invalidation and health failure do not imply ownership relinquishment.
 
-## 24. Verification evidence
+## 25. Verification evidence
 
 The final local verification used these commands:
 
@@ -468,7 +480,7 @@ The final heterogeneous re-review reported no remaining critical, high, or mediu
 
 The full graph exposed two stale progress tests. They watched private factory callbacks. The tests now subscribe to the public engine event stream with cancellation-bounded waits.
 
-## 25. Intentional deviations and non-goals
+## 26. Intentional deviations and non-goals
 
 The Swift implementation strengthens original Cordis behavior in these areas:
 

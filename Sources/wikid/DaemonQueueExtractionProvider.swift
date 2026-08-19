@@ -16,17 +16,14 @@ import WikiFSEngine
 /// `Sendable` types). It hops to the main actor only when reading
 /// `ExtractionCoordinator` state.
 final class DaemonQueueExtractionProvider: QueueExtractionProvider {
-    private let containerDirectory: URL
-    private let extractionCoordinator: ExtractionCoordinator
+    private let extractionServices: any ExtractionServices
     private let storeResolver: @Sendable (WikiID) -> GRDBWikiStore?
 
     init(
-        containerDirectory: URL,
-        extractionCoordinator: ExtractionCoordinator,
+        extractionServices: any ExtractionServices,
         storeResolver: @escaping @Sendable (WikiID) -> GRDBWikiStore?
     ) {
-        self.containerDirectory = containerDirectory
-        self.extractionCoordinator = extractionCoordinator
+        self.extractionServices = extractionServices
         self.storeResolver = storeResolver
     }
 
@@ -108,16 +105,15 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
             return nil
         }
 
-        let (extractor, cfg): (any MarkdownExtractor, ExtractionConfig) = await MainActor.run {
-            (self.extractionCoordinator.current(), self.extractionCoordinator.config)
-        }
+        let preparation = try await extractionServices.prepare(
+            backendOverride: backendOverride)
 
         return ExtractionResolution(
-            extractor: extractor,
+            extractor: preparation.extractor,
             pdfData: bytes,
             filename: source.filename,
-            backend: backendOverride ?? cfg.backend,
-            modelVersion: cfg.currentModelVersion
+            backend: preparation.backend,
+            modelVersion: preparation.modelVersion
         )
     }
 

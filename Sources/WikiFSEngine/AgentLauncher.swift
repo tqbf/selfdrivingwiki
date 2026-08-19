@@ -1153,8 +1153,7 @@ public final class AgentLauncher {
     public init(
         generationGate: GenerationGate = GenerationGate(),
         extractionCoordinator: ExtractionCoordinator = ExtractionCoordinator(
-            containerDirectory: FileManager.default.temporaryDirectory,
-            localExtractorFactory: { UnavailablePdf2MarkdownExtractor() }),
+            services: UnavailableExtractionServices()),
         providerServices: (any AgentProviderServices)? = nil
     ) {
         self.generationGate = generationGate

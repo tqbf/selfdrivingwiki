@@ -29,6 +29,20 @@ struct CordisDocumentationContractTests {
         #expect(plan.contains("Both references use the MIT License"))
         #expect(progress.contains("The final GLM re-review reported no remaining critical, high, or medium findings."))
         #expect(progress.contains("3,366 tests in 311 suites"))
+
+        let extractionPlanPath = "plans/cordis-extraction-services.md"
+        let extractionProgressPath = "progress/2026-08-19T150000Z-cordis-extraction-services.md"
+        let extractionPlan = try String(
+            contentsOf: root.appendingPathComponent(extractionPlanPath),
+            encoding: .utf8)
+        let extractionProgress = try String(
+            contentsOf: root.appendingPathComponent(extractionProgressPath),
+            encoding: .utf8)
+        #expect(index.contains("[`\(extractionPlanPath)`](\(extractionPlanPath))"))
+        #expect(index.contains("[`\(extractionProgressPath)`](\(extractionProgressPath))"))
+        #expect(extractionPlan.contains("extraction.configuration-reader"))
+        #expect(extractionPlan.contains("Logging remains outside Cordis"))
+        #expect(extractionProgress.contains("ExtractionRuntimeAssembly"))
     }
 }
 

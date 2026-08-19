@@ -1,48 +1,155 @@
 #if os(macOS)
 import Foundation
-#if canImport(FoundationNetworking)
-import FoundationNetworking
-#endif
 import WikiFSCore
 
-/// Resolves the user's selected PDF→Markdown backend (`MarkdownExtractor`) from
-/// the persisted `ExtractionConfig` + Keychain secrets. The two extraction call
-/// sites (`AgentOperationRunner.runMultiIngest` and `SourceDetailView.
-/// runExtraction`) ask it for the current extractor and then drive it through
-/// `readiness()` / `convert()`, so they stay backend-agnostic.
-///
-/// App-wide (one instance, `@State` in `WikiFSApp`, threaded like `AgentLauncher`):
-/// an extraction preference belongs to the person, not to any one wiki. The
-/// selected backend — like every other extraction preference — lives in
-/// `ExtractionConfig` JSON (sibling of `zotero-config.json`), the same single
-/// source of truth `ExtractionSettingsView`'s draft+Save edits. `current()`
-/// re-reads config off disk each call so a Settings Save is picked up
-/// immediately by the next extract.
-@MainActor
-@Observable
-public final class ExtractionCoordinator {
-    public let containerDirectory: URL
-    public let credentialStore: any ExtractionCredentialStore
-    /// The ACP credential store — used by the `.acp` backend to read the
-    /// provider's API key from Keychain (the SAME key the chat/ingest path
-    /// uses — no second secret). Defaults to the Keychain-backed store.
-    public let acpCredentialStore: any ACPCredentialStore
-    /// Shared HTTP fetcher for the remote/model backends (production: a generous
-    /// `URLSession`; tests inject a fake).
-    public let fetcher: any HTTPRequestFetcher
-
-    /// Factory for the local pdf2md extractor (`LocalPdf2MarkdownExtractor`).
-    /// Injected because that type lives in the app target (it delegates to the
-    /// AppKit-coupled `PdfExtractionService`). The app passes a concrete closure
-    /// at wiring time; `current()` calls it when the configured backend is
-    /// `.localPdf2md`.
-    private let localExtractorFactory: @MainActor () -> any MarkdownExtractor
+/// The immutable extraction inputs and public provenance for one operation.
+/// Secrets and endpoint construction inputs remain private to the runtime.
+public struct ExtractionPreparation: Sendable {
+    public let extractor: any MarkdownExtractor
+    public let backend: ExtractionBackend
+    public let modelVersion: String?
+    public let technique: String?
 
     public init(
+        extractor: any MarkdownExtractor,
+        backend: ExtractionBackend,
+        modelVersion: String?,
+        technique: String? = nil
+    ) {
+        self.extractor = extractor
+        self.backend = backend
+        self.modelVersion = modelVersion
+        self.technique = technique
+    }
+}
+
+public enum ExtractionServicesError: Error, Equatable, Sendable, LocalizedError {
+    case unavailable
+
+    public var errorDescription: String? {
+        switch self {
+        case .unavailable:
+            return "Extraction services are unavailable."
+        }
+    }
+}
+
+/// Public operation-scoped extraction resolution. Each call returns a fresh
+/// extractor built from one frozen configuration and credential snapshot.
+public protocol ExtractionServices: Sendable {
+    func prepare(backendOverride: ExtractionBackend?) async throws -> ExtractionPreparation
+}
+
+public extension ExtractionServices {
+    func prepare() async throws -> ExtractionPreparation {
+        try await prepare(backendOverride: nil)
+    }
+}
+
+public struct UnavailableExtractionServices: ExtractionServices {
+    public init() {}
+
+    public func prepare(backendOverride: ExtractionBackend?) async throws -> ExtractionPreparation {
+        throw ExtractionServicesError.unavailable
+    }
+}
+
+/// A stable process facade that can exist before asynchronous Cordis assembly.
+public actor MutableExtractionServices: ExtractionServices {
+    public struct Installation: Hashable, Sendable {
+        fileprivate let id = UUID()
+
+        public init() {}
+    }
+
+    private var installed: any ExtractionServices
+    private var activeInstallation: Installation?
+    private var invalidatedInstallations: Set<Installation> = []
+
+    public init(initial: any ExtractionServices = UnavailableExtractionServices()) {
+        installed = initial
+    }
+
+    public func install(
+        _ services: any ExtractionServices,
+        for installation: Installation
+    ) {
+        guard !invalidatedInstallations.contains(installation) else { return }
+        installed = services
+        activeInstallation = installation
+    }
+
+    public func invalidate(_ installation: Installation) {
+        invalidatedInstallations.insert(installation)
+        guard activeInstallation == installation else { return }
+        installed = UnavailableExtractionServices()
+        activeInstallation = nil
+    }
+
+    public func prepare(backendOverride: ExtractionBackend?) async throws -> ExtractionPreparation {
+        try await installed.prepare(backendOverride: backendOverride)
+    }
+}
+
+/// Operation resolver owned by the extraction Cordis context.
+public actor ExtractionRuntime: ExtractionServices {
+    public typealias ConfigurationReader = @Sendable () throws -> ExtractionConfig
+    public typealias BackendResolver = @Sendable (
+        _ configuration: ExtractionConfig,
+        _ effectiveBackend: ExtractionBackend
+    ) async throws -> ExtractionPreparation
+
+    private let readConfiguration: ConfigurationReader
+    private let resolveBackend: BackendResolver
+    private var disposed = false
+
+    public init(
+        readConfiguration: @escaping ConfigurationReader,
+        resolveBackend: @escaping BackendResolver
+    ) {
+        self.readConfiguration = readConfiguration
+        self.resolveBackend = resolveBackend
+    }
+
+    public func prepare(backendOverride: ExtractionBackend?) async throws -> ExtractionPreparation {
+        guard !disposed else { throw ExtractionServicesError.unavailable }
+        let configuration = try readConfiguration()
+        let effectiveBackend = backendOverride ?? configuration.backend
+        let preparation = try await resolveBackend(configuration, effectiveBackend)
+        guard !disposed else { throw ExtractionServicesError.unavailable }
+        return preparation
+    }
+
+    public func dispose() {
+        disposed = true
+    }
+}
+
+enum ExtractionDefaultURL {
+    static let anthropic = required(ExtractionConfig.defaultAnthropicBaseURL)
+    static let gemini = required(ExtractionConfig.defaultGeminiBaseURL)
+
+    private static func required(_ value: String) -> URL {
+        guard let url = URL(string: value) else {
+            preconditionFailure("Invalid built-in extraction base URL: \(value)")
+        }
+        return url
+    }
+}
+
+@MainActor
+private final class LegacyExtractionServices: ExtractionServices {
+    private let containerDirectory: URL
+    private let credentialStore: any ExtractionCredentialStore
+    private let acpCredentialStore: any ACPCredentialStore
+    private let fetcher: any HTTPRequestFetcher
+    private let localExtractorFactory: @MainActor () -> any MarkdownExtractor
+
+    init(
         containerDirectory: URL,
-        credentialStore: any ExtractionCredentialStore = KeychainExtractionCredentialStore(),
-        acpCredentialStore: any ACPCredentialStore = KeychainACPCredentialStore(),
-        fetcher: any HTTPRequestFetcher = URLSessionRequestFetcher(),
+        credentialStore: any ExtractionCredentialStore,
+        acpCredentialStore: any ACPCredentialStore,
+        fetcher: any HTTPRequestFetcher,
         localExtractorFactory: @escaping @MainActor () -> any MarkdownExtractor
     ) {
         self.containerDirectory = containerDirectory
@@ -52,57 +159,83 @@ public final class ExtractionCoordinator {
         self.localExtractorFactory = localExtractorFactory
     }
 
-    /// The latest non-secret config off disk. Re-loaded each access so a
-    /// Settings Save is picked up immediately by the next `current()` call.
-    public var config: ExtractionConfig {
-        ExtractionConfig.load(from: containerDirectory)
-    }
-
-    /// Resolve the configured backend to a concrete extractor, pulling per-backend
-    /// config + secrets fresh each call. Cheap; call once at the start of an
-    /// extract (the backend won't change mid-run). The local backend has no
-    /// secrets; Docling's endpoint is the raw config value (empty when unset, so
-    /// its `readiness()` reports `.needsSetup`); Anthropic falls back to the
-    /// public API base URL when no override is configured.
-    public func current() -> any MarkdownExtractor {
-        let cfg = config
-        switch cfg.backend {
+    func prepare(backendOverride: ExtractionBackend?) async throws -> ExtractionPreparation {
+        let configuration = ExtractionConfig.load(from: containerDirectory)
+        let backend = backendOverride ?? configuration.backend
+        let extractor: any MarkdownExtractor
+        switch backend {
         case .localPdf2md:
-            return localExtractorFactory()
+            extractor = localExtractorFactory()
         case .acp:
-            if let client = ACPExtractionClient.resolveProvider(
+            extractor = ACPExtractionClient.resolveProvider(
                 containerDirectory: containerDirectory,
-                acpProviderId: cfg.acpProviderId,
-                acpCredentialStore: acpCredentialStore) {
-                return client
-            }
-            // Fall back to the local extractor if no ACP provider is configured
-            // — better than crashing. The readiness probe on the ACP client
-            // would surface the real issue, but here we couldn't even build one.
-            DebugLog.config("ExtractionCoordinator: .acp backend but no provider resolvable — falling back to local pdf2md")
-            return localExtractorFactory()
+                acpProviderId: configuration.acpProviderId,
+                acpCredentialStore: acpCredentialStore) ?? localExtractorFactory()
         case .anthropic:
-            let base = cfg.anthropicBaseURLOverride.flatMap(URL.init(string:))
-                ?? URL(string: ExtractionConfig.defaultAnthropicBaseURL)!
-            return AnthropicExtractionClient(
-                model: cfg.anthropicModel,
+            extractor = AnthropicExtractionClient(
+                model: configuration.anthropicModel,
                 apiKey: credentialStore.secret(.anthropicAPIKey) ?? "",
-                baseURL: base,
+                baseURL: configuration.anthropicBaseURLOverride.flatMap(URL.init(string:))
+                    ?? ExtractionDefaultURL.anthropic,
                 fetcher: fetcher)
         case .gemini:
-            let base = cfg.geminiBaseURLOverride.flatMap(URL.init(string:))
-                ?? URL(string: ExtractionConfig.defaultGeminiBaseURL)!
-            return GeminiExtractionClient(
-                model: cfg.geminiModel,
+            extractor = GeminiExtractionClient(
+                model: configuration.geminiModel,
                 apiKey: credentialStore.secret(.geminiAPIKey) ?? "",
-                baseURL: base,
+                baseURL: configuration.geminiBaseURLOverride.flatMap(URL.init(string:))
+                    ?? ExtractionDefaultURL.gemini,
                 fetcher: fetcher)
         case .doclingServe:
-            return DoclingServeClient(
-                endpoint: cfg.doclingServeEndpoint ?? "",
+            extractor = DoclingServeClient(
+                endpoint: configuration.doclingServeEndpoint ?? "",
                 apiToken: credentialStore.secret(.doclingServeToken),
                 fetcher: fetcher)
         }
+        let modelVersion: String? = switch backend {
+        case .anthropic: configuration.anthropicModel
+        case .gemini: configuration.geminiModel
+        case .localPdf2md, .acp, .doclingServe: nil
+        }
+        return ExtractionPreparation(
+            extractor: extractor,
+            backend: backend,
+            modelVersion: modelVersion)
+    }
+}
+
+/// Main-actor adapter retained at existing UI seams. It owns no configuration,
+/// credentials, HTTP client, or backend construction state.
+@MainActor
+@Observable
+public final class ExtractionCoordinator {
+    private let services: any ExtractionServices
+
+    public init(services: any ExtractionServices) {
+        self.services = services
+    }
+
+    /// Test compatibility seam. Production composition must inject the process
+    /// service facade and must not construct extraction dependencies here.
+    public convenience init(
+        containerDirectory: URL,
+        credentialStore: any ExtractionCredentialStore = KeychainExtractionCredentialStore(),
+        acpCredentialStore: any ACPCredentialStore = KeychainACPCredentialStore(),
+        fetcher: any HTTPRequestFetcher = URLSessionRequestFetcher(),
+        localExtractorFactory: @escaping @MainActor () -> any MarkdownExtractor
+    ) {
+        let services = LegacyExtractionServices(
+            containerDirectory: containerDirectory,
+            credentialStore: credentialStore,
+            acpCredentialStore: acpCredentialStore,
+            fetcher: fetcher,
+            localExtractorFactory: localExtractorFactory)
+        self.init(services: services)
+    }
+
+    public func prepare(
+        backendOverride: ExtractionBackend? = nil
+    ) async throws -> ExtractionPreparation {
+        try await services.prepare(backendOverride: backendOverride)
     }
 }
 #endif
