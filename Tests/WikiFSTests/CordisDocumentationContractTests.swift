@@ -95,6 +95,28 @@ struct CordisDocumentationContractTests {
         #expect(searchPlan.contains("`WikiStoreModel`, `WikiSession`, and `SessionManager`"))
         #expect(searchProgress.contains("SearchRuntimeAssembly"))
         #expect(searchProgress.contains("SearchCompositionOwner"))
+
+        let transportPlanPath = "plans/cordis-daemon-transport-services.md"
+        let transportProgressPath = "progress/2026-08-19T221500Z-cordis-daemon-transport-services.md"
+        let transportPlan = try String(
+            contentsOf: root.appendingPathComponent(transportPlanPath),
+            encoding: .utf8)
+        let transportProgress = try String(
+            contentsOf: root.appendingPathComponent(transportProgressPath),
+            encoding: .utf8)
+        #expect(index.contains("[`\(transportPlanPath)`](\(transportPlanPath))"))
+        #expect(index.contains("[`\(transportProgressPath)`](\(transportProgressPath))"))
+        for label in [
+            "daemon-transport.connection-factory",
+            "daemon-transport.configuration",
+            "daemon-transport.runtime",
+            "daemon-transport.services",
+        ] { #expect(transportPlan.contains(label)) }
+        #expect(transportPlan.contains("A successful health probe publishes `awaitingAcceptance`. It does not publish `connected`."))
+        #expect(transportPlan.contains("The app does not request daemon process termination."))
+        #expect(transportPlan.contains("`DaemonHealthMonitor` is a presentation adapter."))
+        #expect(transportProgress.contains("DaemonTransportRuntimeAssembly"))
+        #expect(transportProgress.contains("DaemonTransportAppCoordinator"))
     }
 }
 

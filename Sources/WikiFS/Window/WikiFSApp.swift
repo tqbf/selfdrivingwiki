@@ -45,6 +45,12 @@ struct WikiFSApp: App {
     private let extractionCompositionOwner: ExtractionCompositionOwner
     /// Owns the app-scoped renderer context, bootstrap, publication, and shutdown.
     private let rendererCompositionOwner: RendererCompositionOwner
+    /// Owns daemon transport assembly, admission, retry work, and disposal.
+    private let daemonTransportCompositionOwner: DaemonTransportCompositionOwner
+    /// Keeps concrete XPC connections outside the Engine Cordis assembly.
+    private let daemonTransportBridge: DaemonTransportAppBridge
+    /// Adapts typed transport events into queue/chat ownership policy.
+    private let daemonTransportCoordinator: DaemonTransportAppCoordinator
     /// App-wide queue engine. Owns the persistent `queue.sqlite` store; drives
     /// extraction/ingestion workers off-main. One instance, shared across
     /// sessions via `WikiSession`.
@@ -100,10 +106,8 @@ struct WikiFSApp: App {
     /// unavailable state (no local fallback; the daemon owns chat).
     @State private var chatDaemonCoordinator: ChatDaemonCoordinator?
 
-    /// App-wide daemon health monitor (#878). Drives the menu-bar badge and
-    /// the in-app disconnected/reconnected banner via its `@Observable` state.
-    /// Owns the recurring 30 s health-ping loop + the XPC invalidation handler.
-    @State private var healthMonitor = DaemonHealthMonitor()
+    /// Presentation-only adapter for typed daemon transport events.
+    @State private var healthMonitor: DaemonHealthMonitor
 
     /// The session-lookup box, retained so the local-engine fallback factory
     /// (called on disconnect/reconnect) can re-wire it.
@@ -262,6 +266,31 @@ struct WikiFSApp: App {
         }
         runtimeController.start()
 
+        let transportBridge = DaemonTransportAppBridge()
+        daemonTransportBridge = transportBridge
+        let transportOwner = DaemonTransportCompositionOwner {
+            try await DaemonTransportRuntimeAssembly(
+                connectionFactory: transportBridge.connectionFactory,
+                configuration: .init(
+                    retryInterval: .seconds(30),
+                    healthCheckInterval: .seconds(30),
+                    healthCheckTimeout: 5,
+                    acceptanceDeadline: .seconds(30)))
+                .assemble()
+        }
+        daemonTransportCompositionOwner = transportOwner
+        let transportMonitor = DaemonHealthMonitor(services: transportOwner.services)
+        _healthMonitor = State(initialValue: transportMonitor)
+        daemonTransportCoordinator = DaemonTransportAppCoordinator(
+            services: transportOwner.services,
+            bridge: transportBridge,
+            queueController: runtimeController,
+            replaceChatCoordinator: { _ in },
+            observeEvent: { [weak transportMonitor] event in
+                transportMonitor?.consume(event)
+            })
+        Task { await transportOwner.start() }
+
         // All consumers retain one stable facade. The controller owns its local
         // runtime handle and changes only the facade's admitted inner client.
         let router = runtimeController.client
@@ -398,18 +427,12 @@ struct WikiFSApp: App {
             connectToDaemon()
         }
 
-        // Watchdog (defense-in-depth): if nothing has attempted a daemon
-        // connection 10s after launch — e.g. a future refactor breaks every
-        // wired call site the way #929 did — retry directly. Scheduled from
-        // init(), the one call site that's unconditionally guaranteed no
-        // matter which Scene/window materializes or whether AppKit's
-        // delegate callback path is ever reached.
+        // Defense in depth: every startup path can call this because the
+        // coordinator admits only one subscription and one transport start.
         Task { @MainActor [self] in
             await DebugLog.trying("daemon connect watchdog sleep", operation: {
                 try await Task.sleep(for: .seconds(10))
             })
-            guard !Self.didConnectDaemon else { return }
-            DebugLog.store("WikiFSApp: daemon connect watchdog fired — no entry point called connectToDaemon()")
             connectToDaemon()
         }
     }
@@ -548,11 +571,13 @@ struct WikiFSApp: App {
             // re-dispatches on its own when the app reconnects.
         }
         appDelegate.shutdownForTermination = { [
+            daemonTransportCoordinator,
             localQueueRuntimeController,
             sessionManager,
             extractionCompositionOwner,
             rendererCompositionOwner
         ] in
+            await daemonTransportCoordinator.shutdown()
             _ = await localQueueRuntimeController.dispose()
             await sessionManager.shutdownSearchRuntimes()
             await extractionCompositionOwner.shutdown()
@@ -574,81 +599,15 @@ struct WikiFSApp: App {
         }
     }
 
-    // MARK: - Daemon connection (#878 BLOCKER 2 — async, non-blocking)
+    // MARK: - Daemon transport admission
 
-    /// Attempt to connect to the wikid daemon. If the daemon is healthy, swaps
-    /// the queue engine router from the local fallback to the XPC proxy and
-    /// starts the health monitor. Never blocks the main thread.
-    ///
-    /// Primary call site is `AppDelegate.bootstrap` (wired in `init()`,
-    /// invoked from the guaranteed `applicationDidFinishLaunching`) — NOT a
-    /// window's `.task`. #929: this used to run ONLY from the "main"
-    /// WindowGroup's `.task`, which silently never fired when macOS restored
-    /// a per-wiki window directly on launch, leaving the daemon connection
-    /// permanently unattempted. It's still called redundantly from both
-    /// windows' `.task` and from an init()-scheduled watchdog — idempotent
-    /// via `didConnectDaemon`, so extra calls are harmless.
-    ///
-    /// #885 startup race fix: if the initial connection fails (the XPC service
-    /// may not be available yet on first launch or mid-replacement), the
-    /// health monitor's retry loop is started so the app keeps trying until the
-    /// service responds — instead of silently staying on the local engine.
-    @MainActor
-    private static var didConnectDaemon = false
     @MainActor
     private func connectToDaemon() {
-        guard !Self.didConnectDaemon else { return }
-        Self.didConnectDaemon = true
-
-        // Wire health callbacks before the connection attempt so every
-        // invalidation and reconnect flows through the ownership controller.
-        configureHealthMonitor()
-
-        Task { [weak healthMonitor] in
-            guard let conn = DebugLog.trying("connect daemon", operation: { try WikiDaemonConnection.connect() }) else {
-                DebugLog.store("WikiFSApp: daemon not available — starting retry loop (#885)")
-                healthMonitor?.startRetrying()
-                return
-            }
-            let healthy = await conn.healthCheck()
-            guard healthy else {
-                DebugLog.store("WikiFSApp: daemon health check failed — starting retry loop (#885)")
-                conn.invalidate()
-                healthMonitor?.startRetrying()
-                return
-            }
-
-            DebugLog.store("WikiFSApp: connected to wikid daemon — swapping to XPC proxy")
-            do {
-                let workloadClient = try DaemonWorkloadClient(connection: conn)
-                let status = try await workloadClient.queueOwnershipStatus()
-                guard status.hostState == .serving else {
-                    throw QueueRPCError(
-                        code: .ownershipTransition,
-                        message: "Daemon queue host is \(status.hostState.rawValue)")
-                }
-                let eventSink = DaemonQueueEventSink()
-                workloadClient.registerEventSink(eventSink)
-                let proxy = XPCQueueEngineProxy(
-                    workloadClient: workloadClient, eventSink: eventSink)
-                guard await localQueueRuntimeController.activateDaemon(.init(
-                    client: proxy,
-                    epoch: status.epoch)) else {
-                    throw QueueRPCError(
-                        code: .ownershipTransition,
-                        message: "Local queue runtime refused daemon takeover")
-                }
-                await MainActor.run {
-                    replaceChatDaemonCoordinator(ChatDaemonCoordinator(
-                        client: workloadClient, eventSink: eventSink))
-                    healthMonitor?.start(connection: conn)
-                }
-            } catch {
-                DebugLog.store("WikiFSApp: failed to create daemon workload client: \(error)")
-                conn.invalidate()
-                healthMonitor?.startRetrying()
-            }
+        daemonTransportCoordinator.installChatReplacement { coordinator in
+            replaceChatDaemonCoordinator(coordinator)
         }
+        healthMonitor.start()
+        daemonTransportCoordinator.startIfNeeded()
     }
 
     @MainActor
@@ -656,114 +615,6 @@ struct WikiFSApp: App {
         chatDaemonCoordinator?.stop()
         chatDaemonCoordinator = coordinator
         appDelegate.chatDaemonCoordinator = coordinator
-    }
-
-    /// Wire the health monitor's disconnect/reconnect closures. Called before
-    /// the initial connection attempt so the retry loop (#885) has the engine-
-    /// swap logic ready. The closures capture the router (a class ref) and
-    /// directory/box values by value — WikiFSApp is a struct (no retain cycle).
-    @MainActor
-    private func configureHealthMonitor() {
-        healthMonitor.onDisconnect = {
-            DebugLog.store("WikiFSApp: daemon disconnected — queue ownership is unresolved")
-            let expectedEpoch: QueueOwnershipEpoch
-            if case .daemonActive(let epoch) = localQueueRuntimeController.state {
-                expectedEpoch = epoch
-            } else {
-                DebugLog.store("WikiFSApp: disconnect had no active daemon ownership epoch")
-                chatDaemonCoordinator = nil
-                return
-            }
-            await localQueueRuntimeController.daemonOwnershipBecameUnresolved(
-                expectedEpoch: expectedEpoch,
-                reason: "Daemon connection was invalidated")
-            replaceChatDaemonCoordinator(nil)
-        }
-        healthMonitor.onReconnect = { newConn in
-            do {
-                let workloadClient = try DaemonWorkloadClient(connection: newConn)
-                let makeEndpoint: @MainActor (QueueOwnershipEpoch) -> (
-                    endpoint: LocalQueueRuntimeController.DaemonEndpoint,
-                    chatCoordinator: ChatDaemonCoordinator
-                ) = { epoch in
-                    let eventSink = DaemonQueueEventSink()
-                    workloadClient.registerEventSink(eventSink)
-                    let proxy = XPCQueueEngineProxy(
-                        workloadClient: workloadClient, eventSink: eventSink)
-                    return (
-                        .init(client: proxy, epoch: epoch),
-                        ChatDaemonCoordinator(client: workloadClient, eventSink: eventSink))
-                }
-
-                if case .shutdownBlocked = localQueueRuntimeController.state {
-                    let status = try await workloadClient.queueOwnershipStatus()
-                    guard status.hostState == .serving else { return .retry }
-                    let daemon = makeEndpoint(status.epoch)
-                    let accepted = await localQueueRuntimeController.retryBlockedShutdownForDaemon(
-                        daemon.endpoint)
-                    if accepted {
-                        replaceChatDaemonCoordinator(daemon.chatCoordinator)
-                    }
-                    return accepted ? .connected : .retry
-                }
-
-                if case .daemonOwnershipUnresolved(let expectedEpoch, _) = localQueueRuntimeController.state {
-                    DebugLog.store("WikiFSApp: daemon reconnected — requesting queue relinquishment")
-                    do {
-                        let success = try await workloadClient.relinquishQueue(
-                            expectedEpoch: expectedEpoch)
-                        let fellBack = await localQueueRuntimeController.fallBackAfterRelinquishment(
-                            success,
-                            expectedEpoch: expectedEpoch)
-                        if fellBack {
-                            DebugLog.store("WikiFSApp: daemon relinquished queue ownership — local runtime ready")
-                            return .localFallbackReady
-                        }
-                        return .retry
-                    } catch {
-                        let status = try await workloadClient.queueOwnershipStatus()
-                        guard status.hostState == .serving,
-                              status.epoch != expectedEpoch else { throw error }
-                        let daemon = makeEndpoint(status.epoch)
-                        let accepted = await localQueueRuntimeController.replaceUnresolvedDaemon(
-                            daemon.endpoint,
-                            expectedEpoch: expectedEpoch)
-                        if accepted {
-                            replaceChatDaemonCoordinator(daemon.chatCoordinator)
-                        }
-                        return accepted ? .connected : .retry
-                    }
-                }
-
-                let status = try await workloadClient.queueOwnershipStatus()
-                guard status.hostState == .serving else { return .retry }
-                let daemon = makeEndpoint(status.epoch)
-                let accepted = await localQueueRuntimeController.activateDaemon(daemon.endpoint)
-                if accepted {
-                    replaceChatDaemonCoordinator(daemon.chatCoordinator)
-                }
-                return accepted ? .connected : .retry
-            } catch {
-                DebugLog.store("WikiFSApp: reconnect queue transition failed: \(error)")
-                return .retry
-            }
-        }
-        // #904: on interruption the XPC service was replaced but the connection
-        // is still live. The fresh service has no event sink registered, so
-        // re-register on the SAME connection — otherwise all pushed chat/queue
-        // envelopes are dropped and live chat streams go dark.
-        healthMonitor.onInterrupt = { conn in
-            DebugLog.store("WikiFSApp: daemon interrupted — re-registering event sink on same connection")
-            do {
-                let workloadClient = try DaemonWorkloadClient(connection: conn)
-                let eventSink = DaemonQueueEventSink()
-                workloadClient.registerEventSink(eventSink)
-                replaceChatDaemonCoordinator(ChatDaemonCoordinator(
-                    client: workloadClient, eventSink: eventSink))
-            } catch {
-                DebugLog.store("WikiFSApp: interrupt re-registration failed: \(error)")
-            }
-        }
     }
 
     var body: some Scene {
@@ -891,8 +742,8 @@ struct WikiFSApp: App {
                 // directly on launch (a window was open at quit), the "main"
                 // WindowGroup's .task — the only other caller — never runs,
                 // so `connectToDaemon()` must be reachable from here too.
-                // Idempotent via `didConnectDaemon`, so calling it from both
-                // windows' .task is safe regardless of which fires.
+                // Idempotent through the coordinator lifecycle, so calling it
+                // from both windows is safe regardless of which task fires.
                 connectToDaemon()
             }
             // The presented value can arrive AFTER first render (state
