@@ -16,6 +16,91 @@ import Testing
 /// non-blocking; `.serialized` + `.timeLimit` are the safety net.
 @Suite(.serialized, .timeLimit(.minutes(3)))
 struct IdentifierBoundaryTypecheckTests {
+    private struct FixtureCase: Sendable {
+        let label: String
+        let batchFixture: String
+        let expectedDiagnostic: String
+    }
+
+    private struct BatchFixture: Sendable {
+        let name: String
+        let cases: [FixtureCase]
+
+        var fixtureURL: URL {
+            URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent("Tests/WikiFSTests/Fixtures/IdentifierBoundaryTypecheck")
+                .appendingPathComponent(name)
+        }
+    }
+
+    private static let batchFixtures: [BatchFixture] = [
+        BatchFixture(
+            name: "negative-core-batch.swift",
+            cases: [
+                .init(label: "chatIDIsRejectedByChatMessageAPI", batchFixture: "negative-core-batch.swift", expectedDiagnostic: "cannot convert value of type 'ChatID' to expected argument type 'ChatMessageID'"),
+                .init(label: "chatIDIsRejectedByPageAPI", batchFixture: "negative-core-batch.swift", expectedDiagnostic: "cannot convert value of type 'ChatID' to expected argument type 'PageID'"),
+                .init(label: "chatIDIsRejectedByProcessedMarkdownVersionAPI", batchFixture: "negative-core-batch.swift", expectedDiagnostic: "cannot convert value of type 'ChatID' to expected argument type 'SourceMarkdownVersionID'"),
+                .init(label: "chatIDIsRejectedBySourceAPI", batchFixture: "negative-core-batch.swift", expectedDiagnostic: "cannot convert value of type 'ChatID' to expected argument type 'SourceID'"),
+                .init(label: "markdownVersionIDIsRejectedBySourceVersionAPI", batchFixture: "negative-core-batch.swift", expectedDiagnostic: "cannot convert value of type 'SourceMarkdownVersionID' to expected argument type 'SourceVersionID'"),
+                .init(label: "pageIDIsRejectedByChatAPI", batchFixture: "negative-core-batch.swift", expectedDiagnostic: "cannot convert value of type 'PageID' to expected argument type 'ChatID'"),
+                .init(label: "pageIDIsRejectedByChatTurnAPI", batchFixture: "negative-core-batch.swift", expectedDiagnostic: "cannot convert value of type 'PageID' to expected argument type 'ChatTurnID'"),
+                .init(label: "pageIDIsRejectedByProcessedMarkdownVersionAPI", batchFixture: "negative-core-batch.swift", expectedDiagnostic: "cannot convert value of type 'PageID' to expected argument type 'SourceMarkdownVersionID'"),
+                .init(label: "pageIDIsRejectedBySourceAPI", batchFixture: "negative-core-batch.swift", expectedDiagnostic: "cannot convert value of type 'PageID' to expected argument type 'SourceID'"),
+                .init(label: "pageIDIsRejectedBySourceVersionAPI", batchFixture: "negative-core-batch.swift", expectedDiagnostic: "cannot convert value of type 'PageID' to expected argument type 'SourceVersionID'"),
+                .init(label: "permissionRequestIDIsRejectedByToolCallAPI", batchFixture: "negative-core-batch.swift", expectedDiagnostic: "cannot convert value of type 'PermissionRequestID' to expected argument type 'ToolCallID'"),
+                .init(label: "sourceIDIsRejectedByChatAPI", batchFixture: "negative-core-batch.swift", expectedDiagnostic: "cannot convert value of type 'SourceID' to expected argument type 'ChatID'"),
+                .init(label: "sourceIDIsRejectedByPageAPI", batchFixture: "negative-core-batch.swift", expectedDiagnostic: "cannot convert value of type 'SourceID' to expected argument type 'PageID'"),
+                .init(label: "sourceIDIsRejectedByProcessedMarkdownVersionAPI", batchFixture: "negative-core-batch.swift", expectedDiagnostic: "cannot convert value of type 'SourceID' to expected argument type 'SourceMarkdownVersionID'"),
+                .init(label: "sourceIDIsRejectedBySourceVersionAPI", batchFixture: "negative-core-batch.swift", expectedDiagnostic: "cannot convert value of type 'SourceID' to expected argument type 'SourceVersionID'"),
+                .init(label: "sourceVersionIDIsRejectedByChatAPI", batchFixture: "negative-core-batch.swift", expectedDiagnostic: "cannot convert value of type 'SourceVersionID' to expected argument type 'ChatID'"),
+                .init(label: "sourceVersionIDIsRejectedByPageAPI", batchFixture: "negative-core-batch.swift", expectedDiagnostic: "cannot convert value of type 'SourceVersionID' to expected argument type 'PageID'"),
+                .init(label: "sourceVersionIDIsRejectedByProcessedMarkdownVersionAPI", batchFixture: "negative-core-batch.swift", expectedDiagnostic: "cannot convert value of type 'SourceVersionID' to expected argument type 'SourceMarkdownVersionID'"),
+                .init(label: "sourceVersionIDIsRejectedBySetActiveMarkdownAPI", batchFixture: "negative-core-batch.swift", expectedDiagnostic: "cannot convert value of type 'SourceVersionID' to expected argument type 'SourceMarkdownVersionID'"),
+                .init(label: "sourceVersionIDIsRejectedBySourceAPI", batchFixture: "negative-core-batch.swift", expectedDiagnostic: "cannot convert value of type 'SourceVersionID' to expected argument type 'SourceID'"),
+                .init(label: "stringIsRejectedByChatCommandAPI", batchFixture: "negative-core-batch.swift", expectedDiagnostic: "cannot convert value of type 'String' to expected argument type 'ChatCommandID'"),
+            ]
+        ),
+        BatchFixture(
+            name: "negative-launcher-batch.swift",
+            cases: [
+                .init(label: "pageIDIsRejectedByLauncherChatAPI", batchFixture: "negative-launcher-batch.swift", expectedDiagnostic: "cannot convert value of type 'PageID' to expected argument type 'ChatID'"),
+                .init(label: "stringIsRejectedByLauncherChatAPI", batchFixture: "negative-launcher-batch.swift", expectedDiagnostic: "cannot convert value of type 'String' to expected argument type 'ChatID'"),
+            ]
+        ),
+    ]
+
+    private static let positiveFixtures: [String] = [
+        "positive.swift",
+    ]
+
+    private static let expectedBoundaryLabels: Set<String> = [
+        "chatIDIsRejectedByChatMessageAPI",
+        "chatIDIsRejectedByPageAPI",
+        "chatIDIsRejectedByProcessedMarkdownVersionAPI",
+        "chatIDIsRejectedBySourceAPI",
+        "markdownVersionIDIsRejectedBySourceVersionAPI",
+        "pageIDIsRejectedByChatAPI",
+        "pageIDIsRejectedByChatTurnAPI",
+        "pageIDIsRejectedByLauncherChatAPI",
+        "pageIDIsRejectedByProcessedMarkdownVersionAPI",
+        "pageIDIsRejectedBySourceAPI",
+        "pageIDIsRejectedBySourceVersionAPI",
+        "permissionRequestIDIsRejectedByToolCallAPI",
+        "sourceIDIsRejectedByChatAPI",
+        "sourceIDIsRejectedByPageAPI",
+        "sourceIDIsRejectedByProcessedMarkdownVersionAPI",
+        "sourceIDIsRejectedBySourceVersionAPI",
+        "sourceVersionIDIsRejectedByChatAPI",
+        "sourceVersionIDIsRejectedByPageAPI",
+        "sourceVersionIDIsRejectedByProcessedMarkdownVersionAPI",
+        "sourceVersionIDIsRejectedBySetActiveMarkdownAPI",
+        "sourceVersionIDIsRejectedBySourceAPI",
+        "stringIsRejectedByChatCommandAPI",
+        "stringIsRejectedByLauncherChatAPI",
+    ]
 
     private enum ProcessExitWaitError: Error {
         case timedOut
@@ -81,6 +166,10 @@ struct IdentifierBoundaryTypecheckTests {
             .appendingPathComponent(name)
     }
 
+    private func allBoundaryCases() -> [FixtureCase] {
+        Self.batchFixtures.flatMap(\.cases)
+    }
+
     private func buildProducts(for fixtureName: String) throws -> BuildProducts {
         let buildDirectory = repositoryRoot().appendingPathComponent(".build")
         let fileManager = FileManager.default
@@ -123,7 +212,7 @@ struct IdentifierBoundaryTypecheckTests {
         )
     }
 
-    private func runTypecheck(_ fixtureName: String) async throws -> CompilerResult {
+    private func runTypecheck(fixtureName: String) async throws -> CompilerResult {
         let root = repositoryRoot()
         let buildProducts = try buildProducts(for: fixtureName)
         let scratchDirectory = root
@@ -146,6 +235,48 @@ struct IdentifierBoundaryTypecheckTests {
             "-I", buildProducts.modulesDirectory.path,
             "-module-cache-path", scratchDirectory.path,
             fixtureURL(fixtureName).path,
+        ]
+        arguments.insert(contentsOf: compilerSearchArguments(root: root, buildProducts: buildProducts), at: 6)
+        process.arguments = arguments
+        process.currentDirectoryURL = root
+
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+
+        try await asyncWaitUntilExit(process)
+
+        let outputData = output.fileHandleForReading.readDataToEndOfFile()
+        return CompilerResult(
+            status: process.terminationStatus,
+            output: String(decoding: outputData, as: UTF8.self)
+        )
+    }
+
+    private func runTypecheck(_ batch: BatchFixture) async throws -> CompilerResult {
+        let root = repositoryRoot()
+        let buildProducts = try buildProducts(for: batch.name)
+        let scratchDirectory = root
+            .appendingPathComponent("tmp/identifier-boundary-typecheck-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: scratchDirectory, withIntermediateDirectories: true)
+        defer {
+            do {
+                try FileManager.default.removeItem(at: scratchDirectory)
+            } catch {
+                Issue.record("failed to remove typecheck scratch directory: \(error)")
+            }
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        var arguments = [
+            "swiftc", "-typecheck",
+            "-target", typecheckTargetTriple(),
+            "-I", buildProducts.debugDirectory.path,
+            "-I", buildProducts.modulesDirectory.path,
+            "-module-cache-path", scratchDirectory.path,
+            batch.fixtureURL.path,
         ]
         arguments.insert(contentsOf: compilerSearchArguments(root: root, buildProducts: buildProducts), at: 6)
         process.arguments = arguments
@@ -282,231 +413,50 @@ struct IdentifierBoundaryTypecheckTests {
         return arguments
     }
 
+    @Test func fixtureTablePreservesAllNamedBoundaries() {
+        let labels = Set(allBoundaryCases().map(\.label))
+        #expect(labels == Self.expectedBoundaryLabels)
+    }
+
     @Test func positiveFixturesCompile() async throws {
-        let result = try await runTypecheck("positive.swift")
+        let result = try await runTypecheck(fixtureName: Self.positiveFixtures[0])
         #expect(result.status == 0, "positive fixture failed to typecheck:\n\(result.output)")
     }
 
     #if canImport(WikiFSEngine)
     @Test func positiveChatDomainFixturesCompile() async throws {
-        let result = try await runTypecheck("positive-chat-domain.swift")
+        let result = try await runTypecheck(fixtureName: "positive-chat-domain.swift")
         #expect(result.status == 0, "positive chat-domain fixture failed to typecheck:\n\(result.output)")
     }
     #endif
 
     #if os(macOS)
     @Test func launcherPositiveFixturesCompile() async throws {
-        let result = try await runTypecheck("positive-launcher-macos.swift")
+        let result = try await runTypecheck(fixtureName: "positive-launcher-macos.swift")
         #expect(result.status == 0, "launcher positive fixture failed to typecheck:\n\(result.output)")
     }
     #endif
 
-    @Test func pageIDIsRejectedByChatAPI() async throws {
-        let result = try await runTypecheck("page-id-to-chat-api.swift")
-        #expect(result.status != 0, "PageID unexpectedly typechecked at a ChatID API boundary.")
-        #expect(
-            result.output.contains("cannot convert value of type 'PageID' to expected argument type 'ChatID'"),
-            "unexpected compiler diagnostic:\n\(result.output)"
-        )
-    }
+    @Test func negativeFixturesCompileAndMapBoundaries() async throws {
+        for batch in Self.batchFixtures {
+            let result = try await runTypecheck(batch)
+            #expect(
+                result.status != 0,
+                "\(batch.name) unexpectedly typechecked; expected boundary diagnostics:\n\(result.output)"
+            )
 
-    #if os(macOS)
-    @Test func pageIDIsRejectedByLauncherChatAPI() async throws {
-        let result = try await runTypecheck("page-id-to-launcher-chat-api.swift")
-        #expect(result.status != 0, "PageID unexpectedly typechecked at AgentLauncher.startInteractiveQuery(chatID:).")
-        #expect(
-            result.output.contains("cannot convert value of type 'PageID' to expected argument type 'ChatID'"),
-            "unexpected compiler diagnostic:\n\(result.output)"
-        )
-    }
+            for expectedCase in batch.cases {
+                #expect(
+                    result.output.contains(expectedCase.expectedDiagnostic),
+                    "missing boundary \(expectedCase.label) in \(expectedCase.batchFixture):\n\(result.output)"
+                )
+            }
 
-    @Test func stringIsRejectedByLauncherChatAPI() async throws {
-        let result = try await runTypecheck("string-to-launcher-chat-api.swift")
-        #expect(result.status != 0, "String unexpectedly typechecked at AgentLauncher.startInteractiveQuery(chatID:).")
-        #expect(
-            result.output.contains("cannot convert value of type 'String' to expected argument type 'ChatID'"),
-            "unexpected compiler diagnostic:\n\(result.output)"
-        )
-    }
-    #endif
-
-    @Test func pageIDIsRejectedBySourceAPI() async throws {
-        let result = try await runTypecheck("page-id-to-source-api.swift")
-        #expect(result.status != 0, "PageID unexpectedly typechecked at a SourceID API boundary.")
-        #expect(
-            result.output.contains("cannot convert value of type 'PageID' to expected argument type 'SourceID'"),
-            "unexpected compiler diagnostic:\n\(result.output)"
-        )
-    }
-
-    @Test func pageIDIsRejectedBySourceVersionAPI() async throws {
-        let result = try await runTypecheck("page-id-to-source-version-api.swift")
-        #expect(result.status != 0, "PageID unexpectedly typechecked at a SourceVersionID API boundary.")
-        #expect(
-            result.output.contains("cannot convert value of type 'PageID' to expected argument type 'SourceVersionID'"),
-            "unexpected compiler diagnostic:\n\(result.output)"
-        )
-    }
-
-    @Test func chatIDIsRejectedByPageAPI() async throws {
-        let result = try await runTypecheck("chat-id-to-page-api.swift")
-        #expect(result.status != 0, "ChatID unexpectedly typechecked at a PageID API boundary.")
-        #expect(
-            result.output.contains("cannot convert value of type 'ChatID' to expected argument type 'PageID'"),
-            "unexpected compiler diagnostic:\n\(result.output)"
-        )
-    }
-
-    @Test func sourceIDIsRejectedByPageAPI() async throws {
-        let result = try await runTypecheck("source-id-to-page-api.swift")
-        #expect(result.status != 0, "SourceID unexpectedly typechecked at a PageID API boundary.")
-        #expect(
-            result.output.contains("cannot convert value of type 'SourceID' to expected argument type 'PageID'"),
-            "unexpected compiler diagnostic:\n\(result.output)"
-        )
-    }
-
-    @Test func sourceIDIsRejectedBySourceVersionAPI() async throws {
-        let result = try await runTypecheck("source-id-to-source-version-api.swift")
-        #expect(result.status != 0, "SourceID unexpectedly typechecked at a SourceVersionID API boundary.")
-        #expect(
-            result.output.contains("cannot convert value of type 'SourceID' to expected argument type 'SourceVersionID'"),
-            "unexpected compiler diagnostic:\n\(result.output)"
-        )
-    }
-
-    @Test func sourceIDIsRejectedByChatAPI() async throws {
-        let result = try await runTypecheck("source-id-to-chat-api.swift")
-        #expect(result.status != 0, "SourceID unexpectedly typechecked at a ChatID API boundary.")
-        #expect(
-            result.output.contains("cannot convert value of type 'SourceID' to expected argument type 'ChatID'"),
-            "unexpected compiler diagnostic:\n\(result.output)"
-        )
-    }
-
-    @Test func chatIDIsRejectedBySourceAPI() async throws {
-        let result = try await runTypecheck("chat-id-to-source-api.swift")
-        #expect(result.status != 0, "ChatID unexpectedly typechecked at a SourceID API boundary.")
-        #expect(
-            result.output.contains("cannot convert value of type 'ChatID' to expected argument type 'SourceID'"),
-            "unexpected compiler diagnostic:\n\(result.output)"
-        )
-    }
-
-    @Test func markdownVersionIDIsRejectedBySourceVersionAPI() async throws {
-        let result = try await runTypecheck("markdown-version-id-to-source-version-api.swift")
-        #expect(result.status != 0, "SourceMarkdownVersion.id unexpectedly typechecked at a SourceVersionID API boundary.")
-        #expect(
-            result.output.contains("cannot convert value of type 'SourceMarkdownVersionID' to expected argument type 'SourceVersionID'"),
-            "unexpected compiler diagnostic:\n\(result.output)"
-        )
-    }
-
-    @Test func pageIDIsRejectedByProcessedMarkdownVersionAPI() async throws {
-        let result = try await runTypecheck("page-id-to-processed-markdown-version-api.swift")
-        #expect(result.status != 0, "PageID unexpectedly typechecked at processedMarkdownVersion(id:).")
-        #expect(
-            result.output.contains("cannot convert value of type 'PageID' to expected argument type 'SourceMarkdownVersionID'"),
-            "unexpected compiler diagnostic:\n\(result.output)"
-        )
-    }
-
-    @Test func sourceIDIsRejectedByProcessedMarkdownVersionAPI() async throws {
-        let result = try await runTypecheck("source-id-to-processed-markdown-version-api.swift")
-        #expect(result.status != 0, "SourceID unexpectedly typechecked at processedMarkdownVersion(id:).")
-        #expect(
-            result.output.contains("cannot convert value of type 'SourceID' to expected argument type 'SourceMarkdownVersionID'"),
-            "unexpected compiler diagnostic:\n\(result.output)"
-        )
-    }
-
-    @Test func chatIDIsRejectedByProcessedMarkdownVersionAPI() async throws {
-        let result = try await runTypecheck("chat-id-to-processed-markdown-version-api.swift")
-        #expect(result.status != 0, "ChatID unexpectedly typechecked at processedMarkdownVersion(id:).")
-        #expect(
-            result.output.contains("cannot convert value of type 'ChatID' to expected argument type 'SourceMarkdownVersionID'"),
-            "unexpected compiler diagnostic:\n\(result.output)"
-        )
-    }
-
-    @Test func sourceVersionIDIsRejectedBySourceAPI() async throws {
-        let result = try await runTypecheck("source-version-id-to-source-api.swift")
-        #expect(result.status != 0, "SourceVersionID unexpectedly typechecked at a SourceID API boundary.")
-        #expect(
-            result.output.contains("cannot convert value of type 'SourceVersionID' to expected argument type 'SourceID'"),
-            "unexpected compiler diagnostic:\n\(result.output)"
-        )
-    }
-
-    @Test func sourceVersionIDIsRejectedByProcessedMarkdownVersionAPI() async throws {
-        let result = try await runTypecheck("source-version-id-to-processed-markdown-version-api.swift")
-        #expect(result.status != 0, "SourceVersionID unexpectedly typechecked at processedMarkdownVersion(id:).")
-        #expect(
-            result.output.contains("cannot convert value of type 'SourceVersionID' to expected argument type 'SourceMarkdownVersionID'"),
-            "unexpected compiler diagnostic:\n\(result.output)"
-        )
-    }
-
-    @Test func sourceVersionIDIsRejectedBySetActiveMarkdownAPI() async throws {
-        let result = try await runTypecheck("source-version-id-to-set-active-markdown-api.swift")
-        #expect(result.status != 0, "SourceVersionID unexpectedly typechecked at setActiveMarkdown(sourceID:to:).")
-        #expect(
-            result.output.contains("cannot convert value of type 'SourceVersionID' to expected argument type 'SourceMarkdownVersionID'"),
-            "unexpected compiler diagnostic:\n\(result.output)"
-        )
-    }
-
-    @Test func sourceVersionIDIsRejectedByPageAPI() async throws {
-        let result = try await runTypecheck("source-version-id-to-page-api.swift")
-        #expect(result.status != 0, "SourceVersionID unexpectedly typechecked at a PageID API boundary.")
-        #expect(
-            result.output.contains("cannot convert value of type 'SourceVersionID' to expected argument type 'PageID'"),
-            "unexpected compiler diagnostic:\n\(result.output)"
-        )
-    }
-
-    @Test func sourceVersionIDIsRejectedByChatAPI() async throws {
-        let result = try await runTypecheck("source-version-id-to-chat-api.swift")
-        #expect(result.status != 0, "SourceVersionID unexpectedly typechecked at a ChatID API boundary.")
-        #expect(
-            result.output.contains("cannot convert value of type 'SourceVersionID' to expected argument type 'ChatID'"),
-            "unexpected compiler diagnostic:\n\(result.output)"
-        )
-    }
-
-    @Test func pageIDIsRejectedByChatTurnAPI() async throws {
-        let result = try await runTypecheck("page-id-to-chat-turn-api.swift")
-        #expect(result.status != 0, "PageID unexpectedly typechecked at a ChatTurnID API boundary.")
-        #expect(
-            result.output.contains("cannot convert value of type 'PageID' to expected argument type 'ChatTurnID'"),
-            "unexpected compiler diagnostic:\n\(result.output)"
-        )
-    }
-
-    @Test func chatIDIsRejectedByChatMessageAPI() async throws {
-        let result = try await runTypecheck("chat-id-to-chat-message-api.swift")
-        #expect(result.status != 0, "ChatID unexpectedly typechecked at a ChatMessageID API boundary.")
-        #expect(
-            result.output.contains("cannot convert value of type 'ChatID' to expected argument type 'ChatMessageID'"),
-            "unexpected compiler diagnostic:\n\(result.output)"
-        )
-    }
-
-    @Test func stringIsRejectedByChatCommandAPI() async throws {
-        let result = try await runTypecheck("string-to-chat-command-api.swift")
-        #expect(result.status != 0, "String unexpectedly typechecked at a ChatCommandID API boundary.")
-        #expect(
-            result.output.contains("cannot convert value of type 'String' to expected argument type 'ChatCommandID'"),
-            "unexpected compiler diagnostic:\n\(result.output)"
-        )
-    }
-
-    @Test func permissionRequestIDIsRejectedByToolCallAPI() async throws {
-        let result = try await runTypecheck("permission-request-id-to-tool-call-api.swift")
-        #expect(result.status != 0, "PermissionRequestID unexpectedly typechecked at a ToolCallID API boundary.")
-        #expect(
-            result.output.contains("cannot convert value of type 'PermissionRequestID' to expected argument type 'ToolCallID'"),
-            "unexpected compiler diagnostic:\n\(result.output)"
-        )
+            let emittedDiagnostics = batch.cases.filter { result.output.contains($0.expectedDiagnostic) }
+            #expect(
+                emittedDiagnostics.count == batch.cases.count,
+                "batch \(batch.name) omitted one or more expected boundaries; expected \(batch.cases.count), saw \(emittedDiagnostics.count)"
+            )
+        }
     }
 }
