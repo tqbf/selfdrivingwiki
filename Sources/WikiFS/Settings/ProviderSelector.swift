@@ -340,17 +340,19 @@ struct ProviderSelector: View {
             let liveCapability = liveOption.map {
                 ThinkingCapabilityCatalog.observedACP($0.catalog)
             }
-            let resolution = config.resolveThinkingCapability(
-                providerID: provider.id,
-                modelID: selectedModelID,
-                configuredValueID: configuredThinkingValue,
-                liveCapability: liveCapability,
-                liveCurrentValueID: liveOption.map {
-                    ChatConfigurationValueID(rawValue: $0.currentValue)
-                })
             for family in Self.modelFamilies(
                 from: models,
-                resolution: resolution
+                preferredModelID: selectedModelID,
+                resolutionForModel: { modelID in
+                    config.resolveThinkingCapability(
+                        providerID: provider.id,
+                        modelID: modelID,
+                        configuredValueID: configuredThinkingValue,
+                        liveCapability: modelID == selectedModelID ? liveCapability : nil,
+                        liveCurrentValueID: modelID == selectedModelID ? liveOption.map {
+                            ChatConfigurationValueID(rawValue: $0.currentValue)
+                        } : nil)
+                }
             ) {
                 let model = family.selectedModel
                 rows.append(SelectorRow(
@@ -504,45 +506,53 @@ struct ProviderSelector: View {
         let selectedModel: CachedModelInfo
     }
 
-    /// Collapse only exact model IDs declared by a normalized model-variant
-    /// mechanism. Display names never define capability or family membership.
+    /// Collapse every exact model family declared by normalized model-variant
+    /// mechanisms. Display names never define capability or family membership.
     nonisolated static func modelFamilies(
         from models: [CachedModelInfo],
-        resolution: ThinkingSelectionResolution
+        preferredModelID: ModelID? = nil,
+        resolutionForModel: (ModelID) -> ThinkingSelectionResolution
     ) -> [ModelFamily] {
-        guard case .modelVariants(let mapping) = resolution.mechanism,
-              !mapping.isEmpty else {
-            return models.map { model in
-                ModelFamily(
+        var consumed: Set<ModelID> = []
+        var result: [ModelFamily] = []
+        for model in models where !consumed.contains(model.modelId) {
+            let resolution = resolutionForModel(model.modelId)
+            guard case .modelVariants(let mapping) = resolution.mechanism,
+                  !mapping.isEmpty else {
+                consumed.insert(model.modelId)
+                result.append(ModelFamily(
                     id: "model:\(model.modelId.rawValue)",
                     label: model.displayLabel,
                     models: [model],
-                    selectedModel: model)
+                    selectedModel: model))
+                continue
             }
-        }
-        let mappedIDs = Set(mapping.values)
-        let variants = models.filter { mappedIDs.contains($0.modelId) }
-        let selectedID = resolution.effectiveValueID.flatMap { mapping[$0] }
-        let selected = selectedID.flatMap { id in variants.first { $0.modelId == id } }
-            ?? variants.first
-        var result: [ModelFamily] = []
-        if let selected, let first = variants.first {
+            let mappedIDs = Set(mapping.values)
+            let variants = models.filter { mappedIDs.contains($0.modelId) }
+            guard variants.contains(where: { $0.modelId == model.modelId }) else {
+                consumed.insert(model.modelId)
+                result.append(ModelFamily(
+                    id: "model:\(model.modelId.rawValue)",
+                    label: model.displayLabel,
+                    models: [model],
+                    selectedModel: model))
+                continue
+            }
+            consumed.formUnion(mappedIDs)
+            let selectedID = resolution.effectiveValueID.flatMap { mapping[$0] }
+            let preferred = preferredModelID.flatMap { id in variants.first { $0.modelId == id } }
+            let selected = preferred
+                ?? selectedID.flatMap { id in variants.first { $0.modelId == id } }
+                ?? variants[0]
             let label = ThinkingEffortModelLabel.displayName(
-                for: first.displayLabel,
+                for: variants[0].displayLabel,
                 advertisedEfforts: resolution.capability?.displayAliases ?? [])
             result.append(ModelFamily(
-                id: "thinking:\(first.modelId.rawValue)",
+                id: "thinking:\(variants[0].modelId.rawValue)",
                 label: label,
                 models: variants,
                 selectedModel: selected))
         }
-        result.append(contentsOf: models.filter { !mappedIDs.contains($0.modelId) }.map { model in
-            ModelFamily(
-                id: "model:\(model.modelId.rawValue)",
-                label: model.displayLabel,
-                models: [model],
-                selectedModel: model)
-        })
         return result
     }
 

@@ -89,6 +89,12 @@ An independent Z.AI GLM 5.2 review found two medium test and safety gaps. The pa
 
 The final post-review gates passed. `make test` passed 3,356 tests across 310 suites. `make build`, `make lint`, and `git diff --check` also passed.
 
+A second live check found that the Thinking selector appeared, but the model picker collapsed only the active model family. Other Codex effort variants remained as bracketed model rows. `ProviderSelector` now resolves normalized capability for each candidate family and consumes each mapped family once. A production-shaped multi-family regression passed with the focused 20-test selector and presentation gate.
+
+The Z.AI GLM 5.2 picker review found two medium issues. The picker now preserves the preferred model variant within its family and degrades inconsistent mappings to singleton rows. The regression also covers interleaved family members.
+
+The final picker gates passed. `make test` passed 3,356 tests across 310 suites. `make build`, `make lint`, and `git diff --check` also passed.
+
 ## Remaining Work
 
-- Commit and push the fix to pull request 1114.
+- Commit and push the picker fix to pull request 1114.

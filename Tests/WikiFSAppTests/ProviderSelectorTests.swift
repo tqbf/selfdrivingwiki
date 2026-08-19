@@ -46,11 +46,48 @@ import ACPModel
             effectiveValueID: high)
         let families = ProviderSelector.modelFamilies(
             from: models,
-            resolution: resolution)
+            resolutionForModel: { _ in resolution })
 
         #expect(families.count == 1)
         #expect(families[0].label == "GPT-5.6-Sol")
         #expect(families[0].selectedModel.modelId == ModelID(rawValue: "gpt-5.6-sol[high]"))
+    }
+
+    @Test func legacyCodexSidecarCollapsesEveryThinkingFamily() {
+        let providerID = ProviderID(rawValue: "codex-acp")
+        let provider = AgentProvider(
+            id: providerID,
+            label: "Codex",
+            command: ["npx", "@agentclientprotocol/codex-acp@1.1.7"],
+            enabled: true,
+            isDefault: true)
+        let models = [
+            CachedModelInfo(modelId: ModelID(rawValue: "sol[low]"), name: "Sol (low)"),
+            CachedModelInfo(modelId: ModelID(rawValue: "terra[low]"), name: "Terra (low)"),
+            CachedModelInfo(modelId: ModelID(rawValue: "sol[high]"), name: "Sol (high)"),
+            CachedModelInfo(modelId: ModelID(rawValue: "terra[medium]"), name: "Terra (medium)"),
+            CachedModelInfo(modelId: ModelID(rawValue: "plain"), name: "Plain"),
+            CachedModelInfo(modelId: ModelID(rawValue: "terra[high]"), name: "Terra (high)"),
+        ]
+        let config = AgentProvidersConfig(
+            providers: [provider],
+            providerModels: [providerID.rawValue: models])
+
+        let families = ProviderSelector.modelFamilies(
+            from: models,
+            preferredModelID: ModelID(rawValue: "terra[high]"),
+            resolutionForModel: { modelID in
+                config.resolveThinkingCapability(providerID: providerID, modelID: modelID)
+            })
+
+        #expect(families.map(\.label) == ["Sol", "Terra", "Plain"])
+        #expect(families.map { $0.models.map(\.modelId) } == [
+            [ModelID(rawValue: "sol[low]"), ModelID(rawValue: "sol[high]")],
+            [ModelID(rawValue: "terra[low]"), ModelID(rawValue: "terra[medium]"), ModelID(rawValue: "terra[high]")],
+            [ModelID(rawValue: "plain")],
+        ])
+        #expect(families[0].selectedModel.modelId == ModelID(rawValue: "sol[low]"))
+        #expect(families[1].selectedModel.modelId == ModelID(rawValue: "terra[high]"))
     }
 
     @Test func modelFamiliesDoNotUseDisplaySuffixesWithoutMappedMechanism() {
@@ -64,7 +101,7 @@ import ACPModel
             effectiveValueID: nil)
         let families = ProviderSelector.modelFamilies(
             from: models,
-            resolution: resolution)
+            resolutionForModel: { _ in resolution })
 
         #expect(families.count == 2)
         #expect(families.map(\.label) == ["GPT-5.6-Luna (Low)", "GPT-5.6-Luna (High)"])
