@@ -27,6 +27,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
     private let fileProviderBox: FileProviderBox
     private let wikictlDirectory: String
     private let queueStore: QueueStore
+    private let providerServices: any AgentProviderServices
 
     /// Resolves the selected agent provider (from `agent-providers.json`) for
     /// the readiness probe. Injectable so tests can stub it without touching the
@@ -51,6 +52,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         fileProviderBox: FileProviderBox,
         wikictlDirectory: String,
         queueStore: QueueStore,
+        providerServices: any AgentProviderServices = UnavailableAgentProviderServices(),
         resolveSelectedProvider: @escaping () -> AgentProvider = {
             let dir = (DebugLog.trying("resolve app group container", operation: { try DatabaseLocation.appGroupContainerDirectory() }))
                 ?? FileManager.default.temporaryDirectory
@@ -66,6 +68,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         self.fileProviderBox = fileProviderBox
         self.wikictlDirectory = wikictlDirectory
         self.queueStore = queueStore
+        self.providerServices = providerServices
         self.resolveSelectedProvider = resolveSelectedProvider
         self.resolveProviderConfig = resolveProviderConfig
     }
@@ -91,15 +94,17 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             return msg
         }
 
-        let provider = resolveSelectedProvider()
-        let loginShellPath = await PathPreflight.loginShellPATH()
-        let message = AgentLauncher.readinessMessage(
-            for: provider,
-            searchPath: loginShellPath)
-        if message != nil {
+        guard await providerServices.readiness() else {
+            let provider = resolveSelectedProvider()
+            let loginShellPath = await PathPreflight.loginShellPATH()
+            let message = AgentLauncher.readinessMessage(
+                for: provider,
+                searchPath: loginShellPath)
+                ?? "Agent provider runtime is unavailable. Try again after app startup, or configure an agent provider in Settings → Providers."
             DebugLog.ingest("AppQueueIngestionProvider.readiness: NOT READY provider=\(provider.id) label=\(provider.label)")
+            return message
         }
-        return message
+        return nil
     }
 
     // MARK: - QueueIngestionProvider
@@ -455,6 +460,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
                 onWorkspaceMerge?()
             }
         )
+        await launcher.awaitProviderRelease()
     }
 
     /// Run a lint agent via `launcher.run(...)`. Like `runAgent` but without
@@ -492,6 +498,7 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             onLock: { store.agentRunStarted() },
             onUnlock: { store.agentRunEnded() }
         )
+        await launcher.awaitProviderRelease()
     }
 
     private func ingestSourcePath(for source: SourceSummary) -> String {

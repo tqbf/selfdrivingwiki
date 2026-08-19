@@ -29,6 +29,10 @@ struct WikiFSApp: App {
     @State private var sessionManager: SessionManager
     @State private var fileProvider = FileProviderFacade()
     @State private var installedRendererHost: InstalledRendererHost
+    /// Retains the app-scoped runtime's Cordis context for the lifetime of the
+    /// app. Agent launchers receive its services facade, not this handle.
+    @State private var agentProviderRuntimeHandle: AgentProviderRuntimeHandle?
+    @State private var agentProviderServices = MutableAgentProviderServices()
     /// One app-scoped launcher for Settings-only use ("Test Connection" + backend
     /// config). Has its own `GenerationGate`, independent of any session's gate
     /// — a Settings connection test doesn't block an active wiki's ingest.
@@ -154,6 +158,32 @@ struct WikiFSApp: App {
         // plans/keychain-sharing.md.
         KeychainSecretStore.migrateLegacyItemsToDataProtection()
         containerDirectory = directory
+        let providerServices = MutableAgentProviderServices()
+        _agentProviderServices = State(initialValue: providerServices)
+        let providerAssembly = AgentProviderRuntimeAssembly(
+            readConfiguration: {
+                AgentProvidersConfig.loadOrSeed(from: directory)
+            },
+            resolveCommand: { providers in
+                let loginShellPath = await PathPreflight.loginShellPATH()
+                return Dictionary(uniqueKeysWithValues: providers.compactMap { provider in
+                    AgentLauncher.resolveCommand(for: provider, searchPath: loginShellPath)
+                        .map { (provider.id, $0) }
+                })
+            },
+            readCredential: { providerID in
+                KeychainACPCredentialStore().apiKey(forProvider: providerID.rawValue)
+            },
+            resolvePermissionPolicy: { operation in
+                let key: String
+                switch operation {
+                case .chat: key = AgentLauncher.PermissionModeKey.chat
+                case .ingest: key = AgentLauncher.PermissionModeKey.ingest
+                case .lint: key = AgentLauncher.PermissionModeKey.lint
+                }
+                let raw = UserDefaults.standard.string(forKey: key) ?? ""
+                return PermissionPolicy(rawValue: raw) ?? .bypass
+            })
         // Populate wikis BEFORE handing the registry to @State so SwiftUI's
         // first render sees a non-empty list.  activateNow: false means
         // activeWikiID stays nil for that render — NSTableView's initial
@@ -201,7 +231,8 @@ struct WikiFSApp: App {
                             sessionBox: sessionBox,
                             fileProviderBox: fileProviderBox,
                             wikictlDirectory: HelpersLocation.wikictlDirectory,
-                            queueStore: store)
+                            queueStore: store,
+                            providerServices: providerServices)
                     }
                 })
                 .assemble()
@@ -231,6 +262,7 @@ struct WikiFSApp: App {
             extractionCoordinator: coordinator,
             queueEngine: queueEngine,
             extractionProvider: extractionProvider,
+            providerServices: providerServices,
             pdf2mdScriptPathResolver: { PdfExtractionService.resolveScript()?.path },
             htmlMarkdownExtractorFactory: { LocalDefuddleExtractor() },
             htmlBackendResolver: { ExtractionConfig.load(from: directory).htmlBackend },
@@ -262,7 +294,10 @@ struct WikiFSApp: App {
         // session's gate. Used for "Test Connection" + backend config only.
         let settingsGate = GenerationGate(laneLimits: [.ingest: 1, .interactive: 3])
         _settingsLauncher = State(initialValue: {
-            let l = AgentLauncher(generationGate: settingsGate, extractionCoordinator: coordinator)
+            let l = AgentLauncher(
+                generationGate: settingsGate,
+                extractionCoordinator: coordinator,
+                providerServices: providerServices)
             l.pdf2mdScriptPathResolver = { PdfExtractionService.resolveScript()?.path }
             return l
         }())
@@ -297,6 +332,16 @@ struct WikiFSApp: App {
         // so the `.task` copies that remain are harmless redundant fallbacks,
         // not the primary path. Add new one-time launch work HERE, not to an
         // individual window's `.task`.
+        Task { @MainActor [self, providerAssembly, providerServices] in
+            do {
+                let handle = try await providerAssembly.assemble()
+                await providerServices.install(handle.services)
+                agentProviderRuntimeHandle = handle
+            } catch {
+                DebugLog.agent("WikiFSApp: agent provider runtime assembly failed. Agent features are unavailable: \(error)")
+            }
+        }
+
         appDelegate.bootstrap = { [self] in
             startStatusItem()
             applyAppKitAppearance()

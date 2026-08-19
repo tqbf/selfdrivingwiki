@@ -88,7 +88,6 @@ struct ChatStreamedTextCommitRefreshTests {
                 chatID: chatID,
                 wikiID: WikiID(rawValue: "wiki-controller"),
                 store: store,
-                providersConfigurationDirectory: controllerHarness.rootDirectory,
                 runtime: controllerHarness.runtime,
                 pushEvent: { continuation.yield($0) }
             )

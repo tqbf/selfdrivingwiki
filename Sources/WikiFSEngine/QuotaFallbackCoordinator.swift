@@ -119,6 +119,10 @@ public final class QuotaFallbackCoordinator {
         chain.first { !isExhausted($0.id) }
     }
 
+    func firstLiveDescriptor(in chain: [AgentProviderDescriptor]) -> AgentProviderDescriptor? {
+        chain.first { !isExhausted($0.id) }
+    }
+
     /// Record a backend for teardown purposes.
     func recordBackend(_ backend: AgentBackend, forProvider providerId: ProviderID) {
         backends[providerId] = backend

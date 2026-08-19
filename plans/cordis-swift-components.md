@@ -486,4 +486,6 @@ The implementation still excludes these items:
 - a Cordis event bus;
 - dynamic loaders, packages, decorators, proxies, and HMR.
 
-Possible follow-up areas include daemon transport composition, extraction backend registration, renderer-provider lifetimes, and ACP provider discovery. Each area needs a separate plan and operator decision.
+The agent provider boundary now uses Cordis in both app and daemon processes. See `plans/cordis-agent-provider-composition.md`.
+
+Remaining areas include extraction backend registration, renderer lifetimes, and daemon transport composition. Each area needs a separate plan and operator decision.

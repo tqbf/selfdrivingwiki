@@ -20,7 +20,6 @@ actor DaemonChatController {
     private let chatID: ChatID
     private let wikiID: WikiID
     private let store: GRDBWikiStore
-    private let providersConfigurationDirectory: URL
     private let runtime: ChatAgentRuntime
     private let clock: @Sendable () -> Date
     private let pushEvent: @Sendable (QueueEventEnvelope) -> Void
@@ -66,7 +65,6 @@ actor DaemonChatController {
         chatID: ChatID,
         wikiID: WikiID,
         store: GRDBWikiStore,
-        providersConfigurationDirectory: URL,
         runtime: ChatAgentRuntime,
         pushEvent: @escaping @Sendable (QueueEventEnvelope) -> Void,
         diagnosticTrace: DaemonChatDiagnostics = DaemonChatDiagnostics(),
@@ -75,7 +73,6 @@ actor DaemonChatController {
         self.chatID = chatID
         self.wikiID = wikiID
         self.store = store
-        self.providersConfigurationDirectory = providersConfigurationDirectory
         self.runtime = runtime
         self.clock = clock
         self.pushEvent = pushEvent
@@ -309,7 +306,15 @@ actor DaemonChatController {
             break
         }
 
-        let startRequest = try currentRuntimeStartRequest()
+        let preparingGeneration = generation
+        let startPreparation = try await currentRuntimeStartPreparation()
+        guard generation == preparingGeneration,
+              startPreparation.request.generation == preparingGeneration,
+              runtimeCloseState == .open else {
+            await runtime.discardPreparedStart(startPreparation)
+            return
+        }
+        let startRequest = startPreparation.request
         let claimID = ChatTurnClaimID(rawValue: ULID.generate())
         let startedAt = clock()
         guard let claimed = try store.claimNextPersistedChatTurn(
@@ -319,6 +324,7 @@ actor DaemonChatController {
             providerID: startRequest.providerID,
             modelID: startRequest.modelID
         ) else {
+            await runtime.discardPreparedStart(startPreparation)
             return
         }
 
@@ -346,7 +352,7 @@ actor DaemonChatController {
             if let existingHandle = runtimeHandle {
                 handle = existingHandle
             } else {
-                handle = try await runtime.start(startRequest)
+                handle = try await runtime.start(startPreparation)
                 runtimeHandle = handle
                 runtimeStartRequest = startRequest
                 startEventLoop(handle)
@@ -383,6 +389,9 @@ actor DaemonChatController {
             }
             await observeDiagnostic(stage: .persistence, detail: "provider-submitted", turnID: claimed.submission.turnID)
         } catch {
+            if runtimeHandle == nil {
+                await runtime.discardPreparedStart(startPreparation)
+            }
             DebugLog.agent("DaemonChatController.processQueueIfPossible submit failed: \(error)")
             _ = await finishTurnIfCurrent(
                 turnID: claimed.submission.turnID,
@@ -392,6 +401,7 @@ actor DaemonChatController {
             )
             if let runtimeError = error as? LauncherChatAgentRuntime.RuntimeError,
                case .preflight(let message) = runtimeError {
+                _ = await closeRuntimeAndRotateGeneration()
                 throw DaemonChatError.preflightFailed(message)
             }
         }
@@ -863,33 +873,26 @@ actor DaemonChatController {
         )
     }
 
-    /// The configuration used to claim a turn is the exact configuration used
-    /// to start its runtime. Warm turns retain their existing session's
-    /// configuration instead of reading settings that can change mid-session.
-    private func currentRuntimeStartRequest() throws -> ChatRuntimeStartRequest {
-        if let runtimeStartRequest { return runtimeStartRequest }
+    /// Cold starts resolve provider, model, thinking, policy, credentials, and
+    /// backend state through one process-local preparation. Warm turns retain
+    /// the durable request from their active runtime.
+    private func currentRuntimeStartPreparation() async throws -> ChatRuntimePreparedStart {
+        if let runtimeStartRequest {
+            return ChatRuntimePreparedStart(request: runtimeStartRequest)
+        }
         let chat = try store.getChat(id: chatID)
-        let config = AgentProvidersConfig.loadOrSeed(from: providersConfigurationDirectory)
-        let catalogSelection = config.resolvedChatCatalogSelection(
-            chatOverrideProviderID: chat.modelProviderId,
-            chatOverrideModelID: chat.modelId)
-        let thinking = config.resolveThinkingCapability(
-            chatOverrideProviderID: chat.modelProviderId,
-            chatOverrideModelID: chat.modelId,
-            configuredValueID: chat.configuredThinkingOptionID,
-            priorEffectiveValueID: chat.effectiveThinkingOptionID)
-        let thinkingConfiguration = ResolvedThinkingConfiguration(
-            resolution: thinking,
-            priorEffectiveValueID: chat.effectiveThinkingOptionID)
-        return ChatRuntimeStartRequest(
+        let request = ChatRuntimeStartRequest(
             chatID: chatID,
             generation: generation,
             systemPrompt: try store.getSystemPrompt().body,
-            providerID: catalogSelection.provider.id,
-            modelID: thinkingConfiguration?.modelID ?? catalogSelection.model?.modelId,
+            providerID: chat.modelProviderId,
+            modelID: chat.modelId,
             existingProviderSessionID: chat.acpSessionId,
-            thinkingConfiguration: thinkingConfiguration
-        )
+            thinkingConfiguration: nil)
+        return try await runtime.prepareStart(ChatRuntimeStartInput(
+            request: request,
+            configuredThinkingOptionID: chat.configuredThinkingOptionID,
+            priorEffectiveThinkingOptionID: chat.effectiveThinkingOptionID))
     }
 
     private static let zeroUsage = SessionUsage(

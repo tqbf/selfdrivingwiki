@@ -8,6 +8,94 @@ import Testing
 @testable import wikid
 
 struct LauncherChatAgentRuntimeTests {
+    @Test @MainActor
+    func preparedColdStartReadsOnceAndPreflightRetryDoesNotReuseReleasedToken() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("prepared-chat-start-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let provider = AgentProvider(
+            id: ProviderID(rawValue: "prepared-provider"),
+            label: "Prepared",
+            command: ["/usr/bin/true"],
+            enabled: true,
+            isDefault: true)
+        let configuration = AgentProvidersConfig(
+            providers: [provider],
+            selectedModelIds: [provider.id.rawValue: ModelID(rawValue: "prepared-model")])
+        let reads = LockedInt()
+        let backend = FakeAgentBackend(behaviors: [
+            FakeSessionBehavior(shouldFailOnStart: true),
+            FakeSessionBehavior(),
+        ])
+        let services = AgentProviderRuntime(
+            readConfiguration: {
+                reads.increment()
+                return configuration
+            },
+            resolveCommand: { providers in
+                Dictionary(uniqueKeysWithValues: providers.compactMap { provider in
+                    provider.command.map { (provider.id, $0) }
+                })
+            },
+            readCredential: { _ in nil },
+            resolvePermissionPolicy: { _ in .bypass },
+            makeBackend: { _, _, _ in backend })
+        let store = try GRDBWikiStore(databaseURL: directory.appendingPathComponent("wiki.sqlite"))
+        let chat = try store.createChat(kind: .edit, title: "Prepared start")
+        let coordinator = ExtractionCoordinator(
+            containerDirectory: directory,
+            localExtractorFactory: { UnavailablePdf2MarkdownExtractor() })
+        let gate = GenerationGate(laneLimits: [.ingest: 1, .interactive: 1])
+        let runtime = LauncherChatAgentRuntime(
+            chatID: chat.id,
+            wikiID: WikiID(rawValue: "prepared-wiki"),
+            store: store,
+            extractionCoordinator: coordinator,
+            generationGate: gate,
+            pushEvent: { _ in },
+            onSessionID: { _ in },
+            onStateUpdate: { _ in },
+            onLiveEvents: { _ in },
+            providerServices: services,
+            onMessageSummary: { _ in },
+            launcherConfigurator: { launcher in launcher.containerDirectory = directory })
+        let input = ChatRuntimeStartInput(
+            request: ChatRuntimeStartRequest(
+                chatID: chat.id,
+                generation: ChatSessionGenerationID(rawValue: "prepared-generation"),
+                systemPrompt: "",
+                providerID: nil,
+                modelID: nil,
+                existingProviderSessionID: nil),
+            configuredThinkingOptionID: nil,
+            priorEffectiveThinkingOptionID: nil)
+
+        let prepared = try await runtime.prepareStart(input)
+        #expect(reads.value == 1)
+        let handle = try await runtime.start(prepared)
+        let first = ChatTurnSubmission(
+            commandID: ChatCommandID(rawValue: "prepared-command-1"),
+            turnID: ChatTurnID(rawValue: "prepared-turn-1"),
+            userText: "first",
+            contextReferences: [],
+            submittedAt: Date())
+        await #expect(throws: LauncherChatAgentRuntime.RuntimeError.self) {
+            try await runtime.submitTurn(first, in: handle)
+        }
+        let second = ChatTurnSubmission(
+            commandID: ChatCommandID(rawValue: "prepared-command-2"),
+            turnID: ChatTurnID(rawValue: "prepared-turn-2"),
+            userText: "second",
+            contextReferences: [],
+            submittedAt: Date())
+        try await runtime.submitTurn(second, in: handle)
+
+        #expect(reads.value == 2)
+        #expect(await backend.startCount == 2)
+        await runtime.close(handle)
+    }
+
     @Test func permissionTranslationPreservesToolCallIDAndTypedOptions() {
         let request = LauncherChatAgentRuntime.permissionRequest(
             from: PendingPermission(
@@ -176,6 +264,7 @@ struct LauncherChatAgentRuntimeTests {
             onLiveEvents: { events in
                 await liveSink.receive(events)
             },
+            providerServices: UnavailableAgentProviderServices(),
             onMessageSummary: { _ in },
             launcherConfigurator: { launcher in
                 launcher.resolveBackend = { _, _, _ in backend }
@@ -288,5 +377,17 @@ private actor SuspendingLiveEventSink {
     }
 
     var events: [AgentEvent] { recordedEvents }
+}
+private final class LockedInt: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValue = 0
+
+    var value: Int {
+        lock.withLock { storedValue }
+    }
+
+    func increment() {
+        lock.withLock { storedValue += 1 }
+    }
 }
 #endif
