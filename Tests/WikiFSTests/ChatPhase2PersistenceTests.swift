@@ -7,7 +7,7 @@ import SQLite3
 #endif
 @testable import WikiFSCore
 #if os(macOS)
-import WikiFSSearch
+@testable import WikiFSSearch
 #endif
 
 struct ChatPhase2PersistenceTests {

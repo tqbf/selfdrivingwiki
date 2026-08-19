@@ -133,6 +133,22 @@ struct SessionManagerTests {
         #expect(session.store.eventBus != nil) // session still alive (test holds ref)
     }
 
+    @Test func shutdownSearchRuntimesAwaitsReleasedSession() async throws {
+        let dir = tempDirectory()
+        let registry = makeSeededRegistry(dir: dir)
+        let manager = makeSessionManager(dir: dir)
+        let descriptor = try #require(registry.wikis.first)
+        let session = try manager.session(for: descriptor.id, descriptor: descriptor)
+
+        manager.releaseSession(for: descriptor.id)
+        await manager.shutdownSearchRuntimes()
+
+        #expect(manager.sessions.isEmpty)
+        await #expect(throws: SearchServicesError.self) {
+            try await session.searchServices.search(query: "Home", kinds: [.page], limit: 5)
+        }
+    }
+
     // MARK: - flushAllSessions()
 
     @Test func testFlushAllSessionsFlushesAllActive() {

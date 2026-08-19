@@ -110,15 +110,20 @@ enum SidebarDropBuilder {
     static func wikiLinkAutocompleteHooks(
         store: WikiStoreModel
     ) -> WikiLinkAutocompleteHooks? {
-        guard let search = store.tantivySearch else { return nil }
+        let search = store.searchServices
         return WikiLinkAutocompleteHooks(
             fetch: { partial, kind in
                 let tantivyKind = WikiLinkAutocompleteController.tantivyKind(for: kind)
-                return await search.autocomplete(
-                    partial: partial,
-                    kinds: [tantivyKind],
-                    distance: 2,
-                    limit: 8)
+                do {
+                    return try await search.autocomplete(
+                        partial: partial,
+                        kinds: [tantivyKind],
+                        distance: 2,
+                        limit: 8)
+                } catch {
+                    DebugLog.store("Editor autocomplete unavailable: \(error)")
+                    return []
+                }
             },
             format: { hit in
                 // Map the search hit back to a ParsedLink.LinkType for the

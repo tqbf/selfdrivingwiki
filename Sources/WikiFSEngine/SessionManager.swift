@@ -65,6 +65,14 @@ public final class SessionManager {
     /// headless queue engine to `@MainActor` types.
     public let extractionProvider: any QueueExtractionProvider
 
+    /// Owns the private process search root and per-wiki child lifetimes.
+    public let searchRuntimeRegistry: SearchRuntimeRegistry
+    private struct SearchRelease: Sendable {
+        let token: UUID
+        let task: Task<Void, Never>
+    }
+    @ObservationIgnored private var searchReleaseTasks: [WikiID: SearchRelease] = [:]
+
     /// App-scoped provider composition facade shared by every session launcher.
     /// The app supplies the runtime services, or an unavailable fallback when
     /// assembly fails, so non-agent wiki features remain usable.
@@ -118,6 +126,7 @@ public final class SessionManager {
         extractionCoordinator: ExtractionCoordinator,
         queueEngine: any QueueEngineClient,
         extractionProvider: any QueueExtractionProvider,
+        searchRuntimeRegistry: SearchRuntimeRegistry = SearchRuntimeRegistry(),
         providerServices: any AgentProviderServices = UnavailableAgentProviderServices(),
         pdf2mdScriptPathResolver: @escaping () -> String?,
         htmlMarkdownExtractorFactory: @escaping @MainActor () -> (any HtmlMarkdownExtractor)? = { nil },
@@ -130,6 +139,7 @@ public final class SessionManager {
         self.extractionCoordinator = extractionCoordinator
         self.queueEngine = queueEngine
         self.extractionProvider = extractionProvider
+        self.searchRuntimeRegistry = searchRuntimeRegistry
         self.providerServices = providerServices
         self.pdf2mdScriptPathResolver = pdf2mdScriptPathResolver
         self.htmlMarkdownExtractorFactory = htmlMarkdownExtractorFactory
@@ -166,6 +176,8 @@ public final class SessionManager {
                 extractionCoordinator: extractionCoordinator,
                 queueEngine: queueEngine,
                 extractionProvider: extractionProvider,
+                searchRuntimeRegistry: searchRuntimeRegistry,
+                searchStartupPrerequisite: searchReleaseTasks[wikiID]?.task,
                 providerServices: providerServices,
                 makeStore: makeStore,
                 pdf2mdScriptPathResolver: pdf2mdScriptPathResolver,
@@ -203,6 +215,23 @@ public final class SessionManager {
     public func releaseSession(for wikiID: WikiID) {
         guard let session = sessions.removeValue(forKey: wikiID) else { return }
         session.store.flushPendingSaves()
+        let token = UUID()
+        let task = Task { @MainActor [weak self] in
+            await session.shutdownSearchRuntime()
+            guard self?.searchReleaseTasks[wikiID]?.token == token else { return }
+            self?.searchReleaseTasks[wikiID] = nil
+        }
+        searchReleaseTasks[wikiID] = SearchRelease(token: token, task: task)
+    }
+
+    /// Release all live sessions, await owned teardown, then dispose the private
+    /// search root. Safe to call repeatedly during app termination.
+    public func shutdownSearchRuntimes() async {
+        for wikiID in Array(sessions.keys) { releaseSession(for: wikiID) }
+        let releases = Array(searchReleaseTasks.values)
+        for release in releases { await release.task.value }
+        searchReleaseTasks.removeAll()
+        await searchRuntimeRegistry.shutdown()
     }
 
     /// Flush pending saves for ONE session (used by the registry's

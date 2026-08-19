@@ -311,20 +311,10 @@ public final class WikiStoreModel {
     /// main-actor store. See `WikiReadPool` for the safety argument.
     @ObservationIgnored public var readPool: WikiReadPool?
 
-    /// Phase 2 Tantivy BM25 search service (plans/tantivy-search-sidecar.md §4.4).
-    /// Injected by `WikiSession` after init (the service is built from the same
-    /// store + bus the model wraps, but construction happens post-init so this is
-    /// set rather than a constructor param — same lifecycle as `readPool`).
-    /// `nil` when Tantivy construction failed (the session never breaks over a
-    /// derived index) — search then runs without a BM25 leg (cosine-only when
-    /// semantic search is available).
-    #if os(macOS)
-    @ObservationIgnored public var tantivySearch: TantivySearchService?
-    #else
-    // Linux: Tantivy is unavailable — the search path uses `nil` `bm25Leg`
-    // (no lexical BM25 leg on this branch).
-    @ObservationIgnored public var tantivySearch: Any?
-    #endif
+    /// Stable Tantivy BM25 facade. It starts unavailable and is installed only
+    /// after the per-wiki runtime finishes rebuild and buffered-event catch-up.
+    /// Typed failures map to a missing BM25 leg; semantic search remains usable.
+    @ObservationIgnored public var searchServices: any SearchServices = UnavailableSearchServices()
     /// Injectable HTML→Markdown extractor (defuddle). Set at app wiring time by
     /// `WikiSession` → `SessionManager` → `WikiFSApp`. `nil` means fall back to
     /// the tag-based `HTMLToMarkdown` path (CI, clean dev before `make build`).
@@ -4041,7 +4031,6 @@ public final class WikiStoreModel {
     //
     // FTS5 was retired in #634, so there is no lexical fallback path here.
 
-    #if os(macOS)
     /// Resolve Tantivy BM25 hits into full typed summaries from a cached
     /// catalog, preserving Tantivy's best-first rank order. Returns `nil` when
     /// Tantivy is unavailable, the index returned nothing, or every hit was
@@ -4057,8 +4046,13 @@ public final class WikiStoreModel {
         catalog: [T],
         id: (String) -> T.ID
     ) async -> [T]? where T.ID: Hashable {
-        guard let svc = tantivySearch else { return nil }
-        let hits = await svc.search(query: query, kinds: [kind], limit: limit)
+        let hits: [TantivyShadowSearchResult]
+        do {
+            hits = try await searchServices.search(query: query, kinds: [kind], limit: limit)
+        } catch {
+            DebugLog.store("WikiStoreModel: Tantivy BM25 leg unavailable for query=\"\(query)\": \(error)")
+            return nil
+        }
         guard !hits.isEmpty else { return nil }
         let byID = Dictionary(catalog.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         let resolved = hits.compactMap { hit -> T? in
@@ -4066,18 +4060,6 @@ public final class WikiStoreModel {
         }
         return resolved.isEmpty ? nil : resolved
     }
-
-    #else
-    // Linux: Tantivy is unavailable — the BM25 leg is always nil (no lexical
-    // fallback path on this branch).
-    private func resolveTantivyLeg<T: Identifiable & Sendable>(
-        query: String,
-        kind: TantivyDocumentKind,
-        limit: Int,
-        catalog: [T],
-        id: (String) -> T.ID
-    ) async -> [T]? where T.ID: Hashable { nil }
-    #endif
 
     /// Phase 2 shadow-comparison log. With Option B the FTS5 leg isn't run
     /// separately when Tantivy succeeds, so the meaningful Phase 2 signal is: of

@@ -2,6 +2,8 @@ import Foundation
 import WikiFSCore
 
 #if os(macOS)
+import Cordis
+import WikiFSEngine
 /// Bridges the wikictl CLI's three search commands (`page search`,
 /// `source search`, `chat search`) onto the SAME Tantivy BM25 leg the app's
 /// sidebar / omnibox use (#637).
@@ -16,8 +18,8 @@ import WikiFSCore
 /// post-#634 means `bm25Leg: nil` has NO BM25 leg at all (cosine-only, empty
 /// under `swift test` where NLEmbedding is app-gated).
 ///
-/// This resolver constructs a CLI-owned `TantivySearchService` over the SAME
-/// on-disk index the app builds/maintains (the index is a derived artifact, so
+/// This resolver assembles a request-owned search runtime over the SAME on-disk
+/// index the app builds and maintains. The index is a derived artifact, so
 /// concurrently opening it read-only is safe — SQLite remains the source of
 /// truth), runs the kind-scoped search asynchronously via the actor, and resolves the
 /// hits to typed summaries (`WikiPageSummary` / `SourceSummary` / `ChatSummary`)
@@ -29,14 +31,9 @@ import WikiFSCore
 /// every hit was missing from the catalog. Post-#634, `nil` means "no BM25
 /// leg" — the store's FTS5 fallback was dropped (#634); the cosine leg still
 /// answers when NLEmbedding/MLX is available (Swift-side `VectorCosine`,
-/// issue #628 — no C scalar). As long as the wiki
-/// has been opened in the app at least once (the app kicks off the initial
-/// build via `TantivyShadowSync.start()`), the Tantivy leg is populated.
+/// issue #628 — no C scalar). Request-scoped runtime startup rebuilds an empty
+/// derived index before querying, including for wikis not yet opened by the app.
 public enum CLITantivyLegResolver {
-    private enum SearchRetryPolicy {
-        static let maximumAttempts = 5
-    }
-
     struct SearchRequestKey: Hashable, Sendable {
         let wikiID: WikiID
         let containerPath: String
@@ -80,16 +77,10 @@ public enum CLITantivyLegResolver {
                     return testResults
                 }
 
-                guard let service = CLITantivyLegResolver.makeService(
+                return await CLITantivyLegResolver.runEphemeralSearch(
                     wikiID: wikiID,
                     containerDirectory: containerDirectory,
-                    store: store)
-                else {
-                    return []
-                }
-
-                return await CLITantivyLegResolver.runSearch(
-                    svc: service,
+                    store: store,
                     query: query,
                     kind: kind,
                     limit: limit)
@@ -281,55 +272,59 @@ public enum CLITantivyLegResolver {
 
     // MARK: - Internal
 
-    /// Construct a CLI-owned `TantivySearchService` over the same on-disk
-    /// index the app builds/maintains. `nil` (not an error) when the index
-    /// can't be opened — failures are logged via `DebugLog.store` so they're
-    /// visible in Console.app even from the CLI invocation.
-    private static func makeService(
+    /// Assemble one request-scoped root and child, await deterministic startup,
+    /// query once, then dispose child before root. Failures remain fail-soft at
+    /// the CLI boundary and produce no BM25 leg.
+    private static func runEphemeralSearch(
         wikiID: WikiID,
         containerDirectory: URL,
-        store: WikiStore
-    ) -> TantivySearchService? {
-        let contentSource = StoreBackedTantivyContentSource(store: store)
-        do {
-            return try TantivySearchService(
-                wikiID: wikiID,
-                containerDirectory: containerDirectory,
-                contentSource: contentSource
-            )
-        } catch {
-            DebugLog.store("wikictl: Tantivy search index unavailable for wiki \(wikiID.rawValue): \(error)")
-            return nil
-        }
-    }
-
-    /// Calls `rebuildIfNeeded()` before querying — opening a fresh
-    /// `TantivySearchService` against an existing on-disk index can initially
-    /// report `count == 0` until the rebuild path runs (the index open seems
-    /// to need a kick for the in-memory state to reflect disk). The rebuild
-    /// is itself a no-op when the index already has documents (a single
-    /// `count()` call short-circuits) — so the steady-state cost is one
-    /// `count()` per CLI search invocation. When the index is empty or
-    /// missing (the wiki has been used via `wikictl` but never opened in the
-    /// app, so `TantivyShadowSync.start()` never ran), this is what surfaces
-    /// the content.
-    private static func runSearch(
-        svc: TantivySearchService,
+        store: WikiStore,
         query: String,
         kind: TantivyDocumentKind,
         limit: Int
     ) async -> [TantivyShadowSearchResult] {
-        for attempt in 1...SearchRetryPolicy.maximumAttempts {
-            // Mirror TantivyShadowSync.start()'s rebuild-on-open: cheap
-            // (count-check) when the index is populated, essential when empty.
-            await svc.rebuildIfNeeded()
-            let hits = await svc.search(query: query, kinds: [kind], limit: limit)
-            if !hits.isEmpty || attempt == SearchRetryPolicy.maximumAttempts {
-                return hits
+        let root = CordisContext()
+        var handle: SearchRuntimeHandle?
+        do {
+            let child = try await root.child()
+            let assembly = SearchRuntimeAssembly(
+                identity: SearchRuntimeIdentity(
+                    wikiID: wikiID,
+                    containerDirectory: containerDirectory),
+                contentSource: StoreBackedTantivyContentSource(store: store),
+                changeStreamFactory: FinishedSearchChangeStreamFactory())
+            let assembled = try await assembly.assemble(in: child)
+            handle = assembled
+            let hits = try await assembled.services.search(
+                query: query,
+                kinds: [kind],
+                limit: limit)
+            await dispose(handle: assembled, root: root, wikiID: wikiID)
+            return hits
+        } catch {
+            DebugLog.store("wikictl: Tantivy search unavailable for wiki \(wikiID.rawValue): \(error)")
+            await dispose(handle: handle, root: root, wikiID: wikiID)
+            return []
+        }
+    }
+
+    private static func dispose(
+        handle: SearchRuntimeHandle?,
+        root: CordisContext,
+        wikiID: WikiID
+    ) async {
+        if let handle {
+            do {
+                try await handle.dispose()
+            } catch {
+                DebugLog.store("wikictl: search child cleanup failed for wiki \(wikiID.rawValue): \(error)")
             }
         }
-
-        return []
+        do {
+            try await root.dispose()
+        } catch {
+            DebugLog.store("wikictl: search root cleanup failed for wiki \(wikiID.rawValue): \(error)")
+        }
     }
 
     /// Map best-first Tantivy hits to typed summaries via the supplied catalog,

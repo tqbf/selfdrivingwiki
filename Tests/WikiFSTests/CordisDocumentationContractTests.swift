@@ -71,6 +71,30 @@ struct CordisDocumentationContractTests {
         #expect(rendererPlan.contains("They never receive a `CordisContext`, `ActivationContext`, or `ServiceKey`"))
         #expect(rendererProgress.contains("RendererRuntimeAssembly"))
         #expect(rendererProgress.contains("RendererCompositionOwner"))
+
+        let searchPlanPath = "plans/cordis-search-services.md"
+        let searchProgressPath = "progress/2026-08-19T194500Z-cordis-search-services.md"
+        let searchPlan = try String(
+            contentsOf: root.appendingPathComponent(searchPlanPath),
+            encoding: .utf8)
+        let searchProgress = try String(
+            contentsOf: root.appendingPathComponent(searchProgressPath),
+            encoding: .utf8)
+        #expect(index.contains("[`\(searchPlanPath)`](\(searchPlanPath))"))
+        #expect(index.contains("[`\(searchProgressPath)`](\(searchProgressPath))"))
+        for label in [
+            "search.identity", "search.content-source", "search.change-stream-factory",
+            "search.indexer", "search.runtime", "search.services",
+        ] {
+            #expect(searchPlan.contains(label))
+        }
+        #expect(searchPlan.contains("one private search root context"))
+        #expect(searchPlan.contains("one child context"))
+        #expect(searchPlan.contains("`WikiStore` and `WikiEventBus`"))
+        #expect(searchPlan.contains("SQLite and GRDB connections, statements, transactions, and read pools"))
+        #expect(searchPlan.contains("`WikiStoreModel`, `WikiSession`, and `SessionManager`"))
+        #expect(searchProgress.contains("SearchRuntimeAssembly"))
+        #expect(searchProgress.contains("SearchCompositionOwner"))
     }
 }
 

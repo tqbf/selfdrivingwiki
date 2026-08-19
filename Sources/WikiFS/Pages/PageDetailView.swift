@@ -463,7 +463,7 @@ struct PageDetailView: View {
             },
             // Issue #680: wiki-link autocomplete in the editor. Same hooks +
             // search backend as the chat composer (#684), re-pointed at the
-            // editor's `ScrollableTextEditor`. Built from `store.tantivySearch`
+            // editor's `ScrollableTextEditor`. Built from `store.searchServices`
             // so a wiki without one (no Tantivy service yet attached) gets
             // `nil` and the editor behaves as before.
             autocomplete: SidebarDropBuilder.wikiLinkAutocompleteHooks(store: store),

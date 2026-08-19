@@ -280,11 +280,13 @@ struct WikiFSApp: App {
         _fileProviderBox = State(initialValue: fileProviderBox)
         _activityTracker = State(initialValue: activityTracker)
 
+        let searchRuntimeRegistry = SearchRuntimeRegistry()
         let sm = SessionManager(
             containerDirectory: directory,
             extractionCoordinator: coordinator,
             queueEngine: queueEngine,
             extractionProvider: extractionProvider,
+            searchRuntimeRegistry: searchRuntimeRegistry,
             providerServices: providerServices,
             pdf2mdScriptPathResolver: { PdfExtractionService.resolveScript()?.path },
             htmlMarkdownExtractorFactory: { LocalDefuddleExtractor() },
@@ -547,10 +549,12 @@ struct WikiFSApp: App {
         }
         appDelegate.shutdownForTermination = { [
             localQueueRuntimeController,
+            sessionManager,
             extractionCompositionOwner,
             rendererCompositionOwner
         ] in
             _ = await localQueueRuntimeController.dispose()
+            await sessionManager.shutdownSearchRuntimes()
             await extractionCompositionOwner.shutdown()
             await rendererCompositionOwner.shutdown()
         }

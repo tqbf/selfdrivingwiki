@@ -75,6 +75,9 @@ struct CordisSourcePolicyTests {
             "Sources/WikiFSEngine/AgentProviderRuntimeAssembly.swift",
             "Sources/WikiFSEngine/QueueRuntimeAssembly.swift",
             "Sources/WikiFSEngine/ExtractionRuntimeAssembly.swift",
+            "Sources/WikiFSEngine/SearchRuntimeAssembly.swift",
+            "Sources/WikiFSEngine/SearchRuntimeRegistry.swift",
+            "Sources/WikiCtlCore/CLITantivyLegResolver.swift",
             "Sources/WikiFS/Renderer/RendererRuntimeAssembly.swift",
         ])
         let forbiddenPatterns = [
