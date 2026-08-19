@@ -43,6 +43,8 @@ struct WikiFSApp: App {
     @State private var extractionCoordinator: ExtractionCoordinator
     /// Owns the app-scoped extraction context and its asynchronous startup.
     private let extractionCompositionOwner: ExtractionCompositionOwner
+    /// Owns the app-scoped renderer context, bootstrap, publication, and shutdown.
+    private let rendererCompositionOwner: RendererCompositionOwner
     /// App-wide queue engine. Owns the persistent `queue.sqlite` store; drives
     /// extraction/ingestion workers off-main. One instance, shared across
     /// sessions via `WikiSession`.
@@ -293,7 +295,32 @@ struct WikiFSApp: App {
             }
         )
         _sessionManager = State(initialValue: sm)
-        _installedRendererHost = State(initialValue: InstalledRendererHost.production())
+        let rendererLayout: RendererPackageStoreLayout
+        do {
+            rendererLayout = try RendererPackageStoreLayout(appGroupContainerRoot: directory)
+        } catch {
+            preconditionFailure("Resolved app-group renderer layout was invalid: \(error)")
+        }
+        let rendererOwner = RendererCompositionOwner {
+            try await RendererRuntimeAssembly(
+                layout: rendererLayout,
+                bundledPackageSource: { BundledRendererPackages.excalidrawResourceURL() },
+                reviewedBundledIdentity: .init(
+                    packageID: BundledRendererPackages.excalidrawPackageID,
+                    version: BundledRendererPackages.excalidrawVersion,
+                    registrationID: BundledRendererPackages.excalidrawRegistrationID))
+                .assemble()
+        }
+        rendererCompositionOwner = rendererOwner
+        let rendererHost = InstalledRendererHost(services: rendererOwner.services)
+        _installedRendererHost = State(initialValue: rendererHost)
+        Task { @MainActor in
+            await rendererOwner.start()
+            await rendererOwner.awaitSettled()
+            if let publication = await rendererOwner.consumeStartupPreparation() {
+                publication.publish(to: rendererHost)
+            }
+        }
         _windowTracker = State(initialValue: WindowListTracker())
         
         let backgroundIngestCoordinator = BackgroundIngestCoordinator(
@@ -518,9 +545,14 @@ struct WikiFSApp: App {
             // which is the whole point of the daemon architecture. The daemon
             // re-dispatches on its own when the app reconnects.
         }
-        appDelegate.shutdownForTermination = { [localQueueRuntimeController, extractionCompositionOwner] in
+        appDelegate.shutdownForTermination = { [
+            localQueueRuntimeController,
+            extractionCompositionOwner,
+            rendererCompositionOwner
+        ] in
             _ = await localQueueRuntimeController.dispose()
             await extractionCompositionOwner.shutdown()
+            await rendererCompositionOwner.shutdown()
         }
         appDelegate.unregisterDaemon = {
             // The daemon is a bundled XPC service — the system manages its
@@ -753,7 +785,6 @@ struct WikiFSApp: App {
                 openActivityWindow: { [weak openWindowBridge] queue in openWindowBridge?.openActivityWindow?(queue) },
                 chatDaemon: chatDaemonCoordinator,
                 healthMonitor: healthMonitor)
-            .task { await installedRendererHost.bootstrapBundledRendererPackages() }
             .preferredColorScheme(appearanceColorScheme)
             .alert(
                 "Install Self Driving Wiki in Applications",

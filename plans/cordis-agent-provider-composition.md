@@ -111,6 +111,6 @@ The controller uses the redacted request from that preparation for durable claim
 
 `ChatRuntimeStartRequest` keeps its Codable wire shape. Process-local tokens remain outside JSON, XPC, and persistence.
 
-Extraction backend registration and renderer lifetimes remain separate Cordis migrations.
+Extraction backend registration and renderer package composition now use separate implemented Cordis domains.
 
 Cordis still excludes dynamic loaders, provider plugins, an event bus, hot module replacement, and SwiftUI service lookup.

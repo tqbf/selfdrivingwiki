@@ -373,7 +373,7 @@ struct WikiAppWebViewTests {
             session: session,
             registry: registry,
             fileProvider: FileProviderFacade(),
-            installedRendererHost: InstalledRendererHost(machineStore: nil, layout: nil)
+            installedRendererHost: InstalledRendererHost(services: UnavailableRendererServices())
         )
         .environment(FindModel())
         .environment(QueueActivityTracker())

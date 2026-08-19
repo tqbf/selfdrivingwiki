@@ -113,7 +113,7 @@ These values stay outside the extraction context:
 - renderer, File Provider, and daemon transport services;
 - logging services and all existing `DebugLog` calls.
 
-Renderer, File Provider, and transport composition remain possible later service domains. This record does not define those migrations.
+The app now implements renderer package composition as a separate Cordis domain. File Provider and transport composition remain possible later domains.
 
 ## Compatibility
 

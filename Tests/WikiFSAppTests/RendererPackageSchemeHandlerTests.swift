@@ -103,7 +103,7 @@ struct RendererPackageSchemeHandlerTests {
     }
 }
 
-private final class StubResourceProvider: RendererPackageResourceProviding {
+private struct StubResourceProvider: RendererPackageResourceProviding {
     let result: Result<RendererPackageResource, RendererPackageResourceError>
 
     init(result: Result<RendererPackageResource, RendererPackageResourceError>) {

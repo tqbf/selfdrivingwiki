@@ -391,7 +391,7 @@ private extension WikiAppWebViewSessionState {
     }
 }
 
-private final class StubResourceProvider: RendererPackageResourceProviding {
+private struct StubResourceProvider: RendererPackageResourceProviding {
     func resource(for url: URL) throws -> RendererPackageResource {
         throw RendererPackageResourceError.undeclaredAsset
     }
