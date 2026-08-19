@@ -87,7 +87,7 @@ public struct RendererPackageResource: Sendable {
 
 /// The only resource lookup surface exposed to a package scheme handler.
 /// Implementations return bytes, never a local file URL.
-public protocol RendererPackageResourceProviding {
+public protocol RendererPackageResourceProviding: Sendable {
     func resource(for url: URL) throws -> RendererPackageResource
 }
 

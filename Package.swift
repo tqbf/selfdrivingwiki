@@ -304,6 +304,7 @@ let package = Package(
         .executableTarget(
             name: "WikiFS",
             dependencies: [
+                "Cordis",
                 "WikiFSCore",
                 "WikiFSCodeHighlighting",
                 // The XPC contract — the app implements WikiDaemonEventSink

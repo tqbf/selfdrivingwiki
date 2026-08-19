@@ -43,6 +43,34 @@ struct CordisDocumentationContractTests {
         #expect(extractionPlan.contains("extraction.configuration-reader"))
         #expect(extractionPlan.contains("Logging remains outside Cordis"))
         #expect(extractionProgress.contains("ExtractionRuntimeAssembly"))
+
+        let rendererPlanPath = "plans/cordis-renderer-services.md"
+        let rendererProgressPath = "progress/2026-08-19T170000Z-cordis-renderer-services.md"
+        let rendererPlan = try String(
+            contentsOf: root.appendingPathComponent(rendererPlanPath),
+            encoding: .utf8)
+        let rendererProgress = try String(
+            contentsOf: root.appendingPathComponent(rendererProgressPath),
+            encoding: .utf8)
+        #expect(index.contains("[`\(rendererPlanPath)`](\(rendererPlanPath))"))
+        #expect(index.contains("[`\(rendererProgressPath)`](\(rendererProgressPath))"))
+        for label in [
+            "renderer.package-store-layout",
+            "renderer.machine-index-store",
+            "renderer.package-validator-factory",
+            "renderer.resource-provider-factory",
+            "renderer.bundled-package-source",
+            "renderer.runtime",
+            "renderer.services",
+        ] {
+            #expect(rendererPlan.contains(label))
+        }
+        #expect(rendererPlan.contains("`InstalledRendererHost` is the main-actor observation adapter"))
+        #expect(rendererPlan.contains("SwiftUI views and settings models"))
+        #expect(rendererPlan.contains("WebKit objects and active renderer sessions"))
+        #expect(rendererPlan.contains("They never receive a `CordisContext`, `ActivationContext`, or `ServiceKey`"))
+        #expect(rendererProgress.contains("RendererRuntimeAssembly"))
+        #expect(rendererProgress.contains("RendererCompositionOwner"))
     }
 }
 

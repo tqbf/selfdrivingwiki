@@ -325,7 +325,7 @@ private enum RendererSessionIsolationError: LocalizedError {
     }
 }
 
-private final class SessionIsolationResourceProvider: RendererPackageResourceProviding {
+private struct SessionIsolationResourceProvider: RendererPackageResourceProviding {
     private let entryDocument = Data("""
     <!doctype html>
     <html><head><meta charset="utf-8"><title>renderer-session-isolation</title></head>

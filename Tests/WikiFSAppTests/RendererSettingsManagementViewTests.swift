@@ -31,7 +31,8 @@ struct RendererSettingsManagementViewTests {
         #expect(source.contains("RendererSettingsPackagePicker.importButtonTitle"))
         #expect(source.contains("RendererSettingsPackagePicker.v1FormatMessage"))
         #expect(source.contains("The renderer package could not be validated or installed."))
-        #expect(appSource.contains(".task { await installedRendererHost.bootstrapBundledRendererPackages() }"))
+        #expect(!appSource.contains(".task { await installedRendererHost.bootstrapBundledRendererPackages() }"))
+        #expect(appSource.contains("RendererCompositionOwner"))
         #expect(!source.contains("Install Renderer Directory"))
         #expect(!source.contains("No Renderer Directories"))
         #expect(!source.contains("The renderer directory could not be validated or installed."))
@@ -59,7 +60,7 @@ struct RendererSettingsManagementViewTests {
     @Test("settings model reports install failure and clears busy state")
     func settingsModelReportsInstallFailure() async {
         let model = RendererSettingsModel(
-            host: InstalledRendererHost(machineStore: nil, layout: nil),
+            host: InstalledRendererHost(services: UnavailableRendererServices()),
             wiki: nil)
 
         await model.install(directory: URL.temporaryDirectory.appending(path: "missing-renderer-package"))
@@ -76,9 +77,15 @@ struct RendererSettingsManagementViewTests {
             catch { Issue.record("Renderer settings install fixture cleanup failed.") }
         }
         let layout = try RendererPackageStoreLayout(appGroupContainerRoot: root)
-        let host = InstalledRendererHost(
-            machineStore: RendererMachineIndexStore(layout: layout),
-            layout: layout)
+        let handle = try await RendererRuntimeAssembly(
+            layout: layout,
+            bundledPackageSource: { BundledRendererPackages.excalidrawResourceURL() },
+            reviewedBundledIdentity: .init(
+                packageID: BundledRendererPackages.excalidrawPackageID,
+                version: BundledRendererPackages.excalidrawVersion,
+                registrationID: BundledRendererPackages.excalidrawRegistrationID))
+            .assemble()
+        let host = InstalledRendererHost(services: handle.services)
         let model = RendererSettingsModel(host: host, wiki: nil)
         let packageURL = try #require(BundledRendererPackages.excalidrawResourceURL())
 
@@ -88,6 +95,7 @@ struct RendererSettingsManagementViewTests {
         #expect(model.isBusy == false)
         #expect(model.rows.count == 1)
         #expect(model.diagnostic == "Renderer registry refreshed after installation.")
+        try await handle.dispose()
     }
 
     @Test("settings model follows the current wiki store")
@@ -103,7 +111,7 @@ struct RendererSettingsManagementViewTests {
 
         let firstWiki = WikiStoreModel(store: try GRDBWikiStore(databaseURL: firstURL))
         let secondWiki = WikiStoreModel(store: try GRDBWikiStore(databaseURL: secondURL))
-        let host = InstalledRendererHost(machineStore: nil, layout: nil)
+        let host = InstalledRendererHost(services: UnavailableRendererServices())
         let model = RendererSettingsModel(host: host, wiki: firstWiki)
 
         model.updateWiki(secondWiki)
