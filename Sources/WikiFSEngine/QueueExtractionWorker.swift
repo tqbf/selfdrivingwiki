@@ -75,6 +75,12 @@ public struct QueueExtractionWorkerFactory: QueueWorkerFactory {
     public func worker(for item: QueueItem) async throws -> any QueueWorker {
         QueueExtractionWorker(provider: provider, emitProgress: emitProgress)
     }
+
+    public func worker(for item: QueueItem, output: QueueWorkerOutputScope) async throws -> any QueueWorker {
+        QueueExtractionWorker(provider: provider, emitProgress: { id, line in
+            output.emitProgress(itemID: id, line: line)
+        })
+    }
 }
 
 // MARK: - QueueExtractionWorker

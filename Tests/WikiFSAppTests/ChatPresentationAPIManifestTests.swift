@@ -103,7 +103,6 @@ struct ChatPresentationAPIManifestTests {
             .map(\.path)
         let allowedActivityFeedSources: Set<String> = [
             "Queue/AppQueueIngestionProvider.swift",
-            "Queue/QueueTranscriptEmitBox.swift",
         ]
 
         #expect(Set(legacyEventSources) == allowedActivityFeedSources)

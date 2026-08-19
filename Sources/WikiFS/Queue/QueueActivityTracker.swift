@@ -3,50 +3,6 @@ import Observation
 import WikiFSCore
 import WikiFSEngine
 
-/// A mutable box for a `@Sendable` progress-emit closure. Used to break the
-/// circular dependency between `QueueExtractionWorkerFactory` (needs the
-/// closure) and `QueueEngine` (needs the factory but provides the closure).
-final class ProgressEmitBox: @unchecked Sendable {
-    var emit: (@Sendable (QueueItem.ID, String) -> Void)?
-}
-
-/// A mutable box for a `@Sendable` usage-emit closure. Same pattern as
-/// `ProgressEmitBox`/`TranscriptEmitBox` — breaks the circular dependency
-/// between the ingestion worker factory (needs the closure) and the engine
-/// (provides it). #528 spike.
-final class UsageEmitBox: @unchecked Sendable {
-    var emit: (@Sendable (QueueItem.ID, SessionUsage) -> Void)?
-}
-
-/// A mutable box for a `@Sendable` live-usage-emit closure. Same pattern as
-/// the other emit boxes — breaks the circular dependency between the ingestion
-/// worker factory (needs the closure) and the engine (provides it). #544 live
-/// progress: carries in-progress token/cost usage during a run (the final
-/// `UsageEmitBox` fires once on completion).
-final class LiveUsageEmitBox: @unchecked Sendable {
-    var emit: (@Sendable (QueueItem.ID, SessionUsage) -> Void)?
-}
-
-/// A mutable box for a `@Sendable` log-paths-emit closure. Same pattern as
-/// the other emit boxes — breaks the circular dependency between the ingestion
-/// worker factory (needs the closure) and the engine (provides it). Carries
-/// the run's `run.jsonl` log URL and `debug/` folder URL so the Activity
-/// window can offer "Reveal Log" / "Reveal Debug Folder".
-final class LogPathsEmitBox: @unchecked Sendable {
-    var emit: (@Sendable (QueueItem.ID, URL?, URL?) -> Void)?
-}
-
-/// A mutable box for a `@Sendable` pending-permission-emit closure. Same
-/// pattern as the other emit boxes — breaks the circular dependency between
-/// the ingestion worker factory (needs the closure) and the engine (provides
-/// it). Carries the launcher's current pending-permission snapshot for an
-/// item so the Activity window can surface "Permission pending: <cmd>" while
-/// a run is parked on an always-ask prompt (issue #608). `nil` clears the
-/// row (resolved / rejected / auto-rejected by the S1 companion).
-final class PendingPermissionEmitBox: @unchecked Sendable {
-    var emit: (@Sendable (QueueItem.ID, PendingPermission?) -> Void)?
-}
-
 /// Observes `QueueEngine.events` and maintains `@Observable` UI state for
 /// extraction activity. Replaces the launcher's extraction slot machinery
 /// (`isExtracting`, `extractionLog`, `extractionPID`,
@@ -326,7 +282,13 @@ final class QueueActivityTracker {
     /// `.running` items are reset to `.queued` by `resetRunningToQueued()`, so
     /// these sets rebuild naturally from live `.started` events.
     func rehydrate(from engine: any QueueEngineClient) async {
-        let snapshots = await engine.loadAllActivitySnapshots()
+        let snapshots: [QueueItem.ID: QueueEngine.ActivitySnapshot]
+        do {
+            snapshots = try await engine.loadAllActivitySnapshots()
+        } catch {
+            DebugLog.store("QueueActivityTracker: activity rehydration failed: \(error)")
+            return
+        }
         for (id, snap) in snapshots {
             if let usage = snap.usage { itemUsage[id] = usage }
             if let logURL = snap.logURL { itemLogURLs[id] = logURL }
@@ -385,9 +347,13 @@ final class QueueActivityTracker {
             while !Task.isCancelled {
                 if Task.isCancelled { return }
                 guard let self, let engine else { return }
-                let snapshot = await engine.snapshot()
-                if Task.isCancelled { return }
-                self.reconcile(with: snapshot)
+                do {
+                    let snapshot = try await engine.snapshot()
+                    if Task.isCancelled { return }
+                    self.reconcile(with: snapshot)
+                } catch {
+                    DebugLog.store("QueueActivityTracker: snapshot failed: \(error)")
+                }
                 // Task.sleep only throws CancellationError — expected, not actionable.
                 // swiftlint:disable:next silent_try_optional
                 try? await Task.sleep(for: interval)
@@ -447,7 +413,11 @@ final class QueueActivityTracker {
     /// and transitions the item to `.cancelled`.
     func cancelExtraction() async {
         guard let itemID = currentExtractionItemID, let engine = queueEngine else { return }
-        await engine.cancelItem(itemID)
+        do {
+            try await engine.cancelItem(itemID)
+        } catch {
+            DebugLog.store("QueueActivityTracker: cancel extraction failed: \(error)")
+        }
     }
 
     /// True if the tracker has been attached to a queue engine's event stream.

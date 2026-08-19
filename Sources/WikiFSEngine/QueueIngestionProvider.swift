@@ -200,6 +200,18 @@ public struct QueueIngestionWorkerFactory: QueueWorkerFactory {
     public func worker(for item: QueueItem) async throws -> any QueueWorker {
         QueueIngestionWorker(provider: provider, attemptID: QueueAttemptID(itemID: item.id, attempt: item.attempt), emitProgress: emitProgress, emitTranscript: emitTranscript, emitUsage: emitUsage, emitLiveUsage: emitLiveUsage, emitLogPaths: emitLogPaths, emitPendingPermission: emitPendingPermission)
     }
+
+    public func worker(for item: QueueItem, output: QueueWorkerOutputScope) async throws -> any QueueWorker {
+        QueueIngestionWorker(
+            provider: provider,
+            attemptID: output.attemptID,
+            emitProgress: { id, line in output.emitProgress(itemID: id, line: line) },
+            emitTranscript: { _, event in output.emitTranscript(event) },
+            emitUsage: { id, usage in output.emitUsage(itemID: id, usage: usage) },
+            emitLiveUsage: { id, usage in output.emitLiveUsage(itemID: id, usage: usage) },
+            emitLogPaths: { id, logURL, debugURL in output.emitRunPaths(itemID: id, logURL: logURL, debugURL: debugURL) },
+            emitPendingPermission: { id, permission in output.emitPendingPermission(itemID: id, permission: permission) })
+    }
 }
 
 // MARK: - QueueIngestionWorker

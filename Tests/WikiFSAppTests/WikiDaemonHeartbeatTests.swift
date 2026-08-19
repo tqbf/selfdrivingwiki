@@ -25,9 +25,9 @@ struct WikiDaemonHeartbeatTests {
         let dir = tempDirectory()
         let daemon = WikiDaemon(containerDirectory: dir)
 
-        // Ensure the queue engine exists (the heartbeat reads its snapshot).
+        // Construct queue resources through the admission boundary.
         #if canImport(WikiFSEngine)
-        _ = try await daemon.ensureQueueEngine()
+        _ = try await daemon.daemonQueueHost.perform { _ in () }
         #endif
 
         // Should complete without crashing.

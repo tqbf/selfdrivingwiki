@@ -53,6 +53,10 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
         self.proxy = try connection.daemonProxy()
     }
 
+    init(proxy: WikiDaemonProtocol) {
+        self.proxy = proxy
+    }
+
     // MARK: - Timeout helper
 
     private func withTimeout<T: Sendable>(
@@ -73,6 +77,29 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
         }
     }
 
+    // MARK: - Queue envelope
+
+    private func decodeQueueEnvelope<Payload: Codable & Sendable>(
+        _ payloadType: Payload.Type,
+        from data: Data
+    ) throws -> (envelope: QueueRPCEnvelope<Payload>, payload: Payload) {
+        do {
+            let envelope = try QueueRPCWire.decode(payloadType, from: data)
+            return (envelope, try envelope.requirePayload())
+        } catch let error as QueueRPCError {
+            throw error
+        } catch {
+            throw DaemonXPCError.unexpectedReply
+        }
+    }
+
+    private func decodeQueuePayload<Payload: Codable & Sendable>(
+        _ payloadType: Payload.Type,
+        from data: Data
+    ) throws -> Payload {
+        try decodeQueueEnvelope(payloadType, from: data).payload
+    }
+
     // MARK: - Queue snapshot
 
     /// Fetch the daemon's queue snapshot (JSON-encoded `QueueSnapshot`).
@@ -85,10 +112,11 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
                 cont.resume(returning: data)
             }
         }
+        let payload = try decodeQueuePayload(QueueDataPayload.self, from: data)
         do {
-            return try JSONDecoder().decode(QueueSnapshot.self, from: data)
+            return try JSONDecoder().decode(QueueSnapshot.self, from: payload.data)
         } catch {
-            throw WikiDaemonError.unexpectedReply
+            throw DaemonXPCError.unexpectedReply
         }
     }
 
@@ -113,35 +141,28 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
                     cont.resume(returning: data)
                 }
             }
-            guard let dict = try JSONSerialization.jsonObject(with: replyData) as? [String: Any],
-                  let id = dict["id"] as? String else {
-                throw DaemonXPCError.unexpectedReply
-            }
-            if let error = dict["error"] as? String, !error.isEmpty {
-                throw DaemonXPCError.failure(error)
-            }
-            // XPC wire boundary: the reply dict has the raw String; wrap as QueueItemID.
-            return QueueItemID(rawValue: id)
+            let payload = try self.decodeQueuePayload(QueueItemIDPayload.self, from: replyData)
+            return QueueItemID(rawValue: payload.itemID)
         }
     }
 
     /// Cancel a specific queued or running item.
     public func cancelItem(_ id: QueueItem.ID) async throws {
         try await withTimeout {
-            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-                self.proxy.cancelItem(id: id.rawValue) { cont.resume() }
+            let data = await withCheckedContinuation { cont in
+                self.proxy.cancelItem(id: id.rawValue) { cont.resume(returning: $0) }
             }
+            _ = try self.decodeQueuePayload(QueueVoidPayload.self, from: data)
         }
     }
 
     /// Cancel all in-flight items. Returns the count cancelled.
     public func cancelAllInFlight() async throws -> Int {
         try await withTimeout {
-            await withCheckedContinuation { cont in
-                self.proxy.cancelAllInFlight { count in
-                    cont.resume(returning: count)
-                }
+            let data = await withCheckedContinuation { cont in
+                self.proxy.cancelAllInFlight { cont.resume(returning: $0) }
             }
+            return try self.decodeQueuePayload(QueueCountPayload.self, from: data).count
         }
     }
 
@@ -153,10 +174,7 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
                     cont.resume(returning: data)
                 }
             }
-            if let dict = try JSONSerialization.jsonObject(with: replyData) as? [String: Any],
-               let error = dict["error"] as? String, !error.isEmpty {
-                throw DaemonXPCError.failure(error)
-            }
+            _ = try self.decodeQueuePayload(QueueVoidPayload.self, from: replyData)
         }
     }
 
@@ -165,36 +183,42 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     /// Pause a queue (stop dispatching new items).
     public func pause(_ queue: QueueKind) async throws {
         try await withTimeout {
-            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-                self.proxy.pauseQueue(queue: queue.rawValue) { cont.resume() }
+            let data = await withCheckedContinuation { cont in
+                self.proxy.pauseQueue(queue: queue.rawValue) { cont.resume(returning: $0) }
             }
+            _ = try self.decodeQueuePayload(QueueVoidPayload.self, from: data)
         }
     }
 
     /// Resume a queue (restart dispatch).
     public func resume(_ queue: QueueKind) async throws {
         try await withTimeout {
-            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-                self.proxy.resumeQueue(queue: queue.rawValue) { cont.resume() }
+            let data = await withCheckedContinuation { cont in
+                self.proxy.resumeQueue(queue: queue.rawValue) { cont.resume(returning: $0) }
             }
+            _ = try self.decodeQueuePayload(QueueVoidPayload.self, from: data)
         }
     }
 
     /// Halt a queue (pause + cancel all in-flight items for this queue kind).
     public func halt(_ queue: QueueKind) async throws {
         try await withTimeout {
-            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-                self.proxy.haltQueue(queue: queue.rawValue) { cont.resume() }
+            let data = await withCheckedContinuation { cont in
+                self.proxy.haltQueue(queue: queue.rawValue) { cont.resume(returning: $0) }
             }
+            _ = try self.decodeQueuePayload(QueueVoidPayload.self, from: data)
         }
     }
 
     /// Reorder a queued item (move before `beforeItemID`, or end if nil).
     public func reorderItem(id: QueueItem.ID, beforeItemID: QueueItem.ID?) async throws {
         try await withTimeout {
-            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-                self.proxy.reorderItem(id: id.rawValue, beforeItemID: beforeItemID?.rawValue) { cont.resume() }
+            let data = await withCheckedContinuation { cont in
+                self.proxy.reorderItem(id: id.rawValue, beforeItemID: beforeItemID?.rawValue) {
+                    cont.resume(returning: $0)
+                }
             }
+            _ = try self.decodeQueuePayload(QueueVoidPayload.self, from: data)
         }
     }
 
@@ -203,32 +227,25 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     /// Whether the daemon has queued or running items for the given wiki.
     public func hasActiveWork(for wikiID: WikiID) async throws -> Bool {
         try await withTimeout {
-            await withCheckedContinuation { cont in
-                self.proxy.hasActiveWork(wikiID: wikiID.rawValue) { result in
-                    cont.resume(returning: result)
-                }
+            let data = await withCheckedContinuation { cont in
+                self.proxy.hasActiveWork(wikiID: wikiID.rawValue) { cont.resume(returning: $0) }
             }
+            return try self.decodeQueuePayload(QueueBoolPayload.self, from: data).value
         }
     }
 
     // MARK: - Await / Transcript / Activity
 
-    /// Await the completion of a specific item. Throws on failure/cancellation.
-    public func waitForCompletion(of id: QueueItem.ID) async throws {
+    /// Await the completion of a specific item. Envelope and transport failures
+    /// throw. The returned payload preserves the queue item's domain result.
+    public func waitForCompletion(of id: QueueItem.ID) async throws -> QueueCompletionPayload {
         try await withTimeout {
-            let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
+            let replyData = await withCheckedContinuation { cont in
                 self.proxy.waitForCompletion(id: id.rawValue) { data in
                     cont.resume(returning: data)
                 }
             }
-            guard let dict = try JSONSerialization.jsonObject(with: replyData) as? [String: Any] else {
-                throw DaemonXPCError.unexpectedReply
-            }
-            if dict["success"] as? Bool == true {
-                return
-            }
-            let errorMsg = (dict["error"] as? String) ?? "unknown error"
-            throw DaemonXPCError.failure(errorMsg)
+            return try self.decodeQueuePayload(QueueCompletionPayload.self, from: replyData)
         }
     }
 
@@ -240,8 +257,9 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
                     cont.resume(returning: data)
                 }
             }
+            let payload = try self.decodeQueuePayload(QueueDataPayload.self, from: replyData)
             do {
-                return try JSONDecoder().decode([ChatTranscriptItem].self, from: replyData)
+                return try JSONDecoder().decode([ChatTranscriptItem].self, from: payload.data)
             } catch {
                 throw DaemonXPCError.unexpectedReply
             }
@@ -256,13 +274,58 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
                     cont.resume(returning: data)
                 }
             }
+            let payload = try self.decodeQueuePayload(QueueDataPayload.self, from: replyData)
             do {
                 return try JSONDecoder().decode(
                     [String: QueueEngine.ActivitySnapshotData].self,
-                    from: replyData)
+                    from: payload.data)
             } catch {
                 throw DaemonXPCError.unexpectedReply
             }
+        }
+    }
+
+    /// Read the daemon queue ownership epoch without constructing queue resources.
+    public func queueOwnershipStatus() async throws -> QueueOwnershipStatusPayload {
+        try await withTimeout {
+            let replyData = await withCheckedContinuation { cont in
+                self.proxy.queueOwnershipStatus { cont.resume(returning: $0) }
+            }
+            let decoded = try self.decodeQueueEnvelope(
+                QueueOwnershipStatusPayload.self,
+                from: replyData)
+            guard decoded.envelope.ownershipEpoch == decoded.payload.epoch,
+                  decoded.envelope.hostState == decoded.payload.hostState else {
+                throw QueueRPCError(
+                    code: .invalidEnvelope,
+                    message: "Queue ownership status metadata did not match its payload")
+            }
+            return decoded.payload
+        }
+    }
+
+    /// Ask the daemon to permanently relinquish queue ownership.
+    public func relinquishQueue(
+        expectedEpoch: QueueOwnershipEpoch
+    ) async throws -> QueueRelinquishmentSuccess {
+        let request = try QueueRPCWire.encode(
+            QueueRPCEnvelope<QueueRelinquishmentRequest>.success(
+                QueueRelinquishmentRequest(expectedEpoch: expectedEpoch),
+                epoch: expectedEpoch,
+                hostState: .serving))
+        return try await withTimeout {
+            let replyData = await withCheckedContinuation { cont in
+                self.proxy.relinquishQueue(request: request) { cont.resume(returning: $0) }
+            }
+            let success = try self.decodeQueuePayload(
+                QueueRelinquishmentSuccess.self,
+                from: replyData)
+            guard success.completedEpoch == expectedEpoch, success.isComplete else {
+                throw QueueRPCError(
+                    code: .ownershipTransition,
+                    message: "Daemon relinquishment reply was stale or incomplete")
+            }
+            return success
         }
     }
 

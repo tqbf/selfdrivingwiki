@@ -36,6 +36,8 @@ public actor QueueEngine {
     private let store: QueueStore
     private let config: QueueEngineConfig
     private let workerFactory: any QueueWorkerFactory
+    private let shutdownPolicy: QueueEngineShutdownPolicy
+    private let deadlineSource: any QueueEngineDeadlineSource
 
     /// In-memory mirror of per-provider active (running) counts, used for
     /// capacity checks during dispatch. Derived from `runningItems`.
@@ -45,23 +47,21 @@ public actor QueueEngine {
     /// per-wiki invariant: at most one ingestion per wiki at a time.
     private var activeIngestionWikis: Set<WikiID> = []
 
-    /// Bonne: the `Task` for each running item, so `halt` can cancel them.
-    private var runningTasks: [QueueItem.ID: Task<Void, Never>] = [:]
+    private struct RunningDispatch {
+        let leaseID: WorkerLeaseID
+        let task: Task<Void, Never>
+    }
+
+    /// The exact dispatch identity and task for each running item.
+    private var runningTasks: [QueueItem.ID: RunningDispatch] = [:]
 
     /// Whether the engine should stop dispatching. Set by `pause`; cleared by
     /// `resume`. Persisted via `QueueStore.setQueueRunState`.
     private var runStates: [QueueKind: QueueRunState] = [:]
 
-    /// Fan-out for queue events. `AsyncStream` is single-consumer — with
-    /// several `for await` loops on ONE stream, each event is delivered to
-    /// exactly one of them (racily). The engine has multiple UI consumers
-    /// (activity tracker, status item, activity window), so each access of
-    /// ``events`` subscribes a fresh stream and the broadcaster yields every
-    /// event to all live subscribers.
-    private nonisolated let broadcaster = QueueEventBroadcaster()
-    /// Synchronous provider callbacks cannot await this actor. The dedicated
-    /// lock-backed state store owns only per-attempt translation/reduction.
-    private nonisolated let transcriptState = QueueTranscriptStateStore()
+    /// Ready-at-construction output boundary shared with worker factories.
+    /// It owns event multicast, transcript reduction, and output persistence.
+    public nonisolated let outputChannel: QueueWorkerOutputChannel
 
     /// A fresh event-stream subscription. Every access returns a NEW stream
     /// that receives all events emitted from this point on — safe for any
@@ -69,11 +69,15 @@ public actor QueueEngine {
     /// are not replayed; consumers needing current state should also call
     /// ``snapshot()``.)
     public nonisolated var events: AsyncStream<QueueEvent> {
-        broadcaster.subscribe()
+        outputChannel.events
     }
 
-    /// Whether the engine has been initialized (rehydration + initial dispatch).
-    private var didStart = false
+    /// The finite engine lifecycle. It is the sole dispatch admission state.
+    public private(set) var lifecycle: QueueEngineLifecycle = .created
+    private var shutdownTask: Task<QueueEngineShutdownResult, Never>?
+    private var shutdownSettlementTask: Task<Void, Never>?
+    private var shutdownSettlementSignal: QueueShutdownSettlementSignal?
+    private var shutdownTrackedItemIDs: Set<QueueItem.ID> = []
 
     /// Pending `waitForCompletion` waiters, keyed by item ID. Resumed by
     /// `handleWorkerFinished` when the item reaches a terminal state.
@@ -88,16 +92,24 @@ public actor QueueEngine {
     public init(
         store: QueueStore,
         config: QueueEngineConfig = QueueEngineConfig(),
-        workerFactory: any QueueWorkerFactory
+        workerFactory: any QueueWorkerFactory,
+        outputChannel: QueueWorkerOutputChannel? = nil,
+        shutdownPolicy: QueueEngineShutdownPolicy = QueueEngineShutdownPolicy(),
+        deadlineSource: any QueueEngineDeadlineSource = ContinuousQueueEngineDeadlineSource()
     ) {
         self.store = store
         self.config = config
         self.workerFactory = workerFactory
+        self.outputChannel = outputChannel ?? QueueWorkerOutputChannel(store: store)
+        self.shutdownPolicy = shutdownPolicy
+        self.deadlineSource = deadlineSource
     }
 
     deinit {
-        for task in runningTasks.values {
-            task.cancel()
+        shutdownTask?.cancel()
+        shutdownSettlementTask?.cancel()
+        for dispatch in runningTasks.values {
+            dispatch.task.cancel()
         }
         for waiters in completionWaiters.values {
             for waiter in waiters {
@@ -112,8 +124,8 @@ public actor QueueEngine {
     /// load run states, then dispatch. Safe to call once; subsequent calls are
     /// no-ops.
     public func start() async {
-        guard !didStart else { return }
-        didStart = true
+        guard lifecycle == .created else { return }
+        lifecycle = .starting
 
         // Crash recovery: any items left `.running` from a previous session
         // are reset to `.queued` (attempt preserved).
@@ -146,8 +158,144 @@ public actor QueueEngine {
             }
         }
 
+        guard lifecycle == .starting else { return }
+        lifecycle = .running
         // Initial dispatch scan.
         await dispatchScan()
+    }
+
+    public func shutdownForHandoff() async -> QueueEngineShutdownResult {
+        if lifecycle == .shutDown { return .shutDown }
+        if let shutdownTask { return await shutdownTask.value }
+
+        if shutdownSettlementTask == nil {
+            beginShutdownSettlement()
+        } else {
+            lifecycle = .shuttingDown
+        }
+
+        let task = Task<QueueEngineShutdownResult, Never> { [self] in
+            await runShutdownRace()
+        }
+        shutdownTask = task
+        return await task.value
+    }
+
+    private func beginShutdownSettlement() {
+        lifecycle = .shuttingDown
+        let outputDrainSnapshot = outputChannel.closeScopeAdmission()
+        let outputDrains = outputDrainSnapshot.streams
+        let activeItems: [QueueItem]
+        do {
+            activeItems = try store.loadActive().filter { $0.state == .running }
+        } catch {
+            DebugLog.store("QueueEngine.shutdown: failed to load running items: \(error)")
+            activeItems = []
+        }
+        let workerTasks = runningTasks.values.map(\.task)
+        shutdownTrackedItemIDs = Set(runningTasks.keys)
+            .union(activeItems.map(\.id))
+            .union(outputDrainSnapshot.itemIDs)
+        for task in workerTasks { task.cancel() }
+        for item in activeItems {
+            do {
+                try store.requeue(id: item.id)
+            } catch {
+                DebugLog.store("QueueEngine.shutdown: failed to requeue \(item.id.rawValue): \(error)")
+            }
+        }
+        providerActiveCounts.removeAll()
+        activeIngestionWikis.removeAll()
+        resumeAllWaitersForShutdown()
+
+        let signal = QueueShutdownSettlementSignal()
+        shutdownSettlementSignal = signal
+        shutdownSettlementTask = Task {
+            for task in workerTasks { await task.value }
+            for drain in outputDrains {
+                for await _ in drain {}
+            }
+            signal.complete()
+        }
+    }
+
+    private func runShutdownRace() async -> QueueEngineShutdownResult {
+        guard let signal = shutdownSettlementSignal else {
+            lifecycle = .shutDown
+            outputChannel.finish()
+            shutdownTask = nil
+            return .shutDown
+        }
+        let settlement = signal.stream()
+        let deadline = deadlineSource.stream(after: shutdownPolicy.workerSettlementDeadline)
+        let outcome = await withTaskGroup(of: QueueShutdownRaceOutcome.self) { group in
+            group.addTask {
+                for await _ in settlement {}
+                return .drained
+            }
+            group.addTask {
+                for await _ in deadline { return .deadline }
+                return .deadline
+            }
+            let first = await group.next() ?? .deadline
+            group.cancelAll()
+            return first
+        }
+
+        switch outcome {
+        case .drained:
+            if let settlementTask = shutdownSettlementTask { await settlementTask.value }
+            shutdownSettlementTask = nil
+            shutdownSettlementSignal = nil
+            shutdownTrackedItemIDs.removeAll()
+            outputChannel.finish()
+            lifecycle = .shutDown
+            shutdownTask = nil
+            return .shutDown
+        case .deadline:
+            let activeItemIDs = shutdownTrackedItemIDs.union(runningTasks.keys)
+            lifecycle = .shutdownBlocked(activeItemIDs: activeItemIDs)
+            shutdownTask = nil
+            return .shutdownBlocked(activeItemIDs: activeItemIDs)
+        }
+    }
+
+    private func resumeAllWaitersForShutdown() {
+        let waiters = completionWaiters
+        completionWaiters.removeAll()
+        for itemWaiters in waiters.values {
+            for waiter in itemWaiters {
+                waiter.resume(returning: .failure(QueueEngineLifecycleError.shuttingDown))
+            }
+        }
+    }
+
+    private func requireEnqueueAllowed() throws {
+        switch lifecycle {
+        case .created, .starting, .running:
+            return
+        case .shuttingDown:
+            throw QueueEngineLifecycleError.shuttingDown
+        case .shutdownBlocked(let activeItemIDs):
+            throw QueueEngineLifecycleError.shutdownBlocked(activeItemIDs: activeItemIDs)
+        case .shutDown:
+            throw QueueEngineLifecycleError.shutDown
+        }
+    }
+
+    private func requireRunning() throws {
+        switch lifecycle {
+        case .running:
+            return
+        case .created, .starting:
+            throw QueueEngineLifecycleError.notStarted
+        case .shuttingDown:
+            throw QueueEngineLifecycleError.shuttingDown
+        case .shutdownBlocked(let activeItemIDs):
+            throw QueueEngineLifecycleError.shutdownBlocked(activeItemIDs: activeItemIDs)
+        case .shutDown:
+            throw QueueEngineLifecycleError.shutDown
+        }
     }
 
     // MARK: - Enqueue
@@ -156,6 +304,7 @@ public actor QueueEngine {
     /// `.enqueued` event, and triggers a dispatch scan. Returns the item's ID.
     @discardableResult
     public func enqueue(_ request: QueueItemRequest) async throws -> QueueItem.ID {
+        try requireEnqueueAllowed()
         // Synchronous shape validation (AC4.2): reject empty wikiID before the
         // store write so doomed items never enter the queue.
         guard !request.wikiID.rawValue.trimmingCharacters(in: .whitespaces).isEmpty else {
@@ -182,7 +331,8 @@ public actor QueueEngine {
     }
 
     /// Resume a queue: restart dispatch. Persists the run state.
-    public func resume(_ queue: QueueKind) async {
+    public func resume(_ queue: QueueKind) async throws {
+        try requireRunning()
         runStates[queue] = .running
         do {
             try store.setQueueRunState(queue, .running)
@@ -214,8 +364,8 @@ public actor QueueEngine {
             activeItems = []
         }
         for item in activeItems where item.state == .running {
-            if let task = runningTasks.removeValue(forKey: item.id) {
-                task.cancel()
+            if let dispatch = runningTasks.removeValue(forKey: item.id) {
+                dispatch.task.cancel()
             }
             // Requeue: running → queued, preserves orderingKey.
             // This may fail if the item is mid-transition; best-effort.
@@ -272,8 +422,8 @@ public actor QueueEngine {
     /// `orderingKey`).
     public func cancelItem(_ id: QueueItem.ID) async {
         // Cancel the worker task if running.
-        if let task = runningTasks.removeValue(forKey: id) {
-            task.cancel()
+        if let dispatch = runningTasks.removeValue(forKey: id) {
+            dispatch.task.cancel()
         }
 
         // Transition to cancelled (valid from queued or running).
@@ -295,7 +445,7 @@ public actor QueueEngine {
     /// Retry a failed item: `failed` → `queued`, `attempt + 1`, new
     /// `orderingKey` (back of queue). Triggers a dispatch scan.
     public func retryItem(_ id: QueueItem.ID) async throws {
-        transcriptState.invalidate(itemID: id)
+        try requireRunning()
         try store.retryItem(id: id)
         if let updated = try store.getItem(id) {
             emit(.enqueued(updated))
@@ -428,6 +578,16 @@ public actor QueueEngine {
     /// `handleWorkerFinished` resumes all waiters for the item and empties
     /// the waiters array.
     public func waitForCompletion(of id: QueueItem.ID) async -> Result<Void, Error> {
+        switch lifecycle {
+        case .shuttingDown:
+            return .failure(QueueEngineLifecycleError.shuttingDown)
+        case .shutdownBlocked(let activeItemIDs):
+            return .failure(QueueEngineLifecycleError.shutdownBlocked(activeItemIDs: activeItemIDs))
+        case .shutDown:
+            return .failure(QueueEngineLifecycleError.shutDown)
+        case .created, .starting, .running:
+            break
+        }
         // Check if already terminal.
         do {
             if let item = try store.getItem(id) {
@@ -448,112 +608,6 @@ public actor QueueEngine {
         // Register a waiter.
         return await withCheckedContinuation { c in
             completionWaiters[id, default: []].append(c)
-        }
-    }
-
-    // MARK: - Emit progress (for worker factory)
-
-    /// A `Sendable` closure the worker factory captures to yield `.progress`
-    /// events onto the engine's broadcaster (bypassing `emit()` which is
-    /// actor-isolated). The broadcaster is `Sendable`, so this is safe to
-    /// call from the worker's detached `Task`.
-    public func makeEmitProgress() -> @Sendable (QueueItem.ID, String) -> Void {
-        return { [broadcaster, store] id, line in
-            broadcaster.yield(.progress(id, line: line))
-            // Persist progress lines (primarily extraction output) so the
-            // Activity window can show them after an app restart. Mirrors the
-            // per-event persistence in `makeEmitTranscript`.
-            do {
-                try store.appendItemProgress(itemID: id, line: line)
-            } catch {
-                DebugLog.store("QueueEngine: persist progress failed for item=\(id): \(error)")
-            }
-        }
-    }
-
-    /// A synchronous callback that accepts a provider event attributed to the
-    /// immutable attempt captured by its worker. Translation/reduction happens
-    /// under the per-attempt lock. SQLite and broadcast run after it releases.
-    public func makeEmitTranscript() -> @Sendable (QueueAttemptID, AgentEvent) -> Void {
-        { [broadcaster, store, transcriptState] attemptID, event in
-            transcriptState.accept(
-                event: event,
-                for: attemptID,
-                persist: { update in
-                    try store.upsertTranscriptItems(
-                        attemptID: update.attemptID,
-                        items: update.changedItems)
-                },
-                broadcast: { update in
-                    broadcaster.yield(.transcript(update))
-                }
-            )
-        }
-    }
-
-    /// A `Sendable` closure the worker factory captures to yield `.usage`
-    /// events onto the engine's broadcaster. #528 spike — surfaces per-run
-    /// token/cost usage to the activity tracker (no persistence needed).
-    public func makeEmitUsage() -> @Sendable (QueueItem.ID, SessionUsage) -> Void {
-        return { [broadcaster, store] id, usage in
-            broadcaster.yield(.usage(id, usage))
-            // Persist the final cumulative usage so the Activity window can
-            // show the per-run summary line after an app restart. The store
-            // holds it as an opaque JSON string (it cannot reference
-            // `SessionUsage`, which lives in this module).
-            do {
-                let data = try JSONEncoder().encode(usage)
-                let json = String(data: data, encoding: .utf8)
-                try store.upsertItemActivity(itemID: id, usageJSON: json, logURL: nil, debugURL: nil)
-            } catch {
-                DebugLog.store("QueueEngine: persist usage failed for item=\(id): \(error)")
-            }
-        }
-    }
-
-    /// A `Sendable` closure the worker factory captures to yield `.liveUsage`
-    /// events onto the engine's broadcaster. #544 live progress — surfaces
-    /// in-progress token/cost usage to the activity tracker during a run (no
-    /// persistence needed; the final `.usage` event carries the totals).
-    public func makeEmitLiveUsage() -> @Sendable (QueueItem.ID, SessionUsage) -> Void {
-        return { [broadcaster] id, usage in
-            broadcaster.yield(.liveUsage(id, usage))
-        }
-    }
-
-    /// A `Sendable` closure the worker factory captures to yield `.runPaths`
-    /// events onto the engine's broadcaster. Surfaces the run's `run.jsonl`
-    /// log file URL and `debug/` folder URL to the activity tracker so the
-    /// Activity window can offer "Reveal Log" / "Reveal Debug Folder" (no
-    /// persistence needed — URLs are runtime-only).
-    public func makeEmitLogPaths() -> @Sendable (QueueItem.ID, URL?, URL?) -> Void {
-        return { [broadcaster, store] id, logURL, debugURL in
-            broadcaster.yield(.runPaths(id, logURL: logURL, debugURL: debugURL))
-            // Persist the run's log/debug URLs so "Reveal Log"/"Reveal Debug
-            // Folder" survive an app restart.
-            do {
-                try store.upsertItemActivity(
-                    itemID: id,
-                    usageJSON: nil,
-                    logURL: logURL?.absoluteString,
-                    debugURL: debugURL?.absoluteString)
-            } catch {
-                DebugLog.store("QueueEngine: persist log paths failed for item=\(id): \(error)")
-            }
-        }
-    }
-
-    /// A `Sendable` closure the worker factory captures to yield
-    /// `.pendingPermission` events onto the engine's broadcaster (#608).
-    /// Surfaces the launcher's current pending-permission snapshot for an
-    /// item so the Activity window can render a yellow "Permission pending:
-    /// <cmd>" row while a run is parked on an always-ask prompt. `nil`
-    /// clears the row (resolved / rejected / auto-rejected). No persistence —
-    /// pending state is runtime-only; a restart mid-prompt resets the run to
-    /// `.queued` and a fresh prompt re-emits.
-    public func makeEmitPendingPermission() -> @Sendable (QueueItem.ID, PendingPermission?) -> Void {
-        return { [broadcaster] id, permission in
-            broadcaster.yield(.pendingPermission(id, permission))
         }
     }
 
@@ -670,6 +724,7 @@ public actor QueueEngine {
     /// performed as a single synchronous block AFTER the one `await` that
     /// resolves the provider ID. No `await` separates the check from the set.
     private func dispatchScan() async {
+        guard lifecycle == .running else { return }
         // For each queue kind that is `.running`, try to dispatch items.
         for queue in [QueueKind.extraction, QueueKind.ingestion] {
             guard runStates[queue] == .running else { continue }
@@ -686,6 +741,7 @@ public actor QueueEngine {
                 guard let providerID = await workerFactory.providerID(for: item) else {
                     continue  // No provider available; item stays queued.
                 }
+                guard lifecycle == .running else { return }
 
                 // From here, NO await until the item is claimed and the
                 // in-memory counts are updated. This keeps the check-and-claim
@@ -738,12 +794,19 @@ public actor QueueEngine {
                 // Emit the started event.
                 emit(.started(runningItem))
 
-                // Spawn the worker task.
+                // Create the output capability before the task so the engine can
+                // retain the exact dispatch identity across cancellation and retry.
+                let attemptID = QueueAttemptID(
+                    itemID: runningItem.id,
+                    attempt: runningItem.attempt)
+                let outputScope = outputChannel.makeScope(attemptID: attemptID)
                 let task = Task { [weak self] in
                     guard let self else { return }
-                    await self.runWorker(runningItem)
+                    await self.runWorker(runningItem, outputScope: outputScope)
                 }
-                runningTasks[item.id] = task
+                runningTasks[item.id] = RunningDispatch(
+                    leaseID: outputScope.leaseID,
+                    task: task)
             }
         }
     }
@@ -755,16 +818,22 @@ public actor QueueEngine {
     /// (success) or `.failed` (throw). On cancellation (from `halt` or
     /// `cancelItem`), the item is requeued (halt) or marked cancelled
     /// (cancel). After the worker finishes, triggers a dispatch scan.
-    private func runWorker(_ item: QueueItem) async {
-        let attemptID = QueueAttemptID(itemID: item.id, attempt: item.attempt)
-        transcriptState.begin(attemptID)
+    private func runWorker(
+        _ item: QueueItem,
+        outputScope: QueueWorkerOutputScope
+    ) async {
         let worker: any QueueWorker
         do {
-            worker = try await workerFactory.worker(for: item)
+            worker = try await workerFactory.worker(for: item, output: outputScope)
         } catch {
-            // Factory failed to produce a worker — mark the item failed.
-            await handleWorkerFinished(item, result: .failure(error))
-            transcriptState.finish(attemptID)
+            // Factory failed to produce a worker — revoke output, then fail.
+            let outputDrain = outputChannel.invalidate(outputScope)
+            for await _ in outputDrain {}
+            await handleWorkerFinished(
+                item,
+                leaseID: outputScope.leaseID,
+                result: .failure(error))
+            outputChannel.finish(outputScope)
             return
         }
 
@@ -780,8 +849,13 @@ public actor QueueEngine {
             result = .failure(error)
         }
 
-        await handleWorkerFinished(item, result: result)
-        transcriptState.finish(attemptID)
+        let outputDrain = outputChannel.invalidate(outputScope)
+        for await _ in outputDrain {}
+        await handleWorkerFinished(
+            item,
+            leaseID: outputScope.leaseID,
+            result: result)
+        outputChannel.finish(outputScope)
     }
 
     /// Handle the completion of a worker. Transitions the item to a terminal
@@ -794,7 +868,12 @@ public actor QueueEngine {
     /// so we skip the decrement to avoid double-freeing. The only exception is
     /// if the item is still `.running` (orphaned after cancellation), which we
     /// requeue + free.
-    private func handleWorkerFinished(_ item: QueueItem, result: Result<Void, Error>) async {
+    private func handleWorkerFinished(
+        _ item: QueueItem,
+        leaseID: WorkerLeaseID,
+        result: Result<Void, Error>
+    ) async {
+        guard runningTasks[item.id]?.leaseID == leaseID else { return }
         runningTasks.removeValue(forKey: item.id)
 
         switch result {
@@ -937,7 +1016,7 @@ public actor QueueEngine {
 
     /// Emit a `QueueEvent` to all subscribers.
     private func emit(_ event: QueueEvent) {
-        broadcaster.yield(event)
+        outputChannel.publish(event)
     }
 }
 
@@ -948,7 +1027,18 @@ public actor QueueEngine {
 /// private lock, and no mutable reference escapes the critical section.
 /// The synchronous callback-side state machine. It is `internal` so the
 /// concurrency suite can exercise its lock/SQLite boundary directly; clients
-/// still enter it only through `QueueEngine.makeEmitTranscript()`.
+/// enter it only through `QueueWorkerOutputChannel.emitTranscript`.
+internal enum QueueTranscriptOwner: Hashable, Sendable {
+    case legacy(QueueAttemptID)
+    case scoped(QueueAttemptID, WorkerLeaseID)
+
+    var attemptID: QueueAttemptID {
+        switch self {
+        case .legacy(let attemptID), .scoped(let attemptID, _): attemptID
+        }
+    }
+}
+
 // swiftlint:disable:next unchecked_sendable
 final class QueueTranscriptStateStore: @unchecked Sendable {
     private struct AttemptState {
@@ -963,36 +1053,61 @@ final class QueueTranscriptStateStore: @unchecked Sendable {
     }
 
     private let lock = NSLock()
-    private var currentAttemptByItem: [QueueItem.ID: QueueAttemptID] = [:]
-    private var states: [QueueAttemptID: AttemptState] = [:]
+    private var currentOwnerByItem: [QueueItem.ID: QueueTranscriptOwner] = [:]
+    private var states: [QueueTranscriptOwner: AttemptState] = [:]
 
     func begin(_ attemptID: QueueAttemptID) {
+        begin(.legacy(attemptID))
+    }
+
+    func begin(_ owner: QueueTranscriptOwner) {
         lock.withLock {
-            guard currentAttemptByItem[attemptID.itemID] != attemptID else { return }
-            currentAttemptByItem[attemptID.itemID] = attemptID
-            states[attemptID] = AttemptState()
+            if let previousOwner = currentOwnerByItem[owner.attemptID.itemID],
+               previousOwner != owner {
+                states.removeValue(forKey: previousOwner)
+            } else if currentOwnerByItem[owner.attemptID.itemID] == owner {
+                return
+            }
+            currentOwnerByItem[owner.attemptID.itemID] = owner
+            states[owner] = AttemptState()
         }
     }
 
-    func invalidate(itemID: QueueItem.ID) {
+    func invalidate(_ attemptID: QueueAttemptID) {
+        invalidate(.legacy(attemptID))
+    }
+
+    func invalidate(_ owner: QueueTranscriptOwner) {
         lock.withLock {
-            guard let oldAttempt = currentAttemptByItem.removeValue(forKey: itemID) else { return }
-            states.removeValue(forKey: oldAttempt)
+            guard currentOwnerByItem[owner.attemptID.itemID] == owner else { return }
+            currentOwnerByItem.removeValue(forKey: owner.attemptID.itemID)
+            states.removeValue(forKey: owner)
+        }
+    }
+
+    func invalidateAll() {
+        lock.withLock {
+            currentOwnerByItem.removeAll()
+            states.removeAll()
         }
     }
 
     func finish(_ attemptID: QueueAttemptID) {
+        finish(.legacy(attemptID))
+    }
+
+    func finish(_ owner: QueueTranscriptOwner) {
         lock.withLock {
-            guard currentAttemptByItem[attemptID.itemID] == attemptID,
-                  var state = states[attemptID]
+            guard currentOwnerByItem[owner.attemptID.itemID] == owner,
+                  var state = states[owner]
             else { return }
             state.isClosing = true
             guard state.pending.isEmpty, state.isDraining == false else {
-                states[attemptID] = state
+                states[owner] = state
                 return
             }
-            currentAttemptByItem.removeValue(forKey: attemptID.itemID)
-            states.removeValue(forKey: attemptID)
+            currentOwnerByItem.removeValue(forKey: owner.attemptID.itemID)
+            states.removeValue(forKey: owner)
         }
     }
 
@@ -1002,9 +1117,23 @@ final class QueueTranscriptStateStore: @unchecked Sendable {
         persist: @Sendable (QueueTranscriptUpdate) throws -> Void,
         broadcast: @Sendable (QueueTranscriptUpdate) -> Void
     ) {
+        accept(
+            event: event,
+            for: .legacy(attemptID),
+            persist: persist,
+            broadcast: broadcast)
+    }
+
+    func accept(
+        event: AgentEvent,
+        for owner: QueueTranscriptOwner,
+        persist: @Sendable (QueueTranscriptUpdate) throws -> Void,
+        broadcast: @Sendable (QueueTranscriptUpdate) -> Void
+    ) {
+        let attemptID = owner.attemptID
         let shouldDrain = lock.withLock { () -> Bool in
-            guard currentAttemptByItem[attemptID.itemID] == attemptID,
-                  var state = states[attemptID],
+            guard currentOwnerByItem[attemptID.itemID] == owner,
+                  var state = states[owner],
                   state.isClosing == false
             else { return false }
 
@@ -1019,7 +1148,7 @@ final class QueueTranscriptStateStore: @unchecked Sendable {
             }
             let changed = reduced.filter { previousByIdentity[QueueTranscriptItemIdentity($0)] != $0 }
             guard changed.isEmpty == false else {
-                states[attemptID] = state
+                states[owner] = state
                 return false
             }
 
@@ -1031,36 +1160,37 @@ final class QueueTranscriptStateStore: @unchecked Sendable {
             state.pending.append(update)
             let electDrainer = state.isDraining == false
             state.isDraining = true
-            states[attemptID] = state
+            states[owner] = state
             return electDrainer
         }
 
         guard shouldDrain else { return }
-        drain(attemptID: attemptID, persist: persist, broadcast: broadcast)
+        drain(owner: owner, persist: persist, broadcast: broadcast)
     }
 
     private func drain(
-        attemptID: QueueAttemptID,
+        owner: QueueTranscriptOwner,
         persist: @Sendable (QueueTranscriptUpdate) throws -> Void,
         broadcast: @Sendable (QueueTranscriptUpdate) -> Void
     ) {
+        let attemptID = owner.attemptID
         while true {
             let next = lock.withLock { () -> QueueTranscriptUpdate? in
-                guard currentAttemptByItem[attemptID.itemID] == attemptID,
-                      var state = states[attemptID]
+                guard currentOwnerByItem[attemptID.itemID] == owner,
+                      var state = states[owner]
                 else { return nil }
                 guard state.pending.isEmpty == false else {
                     state.isDraining = false
                     if state.isClosing {
-                        currentAttemptByItem.removeValue(forKey: attemptID.itemID)
-                        states.removeValue(forKey: attemptID)
+                        currentOwnerByItem.removeValue(forKey: attemptID.itemID)
+                        states.removeValue(forKey: owner)
                     } else {
-                        states[attemptID] = state
+                        states[owner] = state
                     }
                     return nil
                 }
                 let update = state.pending.removeFirst()
-                states[attemptID] = state
+                states[owner] = state
                 return update
             }
             guard let next else { return }
@@ -1090,6 +1220,14 @@ public final class QueueEventBroadcaster: @unchecked Sendable {
     public init() {}
 
     public func subscribe() -> AsyncStream<QueueEvent> {
+        subscribe(onSubscribed: {})
+    }
+
+    /// Test seam that acknowledges registration after the continuation enters
+    /// the multicast set. Production subscribers use ``subscribe()``.
+    func subscribe(
+        onSubscribed: @escaping @Sendable () -> Void
+    ) -> AsyncStream<QueueEvent> {
         AsyncStream(bufferingPolicy: .bufferingOldest(256)) { continuation in
             let id = UUID()
             lock.withLock { continuations[id] = continuation }
@@ -1097,6 +1235,7 @@ public final class QueueEventBroadcaster: @unchecked Sendable {
                 guard let self else { return }
                 self.lock.withLock { _ = self.continuations.removeValue(forKey: id) }
             }
+            onSubscribed()
         }
     }
 

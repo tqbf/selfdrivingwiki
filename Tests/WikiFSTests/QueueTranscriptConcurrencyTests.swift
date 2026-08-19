@@ -134,7 +134,7 @@ struct QueueTranscriptConcurrencyTests {
                      broadcast: { updates.append($0) })
         try store.markRunning(id: item.id, providerID: ProviderID(rawValue: "test"))
         try store.markFailed(id: item.id, error: "retry")
-        state.invalidate(itemID: item.id)
+        state.invalidate(oldAttempt)
         try store.retryItem(id: item.id)
         let retried = try #require(try store.getItem(item.id))
         let currentAttempt = QueueAttemptID(itemID: retried.id, attempt: retried.attempt)

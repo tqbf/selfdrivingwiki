@@ -44,7 +44,13 @@ func enqueueIngestion(
 
     // Deduplicate: collect sourceIDs already active (queued or running)
     // for this wiki in either queue, and skip them.
-    let snapshot = await queueEngine.snapshot()
+    let snapshot: QueueSnapshot
+    do {
+        snapshot = try await queueEngine.snapshot()
+    } catch {
+        DebugLog.ingest("enqueueIngestion: queue snapshot unavailable: \(error)")
+        return
+    }
     let activeSourceIDs = Set(
         snapshot.activeItems
             .filter { $0.wikiID == wikiID }
@@ -88,7 +94,7 @@ func enqueueIngestion(
                 payload: QueueItemPayload(sourceIDs: [sourceID]))
             do {
                 let itemID = try await queueEngine.enqueue(request)
-                let result = await queueEngine.waitForCompletion(of: itemID)
+                let result = try await queueEngine.waitForCompletion(of: itemID)
                 if case .failure(let error) = result {
                     DebugLog.ingest("enqueueIngestion: extraction waitForCompletion failed for \(sourceID.rawValue): \(error.localizedDescription)")
                 }

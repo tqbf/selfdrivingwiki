@@ -1,6 +1,7 @@
 #if os(macOS)
 import Foundation
 import os
+import Synchronization
 import Testing
 @testable import WikiFSEngine
 import WikiFSCore
@@ -253,7 +254,7 @@ struct QueueEngineTests {
         #expect(recorder.executedIDs == [id1])
 
         // Resume — the second should now dispatch.
-        await engine.resume(.extraction)
+        try await engine.resume(.extraction)
         try await recorder.waitForCount(2, timeoutSeconds: 5)
 
         store.close()
@@ -330,7 +331,7 @@ struct QueueEngineTests {
         // requeued item will start and block).
         // Release the gate first so the requeued item can proceed.
         gate.release()
-        await engine.resume(.extraction)
+        try await engine.resume(.extraction)
         try await recorder.waitForCount(2, timeoutSeconds: 5)
 
         store.close()
@@ -770,10 +771,151 @@ struct QueueEngineTests {
         // Only the first should have started — the queue is paused.
         #expect(recorder.executedIDs == [id1])
 
-        await engine.resume(.ingestion)
+        try await engine.resume(.ingestion)
         try await recorder.waitForCount(2, timeoutSeconds: 5)
 
         store.close()
+    }
+
+    // MARK: - Ordered shutdown
+
+    @Test func shutdownRequeuesWorkerFailsWaitersAndFinishesEvents() async throws {
+        let store = try QueueStore(databaseURL: tempDatabaseURL())
+        let control = CancellationCooperativeWorkerControl()
+        let factory = FakeWorkerFactory(
+            providerID: { _ in ProviderID(rawValue: "shutdown-provider") },
+            worker: { item in try await control.execute(item) })
+        let engine = QueueEngine(store: store, workerFactory: factory)
+        let eventReady = AsyncStream<Void>.makeStream()
+        let eventStream = engine.outputChannel.events {
+            eventReady.continuation.yield(())
+            eventReady.continuation.finish()
+        }
+        let events = Task { await collectEvents(eventStream) }
+        for await _ in eventReady.stream { break }
+        let itemID = try await engine.enqueue(
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "shutdown-wiki"), payload: makePayload()))
+        await engine.start()
+        await control.awaitStarted()
+        let completion = Task { await engine.waitForCompletion(of: itemID) }
+
+        let result = await engine.shutdownForHandoff()
+
+        #expect(result == .shutDown)
+        #expect(await engine.lifecycle == .shutDown)
+        #expect(try store.getItem(itemID)?.state == .queued)
+        if case .failure(let error) = await completion.value {
+            #expect(error as? QueueEngineLifecycleError == .shuttingDown)
+        } else {
+            Issue.record("Expected shutdown to fail the completion waiter")
+        }
+        #expect(await control.cancellationWasObserved())
+        #expect(await events.value.isEmpty == false)
+        await #expect(throws: QueueEngineLifecycleError.shutDown) {
+            _ = try await engine.enqueue(
+                QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "rejected-wiki"), payload: makePayload()))
+        }
+        #expect(await engine.shutdownForHandoff() == .shutDown)
+        store.close()
+    }
+
+    @Test func uncooperativeWorkerBlocksShutdownUntilExplicitRetry() async throws {
+        let store = try QueueStore(databaseURL: tempDatabaseURL())
+        let control = UncooperativeWorkerControl()
+        let deadline = ManualQueueEngineDeadlineSource()
+        let factory = FakeWorkerFactory(
+            providerID: { _ in ProviderID(rawValue: "blocked-provider") },
+            worker: { item in await control.execute(item) })
+        let engine = QueueEngine(
+            store: store,
+            workerFactory: factory,
+            shutdownPolicy: QueueEngineShutdownPolicy(workerSettlementDeadline: .seconds(1)),
+            deadlineSource: deadline)
+        let itemID = try await engine.enqueue(
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "blocked-wiki"), payload: makePayload()))
+        await engine.start()
+        await control.awaitStarted()
+
+        let firstShutdown = Task { await engine.shutdownForHandoff() }
+        await control.awaitCancellationObserved()
+        await deadline.awaitWaiting()
+        deadline.fire()
+        let firstResult = await firstShutdown.value
+
+        #expect(firstResult == .shutdownBlocked(activeItemIDs: [itemID]))
+        #expect(await engine.lifecycle == .shutdownBlocked(activeItemIDs: [itemID]))
+        #expect(try store.getItem(itemID)?.state == .queued)
+        await #expect(throws: QueueEngineLifecycleError.shutdownBlocked(activeItemIDs: [itemID])) {
+            try await engine.resume(.extraction)
+        }
+
+        control.release()
+        await control.awaitFinished()
+        let retryResult = await engine.shutdownForHandoff()
+
+        #expect(retryResult == .shutDown)
+        #expect(await engine.lifecycle == .shutDown)
+        store.close()
+    }
+
+    @Test func shutdownRevokesRetainedWorkerOutputBeforeStoreClose() async throws {
+        let store = try QueueStore(databaseURL: tempDatabaseURL())
+        let lateOutput = RetainedOutputWorkerControl()
+        let observedEvents = LockedQueueEventLog()
+        let channel = QueueWorkerOutputChannel(
+            appendProgress: { id, line in
+                try store.appendItemProgress(itemID: id, line: line)
+            },
+            persistTranscript: { update in
+                try store.upsertTranscriptItems(
+                    attemptID: update.attemptID,
+                    items: update.changedItems)
+            },
+            persistUsage: { id, json in
+                try store.upsertItemActivity(
+                    itemID: id,
+                    usageJSON: json,
+                    logURL: nil,
+                    debugURL: nil)
+            },
+            persistRunPaths: { id, logURL, debugURL in
+                try store.upsertItemActivity(
+                    itemID: id,
+                    usageJSON: nil,
+                    logURL: logURL,
+                    debugURL: debugURL)
+            },
+            observePublication: { observedEvents.append($0) })
+        let factory = ScopedOutputWorkerFactory(control: lateOutput)
+        let engine = QueueEngine(
+            store: store,
+            workerFactory: factory,
+            outputChannel: channel)
+        let itemID = try await engine.enqueue(QueueItemRequest(
+            queue: .extraction,
+            wikiID: WikiID(rawValue: "late-output-wiki"),
+            payload: makePayload()))
+        await engine.start()
+        await lateOutput.awaitStarted()
+        let baselineEventCount = observedEvents.count
+
+        let shutdown = await engine.shutdownForHandoff()
+
+        #expect(shutdown == .shutDown)
+        #expect(await lateOutput.didAttemptAllOutputs)
+        #expect(observedEvents.count == baselineEventCount)
+        #expect(try store.loadTranscriptItems(itemID: itemID).isEmpty)
+        #expect(try store.loadItemActivity(itemID: itemID) == nil)
+        store.close()
+        #expect(throws: (any Error).self) {
+            _ = try store.loadActive()
+        }
+    }
+
+    private func collectEvents(_ stream: AsyncStream<QueueEvent>) async -> [QueueEvent] {
+        var events: [QueueEvent] = []
+        for await event in stream { events.append(event) }
+        return events
     }
 }
 
@@ -811,6 +953,88 @@ private struct FakeWorker: QueueWorker {
     }
 }
 
+private struct ScopedOutputWorkerFactory: QueueWorkerFactory {
+    let control: RetainedOutputWorkerControl
+
+    func providerID(for item: QueueItem) async -> ProviderID? {
+        ProviderID(rawValue: "scoped-output-provider")
+    }
+
+    func worker(for item: QueueItem) async throws -> any QueueWorker {
+        throw QueueIngestionError.noSources
+    }
+
+    func worker(
+        for item: QueueItem,
+        output: QueueWorkerOutputScope
+    ) async throws -> any QueueWorker {
+        RetainedOutputWorker(control: control, output: output)
+    }
+}
+
+private struct RetainedOutputWorker: QueueWorker {
+    let control: RetainedOutputWorkerControl
+    let output: QueueWorkerOutputScope
+
+    func execute(_ item: QueueItem) async throws {
+        await control.execute(item: item, output: output)
+    }
+}
+
+private actor RetainedOutputWorkerControl {
+    private let started = AsyncStream<Void>.makeStream()
+    private let releaseGate = AsyncStream<Void>.makeStream()
+    private(set) var didAttemptAllOutputs = false
+
+    func execute(item: QueueItem, output: QueueWorkerOutputScope) async {
+        started.continuation.yield(())
+        started.continuation.finish()
+        let releaseTask = Task {
+            for await _ in releaseGate.stream { break }
+        }
+        await withTaskCancellationHandler {
+            await releaseTask.value
+        } onCancel: {
+            releaseGate.continuation.yield(())
+            releaseGate.continuation.finish()
+        }
+        let usage = SessionUsage(
+            inputTokens: 1,
+            outputTokens: 2,
+            totalTokens: 3,
+            cachedReadTokens: nil,
+            thoughtTokens: nil,
+            cost: nil,
+            currency: nil,
+            contextUsed: 3,
+            contextSize: 100)
+        output.emitProgress(itemID: item.id, line: "late progress")
+        output.emitTranscript(.assistantText("late transcript"))
+        output.emitUsage(itemID: item.id, usage: usage)
+        output.emitLiveUsage(itemID: item.id, usage: usage)
+        output.emitRunPaths(
+            itemID: item.id,
+            logURL: URL(fileURLWithPath: "/late-log"),
+            debugURL: URL(fileURLWithPath: "/late-debug"))
+        output.emitPendingPermission(itemID: item.id, permission: nil)
+        didAttemptAllOutputs = true
+    }
+
+    func awaitStarted() async {
+        for await _ in started.stream { break }
+    }
+}
+
+private final class LockedQueueEventLog: Sendable {
+    private let storage = Mutex<[QueueEvent]>([])
+
+    var count: Int { storage.withLock { $0.count } }
+
+    func append(_ event: QueueEvent) {
+        storage.withLock { $0.append(event) }
+    }
+}
+
 /// Records the order of item executions. Test-only — uses
 /// `OSAllocatedUnfairLock` (async-safe) so properties can be read
 /// synchronously from `#expect` assertions.
@@ -845,6 +1069,107 @@ private final class FakeWorkerRecorder: @unchecked Sendable {
             }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
+    }
+}
+
+/// A simple count-down latch for async tests. Test-only — uses
+/// `OSAllocatedUnfairLock` (async-safe) so `release()` is synchronous.
+private actor CancellationCooperativeWorkerControl {
+    private let started = AsyncStream<Void>.makeStream()
+    private let hold = AsyncStream<Void>.makeStream()
+    private var observedCancellation = false
+
+    func execute(_ item: QueueItem) async throws {
+        started.continuation.yield(())
+        started.continuation.finish()
+        for await _ in hold.stream { break }
+        do {
+            try Task.checkCancellation()
+        } catch {
+            observedCancellation = true
+            throw error
+        }
+    }
+
+    func awaitStarted() async {
+        for await _ in started.stream { break }
+    }
+
+    func cancellationWasObserved() -> Bool {
+        observedCancellation
+    }
+}
+
+private final class UncooperativeWorkerControl: Sendable {
+    private let started = AsyncStream<Void>.makeStream()
+    private let cancellation = AsyncStream<Void>.makeStream()
+    private let releaseGate = AsyncStream<Void>.makeStream()
+    private let finished = AsyncStream<Void>.makeStream()
+
+    func execute(_ item: QueueItem) async {
+        started.continuation.yield(())
+        started.continuation.finish()
+        let releaseTask = Task {
+            for await _ in releaseGate.stream { break }
+        }
+        await withTaskCancellationHandler {
+            await releaseTask.value
+        } onCancel: {
+            cancellation.continuation.yield(())
+            cancellation.continuation.finish()
+        }
+        finished.continuation.yield(())
+        finished.continuation.finish()
+    }
+
+    func awaitStarted() async {
+        for await _ in started.stream { break }
+    }
+
+    func awaitCancellationObserved() async {
+        for await _ in cancellation.stream { break }
+    }
+
+    func release() {
+        releaseGate.continuation.yield(())
+        releaseGate.continuation.finish()
+    }
+
+    func awaitFinished() async {
+        for await _ in finished.stream { break }
+    }
+}
+
+private final class ManualQueueEngineDeadlineSource: QueueEngineDeadlineSource, Sendable {
+    private struct State: Sendable {
+        var waiters: [UUID: AsyncStream<Void>.Continuation] = [:]
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+    private let waiting = AsyncStream<Void>.makeStream()
+
+    func stream(after duration: Duration) -> AsyncStream<Void> {
+        let pair = AsyncStream<Void>.makeStream()
+        let id = UUID()
+        pair.continuation.onTermination = { [state] _ in
+            state.withLock { _ = $0.waiters.removeValue(forKey: id) }
+        }
+        state.withLock { $0.waiters[id] = pair.continuation }
+        waiting.continuation.yield(())
+        return pair.stream
+    }
+
+    func awaitWaiting() async {
+        for await _ in waiting.stream { break }
+    }
+
+    func fire() {
+        let waiters = state.withLock { state -> [AsyncStream<Void>.Continuation] in
+            let waiters = Array(state.waiters.values)
+            state.waiters.removeAll()
+            return waiters
+        }
+        for waiter in waiters { waiter.finish() }
     }
 }
 

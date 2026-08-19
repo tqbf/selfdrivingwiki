@@ -34,6 +34,10 @@ final class QueueViewModel {
 
     func refresh() async {
         guard let engine = queueEngine else { return }
-        snapshot = await engine.snapshot()
+        do {
+            snapshot = try await engine.snapshot()
+        } catch {
+            DebugLog.store("QueueViewModel: snapshot failed: \(error)")
+        }
     }
 }

@@ -252,8 +252,21 @@ struct ActivityWindowView: View {
             beforeItemID = active[adjustedDest].id
         }
 
-        Task {
-            await queueEngine.reorderItem(id: movedItem.id, beforeItemID: beforeItemID)
+        runQueueCommand("reorder item") {
+            try await queueEngine.reorderItem(id: movedItem.id, beforeItemID: beforeItemID)
+        }
+    }
+
+    private func runQueueCommand(
+        _ name: String,
+        operation: @escaping @MainActor () async throws -> Void
+    ) {
+        Task { @MainActor in
+            do {
+                try await operation()
+            } catch {
+                DebugLog.store("ActivityWindow: \(name) failed: \(error)")
+            }
         }
     }
 
@@ -416,7 +429,7 @@ struct ActivityWindowView: View {
         switch item.state {
         case .running, .queued:
             Button {
-                Task { await queueEngine.cancelItem(item.id) }
+                runQueueCommand("cancel item") { try await queueEngine.cancelItem(item.id) }
             } label: {
                 Image(systemName: "xmark.circle.fill")
                     .foregroundStyle(.secondary)
@@ -460,7 +473,7 @@ struct ActivityWindowView: View {
         switch item.state {
         case .running, .queued:
             Button("Cancel") {
-                Task { await queueEngine.cancelItem(item.id) }
+                runQueueCommand("cancel item") { try await queueEngine.cancelItem(item.id) }
             }
         case .failed:
             Button("Retry") {
@@ -492,16 +505,22 @@ struct ActivityWindowView: View {
         Menu {
             if state == .running {
                 Button("Pause \(queueTitle)", systemImage: "pause.fill") {
-                    Task { await queueEngine.pause(queue) }
+                    runQueueCommand("pause queue") { try await queueEngine.pause(queue) }
                 }
             } else {
                 Button("Resume \(queueTitle)", systemImage: "play.fill") {
-                    Task { await queueEngine.resume(queue) }
+                    Task {
+                        do {
+                            try await queueEngine.resume(queue)
+                        } catch {
+                            DebugLog.store("ActivityWindow: resume queue failed: \(error)")
+                        }
+                    }
                 }
             }
             Divider()
             Button("Stop All \(queueTitle)", systemImage: "stop.fill", role: .destructive) {
-                Task { await queueEngine.halt(queue) }
+                runQueueCommand("halt queue") { try await queueEngine.halt(queue) }
             }
         } label: {
             Label(queueTitle, systemImage: state == .paused ? "pause.circle.fill" : icon)
@@ -533,7 +552,11 @@ struct ActivityWindowView: View {
                 // merging into this item's live transcript while its load is
                 // in flight.
                 loadedTranscriptItems = []
-                loadedTranscriptItems = await queueEngine.loadTranscript(for: itemID)
+                do {
+                    loadedTranscriptItems = try await queueEngine.loadTranscript(for: itemID)
+                } catch {
+                    DebugLog.store("ActivityWindow: load transcript failed: \(error)")
+                }
             }
         } else if activeItems.isEmpty && recentItems.isEmpty {
             emptyState
@@ -663,7 +686,7 @@ struct ActivityWindowView: View {
             switch item.state {
             case .running, .queued:
                 Button("Cancel") {
-                    Task { await queueEngine.cancelItem(item.id) }
+                    runQueueCommand("cancel item") { try await queueEngine.cancelItem(item.id) }
                 }
             case .failed, .cancelled:
                 Button("Retry") {

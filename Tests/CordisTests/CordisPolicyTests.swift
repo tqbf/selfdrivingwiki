@@ -1,0 +1,117 @@
+import Cordis
+import Foundation
+import Testing
+
+@Suite("Cordis source policy", .timeLimit(.minutes(1)))
+struct CordisSourcePolicyTests {
+    @Test("target graph is Foundation-only")
+    func foundationOnlyTargetGraph() throws {
+        let root = repositoryRoot()
+        let package = try String(contentsOf: root.appendingPathComponent("Package.swift"), encoding: .utf8)
+        let expected = """
+        .target(
+                    name: "Cordis",
+                    path: "Sources/Cordis",
+                    swiftSettings: strictSwiftSettings
+                )
+        """
+        #expect(package.contains(expected))
+    }
+
+    @Test("source has no unchecked Sendable or detached tasks")
+    func noUncheckedSendableOrDetachedTasks() throws {
+        let root = repositoryRoot()
+        let sourceURL = root.appendingPathComponent("Sources/Cordis", isDirectory: true)
+        let files = try FileManager.default.contentsOfDirectory(
+            at: sourceURL,
+            includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "swift" }
+        let source = try files.map { try String(contentsOf: $0, encoding: .utf8) }.joined(separator: "\n")
+
+        let uncheckedSendable = "@unchecked" + " Sendable"
+        let detachedTask = "Task." + "detached"
+        #expect(!source.contains(uncheckedSendable))
+        #expect(!source.contains(detachedTask))
+        #expect(!source.contains("import SwiftUI"))
+        #expect(!source.contains("import AppKit"))
+        #expect(!source.contains("import GRDB"))
+        #expect(!source.contains("import WikiFS"))
+    }
+
+    @Test("Cordis remains outside UI, model, session, and daemon files")
+    func forbiddenProductionFilesDoNotImportCordis() throws {
+        let root = repositoryRoot()
+        let forbidden = [
+            "Sources/WikiFS/Window",
+            "Sources/WikiFSCore/WikiStoreModel.swift",
+            "Sources/WikiFSEngine/SessionManager.swift",
+            "Sources/wikid",
+        ]
+        for relativePath in forbidden {
+            let url = root.appendingPathComponent(relativePath)
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
+                continue
+            }
+            let files: [URL]
+            if isDirectory.boolValue {
+                let enumerator = FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil)
+                files = (enumerator?.allObjects as? [URL] ?? []).filter { $0.pathExtension == "swift" }
+            } else {
+                files = [url]
+            }
+            for file in files {
+                let source = try String(contentsOf: file, encoding: .utf8)
+                #expect(!source.contains("import Cordis"), "Forbidden Cordis import in \(file.path)")
+            }
+        }
+    }
+
+    @Test("tests have no timing sleeps, polling, or semaphores")
+    func testsUseDeterministicSynchronization() throws {
+        let root = repositoryRoot()
+        let testsURL = root.appendingPathComponent("Tests/CordisTests", isDirectory: true)
+        let files = try FileManager.default.contentsOfDirectory(
+            at: testsURL,
+            includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "swift" }
+        let source = try files.map { try String(contentsOf: $0, encoding: .utf8) }.joined(separator: "\n")
+
+        let taskSleep = "Task." + "sleep"
+        let threadSleep = "Thread." + "sleep"
+        let semaphore = "Dispatch" + "Semaphore"
+        let bareContinuation = "withChecked" + "Continuation"
+        let pollingLoop = "while" + " true"
+        #expect(!source.contains(taskSleep))
+        #expect(!source.contains(threadSleep))
+        #expect(!source.contains(semaphore))
+        #expect(!source.contains(bareContinuation))
+        #expect(!source.contains(pollingLoop))
+    }
+
+    @Test("settlement returns for every stable transition")
+    func awaitSettledReturnsForStableTransitions() async throws {
+        let missingKey = ServiceKey<String>(label: "missing")
+        let context = CordisContext()
+        let pending = try await context.register(try ComponentDefinition(
+            label: "pending",
+            dependencies: [ServiceDependency(missingKey)]) { _ in })
+        let active = try await context.register(try ComponentDefinition(label: "active") { _ in })
+        let failed = try await context.register(try ComponentDefinition(label: "failed") { _ in
+            throw CordisFailure("failure")
+        })
+
+        #expect(try await pending.awaitSettled().kind == .pending)
+        #expect(try await active.awaitSettled().kind == .active)
+        #expect(try await failed.awaitSettled().kind == .failed)
+        try await active.dispose()
+        #expect(try await active.awaitSettled().kind == .disposed)
+    }
+}
+
+private func repositoryRoot() -> URL {
+    URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+}

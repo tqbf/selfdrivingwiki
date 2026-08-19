@@ -284,26 +284,29 @@ struct QueueTranscriptionTests {
     @Test func testProgressEventEmitted() async throws {
         let store = try QueueStore(databaseURL: tempDatabaseURL())
 
-        let progressHolder = ProgressCollector()
         let provider = FakeTranscriptionProvider(
             resolveResult: .resolved,
             fetchBehavior: { }
         )
         let factory = QueueExtractionWorkerFactory(
             provider: provider,
-            emitProgress: { id, line in progressHolder.record(id: id, line: line) })
+            emitProgress: { _, _ in })
         let engine = QueueEngine(store: store,
                                  config: QueueEngineConfig(remoteExtractionLimit: 2),
                                  workerFactory: factory)
+        let events = engine.events
         await engine.start()
 
-        _ = try await engine.enqueue(
+        let id = try await engine.enqueue(
             QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "wiki1"), payload: makePayload()))
 
-        try await progressHolder.waitForCount(1, timeoutSeconds: 5)
+        let lines = try await transcriptionProgressLines(
+            for: id,
+            count: 1,
+            from: events,
+            timeout: .seconds(5))
 
-        #expect(progressHolder.lines.count >= 1)
-        #expect(progressHolder.lines[0].line == "Fetching transcript…")
+        #expect(lines == ["Fetching transcript…"])
         store.close()
     }
 
@@ -391,30 +394,39 @@ private final class FakeTranscriptionProvider: QueueExtractionProvider, @uncheck
     }
 }
 
-// MARK: - Progress collector + CountDownLatch (same as QueueExtractionTests)
+// MARK: - Progress event wait + CountDownLatch
 
-private final class ProgressCollector: @unchecked Sendable {
-    private let lock = OSAllocatedUnfairLock(initialState: [(id: QueueItem.ID, line: String)]())
+private enum TranscriptionProgressWaitError: Error {
+    case streamEnded
+    case timedOut
+}
 
-    var lines: [(id: QueueItem.ID, line: String)] {
-        lock.withLock { $0 }
-    }
-
-    func record(id: QueueItem.ID, line: String) {
-        lock.withLock { $0.append((id, line)) }
-    }
-
-    func waitForCount(_ count: Int, timeoutSeconds: TimeInterval) async throws {
-        let deadline = Date().addingTimeInterval(timeoutSeconds)
-        while true {
-            let current = lines.count
-            if current >= count { return }
-            if Date() > deadline {
-                Issue.record("Timed out waiting for \(count) progress lines, got \(current)")
-                return
+private func transcriptionProgressLines(
+    for itemID: QueueItem.ID,
+    count: Int,
+    from events: AsyncStream<QueueEvent>,
+    timeout: Duration
+) async throws -> [String] {
+    try await withThrowingTaskGroup(of: [String].self) { group in
+        group.addTask {
+            var lines: [String] = []
+            for await event in events {
+                guard case .progress(let eventItemID, let line) = event,
+                      eventItemID == itemID else { continue }
+                lines.append(line)
+                if lines.count == count { return lines }
             }
-            try await Task.sleep(nanoseconds: 50_000_000)
+            throw TranscriptionProgressWaitError.streamEnded
         }
+        group.addTask {
+            try await Task.sleep(for: timeout)
+            throw TranscriptionProgressWaitError.timedOut
+        }
+        guard let lines = try await group.next() else {
+            throw TranscriptionProgressWaitError.streamEnded
+        }
+        group.cancelAll()
+        return lines
     }
 }
 

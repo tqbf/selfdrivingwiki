@@ -63,6 +63,20 @@ let package = Package(
         .package(url: "https://github.com/wsargent/tantivy.swift.git", from: "0.3.5"),
     ],
     targets: [
+        // Foundation-only typed component runtime. Cordis owns actor-isolated
+        // service and component lifecycles, but no SwiftUI, store, XPC, or queue
+        // domain types. See plans/cordis-swift-components.md.
+        .target(
+            name: "Cordis",
+            path: "Sources/Cordis",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "CordisTests",
+            dependencies: ["Cordis"],
+            path: "Tests/CordisTests",
+            swiftSettings: strictSwiftSettings
+        ),
         .executableTarget(
             name: "DynamicRendererPRSeriesAudit",
             path: "Sources/DynamicRendererPRSeriesAudit",
@@ -273,6 +287,7 @@ let package = Package(
         .target(
             name: "WikiFSEngine",
             dependencies: [
+                "Cordis",
                 "WikiFSCore",
                 // ACP client runtime (ACPBackend — plans/acp-backend-and-permissions.md).
                 // The `ACP` product is macOS-only: it uses ACPProcessManager and os.log.
@@ -438,7 +453,7 @@ let package = Package(
         // ACP wiring (pure), etc. These run on both macOS and Linux (#754).
         .testTarget(
             name: "WikiFSCoreTests",
-            dependencies: ["WikiFSCore", "WikiCtlCore", "ProviderConfigMutationHelper",
+            dependencies: ["Cordis", "WikiFSCore", "WikiCtlCore", "ProviderConfigMutationHelper",
                            // WikiFSEngine is macOS-only at build time because it
                            // depends on the `ACP` product (macOS-only). On Linux
                            // the test target still builds — the ACP-backed tests

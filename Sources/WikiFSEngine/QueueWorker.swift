@@ -1,6 +1,38 @@
 import Foundation
 import WikiFSCore
 
+/// An in-memory dispatch identity. It is intentionally distinct from the
+/// durable `QueueAttemptID`: a re-dispatch of the same attempt gets a new
+/// lease, so output from an old worker cannot reach the next owner.
+public struct WorkerLeaseID: RawRepresentable, Hashable, Sendable, Codable {
+    public let rawValue: UUID
+
+    public init(rawValue: UUID = UUID()) {
+        self.rawValue = rawValue
+    }
+}
+
+/// The only output capability given to a worker dispatch. Its methods become
+/// no-ops as soon as the engine invalidates its lease.
+public struct QueueWorkerOutputScope: Sendable {
+    public let attemptID: QueueAttemptID
+    public let leaseID: WorkerLeaseID
+    private let channel: QueueWorkerOutputChannel
+
+    internal init(attemptID: QueueAttemptID, leaseID: WorkerLeaseID, channel: QueueWorkerOutputChannel) {
+        self.attemptID = attemptID
+        self.leaseID = leaseID
+        self.channel = channel
+    }
+
+    public func emitProgress(itemID: QueueItem.ID, line: String) { channel.emitProgress(itemID: itemID, line: line, scope: self) }
+    public func emitTranscript(_ event: AgentEvent) { channel.emitTranscript(attemptID: attemptID, event: event, scope: self) }
+    public func emitUsage(itemID: QueueItem.ID, usage: SessionUsage) { channel.emitUsage(itemID: itemID, usage: usage, scope: self) }
+    public func emitLiveUsage(itemID: QueueItem.ID, usage: SessionUsage) { channel.emitLiveUsage(itemID: itemID, usage: usage, scope: self) }
+    public func emitRunPaths(itemID: QueueItem.ID, logURL: URL?, debugURL: URL?) { channel.emitRunPaths(itemID: itemID, logURL: logURL, debugURL: debugURL, scope: self) }
+    public func emitPendingPermission(itemID: QueueItem.ID, permission: PendingPermission?) { channel.emitPendingPermission(itemID: itemID, permission: permission, scope: self) }
+}
+
 // MARK: - CompositeWorkerFactory
 
 /// A `QueueWorkerFactory` that delegates to per-queue-kind sub-factories.
@@ -27,6 +59,13 @@ public struct CompositeWorkerFactory: QueueWorkerFactory {
             throw QueueIngestionError.noSources
         }
         return try await factory.worker(for: item)
+    }
+
+    public func worker(for item: QueueItem, output: QueueWorkerOutputScope) async throws -> any QueueWorker {
+        guard let factory = factories[item.queue] else {
+            throw QueueIngestionError.noSources
+        }
+        return try await factory.worker(for: item, output: output)
     }
 }
 
@@ -61,6 +100,15 @@ public protocol QueueWorker: Sendable {
 public protocol QueueWorkerFactory: Sendable {
     func providerID(for item: QueueItem) async -> ProviderID?
     func worker(for item: QueueItem) async throws -> any QueueWorker
+    /// Scoped factories must route every worker-originated output through this
+    /// capability. The default preserves source compatibility for legacy fakes.
+    func worker(for item: QueueItem, output: QueueWorkerOutputScope) async throws -> any QueueWorker
+}
+
+public extension QueueWorkerFactory {
+    func worker(for item: QueueItem, output: QueueWorkerOutputScope) async throws -> any QueueWorker {
+        try await worker(for: item)
+    }
 }
 
 // MARK: - QueueEvent
