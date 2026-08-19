@@ -106,7 +106,7 @@ struct ChatComposerPaneView: View {
                 props.onAddAttachment(ChatAttachment(payload: payload, store: props.store))
             }
             ProviderSelector(remoteSession: props.remoteSession, store: props.store)
-            ThinkingEffortSelector(remoteSession: props.remoteSession)
+            ThinkingEffortSelector(remoteSession: props.remoteSession, store: props.store)
             PermissionModeSelector(rawValue: props.permissionModeRaw)
             Spacer(minLength: 0)
             if props.composer.showsStopButton {

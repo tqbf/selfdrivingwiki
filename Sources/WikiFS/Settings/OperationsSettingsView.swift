@@ -8,7 +8,7 @@ import WikiFSCore
 /// here, unlike inside a single provider's detail pane.
 ///
 /// Owns its own `AgentProvidersConfig` copy (like the other settings tabs) and
-/// persists via `AgentProvidersConfig.save(to:)` on every edit. Reloads on
+/// persists each edit through `AgentProvidersConfigStore`. Reloads on
 /// appear so provider/model changes made in the Agents tab are reflected (the
 /// Settings `TabView` keeps every tab alive, so `init` runs only once).
 struct OperationsSettingsView: View {

@@ -1,5 +1,6 @@
 import ACPModel
 import Foundation
+import WikiFSCore
 
 /// #566: A UI-facing projection of the agent's `thought_level` config option.
 ///
@@ -54,44 +55,79 @@ public struct ThinkingEffortOption: Equatable, Sendable, Codable {
         ThinkingEffortOption(configId: configId, currentValue: value, choices: choices)
     }
 
-    /// Scan an agent's advertised `configOptions` for the `thought_level`
-    /// select and project it. Returns `nil` when the agent advertises no such
-    /// option (capability detection → the toolbar hides the dropdown).
-    ///
-    /// Matches by `id.value == "thought_level"` OR `category == "thought_level"`
-    /// — the daemon and the spec use different conventions, so we accept both.
-    /// Only `.select` kinds are surfaced (a `thought_level` boolean doesn't
-    /// make sense; if an agent advertises one, we ignore it).
+    /// Scan the authoritative session options and project the live current value.
+    /// Durable capability is stored separately in each model's catalog; this
+    /// value is an optional active-session overlay.
     public static func from(configOptions: [SessionConfigOption]) -> ThinkingEffortOption? {
-        guard let option = configOptions.first(where: { isThoughtLevel($0) }),
+        guard let extracted = extract(from: configOptions) else { return nil }
+        return ThinkingEffortOption(
+            configId: extracted.catalog.configOptionID.rawValue,
+            currentValue: extracted.currentValueID.rawValue,
+            choices: extracted.catalog.choices.map {
+                Choice(value: $0.id.rawValue, label: $0.label)
+            })
+    }
+
+    /// Convert a live projection back to the complete durable core catalog.
+    public var catalog: ThinkingOptionCatalog {
+        ThinkingOptionCatalog(
+            configOptionID: ChatConfigurationOptionID(rawValue: configId),
+            choices: choices.map {
+                ThinkingOptionCatalogChoice(
+                    id: ChatConfigurationValueID(rawValue: $0.value), label: $0.label)
+            },
+            defaultValueID: choices.contains { $0.value == currentValue }
+                ? ChatConfigurationValueID(rawValue: currentValue)
+                : nil)
+    }
+
+    struct Extracted: Equatable, Sendable {
+        let catalog: ThinkingOptionCatalog
+        let currentValueID: ChatConfigurationValueID
+    }
+
+    /// Shared ACP-shaped extraction used by provider probing and live sessions.
+    static func extract(from configOptions: [SessionConfigOption]) -> Extracted? {
+        let categoryMatch = configOptions.first {
+            $0.category == "thought_level"
+        }
+        let legacyIDMatch = configOptions.first {
+            $0.category == nil && $0.id.value == "thought_level"
+        }
+        guard let option = categoryMatch ?? legacyIDMatch,
               case .select(let select) = option.kind else {
             return nil
         }
         let choices = flatChoices(from: select.options)
         guard !choices.isEmpty else { return nil }
-        return ThinkingEffortOption(
-            configId: option.id.value,
-            currentValue: select.currentValue.value,
-            choices: choices)
+        let currentValueID = ChatConfigurationValueID(rawValue: select.currentValue.value)
+        let defaultValueID = choices.contains { $0.id == currentValueID } ? currentValueID : nil
+        return Extracted(
+            catalog: ThinkingOptionCatalog(
+                configOptionID: ChatConfigurationOptionID(rawValue: option.id.value),
+                choices: choices,
+                defaultValueID: defaultValueID),
+            currentValueID: currentValueID)
     }
 
-    /// Match heuristic: `thought_level` by id or by category.
-    private static func isThoughtLevel(_ option: SessionConfigOption) -> Bool {
-        option.id.value == "thought_level" || option.category == "thought_level"
-    }
-
-    /// Flatten the SDK's `ungrouped`/`grouped` select options into a single
-    /// `[Choice]` list. Grouped options preserve the agent's ordering within
-    /// each group but drop the group headings (the toolbar is a flat Menu).
+    /// Flatten grouped and ungrouped choices in advertised order.
     private static func flatChoices(
-        from options: SessionConfigSelectOptions
-    ) -> [Choice] {
-        switch options {
-        case .ungrouped(let opts):
-            return opts.map { Choice(value: $0.value.value, label: $0.name) }
+        from selectOptions: SessionConfigSelectOptions
+    ) -> [ThinkingOptionCatalogChoice] {
+        switch selectOptions {
+        case .ungrouped(let options):
+            return options.map { option in
+                ThinkingOptionCatalogChoice(
+                    id: ChatConfigurationValueID(rawValue: option.value.value),
+                    label: option.name)
+            }
         case .grouped(let groups):
             return groups.flatMap { group in
-                group.options.map { Choice(value: $0.value.value, label: $0.name) }
+                group.options.map { option in
+                    ThinkingOptionCatalogChoice(
+                        id: ChatConfigurationValueID(rawValue: option.value.value),
+                        label: option.name)
+                }
             }
         }
     }

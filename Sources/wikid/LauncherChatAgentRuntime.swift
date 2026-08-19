@@ -212,6 +212,21 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
                 priorAcpSessionId: priorSessionID,
                 chatOverrideProviderId: providerID,
                 chatOverrideModelId: modelID,
+                thinkingConfiguration: request.thinkingConfiguration,
+                onThinkingConfirmed: { [weak self] confirmedValueID in
+                    guard let self else { return }
+                    do {
+                        let chat = try self.store.getChat(id: self.chatID)
+                        try self.store.updateChatModelAndThinkingSelection(
+                            chatID: self.chatID,
+                            providerID: chat.modelProviderId,
+                            modelID: chat.modelId,
+                            configuredThinkingID: chat.configuredThinkingOptionID,
+                            effectiveThinkingID: confirmedValueID)
+                    } catch {
+                        DebugLog.store("LauncherChatAgentRuntime thinking confirmation writeback failed: \(error)")
+                    }
+                },
                 onAcpSessionId: { [weak self] sessionID in
                     guard let self else { return }
                     Task {
@@ -295,12 +310,9 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
 
     func setConfiguration(_ change: ChatRuntimeConfigurationChange, in handle: ChatRuntimeHandle) async throws {
         guard let state = runtimeState, state.handle == handle else { throw RuntimeError.unknownHandle }
-        await MainActor.run {
-            state.launcher.setConfigOption(
-                configId: change.optionID.rawValue,
-                value: change.valueID.rawValue
-            )
-        }
+        try await state.launcher.setConfigOption(
+            configId: change.optionID.rawValue,
+            value: change.valueID.rawValue)
     }
 
     func snapshot(for handle: ChatRuntimeHandle) async throws -> ChatRuntimeSnapshot {

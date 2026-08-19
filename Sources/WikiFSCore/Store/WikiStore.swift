@@ -749,13 +749,15 @@ public protocol WikiStore: Sendable {
     @discardableResult
     func createChat(kind: ChatKind, title: String) throws -> ChatSummary
 
-    /// `createChat(kind:title:)`, seeding the per-chat model override
-    /// (composer `ProviderSelector` pin) at creation time. `modelProviderId`
-    /// nil = no override (equivalent to the two-arg overload above).
+    /// `createChat(kind:title:)`, atomically seeding the draft's provider,
+    /// model, configured thinking intent, and resolved effective value.
+    /// `modelProviderId == nil` means no model override.
     @discardableResult
     func createChat(
         kind: ChatKind, title: String,
-        modelProviderId: ProviderID?, modelId: ModelID?
+        modelProviderId: ProviderID?, modelId: ModelID?,
+        configuredThinkingOptionID: ChatConfigurationValueID?,
+        effectiveThinkingOptionID: ChatConfigurationValueID?
     ) throws -> ChatSummary
 
     /// Append the given events as new `chat_messages` rows, in one transaction:
@@ -794,11 +796,19 @@ public protocol WikiStore: Sendable {
     /// `updated_at`.
     func updateChatAcpSessionId(chatID: ChatID, acpSessionId: AcpSessionID?) throws
 
-    /// Write or clear the per-chat model override (composer `ProviderSelector`
-    /// pin — outranks both the "chat" stage pin and the global default
-    /// provider for THIS chat only). Pass `providerId: nil` to clear. Bumps
-    /// `updated_at`. Throws `.notFound` if no chat has `id`.
+    /// Write or clear the per-chat model override while preserving its thinking
+    /// fields. Use the coherent mutation below for UI provider/model switches.
     func updateChatModelOverride(id: ChatID, providerId: ProviderID?, modelId: ModelID?) throws
+
+    /// Atomically write provider/model selection, configured thinking intent,
+    /// and effective thinking value. Emits exactly one `.chat .updated` event.
+    func updateChatModelAndThinkingSelection(
+        chatID: ChatID,
+        providerID: ProviderID?,
+        modelID: ModelID?,
+        configuredThinkingID: ChatConfigurationValueID?,
+        effectiveThinkingID: ChatConfigurationValueID?
+    ) throws
 
     /// One chat summary by id. Throws `.notFound` if no chat has `id`.
     func getChat(id: ChatID) throws -> ChatSummary

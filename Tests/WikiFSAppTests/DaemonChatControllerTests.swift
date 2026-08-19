@@ -179,6 +179,87 @@ struct DaemonChatControllerTests {
         #expect(snapshot.attention == .none)
     }
 
+    @Test func coldStartReloadsLatestProviderCatalog() async throws {
+        let harness = try ControllerHarness()
+        let provider = AgentProvider(
+            id: ProviderID(rawValue: "provider"),
+            label: "Provider",
+            enabled: true,
+            isDefault: true)
+        let model = CachedModelInfo(
+            modelId: ModelID(rawValue: "model"),
+            name: "Model",
+            thinkingOptionCatalog: ThinkingOptionCatalog(
+                configOptionID: ChatConfigurationOptionID(rawValue: "reasoning_mode"),
+                choices: [ThinkingOptionCatalogChoice(
+                    id: ChatConfigurationValueID(rawValue: "maximum"), label: "Maximum")],
+                defaultValueID: ChatConfigurationValueID(rawValue: "maximum")),
+            isDefault: true)
+        try AgentProvidersConfig(
+            providers: [provider],
+            providerModels: [provider.id.rawValue: [model]],
+            selectedModelIds: [provider.id.rawValue: model.modelId]
+        ).save(to: harness.rootDirectory)
+        let controller = try harness.makeController()
+
+        _ = try await controller.submit(harness.makeSubmitRequest(
+            submission: harness.makeSubmission(commandID: "command-cold", turnID: "turn-cold")))
+
+        let start = try #require(await harness.runtime.snapshot().startRequests.first)
+        #expect(start.providerID == provider.id)
+        #expect(start.modelID == model.modelId)
+        #expect(start.thinkingConfiguration == ResolvedThinkingConfiguration(
+            optionID: ChatConfigurationOptionID(rawValue: "reasoning_mode"),
+            desiredValueID: ChatConfigurationValueID(rawValue: "maximum"),
+            priorEffectiveValueID: nil))
+    }
+
+    @Test func liveThinkingConfirmationPersistsEffectiveValue() async throws {
+        let harness = try ControllerHarness()
+        try harness.store.updateChatModelAndThinkingSelection(
+            chatID: harness.chat.id,
+            providerID: ProviderID(rawValue: "provider"),
+            modelID: ModelID(rawValue: "model"),
+            configuredThinkingID: ChatConfigurationValueID(rawValue: "high"),
+            effectiveThinkingID: ChatConfigurationValueID(rawValue: "low"))
+        let controller = try harness.makeController()
+        _ = try await controller.submit(harness.makeSubmitRequest(
+            submission: harness.makeSubmission(commandID: "command-config", turnID: "turn-config")))
+
+        try await controller.setConfiguration(option: "reasoning_mode", value: "high")
+
+        let chat = try harness.store.getChat(id: harness.chat.id)
+        #expect(chat.configuredThinkingOptionID == ChatConfigurationValueID(rawValue: "high"))
+        #expect(chat.effectiveThinkingOptionID == ChatConfigurationValueID(rawValue: "high"))
+        #expect(await harness.runtime.snapshot().configurationChanges == [
+            ChatRuntimeConfigurationChange(
+                optionID: ChatConfigurationOptionID(rawValue: "reasoning_mode"),
+                valueID: ChatConfigurationValueID(rawValue: "high")),
+        ])
+    }
+
+    @Test func liveThinkingRejectionPreservesConfiguredAndPriorEffective() async throws {
+        let harness = try ControllerHarness()
+        try harness.store.updateChatModelAndThinkingSelection(
+            chatID: harness.chat.id,
+            providerID: ProviderID(rawValue: "provider"),
+            modelID: ModelID(rawValue: "model"),
+            configuredThinkingID: ChatConfigurationValueID(rawValue: "high"),
+            effectiveThinkingID: ChatConfigurationValueID(rawValue: "low"))
+        await harness.runtime.setRejectsConfiguration(true)
+        let controller = try harness.makeController()
+        _ = try await controller.submit(harness.makeSubmitRequest(
+            submission: harness.makeSubmission(commandID: "command-reject", turnID: "turn-reject")))
+
+        await #expect(throws: StubControllerRuntime.StubError.self) {
+            try await controller.setConfiguration(option: "reasoning_mode", value: "high")
+        }
+
+        let chat = try harness.store.getChat(id: harness.chat.id)
+        #expect(chat.configuredThinkingOptionID == ChatConfigurationValueID(rawValue: "high"))
+        #expect(chat.effectiveThinkingOptionID == ChatConfigurationValueID(rawValue: "low"))
+    }
+
     @Test func activeTurnCancellationRaceHasCancelledTerminalWinner() async throws {
         let harness = try ControllerHarness()
         let controller = try harness.makeController()
@@ -653,6 +734,7 @@ struct DaemonChatControllerTests {
             message: "boom"
         ))
         _ = try await controller.submit(harness.makeSubmitRequest(submission: second))
+        try await harness.waitUntilPersistedTurnState(second.turnID, equals: .providerSubmitted)
 
         let runtime = await harness.runtime.snapshot()
         #expect(runtime.submitCalls.map(\.turnID) == [first.turnID, second.turnID])
@@ -825,6 +907,7 @@ final class ControllerHarness {
             chatID: chat.id,
             wikiID: WikiID(rawValue: "wiki-controller"),
             store: store,
+            providersConfigurationDirectory: rootDirectory,
             runtime: runtime,
             pushEvent: { [eventRecorder] envelope in
                 eventRecorder.record(envelope)
@@ -985,6 +1068,7 @@ actor StubControllerRuntime: ChatAgentRuntime {
         let submitCalls: [ChatTurnSubmission]
         let cancelCalls: [ChatTurnID?]
         let permissionResolutions: [ChatPermissionResolution]
+        let configurationChanges: [ChatRuntimeConfigurationChange]
         let closeCallCount: Int
     }
 
@@ -994,6 +1078,8 @@ actor StubControllerRuntime: ChatAgentRuntime {
     private var submitCalls: [ChatTurnSubmission] = []
     private var cancelCalls: [ChatTurnID?] = []
     private var permissionResolutions: [ChatPermissionResolution] = []
+    private var configurationChanges: [ChatRuntimeConfigurationChange] = []
+    private var rejectsConfiguration = false
     private var closeCallCount = 0
     private var pausesNextClose = false
     private var closeHasStarted = false
@@ -1052,7 +1138,16 @@ actor StubControllerRuntime: ChatAgentRuntime {
         permissionResolutions.append(resolution)
     }
 
-    func setConfiguration(_ change: ChatRuntimeConfigurationChange, in handle: ChatRuntimeHandle) async throws {}
+    func setConfiguration(_ change: ChatRuntimeConfigurationChange, in handle: ChatRuntimeHandle) async throws {
+        configurationChanges.append(change)
+        if rejectsConfiguration { throw StubError.configurationRejected }
+    }
+
+    enum StubError: Error { case configurationRejected }
+
+    func setRejectsConfiguration(_ rejects: Bool) {
+        rejectsConfiguration = rejects
+    }
 
     func snapshot(for handle: ChatRuntimeHandle) async throws -> ChatRuntimeSnapshot {
         ChatRuntimeSnapshot(
@@ -1118,6 +1213,7 @@ actor StubControllerRuntime: ChatAgentRuntime {
             submitCalls: submitCalls,
             cancelCalls: cancelCalls,
             permissionResolutions: permissionResolutions,
+            configurationChanges: configurationChanges,
             closeCallCount: closeCallCount
         )
     }

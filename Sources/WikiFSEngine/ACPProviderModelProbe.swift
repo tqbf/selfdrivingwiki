@@ -73,7 +73,16 @@ public struct ACPProviderModelProbe: Sendable {
     /// - Returns: the agent's advertised `availableModels` mapped to
     ///   `[CachedModelInfo]`. Empty list → `.noModelsAdvertised`.
     public func discoverModels(timeout: Duration = .seconds(60)) async throws -> [CachedModelInfo] {
-        DebugLog.agent("ACPProviderModelProbe.discoverModels: enter provider=\(provider.id) timeout=\(timeout)")
+        try await discoverObservation(timeout: timeout).models
+    }
+
+    /// Discovers one complete, successful ACP catalog observation. Identity is
+    /// taken only from `InitializeResponse.agentInfo`; an omitted agentInfo
+    /// remains unknown and cannot satisfy a version-specific adapter.
+    public func discoverObservation(
+        timeout: Duration = .seconds(60)
+    ) async throws -> ACPProviderCatalogObservation {
+        DebugLog.agent("ACPProviderModelProbe.discoverObservation: enter provider=\(provider.id) timeout=\(timeout)")
 
         // Build the spawn profile via the SAME construction ACPBackend uses —
         // `resolveSpawnConfig` handles PATH resolution, env.* hints, and the
@@ -123,7 +132,9 @@ public struct ACPProviderModelProbe: Sendable {
         let client = Client()
 
         do {
-            let result: [CachedModelInfo] = try await withThrowingTaskGroup(of: [CachedModelInfo].self) { group in
+            let result: ACPProviderCatalogObservation = try await withThrowingTaskGroup(
+                of: ACPProviderCatalogObservation.self
+            ) { group in
                 // The probe work child: launch → initialize → (auth) →
                 // newSession → map to CachedModelInfo. Teardown happens
                 // OUTSIDE this group (never inside the racing operation).
@@ -175,7 +186,7 @@ public struct ACPProviderModelProbe: Sendable {
         spawn: ACPBackend.AgentSpawnConfig,
         probeCWD: String,
         env: [String: String]
-    ) async throws -> [CachedModelInfo] {
+    ) async throws -> ACPProviderCatalogObservation {
         // A minimal delegate so the SDK has someone to ask (the probe never
         // sends a prompt, so no permission will actually arrive — but the
         // SDK's `setDelegate` is required before `initialize`). `.bypass`
@@ -273,8 +284,24 @@ public struct ACPProviderModelProbe: Sendable {
         }
 
         let models = Self.mapModelsToCache(session.models, configOptions: session.configOptions)
-        DebugLog.agent("ACPProviderModelProbe.runProbe: discovered \(models.count) model(s) for provider=\(provider.id) ids=\(models.map(\.modelId))")
-        return models
+        let extractedThinking = ThinkingEffortOption.extract(from: session.configOptions ?? [])
+        let fingerprint = initResponse.agentInfo.map {
+            ACPAgentFingerprint(
+                identity: ACPAgentIdentity(rawValue: $0.name),
+                version: ACPAgentVersion(rawValue: $0.version),
+                title: $0.title)
+        }
+        DebugLog.agent("ACPProviderModelProbe.runProbe: discovered \(models.count) model(s) for provider=\(provider.id) agent=\(fingerprint?.identity.rawValue ?? "unknown") ids=\(models.map(\.modelId))")
+        return ACPProviderCatalogObservation(
+            providerID: provider.id,
+            fingerprint: fingerprint,
+            models: models,
+            currentModelID: session.models.map {
+                ModelID(rawValue: $0.currentModelId)
+            } ?? models.first(where: \.isDefault)?.modelId,
+            thinkingCapability: extractedThinking.map {
+                ThinkingCapabilityCatalog.observedACP($0.catalog)
+            })
     }
 
     // MARK: - PURE helpers (testable without a live Client actor)
@@ -297,17 +324,24 @@ public struct ACPProviderModelProbe: Sendable {
         _ models: ModelsInfo?,
         configOptions: [SessionConfigOption]? = nil
     ) -> [CachedModelInfo] {
+        let options = configOptions ?? []
+        // Thinking capability is stored once on the complete observation. It
+        // applies only to the model that produced this session snapshot.
         // Primary path: the agent advertised `availableModels`. Paseo parity.
         if let models, !models.availableModels.isEmpty {
             return models.availableModels.map {
-                CachedModelInfo(modelId: ModelID(rawValue: $0.modelId), name: $0.name, description: $0.description)
+                CachedModelInfo(
+                    modelId: ModelID(rawValue: $0.modelId),
+                    name: $0.name,
+                    description: $0.description,
+                    isDefault: $0.modelId == models.currentModelId)
             }
         }
         // Fallback: derive from the configOptions model selector — the path
         // opencode and other agents take when they don't populate
         // `availableModels`.
-        guard let configOptions else { return [] }
-        return deriveModelsFromConfigOptions(configOptions)
+        guard !options.isEmpty else { return [] }
+        return deriveModelsFromConfigOptions(options)
     }
 
     /// PURE. Scan `configOptions` for a `model` select option (matched by
@@ -330,7 +364,8 @@ public struct ACPProviderModelProbe: Sendable {
             CachedModelInfo(
                 modelId: ModelID(rawValue: choice.value.value),
                 name: choice.name,
-                description: choice.description)
+                description: choice.description,
+                isDefault: choice.value == select.currentValue)
         }
     }
 

@@ -51,13 +51,21 @@ public struct ChatSummary: Identifiable, Hashable, Sendable {
     /// the composer's synthetic "Default" row. Meaningless when
     /// `modelProviderId` is `nil`.
     public var modelId: ModelID?
+    /// Persisted user intent. It remains set when a refreshed catalog no longer
+    /// advertises the value so a later refresh can restore the user's choice.
+    public var configuredThinkingOptionID: ChatConfigurationValueID?
+    /// Last catalog-resolved or runtime-confirmed value. It must be supported
+    /// by the effective model's catalog, or nil when no capability is known.
+    public var effectiveThinkingOptionID: ChatConfigurationValueID?
 
     public init(
         id: ChatID, kind: ChatKind, title: String,
         createdAt: Date, updatedAt: Date, messageCount: Int,
         summary: String? = nil, summaryAt: Date? = nil,
         acpSessionId: AcpSessionID? = nil,
-        modelProviderId: ProviderID? = nil, modelId: ModelID? = nil
+        modelProviderId: ProviderID? = nil, modelId: ModelID? = nil,
+        configuredThinkingOptionID: ChatConfigurationValueID? = nil,
+        effectiveThinkingOptionID: ChatConfigurationValueID? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -70,6 +78,8 @@ public struct ChatSummary: Identifiable, Hashable, Sendable {
         self.acpSessionId = acpSessionId
         self.modelProviderId = modelProviderId
         self.modelId = modelId
+        self.configuredThinkingOptionID = configuredThinkingOptionID
+        self.effectiveThinkingOptionID = effectiveThinkingOptionID
     }
 
     /// Derive a chat title from the first user message: first line, trimmed,

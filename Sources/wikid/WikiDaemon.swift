@@ -621,7 +621,9 @@ final class WikiDaemon: @unchecked Sendable {
             let req = try JSONDecoder().decode(ChatStartRequest.self, from: request)
             let chatID = try await host.startChat(
                 wikiID: req.wikiID, firstMessage: req.firstMessage,
-                providerId: req.providerId, modelId: req.modelId)
+                providerId: req.providerId,
+                modelId: req.modelId,
+                configuredThinkingOptionID: req.configuredThinkingOptionID)
             let reply = ChatStartReply(chatID: chatID, error: nil)
             return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
         } catch {

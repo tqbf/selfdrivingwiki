@@ -66,11 +66,18 @@ final class DaemonChatHost: @unchecked Sendable {
                 throw DaemonChatError.noStore(request.wikiID)
             }
             let title = ChatSummary.title(fromFirstMessage: request.submission.userText)
+            let config = AgentProvidersConfig.loadOrSeed(from: containerDirectory)
+            let thinking = config.resolveThinkingCapability(
+                chatOverrideProviderID: request.providerId,
+                chatOverrideModelID: request.modelId,
+                configuredValueID: request.configuredThinkingOptionID)
             resolvedChatID = try store.createChat(
                 kind: .edit,
                 title: title,
                 modelProviderId: request.providerId,
-                modelId: request.modelId
+                modelId: request.modelId,
+                configuredThinkingOptionID: request.configuredThinkingOptionID,
+                effectiveThinkingOptionID: thinking.effectiveValueID
             ).id
         }
 
@@ -107,7 +114,9 @@ final class DaemonChatHost: @unchecked Sendable {
     /// every pre-existing caller.
     func startChat(
         wikiID: WikiID, firstMessage: String,
-        providerId: ProviderID? = nil, modelId: ModelID? = nil
+        providerId: ProviderID? = nil,
+        modelId: ModelID? = nil,
+        configuredThinkingOptionID: ChatConfigurationValueID? = nil
     ) async throws -> ChatID {
         try await submitTurn(ChatSubmitRequest(
             wikiID: wikiID,
@@ -120,7 +129,8 @@ final class DaemonChatHost: @unchecked Sendable {
                 submittedAt: Date()
             ),
             providerId: providerId,
-            modelId: modelId
+            modelId: modelId,
+            configuredThinkingOptionID: configuredThinkingOptionID
         ))
     }
 
@@ -303,6 +313,7 @@ final class DaemonChatHost: @unchecked Sendable {
             chatID: chatID,
             wikiID: wikiID,
             store: store,
+            providersConfigurationDirectory: containerDirectory,
             runtime: runtime,
             pushEvent: pushEvent,
             diagnosticTrace: diagnosticTrace

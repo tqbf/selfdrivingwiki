@@ -53,6 +53,81 @@ struct ACPProviderModelProbeTests {
         #expect(cached[2].description == nil)
     }
 
+    @Test func keepsThinkingCapabilityAtObservationLevelWithNonliteralID() throws {
+        let models = ModelsInfo(
+            currentModelId: "opus",
+            availableModels: [
+                ModelInfo(modelId: "sonnet", name: "Sonnet", description: nil),
+                ModelInfo(modelId: "opus", name: "Opus", description: nil),
+            ])
+        let configOptions = [
+            SessionConfigOption(
+                id: SessionConfigId("reasoning_mode"),
+                name: "Thinking",
+                category: "thought_level",
+                kind: .select(SessionConfigSelect(
+                    currentValue: SessionConfigValueId("high"),
+                    options: .grouped([
+                        SessionConfigSelectGroup(
+                            group: SessionConfigGroupId("normal"),
+                            name: "Normal",
+                            options: [
+                                SessionConfigSelectOption(
+                                    value: SessionConfigValueId("low"), name: "Low"),
+                                SessionConfigSelectOption(
+                                    value: SessionConfigValueId("medium"), name: "Medium"),
+                            ]),
+                        SessionConfigSelectGroup(
+                            group: SessionConfigGroupId("deep"),
+                            name: "Deep",
+                            options: [
+                                SessionConfigSelectOption(
+                                    value: SessionConfigValueId("high"), name: "High"),
+                            ]),
+                    ]))))
+        ]
+
+        let cached = ACPProviderModelProbe.mapModelsToCache(models, configOptions: configOptions)
+        #expect(cached.count == 2)
+        #expect(cached.allSatisfy { $0.thinkingOptionCatalog == nil })
+        let catalog = try #require(ThinkingEffortOption.extract(from: configOptions)?.catalog)
+        #expect(catalog.configOptionID == ChatConfigurationOptionID(rawValue: "reasoning_mode"))
+        #expect(catalog.choices.map(\.id) == [
+            ChatConfigurationValueID(rawValue: "low"),
+            ChatConfigurationValueID(rawValue: "medium"),
+            ChatConfigurationValueID(rawValue: "high"),
+        ])
+        #expect(catalog.defaultValueID == ChatConfigurationValueID(rawValue: "high"))
+        #expect(cached.first(where: \.isDefault)?.modelId == ModelID(rawValue: "opus"))
+    }
+
+    @Test func categoryMatchOutranksConflictingLiteralID() throws {
+        let literal = SessionConfigOption(
+            id: SessionConfigId("thought_level"),
+            name: "Legacy",
+            kind: .select(SessionConfigSelect(
+                currentValue: SessionConfigValueId("legacy"),
+                options: .ungrouped([
+                    SessionConfigSelectOption(
+                        value: SessionConfigValueId("legacy"), name: "Legacy"),
+                ]))))
+        let category = SessionConfigOption(
+            id: SessionConfigId("reasoning_mode"),
+            name: "Thinking",
+            category: "thought_level",
+            kind: .select(SessionConfigSelect(
+                currentValue: SessionConfigValueId("high"),
+                options: .ungrouped([
+                    SessionConfigSelectOption(
+                        value: SessionConfigValueId("low"), name: "Low"),
+                    SessionConfigSelectOption(
+                        value: SessionConfigValueId("high"), name: "High"),
+                ]))))
+        let extracted = try #require(ThinkingEffortOption.extract(from: [literal, category]))
+        #expect(extracted.catalog.configOptionID == ChatConfigurationOptionID(rawValue: "reasoning_mode"))
+        #expect(extracted.currentValueID == ChatConfigurationValueID(rawValue: "high"))
+    }
+
     @Test func mapModelsToCacheNilModelsReturnsEmpty() {
         // An agent that predates the models capability returns `session/new`
         // with no `models` field → nil → empty cache. The probe surfaces

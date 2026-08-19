@@ -390,12 +390,9 @@ public final class AgentLauncher {
     public func setDefaultProvider(id: ProviderID) -> AgentProvidersConfig {
         let dir = resolveProvidersContainerDirectory()
         let updated = providersConfig().settingDefault(id: id)
-        do {
-            try updated.save(to: dir)
-        } catch {
-            // #475/#492: persisting the default-provider choice is a mutation;
-            // swallowing the throw silently reverts the choice on next launch.
-            DebugLog.store("AgentLauncher.setDefaultProvider save failed (provider=\(id)): \(error)")
+        Task { @MainActor in
+            do { _ = try await AgentProvidersConfigStore(directory: dir).mutate { $0.settingDefault(id: id) } }
+            catch { DebugLog.store("AgentLauncher.setDefaultProvider save failed (provider=\(id)): \(error)") }
         }
         return updated
     }
@@ -407,17 +404,39 @@ public final class AgentLauncher {
     /// `startInteractiveQuery` / `run` right after `backend.start` succeeds so
     /// the model picker has the agent's advertised list on the next read.
     /// `@MainActor`; no return — the picker reads the cache next load.
-    public func cacheDiscoveredModels(_ models: [CachedModelInfo], forProvider providerId: ProviderID) {
+    /// Compatibility entry point for callers that have only model metadata.
+    /// New ACP discovery paths use `cacheCatalogObservation` with identity and
+    /// capability provenance.
+    public func cacheDiscoveredModels(
+        _ models: [CachedModelInfo], forProvider providerID: ProviderID
+    ) {
         guard !models.isEmpty else { return }
+        let observation = ACPProviderCatalogObservation(
+            providerID: providerID,
+            fingerprint: nil,
+            models: models,
+            currentModelID: models.first(where: \.isDefault)?.modelId,
+            thinkingCapability: models.compactMap(\.thinkingOptionCatalog).first.map {
+                ThinkingCapabilityCatalog.observedACP($0)
+            })
+        Task { @MainActor [weak self] in
+            await self?.cacheCatalogObservation(observation, forProvider: providerID)
+        }
+    }
+
+    public func cacheCatalogObservation(
+        _ observation: ACPProviderCatalogObservation,
+        forProvider providerID: ProviderID
+    ) async {
+        guard !observation.models.isEmpty else { return }
         let dir = resolveProvidersContainerDirectory()
-        let updated = providersConfig().settingCachedModels(models, forProvider: providerId)
-        DebugLog.store("cacheDiscoveredModels: provider=\(providerId.rawValue) count=\(models.count) → save")
+        DebugLog.store("cacheCatalogObservation: provider=\(providerID.rawValue) count=\(observation.models.count) → locked save")
         do {
-            try updated.save(to: dir)
+            _ = try await AgentProvidersConfigStore(directory: dir).mutate {
+                $0.settingCatalogObservation(observation, forProvider: providerID)
+            }
         } catch {
-            // #475/#492: the cached model list silently disappears on next launch
-            // if this write throws; log so it's visible in Console.app.
-            DebugLog.store("AgentLauncher.cacheDiscoveredModels save failed (provider=\(providerId.rawValue)): \(error)")
+            DebugLog.store("AgentLauncher.cacheCatalogObservation failed (provider=\(providerID.rawValue)): \(error)")
         }
     }
 
@@ -429,12 +448,14 @@ public final class AgentLauncher {
         let dir = resolveProvidersContainerDirectory()
         let updated = providersConfig().settingSelectedModel(modelId, forProvider: providerId)
         DebugLog.store("setSelectedModel: provider=\(providerId.rawValue) modelId=\(modelId?.rawValue ?? "nil") → save")
-        do {
-            try updated.save(to: dir)
-        } catch {
-            // #475/#492: the user's model selection silently reverts on next
-            // launch if this write throws; log so it's visible in Console.app.
-            DebugLog.store("AgentLauncher.setSelectedModel save failed (provider=\(providerId) modelId=\(modelId?.rawValue ?? "nil")): \(error)")
+        Task { @MainActor in
+            do {
+                _ = try await AgentProvidersConfigStore(directory: dir).mutate {
+                    $0.settingSelectedModel(modelId, forProvider: providerId)
+                }
+            } catch {
+                DebugLog.store("AgentLauncher.setSelectedModel save failed (provider=\(providerId) modelId=\(modelId?.rawValue ?? "nil")): \(error)")
+            }
         }
         return updated
     }
@@ -449,20 +470,13 @@ public final class AgentLauncher {
     @discardableResult
     public func setSelectedModelAndDefault(
         _ modelId: ModelID?, provider: AgentProvider
-    ) -> AgentProvidersConfig {
+    ) async throws -> AgentProvidersConfig {
         let dir = resolveProvidersContainerDirectory()
-        DebugLog.store("setSelectedModelAndDefault: provider=\(provider.id) modelId=\(modelId?.rawValue ?? "nil") → save")
-        let updated = providersConfig()
-            .settingDefault(id: provider.id)
-            .settingSelectedModel(modelId, forProvider: provider.id)
-        do {
-            try updated.save(to: dir)
-        } catch {
-            // #475/#492: provider+model selection must land together; swallowing
-            // the throw silently reverts both on next launch.
-            DebugLog.store("AgentLauncher.setSelectedModelAndDefault save failed (provider=\(provider.id) modelId=\(modelId?.rawValue ?? "nil")): \(error)")
+        DebugLog.store("setSelectedModelAndDefault: provider=\(provider.id) modelId=\(modelId?.rawValue ?? "nil") → locked save")
+        return try await AgentProvidersConfigStore(directory: dir).mutate {
+            $0.settingDefault(id: provider.id)
+                .settingSelectedModel(modelId, forProvider: provider.id)
         }
-        return updated
     }
 
     /// The user's persisted model selection for `providerId` (nil = "use the
@@ -480,12 +494,14 @@ public final class AgentLauncher {
     public func toggleFavoriteModel(_ modelId: ModelID, forProvider providerId: ProviderID) -> AgentProvidersConfig {
         let dir = resolveProvidersContainerDirectory()
         let updated = providersConfig().togglingFavoriteModel(modelId, forProvider: providerId)
-        do {
-            try updated.save(to: dir)
-        } catch {
-            // #475/#492: the favorite toggle silently reverts if this write
-            // throws; log so it's visible in Console.app.
-            DebugLog.store("AgentLauncher.toggleFavoriteModel save failed (provider=\(providerId.rawValue) model=\(modelId.rawValue)): \(error)")
+        Task { @MainActor in
+            do {
+                _ = try await AgentProvidersConfigStore(directory: dir).mutate {
+                    $0.togglingFavoriteModel(modelId, forProvider: providerId)
+                }
+            } catch {
+                DebugLog.store("AgentLauncher.toggleFavoriteModel save failed (provider=\(providerId.rawValue) model=\(modelId.rawValue)): \(error)")
+            }
         }
         return updated
     }
@@ -503,16 +519,29 @@ public final class AgentLauncher {
         DebugLog.agent("captureAndCacheModels: enter provider=\(provider.id) session=\(session.id)")
         Task { @MainActor [weak self] in
             guard let self else { return }
-            let models = await acp.availableModels(for: session)
-            guard !models.isEmpty else {
+            async let advertisedModels = acp.modelsInfo(for: session)
+            async let configOptions = acp.sessionConfigOptions(for: session)
+            async let fingerprint = acp.agentFingerprint()
+            let (modelsInfo, options, observedFingerprint) = await (
+                advertisedModels, configOptions, fingerprint)
+            let cached = ACPProviderModelProbe.mapModelsToCache(
+                modelsInfo, configOptions: options)
+            guard !cached.isEmpty else {
                 DebugLog.agent("captureAndCacheModels: no models discovered for provider=\(provider.id)")
                 return
             }
-            let cached = models.map {
-                CachedModelInfo(modelId: ModelID(rawValue: $0.modelId), name: $0.name, description: $0.description)
-            }
-            DebugLog.agent("captureAndCacheModels: captured \(cached.count) model(s) for provider=\(provider.id) ids=\(cached.map(\.modelId))")
-            self.cacheDiscoveredModels(cached, forProvider: provider.id)
+            let extracted = ThinkingEffortOption.extract(from: options)
+            let observation = ACPProviderCatalogObservation(
+                providerID: provider.id,
+                fingerprint: observedFingerprint,
+                models: cached,
+                currentModelID: modelsInfo.map { ModelID(rawValue: $0.currentModelId) }
+                    ?? cached.first(where: \.isDefault)?.modelId,
+                thinkingCapability: extracted.map {
+                    ThinkingCapabilityCatalog.observedACP($0.catalog)
+                })
+            DebugLog.agent("captureAndCacheModels: captured \(cached.count) model(s) for provider=\(provider.id) agent=\(observedFingerprint?.identity.rawValue ?? "unknown") ids=\(cached.map(\.modelId))")
+            await self.cacheCatalogObservation(observation, forProvider: provider.id)
         }
         #else
         // ACPBackend is macOS-only; no-op on Linux.
@@ -558,6 +587,117 @@ public final class AgentLauncher {
         #endif
     }
 
+    /// Deterministic preparation policy used by production ACP sessions and by
+    /// the recording runtime harness. It never reports an unconfirmed value.
+    static func resolveAndApplyThinkingConfiguration(
+        _ requested: ResolvedThinkingConfiguration?,
+        snapshot: @escaping @Sendable () async -> ThinkingEffortOption?,
+        apply: @escaping @Sendable (ChatConfigurationOptionID, ChatConfigurationValueID) async throws -> Void,
+        diagnostic: @escaping @Sendable (String) -> Void = { DebugLog.agent($0) }
+    ) async -> ChatConfigurationValueID? {
+        guard let requested else { return nil }
+        switch requested.mechanism {
+        case .modelVariants:
+            guard requested.modelID != nil, requested.optionID == nil else {
+                diagnostic("invalid model-variant thinking request")
+                return requested.priorEffectiveValueID
+            }
+            // The exact effort-specific model was applied before this helper.
+            // Re-read ACP now: a standard thought_level option that appeared
+            // after model selection becomes authoritative for this session.
+            guard let live = await snapshot() else {
+                return requested.desiredValueID
+            }
+            guard live.choices.contains(where: {
+                $0.value == requested.desiredValueID.rawValue
+            }) else {
+                diagnostic("post-model ACP thinking option does not advertise the configured value")
+                return requested.priorEffectiveValueID
+            }
+            let liveOptionID = ChatConfigurationOptionID(rawValue: live.configId)
+            do {
+                if live.currentValue != requested.desiredValueID.rawValue {
+                    try await apply(liveOptionID, requested.desiredValueID)
+                }
+                guard let confirmed = await snapshot(),
+                      confirmed.configId == live.configId,
+                      confirmed.currentValue == requested.desiredValueID.rawValue else {
+                    diagnostic("post-model ACP thinking value was not confirmed")
+                    return requested.priorEffectiveValueID
+                }
+                return requested.desiredValueID
+            } catch {
+                diagnostic("post-model ACP thinking set rejected: \(error)")
+                return requested.priorEffectiveValueID
+            }
+        case .sessionConfig:
+            break
+        }
+        guard let optionID = requested.optionID, requested.modelID == nil else {
+            diagnostic("invalid session-config thinking request")
+            return requested.priorEffectiveValueID
+        }
+        guard let initial = await snapshot() else {
+            diagnostic("thinking capability absent")
+            return requested.priorEffectiveValueID
+        }
+        let supported = initial.configId == optionID.rawValue
+            && initial.choices.contains { $0.value == requested.desiredValueID.rawValue }
+        guard supported else {
+            diagnostic("thinking option or value unsupported")
+            return requested.priorEffectiveValueID
+        }
+        do {
+            if initial.currentValue != requested.desiredValueID.rawValue {
+                try await apply(optionID, requested.desiredValueID)
+            }
+            guard let confirmed = await snapshot(),
+                  confirmed.configId == optionID.rawValue,
+                  confirmed.currentValue == requested.desiredValueID.rawValue else {
+                diagnostic("thinking value was not confirmed")
+                return requested.priorEffectiveValueID
+            }
+            return requested.desiredValueID
+        } catch {
+            diagnostic("thinking set rejected: \(error)")
+            return requested.priorEffectiveValueID
+        }
+    }
+
+    /// Prepare and confirm thinking configuration before the first provider
+    /// submit. Model selection has already completed inside ACPBackend.start or
+    /// resume before this method is called, so validation uses post-model options.
+    private func prepareThinkingConfiguration(
+        _ requested: ResolvedThinkingConfiguration?,
+        session: SessionHandle,
+        onConfirmed: (@MainActor (ChatConfigurationValueID?) -> Void)?
+    ) async {
+        guard let requested else { return }
+        guard let acp = backend as? ACPBackend else {
+            DebugLog.agent("prepareThinkingConfiguration: ACP backend unavailable")
+            onConfirmed?(requested.priorEffectiveValueID)
+            return
+        }
+        let confirmed = await Self.resolveAndApplyThinkingConfiguration(
+            requested,
+            snapshot: {
+                let options = await acp.sessionConfigOptions(for: session)
+                return ThinkingEffortOption.from(configOptions: options)
+            },
+            apply: { optionID, valueID in
+                try await acp.setConfigOption(
+                    sessionHandle: session,
+                    configId: optionID.rawValue,
+                    value: valueID.rawValue)
+            },
+            diagnostic: { message in
+                DebugLog.agent("prepareThinkingConfiguration: \(message)")
+            })
+        let options = await acp.sessionConfigOptions(for: session)
+        thinkingOption = ThinkingEffortOption.from(configOptions: options)
+        onConfirmed?(confirmed)
+    }
+
     /// #566: Set the `thought_level` config option on the live ACP session.
     /// Called by the chat toolbar's "Thinking" dropdown. No-op when no session
     /// is live or the backend isn't ACP. Errors are logged (not surfaced) —
@@ -569,8 +709,9 @@ public final class AgentLauncher {
               let handle = sessionHandle,
               let option = thinkingOption else { return }
         DebugLog.agent("setThinkingEffort: value=\(value) configId=\(option.configId)")
-        // Optimistic local flip — the backend also patches its snapshot, but
-        // updating here keeps the dropdown snappy before the actor hop returns.
+        thinkingWriteGeneration &+= 1
+        let generation = thinkingWriteGeneration
+        // Optimistic local flip. Only the newest completion can reconcile it.
         thinkingOption = option.withCurrentValue(value)
         Task { @MainActor [weak self] in
             do {
@@ -578,10 +719,13 @@ public final class AgentLauncher {
                     sessionHandle: handle,
                     configId: option.configId,
                     value: value)
+                guard let self, self.thinkingWriteGeneration == generation else { return }
+                let options = await acp.sessionConfigOptions(for: handle)
+                self.thinkingOption = ThinkingEffortOption.from(configOptions: options)
             } catch {
                 DebugLog.agent("setThinkingEffort: failed value=\(value) \(error.localizedDescription)")
-                // Revert the optimistic flip on failure.
-                self?.thinkingOption = option
+                guard let self, self.thinkingWriteGeneration == generation else { return }
+                self.thinkingOption = option
             }
         }
         #else
@@ -593,29 +737,29 @@ public final class AgentLauncher {
     /// This is the generic form of ``setThinkingEffort(_:)`` — the daemon's
     /// `setChatConfigOption` XPC method calls this so the app can change any
     /// advertised config option (not just `thought_level`) on a live session
-    /// without restarting it. No-op when no session is live or the backend
-    /// isn't ACP. Errors are logged (not surfaced).
-    public func setConfigOption(configId: String, value: String) {
+    /// without restarting it. Returns only after the agent's response snapshot
+    /// confirms the requested value; failures propagate to the daemon so it can
+    /// retain the prior persisted effective value.
+    public func setConfigOption(configId: String, value: String) async throws {
         #if os(macOS)
         guard let acp = backend as? ACPBackend,
-              let handle = sessionHandle else { return }
+              let handle = sessionHandle else {
+            throw ACPBackendError.noAgentConfigured
+        }
         DebugLog.agent("setConfigOption: configId=\(configId) value=\(value)")
-        Task { @MainActor [weak self] in
-            do {
-                try await acp.setConfigOption(
-                    sessionHandle: handle,
-                    configId: configId,
-                    value: value)
-                // If this is the thought_level option, flip the local mirror.
-                if configId == "thought_level" {
-                    self?.thinkingOption = self?.thinkingOption?.withCurrentValue(value)
-                }
-            } catch {
-                DebugLog.agent("setConfigOption: failed configId=\(configId) value=\(value) \(error.localizedDescription)")
-            }
+        try await acp.setConfigOption(
+            sessionHandle: handle,
+            configId: configId,
+            value: value)
+        let options = await acp.sessionConfigOptions(for: handle)
+        thinkingOption = ThinkingEffortOption.from(configOptions: options)
+        guard let confirmed = options.first(where: { $0.id.value == configId }),
+              case .select(let select) = confirmed.kind,
+              select.currentValue.value == value else {
+            throw ACPBackendError.noAgentConfigured
         }
         #else
-        // ACPBackend is macOS-only; no-op on Linux.
+        throw ACPBackendError.noAgentConfigured
         #endif
     }
 
@@ -634,6 +778,9 @@ public final class AgentLauncher {
     /// option (capability detection: only show UI when present). Refreshed
     /// after `backend.start` and (future) on `config_option_update`.
     public var thinkingOption: ThinkingEffortOption?
+    /// Identifies the latest optimistic live thinking write. Older completions
+    /// cannot overwrite or roll back a newer selection.
+    @ObservationIgnored private var thinkingWriteGeneration: UInt64 = 0
 
     /// Backstop poller that refreshes `pendingPermissions` from the backend while
     /// a turn is generating (always-ask blocks the turn until resolved, so no
@@ -2951,6 +3098,8 @@ public final class AgentLauncher {
         priorAcpSessionId: AcpSessionID? = nil,
         chatOverrideProviderId: ProviderID? = nil,
         chatOverrideModelId: ModelID? = nil,
+        thinkingConfiguration: ResolvedThinkingConfiguration? = nil,
+        onThinkingConfirmed: (@MainActor (ChatConfigurationValueID?) -> Void)? = nil,
         onAcpSessionId: (@MainActor (AcpSessionID?) -> Void)? = nil,
         onEvent: (@Sendable (AgentEvent) -> Void)? = nil,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)? = nil,
@@ -3249,11 +3398,17 @@ public final class AgentLauncher {
             // turn.
             captureAndCacheModels(provider: provider, session: session)
             captureProcessID(session: session)
-            // #566: mirror the agent-advertised config options (e.g. the
-            // `thought_level` select) so the chat toolbar can render a
-            // "Thinking" dropdown. No-op for agents that advertise none.
-            captureThinkingOption(session: session)
-            DebugLog.agent("startInteractiveQuery: spawned")
+            // Apply and confirm thinking only after the model-bearing session
+            // exists/resumes, and before the first provider submit.
+            await prepareThinkingConfiguration(
+                thinkingConfiguration,
+                session: session,
+                onConfirmed: onThinkingConfirmed)
+            if thinkingConfiguration == nil {
+                let options = await (backend as? ACPBackend)?.sessionConfigOptions(for: session) ?? []
+                thinkingOption = ThinkingEffortOption.from(configOptions: options)
+            }
+            DebugLog.agent("startInteractiveQuery: spawned and configured")
             // Start the first turn — this acquires the generation gate for turn 1.
             // Compose the full task prompt (chat.md, write rules, citation rules,
             // don't-rediscover directive) + the user's message — same composition

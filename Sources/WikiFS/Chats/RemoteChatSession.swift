@@ -50,6 +50,8 @@ public final class RemoteChatSession {
     }
 
     public var pendingModelOverride: (providerId: ProviderID, modelId: ModelID?)?
+    /// Draft-only configured thinking intent before a persisted chat row exists.
+    public var pendingConfiguredThinkingOptionID: ChatConfigurationValueID?
 
     /// Cached provider configuration observed by the composer. This changes
     /// only at session creation or after an atomic Settings save; it must not
@@ -367,24 +369,36 @@ public final class RemoteChatSession {
     public func toggleFavoriteModel(_ modelId: ModelID, forProvider providerId: ProviderID) -> AgentProvidersConfig {
         let dir = providersConfigurationDirectory
         let updated = providersConfig().togglingFavoriteModel(modelId, forProvider: providerId)
-        do {
-            try updated.save(to: dir)
-            providerConfiguration = updated
-        } catch {
-            DebugLog.store("RemoteChatSession.toggleFavoriteModel save failed (provider=\(providerId.rawValue) model=\(modelId.rawValue)): \(error)")
+        providerConfiguration = updated
+        Task { @MainActor [weak self] in
+            do {
+                self?.providerConfiguration = try await AgentProvidersConfigStore(directory: dir).mutate {
+                    $0.togglingFavoriteModel(modelId, forProvider: providerId)
+                }
+            } catch {
+                DebugLog.store("RemoteChatSession.toggleFavoriteModel save failed (provider=\(providerId.rawValue) model=\(modelId.rawValue)): \(error)")
+                self?.refreshProvidersConfig()
+            }
         }
         return updated
     }
 
     // MARK: - Mid-session thinking effort
 
-    public func setThinkingEffort(_ value: String) {
-        guard let option = thinkingOption else { return }
-        DebugLog.agent("RemoteChatSession.setThinkingEffort: value=\(value) configId=\(option.configId)")
-        thinkingOption = option.withCurrentValue(value)
-        let configId = option.configId
+    public func setThinkingEffort(
+        _ valueID: ChatConfigurationValueID,
+        configOptionID: ChatConfigurationOptionID?
+    ) {
+        let resolvedConfigID = thinkingOption.map {
+            ChatConfigurationOptionID(rawValue: $0.configId)
+        } ?? configOptionID
+        guard let resolvedConfigID else { return }
+        DebugLog.agent("RemoteChatSession.setThinkingEffort: value=\(valueID.rawValue) configId=\(resolvedConfigID.rawValue)")
+        if let option = thinkingOption {
+            thinkingOption = option.withCurrentValue(valueID.rawValue)
+        }
         let callback = onSetChatConfigOption
-        Task { await callback?(configId, value) }
+        Task { await callback?(resolvedConfigID.rawValue, valueID.rawValue) }
     }
 
     // MARK: - Per-chat debug/log URL resolution
@@ -421,6 +435,8 @@ public final class RemoteChatSession {
         preflightError = nil
         pendingPermissions = []
         thinkingOption = nil
+        pendingModelOverride = nil
+        pendingConfiguredThinkingOptionID = nil
         runTotalUsage = nil
         stderr = ""
         lastActivityAt = nil

@@ -13,7 +13,7 @@ import Testing
 /// `sources.id` and markdown-version `PageID`s.
 struct SourceVersionIDPersistenceTests {
 
-    private let currentSchemaVersion = "50"
+    private let currentSchemaVersion = "51"
     private let legacySourceID = "01JSOURCEVERSIONFIXTURE000001"
     private let legacyVersionV1 = "01JSOURCEVERSION000000000001"
     private let legacyVersionV2 = "01JSOURCEVERSION000000000002"

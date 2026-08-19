@@ -229,7 +229,7 @@ import SQLite3
     /// AC.2: a fresh schema has the `acp_session_id` column on the chats table.
     @Test func freshSchemaHasChatAcpSessionIdColumn() throws {
         let store = try tempStore()
-        #expect(GRDBWikiStore.schemaVersion == 50)
+        #expect(GRDBWikiStore.schemaVersion == 51)
         let hasCol = store.scalarText(
             "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name='acp_session_id';")
         #expect(hasCol == "1")
@@ -317,7 +317,7 @@ import SQLite3
     /// A fresh schema has the `model_provider_id`/`model_id` columns on `chats`.
     @Test func freshSchemaHasChatModelOverrideColumns() throws {
         let store = try tempStore()
-        #expect(GRDBWikiStore.schemaVersion == 50)
+        #expect(GRDBWikiStore.schemaVersion == 51)
         let hasProviderCol = store.scalarText(
             "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name='model_provider_id';")
         #expect(hasProviderCol == "1")
@@ -377,6 +377,76 @@ import SQLite3
         let listed = try store.listChats()
         #expect(listed.first(where: { $0.id == chat.id })?.modelProviderId == ProviderID(rawValue: "acme"))
         #expect(listed.first(where: { $0.id == chat.id })?.modelId == ModelID(rawValue: "acme-1"))
+    }
+
+    @Test func chatThinkingSelectionRoundTripsThroughCreateListGetAndUpdate() throws {
+        let store = try tempStore()
+        let configured = ChatConfigurationValueID(rawValue: "high")
+        let effective = ChatConfigurationValueID(rawValue: "medium")
+        let chat = try store.createChat(
+            kind: .edit,
+            title: "Thinking chat",
+            modelProviderId: ProviderID(rawValue: "acme"),
+            modelId: ModelID(rawValue: "acme-1"),
+            configuredThinkingOptionID: configured,
+            effectiveThinkingOptionID: effective)
+
+        #expect(chat.configuredThinkingOptionID == configured)
+        #expect(chat.effectiveThinkingOptionID == effective)
+        #expect(try store.getChat(id: chat.id).configuredThinkingOptionID == configured)
+        #expect(try store.listChats().first?.effectiveThinkingOptionID == effective)
+        #expect(try store.listAllChatsOrderedByID().first?.configuredThinkingOptionID == configured)
+
+        let fallback = ChatConfigurationValueID(rawValue: "low")
+        try store.updateChatModelAndThinkingSelection(
+            chatID: chat.id,
+            providerID: ProviderID(rawValue: "other"),
+            modelID: ModelID(rawValue: "other-1"),
+            configuredThinkingID: configured,
+            effectiveThinkingID: fallback)
+        let updated = try store.getChat(id: chat.id)
+        #expect(updated.modelProviderId == ProviderID(rawValue: "other"))
+        #expect(updated.modelId == ModelID(rawValue: "other-1"))
+        #expect(updated.configuredThinkingOptionID == configured)
+        #expect(updated.effectiveThinkingOptionID == fallback)
+    }
+
+    @Test func freshAndMigratedSchemasHaveThinkingSelectionColumns() throws {
+        let fresh = try tempStore()
+        for column in ["configured_thinking_option_id", "effective_thinking_option_id"] {
+            #expect(fresh.scalarText(
+                "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name='\(column)';") == "1")
+        }
+
+        let url = tempDatabaseURL()
+        var raw: OpaquePointer?
+        #expect(sqlite3_open(url.path, &raw) == SQLITE_OK)
+        #expect(sqlite3_exec(raw, """
+        CREATE TABLE chats (
+            id TEXT PRIMARY KEY, kind TEXT, title TEXT,
+            created_at REAL, updated_at REAL, summary TEXT, summary_at REAL,
+            acp_session_id TEXT, model_provider_id TEXT, model_id TEXT
+        );
+        CREATE TABLE chat_messages (
+            id TEXT PRIMARY KEY, chat_id TEXT, seq INTEGER, role TEXT,
+            event_json TEXT, text TEXT, created_at REAL
+        );
+        INSERT INTO chats (id, kind, title, created_at, updated_at)
+        VALUES ('existing-chat', 'edit', 'Existing', 0, 0);
+        PRAGMA user_version = 50;
+        """, nil, nil, nil) == SQLITE_OK)
+        sqlite3_close(raw)
+        raw = nil
+
+        let migrated = try GRDBWikiStore(databaseURL: url)
+        #expect(migrated.pragmaValue("user_version") == "51")
+        let existing = try migrated.getChat(id: ChatID(rawValue: "existing-chat"))
+        #expect(existing.configuredThinkingOptionID == nil)
+        #expect(existing.effectiveThinkingOptionID == nil)
+        for column in ["configured_thinking_option_id", "effective_thinking_option_id"] {
+            #expect(migrated.scalarText(
+                "SELECT COUNT(*) FROM pragma_table_info('chats') WHERE name='\(column)';") == "1")
+        }
     }
 
     /// Migration v44→v45: a DB at v44 without the two columns gets them added,

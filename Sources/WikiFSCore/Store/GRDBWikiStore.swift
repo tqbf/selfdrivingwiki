@@ -145,7 +145,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// databases produced by that store carry `PRAGMA user_version` up to 37, and
     /// this store must recognize them as already-current so the ladder is a no-op
     /// on re-open (the proven `if version < N`)
-    private static let currentSchemaVersion = 50
+    private static let currentSchemaVersion = 51
     /// The current schema version (mirrors the former
     /// `SQLiteWikiStore.currentSchemaVersion`). Public so tests can assert the
     /// migration ladder landed at the expected `user_version`.
@@ -1479,6 +1479,22 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             version = 50
         }
 
+        // v50→v51: chats persist configured user intent separately from the
+        // last catalog-resolved or runtime-confirmed effective thinking value.
+        if version < 51 {
+            try db.inTransaction(.immediate) {
+                if !(try Self.hasColumn("configured_thinking_option_id", on: "chats", in: db)) {
+                    try db.execute(sql: "ALTER TABLE chats ADD COLUMN configured_thinking_option_id TEXT NULL;")
+                }
+                if !(try Self.hasColumn("effective_thinking_option_id", on: "chats", in: db)) {
+                    try db.execute(sql: "ALTER TABLE chats ADD COLUMN effective_thinking_option_id TEXT NULL;")
+                }
+                try db.execute(sql: "PRAGMA user_version = 51;")
+                return .commit
+            }
+            version = 51
+        }
+
         // Catch-all fallback: any DB older than `currentSchemaVersion` whose
         // per-step work has not been added above (the steady-state guard for a
         // genuine currentSchemaVersion bump). Drops FTS5 + stamps
@@ -1934,7 +1950,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             summary_at         REAL,
             acp_session_id     TEXT,
             model_provider_id  TEXT,
-            model_id           TEXT
+            model_id           TEXT,
+            configured_thinking_option_id TEXT NULL,
+            effective_thinking_option_id  TEXT NULL
         );
         """)
         try db.execute(sql: "CREATE INDEX IF NOT EXISTS chats_updated ON chats(updated_at);")
@@ -3226,7 +3244,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         );
         """)
 
-        // v25: persisted chat history (chats + chat_messages).
+        // v25: persisted chat history (chats + chat_messages), including the
+        // current additive thinking-selection columns.
         try db.execute(sql: """
         CREATE TABLE IF NOT EXISTS chats (
             id                 TEXT PRIMARY KEY,
@@ -3238,7 +3257,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             summary_at         REAL,
             acp_session_id     TEXT,
             model_provider_id  TEXT,
-            model_id           TEXT
+            model_id           TEXT,
+            configured_thinking_option_id TEXT NULL,
+            effective_thinking_option_id  TEXT NULL
         );
         """)
         try db.execute(sql: "CREATE INDEX IF NOT EXISTS chats_updated ON chats(updated_at);")
@@ -7604,12 +7625,17 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     // MARK: - WikiStore protocol: Persisted chats
 
     public func createChat(kind: ChatKind, title: String) throws -> ChatSummary {
-        try createChat(kind: kind, title: title, modelProviderId: nil, modelId: nil)
+        try createChat(
+            kind: kind, title: title,
+            modelProviderId: nil, modelId: nil,
+            configuredThinkingOptionID: nil, effectiveThinkingOptionID: nil)
     }
 
     public func createChat(
         kind: ChatKind, title: String,
-        modelProviderId: ProviderID?, modelId: ModelID?
+        modelProviderId: ProviderID?, modelId: ModelID?,
+        configuredThinkingOptionID: ChatConfigurationValueID? = nil,
+        effectiveThinkingOptionID: ChatConfigurationValueID? = nil
     ) throws -> ChatSummary {
         try mutate(event: { chat in
             self.localEvent(.chat, id: chat.id.rawValue, change: .created)
@@ -7617,17 +7643,24 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             let id = ChatID(rawValue: ULID.generate())
             let now = Date()
             try db.execute(sql: """
-            INSERT INTO chats (id, kind, title, created_at, updated_at, model_provider_id, model_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?);
+            INSERT INTO chats (
+                id, kind, title, created_at, updated_at,
+                model_provider_id, model_id,
+                configured_thinking_option_id, effective_thinking_option_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
             """, arguments: [
                 id.rawValue, kind.rawValue, title,
                 now.timeIntervalSince1970, now.timeIntervalSince1970,
-                modelProviderId?.rawValue, modelId?.rawValue
+                modelProviderId?.rawValue, modelProviderId == nil ? nil : modelId?.rawValue,
+                configuredThinkingOptionID?.rawValue, effectiveThinkingOptionID?.rawValue
             ])
             return ChatSummary(
                 id: id, kind: kind, title: title,
                 createdAt: now, updatedAt: now, messageCount: 0,
-                modelProviderId: modelProviderId, modelId: modelId
+                modelProviderId: modelProviderId,
+                modelId: modelProviderId == nil ? nil : modelId,
+                configuredThinkingOptionID: configuredThinkingOptionID,
+                effectiveThinkingOptionID: effectiveThinkingOptionID
             )
         }
     }
@@ -8541,6 +8574,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             return columns.contains("acp_session_id")
                 && columns.contains("model_provider_id")
                 && columns.contains("model_id")
+                && columns.contains("configured_thinking_option_id")
+                && columns.contains("effective_thinking_option_id")
         } catch {
             // swiftlint:disable:next silent_try_optional
             return false
@@ -8554,7 +8589,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
                    (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS msg_count,
                    c.summary, c.summary_at, c.acp_session_id,
-                   c.model_provider_id, c.model_id
+                   c.model_provider_id, c.model_id,
+                   c.configured_thinking_option_id, c.effective_thinking_option_id
             FROM chats c
             ORDER BY c.updated_at DESC, c.rowid DESC;
             """)
@@ -8702,6 +8738,34 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    public func updateChatModelAndThinkingSelection(
+        chatID: ChatID,
+        providerID: ProviderID?,
+        modelID: ModelID?,
+        configuredThinkingID: ChatConfigurationValueID?,
+        effectiveThinkingID: ChatConfigurationValueID?
+    ) throws {
+        try mutate(event: { _ in
+            self.localEvent(.chat, id: chatID.rawValue, change: .updated)
+        }) { db in
+            try db.execute(sql: """
+            UPDATE chats
+            SET model_provider_id = ?, model_id = ?,
+                configured_thinking_option_id = ?, effective_thinking_option_id = ?,
+                updated_at = ?
+            WHERE id = ?;
+            """, arguments: [
+                providerID?.rawValue,
+                providerID == nil ? nil : modelID?.rawValue,
+                configuredThinkingID?.rawValue,
+                effectiveThinkingID?.rawValue,
+                Date().timeIntervalSince1970,
+                chatID.rawValue,
+            ])
+            guard db.changesCount > 0 else { throw WikiStoreError.chatNotFound(chatID) }
+        }
+    }
+
     /// Write the cached one-line summary for a single assistant message
     /// (chat-summary plan §3.5). Routes through `mutate(event:_:)` and emits a
     /// `.chat .updated` event on the chat the message belongs to — the
@@ -8732,7 +8796,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
                    (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS msg_count,
                    c.summary, c.summary_at, c.acp_session_id,
-                   c.model_provider_id, c.model_id
+                   c.model_provider_id, c.model_id,
+                   c.configured_thinking_option_id, c.effective_thinking_option_id
             FROM chats c
             ORDER BY c.id ASC;
             """)
@@ -8835,7 +8900,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 let rows = try Row.fetchAll(db, sql: """
                     SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
                            (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS msg_count,
-                           cc.embedding, c.acp_session_id
+                           c.summary, c.summary_at, cc.embedding, c.acp_session_id,
+                           c.model_provider_id, c.model_id,
+                           c.configured_thinking_option_id, c.effective_thinking_option_id
                     FROM chat_chunks cc
                     JOIN chats c ON c.id = cc.chat_id;
                     """)
@@ -8855,7 +8922,12 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                     .sorted { $0.value.sim > $1.value.sim }
                     .prefix(pool)
                     .map { _, entry in
-                        Self.readChatSummary(from: entry.row, summary: nil, summaryAt: nil)
+                        let summary: String? = entry.row["summary"]
+                        let summaryAt: Double? = entry.row["summary_at"]
+                        return Self.readChatSummary(
+                            from: entry.row,
+                            summary: summary,
+                            summaryAt: summaryAt.map { Date(timeIntervalSince1970: $0) })
                     }
                 return Array(RankFusion.rrf([semRows, ftsRows], id: \.id).prefix(limit))
             }
@@ -9429,17 +9501,17 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     // MARK: - GRDB implementation helpers
 
-    /// Read a ChatSummary from a GRDB Row. The `summary` and `summaryAt` columns
-    /// are passed in so this works for both the 6-column search variants (nil) and
-    /// the 8-column list variants. Mirrors SQLiteWikiStore.chatSummary(from:).
-    /// Columns (named): id, kind, title, created_at, updated_at, + an unnamed
-    /// message-count subquery at index 5.
+    /// Read a complete ChatSummary from a GRDB Row. Every caller selects the
+    /// provider/model and thinking-selection columns so list, get, search, and
+    /// File Provider projections preserve the same durable state.
     private static func readChatSummary(
         from row: Row, summary: String?, summaryAt: Date?
     ) -> ChatSummary {
         let acpSessionId: String? = row["acp_session_id"]
         let modelProviderId: String? = row["model_provider_id"]
         let modelId: String? = row["model_id"]
+        let configuredThinkingOptionID: String? = row["configured_thinking_option_id"]
+        let effectiveThinkingOptionID: String? = row["effective_thinking_option_id"]
         return ChatSummary(
             id: ChatID(rawValue: row["id"]),
             kind: ChatKind(rawValue: row["kind"]) ?? .edit,
@@ -9451,7 +9523,13 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             summaryAt: summaryAt,
             acpSessionId: acpSessionId.map { AcpSessionID(rawValue: $0) },
             modelProviderId: modelProviderId.map { ProviderID(rawValue: $0) },
-            modelId: modelId.map { ModelID(rawValue: $0) }
+            modelId: modelId.map { ModelID(rawValue: $0) },
+            configuredThinkingOptionID: configuredThinkingOptionID.map {
+                ChatConfigurationValueID(rawValue: $0)
+            },
+            effectiveThinkingOptionID: effectiveThinkingOptionID.map {
+                ChatConfigurationValueID(rawValue: $0)
+            }
         )
     }
 
@@ -10482,7 +10560,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 SELECT c.id, c.kind, c.title, c.created_at, c.updated_at,
                        (SELECT COUNT(*) FROM chat_messages m WHERE m.chat_id = c.id) AS msg_count,
                        c.summary, c.summary_at, c.acp_session_id,
-                       c.model_provider_id, c.model_id
+                       c.model_provider_id, c.model_id,
+                       c.configured_thinking_option_id, c.effective_thinking_option_id
                 FROM chats c WHERE c.id = ?;
                 """,
                 arguments: [id.rawValue]

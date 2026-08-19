@@ -579,6 +579,33 @@ struct StoreEmissionTests {
         #expect(events.last?.id == chat.id.rawValue)
     }
 
+    @Test func updateChatModelAndThinkingSelectionEmitsOneCoherentEvent() async throws {
+        let (store, _, rec) = try makeHarness()
+        let chat = try store.createChat(
+            kind: .edit,
+            title: "Test Chat",
+            modelProviderId: ProviderID(rawValue: "old"),
+            modelId: ModelID(rawValue: "old-model"),
+            configuredThinkingOptionID: ChatConfigurationValueID(rawValue: "high"),
+            effectiveThinkingOptionID: ChatConfigurationValueID(rawValue: "high"))
+        try await drain(rec)
+
+        try store.updateChatModelAndThinkingSelection(
+            chatID: chat.id,
+            providerID: ProviderID(rawValue: "new"),
+            modelID: ModelID(rawValue: "new-model"),
+            configuredThinkingID: ChatConfigurationValueID(rawValue: "high"),
+            effectiveThinkingID: ChatConfigurationValueID(rawValue: "low"))
+        let events = try await awaitEvents(rec)
+        let matching = events.filter { $0.kind == .chat && $0.id == chat.id.rawValue }
+        #expect(matching.count == 1)
+        #expect(matching.first?.change == .updated)
+
+        let observed = try store.getChat(id: chat.id)
+        #expect(observed.modelId == ModelID(rawValue: "new-model"))
+        #expect(observed.effectiveThinkingOptionID == ChatConfigurationValueID(rawValue: "low"))
+    }
+
     /// Incremental in-flight checkpoint (#826). The `checkpointStreamingMessage`
     /// mutator MUST route through `mutate()` and emit a `.chat .updated` event
     /// — it is a real content mutation (writes `event_json`, `text`), not
