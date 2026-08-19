@@ -1186,6 +1186,20 @@ public final class AgentLauncher {
         return (preparation, prepared)
     }
 
+    private func preparedProvider(
+        from preparation: AgentOperationPreparation
+    ) async throws -> (AgentOperationPreparation, AgentProviderPreparedBackend)? {
+        await awaitProviderRelease()
+        guard let services = privateProviderServices else {
+            throw AgentProviderRuntimeError.unavailable
+        }
+        providerOperationToken = preparation.selection.token
+        let prepared = try await services.preparedBackend(
+            from: preparation.selection.token,
+            stage: preparation.selection.stage)
+        return (preparation, prepared)
+    }
+
     private func preparedIngestStage(
         from originalToken: AgentProviderAttemptToken,
         stage: ACPIngestStage,
@@ -3302,6 +3316,7 @@ public final class AgentLauncher {
         priorAcpSessionId: AcpSessionID? = nil,
         chatOverrideProviderId: ProviderID? = nil,
         chatOverrideModelId: ModelID? = nil,
+        preparedInteractiveOperation: AgentOperationPreparation? = nil,
         thinkingConfiguration: ResolvedThinkingConfiguration? = nil,
         onThinkingConfirmed: (@MainActor (ChatConfigurationValueID?) -> Void)? = nil,
         onAcpSessionId: (@MainActor (AcpSessionID?) -> Void)? = nil,
@@ -3348,11 +3363,16 @@ public final class AgentLauncher {
         // cancel via the UI chip.
         let servicePreparation: (AgentOperationPreparation, AgentProviderPreparedBackend)?
         do {
-            servicePreparation = try await preparedProvider(
-                for: .interactive,
-                providerOverride: chatOverrideProviderId,
-                modelOverride: chatOverrideModelId,
-                thinkingOverride: thinkingConfiguration?.desiredValueID.rawValue)
+            if let preparedInteractiveOperation {
+                servicePreparation = try await preparedProvider(
+                    from: preparedInteractiveOperation)
+            } else {
+                servicePreparation = try await preparedProvider(
+                    for: .interactive,
+                    providerOverride: chatOverrideProviderId,
+                    modelOverride: chatOverrideModelId,
+                    thinkingOverride: thinkingConfiguration?.desiredValueID.rawValue)
+            }
         } catch {
             preflightError = error.localizedDescription
             return

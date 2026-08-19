@@ -317,7 +317,6 @@ final class DaemonChatHost: @unchecked Sendable {
             chatID: chatID,
             wikiID: wikiID,
             store: store,
-            providersConfigurationDirectory: containerDirectory,
             runtime: runtime,
             pushEvent: pushEvent,
             diagnosticTrace: diagnosticTrace

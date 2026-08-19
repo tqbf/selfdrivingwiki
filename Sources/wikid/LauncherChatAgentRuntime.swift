@@ -28,6 +28,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
 
     private struct RuntimeState {
         let request: ChatRuntimeStartRequest
+        var providerPreparation: AgentInteractivePreparation?
         let handle: ChatRuntimeHandle
         let stream: AsyncStream<ChatAgentRuntimeEventEnvelope>
         let continuation: AsyncStream<ChatAgentRuntimeEventEnvelope>.Continuation
@@ -121,10 +122,42 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         self.launcherConfigurator = launcherConfigurator
     }
 
+    func prepareStart(_ input: ChatRuntimeStartInput) async throws -> ChatRuntimePreparedStart {
+        let prepared = try await providerServices.prepareInteractive(
+            providerOverride: input.request.providerID,
+            modelOverride: input.request.modelID,
+            configuredThinkingOptionID: input.configuredThinkingOptionID,
+            priorEffectiveThinkingOptionID: input.priorEffectiveThinkingOptionID)
+        let request = ChatRuntimeStartRequest(
+            chatID: input.request.chatID,
+            generation: input.request.generation,
+            systemPrompt: input.request.systemPrompt,
+            providerID: prepared.operation.selection.descriptor.id,
+            modelID: prepared.operation.selection.model,
+            existingProviderSessionID: input.request.existingProviderSessionID,
+            thinkingConfiguration: prepared.thinkingConfiguration)
+        return ChatRuntimePreparedStart(
+            request: request,
+            providerPreparation: prepared)
+    }
+
+    func discardPreparedStart(_ preparation: ChatRuntimePreparedStart) async {
+        guard let prepared = preparation.providerPreparation else { return }
+        await providerServices.release(prepared.operation.selection.token)
+    }
+
     func start(_ request: ChatRuntimeStartRequest) async throws -> ChatRuntimeHandle {
+        try await start(ChatRuntimePreparedStart(request: request))
+    }
+
+    func start(_ preparation: ChatRuntimePreparedStart) async throws -> ChatRuntimeHandle {
         if let existing = runtimeState {
+            if let unused = preparation.providerPreparation {
+                await providerServices.release(unused.operation.selection.token)
+            }
             return existing.handle
         }
+        let request = preparation.request
 
         let launcher = await MainActor.run {
             let launcher = AgentLauncher(
@@ -153,6 +186,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         let handle = ChatRuntimeHandle(rawValue: "chat-runtime-\(chatID.rawValue)")
         runtimeState = RuntimeState(
             request: request,
+            providerPreparation: preparation.providerPreparation,
             handle: handle,
             stream: stream,
             continuation: continuation,
@@ -203,6 +237,9 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
             }
             let firstPrePersisted = historySeed.contains(.userText(firstMessage))
             let liveEventContinuation = state.liveEventContinuation
+            let preparedInteractiveOperation = state.providerPreparation?.operation
+            state.providerPreparation = nil
+            runtimeState = state
 
             await state.launcher.startInteractiveQuery(
                 firstMessage: firstMessage,
@@ -218,6 +255,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
                 priorAcpSessionId: priorSessionID,
                 chatOverrideProviderId: providerID,
                 chatOverrideModelId: modelID,
+                preparedInteractiveOperation: preparedInteractiveOperation,
                 thinkingConfiguration: request.thinkingConfiguration,
                 onThinkingConfirmed: { [weak self] confirmedValueID in
                     guard let self else { return }
@@ -385,6 +423,10 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
             state.launcher.stopAgent()
         }
         await state.launcher.awaitProviderRelease()
+        if state.startedInteractiveSession == false,
+           let unused = state.providerPreparation {
+            await providerServices.release(unused.operation.selection.token)
+        }
         state.liveEventContinuation.finish()
         state.liveEventConsumerTask.cancel()
         runtimeState = nil

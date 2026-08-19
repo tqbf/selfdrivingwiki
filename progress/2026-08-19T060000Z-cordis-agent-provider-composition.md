@@ -123,10 +123,14 @@ The implementation includes all five changes. It also stores the attempt token b
 
 ## Remaining work
 
-The daemon chat controller still reads redacted display selection before cold start. The launcher creates the authoritative snapshot when the runtime starts.
+Daemon cold starts now use one process-local `ChatRuntimePreparedStart`. The controller claims the turn with its redacted request. The launcher consumes its opaque provider preparation without another configuration read.
 
-A future process-local chat start contract can remove this duplicate read. The Codable XPC request must not carry process-local tokens.
+The Codable `ChatRuntimeStartRequest` remains token-free. Tests verify one configuration read, warm-session reuse, durable provider attribution, and the stable wire shape.
 
 The final GLM re-review verified all five medium fixes and the token-release fix. It found no regression in actor isolation, secret boundaries, or summary batch coherence. The verdict was `APPROVE WITH NON-BLOCKING FINDINGS`.
 
 The remaining low findings cover PATH error-message quality, daemon-only behavioral test gaps, a production test seam, the app runtime-handle state write, and unused thinking metadata. None blocks this pull request.
+
+A follow-up removed the daemon cold-start duplicate configuration read. One process-local preparation now supplies claim attribution and launcher startup. Preflight failure closes the prepared runtime before retry, so a released token cannot become a permanent retry failure.
+
+Follow-up verification passed `make build`, `make test` with 3,421 tests, the 10-test store concurrency gate, bare SwiftPM gates, and 112 focused chat/provider tests. GLM 5.2 reviewed the follow-up, found one medium retry defect, verified its fix, and returned `APPROVE WITH NON-BLOCKING FINDINGS`.

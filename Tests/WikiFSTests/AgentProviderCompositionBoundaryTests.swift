@@ -30,6 +30,17 @@ struct AgentProviderCompositionBoundaryTests {
         #expect(!daemon.contains("CordisContext"))
     }
 
+    @Test("daemon chat cold start does not load provider configuration directly")
+    func daemonChatColdStartUsesPreparedRuntimeContract() throws {
+        let controller = try sourceText("Sources/wikid/DaemonChatController.swift")
+        let runtime = try sourceText("Sources/wikid/LauncherChatAgentRuntime.swift")
+
+        #expect(!controller.contains("AgentProvidersConfig.load"))
+        #expect(controller.contains("runtime.prepareStart("))
+        #expect(runtime.contains("providerServices.prepareInteractive("))
+        #expect(runtime.contains("preparedInteractiveOperation:"))
+    }
+
     @Test("provider assembly excludes app and process owners")
     func providerAssemblyExcludesAppAndProcessOwners() throws {
         let source = try sourceText(

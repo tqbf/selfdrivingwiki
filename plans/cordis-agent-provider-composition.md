@@ -105,9 +105,11 @@ The queue ownership controller, output leases, handoff rules, and daemon ownersh
 
 ## Remaining migrations
 
-The daemon chat controller still resolves redacted display selection before the runtime starts. The launcher creates the authoritative provider snapshot at cold start.
+Daemon cold starts now use one process-local prepared start value. The provider runtime resolves provider, model, thinking, policy, credentials, and backend state from one configuration snapshot.
 
-A future chat contract can remove that duplicate read with a process-local prepared start value. The Codable XPC request must not carry process-local tokens.
+The controller uses the redacted request from that preparation for durable claim attribution. The launcher consumes the matching opaque preparation without a second provider configuration read.
+
+`ChatRuntimeStartRequest` keeps its Codable wire shape. Process-local tokens remain outside JSON, XPC, and persistence.
 
 Extraction backend registration and renderer lifetimes remain separate Cordis migrations.
 

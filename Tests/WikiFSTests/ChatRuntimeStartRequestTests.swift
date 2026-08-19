@@ -23,6 +23,23 @@ import WikiFSCore
         #expect(decoded == request)
     }
 
+    @Test func wireRequestContainsNoProcessLocalPreparation() throws {
+        let request = ChatRuntimeStartRequest(
+            chatID: ChatID(rawValue: "chat"),
+            generation: ChatSessionGenerationID(rawValue: "generation"),
+            systemPrompt: "Prompt",
+            providerID: ProviderID(rawValue: "provider"),
+            modelID: ModelID(rawValue: "model"),
+            existingProviderSessionID: nil)
+        let object = try #require(JSONSerialization.jsonObject(
+            with: JSONEncoder().encode(request)) as? [String: Any])
+        #expect(Set(object.keys) == [
+            "chatID", "generation", "systemPrompt", "providerID", "modelID",
+        ])
+        #expect(object["token"] == nil)
+        #expect(object["providerPreparation"] == nil)
+    }
+
     @Test func encodesStableSessionConfigWireShape() throws {
         let value = ResolvedThinkingConfiguration(
             optionID: ChatConfigurationOptionID(rawValue: "reasoning_mode"),

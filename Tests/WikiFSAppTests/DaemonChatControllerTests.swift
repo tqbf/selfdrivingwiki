@@ -179,39 +179,66 @@ struct DaemonChatControllerTests {
         #expect(snapshot.attention == .none)
     }
 
-    @Test func coldStartReloadsLatestProviderCatalog() async throws {
+    @Test func coldStartUsesOneAuthoritativeRuntimePreparation() async throws {
         let harness = try ControllerHarness()
-        let provider = AgentProvider(
-            id: ProviderID(rawValue: "provider"),
-            label: "Provider",
-            enabled: true,
-            isDefault: true)
-        let model = CachedModelInfo(
-            modelId: ModelID(rawValue: "model"),
-            name: "Model",
-            thinkingOptionCatalog: ThinkingOptionCatalog(
-                configOptionID: ChatConfigurationOptionID(rawValue: "reasoning_mode"),
-                choices: [ThinkingOptionCatalogChoice(
-                    id: ChatConfigurationValueID(rawValue: "maximum"), label: "Maximum")],
-                defaultValueID: ChatConfigurationValueID(rawValue: "maximum")),
-            isDefault: true)
-        try AgentProvidersConfig(
-            providers: [provider],
-            providerModels: [provider.id.rawValue: [model]],
-            selectedModelIds: [provider.id.rawValue: model.modelId]
-        ).save(to: harness.rootDirectory)
+        let providerID = ProviderID(rawValue: "provider")
+        let modelID = ModelID(rawValue: "model")
+        let thinking = ResolvedThinkingConfiguration(
+            optionID: ChatConfigurationOptionID(rawValue: "reasoning_mode"),
+            desiredValueID: ChatConfigurationValueID(rawValue: "maximum"),
+            priorEffectiveValueID: nil)
+        await harness.runtime.setPreparedSelection(
+            providerID: providerID,
+            modelID: modelID,
+            thinkingConfiguration: thinking)
         let controller = try harness.makeController()
 
         _ = try await controller.submit(harness.makeSubmitRequest(
             submission: harness.makeSubmission(commandID: "command-cold", turnID: "turn-cold")))
 
-        let start = try #require(await harness.runtime.snapshot().startRequests.first)
-        #expect(start.providerID == provider.id)
-        #expect(start.modelID == model.modelId)
-        #expect(start.thinkingConfiguration == ResolvedThinkingConfiguration(
-            optionID: ChatConfigurationOptionID(rawValue: "reasoning_mode"),
-            desiredValueID: ChatConfigurationValueID(rawValue: "maximum"),
-            priorEffectiveValueID: nil))
+        let runtime = await harness.runtime.snapshot()
+        let start = try #require(runtime.startRequests.first)
+        #expect(runtime.prepareCallCount == 1)
+        #expect(start.providerID == providerID)
+        #expect(start.modelID == modelID)
+        #expect(start.thinkingConfiguration == thinking)
+
+        let firstTurnID = ChatTurnID(rawValue: "turn-cold")
+        await harness.runtime.emit(.turnCompleted(firstTurnID))
+        try await harness.waitUntil(
+            controller,
+            predicate: { $0?.state.isTerminal == true },
+            failureMessage: "expected cold turn completion")
+        _ = try await controller.submit(harness.makeSubmitRequest(
+            submission: harness.makeSubmission(
+                commandID: "command-warm",
+                turnID: "turn-warm")))
+        #expect(await harness.runtime.snapshot().prepareCallCount == 1)
+    }
+
+    @Test func preflightFailureClosesPreparedRuntimeAndNextTurnPreparesFresh() async throws {
+        let harness = try ControllerHarness()
+        let controller = try harness.makeController()
+        await harness.runtime.failNextSubmitPreflight("transient preflight")
+
+        await #expect(throws: DaemonChatError.self) {
+            _ = try await controller.submit(harness.makeSubmitRequest(
+                submission: harness.makeSubmission(
+                    commandID: "command-preflight-1",
+                    turnID: "turn-preflight-1")))
+        }
+        _ = try await controller.submit(harness.makeSubmitRequest(
+            submission: harness.makeSubmission(
+                commandID: "command-preflight-2",
+                turnID: "turn-preflight-2")))
+
+        let runtime = await harness.runtime.snapshot()
+        #expect(runtime.prepareCallCount == 2)
+        #expect(runtime.startRequests.count == 2)
+        #expect(runtime.closeCallCount == 1)
+        #expect(runtime.submitCalls.map(\.turnID) == [
+            ChatTurnID(rawValue: "turn-preflight-2"),
+        ])
     }
 
     @Test func liveThinkingConfirmationPersistsEffectiveValue() async throws {
@@ -907,7 +934,6 @@ final class ControllerHarness {
             chatID: chat.id,
             wikiID: WikiID(rawValue: "wiki-controller"),
             store: store,
-            providersConfigurationDirectory: rootDirectory,
             runtime: runtime,
             pushEvent: { [eventRecorder] envelope in
                 eventRecorder.record(envelope)
@@ -1065,6 +1091,7 @@ private actor IdleEvictionProbe {
 actor StubControllerRuntime: ChatAgentRuntime {
     struct Snapshot: Sendable {
         let startRequests: [ChatRuntimeStartRequest]
+        let prepareCallCount: Int
         let submitCalls: [ChatTurnSubmission]
         let cancelCalls: [ChatTurnID?]
         let permissionResolutions: [ChatPermissionResolution]
@@ -1075,11 +1102,16 @@ actor StubControllerRuntime: ChatAgentRuntime {
     private let handle = ChatRuntimeHandle(rawValue: "stub-runtime")
     private var generation = ChatSessionGenerationID(rawValue: "generation-stub")
     private var startRequests: [ChatRuntimeStartRequest] = []
+    private var prepareCallCount = 0
+    private var preparedProviderID: ProviderID?
+    private var preparedModelID: ModelID?
+    private var preparedThinkingConfiguration: ResolvedThinkingConfiguration?
     private var submitCalls: [ChatTurnSubmission] = []
     private var cancelCalls: [ChatTurnID?] = []
     private var permissionResolutions: [ChatPermissionResolution] = []
     private var configurationChanges: [ChatRuntimeConfigurationChange] = []
     private var rejectsConfiguration = false
+    private var preflightFailureMessage: String?
     private var closeCallCount = 0
     private var pausesNextClose = false
     private var closeHasStarted = false
@@ -1087,6 +1119,33 @@ actor StubControllerRuntime: ChatAgentRuntime {
     private var closeResumeWaiter: CheckedContinuation<Void, Never>?
     private var streamContinuation: AsyncStream<ChatAgentRuntimeEventEnvelope>.Continuation?
     private var stream: AsyncStream<ChatAgentRuntimeEventEnvelope>?
+
+    func failNextSubmitPreflight(_ message: String) {
+        preflightFailureMessage = message
+    }
+
+    func setPreparedSelection(
+        providerID: ProviderID,
+        modelID: ModelID,
+        thinkingConfiguration: ResolvedThinkingConfiguration?
+    ) {
+        preparedProviderID = providerID
+        preparedModelID = modelID
+        preparedThinkingConfiguration = thinkingConfiguration
+    }
+
+    func prepareStart(_ input: ChatRuntimeStartInput) async throws -> ChatRuntimePreparedStart {
+        prepareCallCount += 1
+        let request = ChatRuntimeStartRequest(
+            chatID: input.request.chatID,
+            generation: input.request.generation,
+            systemPrompt: input.request.systemPrompt,
+            providerID: preparedProviderID ?? input.request.providerID,
+            modelID: preparedModelID ?? input.request.modelID,
+            existingProviderSessionID: input.request.existingProviderSessionID,
+            thinkingConfiguration: preparedThinkingConfiguration)
+        return ChatRuntimePreparedStart(request: request)
+    }
 
     func start(_ request: ChatRuntimeStartRequest) async throws -> ChatRuntimeHandle {
         startRequests.append(request)
@@ -1110,6 +1169,10 @@ actor StubControllerRuntime: ChatAgentRuntime {
     }
 
     func submitTurn(_ submission: ChatTurnSubmission, in handle: ChatRuntimeHandle) async throws {
+        if let message = preflightFailureMessage {
+            preflightFailureMessage = nil
+            throw LauncherChatAgentRuntime.RuntimeError.preflight(message)
+        }
         submitCalls.append(submission)
         streamContinuation?.yield(.init(
             generation: generation,
@@ -1210,6 +1273,7 @@ actor StubControllerRuntime: ChatAgentRuntime {
     func snapshot() -> Snapshot {
         Snapshot(
             startRequests: startRequests,
+            prepareCallCount: prepareCallCount,
             submitCalls: submitCalls,
             cancelCalls: cancelCalls,
             permissionResolutions: permissionResolutions,

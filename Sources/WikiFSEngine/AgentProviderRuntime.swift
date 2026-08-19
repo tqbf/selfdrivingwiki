@@ -54,6 +54,19 @@ public struct AgentOperationPreparation: Sendable, Equatable {
     }
 }
 
+public struct AgentInteractivePreparation: Sendable, Equatable {
+    public let operation: AgentOperationPreparation
+    public let thinkingConfiguration: ResolvedThinkingConfiguration?
+
+    public init(
+        operation: AgentOperationPreparation,
+        thinkingConfiguration: ResolvedThinkingConfiguration?
+    ) {
+        self.operation = operation
+        self.thinkingConfiguration = thinkingConfiguration
+    }
+}
+
 public enum AgentProviderSummaryPreparation: Sendable, Equatable {
     case defaultTruncation
     case model(AgentOperationPreparation)
@@ -74,6 +87,12 @@ public enum AgentProviderRuntimeError: Error, Sendable, Equatable, CustomStringC
 }
 
 public protocol AgentProviderServices: Sendable {
+    func prepareInteractive(
+        providerOverride: ProviderID?,
+        modelOverride: ModelID?,
+        configuredThinkingOptionID: ChatConfigurationValueID?,
+        priorEffectiveThinkingOptionID: ChatConfigurationValueID?
+    ) async throws -> AgentInteractivePreparation
     func prepare(_ operation: AgentProviderOperationKind, providerOverride: ProviderID?, modelOverride: ModelID?, thinkingOverride: String?) async throws -> AgentOperationPreparation
     func preparation(from token: AgentProviderAttemptToken, stage: AgentProviderStage) async throws -> AgentOperationPreparation
     func fallbackPreparation(from token: AgentProviderAttemptToken, stage: AgentProviderStage, fallbackProviderID: ProviderID) async throws -> AgentOperationPreparation
@@ -81,10 +100,25 @@ public protocol AgentProviderServices: Sendable {
     func modelSummary(text: String, preparation: AgentOperationPreparation) async throws -> String?
     func release(_ token: AgentProviderAttemptToken) async
     func readiness() async -> Bool
-    func selectedDescriptor() async -> AgentProviderDescriptor?
 }
 
 public extension AgentProviderServices {
+    func prepareInteractive(
+        providerOverride: ProviderID?,
+        modelOverride: ModelID?,
+        configuredThinkingOptionID: ChatConfigurationValueID?,
+        priorEffectiveThinkingOptionID: ChatConfigurationValueID?
+    ) async throws -> AgentInteractivePreparation {
+        let operation = try await prepare(
+            .interactive,
+            providerOverride: providerOverride,
+            modelOverride: modelOverride,
+            thinkingOverride: configuredThinkingOptionID?.rawValue)
+        return AgentInteractivePreparation(
+            operation: operation,
+            thinkingConfiguration: nil)
+    }
+
     func prepare(_ operation: AgentProviderOperationKind) async throws -> AgentOperationPreparation {
         try await prepare(operation, providerOverride: nil, modelOverride: nil, thinkingOverride: nil)
     }
@@ -99,6 +133,19 @@ public actor MutableAgentProviderServices: AgentProviderPrivateServices {
 
     public func install(_ services: any AgentProviderServices) {
         installed = services
+    }
+
+    public func prepareInteractive(
+        providerOverride: ProviderID?,
+        modelOverride: ModelID?,
+        configuredThinkingOptionID: ChatConfigurationValueID?,
+        priorEffectiveThinkingOptionID: ChatConfigurationValueID?
+    ) async throws -> AgentInteractivePreparation {
+        try await installed.prepareInteractive(
+            providerOverride: providerOverride,
+            modelOverride: modelOverride,
+            configuredThinkingOptionID: configuredThinkingOptionID,
+            priorEffectiveThinkingOptionID: priorEffectiveThinkingOptionID)
     }
 
     public func prepare(
@@ -148,9 +195,6 @@ public actor MutableAgentProviderServices: AgentProviderPrivateServices {
     }
 
     public func readiness() async -> Bool { await installed.readiness() }
-    public func selectedDescriptor() async -> AgentProviderDescriptor? {
-        await installed.selectedDescriptor()
-    }
 
     func frozenProviderDescriptors(
         from token: AgentProviderAttemptToken,
@@ -187,6 +231,7 @@ public actor MutableAgentProviderServices: AgentProviderPrivateServices {
 
 public struct UnavailableAgentProviderServices: AgentProviderServices {
     public init() {}
+    public func prepareInteractive(providerOverride: ProviderID?, modelOverride: ModelID?, configuredThinkingOptionID: ChatConfigurationValueID?, priorEffectiveThinkingOptionID: ChatConfigurationValueID?) async throws -> AgentInteractivePreparation { throw AgentProviderRuntimeError.unavailable }
     public func prepare(_ operation: AgentProviderOperationKind, providerOverride: ProviderID?, modelOverride: ModelID?, thinkingOverride: String?) async throws -> AgentOperationPreparation { throw AgentProviderRuntimeError.unavailable }
     public func preparation(from token: AgentProviderAttemptToken, stage: AgentProviderStage) async throws -> AgentOperationPreparation { throw AgentProviderRuntimeError.unavailable }
     public func fallbackPreparation(from token: AgentProviderAttemptToken, stage: AgentProviderStage, fallbackProviderID: ProviderID) async throws -> AgentOperationPreparation { throw AgentProviderRuntimeError.unavailable }
@@ -194,7 +239,6 @@ public struct UnavailableAgentProviderServices: AgentProviderServices {
     public func modelSummary(text: String, preparation: AgentOperationPreparation) async throws -> String? { throw AgentProviderRuntimeError.unavailable }
     public func release(_ token: AgentProviderAttemptToken) async {}
     public func readiness() async -> Bool { false }
-    public func selectedDescriptor() async -> AgentProviderDescriptor? { nil }
 }
 
 /// Engine-only capability surface. It deliberately carries the private hints needed to spawn.
@@ -235,6 +279,45 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
     public init(readConfiguration: @escaping ConfigurationReader, resolveCommand: @escaping CommandResolver, readCredential: @escaping CredentialReader, resolvePermissionPolicy: @escaping PermissionPolicyResolver, makeBackend: @escaping BackendFactory = { AgentBackendFactory.makeBackend(policy: $0, budget: $1, turnCeilingTimeout: $2) }) {
         self.readConfiguration = readConfiguration; self.resolveCommand = resolveCommand; self.readCredential = readCredential
         self.resolvePermissionPolicy = resolvePermissionPolicy; self.makeBackend = makeBackend
+    }
+
+    public func prepareInteractive(
+        providerOverride: ProviderID?,
+        modelOverride: ModelID?,
+        configuredThinkingOptionID: ChatConfigurationValueID?,
+        priorEffectiveThinkingOptionID: ChatConfigurationValueID?
+    ) async throws -> AgentInteractivePreparation {
+        try requireAvailable()
+        let configuration = try readConfiguration()
+        let catalogSelection = configuration.resolvedChatCatalogSelection(
+            chatOverrideProviderID: providerOverride,
+            chatOverrideModelID: modelOverride)
+        let thinking = configuration.resolveThinkingCapability(
+            chatOverrideProviderID: providerOverride,
+            chatOverrideModelID: modelOverride,
+            configuredValueID: configuredThinkingOptionID,
+            priorEffectiveValueID: priorEffectiveThinkingOptionID)
+        let thinkingConfiguration = ResolvedThinkingConfiguration(
+            resolution: thinking,
+            priorEffectiveValueID: priorEffectiveThinkingOptionID)
+        let effectiveModel = thinkingConfiguration?.modelID ?? catalogSelection.model?.modelId
+        let snapshotID = UUID()
+        let snapshot = try await makeSnapshot(
+            configuration: configuration,
+            operation: .interactive,
+            providerOverride: catalogSelection.provider.id,
+            modelOverride: effectiveModel,
+            thinkingOverride: thinkingConfiguration?.desiredValueID.rawValue,
+            stages: AgentProviderOperationKind.interactive.stages)
+        snapshots[snapshotID] = snapshot
+        let operation = try makePreparation(
+            snapshotID: snapshotID,
+            stage: .chat,
+            providerID: nil,
+            isOriginal: true)
+        return AgentInteractivePreparation(
+            operation: operation,
+            thinkingConfiguration: thinkingConfiguration)
     }
 
     public func prepare(_ operation: AgentProviderOperationKind, providerOverride: ProviderID? = nil, modelOverride: ModelID? = nil, thinkingOverride: String? = nil) async throws -> AgentOperationPreparation {
@@ -324,17 +407,6 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         }
     }
 
-    public func selectedDescriptor() async -> AgentProviderDescriptor? {
-        guard !disposed else { return nil }
-        do {
-            let config = try readConfiguration()
-            let provider = config.provider(forStage: "chat")
-            return .init(id: provider.id, label: provider.label)
-        } catch {
-            DebugLog.agent("Agent provider selection failed: \(error)")
-            return nil
-        }
-    }
     public func dispose() { disposed = true; snapshots.removeAll(); tokens.removeAll(); cachedBackends.removeAll() }
 
     func frozenProviderDescriptors(from token: AgentProviderAttemptToken, stage: AgentProviderStage) async throws -> [AgentProviderDescriptor] {

@@ -49,6 +49,23 @@ struct AgentProviderRuntimeTests {
         #expect(counts.credentialCalls == 2)
     }
 
+    @Test("Interactive preparation uses one configuration snapshot")
+    func interactivePreparationUsesOneConfigurationSnapshot() async throws {
+        let config = LockedBox(configuration())
+        let counts = RuntimeCounts()
+        let service = runtime(config: config, counts: counts)
+
+        let prepared = try await service.prepareInteractive(
+            providerOverride: beta,
+            modelOverride: nil,
+            configuredThinkingOptionID: nil,
+            priorEffectiveThinkingOptionID: nil)
+
+        #expect(counts.configurationReads == 1)
+        #expect(prepared.operation.selection.descriptor.id == beta)
+        #expect(prepared.operation.selection.model == ModelID(rawValue: "beta-default"))
+    }
+
     @Test("Chat provider override uses the override provider model")
     func chatProviderOverrideUsesProviderModel() async throws {
         let config = LockedBox(configuration())

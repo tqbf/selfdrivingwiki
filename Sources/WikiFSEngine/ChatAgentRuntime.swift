@@ -190,6 +190,39 @@ public struct ChatRuntimeStartRequest: Hashable, Sendable, Codable {
     }
 }
 
+/// Process-local inputs for authoritative cold-start preparation. Provider and
+/// model fields in `request` are persisted overrides until preparation resolves them.
+public struct ChatRuntimeStartInput: Sendable {
+    public let request: ChatRuntimeStartRequest
+    public let configuredThinkingOptionID: ChatConfigurationValueID?
+    public let priorEffectiveThinkingOptionID: ChatConfigurationValueID?
+
+    public init(
+        request: ChatRuntimeStartRequest,
+        configuredThinkingOptionID: ChatConfigurationValueID?,
+        priorEffectiveThinkingOptionID: ChatConfigurationValueID?
+    ) {
+        self.request = request
+        self.configuredThinkingOptionID = configuredThinkingOptionID
+        self.priorEffectiveThinkingOptionID = priorEffectiveThinkingOptionID
+    }
+}
+
+/// Process-local cold-start state. The durable request remains Codable, but the
+/// opaque provider preparation must never cross JSON, XPC, or persistence.
+public struct ChatRuntimePreparedStart: Sendable {
+    public let request: ChatRuntimeStartRequest
+    public let providerPreparation: AgentInteractivePreparation?
+
+    public init(
+        request: ChatRuntimeStartRequest,
+        providerPreparation: AgentInteractivePreparation? = nil
+    ) {
+        self.request = request
+        self.providerPreparation = providerPreparation
+    }
+}
+
 public struct ChatRuntimeConfigurationChange: Hashable, Sendable, Codable {
     public let optionID: ChatConfigurationOptionID
     public let valueID: ChatConfigurationValueID
@@ -234,7 +267,10 @@ public struct ChatAgentRuntimeEventEnvelope: Hashable, Sendable, Codable {
 }
 
 public protocol ChatAgentRuntime: Sendable {
+    func prepareStart(_ input: ChatRuntimeStartInput) async throws -> ChatRuntimePreparedStart
     func start(_ request: ChatRuntimeStartRequest) async throws -> ChatRuntimeHandle
+    func start(_ preparation: ChatRuntimePreparedStart) async throws -> ChatRuntimeHandle
+    func discardPreparedStart(_ preparation: ChatRuntimePreparedStart) async
     func eventStream(for handle: ChatRuntimeHandle) async throws -> AsyncStream<ChatAgentRuntimeEventEnvelope>
     func submitTurn(_ submission: ChatTurnSubmission, in handle: ChatRuntimeHandle) async throws
     func cancelTurn(_ turnID: ChatTurnID?, in handle: ChatRuntimeHandle) async throws
@@ -242,6 +278,18 @@ public protocol ChatAgentRuntime: Sendable {
     func setConfiguration(_ change: ChatRuntimeConfigurationChange, in handle: ChatRuntimeHandle) async throws
     func snapshot(for handle: ChatRuntimeHandle) async throws -> ChatRuntimeSnapshot
     func close(_ handle: ChatRuntimeHandle) async
+}
+
+public extension ChatAgentRuntime {
+    func prepareStart(_ input: ChatRuntimeStartInput) async throws -> ChatRuntimePreparedStart {
+        ChatRuntimePreparedStart(request: input.request)
+    }
+
+    func start(_ preparation: ChatRuntimePreparedStart) async throws -> ChatRuntimeHandle {
+        try await start(preparation.request)
+    }
+
+    func discardPreparedStart(_ preparation: ChatRuntimePreparedStart) async {}
 }
 
 public struct ClosureBackedChatAgentRuntime: ChatAgentRuntime {
