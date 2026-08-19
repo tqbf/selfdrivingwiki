@@ -71,7 +71,7 @@ struct ScrollableTextEditor: NSViewRepresentable {
     /// The hooks (`fetch`: Tantivy autocomplete, `format`: canonical link)
     /// are decoupled from `WikiFSCore` / `DroppedLinkFormatter` so the AppKit
     /// controller stays dependency-light. Built by `PageDetailView` and
-    /// `SourceDetailView` from `store.tantivySearch` (same pattern as
+    /// `SourceDetailView` from `store.searchServices` (same pattern as
     /// `ChatDetailView.chatAutocompleteHooks`).
     var autocomplete: WikiLinkAutocompleteHooks? = nil
 
@@ -305,7 +305,7 @@ struct ScrollableTextEditor: NSViewRepresentable {
         /// `autocomplete` hooks. Safe to call on every `textDidChange` (no-op
         /// when the parent hasn't changed). The host view (PageDetailView /
         /// SourceDetailView) builds `autocomplete` once from
-        /// `store.tantivySearch` — it doesn't change between SwiftUI updates
+        /// `store.searchServices` — it does not change between SwiftUI updates
         /// for the same wiki — but the controller is rebuilt if `autocomplete`
         /// transitions to nil (wiki closed) so a stale dropdown doesn't linger.
         private func ensureAutocompleteController() {

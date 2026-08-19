@@ -484,16 +484,20 @@ struct ChatDetailView: View {
     }
 
     private var chatAutocompleteHooks: ComposerTextView.AutocompleteHooks? {
-        guard let search = store.tantivySearch else { return nil }
+        let search = store.searchServices
         return ComposerTextView.AutocompleteHooks(
             fetch: { partial, kind in
                 let tantivyKind = Self.tantivyKind(for: kind)
-                return await search.autocomplete(
-                    partial: partial,
-                    kinds: [tantivyKind],
-                    distance: 2,
-                    limit: 8
-                )
+                do {
+                    return try await search.autocomplete(
+                        partial: partial,
+                        kinds: [tantivyKind],
+                        distance: 2,
+                        limit: 8)
+                } catch {
+                    DebugLog.store("Chat autocomplete unavailable: \(error)")
+                    return []
+                }
             },
             format: { hit in
                 let linkType = Self.linkType(for: hit.kind)

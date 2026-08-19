@@ -1,7 +1,7 @@
 #if os(macOS)
 import Testing
 import Foundation
-import WikiFSSearch
+@testable import WikiFSSearch
 
 /// Phase 1 shadow-index smoke test (plans/tantivy-search-sidecar.md).
 ///

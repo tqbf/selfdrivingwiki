@@ -812,6 +812,10 @@ the vec layer, the GRDB migration doesn't need to preserve vec registration.
 
 ### 8.4 WikiFSEngine / wikid daemon
 
+**Current lifecycle note:** `SearchRuntime` and `SearchRuntimeRegistry` replaced the old `TantivyShadowSync` lifecycle. See [`cordis-search-services.md`](cordis-search-services.md).
+
+The runtime now owns startup, sequential event processing, and deterministic disposal. The historical search and storage decisions in this record remain unchanged.
+
 When the `wikid` XPC daemon (#358) owns the wiki store lifecycle, it would
 also own the Tantivy index (the indexer subscribes to the store's event bus,
 which is per-wiki). `wikictl` could send search requests via XPC (§4.6,

@@ -96,6 +96,13 @@ jobs:
         env:
           SKIP: 'CLITantivyLegResolverTests|TantivySmokeTests|TantivyShadowIndexTests|TantivyBM25LegCutoverTests|TantivyAutocompleteTests|RunAwaitsTurnTests|SourceEmbeddingSearchTests|PdfExtractionServiceTests|YouTubeEmbedWebViewTests|QuoteHighlightWebViewTests|SplitDiffSnapshotTests|BlobSchemeHandlerTests|ReaderRenderPerfTests|TransclusionEmbedTests|PageDetailViewHostedTests|PageVersionTests|EnumeratorDeletionTests|BlobVacuumTests|AgentCASTests|GenerationGateLaneTests|WorkspaceStagingTests|WorkspaceMergeCompletenessTests|IngestIsolationTests|IngestGateTests|ChatSummaryTests|ProjectionTreeTests|SessionManagerTests|SidebarDropBuilderIntegrationTests|MediaEmbedPlayerTests|Phase6PinningModelTests|DropLinkTextViewDropTests|ComposerTextViewTests|EditorAutocompleteHostedTests|ComposerAutocompleteHostedTests|ChatAutocompleteSelectionTests|ChatAutocompletePanelPlacementTests|ActivityPermissionPendingRowTests|AddressBarLayoutHostedTests|BookmarkInsertPositionTests|SidebarDragPasteboardBridgeTests|SidebarSelectAllShortcutTests|SourceDetailWebViewMenuTests|SourceWebAnchorTests|FootnoteAnchorTests|RetryStuckRegressionTests|ExternalWriteBookmarkRefreshTests|ExternalWriteDraftRefreshTests'
         run: xcrun swift test --parallel --num-workers 1 --filter WikiFSCoreTests --skip "$SKIP"
+      - name: Test serialized Cordis search suites
+        # Real Tantivy and CLI search can starve a small cooperative pool when
+        # they run with the broad suite. Keep this required gate at one worker.
+        timeout-minutes: 15
+        env:
+          WIKIFS_APP_TESTS: "1"
+        run: xcrun swift test --parallel --num-workers 1 --filter 'SearchRuntimeAssemblyTests|SearchCordisBoundaryPolicyTests|SessionManagerTests|CLITantivyLegResolverTests|TantivyAutocompleteTests|TantivyBM25LegCutoverTests'
       - name: Test opt-in chat lifecycle suites
         # This opt-in app target contains source-contract and daemon lifecycle
         # tests only. It does not host AppKit or WebKit views, so it avoids the

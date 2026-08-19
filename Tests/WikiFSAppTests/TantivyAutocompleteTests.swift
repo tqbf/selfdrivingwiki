@@ -1,7 +1,7 @@
 #if os(macOS)
 import Testing
 import Foundation
-import WikiFSSearch
+@testable import WikiFSSearch
 
 /// Integration tests for `TantivyIndexer.autocomplete(...)` /
 /// `TantivySearchService.autocomplete(...)` (issues #436 / #638, plan §6b/§6c).

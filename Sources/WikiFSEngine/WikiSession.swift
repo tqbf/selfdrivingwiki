@@ -92,17 +92,9 @@ public final class WikiSession {
     /// blob and activity orphans; cleared on Cancel / Vacuum.
     public var pendingVacuumAll: VacuumReport?
 
-    /// Phase 2 Tantivy search index (plans/tantivy-search-sidecar.md §4.4).
-    /// Tantivy is the PRIMARY BM25 leg of the hybrid search; post-#634 it is
-    /// the SOLE BM25 leg (FTS5 was dropped). `nil` if construction failed
-    /// (session never breaks over a derived index). Retained for the lifetime
-    /// of the session so the `TantivyShadowSync` bus subscription stays alive.
-    #if os(macOS)
-    public let tantivyShadowSearch: TantivySearchService?
-    #else
-    // Linux: Tantivy is unavailable.
-    public let tantivyShadowSearch: Any?
-    #endif
+    /// Stable search facade. It remains unavailable until asynchronous runtime
+    /// startup and event catch-up complete, then delegates to the private child.
+    public let searchServices: any SearchServices
 
     /// Cross-window deferred `wiki://` navigation. Set by
     /// ``SessionManager`` when a `wiki://` link is clicked in a window
@@ -116,11 +108,7 @@ public final class WikiSession {
     /// layer never references the app-layer `WikiLinkRoute`). Same
     /// "set once / consume once" discipline as `pendingBlobVacuum`.
     public var pendingWikiLink: (url: URL, openInNewTab: Bool)?
-    #if os(macOS)
-    @ObservationIgnored private var tantivyShadowSync: TantivyShadowSync?
-    #else
-    @ObservationIgnored private var tantivyShadowSync: Any?
-    #endif
+    @ObservationIgnored private let searchCompositionOwner: SearchCompositionOwner
 
     // MARK: - Init
 
@@ -159,6 +147,8 @@ public final class WikiSession {
         extractionCoordinator: ExtractionCoordinator,
         queueEngine: any QueueEngineClient,
         extractionProvider: any QueueExtractionProvider,
+        searchRuntimeRegistry: SearchRuntimeRegistry = SearchRuntimeRegistry(),
+        searchStartupPrerequisite: Task<Void, Never>? = nil,
         providerServices: any AgentProviderServices = UnavailableAgentProviderServices(),
         makeStore: @escaping (URL) throws -> WikiStore = { try StoreBackend.current.makeStore(databaseURL: $0) },
         pdf2mdScriptPathResolver: @escaping () -> String? = { nil },
@@ -178,9 +168,6 @@ public final class WikiSession {
 
         let url = containerDirectory.appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false)
         let model: WikiStoreModel
-        // Captured so the Phase 1 Tantivy shadow service can read from the
-        // same `WikiStore` the model wraps (the model keeps it `private`).
-        var shadowStore: WikiStore?
         // Open the on-disk store. There is NO in-memory fallback anymore
         // (issue #881): a failure here is rethrown so `SessionManager` can
         // surface a user-visible error instead of silently showing an empty
@@ -193,8 +180,9 @@ public final class WikiSession {
         // model's `.external`→reload subscription (in its init) sees it. The
         // File Provider signaler and the change bridge subscribe to the
         // same bus from the app layer. See `plans/event-bus.md`.
-        store.eventBus = WikiEventBus(wikiID: wikiID)
-        shadowStore = store
+        let searchBus = WikiEventBus(wikiID: wikiID)
+        store.eventBus = searchBus
+        let contentSource = StoreBackedTantivyContentSource(store: store)
         model = WikiStoreModel(store: store)
         // Seed a Home page when the store is empty (mirrors
         // `openActive` lines 334–341 + `createWiki`'s #315
@@ -236,43 +224,22 @@ public final class WikiSession {
         // `.appleTranscript` directly (the only backend today).
         model.podcastBackend = podcastBackendResolver()
 
-        // Phase 2 Tantivy search index (plans/tantivy-search-sidecar.md §4.4).
-        // Phase 2 CUTOVER (#634): Tantivy is the SOLE BM25 leg of the hybrid
-        // search. The service is injected into the model (`model.tantivySearch =
-        // svc`) so the search path queries Tantivy first; a `nil`/empty leg
-        // means no BM25 signal (FTS5 fallback was dropped in #634). Failures
-        // are non-fatal — the session never breaks over a derived, rebuildable
-        // index; a failed start just means no Tantivy results (cosine still
-        // answers when NLEmbedding/MLX is available). Reads happen off-main on
-        // the indexer actor; the content source reads committed SQLite state
-        // through its own recursive lock (no statement handle crosses a boundary).
-        #if os(macOS)
-        var shadowSearch: TantivySearchService?
-        var shadowSync: TantivyShadowSync?
-        if let shadowStore, let bus = shadowStore.eventBus {
-            do {
-                let contentSource = StoreBackedTantivyContentSource(store: shadowStore)
-                let svc = try TantivySearchService(
-                    wikiID: wikiID,
-                    containerDirectory: containerDirectory,
-                    contentSource: contentSource
-                )
-                let sync = TantivyShadowSync(service: svc, bus: bus)
-                sync.start()
-                shadowSearch = svc
-                shadowSync = sync
-                // Wire the service into the model's search path (Phase 2 cutover).
-                model.tantivySearch = svc
-            } catch {
-                DebugLog.store("WikiSession: Tantivy search index disabled for wiki \(wikiID.rawValue): \(error)")
-            }
-        }
-        self.tantivyShadowSearch = shadowSearch
-        self.tantivyShadowSync = shadowSync
-        #else
-        self.tantivyShadowSearch = nil
-        self.tantivyShadowSync = nil
-        #endif
+        // Subscribe synchronously before asynchronous child assembly so writes
+        // committed during startup or same-wiki replacement are buffered.
+        let streamFactory = BusSearchChangeStreamFactory(bus: searchBus)
+        let identity = SearchRuntimeIdentity(
+            wikiID: wikiID,
+            containerDirectory: containerDirectory)
+        let searchOwner = SearchCompositionOwner(
+            registry: searchRuntimeRegistry,
+            identity: identity,
+            contentSource: contentSource,
+            changeStreamFactory: streamFactory,
+            startupPrerequisite: searchStartupPrerequisite)
+        self.searchCompositionOwner = searchOwner
+        self.searchServices = searchOwner.services
+        model.searchServices = searchOwner.services
+        searchOwner.start()
 
         // Per-session gate: lane limits match the app-wide gate the launchers
         // previously shared. Each session gets its own so cross-wiki
@@ -363,22 +330,21 @@ public final class WikiSession {
     /// `WikiStoreModel.resolveTantivyLeg(...)` — this public accessor is for
     /// direct/CLI/check queries that want the raw Tantivy hits without the
     /// semantic-cosine + RRF fusion the model applies.
-    #if os(macOS)
     public func searchTantivy(
         query: String,
         kinds: [TantivyDocumentKind] = [],
         limit: Int = 20
     ) async -> [TantivyShadowSearchResult]? {
-        guard let svc = tantivyShadowSearch else { return nil }
-        return await svc.search(query: query, kinds: kinds, limit: limit)
+        do {
+            return try await searchServices.search(query: query, kinds: kinds, limit: limit)
+        } catch {
+            DebugLog.store("WikiSession: Tantivy search unavailable for wiki \(wikiID.rawValue): \(error)")
+            return nil
+        }
     }
-    #else
-    // Linux: Tantivy is unavailable — search returns nil (store uses FTS5 fallback).
-    public func searchTantivy(
-        query: String,
-        kinds: [TantivyDocumentKind] = [],
-        limit: Int = 20
-    ) async -> [TantivyShadowSearchResult]? { nil }
-    #endif
+
+    public func shutdownSearchRuntime() async {
+        await searchCompositionOwner.shutdown()
+    }
 }
 #endif

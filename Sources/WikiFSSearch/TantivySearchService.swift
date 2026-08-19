@@ -14,13 +14,13 @@ import Foundation
 /// index in shadow mode (FTS5 remains the primary search path). Callers
 /// should not surface `search(...)` results to the user yet — use it only for
 /// validation / the smoke test.
-public final class TantivySearchService: Sendable {
-    public let indexer: TantivyIndexer
-    public let wikiID: WikiID
+final class TantivySearchService: Sendable {
+    let indexer: TantivyIndexer
+    let wikiID: WikiID
     private let indexDirectory: URL
     private let rebuildMarkerSource: (any TantivyRebuildMarkerSource)?
 
-    public init(wikiID: WikiID, containerDirectory: URL, contentSource: any TantivyContentSource) throws {
+    init(wikiID: WikiID, containerDirectory: URL, contentSource: any TantivyContentSource) throws {
         self.wikiID = wikiID
         // `<container>/search-index/<wikiID>/` — per-wiki, alongside the
         // `.sqlite` files (same TCC-protected container the app already
@@ -38,7 +38,7 @@ public final class TantivySearchService: Sendable {
     /// Free-text search over the Tantivy index, optionally restricted to one
     /// kind. Returns empty on any error (the caller falls back to FTS5 in
     /// Phase 2; in Phase 1 the result is logged for comparison, not shown).
-    public func search(query: String, kinds: [TantivyDocumentKind] = [], limit: Int = 20) async -> [TantivyShadowSearchResult] {
+    func search(query: String, kinds: [TantivyDocumentKind] = [], limit: Int = 20) async -> [TantivyShadowSearchResult] {
         do {
             // Single-kind fast path: ask the indexer to filter.
             if kinds.count == 1, let only = kinds.first {
@@ -68,7 +68,7 @@ public final class TantivySearchService: Sendable {
     /// See `TantivyIndexer.autocomplete(...)` for the query-string-path
     /// rationale (prefix-true on title is load-bearing for the
     /// `"Erl" → "Erickson"` headline case).
-    public func autocomplete(
+    func autocomplete(
         partial: String,
         kinds: Set<TantivyDocumentKind>,
         distance: UInt8 = 2,
@@ -93,7 +93,7 @@ public final class TantivySearchService: Sendable {
     /// **Concurrency:** runs on a detached task so the wiki open path is not
     /// blocked by a potentially large initial build. `await`-free on the
     /// caller; callers that need the build complete can `await rebuildIfNeeded()`.
-    public func rebuildIfNeeded() async {
+    func rebuildIfNeeded() async {
         do {
             let markerRequiresRebuild = await rebuildMarkerSource?.requiresTantivyRebuild() ?? false
             let n = await indexer.count()
@@ -113,7 +113,7 @@ public final class TantivySearchService: Sendable {
 
     /// Force a full rebuild (used after corruption detection or an external
     /// coarse `.external` event where we can't tell what changed).
-    public func rebuild() async {
+    func rebuild() async {
         do {
             try await indexer.rebuild()
         } catch {
@@ -124,7 +124,7 @@ public final class TantivySearchService: Sendable {
     /// Delete the on-disk index entirely (wiki removal path). Best-effort —
     /// a leftover dir is rebuilt-from-scratch-safe since SQLite is the source
     /// of truth.
-    public func deleteIndex() {
+    func deleteIndex() {
         let fm = FileManager.default
         if fm.fileExists(atPath: indexDirectory.path) {
             do {

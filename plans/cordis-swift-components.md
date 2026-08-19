@@ -1,6 +1,6 @@
 # Swift Cordis Components
 
-**Status:** Implemented. The runtime, queue, provider, and extraction service migrations passed their gates.
+**Status:** Implemented. The runtime, queue, provider, extraction, renderer, and search service migrations passed their gates.
 
 **Provenance-Mode:** `clean-room behavior implementation`
 
@@ -500,4 +500,6 @@ The implementation still excludes these items:
 
 The agent provider boundary now uses Cordis in both app and daemon processes. See `plans/cordis-agent-provider-composition.md`.
 
-Remaining areas include extraction backend registration, renderer lifetimes, and daemon transport composition. Each area needs a separate plan and operator decision.
+Extraction, renderer, and search now use separate implemented Cordis domains. See their focused design records.
+
+File Provider and daemon transport composition remain possible later domains. Each domain needs a separate plan and operator decision.
