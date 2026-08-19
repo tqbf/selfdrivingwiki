@@ -349,6 +349,14 @@ let package = Package(
             path: "Sources/wikictl",
             swiftSettings: strictSwiftSettings
         ),
+        // Test-only process helper for kernel-lock integration coverage. It is
+        // not bundled into the app or daemon.
+        .executableTarget(
+            name: "ProviderConfigMutationHelper",
+            dependencies: ["WikiFSCore"],
+            path: "Sources/ProviderConfigMutationHelper",
+            swiftSettings: strictSwiftSettings
+        ),
         // wikid — the bundled XPC service (Contents/XPCServices/wikid.xpc). It
         // owns the live wiki registry + GRDBWikiStore lifecycle and serves app
         // clients through WikiDaemonProtocol. macOS runs it as an on-demand XPC
@@ -430,7 +438,7 @@ let package = Package(
         // ACP wiring (pure), etc. These run on both macOS and Linux (#754).
         .testTarget(
             name: "WikiFSCoreTests",
-            dependencies: ["WikiFSCore", "WikiCtlCore",
+            dependencies: ["WikiFSCore", "WikiCtlCore", "ProviderConfigMutationHelper",
                            // WikiFSEngine is macOS-only at build time because it
                            // depends on the `ACP` product (macOS-only). On Linux
                            // the test target still builds — the ACP-backed tests

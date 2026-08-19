@@ -413,13 +413,16 @@ import WikiFSCore
     // MARK: - Picker selection persistence (launcher atomic set)
 
     @MainActor
-    @Test func setSelectedModelAndDefaultIsAtomic() throws {
+    @Test func setSelectedModelAndDefaultIsAtomic() async throws {
         // The picker's "pick a model" path: choosing a model implies choosing
         // its provider, and both land in ONE load→mutate→save cycle (no race).
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("picker-set-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: tmp) }
+        defer {
+            do { try FileManager.default.removeItem(at: tmp) }
+            catch { Issue.record("Failed to remove the picker fixture: \(error)") }
+        }
 
         let initial = AgentProvidersConfig(providers: [
             AgentProvider(id: ProviderID(rawValue: "claude"), label: "Claude", enabled: true, isDefault: true),
@@ -431,7 +434,8 @@ import WikiFSCore
         launcher.resolveProvidersContainerDirectory = { tmp }
 
         let hermes = initial.provider(id: ProviderID(rawValue: "hermes"))!
-        _ = launcher.setSelectedModelAndDefault(ModelID(rawValue: "glm-4.7"), provider: hermes)
+        _ = try await launcher.setSelectedModelAndDefault(
+            ModelID(rawValue: "glm-4.7"), provider: hermes)
 
         let reloaded = AgentProvidersConfig.loadOrSeed(from: tmp)
         #expect(reloaded.defaultProvider.id == ProviderID(rawValue: "hermes"))
@@ -449,7 +453,7 @@ import WikiFSCore
 @Suite struct AgentProviderModelCaptureTests {
 
     @MainActor
-    @Test func captureMapsSDKModelInfoToCache() throws {
+    @Test func captureMapsSDKModelInfoToCache() async throws {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("capture-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
@@ -469,7 +473,15 @@ import WikiFSCore
         let cached = discovered.map {
             CachedModelInfo(modelId: ModelID(rawValue: $0.modelId), name: $0.name, description: $0.description)
         }
-        launcher.cacheDiscoveredModels(cached, forProvider: ProviderID(rawValue: "hermes"))
+        let providerID = ProviderID(rawValue: "hermes")
+        await launcher.cacheCatalogObservation(
+            ACPProviderCatalogObservation(
+                providerID: providerID,
+                fingerprint: nil,
+                models: cached,
+                currentModelID: nil,
+                thinkingCapability: nil),
+            forProvider: providerID)
 
         let reloaded = AgentProvidersConfig.loadOrSeed(from: tmp)
         #expect(reloaded.cachedModels(forProvider: ProviderID(rawValue: "hermes")).map(\.modelId) == [ModelID(rawValue: "glm-4.7"), ModelID(rawValue: "glm-4-7")])

@@ -18,6 +18,7 @@ Sources/WikiFSCore/Store/WikiStore.swift	func deleteChat(id: ChatID) throws
 Sources/WikiFSCore/Store/WikiStore.swift	func updateChatSummary(chatID: ChatID, summary: String) throws
 Sources/WikiFSCore/Store/WikiStore.swift	func updateChatAcpSessionId(chatID: ChatID, acpSessionId: AcpSessionID?) throws
 Sources/WikiFSCore/Store/WikiStore.swift	func updateChatModelOverride(id: ChatID, providerId: ProviderID?, modelId: ModelID?) throws
+Sources/WikiFSCore/Store/WikiStore.swift	        chatID: ChatID,
 Sources/WikiFSCore/Store/WikiStore.swift	func getChat(id: ChatID) throws -> ChatSummary
 Sources/WikiFSCore/Store/WikiStore.swift	        chatID: ChatID, messageID: PageID, summary: String, kind: ChatMessageSummaryKind
 Sources/WikiFSCore/Store/WikiStore.swift	        chatID: ChatID, handle: String, event: AgentEvent, isDraft: Bool
@@ -63,7 +64,7 @@ Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	    func chatSessionState(_ cha
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func submitTurn(_ request: ChatSubmitRequest) async throws -> ChatID
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func stop(chatID: ChatID) async {
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	func resolvePermission(chatID: ChatID, intent: ChatPermissionResolutionIntent) async {
-Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func setThinkingEffort(chatID: ChatID, value: String) async {
+Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	        chatID: ChatID,
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func rehydrate(chatID: ChatID) async {
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func session(for chatID: ChatID?) -> RemoteChatSession {
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func discard(chatID: ChatID?) {

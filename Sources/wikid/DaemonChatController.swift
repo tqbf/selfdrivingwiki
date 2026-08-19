@@ -20,6 +20,7 @@ actor DaemonChatController {
     private let chatID: ChatID
     private let wikiID: WikiID
     private let store: GRDBWikiStore
+    private let providersConfigurationDirectory: URL
     private let runtime: ChatAgentRuntime
     private let clock: @Sendable () -> Date
     private let pushEvent: @Sendable (QueueEventEnvelope) -> Void
@@ -65,6 +66,7 @@ actor DaemonChatController {
         chatID: ChatID,
         wikiID: WikiID,
         store: GRDBWikiStore,
+        providersConfigurationDirectory: URL,
         runtime: ChatAgentRuntime,
         pushEvent: @escaping @Sendable (QueueEventEnvelope) -> Void,
         diagnosticTrace: DaemonChatDiagnostics = DaemonChatDiagnostics(),
@@ -73,6 +75,7 @@ actor DaemonChatController {
         self.chatID = chatID
         self.wikiID = wikiID
         self.store = store
+        self.providersConfigurationDirectory = providersConfigurationDirectory
         self.runtime = runtime
         self.clock = clock
         self.pushEvent = pushEvent
@@ -220,13 +223,21 @@ actor DaemonChatController {
 
     func setConfiguration(option: String, value: String) async throws {
         guard let handle = runtimeHandle else { return }
+        let valueID = ChatConfigurationValueID(rawValue: value)
         try await runtime.setConfiguration(
             ChatRuntimeConfigurationChange(
                 optionID: ChatConfigurationOptionID(rawValue: option),
-                valueID: ChatConfigurationValueID(rawValue: value)
+                valueID: valueID
             ),
             in: handle
         )
+        let chat = try store.getChat(id: chatID)
+        try store.updateChatModelAndThinkingSelection(
+            chatID: chatID,
+            providerID: chat.modelProviderId,
+            modelID: chat.modelId,
+            configuredThinkingID: chat.configuredThinkingOptionID ?? valueID,
+            effectiveThinkingID: valueID)
     }
 
     func chatSyncSnapshot() throws -> ChatSyncSnapshot {
@@ -858,13 +869,26 @@ actor DaemonChatController {
     private func currentRuntimeStartRequest() throws -> ChatRuntimeStartRequest {
         if let runtimeStartRequest { return runtimeStartRequest }
         let chat = try store.getChat(id: chatID)
+        let config = AgentProvidersConfig.loadOrSeed(from: providersConfigurationDirectory)
+        let catalogSelection = config.resolvedChatCatalogSelection(
+            chatOverrideProviderID: chat.modelProviderId,
+            chatOverrideModelID: chat.modelId)
+        let thinking = config.resolveThinkingCapability(
+            chatOverrideProviderID: chat.modelProviderId,
+            chatOverrideModelID: chat.modelId,
+            configuredValueID: chat.configuredThinkingOptionID,
+            priorEffectiveValueID: chat.effectiveThinkingOptionID)
+        let thinkingConfiguration = ResolvedThinkingConfiguration(
+            resolution: thinking,
+            priorEffectiveValueID: chat.effectiveThinkingOptionID)
         return ChatRuntimeStartRequest(
             chatID: chatID,
             generation: generation,
             systemPrompt: try store.getSystemPrompt().body,
-            providerID: chat.modelProviderId,
-            modelID: chat.modelId,
-            existingProviderSessionID: chat.acpSessionId
+            providerID: catalogSelection.provider.id,
+            modelID: thinkingConfiguration?.modelID ?? catalogSelection.model?.modelId,
+            existingProviderSessionID: chat.acpSessionId,
+            thinkingConfiguration: thinkingConfiguration
         )
     }
 

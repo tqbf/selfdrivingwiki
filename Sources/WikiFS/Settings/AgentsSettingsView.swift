@@ -31,8 +31,8 @@ enum ModelStatus: Equatable {
 /// top-level Settings tab (`OperationsSettingsView`) — they pick *any* provider
 /// per operation, so they don't belong inside a single provider's detail pane.
 ///
-/// Persists via `AgentProvidersConfig.save(to:)` on every edit — no explicit
-/// save step, mirroring `ZoteroSettingsView`.
+/// Persists each edit through `AgentProvidersConfigStore`, with no explicit
+/// save step. The store preserves concurrent app and daemon edits.
 struct AgentsSettingsView: View {
     @State private var config: AgentProvidersConfig
     @State private var selectedProviderID: ProviderID?
@@ -338,12 +338,15 @@ struct AgentsSettingsView: View {
     // MARK: - Persistence
 
     private func save(_ updated: AgentProvidersConfig) {
+        let prior = config
         config = updated
-        do {
-            try updated.save(to: containerDirectory)
-        } catch {
-            // House rule: never bare `try?`. Log so failures are visible.
-            DebugLog.store("Failed to save agent-providers config: \(error.localizedDescription)")
+        Task { @MainActor in
+            do {
+                config = try await AgentProvidersConfigStore(directory: containerDirectory)
+                    .mergeMutation(from: prior, to: updated)
+            } catch {
+                DebugLog.store("Failed to save agent-providers config: \(error.localizedDescription)")
+            }
         }
     }
 }
@@ -576,11 +579,15 @@ private struct ProviderDetailPane: View {
     }
 
     private func saveConfig(_ updated: AgentProvidersConfig) {
+        let prior = config
         config = updated
-        do {
-            try updated.save(to: containerDirectory)
-        } catch {
-            DebugLog.store("ProviderDetailPane save failed (provider=\(provider.id)): \(error.localizedDescription)")
+        Task { @MainActor in
+            do {
+                config = try await AgentProvidersConfigStore(directory: containerDirectory)
+                    .mergeMutation(from: prior, to: updated)
+            } catch {
+                DebugLog.store("ProviderDetailPane save failed (provider=\(provider.id)): \(error.localizedDescription)")
+            }
         }
     }
 
@@ -646,15 +653,15 @@ private struct ProviderDetailPane: View {
                 provider: providerForProbe,
                 resolvedCommand: resolvedWords,
                 apiKey: nil)
-            let outcome: Result<[CachedModelInfo], Error>
+            let outcome: Result<ACPProviderCatalogObservation, Error>
             do {
-                let models = try await probe.discoverModels()
-                if ACPProviderModelProbe.shouldThrowNoModels(models) {
+                let observation = try await probe.discoverObservation()
+                if ACPProviderModelProbe.shouldThrowNoModels(observation.models) {
                     DebugLog.agent("ProviderDetailPane.refreshModels: probe OK but no models advertised provider=\(providerID)")
                     outcome = .failure(ACPProviderModelProbeError.noModelsAdvertised)
                 } else {
-                    DebugLog.agent("ProviderDetailPane.refreshModels: probe OK models=\(models.count) provider=\(providerID)")
-                    outcome = .success(models)
+                    DebugLog.agent("ProviderDetailPane.refreshModels: probe OK models=\(observation.models.count) provider=\(providerID)")
+                    outcome = .success(observation)
                 }
             } catch {
                 DebugLog.agent("ProviderDetailPane.refreshModels: probe failed provider=\(providerID): \(error.localizedDescription)")
@@ -662,11 +669,12 @@ private struct ProviderDetailPane: View {
             }
             await MainActor.run {
                 switch outcome {
-                case .success(let models):
-                    modelRefreshState = .ready(models)
-                    // Persist durably — survives even if the user never changes
-                    // the picker (matches the launcher's post-spawn cache).
-                    saveConfig(config.settingCachedModels(models, forProvider: providerID))
+                case .success(let observation):
+                    modelRefreshState = .ready(observation.models)
+                    // Persist models, agent fingerprint, and standard ACP
+                    // capability as one successful catalog observation.
+                    saveConfig(config.settingCatalogObservation(
+                        observation, forProvider: providerID))
                 case .failure(let error):
                     let message: String
                     if let probeErr = error as? ACPProviderModelProbeError {

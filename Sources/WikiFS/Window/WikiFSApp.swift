@@ -520,8 +520,8 @@ struct WikiFSApp: App {
                     let proxy = XPCQueueEngineProxy(
                         workloadClient: workloadClient, eventSink: eventSink)
                     queueEngine.swap(to: proxy)
-                    chatDaemonCoordinator = ChatDaemonCoordinator(
-                        client: workloadClient, eventSink: eventSink)
+                    replaceChatDaemonCoordinator(ChatDaemonCoordinator(
+                        client: workloadClient, eventSink: eventSink))
                     healthMonitor?.start(connection: conn)
                 } catch {
                     DebugLog.store("WikiFSApp: failed to create daemon workload client: \(error)")
@@ -530,6 +530,13 @@ struct WikiFSApp: App {
                 }
             }
         }
+    }
+
+    @MainActor
+    private func replaceChatDaemonCoordinator(_ coordinator: ChatDaemonCoordinator?) {
+        chatDaemonCoordinator?.stop()
+        chatDaemonCoordinator = coordinator
+        appDelegate.chatDaemonCoordinator = coordinator
     }
 
     /// Wire the health monitor's disconnect/reconnect closures. Called before
@@ -554,7 +561,7 @@ struct WikiFSApp: App {
                 DebugLog.store("WikiFSApp: local queue engine unavailable after daemon disconnect: \(disconnectError)")
             }
             queueEngine.swap(to: local.engine)
-            chatDaemonCoordinator = nil
+            replaceChatDaemonCoordinator(nil)
         }
         healthMonitor.onReconnect = { newConn in
             DebugLog.store("WikiFSApp: daemon reconnected — swapping back to XPC proxy")
@@ -565,8 +572,8 @@ struct WikiFSApp: App {
                 let proxy = XPCQueueEngineProxy(
                     workloadClient: workloadClient, eventSink: eventSink)
                 queueEngine.swap(to: proxy)
-                chatDaemonCoordinator = ChatDaemonCoordinator(
-                    client: workloadClient, eventSink: eventSink)
+                replaceChatDaemonCoordinator(ChatDaemonCoordinator(
+                    client: workloadClient, eventSink: eventSink))
             } catch {
                 DebugLog.store("WikiFSApp: reconnect failed to create workload client: \(error)")
             }
@@ -584,8 +591,8 @@ struct WikiFSApp: App {
                 let proxy = XPCQueueEngineProxy(
                     workloadClient: workloadClient, eventSink: eventSink)
                 queueEngine.swap(to: proxy)
-                chatDaemonCoordinator = ChatDaemonCoordinator(
-                    client: workloadClient, eventSink: eventSink)
+                replaceChatDaemonCoordinator(ChatDaemonCoordinator(
+                    client: workloadClient, eventSink: eventSink))
             } catch {
                 DebugLog.store("WikiFSApp: interrupt re-registration failed: \(error)")
             }
@@ -940,6 +947,7 @@ struct WikiFSApp: App {
 /// backgrounded — the closest macOS equivalent to "all windows inactive."
 final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor weak var sessionManager: SessionManager?
+    @MainActor weak var chatDaemonCoordinator: ChatDaemonCoordinator?
     /// STRONG on purpose: this is the only long-lived owner of the status-item
     /// controller. A weak reference here deallocates the controller the moment
     /// `startStatusItem()` returns, which removes the NSStatusItem from the
@@ -1061,6 +1069,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 index += 1
             }
+        }
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        MainActor.assumeIsolated {
+            chatDaemonCoordinator?.applicationDidBecomeActive()
         }
     }
 

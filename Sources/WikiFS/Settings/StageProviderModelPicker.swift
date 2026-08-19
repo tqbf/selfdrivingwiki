@@ -240,11 +240,15 @@ struct StageProviderModelPicker: View {
     /// (read-only mount, permission) and the failure must be visible in
     /// Console.app.
     private func save(_ updated: AgentProvidersConfig) {
+        let prior = config
         config = updated
-        do {
-            try updated.save(to: containerDirectory)
-        } catch {
-            DebugLog.store("StageProviderModelPicker save failed (stage=\(stageKey)): \(error.localizedDescription)")
+        Task { @MainActor in
+            do {
+                config = try await AgentProvidersConfigStore(directory: containerDirectory)
+                    .mergeMutation(from: prior, to: updated)
+            } catch {
+                DebugLog.store("StageProviderModelPicker save failed (stage=\(stageKey)): \(error.localizedDescription)")
+            }
         }
     }
 }

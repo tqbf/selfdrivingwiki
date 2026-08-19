@@ -1,42 +1,94 @@
 import SwiftUI
 import WikiFSEngine
+import WikiFSCore
 
-/// #566: The "Thinking" dropdown for the chat composer toolbar.
-///
-/// Surfaces the agent's `thought_level` config option (high/medium/low) so the
-/// user can change how hard the agent reasons, mid-session. Capability-gated:
-/// the view renders nothing when `launcher.thinkingOption` is `nil` (agent
-/// advertises no `thought_level` — older agents, or those that don't switch
-/// model variants). This is the agent-dependent hide rule from the issue.
-///
-/// **UI shape:** a compact borderless chip next to `ProviderSelector`, showing
-/// a brain glyph + the current level + a chevron. Tapping opens a native
-/// `Menu` (the level list is short — 2–4 fixed entries — so the
-/// ProviderSelector-style search popover would be overkill and less native).
-/// A checkmark marks the active level. Selecting one calls
-/// `launcher.setThinkingEffort(_:)`, which optimistically flips the chip and
-/// fires `session/set_config_option`; a `config_option_update` confirms it.
-///
-/// Mirrors `ProviderSelector`'s trigger styling (.callout font, secondary
-/// foreground, tertiary chevron) so the two chips read as siblings.
+struct ThinkingEffortPresentation: Equatable, Sendable {
+    let choices: [ThinkingOptionCatalogChoice]
+    let effectiveValueID: ChatConfigurationValueID?
+    let effectiveLabel: String
+    let configOptionID: ChatConfigurationOptionID?
+    let modelIDByValueID: [ChatConfigurationValueID: ModelID]
+    let isUsingFallback: Bool
+    let shouldRender: Bool
+
+    static func resolve(
+        config: AgentProvidersConfig,
+        providerID: ProviderID?,
+        modelID: ModelID?,
+        configuredID: ChatConfigurationValueID?,
+        liveOption: ThinkingEffortOption?
+    ) -> Self {
+        let liveCapability = liveOption.map {
+            ThinkingCapabilityCatalog.observedACP($0.catalog)
+        }
+        let liveID = liveOption.map { ChatConfigurationValueID(rawValue: $0.currentValue) }
+        let resolution = config.resolveThinkingCapability(
+            chatOverrideProviderID: providerID,
+            chatOverrideModelID: modelID,
+            configuredValueID: configuredID,
+            liveCapability: liveCapability,
+            liveCurrentValueID: liveID)
+        return from(resolution)
+    }
+
+    static func from(_ resolution: ThinkingSelectionResolution) -> Self {
+        let label = resolution.choices.first { $0.id == resolution.effectiveValueID }?.label
+            ?? resolution.effectiveValueID?.rawValue
+            ?? "Thinking"
+        return Self(
+            choices: resolution.choices,
+            effectiveValueID: resolution.effectiveValueID,
+            effectiveLabel: label,
+            configOptionID: resolution.configOptionID,
+            modelIDByValueID: resolution.modelIDByValueID,
+            isUsingFallback: resolution.isUsingFallback,
+            shouldRender: resolution.shouldRenderSelector)
+    }
+}
+
+/// Compact catalog-driven Thinking menu for draft, idle, restored, and live chats.
+/// The provider catalog owns choices/defaults; the chat owns configured/effective
+/// IDs. Live session metadata is an authoritative overlay, not a visibility gate.
 struct ThinkingEffortSelector: View {
-    /// The daemon-mirrored chat session. `thinkingOption` is mirrored from the
-    /// daemon's launcher via chat-state envelopes; `setThinkingEffort` flips
-    /// the chip optimistically and fires `setChatConfigOption` on the daemon's
-    /// live session. Replaces the chat `AgentLauncher` binding.
     var remoteSession: RemoteChatSession
+    var store: WikiStoreModel
+
+    private var chatSummary: ChatSummary? {
+        guard case .chat(let chatID) = remoteSession.chatID else { return nil }
+        return store.chats.first { $0.id == chatID }
+    }
+
+    private var modelOverride: (ProviderID?, ModelID?) {
+        if let chatSummary {
+            return (chatSummary.modelProviderId, chatSummary.modelId)
+        }
+        return (remoteSession.pendingModelOverride?.providerId,
+                remoteSession.pendingModelOverride?.modelId)
+    }
+
+    private var configuredID: ChatConfigurationValueID? {
+        chatSummary?.configuredThinkingOptionID
+            ?? remoteSession.pendingConfiguredThinkingOptionID
+    }
+
+    private var presentation: ThinkingEffortPresentation {
+        ThinkingEffortPresentation.resolve(
+            config: remoteSession.providerConfiguration,
+            providerID: modelOverride.0,
+            modelID: modelOverride.1,
+            configuredID: configuredID,
+            liveOption: remoteSession.thinkingOption)
+    }
 
     var body: some View {
-        // Capability gate: render nothing when the agent advertises no
-        // `thought_level`. This keeps the toolbar uncluttered for agents that
-        // don't support thinking-effort switching.
-        if let option = remoteSession.thinkingOption {
+        let state = presentation
+        if state.shouldRender {
             Menu {
-                ForEach(option.choices) { choice in
+                ForEach(state.choices) { choice in
                     Button {
-                        remoteSession.setThinkingEffort(choice.value)
+                        select(choice.id, state: state)
                     } label: {
-                        if choice.value == option.currentValue {
+                        if choice.id == state.effectiveValueID {
                             Label(choice.label, systemImage: "checkmark")
                         } else {
                             Text(choice.label)
@@ -44,22 +96,59 @@ struct ThinkingEffortSelector: View {
                     }
                 }
             } label: {
-                trigger(option: option)
+                trigger(label: state.effectiveLabel, isUsingFallback: state.isUsingFallback)
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
-            .help("Thinking effort — how hard the agent reasons before answering")
+            .help(state.isUsingFallback
+                ? "The configured thinking effort is unavailable. Using \(state.effectiveLabel)."
+                : "Thinking effort — how hard the agent reasons before answering")
+            .accessibilityLabel("Thinking effort")
+            .accessibilityValue(state.effectiveLabel)
         }
     }
 
-    /// The compact chip: brain glyph + current level + chevron. Styled to sit
-    /// beside `ProviderSelector` as a sibling secondary control.
-    private func trigger(option: ThinkingEffortOption) -> some View {
+    private func select(
+        _ valueID: ChatConfigurationValueID,
+        state: ThinkingEffortPresentation
+    ) {
+        let targetModelID = state.modelIDByValueID[valueID]
+        switch remoteSession.chatID {
+        case .draft:
+            remoteSession.pendingConfiguredThinkingOptionID = valueID
+            if let targetModelID, let providerID = modelOverride.0 {
+                remoteSession.pendingModelOverride = (providerID, targetModelID)
+            }
+        case .chat(let chatID):
+            store.updateChatModelAndThinkingSelection(
+                chatID: chatID,
+                providerID: chatSummary?.modelProviderId,
+                modelID: targetModelID ?? chatSummary?.modelId,
+                configuredThinkingID: valueID,
+                effectiveThinkingID: targetModelID != nil
+                    ? valueID
+                    : (remoteSession.runState.isLive
+                        ? chatSummary?.effectiveThinkingOptionID
+                        : valueID))
+        }
+        if targetModelID == nil, remoteSession.runState.isLive, state.configOptionID != nil {
+            remoteSession.setThinkingEffort(
+                valueID,
+                configOptionID: state.configOptionID)
+        }
+    }
+
+    private func trigger(label: String, isUsingFallback: Bool) -> some View {
         HStack(spacing: 4) {
             Image(systemName: "brain.head.profile")
                 .foregroundStyle(Color.purple)
-            Text(option.currentValue)
+            Text(label)
                 .foregroundStyle(.secondary)
+            if isUsingFallback {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .imageScale(.small)
+                    .foregroundStyle(.orange)
+            }
             Image(systemName: "chevron.up.chevron.down")
                 .imageScale(.small)
                 .foregroundStyle(.tertiary)

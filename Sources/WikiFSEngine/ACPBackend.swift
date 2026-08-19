@@ -1606,20 +1606,13 @@ public actor ACPBackend: AgentBackend {
             thinkingLevel: thinkingLevel)
     }
 
-    /// #566: read the `thought_level` option's current value from a config
-    /// option set. Matches by `id.value == "thought_level"` OR
-    /// `category == "thought_level"` (the daemon vs the spec use different
-    /// conventions). Returns the select's `currentValue.value` (e.g.
-    /// `"high"`), or `nil` when the agent advertises no such option.
+    /// Read the current value through the same ACP extractor used by probing,
+    /// live snapshots, notifications, and runtime confirmation.
     private static func currentThoughtLevel(
         from configOptions: [SessionConfigOption]?
     ) -> String? {
-        guard let configOptions,
-              let option = configOptions.first(where: { $0.id.value == "thought_level" || $0.category == "thought_level" }),
-              case .select(let select) = option.kind else {
-            return nil
-        }
-        return select.currentValue.value
+        guard let configOptions else { return nil }
+        return ThinkingEffortOption.extract(from: configOptions)?.currentValueID.rawValue
     }
 
     /// The current context window usage for a session — `used` tokens consumed
@@ -1669,6 +1662,24 @@ public actor ACPBackend: AgentBackend {
         return session.modelsInfo?.availableModels ?? []
     }
 
+    /// Complete captured model metadata, including the agent's current/default
+    /// model id. Used with the same config-option snapshot to enrich the durable
+    /// provider catalog after a live session starts.
+    func modelsInfo(for sessionHandle: SessionHandle) async -> ModelsInfo? {
+        sessions[sessionHandle.id]?.modelsInfo
+    }
+
+    /// ACP implementation identity from the initialize handshake. This remains
+    /// unknown when the agent omitted `agentInfo`.
+    func agentFingerprint() async -> ACPAgentFingerprint? {
+        warmProcess?.initResponse.agentInfo.map {
+            ACPAgentFingerprint(
+                identity: ACPAgentIdentity(rawValue: $0.name),
+                version: ACPAgentVersion(rawValue: $0.version),
+                title: $0.title)
+        }
+    }
+
     // MARK: - Session config options (#566 — thinking effort)
 
     /// The config options the agent advertised for a session (`session/new` →
@@ -1699,19 +1710,15 @@ public actor ACPBackend: AgentBackend {
         let configIdValue = SessionConfigId(configId)
         let valueId = SessionConfigValueId(value)
         DebugLog.agent("ACPBackend.setConfigOption: configId=\(configId) value=\(value) session=\(session.sessionId.value)")
-        _ = try await session.client.setConfigOption(
+        let response = try await session.client.setConfigOption(
             sessionId: session.sessionId,
             configId: configIdValue,
             value: valueId
         )
-        // Optimistically patch the local snapshot so the toolbar flips
-        // immediately — the `config_option_update` that follows confirms it
-        // (or corrects it if the agent rewrote the value).
+        // The response is the authoritative post-write snapshot. Store it
+        // immediately; a later config_option_update may refresh it again.
         if var session = sessions[sessionHandle.id] {
-            session.configOptions = patchConfigOption(
-                in: session.configOptions ?? [],
-                configId: configId,
-                newValue: value)
+            session.configOptions = response.configOptions
             sessions[sessionHandle.id] = session
         }
     }
@@ -1728,9 +1735,8 @@ public actor ACPBackend: AgentBackend {
         // replace wholesale rather than merge — simplest correct behavior.
         session.configOptions = options
         sessions[handle.id] = session
-        let changed = options.first(where: { $0.id.value == "thought_level" })
-        if case .select(let sel) = changed?.kind {
-            DebugLog.agent("ACPBackend: thought_level now \(sel.currentValue.value)")
+        if let extracted = ThinkingEffortOption.extract(from: options) {
+            DebugLog.agent("ACPBackend: thought_level now \(extracted.currentValueID.rawValue)")
         }
     }
 

@@ -46,6 +46,7 @@ public final class ChatDaemonCoordinator {
     private let client: ChatDaemonCommands
     private let eventSink: DaemonQueueEventSink
     private let diagnosticTrace: ChatDiagnosticTrace
+    private let providersConfigurationDirectory: URL?
 
     /// chat key → mirror session. The draft (.newChat) state uses `.draft`.
     private var sessions: [ChatSessionKey: RemoteChatSession] = [:]
@@ -75,11 +76,13 @@ public final class ChatDaemonCoordinator {
     public private(set) var runningStateToken: Int = 0
 
     private var routerTask: Task<Void, Never>?
+    private var providerConfigObserver: ProviderConfigChangeObserver?
 
     init(
         client: ChatDaemonCommands,
         eventSink: DaemonQueueEventSink,
-        diagnosticTrace: ChatDiagnosticTrace = ChatDiagnostics.appTrace
+        diagnosticTrace: ChatDiagnosticTrace = ChatDiagnostics.appTrace,
+        providersConfigurationDirectory: URL? = nil
     ) {
         // Intentionally non-`public` — `DaemonQueueEventSink` is internal, so
         // the coordinator can only be constructed from within the WikiFS module
@@ -87,7 +90,11 @@ public final class ChatDaemonCoordinator {
         self.client = client
         self.eventSink = eventSink
         self.diagnosticTrace = diagnosticTrace
+        self.providersConfigurationDirectory = providersConfigurationDirectory
         startRouting()
+        providerConfigObserver = ProviderConfigChangeObserver { [weak self] in
+            self?.reloadProviderConfigurationIfNeeded()
+        }
     }
 
     // MARK: - Session registry
@@ -97,10 +104,28 @@ public final class ChatDaemonCoordinator {
     public func session(for chatID: ChatID?) -> RemoteChatSession {
         let key: ChatSessionKey = chatID.map(ChatSessionKey.chat) ?? .draft
         if let existing = sessions[key] { return existing }
-        let session = RemoteChatSession(chatID: key)
+        let session = providersConfigurationDirectory.map {
+            RemoteChatSession(chatID: key, providersConfigurationDirectory: $0)
+        } ?? RemoteChatSession(chatID: key)
         wireSessionCallbacks(session)
         sessions[key] = session
         return session
+    }
+
+    /// Reload every known draft, idle, restored, and live mirror after a
+    /// committed provider-sidecar generation becomes visible.
+    func reloadProviderConfigurationIfNeeded() {
+        for session in sessions.values {
+            let loaded = AgentProvidersConfig.loadOrSeed(
+                from: session.resolveProvidersContainerDirectory())
+            guard loaded.generation != session.providerConfiguration.generation else { continue }
+            session.refreshProvidersConfig()
+        }
+    }
+
+    /// Activation repair for notifications missed while the app was suspended.
+    func applicationDidBecomeActive() {
+        reloadProviderConfigurationIfNeeded()
     }
 
     /// Builds the redacted app/daemon diagnostic artifact for an existing chat.
@@ -198,6 +223,13 @@ public final class ChatDaemonCoordinator {
         sessions[.draft] = session
     }
 
+    func stop() {
+        routerTask?.cancel()
+        routerTask = nil
+        providerConfigObserver?.stop()
+        providerConfigObserver = nil
+    }
+
     // MARK: - Event routing
 
     private func startRouting() {
@@ -286,10 +318,16 @@ public final class ChatDaemonCoordinator {
     /// Set the thinking-effort config option on a live chat session via the
     /// daemon's `setChatConfigOption` XPC method. Errors are logged (the UI
     /// already flipped optimistically; a `chatState` envelope reconciles).
-    public func setThinkingEffort(chatID: ChatID, value: String) async {
+    public func setThinkingEffort(
+        chatID: ChatID,
+        optionID: ChatConfigurationOptionID,
+        valueID: ChatConfigurationValueID
+    ) async {
         do {
-            try await client.setChatConfigOption(
-                ChatConfigOptionRequest(chatID: chatID, option: "thought_level", value: value))
+            try await client.setChatConfigOption(ChatConfigOptionRequest(
+                chatID: chatID,
+                option: optionID.rawValue,
+                value: valueID.rawValue))
         } catch {
             DebugLog.agent("ChatDaemonCoordinator.setThinkingEffort failed for \(chatID.rawValue): \(error)")
         }

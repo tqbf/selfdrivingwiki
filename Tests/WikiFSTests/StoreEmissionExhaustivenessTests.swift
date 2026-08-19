@@ -34,4 +34,17 @@ struct StoreEmissionExhaustivenessTests {
             #expect(implementation.contains("mutate("), "\(signature) must use mutate")
         }
     }
+
+    @Test func chatSelectionPublicMutatorRoutesThroughMutate() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Sources/WikiFSCore/Store/GRDBWikiStore.swift"),
+            encoding: .utf8)
+        let signature = "public func updateChatModelAndThinkingSelection("
+        let start = try #require(source.range(of: signature)?.lowerBound)
+        let tail = source[start...]
+        let end = tail.dropFirst().range(of: "\n    public func ")?.lowerBound ?? source.endIndex
+        #expect(source[start..<end].contains("mutate("))
+    }
 }

@@ -4611,6 +4611,27 @@ public final class WikiStoreModel {
         }
     }
 
+    /// Atomically updates every durable chat selection field so observers never
+    /// see a new provider/model paired with an old effective thinking value.
+    public func updateChatModelAndThinkingSelection(
+        chatID: ChatID,
+        providerID: ProviderID?,
+        modelID: ModelID?,
+        configuredThinkingID: ChatConfigurationValueID?,
+        effectiveThinkingID: ChatConfigurationValueID?
+    ) {
+        do {
+            try store.updateChatModelAndThinkingSelection(
+                chatID: chatID,
+                providerID: providerID,
+                modelID: modelID,
+                configuredThinkingID: configuredThinkingID,
+                effectiveThinkingID: effectiveThinkingID)
+        } catch {
+            DebugLog.store("WikiStoreModel.updateChatModelAndThinkingSelection failed: \(error)")
+        }
+    }
+
     /// `@MainActor` wrapper for the per-message summary write (chat-summary
     /// plan §3.5). The summarizer's off-main compute marshals back here for the
     /// DB write (no inference inside a transaction). No manual reload — the bus

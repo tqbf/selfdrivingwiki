@@ -33,6 +33,14 @@ public enum DarwinNotifier {
         #endif
     }
 
+    /// Posts the stable, payload-free notification for a committed agent-provider
+    /// sidecar mutation. Consumers reload the sidecar to obtain its generation.
+    public static func postAgentProvidersConfigChange() {
+        #if os(macOS)
+        post(name: AgentProvidersConfigStore.darwinNotificationName)
+        #endif
+    }
+
     #if os(macOS)
     private static func post(name rawName: String) {
         let center = CFNotificationCenterGetDarwinNotifyCenter()

@@ -132,13 +132,6 @@ struct ChatDetailView: View {
             guard !runState.isAnswering, runState.isLive, !queuedMessages.isEmpty else { return }
             firePendingQueuedMessage()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .agentProvidersConfigDidChange)) { notification in
-            guard let changedDirectory = notification.object as? URL,
-                  changedDirectory.standardizedFileURL
-                    == remoteSession.resolveProvidersContainerDirectory().standardizedFileURL
-            else { return }
-            remoteSession.refreshProvidersConfig()
-        }
         .task(id: ChatHydrationTaskKey(chatID: chatID, sessionID: remoteSession.instanceID)) {
             if let chatID {
                 loadPersistedTranscript(chatID: chatID)
@@ -681,7 +674,10 @@ struct ChatDetailView: View {
                         chatID: chatID,
                         submission: submission,
                         providerId: chatID == nil ? override?.providerId : nil,
-                        modelId: chatID == nil ? override?.modelId : nil
+                        modelId: chatID == nil ? override?.modelId : nil,
+                        configuredThinkingOptionID: chatID == nil
+                            ? remoteSession.pendingConfiguredThinkingOptionID
+                            : nil
                     )
                 )
                 if chatID == nil {

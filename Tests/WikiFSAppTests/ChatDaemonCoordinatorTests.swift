@@ -104,7 +104,10 @@ struct ChatDaemonCoordinatorTests {
             chatID: ChatID(rawValue: "chat-1"),
             intent: .approve(optionID: PermissionOptionID(rawValue: "allow"))
         )
-        await coordinator.setThinkingEffort(chatID: ChatID(rawValue: "chat-1"), value: "high")
+        await coordinator.setThinkingEffort(
+            chatID: ChatID(rawValue: "chat-1"),
+            optionID: ChatConfigurationOptionID(rawValue: "reasoning_mode"),
+            valueID: ChatConfigurationValueID(rawValue: "high"))
         await coordinator.stop(chatID: ChatID(rawValue: "chat-1"))
 
         #expect(submitID == ChatID(rawValue: "submit-id"))
@@ -393,6 +396,73 @@ struct ChatDaemonCoordinatorTests {
     @Test func draftSessionDoesNotWireConfigCallback() {
         let coordinator = makeCoordinator()
         #expect(coordinator.session(for: nil).onSetChatConfigOption == nil)
+    }
+
+    @Test func providerSignalReloadsDraftOpenAndRestoredSessions() async throws {
+        let directory = try providerConfigDirectory()
+        defer { removeProviderConfigDirectory(directory) }
+        try AgentProvidersConfig.seed(discovered: []).writeAtomically(to: directory)
+        let coordinator = ChatDaemonCoordinator(
+            client: StubChatDaemonCommands(),
+            eventSink: DaemonQueueEventSink(),
+            providersConfigurationDirectory: directory)
+        let draft = coordinator.session(for: nil)
+        let open = coordinator.session(for: ChatID(rawValue: "open"))
+        let restored = coordinator.session(for: ChatID(rawValue: "restored"))
+
+        let committed = try await AgentProvidersConfigStore(
+            directory: directory,
+            postLocal: { _ in },
+            postDarwin: {}).mutate {
+                $0.settingSelectedModel(
+                    ModelID(rawValue: "new-model"),
+                    forProvider: ProviderID(rawValue: "claude-acp"))
+            }
+        coordinator.reloadProviderConfigurationIfNeeded()
+
+        #expect(draft.providerConfiguration.generation == committed.generation)
+        #expect(open.providerConfiguration.generation == committed.generation)
+        #expect(restored.providerConfiguration.generation == committed.generation)
+        #expect(open.selectedModelId(forProvider: ProviderID(rawValue: "claude-acp")) == ModelID(rawValue: "new-model"))
+    }
+
+    @Test func activationRepairsMissedProviderGeneration() async throws {
+        let directory = try providerConfigDirectory()
+        defer { removeProviderConfigDirectory(directory) }
+        try AgentProvidersConfig.seed(discovered: []).writeAtomically(to: directory)
+        let coordinator = ChatDaemonCoordinator(
+            client: StubChatDaemonCommands(),
+            eventSink: DaemonQueueEventSink(),
+            providersConfigurationDirectory: directory)
+        let session = coordinator.session(for: ChatID(rawValue: "idle"))
+        let oldGeneration = session.providerConfiguration.generation
+
+        let committed = try await AgentProvidersConfigStore(
+            directory: directory,
+            postLocal: { _ in },
+            postDarwin: {}).mutate {
+                $0.settingSelectedModel(
+                    ModelID(rawValue: "activation-model"),
+                    forProvider: ProviderID(rawValue: "claude-acp"))
+            }
+        #expect(session.providerConfiguration.generation == oldGeneration)
+
+        coordinator.applicationDidBecomeActive()
+
+        #expect(session.providerConfiguration.generation == committed.generation)
+        #expect(session.selectedModelId(forProvider: ProviderID(rawValue: "claude-acp")) == ModelID(rawValue: "activation-model"))
+    }
+
+    private func providerConfigDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("provider-reload-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    private func removeProviderConfigDirectory(_ directory: URL) {
+        do { try FileManager.default.removeItem(at: directory) }
+        catch { Issue.record("Failed to remove the provider-config fixture: \(error)") }
     }
 
     private func makeCoordinator() -> ChatDaemonCoordinator {

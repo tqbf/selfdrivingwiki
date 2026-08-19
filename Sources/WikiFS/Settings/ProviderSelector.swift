@@ -105,6 +105,15 @@ struct ProviderSelector: View {
     /// (**Decision A**, `plans/agent-settings-tabs.md` §6.5, now extended with
     /// the per-chat tier). Selecting a row in the popover writes THIS chat's
     /// override (`selectRow`) — it no longer touches the global default.
+    private var configuredThinkingValue: ChatConfigurationValueID? {
+        switch remoteSession.chatID {
+        case .draft:
+            return remoteSession.pendingConfiguredThinkingOptionID
+        case .chat(let chatID):
+            return store.chats.first { $0.id == chatID }?.configuredThinkingOptionID
+        }
+    }
+
     private var current: AgentProvider {
         if let overrideProviderId = chatModelOverride?.providerId,
            let p = config.provider(id: overrideProviderId), p.enabled {
@@ -206,26 +215,32 @@ struct ProviderSelector: View {
     /// ACP) since we have no brand assets.
     private func rowView(_ row: SelectorRow) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: glyph(for: row.provider))
-                .frame(width: 16)
-                .foregroundStyle(Color.blue)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(row.title)
-                    .font(.system(size: 13, weight: .semibold))
-                Text(row.subtitle)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(1)
+            Button {
+                selectRow(row)
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: glyph(for: row.provider))
+                        .frame(width: 16)
+                        .foregroundStyle(Color.blue)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(row.title)
+                            .font(.system(size: 13, weight: .semibold))
+                        Text(row.subtitle)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    if row.id == selectedRowID {
+                        Image(systemName: "checkmark")
+                            .imageScale(.small)
+                            .foregroundStyle(.tint)
+                    }
+                }
+                .contentShape(Rectangle())
             }
-            Spacer(minLength: 0)
-            if row.id == selectedRowID {
-                Image(systemName: "checkmark")
-                    .imageScale(.small)
-                    .foregroundStyle(.tint)
-            }
-            // Favorite star — only real model rows are favoritable (not the
-            // synthetic "Default" row). Its own Button so tapping the star
-            // toggles the favorite without also selecting the row.
+            .buttonStyle(.plain)
+            // Favorite star is a sibling button, so it cannot trigger row selection.
             if row.modelId != nil {
                 Button {
                     toggleFavorite(row)
@@ -240,7 +255,6 @@ struct ProviderSelector: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
-        .contentShape(Rectangle())
         .background(
             RoundedRectangle(cornerRadius: 6)
                 .fill(hoveredRowID == row.id ? Color.primary.opacity(0.08) : .clear)
@@ -249,7 +263,6 @@ struct ProviderSelector: View {
         .onHover { inside in
             if inside { hoveredRowID = row.id } else if hoveredRowID == row.id { hoveredRowID = nil }
         }
-        .onTapGesture { selectRow(row) }
     }
 
     /// Toggle + persist a model row's favorite state, refreshing local config so
@@ -320,11 +333,26 @@ struct ProviderSelector: View {
                     id: "\(provider.id.rawValue):default",
                     modelIDs: [])
             ]
-            let thinkingOption = remoteSession.thinkingOption
+            let selectedModelID = chatModelOverride?.providerId == provider.id
+                ? chatModelOverride?.modelId
+                : config.selectedModelId(forProvider: provider.id)
+            let liveOption = provider.id == current.id ? remoteSession.thinkingOption : nil
+            let liveCapability = liveOption.map {
+                ThinkingCapabilityCatalog.observedACP($0.catalog)
+            }
             for family in Self.modelFamilies(
                 from: models,
-                thinkingChoices: thinkingOption?.choices ?? [],
-                currentThinkingValue: thinkingOption?.currentValue
+                preferredModelID: selectedModelID,
+                resolutionForModel: { modelID in
+                    config.resolveThinkingCapability(
+                        providerID: provider.id,
+                        modelID: modelID,
+                        configuredValueID: configuredThinkingValue,
+                        liveCapability: modelID == selectedModelID ? liveCapability : nil,
+                        liveCurrentValueID: modelID == selectedModelID ? liveOption.map {
+                            ChatConfigurationValueID(rawValue: $0.currentValue)
+                        } : nil)
+                }
             ) {
                 let model = family.selectedModel
                 rows.append(SelectorRow(
@@ -415,6 +443,23 @@ struct ProviderSelector: View {
         "\(current.label) · \(currentModelSegment)"
     }
 
+    private func thinkingResolution(
+        for provider: AgentProvider,
+        modelID: ModelID?
+    ) -> ThinkingSelectionResolution {
+        let liveOption = provider.id == current.id ? remoteSession.thinkingOption : nil
+        return config.resolveThinkingCapability(
+            providerID: provider.id,
+            modelID: modelID,
+            configuredValueID: configuredThinkingValue,
+            liveCapability: liveOption.map {
+                ThinkingCapabilityCatalog.observedACP($0.catalog)
+            },
+            liveCurrentValueID: liveOption.map {
+                ChatConfigurationValueID(rawValue: $0.currentValue)
+            })
+    }
+
     /// The model text shown in the trigger for `current`: THIS chat's override
     /// model when one is active, else the provider's global selection (via
     /// `modelSegment(for:)`), else "default".
@@ -423,9 +468,10 @@ struct ProviderSelector: View {
             guard let modelId = override.modelId else { return "default" }
             if let cached = config.cachedModels(forProvider: current.id)
                 .first(where: { $0.modelId == modelId }) {
-                return Self.modelDisplayLabel(
-                    modelName: cached.displayLabel,
-                    thinkingChoices: remoteSession.thinkingOption?.choices ?? [])
+                return ThinkingEffortModelLabel.displayName(
+                    for: cached.displayLabel,
+                    advertisedEfforts: thinkingResolution(
+                        for: current, modelID: modelId).capability?.displayAliases ?? [])
             }
             return modelId.rawValue
         }
@@ -440,25 +486,14 @@ struct ProviderSelector: View {
             // Use the cached friendly name when available.
             if let cached = config.cachedModels(forProvider: provider.id)
                 .first(where: { $0.modelId == selected }) {
-                return Self.modelDisplayLabel(
-                    modelName: cached.displayLabel,
-                    thinkingChoices: remoteSession.thinkingOption?.choices ?? [])
+                return ThinkingEffortModelLabel.displayName(
+                    for: cached.displayLabel,
+                    advertisedEfforts: thinkingResolution(
+                        for: provider, modelID: selected).capability?.displayAliases ?? [])
             }
             return selected.rawValue
         }
         return "default"
-    }
-
-    /// The agent may include its current thinking level in the advertised
-    /// model name (for example, "GPT-5.6-Luna (Low)"). Thinking effort has a
-    /// separate toolbar control, so remove only a trailing parenthetical that
-    /// matches an advertised thinking choice. Other parenthetical model names
-    /// such as "Model (beta)" remain unchanged.
-    nonisolated static func modelDisplayLabel(
-        modelName: String,
-        thinkingChoices: [ThinkingEffortOption.Choice]
-    ) -> String {
-        modelVariant(modelName: modelName, thinkingChoices: thinkingChoices)?.baseName ?? modelName
     }
 
     /// A single base-model choice with all of the agent's effort-specific
@@ -471,94 +506,54 @@ struct ProviderSelector: View {
         let selectedModel: CachedModelInfo
     }
 
-    /// Collapse agent-advertised thinking variants into one picker row per
-    /// base model. An unrecognised parenthetical suffix is not a thinking
-    /// variant, so it remains a separate model and is never silently merged.
+    /// Collapse every exact model family declared by normalized model-variant
+    /// mechanisms. Display names never define capability or family membership.
     nonisolated static func modelFamilies(
         from models: [CachedModelInfo],
-        thinkingChoices: [ThinkingEffortOption.Choice],
-        currentThinkingValue: String?
+        preferredModelID: ModelID? = nil,
+        resolutionForModel: (ModelID) -> ThinkingSelectionResolution
     ) -> [ModelFamily] {
-        var groupedModels: [String: [CachedModelInfo]] = [:]
-        var familyLabels: [String: String] = [:]
-        var familyOrder: [String] = []
-
-        for model in models {
-            let variant = modelVariant(
-                modelName: model.displayLabel,
-                thinkingChoices: thinkingChoices
-            )
-            let familyID: String
-            let label: String
-            if let variant {
-                familyID = "thinking:\(variant.baseName.lowercased())"
-                label = variant.baseName
-            } else {
-                familyID = "model:\(model.modelId.rawValue)"
-                label = model.displayLabel
+        var consumed: Set<ModelID> = []
+        var result: [ModelFamily] = []
+        for model in models where !consumed.contains(model.modelId) {
+            let resolution = resolutionForModel(model.modelId)
+            guard case .modelVariants(let mapping) = resolution.mechanism,
+                  !mapping.isEmpty else {
+                consumed.insert(model.modelId)
+                result.append(ModelFamily(
+                    id: "model:\(model.modelId.rawValue)",
+                    label: model.displayLabel,
+                    models: [model],
+                    selectedModel: model))
+                continue
             }
-
-            if groupedModels[familyID] == nil {
-                familyOrder.append(familyID)
-                familyLabels[familyID] = label
+            let mappedIDs = Set(mapping.values)
+            let variants = models.filter { mappedIDs.contains($0.modelId) }
+            guard variants.contains(where: { $0.modelId == model.modelId }) else {
+                consumed.insert(model.modelId)
+                result.append(ModelFamily(
+                    id: "model:\(model.modelId.rawValue)",
+                    label: model.displayLabel,
+                    models: [model],
+                    selectedModel: model))
+                continue
             }
-            groupedModels[familyID, default: []].append(model)
-        }
-
-        let currentEffort = normalizedThinkingValue(
-            currentThinkingValue,
-            among: thinkingChoices
-        )
-        return familyOrder.compactMap { familyID in
-            guard let familyModels = groupedModels[familyID],
-                  let firstModel = familyModels.first,
-                  let label = familyLabels[familyID] else {
-                return nil
-            }
-            let selectedModel = familyModels.first {
-                modelVariant(modelName: $0.displayLabel, thinkingChoices: thinkingChoices)?.effort == currentEffort
-            } ?? firstModel
-            return ModelFamily(
-                id: familyID,
+            consumed.formUnion(mappedIDs)
+            let selectedID = resolution.effectiveValueID.flatMap { mapping[$0] }
+            let preferred = preferredModelID.flatMap { id in variants.first { $0.modelId == id } }
+            let selected = preferred
+                ?? selectedID.flatMap { id in variants.first { $0.modelId == id } }
+                ?? variants[0]
+            let label = ThinkingEffortModelLabel.displayName(
+                for: variants[0].displayLabel,
+                advertisedEfforts: resolution.capability?.displayAliases ?? [])
+            result.append(ModelFamily(
+                id: "thinking:\(variants[0].modelId.rawValue)",
                 label: label,
-                models: familyModels,
-                selectedModel: selectedModel
-            )
+                models: variants,
+                selectedModel: selected))
         }
-    }
-
-    private nonisolated static func modelVariant(
-        modelName: String,
-        thinkingChoices: [ThinkingEffortOption.Choice]
-    ) -> (baseName: String, effort: String)? {
-        let trimmedName = modelName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let openParen = trimmedName.lastIndex(of: "("),
-              trimmedName.last == ")" else {
-            return nil
-        }
-
-        let suffix = trimmedName[trimmedName.index(after: openParen)..<trimmedName.index(before: trimmedName.endIndex)]
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let effort = normalizedThinkingValue(String(suffix), among: thinkingChoices) else {
-            return nil
-        }
-
-        let baseName = trimmedName[..<openParen].trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !baseName.isEmpty else { return nil }
-        return (String(baseName), effort)
-    }
-
-    private nonisolated static func normalizedThinkingValue(
-        _ value: String?,
-        among choices: [ThinkingEffortOption.Choice]
-    ) -> String? {
-        guard let value else { return nil }
-        let normalizedValue = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !normalizedValue.isEmpty else { return nil }
-        return choices.first(where: {
-            $0.value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalizedValue
-                || $0.label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalizedValue
-        })?.value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return result
     }
 
     private var defaultHelpText: String {
@@ -581,7 +576,19 @@ struct ProviderSelector: View {
         case .draft:
             remoteSession.pendingModelOverride = (provider.id, modelId)
         case .chat(let pageID):
-            store.updateChatModelOverride(id: pageID, providerId: provider.id, modelId: modelId)
+            let summary = store.chats.first { $0.id == pageID }
+            let configured = summary?.configuredThinkingOptionID
+            let resolved = config.resolveThinkingCapability(
+                providerID: provider.id,
+                modelID: modelId,
+                configuredValueID: configured,
+                priorEffectiveValueID: summary?.effectiveThinkingOptionID)
+            store.updateChatModelAndThinkingSelection(
+                chatID: pageID,
+                providerID: provider.id,
+                modelID: modelId,
+                configuredThinkingID: configured,
+                effectiveThinkingID: resolved.effectiveValueID)
         }
         isPresented = false
         searchText = ""

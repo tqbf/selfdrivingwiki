@@ -227,7 +227,7 @@ import ACPModel
         #expect(decoded.defaultProvider.id == ProviderID(rawValue: "claude-acp"))
     }
 
-    @Test func loadOrSeedSeedsWhenMissing() throws {
+    @Test func loadOrSeedReturnsSeedWithoutUnlockedWriteWhenMissing() throws {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("agent-providers-seed-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
@@ -235,9 +235,9 @@ import ACPModel
 
         let config = AgentProvidersConfig.loadOrSeed(from: tmp, discover: { [] })
         #expect(config.providers.first?.id == ProviderID(rawValue: "claude-acp"))
-        // The seed is persisted so the next load is stable.
+        // Reads do not bypass the locked mutation API to create the sidecar.
         let url = tmp.appendingPathComponent(AgentProvidersConfig.fileName, isDirectory: false)
-        #expect(FileManager.default.fileExists(atPath: url.path))
+        #expect(!FileManager.default.fileExists(atPath: url.path))
     }
 
     @Test func loadOrSeedSeedsTheSingleClaudeDefaultIgnoringDiscovery() {

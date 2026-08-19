@@ -20,12 +20,20 @@ public struct ChatStartRequest: Codable, Sendable {
     /// `.modelId` at creation (`DaemonChatHost.startChat`).
     public let providerId: ProviderID?
     public let modelId: ModelID?
+    public let configuredThinkingOptionID: ChatConfigurationValueID?
 
-    public init(wikiID: WikiID, firstMessage: String, providerId: ProviderID? = nil, modelId: ModelID? = nil) {
+    public init(
+        wikiID: WikiID,
+        firstMessage: String,
+        providerId: ProviderID? = nil,
+        modelId: ModelID? = nil,
+        configuredThinkingOptionID: ChatConfigurationValueID? = nil
+    ) {
         self.wikiID = wikiID
         self.firstMessage = firstMessage
         self.providerId = providerId
         self.modelId = modelId
+        self.configuredThinkingOptionID = configuredThinkingOptionID
     }
 }
 
@@ -52,19 +60,22 @@ public struct ChatSubmitRequest: Codable, Sendable {
     /// `chatID` is non-nil.
     public let providerId: ProviderID?
     public let modelId: ModelID?
+    public let configuredThinkingOptionID: ChatConfigurationValueID?
 
     public init(
         wikiID: WikiID,
         chatID: ChatID?,
         submission: ChatTurnSubmission,
         providerId: ProviderID? = nil,
-        modelId: ModelID? = nil
+        modelId: ModelID? = nil,
+        configuredThinkingOptionID: ChatConfigurationValueID? = nil
     ) {
         self.wikiID = wikiID
         self.chatID = chatID
         self.submission = submission
         self.providerId = providerId
         self.modelId = modelId
+        self.configuredThinkingOptionID = configuredThinkingOptionID
     }
 }
 

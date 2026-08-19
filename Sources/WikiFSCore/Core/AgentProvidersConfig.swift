@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 public extension Notification.Name {
     /// Emitted after `agent-providers.json` is atomically replaced so cached
@@ -6,6 +7,159 @@ public extension Notification.Name {
     static let agentProvidersConfigDidChange = Notification.Name(
         "org.selfdrivingwiki.agentProvidersConfigDidChange"
     )
+}
+
+/// Serializes read-modify-write operations on `agent-providers.json` in this
+/// process and across processes that share the App Group container.
+public actor AgentProvidersConfigStore {
+    public static let darwinNotificationName = "org.selfdrivingwiki.agentProvidersConfigDidChange"
+
+    private static let retryBackoff: Duration = .milliseconds(25)
+    private static let inProcessGate = AgentProvidersConfigInProcessGate()
+
+    private let directory: URL
+    private let write: @Sendable (AgentProvidersConfig, URL) throws -> Void
+    private let postLocal: @Sendable (URL) -> Void
+    private let postDarwin: @Sendable () -> Void
+    private let lockTimeout: Duration
+
+    public init(
+        directory: URL,
+        lockTimeout: Duration = .seconds(5),
+        write: @escaping @Sendable (AgentProvidersConfig, URL) throws -> Void = { config, directory in
+            try config.writeAtomically(to: directory)
+        },
+        postLocal: @escaping @Sendable (URL) -> Void = { directory in
+            NotificationCenter.default.post(
+                name: .agentProvidersConfigDidChange,
+                object: directory.standardizedFileURL)
+        },
+        postDarwin: @escaping @Sendable () -> Void = {
+            DarwinNotifier.postAgentProvidersConfigChange()
+        }
+    ) {
+        self.directory = directory.standardizedFileURL
+        self.write = write
+        self.postLocal = postLocal
+        self.postDarwin = postDarwin
+        self.lockTimeout = lockTimeout
+    }
+
+    /// Applies only fields changed between a caller's prior snapshot and its
+    /// updated snapshot. Unchanged fields retain the newest locked value, so
+    /// disjoint app/daemon edits survive concurrent SwiftUI save helpers.
+    public func mergeMutation(
+        from prior: AgentProvidersConfig,
+        to updated: AgentProvidersConfig
+    ) async throws -> AgentProvidersConfig {
+        try await mutate { latest in
+            AgentProvidersConfig(
+                providers: prior.providers == updated.providers ? latest.providers : updated.providers,
+                providerModels: prior.providerModels == updated.providerModels ? latest.providerModels : updated.providerModels,
+                selectedModelIds: prior.selectedModelIds == updated.selectedModelIds ? latest.selectedModelIds : updated.selectedModelIds,
+                favoriteModelIds: prior.favoriteModelIds == updated.favoriteModelIds ? latest.favoriteModelIds : updated.favoriteModelIds,
+                maxConcurrent: prior.maxConcurrent == updated.maxConcurrent ? latest.maxConcurrent : updated.maxConcurrent,
+                ingestStageModelIds: prior.ingestStageModelIds == updated.ingestStageModelIds ? latest.ingestStageModelIds : updated.ingestStageModelIds,
+                stageProviderIds: prior.stageProviderIds == updated.stageProviderIds ? latest.stageProviderIds : updated.stageProviderIds,
+                catalogObservations: prior.catalogObservations == updated.catalogObservations ? latest.catalogObservations : updated.catalogObservations,
+                generation: latest.generation)
+        }
+    }
+
+    /// Reloads the newest committed value while holding the kernel lock, applies
+    /// one synchronous value mutation, commits exactly one next generation, then
+    /// releases both locks before notifying observers.
+    public func mutate(
+        _ body: @Sendable (AgentProvidersConfig) throws -> AgentProvidersConfig
+    ) async throws -> AgentProvidersConfig {
+        let descriptor = try await acquireLock()
+        let committed: AgentProvidersConfig
+        do {
+            let current = AgentProvidersConfig.load(from: directory)
+                ?? AgentProvidersConfig.seed(discovered: [])
+            var updated = try body(current)
+            updated.generation = current.generation &+ 1
+            try write(updated, directory)
+            committed = updated
+        } catch {
+            await releaseLock(descriptor)
+            throw error
+        }
+        await releaseLock(descriptor)
+        // Ordering is deliberate: observers can always reopen the finished file.
+        postLocal(directory)
+        postDarwin()
+        return committed
+    }
+
+    private var lockURL: URL {
+        directory.appendingPathComponent("\(AgentProvidersConfig.fileName).lock", isDirectory: false)
+    }
+
+    private func acquireLock() async throws -> Int32 {
+        let key = lockURL.path
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: lockTimeout)
+        while true {
+            try Task.checkCancellation()
+            guard clock.now < deadline else {
+                throw AgentProvidersConfigStoreError.lockAcquisitionTimedOut
+            }
+            guard await Self.inProcessGate.tryAcquire(key) else {
+                try await Task.sleep(for: Self.retryBackoff)
+                continue
+            }
+            do {
+                let descriptor = try openLockFile()
+                guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+                    let code = errno
+                    close(descriptor)
+                    if code == EWOULDBLOCK || code == EAGAIN {
+                        await Self.inProcessGate.release(key)
+                        try await Task.sleep(for: Self.retryBackoff)
+                        continue
+                    }
+                    throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
+                }
+                return descriptor
+            } catch {
+                await Self.inProcessGate.release(key)
+                throw error
+            }
+        }
+    }
+
+    private func openLockFile() throws -> Int32 {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let descriptor = lockURL.path.withCString {
+            open($0, O_RDWR | O_CREAT | O_NOFOLLOW, S_IRUSR | S_IWUSR)
+        }
+        guard descriptor >= 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        return descriptor
+    }
+
+    private func releaseLock(_ descriptor: Int32) async {
+        let unlockResult = flock(descriptor, LOCK_UN)
+        let closeResult = close(descriptor)
+        if unlockResult != 0 || closeResult != 0 {
+            DebugLog.store("AgentProvidersConfigStore: lock release failed.")
+        }
+        let key = lockURL.path
+        await Self.inProcessGate.release(key)
+    }
+}
+
+public enum AgentProvidersConfigStoreError: Error, Equatable, Sendable {
+    case lockAcquisitionTimedOut
+}
+
+private actor AgentProvidersConfigInProcessGate {
+    private var heldPaths: Set<String> = []
+
+    func tryAcquire(_ path: String) -> Bool { heldPaths.insert(path).inserted }
+    func release(_ path: String) { heldPaths.remove(path) }
 }
 
 /// The persisted list of configured agent providers (slice of #324 — provider
@@ -93,6 +247,14 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// `plans/agent-settings-tabs.md`.
     public var stageProviderIds: [String: ProviderID]
 
+    /// Complete successful catalog observations keyed by configured provider ID.
+    /// Missing data is expected for legacy files and means identity is unknown.
+    public var catalogObservations: [String: ACPProviderCatalogObservation]
+
+    /// Monotonic sidecar revision. The locked mutation store increments this
+    /// exactly once for every committed logical mutation.
+    public var generation: UInt64
+
     public init(
         providers: [AgentProvider] = [AgentProvider.claudeAcpDefault],
         providerModels: [String: [CachedModelInfo]] = [:],
@@ -100,7 +262,9 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         favoriteModelIds: [String: [ModelID]] = [:],
         maxConcurrent: [String: Int] = [:],
         ingestStageModelIds: [String: ModelID] = [:],
-        stageProviderIds: [String: ProviderID] = [:]
+        stageProviderIds: [String: ProviderID] = [:],
+        catalogObservations: [String: ACPProviderCatalogObservation] = [:],
+        generation: UInt64 = 0
     ) {
         let normalizedProviders = AgentProvidersConfig.normalized(providers)
         self.providers = normalizedProviders
@@ -110,6 +274,8 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         self.maxConcurrent = maxConcurrent
         self.ingestStageModelIds = ingestStageModelIds
         self.stageProviderIds = stageProviderIds
+        self.catalogObservations = catalogObservations
+        self.generation = generation
     }
 
     // MARK: - Coding (forward-compatible: old files without model caches decode)
@@ -122,6 +288,8 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         case maxConcurrent
         case ingestStageModelIds
         case stageProviderIds
+        case catalogObservations
+        case generation
     }
 
     public init(from decoder: Decoder) throws {
@@ -146,6 +314,9 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         // `stageProviderIds` key. `[:]` → every stage uses the global default
         // provider (the legacy behavior — no migration, no behavior change).
         self.stageProviderIds = try c.decodeIfPresent([String: ProviderID].self, forKey: .stageProviderIds) ?? [:]
+        self.catalogObservations = try c.decodeIfPresent(
+            [String: ACPProviderCatalogObservation].self, forKey: .catalogObservations) ?? [:]
+        self.generation = try c.decodeIfPresent(UInt64.self, forKey: .generation) ?? 0
         // NOTE: a legacy `stageAssignments` key in `agent-providers.json` is
         // silently ignored — it is not in `CodingKeys`, so `JSONDecoder`
         // skips it. The original per-stage assignment feature was removed
@@ -212,7 +383,9 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             favoriteModelIds: favoriteModelIds,
             maxConcurrent: maxConcurrent,
             ingestStageModelIds: ingestStageModelIds,
-            stageProviderIds: stageProviderIds)
+            stageProviderIds: stageProviderIds,
+            catalogObservations: catalogObservations,
+            generation: generation)
     }
 
     /// The default provider (the launcher's fallback when the user hasn't picked
@@ -301,6 +474,122 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         return modelId(forStage: stage, fallbackProvider: p.id)
     }
 
+    /// Resolves the effective provider and concrete cached model for a chat.
+    /// A provider-only selection maps to the discovered default model, then the
+    /// first advertised model, so catalog capability remains available when no
+    /// explicit model override is stored.
+    public func resolvedChatCatalogSelection(
+        chatOverrideProviderID: ProviderID? = nil,
+        chatOverrideModelID: ModelID? = nil
+    ) -> (provider: AgentProvider, model: CachedModelInfo?) {
+        let provider = provider(
+            forStage: "chat", chatOverrideProviderId: chatOverrideProviderID)
+        let models = cachedModels(forProvider: provider.id)
+        let resolvedModelID = modelId(
+            forStage: "chat",
+            chatOverrideProviderId: chatOverrideProviderID,
+            chatOverrideModelId: chatOverrideModelID)
+        let model = resolvedModelID.flatMap { id in models.first { $0.modelId == id } }
+            ?? models.first(where: \.isDefault)
+            ?? models.first
+        return (provider, model)
+    }
+
+    public func resolveThinkingCapability(
+        providerID: ProviderID,
+        modelID: ModelID?,
+        configuredValueID: ChatConfigurationValueID? = nil,
+        priorEffectiveValueID: ChatConfigurationValueID? = nil,
+        liveCapability: ThinkingCapabilityCatalog? = nil,
+        liveCurrentValueID: ChatConfigurationValueID? = nil,
+        localOverride: ThinkingCapabilityCatalog? = nil
+    ) -> ThinkingSelectionResolution {
+        let models = cachedModels(forProvider: providerID)
+        let selectedModel: CachedModelInfo?
+        if let modelID {
+            selectedModel = models.first { $0.modelId == modelID }
+        } else {
+            selectedModel = models.first(where: \.isDefault) ?? models.first
+        }
+        var observation = catalogObservation(forProvider: providerID)
+            ?? legacyObservation(providerID: providerID, modelID: selectedModel?.modelId)
+        if observation?.fingerprint == nil,
+           let provider = provider(id: providerID),
+           let compatibilityFingerprint = CodexThinkingCapabilityAdapter.trustedLegacyFingerprint(
+               configuredCommand: provider.command) {
+            observation = observation.map {
+                ACPProviderCatalogObservation(
+                    providerID: $0.providerID,
+                    fingerprint: compatibilityFingerprint,
+                    models: $0.models,
+                    currentModelID: $0.currentModelID,
+                    thinkingCapability: $0.thinkingCapability,
+                    observedAt: $0.observedAt)
+            }
+        }
+        let adapter = CodexThinkingCapabilityAdapter.resolve(
+            fingerprint: observation?.fingerprint,
+            selectedModelID: selectedModel?.modelId,
+            models: observation?.models ?? models)
+        let resolvedOverride = localOverride ?? LocalThinkingCapabilityRegistry.bundled.resolve(
+            fingerprint: observation?.fingerprint,
+            modelID: selectedModel?.modelId)
+        return ThinkingCapabilityResolver.resolve(.init(
+            selectedProviderID: providerID,
+            selectedModelID: selectedModel?.modelId,
+            liveACP: liveCapability,
+            liveCurrentValueID: liveCurrentValueID,
+            cachedObservation: observation,
+            adapter: adapter,
+            localOverride: resolvedOverride,
+            configuredValueID: configuredValueID,
+            priorEffectiveValueID: priorEffectiveValueID))
+    }
+
+    /// Resolves the normalized thinking capability for a chat through the one
+    /// evidence-priority policy. SwiftUI and daemon code consume only this result.
+    public func resolveThinkingCapability(
+        chatOverrideProviderID: ProviderID? = nil,
+        chatOverrideModelID: ModelID? = nil,
+        configuredValueID: ChatConfigurationValueID? = nil,
+        priorEffectiveValueID: ChatConfigurationValueID? = nil,
+        liveCapability: ThinkingCapabilityCatalog? = nil,
+        liveCurrentValueID: ChatConfigurationValueID? = nil,
+        localOverride: ThinkingCapabilityCatalog? = nil
+    ) -> ThinkingSelectionResolution {
+        let selection = resolvedChatCatalogSelection(
+            chatOverrideProviderID: chatOverrideProviderID,
+            chatOverrideModelID: chatOverrideModelID)
+        return resolveThinkingCapability(
+            providerID: selection.provider.id,
+            modelID: selection.model?.modelId,
+            configuredValueID: configuredValueID,
+            priorEffectiveValueID: priorEffectiveValueID,
+            liveCapability: liveCapability,
+            liveCurrentValueID: liveCurrentValueID,
+            localOverride: localOverride)
+    }
+
+    private func legacyObservation(
+        providerID: ProviderID,
+        modelID: ModelID?
+    ) -> ACPProviderCatalogObservation? {
+        let models = cachedModels(forProvider: providerID)
+        guard !models.isEmpty else { return nil }
+        guard let selected = modelID.flatMap({ id in models.first { $0.modelId == id } })
+            ?? models.first(where: \.isDefault)
+            ?? models.first else { return nil }
+        return ACPProviderCatalogObservation(
+            providerID: providerID,
+            fingerprint: nil,
+            models: models,
+            currentModelID: selected.modelId,
+            thinkingCapability: selected.thinkingOptionCatalog.map {
+                ThinkingCapabilityCatalog.observedACP($0)
+            },
+            observedAt: .distantPast)
+    }
+
     /// The chat composer may enable submission only when the same resolved
     /// provider/model pair that the launcher validates is available. This keeps
     /// an all-disabled provider list or a missing selected model from reaching
@@ -366,7 +655,9 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             favoriteModelIds: favoriteModelIds,
             maxConcurrent: maxConcurrent,
             ingestStageModelIds: stages,
-            stageProviderIds: stageProviderIds)
+            stageProviderIds: stageProviderIds,
+            catalogObservations: catalogObservations,
+            generation: generation)
     }
 
     /// A PURE mutator: returns a NEW config with the per-stage PROVIDER pin for
@@ -405,7 +696,9 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             favoriteModelIds: favoriteModelIds,
             maxConcurrent: maxConcurrent,
             ingestStageModelIds: stages,
-            stageProviderIds: pins)
+            stageProviderIds: pins,
+            catalogObservations: catalogObservations,
+            generation: generation)
     }
 
     /// Mark the provider with `id` as the default, demoting every other provider
@@ -433,7 +726,9 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             favoriteModelIds: favoriteModelIds,
             maxConcurrent: maxConcurrent,
             ingestStageModelIds: ingestStageModelIds,
-            stageProviderIds: stageProviderIds)
+            stageProviderIds: stageProviderIds,
+            catalogObservations: catalogObservations,
+            generation: generation)
     }
 
     /// The list of providers the selector surfaces: enabled ones only (the
@@ -452,6 +747,36 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// probing is a later enhancement). PURE.
     public func cachedModels(forProvider providerId: ProviderID) -> [CachedModelInfo] {
         providerModels[providerId.rawValue] ?? []
+    }
+
+    public func catalogObservation(
+        forProvider providerID: ProviderID
+    ) -> ACPProviderCatalogObservation? {
+        catalogObservations[providerID.rawValue]
+    }
+
+    /// Replaces a provider's models and complete successful observation in one
+    /// value mutation. Empty discoveries are rejected by callers and therefore
+    /// cannot erase the previous valid catalog.
+    public func settingCatalogObservation(
+        _ observation: ACPProviderCatalogObservation,
+        forProvider providerID: ProviderID
+    ) -> AgentProvidersConfig {
+        precondition(observation.providerID == providerID)
+        var modelCache = providerModels
+        modelCache[providerID.rawValue] = observation.models
+        var observations = catalogObservations
+        observations[providerID.rawValue] = observation
+        return AgentProvidersConfig(
+            providers: providers,
+            providerModels: modelCache,
+            selectedModelIds: selectedModelIds,
+            favoriteModelIds: favoriteModelIds,
+            maxConcurrent: maxConcurrent,
+            ingestStageModelIds: ingestStageModelIds,
+            stageProviderIds: stageProviderIds,
+            catalogObservations: observations,
+            generation: generation)
     }
 
     /// The user's selected model id for `providerId`, or `nil` when none is set
@@ -481,7 +806,9 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             favoriteModelIds: favoriteModelIds,
             maxConcurrent: maxConcurrent,
             ingestStageModelIds: ingestStageModelIds,
-            stageProviderIds: stageProviderIds)
+            stageProviderIds: stageProviderIds,
+            catalogObservations: catalogObservations,
+            generation: generation)
     }
 
     /// A PURE mutator: returns a NEW config with the user's model selection for
@@ -503,7 +830,9 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             favoriteModelIds: favoriteModelIds,
             maxConcurrent: maxConcurrent,
             ingestStageModelIds: ingestStageModelIds,
-            stageProviderIds: stageProviderIds)
+            stageProviderIds: stageProviderIds,
+            catalogObservations: catalogObservations,
+            generation: generation)
     }
 
     // MARK: - Favorites (#favorites — display-only, paseo per-row star)
@@ -542,7 +871,9 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
             favoriteModelIds: favorites,
             maxConcurrent: maxConcurrent,
             ingestStageModelIds: ingestStageModelIds,
-            stageProviderIds: stageProviderIds)
+            stageProviderIds: stageProviderIds,
+            catalogObservations: catalogObservations,
+            generation: generation)
     }
 
     // MARK: - Seed (pure)
@@ -570,28 +901,30 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
 
     // MARK: - Persistence
 
-    /// Persists the provider configuration and announces the completed write.
-    /// The notification is intentionally post-write: listeners always reload a
-    /// whole, atomically written sidecar rather than observing an in-progress
-    /// edit.
-    public func save(to directory: URL) throws {
-        let url = directory.appendingPathComponent(Self.fileName, isDirectory: false)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(self)
-        try data.write(to: url, options: .atomic)
+    /// Legacy direct writer retained only for bootstrap and tests. Production
+    /// read-modify-write paths must use `AgentProvidersConfigStore.mutate(_:)`.
+    func save(to directory: URL) throws {
+        try writeAtomically(to: directory)
         NotificationCenter.default.post(
             name: .agentProvidersConfigDidChange,
             object: directory.standardizedFileURL
         )
     }
 
-    /// Load `agent-providers.json` from `directory`. If missing OR empty, seed
-    /// from `seed(discovered:)` (running real PATH discovery) AND persist the
-    /// seed so subsequent loads are stable + the user's edits survive. A corrupt
-    /// file degrades to the seed too (same fresh-install behavior as
-    /// `AgentCommandConfig.load`). Delegates the file read + decode to
-    /// `JSONSidecarConfig.load(from:)`.
+    /// Writes the JSON payload without emitting notifications. This is the store
+    /// seam; application code must use `AgentProvidersConfigStore` instead.
+    public func writeAtomically(to directory: URL) throws {
+        let url = directory.appendingPathComponent(Self.fileName, isDirectory: false)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(self)
+        try data.write(to: url, options: .atomic)
+    }
+
+    /// Load `agent-providers.json` from `directory`. If it is missing, empty,
+    /// or corrupt, return the seed without writing during this read. The first
+    /// logical mutation persists it through `AgentProvidersConfigStore` while
+    /// holding the process and kernel locks.
     public static func loadOrSeed(
         from directory: URL,
         discover: () -> [DiscoveredACPAgent] = { ACPProviderDiscovery.discover() }
@@ -625,21 +958,12 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
                 favoriteModelIds: config.favoriteModelIds,
                 maxConcurrent: config.maxConcurrent,
                 ingestStageModelIds: config.ingestStageModelIds,
-                stageProviderIds: config.stageProviderIds)
+                stageProviderIds: config.stageProviderIds,
+                catalogObservations: config.catalogObservations,
+                generation: config.generation)
         }
-        // Missing / corrupt / empty → seed + persist.
-        DebugLog.store("AgentProvidersConfig.loadOrSeed: SEED (file missing/corrupt/empty)")
-        let seeded = seed(discovered: discover())
-        do {
-            try seeded.save(to: directory)
-        } catch {
-            // Per house rules — never bare `try?`. Persisting the seed is
-            // best-effort here (the file may be on a read-only mount during
-            // first-launch discovery); the in-memory seed is returned either
-            // way so the launcher can continue, and the next write attempt
-            // (Settings edit) surfaces a real error if the dir is unwritable.
-            DebugLog.store("AgentProvidersConfig.loadOrSeed: failed to persist seed — \(error.localizedDescription)")
-        }
-        return seeded
+        // Missing, corrupt, or empty: return the seed without an unlocked write.
+        DebugLog.store("AgentProvidersConfig.loadOrSeed: SEED (file missing/corrupt/empty; not persisted during read)")
+        return seed(discovered: discover())
     }
 }

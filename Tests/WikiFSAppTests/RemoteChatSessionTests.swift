@@ -391,6 +391,18 @@ struct RemoteChatSessionTests {
         #expect(try decoded.decodedChatSyncUpdate().projection.lastIncludedSequence == ChatUpdateSequence(rawValue: 2))
     }
 
+    @Test func draftResetClearsPendingModelAndThinkingSelection() {
+        let session = RemoteChatSession(chatID: .draft)
+        session.pendingModelOverride = (
+            ProviderID(rawValue: "provider"), ModelID(rawValue: "model"))
+        session.pendingConfiguredThinkingOptionID = ChatConfigurationValueID(rawValue: "high")
+
+        session.reset()
+
+        #expect(session.pendingModelOverride == nil)
+        #expect(session.pendingConfiguredThinkingOptionID == nil)
+    }
+
     @Test func providerConfigurationCacheRefreshesAfterSettingsSave() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
             "remote-chat-provider-cache-\(UUID().uuidString)",

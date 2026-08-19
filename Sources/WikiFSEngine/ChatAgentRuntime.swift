@@ -9,6 +9,141 @@ public struct ChatRuntimeHandle: Hashable, Sendable, Codable, RawRepresentable {
     }
 }
 
+public struct ResolvedThinkingConfiguration: Hashable, Sendable, Codable {
+    public enum Mechanism: String, Hashable, Sendable, Codable {
+        case sessionConfig
+        case modelVariants
+    }
+
+    public let mechanism: Mechanism
+    public let optionID: ChatConfigurationOptionID?
+    public let desiredValueID: ChatConfigurationValueID
+    public let priorEffectiveValueID: ChatConfigurationValueID?
+    public let modelID: ModelID?
+
+    public init(
+        optionID: ChatConfigurationOptionID,
+        desiredValueID: ChatConfigurationValueID,
+        priorEffectiveValueID: ChatConfigurationValueID? = nil
+    ) {
+        mechanism = .sessionConfig
+        self.optionID = optionID
+        self.desiredValueID = desiredValueID
+        self.priorEffectiveValueID = priorEffectiveValueID
+        modelID = nil
+    }
+
+    public init(
+        modelID: ModelID,
+        desiredValueID: ChatConfigurationValueID,
+        priorEffectiveValueID: ChatConfigurationValueID? = nil
+    ) {
+        mechanism = .modelVariants
+        optionID = nil
+        self.desiredValueID = desiredValueID
+        self.priorEffectiveValueID = priorEffectiveValueID
+        self.modelID = modelID
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case mechanism, optionID, desiredValueID, priorEffectiveValueID, modelID
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let desired = try container.decodeIfPresent(
+            ChatConfigurationValueID.self, forKey: .desiredValueID)
+        let option = try container.decodeIfPresent(
+            ChatConfigurationOptionID.self, forKey: .optionID)
+        let model = try container.decodeIfPresent(ModelID.self, forKey: .modelID)
+        let prior = try container.decodeIfPresent(
+            ChatConfigurationValueID.self, forKey: .priorEffectiveValueID)
+        guard let desired else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .desiredValueID, in: container,
+                debugDescription: "Thinking configuration requires desiredValueID.")
+        }
+        if !container.contains(.mechanism) {
+            guard let option, model == nil else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .mechanism, in: container,
+                    debugDescription: "Legacy thinking configuration must contain only optionID and desiredValueID.")
+            }
+            mechanism = .sessionConfig
+            optionID = option
+            modelID = nil
+        } else {
+            let decodedMechanism = try container.decode(Mechanism.self, forKey: .mechanism)
+            switch decodedMechanism {
+            case .sessionConfig:
+                guard let option, model == nil else {
+                    throw DecodingError.dataCorruptedError(
+                        forKey: .mechanism, in: container,
+                        debugDescription: "sessionConfig requires optionID and forbids modelID.")
+                }
+                mechanism = decodedMechanism
+                optionID = option
+                modelID = nil
+            case .modelVariants:
+                guard option == nil, let model else {
+                    throw DecodingError.dataCorruptedError(
+                        forKey: .mechanism, in: container,
+                        debugDescription: "modelVariants requires modelID and forbids optionID.")
+                }
+                mechanism = decodedMechanism
+                optionID = nil
+                modelID = model
+            }
+        }
+        desiredValueID = desired
+        priorEffectiveValueID = prior
+    }
+
+    public init?(
+        resolution: ThinkingSelectionResolution,
+        priorEffectiveValueID: ChatConfigurationValueID?
+    ) {
+        guard let effective = resolution.effectiveValueID,
+              let mechanism = resolution.mechanism else { return nil }
+        switch mechanism {
+        case .sessionConfig(let optionID):
+            self.init(
+                optionID: optionID,
+                desiredValueID: effective,
+                priorEffectiveValueID: priorEffectiveValueID)
+        case .modelVariants(let mapping):
+            guard let modelID = mapping[effective] else { return nil }
+            self.init(
+                modelID: modelID,
+                desiredValueID: effective,
+                priorEffectiveValueID: priorEffectiveValueID)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(mechanism, forKey: .mechanism)
+        try container.encode(desiredValueID, forKey: .desiredValueID)
+        try container.encodeIfPresent(priorEffectiveValueID, forKey: .priorEffectiveValueID)
+        switch mechanism {
+        case .sessionConfig:
+            guard let optionID, modelID == nil else {
+                throw EncodingError.invalidValue(self, .init(
+                    codingPath: encoder.codingPath,
+                    debugDescription: "Invalid sessionConfig thinking payload."))
+            }
+            try container.encode(optionID, forKey: .optionID)
+        case .modelVariants:
+            guard optionID == nil, let modelID else {
+                throw EncodingError.invalidValue(self, .init(
+                    codingPath: encoder.codingPath,
+                    debugDescription: "Invalid modelVariants thinking payload."))
+            }
+            try container.encode(modelID, forKey: .modelID)
+        }
+    }
+}
+
 public struct ChatRuntimeStartRequest: Hashable, Sendable, Codable {
     public let chatID: ChatID
     public let generation: ChatSessionGenerationID
@@ -16,6 +151,7 @@ public struct ChatRuntimeStartRequest: Hashable, Sendable, Codable {
     public let providerID: ProviderID?
     public let modelID: ModelID?
     public let existingProviderSessionID: AcpSessionID?
+    public let thinkingConfiguration: ResolvedThinkingConfiguration?
 
     public init(
         chatID: ChatID,
@@ -23,7 +159,8 @@ public struct ChatRuntimeStartRequest: Hashable, Sendable, Codable {
         systemPrompt: String,
         providerID: ProviderID?,
         modelID: ModelID?,
-        existingProviderSessionID: AcpSessionID?
+        existingProviderSessionID: AcpSessionID?,
+        thinkingConfiguration: ResolvedThinkingConfiguration? = nil
     ) {
         self.chatID = chatID
         self.generation = generation
@@ -31,6 +168,25 @@ public struct ChatRuntimeStartRequest: Hashable, Sendable, Codable {
         self.providerID = providerID
         self.modelID = modelID
         self.existingProviderSessionID = existingProviderSessionID
+        self.thinkingConfiguration = thinkingConfiguration
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case chatID, generation, systemPrompt, providerID, modelID
+        case existingProviderSessionID, thinkingConfiguration
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        chatID = try container.decode(ChatID.self, forKey: .chatID)
+        generation = try container.decode(ChatSessionGenerationID.self, forKey: .generation)
+        systemPrompt = try container.decode(String.self, forKey: .systemPrompt)
+        providerID = try container.decodeIfPresent(ProviderID.self, forKey: .providerID)
+        modelID = try container.decodeIfPresent(ModelID.self, forKey: .modelID)
+        existingProviderSessionID = try container.decodeIfPresent(
+            AcpSessionID.self, forKey: .existingProviderSessionID)
+        thinkingConfiguration = try container.decodeIfPresent(
+            ResolvedThinkingConfiguration.self, forKey: .thinkingConfiguration)
     }
 }
 

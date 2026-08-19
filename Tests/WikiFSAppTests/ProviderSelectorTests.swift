@@ -18,52 +18,93 @@ import ACPModel
 
     // MARK: - Chat model label presentation
 
-    @Test func chatModelLabelRemovesAdvertisedThinkingSuffix() {
-        let choices = [
-            ThinkingEffortOption.Choice(value: "low", label: "Low"),
-            ThinkingEffortOption.Choice(value: "high", label: "High"),
+    @Test func codexStructuredModelIDsGroupWithoutLiveThinkingMetadata() {
+        let models = [
+            CachedModelInfo(
+                modelId: ModelID(rawValue: "gpt-5.6-sol[low]"),
+                name: "GPT-5.6-Sol (low)"),
+            CachedModelInfo(
+                modelId: ModelID(rawValue: "gpt-5.6-sol[high]"),
+                name: "GPT-5.6-Sol (high)"),
         ]
+        let low = ChatConfigurationValueID(rawValue: "low")
+        let high = ChatConfigurationValueID(rawValue: "high")
+        let capability = ThinkingCapabilityCatalog(
+            choices: [
+                ThinkingOptionCatalogChoice(id: low, label: "Low"),
+                ThinkingOptionCatalogChoice(id: high, label: "High"),
+            ],
+            mechanism: .modelVariants(valueToModelID: [
+                low: models[0].modelId,
+                high: models[1].modelId,
+            ]),
+            source: .agentAdapter(adapterID: ThinkingCapabilityAdapterID(rawValue: "codex")),
+            displayAliases: ["low", "Low", "high", "High"])
+        let resolution = ThinkingSelectionResolution(
+            capability: capability,
+            configuredValueID: high,
+            effectiveValueID: high)
+        let families = ProviderSelector.modelFamilies(
+            from: models,
+            resolutionForModel: { _ in resolution })
 
-        #expect(
-            ProviderSelector.modelDisplayLabel(
-                modelName: "GPT-5.6-Luna (Low)",
-                thinkingChoices: choices
-            ) == "GPT-5.6-Luna"
-        )
+        #expect(families.count == 1)
+        #expect(families[0].label == "GPT-5.6-Sol")
+        #expect(families[0].selectedModel.modelId == ModelID(rawValue: "gpt-5.6-sol[high]"))
     }
 
-    @Test func chatModelLabelPreservesUnrelatedParentheticalSuffix() {
-        let choices = [
-            ThinkingEffortOption.Choice(value: "low", label: "Low"),
+    @Test func legacyCodexSidecarCollapsesEveryThinkingFamily() {
+        let providerID = ProviderID(rawValue: "codex-acp")
+        let provider = AgentProvider(
+            id: providerID,
+            label: "Codex",
+            command: ["npx", "@agentclientprotocol/codex-acp@1.1.7"],
+            enabled: true,
+            isDefault: true)
+        let models = [
+            CachedModelInfo(modelId: ModelID(rawValue: "sol[low]"), name: "Sol (low)"),
+            CachedModelInfo(modelId: ModelID(rawValue: "terra[low]"), name: "Terra (low)"),
+            CachedModelInfo(modelId: ModelID(rawValue: "sol[high]"), name: "Sol (high)"),
+            CachedModelInfo(modelId: ModelID(rawValue: "terra[medium]"), name: "Terra (medium)"),
+            CachedModelInfo(modelId: ModelID(rawValue: "plain"), name: "Plain"),
+            CachedModelInfo(modelId: ModelID(rawValue: "terra[high]"), name: "Terra (high)"),
         ]
+        let config = AgentProvidersConfig(
+            providers: [provider],
+            providerModels: [providerID.rawValue: models])
 
-        #expect(
-            ProviderSelector.modelDisplayLabel(
-                modelName: "GPT-5.6-Luna (beta)",
-                thinkingChoices: choices
-            ) == "GPT-5.6-Luna (beta)"
-        )
+        let families = ProviderSelector.modelFamilies(
+            from: models,
+            preferredModelID: ModelID(rawValue: "terra[high]"),
+            resolutionForModel: { modelID in
+                config.resolveThinkingCapability(providerID: providerID, modelID: modelID)
+            })
+
+        #expect(families.map(\.label) == ["Sol", "Terra", "Plain"])
+        #expect(families.map { $0.models.map(\.modelId) } == [
+            [ModelID(rawValue: "sol[low]"), ModelID(rawValue: "sol[high]")],
+            [ModelID(rawValue: "terra[low]"), ModelID(rawValue: "terra[medium]"), ModelID(rawValue: "terra[high]")],
+            [ModelID(rawValue: "plain")],
+        ])
+        #expect(families[0].selectedModel.modelId == ModelID(rawValue: "sol[low]"))
+        #expect(families[1].selectedModel.modelId == ModelID(rawValue: "terra[high]"))
     }
 
-    @Test func modelFamiliesChooseTheVariantForCurrentThinkingEffort() {
-        let choices = [
-            ThinkingEffortOption.Choice(value: "low", label: "Low"),
-            ThinkingEffortOption.Choice(value: "high", label: "High"),
-        ]
+    @Test func modelFamiliesDoNotUseDisplaySuffixesWithoutMappedMechanism() {
         let models = [
             CachedModelInfo(modelId: ModelID(rawValue: "luna-low"), name: "GPT-5.6-Luna (Low)"),
             CachedModelInfo(modelId: ModelID(rawValue: "luna-high"), name: "GPT-5.6-Luna (High)"),
         ]
-
+        let resolution = ThinkingSelectionResolution(
+            capability: nil,
+            configuredValueID: ChatConfigurationValueID(rawValue: "high"),
+            effectiveValueID: nil)
         let families = ProviderSelector.modelFamilies(
             from: models,
-            thinkingChoices: choices,
-            currentThinkingValue: "high"
-        )
+            resolutionForModel: { _ in resolution })
 
-        #expect(families.count == 1)
-        #expect(families[0].label == "GPT-5.6-Luna")
-        #expect(families[0].selectedModel.modelId == ModelID(rawValue: "luna-high"))
+        #expect(families.count == 2)
+        #expect(families.map(\.label) == ["GPT-5.6-Luna (Low)", "GPT-5.6-Luna (High)"])
     }
 
     // MARK: - settingDefault (single-default invariant)
