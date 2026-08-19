@@ -309,7 +309,9 @@ public enum CodexThinkingModelVariantParser {
             guard let parsed = split(model.modelId), parsed.base == selected.base else { return nil }
             return (parsed.valueID, model.modelId)
         }
-        guard variants.count >= 2 else { return nil }
+        guard variants.count >= 2,
+              Set(variants.map(\.0)).count == variants.count,
+              Set(variants.map(\.1)).count == variants.count else { return nil }
         return ThinkingModelVariantFamily(
             baseModelID: selected.base,
             choices: variants.map {
@@ -340,10 +342,32 @@ public enum CodexThinkingModelVariantParser {
 /// version before interpreting Codex's final `base[value]` model-ID convention.
 public enum CodexThinkingCapabilityAdapter {
     public static let adapterID = ThinkingCapabilityAdapterID(rawValue: "codex-model-variants-v1")
-    public static let identity = ACPAgentIdentity(rawValue: "codex-acp")
+    public static let identity = ACPAgentIdentity(rawValue: "@agentclientprotocol/codex-acp")
     public static let supportedVersions = ACPAgentVersionPredicate.semanticRange(
         lowerInclusive: ACPAgentVersion(rawValue: "0.1.0"),
         upperExclusive: ACPAgentVersion(rawValue: "2.0.0"))
+
+    /// Immutable commands that prior app versions stored before catalog
+    /// observations included ACP `agentInfo`. Each command pins the package
+    /// version that supplies the matching compatibility fingerprint.
+    public static let trustedLegacyCommands: [([String], ACPAgentFingerprint)] = [
+        (
+            ["npx", "@agentclientprotocol/codex-acp@1.1.7"],
+            ACPAgentFingerprint(
+                identity: identity,
+                version: ACPAgentVersion(rawValue: "1.1.7"),
+                title: "Codex"))
+    ]
+
+    /// Returns compatibility identity only when the complete configured argv
+    /// equals an immutable command that a prior app version stored.
+    public static func trustedLegacyFingerprint(
+        configuredCommand: [String]?
+    ) -> ACPAgentFingerprint? {
+        trustedLegacyCommands.first { command, _ in
+            configuredCommand == command
+        }?.1
+    }
 
     public static func resolve(
         fingerprint: ACPAgentFingerprint?,

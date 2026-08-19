@@ -511,8 +511,22 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
         } else {
             selectedModel = models.first(where: \.isDefault) ?? models.first
         }
-        let observation = catalogObservation(forProvider: providerID)
+        var observation = catalogObservation(forProvider: providerID)
             ?? legacyObservation(providerID: providerID, modelID: selectedModel?.modelId)
+        if observation?.fingerprint == nil,
+           let provider = provider(id: providerID),
+           let compatibilityFingerprint = CodexThinkingCapabilityAdapter.trustedLegacyFingerprint(
+               configuredCommand: provider.command) {
+            observation = observation.map {
+                ACPProviderCatalogObservation(
+                    providerID: $0.providerID,
+                    fingerprint: compatibilityFingerprint,
+                    models: $0.models,
+                    currentModelID: $0.currentModelID,
+                    thinkingCapability: $0.thinkingCapability,
+                    observedAt: $0.observedAt)
+            }
+        }
         let adapter = CodexThinkingCapabilityAdapter.resolve(
             fingerprint: observation?.fingerprint,
             selectedModelID: selectedModel?.modelId,

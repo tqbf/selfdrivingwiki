@@ -2,7 +2,7 @@
 timestamp: 2026-08-18T052700Z
 title: Catalog-driven chat thinking
 branch: bugfix/chat-thinking-labels
-status: validated-awaiting-final-review
+status: delivered-live-regression-fix-validated
 ---
 
 # Catalog-Driven Chat Thinking Progress
@@ -43,8 +43,9 @@ Branch: `bugfix/chat-thinking-labels`
 - Migrated production provider writes to the locked mutation API.
 - Added a static production writer guard.
 - Added a two-process helper test for the kernel lock.
-- Added strict command-fingerprint matching for future trusted catalog fallback.
-- Kept legacy unknown-fingerprint Codex matching disabled because the immutable catalog has no Codex command.
+- Added strict command-fingerprint matching for trusted compatibility fallback.
+- Added an immutable compatibility record for the legacy `npx @agentclientprotocol/codex-acp@1.1.7` seed.
+- Kept provider IDs, labels, changed arguments, other package versions, and unrelated bracketed models outside the fallback.
 
 ## Verification
 
@@ -76,9 +77,18 @@ A Swift 6.3 compiler assertion occurred in a compact enum switch. A direct switc
 
 A controller test had an existing asynchronous assertion race. The test now uses its bounded persisted-state wait helper.
 
+A live `make run` check found that a legacy Codex sidecar still showed model names such as `(high)` without a separate Thinking selector. The sidecar had cached bracketed variants but no catalog observation or ACP fingerprint.
+
+The resolver now accepts that legacy sidecar only when its complete configured command matches the immutable `1.1.7` seed. The adapter uses the package's observed ACP identity, `@agentclientprotocol/codex-acp`.
+
+A Paseo and `codex-acp@1.1.7` source review confirmed that current sessions advertise standard ACP `thought_level` metadata. The bracketed model list remains a legacy compatibility surface. The fallback no longer depends on the GUI process `PATH`.
+
+Focused core capability and command tests passed 20 tests. Focused opt-in probe, selector, presentation, and label tests passed 46 tests.
+
+An independent Z.AI GLM 5.2 review found two medium test and safety gaps. The parser now rejects duplicate variant IDs without a dictionary trap. A config-level regression proves that a real observed fingerprint suppresses the legacy command fallback. The fix also removed a repeated render-path diagnostic.
+
+The final post-review gates passed. `make test` passed 3,356 tests across 310 suites. `make build`, `make lint`, and `git diff --check` also passed.
+
 ## Remaining Work
 
-- Run the full build and test gates.
-- Run the complete selected opt-in app test gate.
-- Complete the independent implementation review and fix findings.
-- Commit, push, and open one pull request.
+- Commit and push the fix to pull request 1114.

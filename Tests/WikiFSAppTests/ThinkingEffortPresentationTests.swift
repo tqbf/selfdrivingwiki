@@ -101,7 +101,7 @@ import WikiFSCore
                 name: "GPT-5.6-Sol (high)"),
         ]
         let fingerprint = ACPAgentFingerprint(
-            identity: ACPAgentIdentity(rawValue: "codex-acp"),
+            identity: CodexThinkingCapabilityAdapter.identity,
             version: ACPAgentVersion(rawValue: "1.2.3"))
         let observation = ACPProviderCatalogObservation(
             providerID: provider.id,

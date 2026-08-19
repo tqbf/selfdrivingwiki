@@ -26,17 +26,17 @@ The extractor preserves the advertised option ID, choice IDs, labels, order, and
 
 An adapter must declare a stable adapter ID, an exact identity, and a version predicate. Opaque versions match only exact rules.
 
-The Codex adapter is the first nonstandard adapter. It accepts the tested `codex-acp` identity from version `0.1.0` up to version `2.0.0`.
+The Codex adapter is the first nonstandard adapter. It accepts the observed `@agentclientprotocol/codex-acp` identity from version `0.1.0` up to version `2.0.0`.
 
-The adapter reads only provider-advertised model IDs. It recognizes a family only when two or more IDs use the final `base[value]` form.
+Current `codex-acp@1.1.7` advertises a standard ACP `thought_level` option with the exact ID `reasoning_effort`. That standard option wins after a successful provider refresh.
+
+The adapter supports sidecars that cached the same agent's legacy combined model list before capability observations existed. It reads only provider-advertised model IDs and requires two or more IDs with the final `base[value]` form.
 
 Bracket syntax is not a general discovery rule. An unrelated agent with the same syntax does not get a Thinking control.
 
-A legacy cache without `agentInfo` cannot match the Codex adapter in the current catalog. The shipped immutable ACP catalog has no Codex command entry.
+A legacy cache without `agentInfo` can match only an immutable command that a prior app version stored. The first record requires the complete argv `npx @agentclientprotocol/codex-acp@1.1.7` and supplies the package's observed identity and version.
 
-`ACPAgentCommandFingerprint` supports a future trusted fallback. It requires exact ordered arguments and one canonical executable path for both commands.
-
-The fingerprint rejects changed arguments, extra flags, unresolved commands, noncanonical paths, and same basenames at different paths. It excludes labels, environment values, and credentials.
+The match excludes provider IDs, labels, environment values, credentials, other package versions, and changed arguments. `ACPAgentCommandFingerprint` remains available for compatibility records that must compare resolved executable paths.
 
 ## Local Overrides
 

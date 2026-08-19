@@ -5,7 +5,7 @@ import Testing
     private let providerID = ProviderID(rawValue: "provider")
     private let modelID = ModelID(rawValue: "model")
     private let fingerprint = ACPAgentFingerprint(
-        identity: ACPAgentIdentity(rawValue: "codex-acp"),
+        identity: CodexThinkingCapabilityAdapter.identity,
         version: ACPAgentVersion(rawValue: "1.2.3"))
     private let low = ChatConfigurationValueID(rawValue: "low")
     private let high = ChatConfigurationValueID(rawValue: "high")
@@ -128,6 +128,100 @@ import Testing
             localOverride: override))
 
         #expect(result.capability == nil)
+    }
+
+    @Test func legacyCodexSidecarUsesExactTrustedCommand() throws {
+        let codexProviderID = ProviderID(rawValue: "codex-acp")
+        let variants = [
+            CachedModelInfo(
+                modelId: ModelID(rawValue: "gpt-5.6-sol[low]"),
+                name: "GPT-5.6-Sol (low)",
+                isDefault: true),
+            CachedModelInfo(
+                modelId: ModelID(rawValue: "gpt-5.6-sol[high]"),
+                name: "GPT-5.6-Sol (high)"),
+        ]
+        let provider = AgentProvider(
+            id: codexProviderID,
+            label: "Codex",
+            command: ["npx", "@agentclientprotocol/codex-acp@1.1.7"],
+            enabled: true,
+            isDefault: true)
+        let config = AgentProvidersConfig(
+            providers: [provider],
+            providerModels: [codexProviderID.rawValue: variants])
+
+        let result = config.resolveThinkingCapability(
+            providerID: codexProviderID,
+            modelID: nil)
+
+        #expect(result.shouldRenderSelector)
+        #expect(result.source == .agentAdapter(
+            adapterID: CodexThinkingCapabilityAdapter.adapterID))
+        #expect(result.effectiveValueID == ChatConfigurationValueID(rawValue: "low"))
+        #expect(result.modelIDByValueID[ChatConfigurationValueID(rawValue: "high")]
+            == variants[1].modelId)
+    }
+
+    @Test func observedFingerprintSuppressesLegacyCommandFallback() {
+        let codexProviderID = ProviderID(rawValue: "codex-acp")
+        let variants = [
+            CachedModelInfo(
+                modelId: ModelID(rawValue: "gpt[low]"),
+                name: "GPT (low)",
+                isDefault: true),
+            CachedModelInfo(modelId: ModelID(rawValue: "gpt[high]"), name: "GPT (high)"),
+        ]
+        let provider = AgentProvider(
+            id: codexProviderID,
+            label: "Codex",
+            command: ["npx", "@agentclientprotocol/codex-acp@1.1.7"],
+            enabled: true,
+            isDefault: true)
+        let observedFingerprint = ACPAgentFingerprint(
+            identity: CodexThinkingCapabilityAdapter.identity,
+            version: ACPAgentVersion(rawValue: "2.0.0"))
+        let observation = ACPProviderCatalogObservation(
+            providerID: codexProviderID,
+            fingerprint: observedFingerprint,
+            models: variants,
+            currentModelID: variants[0].modelId,
+            thinkingCapability: nil)
+        let config = AgentProvidersConfig(
+            providers: [provider],
+            providerModels: [codexProviderID.rawValue: variants],
+            catalogObservations: [codexProviderID.rawValue: observation])
+
+        let result = config.resolveThinkingCapability(
+            providerID: codexProviderID,
+            modelID: variants[0].modelId)
+
+        #expect(result.capability == nil)
+        #expect(!result.shouldRenderSelector)
+    }
+
+    @Test func legacyCodexSidecarRejectsUntrustedCommand() {
+        let codexProviderID = ProviderID(rawValue: "codex-acp")
+        let variants = [
+            CachedModelInfo(modelId: ModelID(rawValue: "gpt[low]"), name: "GPT (low)"),
+            CachedModelInfo(modelId: ModelID(rawValue: "gpt[high]"), name: "GPT (high)"),
+        ]
+        let provider = AgentProvider(
+            id: codexProviderID,
+            label: "Codex",
+            command: ["npx", "@agentclientprotocol/codex-acp@latest"],
+            enabled: true,
+            isDefault: true)
+        let config = AgentProvidersConfig(
+            providers: [provider],
+            providerModels: [codexProviderID.rawValue: variants])
+
+        let result = config.resolveThinkingCapability(
+            providerID: codexProviderID,
+            modelID: variants[0].modelId)
+
+        #expect(result.capability == nil)
+        #expect(!result.shouldRenderSelector)
     }
 
     @Test func hidesUnknownAndExternallyConfiguredCapability() {
