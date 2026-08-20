@@ -1,5 +1,7 @@
 import Foundation
 
+// pattern: Functional Core
+
 /// The format-layer types and dispatcher, separated from origin (where bytes
 /// came from). Given bytes + a content-type hint + a pre-computed filename stem
 /// + an optional extension hint, `FormatMaterializer.dispatch` determines the
@@ -82,6 +84,16 @@ public struct FormatPlan: Sendable, Equatable {
 /// bytes + build provenance, then delegate here for content-type dispatch,
 /// HTML→Markdown conversion, and filename derivation.
 public enum FormatMaterializer {
+
+    /// Return a JSON document extension that should survive generic server
+    /// MIME types. GitHub's raw endpoint reports `.canvas` as `text/plain`,
+    /// while the local source MIME table identifies it as JSON Canvas.
+    private static func jsonDocumentExtension(from extensionHint: String?) -> String? {
+        guard let extensionHint,
+              MimeType.mime(forExtension: extensionHint) == MimeType.json
+        else { return nil }
+        return extensionHint.lowercased()
+    }
 
     /// Dispatch bytes to a `FormatPlan`: content-sniff ambiguous types, convert
     /// HTML→Markdown, store PDF/text/binary verbatim, and derive the filename
@@ -246,6 +258,9 @@ public enum FormatMaterializer {
     /// Extension for a `text/*` response: map the common ones, else fall back to
     /// `extensionHint`, else `txt`.
     static func textExtension(forMIME mime: String, extensionHint: String?) -> String {
+        if let jsonExtension = jsonDocumentExtension(from: extensionHint) {
+            return jsonExtension
+        }
         switch mime {
         case MimeType.markdown, MimeType.markdownX: return "md"
         case "text/plain": return "txt"
@@ -261,6 +276,9 @@ public enum FormatMaterializer {
     /// Extension for a non-text response: from the MIME subtype when recognizable,
     /// else `extensionHint`, else empty (no extension).
     static func binaryExtension(forMIME mime: String?, extensionHint: String?) -> String {
+        if let jsonExtension = jsonDocumentExtension(from: extensionHint) {
+            return jsonExtension
+        }
         if let mime {
             switch mime {
             case MimeType.imageJPEG: return "jpg"

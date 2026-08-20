@@ -121,6 +121,25 @@ struct FormatMaterializerTests {
         #expect(plan.filename == "doc.md")
     }
 
+    @Test func canvasExtensionSurvivesGenericJSONContentType() {
+        let canvas = Data("{\"nodes\":[],\"edges\":[]}".utf8)
+        let plan = FormatMaterializer.dispatch(
+            data: canvas, contentType: "text/plain; charset=utf-8",
+            stem: "sample", extensionHint: "canvas")
+
+        #expect(plan.filename == "sample.canvas")
+        #expect(plan.data == canvas)
+    }
+
+    @Test func canvasExtensionSurvivesApplicationJSONContentType() {
+        let plan = FormatMaterializer.dispatch(
+            data: Data("{\"nodes\":[],\"edges\":[]}".utf8),
+            contentType: "application/json",
+            stem: "sample", extensionHint: "canvas")
+
+        #expect(plan.filename == "sample.canvas")
+    }
+
     // MARK: - Binary verbatim (AC.1)
 
     @Test func imageStoredWithInferredExtension() {
