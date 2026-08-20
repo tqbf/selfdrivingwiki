@@ -271,6 +271,19 @@ struct Phase6RendererHostedValidationTests {
             expectedValue: "scene-rendered",
             in: webView,
             description: "unassisted Excalidraw scene")
+
+        // The session creates its WKWebView inside `start()`, so a host that
+        // reads `hostedView` before that runs attaches nothing and the
+        // renderer draws off-screen. Evaluating JavaScript against the session
+        // succeeds either way, so only the view hierarchy proves it is visible.
+        #expect(webView.window === window)
+        let attachedContainer = try #require(webView.superview)
+
+        host.view.frame = NSRect(x: 0, y: 0, width: 720, height: 480)
+        host.view.layoutSubtreeIfNeeded()
+        #expect(attachedContainer.bounds.width > 0)
+        #expect(attachedContainer.bounds.height > 0)
+        #expect(webView.frame == attachedContainer.bounds)
     }
 
     private static func prepareApplication() {
