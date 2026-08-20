@@ -135,6 +135,7 @@ struct RendererSettingsView: View {
     private let wiki: WikiStoreModel?
     private let wikiID: WikiID?
     @State private var model: RendererSettingsModel
+    @State private var showingPackageHelp = false
     @State private var showingPicker = false
     @State private var removalCandidate: RendererSettingsRow?
     @State private var selectedSourceID: SourceID?
@@ -149,6 +150,7 @@ struct RendererSettingsView: View {
         @Bindable var model = model
         Form {
             Section {
+                RendererPackageHelpControl(isPresented: $showingPackageHelp)
                 DisclosureGroup("Advanced Local Renderer Package Import") {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(RendererSettingsPackagePicker.localImportSourceMessage)

@@ -82,6 +82,27 @@ let package = Package(
             path: "Sources/DynamicRendererPRSeriesAudit",
             swiftSettings: strictSwiftSettings
         ),
+        // Development-only validator for local renderer package authoring. The
+        // core owns argument parsing, isolated validation roots, and cleanup;
+        // the executable is a thin stdout/stderr process shell.
+        .target(
+            name: "RendererPackageToolCore",
+            dependencies: ["WikiFSCore"],
+            path: "Sources/RendererPackageToolCore",
+            swiftSettings: strictSwiftSettings
+        ),
+        .executableTarget(
+            name: "RendererPackageTool",
+            dependencies: ["RendererPackageToolCore"],
+            path: "Sources/RendererPackageTool",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "RendererPackageToolTests",
+            dependencies: ["RendererPackageToolCore", "RendererPackageTool"],
+            path: "Tests/RendererPackageToolTests",
+            swiftSettings: strictSwiftSettings
+        ),
         .testTarget(
             name: "DynamicRendererPRSeriesAuditTests",
             dependencies: ["DynamicRendererPRSeriesAudit"],

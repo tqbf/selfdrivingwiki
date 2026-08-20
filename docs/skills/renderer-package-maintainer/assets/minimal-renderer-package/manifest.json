@@ -1,0 +1,61 @@
+{
+  "revision": 1,
+  "packageID": "org.example.readonly",
+  "version": "1.0.0",
+  "descriptors": [
+    {
+      "reference": {
+        "packageID": "org.example.readonly",
+        "version": "1.0.0",
+        "registrationID": "example"
+      },
+      "displayName": "Example Renderer",
+      "implementation": {
+        "webPackage": {
+          "_0": {
+            "path": "index.html"
+          }
+        }
+      },
+      "matchers": [
+        {
+          "extensionFallback": {
+            "_0": "example"
+          }
+        }
+      ],
+      "presentations": [
+        "web"
+      ],
+      "approvedAssets": [
+        {
+          "path": "index.html",
+          "digest": "3fd4edb473cf5a4617fc44a8d1c42f708a274122d7e2c7b424931dc97ffd0f33"
+        }
+      ],
+      "capabilities": [
+        "inputRead"
+      ],
+      "sizeLimits": {
+        "maximumInputByteCount": 1024,
+        "maximumDecodedByteCount": 1024
+      },
+      "linkPolicy": "none",
+      "accessibility": {
+        "supportsVoiceOver": true,
+        "supportsKeyboardNavigation": true
+      },
+      "compatibility": {
+        "minimumProtocolRevision": 1,
+        "maximumProtocolRevision": 1
+      },
+      "priority": 0
+    }
+  ],
+  "assets": [
+    {
+      "path": "index.html",
+      "digest": "3fd4edb473cf5a4617fc44a8d1c42f708a274122d7e2c7b424931dc97ffd0f33"
+    }
+  ]
+}

@@ -14,13 +14,16 @@ struct RendererPackageDocumentationTests {
         let guideLoader = try String(contentsOf: root.appending(path: "Sources/WikiFSCore/Core/RendererPackageGuide.swift"), encoding: .utf8)
 
         #expect(skill.contains("name: renderer-package-maintainer"))
-        #expect(skill.contains("description: Maintain Self Driving Wiki static renderer packages."))
+        #expect(skill.contains("description: Create and maintain Self Driving Wiki static renderer packages."))
         #expect(skill.contains("Every compatible validated package is available to every wiki."))
+        #expect(skill.contains("swift run RendererPackageTool validate <folder>"))
+        #expect(skill.contains("The validation tool does not install or activate the package."))
         #expect(guide.contains("org.selfdrivingwiki.excalidraw-readonly"))
         #expect(guide.contains("Every compatible validated installed renderer is available to every wiki."))
         #expect(guide.contains("renderer_wiki_enablement"))
         #expect(guide.contains("input.read"))
-        #expect(guide.contains("5ce39d66a927d4e2933dc6a637a9c54eee55a1d54da48b87791b0d90bd23022b"))
+        #expect(guide.contains("../assets/minimal-renderer-package/"))
+        #expect(guide.contains("swift run RendererPackageTool validate <package-folder>"))
         #expect(stateReference.contains("every compatible validated installed renderer available to every wiki"))
         #expect(stateReference.contains("This short reference is context for wiki operations."))
         #expect(!package.contains("renderer-package-maintainer/references/current-package-guide.md"))
@@ -44,41 +47,66 @@ struct RendererPackageDocumentationTests {
         #expect(buildScript.contains("cp -R \"${SPM_APP_RESOURCE_BUNDLE}/Excalidraw\" \"${RESOURCES_DIR}/RendererPackages/\""))
     }
 
-    @Test("documented two-file example has a valid manifest hash")
-    func documentedTwoFileExampleHasAValidManifestHash() throws {
-        let root = URL.temporaryDirectory.appending(path: "renderer-package-guide-example-\(UUID().uuidString)")
+    @Test("minimal skill template validates with the production validator")
+    func minimalSkillTemplateValidatesWithProductionValidator() throws {
+        let root = URL.temporaryDirectory.appending(path: "renderer-package-template-validation-\(UUID().uuidString)")
         defer {
             do { try FileManager.default.removeItem(at: root) }
-            catch { Issue.record("Renderer package guide example fixture cleanup failed.") }
+            catch { Issue.record("Renderer package template validation cleanup failed.") }
         }
-        let packageRoot = root.appending(path: "example")
-        try FileManager.default.createDirectory(at: packageRoot, withIntermediateDirectories: true)
-        let html = Data("<!doctype html><meta charset=\"utf-8\"><title>Example</title><p>Read-only renderer.</p>".utf8)
-        try html.write(to: packageRoot.appending(path: "index.html"))
-        let digest = RendererSHA256.digest(html)
-        #expect(digest.hex == "5ce39d66a927d4e2933dc6a637a9c54eee55a1d54da48b87791b0d90bd23022b")
 
-        let packageID = try RendererPackageID(validating: "org.example.readonly")
-        let version = try RendererPackageVersion(validating: "1.0.0")
-        let path = try RendererRelativePath(validating: "index.html")
-        let asset = RendererAsset(path: path, digest: digest)
-        let descriptor = try RendererDescriptor(
-            reference: .init(packageID: packageID, version: version, registrationID: try RendererRegistrationID(validating: "example")),
-            displayName: "Example",
-            implementation: .webPackage(.init(path: path)),
-            matchers: [.extensionFallback(try RendererFileExtension(validating: "example"))],
-            presentations: [.web],
-            approvedAssets: [asset],
-            capabilities: [.inputRead],
-            sizeLimits: try .init(maximumInputByteCount: 1_024, maximumDecodedByteCount: 1_024),
-            linkPolicy: .none,
-            accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
-            compatibility: try .init(minimumProtocolRevision: 1, maximumProtocolRevision: 1),
-            priority: 0)
-        let manifest = try RendererManifest(revision: 1, packageID: packageID, version: version, descriptors: [descriptor], assets: [asset])
-        try manifest.canonicalJSON().write(to: packageRoot.appending(path: "manifest.json"))
+        let validated = try RendererPackageValidator(
+            packageRoot: root.appending(path: "packages"),
+            stagingRoot: root.appending(path: "staging"))
+            .validate(directory: minimalTemplateRoot())
 
-        _ = try RendererPackageValidator(packageRoot: root).validate(directory: packageRoot)
+        #expect(validated.manifest.packageID.rawValue == "org.example.readonly")
+        #expect(validated.manifest.version.rawValue == "1.0.0")
+        #expect(validated.manifest.descriptors.map(\.reference.registrationID.rawValue) == ["example"])
+    }
+
+    @Test("minimal skill template has exact digest and semantic read-only HTML")
+    func minimalSkillTemplateHasSemanticReadOnlyHTML() throws {
+        let template = minimalTemplateRoot()
+        let htmlData = try Data(contentsOf: template.appending(path: "index.html"))
+        let html = try #require(String(data: htmlData, encoding: .utf8))
+        let manifest = try JSONDecoder().decode(
+            RendererManifest.self,
+            from: Data(contentsOf: template.appending(path: "manifest.json")))
+        let expectedDigest = RendererSHA256.digest(htmlData)
+
+        #expect(expectedDigest.hex == "3fd4edb473cf5a4617fc44a8d1c42f708a274122d7e2c7b424931dc97ffd0f33")
+        #expect(manifest.assets == [RendererAsset(path: try RendererRelativePath(validating: "index.html"), digest: expectedDigest)])
+        #expect(manifest.descriptors.first?.approvedAssets == manifest.assets)
+        #expect(html.contains("<html lang=\"en\">"))
+        #expect(html.contains("<title>Example renderer</title>"))
+        #expect(html.contains("<main>"))
+        #expect(html.contains("<h1>Example renderer</h1>"))
+        #expect(html.contains("This read-only renderer displays local package content."))
+        #expect(!html.contains("<script"))
+        #expect(!html.contains("<form"))
+    }
+
+    @Test("user guide indexes renderer documentation and preserves package v1 boundaries")
+    func userGuideIndexesRendererPackageDocumentation() throws {
+        let root = repositoryRoot()
+        let index = try String(contentsOf: root.appending(path: "docs/user-guide/README.md"), encoding: .utf8)
+        let guide = try String(contentsOf: root.appending(path: "docs/user-guide/renderer-packages.md"), encoding: .utf8)
+        let plan = try String(contentsOf: root.appending(path: "PLAN.md"), encoding: .utf8)
+
+        #expect(index.contains("[Renderer packages](renderer-packages.md)"))
+        #expect(plan.contains("[`docs/user-guide/`](docs/user-guide/README.md)"))
+        #expect(guide.contains("The app does not use the selected source folder after import."))
+        #expect(guide.contains("Every compatible installed renderer is available to every wiki on this Mac."))
+        #expect(guide.contains("It does not accept ZIP files, other archives, remote catalogs, signing services, or network installation."))
+        #expect(guide.contains("It does not delete source data or source preferences."))
+        #expect(!guide.contains("destination picker"))
+        #expect(guide.contains("You do not enable a package for each wiki."))
+    }
+
+    private func minimalTemplateRoot() -> URL {
+        repositoryRoot().appending(
+            path: "docs/skills/renderer-package-maintainer/assets/minimal-renderer-package")
     }
 
     private func repositoryRoot() -> URL {
