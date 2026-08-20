@@ -469,12 +469,16 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// This matches design doc Approach A for composing methods; Approach B's
     /// `pendingEvent` buffer is used for the non-composing case (the common
     /// case). For this pilot, all implemented methods are non-composing.
+    private final class MutationResultBox<Value> {
+        var value: Value?
+    }
+
     private func mutate<T>(
         event: (T) throws -> ResourceChangeEvent?,
         _ body: (Database) throws -> T
     ) throws -> T {
         var pending: ResourceChangeEvent?
-        var result: T!
+        let result = MutationResultBox<T>()
         // Use `unsafeReentrantWrite` + `db.inSavepoint` (instead of
         // `dbWriter.write`) so that `mutate` is **truly reentrant**: when called
         // from inside `withTransaction` (which already opened a write on the
@@ -488,7 +492,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         try dbWriter.unsafeReentrantWrite { db in
             try db.inSavepoint {
                 let r = try body(db)
-                result = r
+                result.value = r
                 // Compute the event inside the transaction (committed state).
                 pending = DebugLog.trying("processEvent", operation: { try event(r) })
                 return .commit
@@ -498,7 +502,33 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         if let pending {
             eventBus?.emit(pending)
         }
-        return result
+        switch result.value {
+        case .some(let value): return value
+        case .none: throw WikiStoreError.unexpected("mutation completed without a result")
+        }
+    }
+
+    private func mutateBatch<T>(
+        events: (T) throws -> [ResourceChangeEvent],
+        _ body: (Database) throws -> T
+    ) throws -> T {
+        var pending: [ResourceChangeEvent] = []
+        let result = MutationResultBox<T>()
+        try dbWriter.unsafeReentrantWrite { db in
+            try db.inSavepoint {
+                let value = try body(db)
+                result.value = value
+                pending = try events(value)
+                return .commit
+            }
+        }
+        for event in pending {
+            eventBus?.emit(event)
+        }
+        switch result.value {
+        case .some(let value): return value
+        case .none: throw WikiStoreError.unexpected("batch mutation completed without a result")
+        }
     }
 
     /// Build a `ResourceChangeEvent` for a local mutation. `seq` is stamped by
@@ -4208,6 +4238,55 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     // MARK: - WikiStore protocol: Sources
 
+    private static func logContentTypeConflicts(
+        _ result: ContentTypeDetectionResult,
+        filename: String
+    ) {
+        guard !result.conflicts.isEmpty else { return }
+        let origins = result.conflicts.map(\.conflictingEvidence.origin.rawValue).joined(separator: ",")
+        let chosenMIME = result.normalizedMIMEType ?? "nil"
+        DebugLog.store(
+            "Content type conflict: filename=\(filename) chosen=\(chosenMIME) origins=\(origins)")
+    }
+
+    public func addSource(
+        filename: String,
+        data: Data,
+        detectionHints: ContentTypeDetectionHints,
+        ingestMetadata: SourceIngestMetadata?,
+        provenance: SourceProvenance?,
+        role: SourceRole,
+        originalPath: String?,
+        activityID: String?,
+        resolvedDisplayName: String??
+    ) throws -> SourceSummary {
+        let ext = (filename as NSString).pathExtension.lowercased()
+        let fallbackUTIMIME: String? = {
+            #if canImport(UniformTypeIdentifiers)
+            ext.isEmpty ? nil : UTType(filenameExtension: ext)?.preferredMIMEType
+            #else
+            nil
+            #endif
+        }()
+        let effectiveHints = ContentTypeDetectionHints(
+            declaredMIME: detectionHints.declaredMIME,
+            filenameExtension: detectionHints.filenameExtension ?? (ext.isEmpty ? nil : ext),
+            utiMIME: detectionHints.utiMIME ?? fallbackUTIMIME)
+        let detected = ContentTypeDetector.detect(.init(data: data, hints: effectiveHints))
+        Self.logContentTypeConflicts(detected, filename: filename)
+        return try addSource(
+            filename: filename,
+            data: data,
+            zoteroItemKey: ingestMetadata?.externalItemID,
+            zoteroItemTitle: ingestMetadata?.externalItemTitle,
+            mimeType: detected.normalizedMIMEType,
+            provenance: provenance,
+            role: role,
+            originalPath: originalPath,
+            activityID: activityID,
+            resolvedDisplayName: resolvedDisplayName)
+    }
+
     public func addSource(
         filename: String, data: Data,
         zoteroItemKey: String? = nil, zoteroItemTitle: String? = nil,
@@ -4226,10 +4305,13 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             return nil
             #endif
         }()
-        let mime = mimeType
-            ?? ContentSniff.mimeType(of: data)
-            ?? utiMime
-            ?? MimeType.mime(forExtension: ext)  // #620: .mmd → text/mermaid (UTType can't resolve it)
+        let hints = ContentTypeDetectionHints(
+            declaredMIME: mimeType.map { .init($0, origin: .trustedGenerated) },
+            filenameExtension: ext.isEmpty ? nil : ext,
+            utiMIME: utiMime)
+        let detection = ContentTypeDetector.detect(.init(data: data, hints: hints))
+        let mime = detection.normalizedMIMEType
+        Self.logContentTypeConflicts(detection, filename: filename)
         let displayName: String?
         if let resolved = resolvedDisplayName ?? DisplayNameResolver.resolve(
             filename: filename, data: data, mimeType: mime,
@@ -4361,7 +4443,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         filename: String, mimeType: String? = nil,
         provenance: SourceProvenance, role: SourceRole = .primary
     ) throws -> SourceSummary {
-        try mutate(event: { source in
+        let mimeType = ContentTypeDetector.normalizeMIMEType(mimeType)
+        return try mutate(event: { source in
             self.localEvent(.source, id: source.id.rawValue, change: .created)
         }) { db in
             // Byteless dedup: same external_identity among blob_hash IS NULL versions.
@@ -4827,7 +4910,42 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         sourceID: SourceID, data: Data, mimeType: String? = nil,
         provenance: SourceProvenance? = nil
     ) throws -> SourceVersion {
-        try mutate(event: { _ in
+        let hints = ContentTypeDetectionHints(
+            declaredMIME: mimeType.map { .init($0, origin: .httpResponse) })
+        return try appendContentVersion(
+            sourceID: sourceID,
+            data: data,
+            detectionHints: hints,
+            provenance: provenance)
+    }
+
+    public func appendContentVersion(
+        sourceID: SourceID, data: Data,
+        detectionHints: ContentTypeDetectionHints,
+        provenance: SourceProvenance? = nil
+    ) throws -> SourceVersion {
+        let filename = try dbWriter.read { db in
+            try String.fetchOne(db, sql: "SELECT filename FROM sources WHERE id = ?;", arguments: [sourceID.rawValue])
+        }
+        guard let filename else {
+            throw WikiStoreError.unexpected("source not found: \(sourceID.rawValue)")
+        }
+        let ext = (filename as NSString).pathExtension.lowercased()
+        let fallbackUTIMIME: String? = {
+            #if canImport(UniformTypeIdentifiers)
+            ext.isEmpty ? nil : UTType(filenameExtension: ext)?.preferredMIMEType
+            #else
+            nil
+            #endif
+        }()
+        let effectiveHints = ContentTypeDetectionHints(
+            declaredMIME: detectionHints.declaredMIME,
+            filenameExtension: detectionHints.filenameExtension ?? (ext.isEmpty ? nil : ext),
+            utiMIME: detectionHints.utiMIME ?? fallbackUTIMIME)
+        let detection = ContentTypeDetector.detect(.init(data: data, hints: effectiveHints))
+        let resolvedMime = detection.normalizedMIMEType
+        Self.logContentTypeConflicts(detection, filename: filename)
+        return try mutate(event: { _ in
             self.localEvent(.source, id: sourceID.rawValue, change: .updated)
         }) { db in
             guard data.count <= Self.ingestByteCap else {
@@ -4870,7 +4988,6 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
             // 3. New version (parent = current active).
             let versionID = SourceVersionID(rawValue: ULID.generate())
-            let resolvedMime = mimeType ?? parent?.mimeType
             try db.execute(sql: """
             INSERT INTO source_versions (id, source_id, parent_id, blob_hash,
                                          mime_type, activity_id, external_identity, fetched_at)
@@ -4893,20 +5010,16 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             // 5. Refresh the denormalized sources mirror (byte_size, content_hash,
             //    mime_type — keep addSource dedup consistent with the new blob).
             try db.execute(sql: """
-            UPDATE sources SET byte_size = ?, content_hash = ?, updated_at = ?,
+            UPDATE sources SET byte_size = ?, content_hash = ?, mime_type = ?, updated_at = ?,
                                 version = version + 1
             WHERE id = ?;
-            """, arguments: [Int64(data.count), contentHash, nowTS,
+            """, arguments: [Int64(data.count), contentHash, resolvedMime, nowTS,
                             sourceID.rawValue])
-            if let resolvedMime {
-                try db.execute(sql: "UPDATE sources SET mime_type = ? WHERE id = ?;",
-                               arguments: [resolvedMime, sourceID.rawValue])
-            }
 
             return SourceVersion(
                 id: versionID, sourceID: sourceID, parentID: parent?.id,
                 blobHash: contentHash,
-                mimeType: mimeType ?? parent?.mimeType,
+                mimeType: resolvedMime,
                 activityID: activityID,
                 externalIdentity: provenance?.externalIdentity, fetchedAt: now
             )
@@ -5076,12 +5189,45 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
 
     public func addSnapshotImage(
-        filename: String, data: Data, mimeType: String,
+        filename: String,
+        data: Data,
+        detectionHints: ContentTypeDetectionHints,
+        originalPath: String,
+        sourceURL: URL,
+        activityID: String,
+        role: SourceRole
+    ) throws -> SourceSummary {
+        let detected = ContentTypeDetector.detect(.init(data: data, hints: detectionHints))
+        return try addSnapshotImage(
+            filename: filename,
+            data: data,
+            mimeType: detected.normalizedMIMEType,
+            originalPath: originalPath,
+            sourceURL: sourceURL,
+            activityID: activityID,
+            role: role)
+    }
+
+    public func addSnapshotImage(
+        filename: String, data: Data, mimeType: String?,
         originalPath: String, sourceURL: URL,
         activityID: String, role: SourceRole
     ) throws -> SourceSummary {
         let ext = (filename as NSString).pathExtension.lowercased()
-        let mime = ContentSniff.mimeType(of: data) ?? mimeType
+        let utiMIME: String? = {
+            #if canImport(UniformTypeIdentifiers)
+            ext.isEmpty ? nil : UTType(filenameExtension: ext)?.preferredMIMEType
+            #else
+            nil
+            #endif
+        }()
+        let hints = ContentTypeDetectionHints(
+            declaredMIME: mimeType.map { .init($0, origin: .httpResponse) },
+            filenameExtension: ext.isEmpty ? nil : ext,
+            utiMIME: utiMIME)
+        let detection = ContentTypeDetector.detect(.init(data: data, hints: hints))
+        let mime = detection.normalizedMIMEType
+        Self.logContentTypeConflicts(detection, filename: filename)
         let displayName: String?
         if let resolved = DisplayNameResolver.resolve(
             filename: filename, data: data, mimeType: mime, zoteroItemTitle: nil) {
@@ -8937,7 +9083,108 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     }
 
 
-    // MARK: - WikiStore protocol: Blob GC
+    // MARK: - WikiStore protocol: MIME repair and blob GC
+
+    public func repairMIME(dryRun: Bool) throws -> MIMERepairReport {
+        struct RepairWork {
+            let items: [MIMERepairItem]
+            let changedSourceIDs: [SourceID]
+            let skippedBytelessCount: Int
+        }
+
+        let work: RepairWork = try mutateBatch(events: { (work: RepairWork) in
+            guard !dryRun else { return [] }
+            return work.changedSourceIDs.map {
+                self.localEvent(.source, id: $0.rawValue, change: .updated)
+            }
+        }) { db in
+            let limit = ContentTypeDetectionLimits.maximumPrefixByteCount
+            let rows = try Row.fetchAll(db, sql: """
+            WITH active AS (
+                SELECT s.id AS source_id,
+                       COALESCE(
+                           (SELECT r.version_id FROM refs r
+                            WHERE r.kind = 'source-content' AND r.owner_id = s.id),
+                           (SELECT MAX(sv2.id) FROM source_versions sv2 WHERE sv2.source_id = s.id)
+                       ) AS version_id
+                FROM sources s
+            )
+            SELECT s.id AS source_id,
+                   s.filename AS filename,
+                   s.mime_type AS source_mime,
+                   sv.id AS version_id,
+                   sv.mime_type AS version_mime,
+                   sv.blob_hash AS blob_hash,
+                   substr(b.content, 1, ?) AS content_prefix,
+                   length(b.content) AS content_length
+            FROM active a
+            JOIN sources s ON s.id = a.source_id
+            JOIN source_versions sv ON sv.id = a.version_id
+            LEFT JOIN blobs b ON b.hash = sv.blob_hash
+            WHERE s.mime_type IS NULL OR sv.mime_type IS NULL
+            ORDER BY s.id;
+            """, arguments: [limit])
+
+            var items: [MIMERepairItem] = []
+            var changed: [SourceID] = []
+            var skippedByteless = 0
+            for row in rows {
+                let sourceID = SourceID(rawValue: row["source_id"])
+                let versionID = SourceVersionID(rawValue: row["version_id"])
+                let filename: String = row["filename"]
+                let oldSourceMIME: String? = row["source_mime"]
+                let oldVersionMIME: String? = row["version_mime"]
+                let nullState: MIMERepairNullState = switch (oldSourceMIME, oldVersionMIME) {
+                case (nil, nil): .both
+                case (nil, _): .sourceOnly
+                case (_, nil): .activeVersionOnly
+                case (_, _): .both
+                }
+                guard let _: String = row["blob_hash"],
+                      let prefixData: Data = row["content_prefix"],
+                      let totalLength: Int = row["content_length"] else {
+                    skippedByteless += 1
+                    continue
+                }
+                let completeness: ContentPrefixCompleteness = totalLength <= prefixData.count ? .complete : .truncated
+                let ext = (filename as NSString).pathExtension.lowercased()
+                let detection = ContentTypeDetector.detect(.init(
+                    hints: .init(filenameExtension: ext.isEmpty ? nil : ext),
+                    prefix: .init(bytes: prefixData, completeness: completeness)))
+                let newMIME = detection.normalizedMIMEType
+                let shouldUpdate = !dryRun && newMIME != nil
+                if shouldUpdate, let newMIME {
+                    try db.execute(
+                        sql: "UPDATE sources SET mime_type = ? WHERE id = ?;",
+                        arguments: [newMIME, sourceID.rawValue])
+                    try db.execute(
+                        sql: "UPDATE source_versions SET mime_type = ? WHERE id = ?;",
+                        arguments: [newMIME, versionID.rawValue])
+                    changed.append(sourceID)
+                }
+                items.append(.init(
+                    sourceID: sourceID,
+                    sourceVersionID: versionID,
+                    filename: filename,
+                    nullState: nullState,
+                    oldSourceMIMEType: oldSourceMIME,
+                    oldVersionMIMEType: oldVersionMIME,
+                    newMIMEType: newMIME,
+                    detection: detection,
+                    updated: shouldUpdate))
+            }
+            return RepairWork(items: items, changedSourceIDs: changed, skippedBytelessCount: skippedByteless)
+        }
+        let repairableCount = work.items.filter { $0.newMIMEType != nil }.count
+        return MIMERepairReport(
+            scannedCount: work.items.count + work.skippedBytelessCount,
+            repairableCount: repairableCount,
+            updatedCount: work.changedSourceIDs.count,
+            skippedBytelessCount: work.skippedBytelessCount,
+            skippedInconclusiveCount: work.items.count - repairableCount,
+            applied: !dryRun,
+            items: work.items)
+    }
 
     public func vacuumBlobs(dryRun: Bool) throws -> BlobVacuumReport {
         try dbWriter.write { db in
@@ -10731,18 +10978,21 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     ///
     /// Internal (not private) so tests can exercise nesting directly.
     func withTransaction<T>(_ body: () throws -> T) throws -> T {
-        var result: T!
+        let result = MutationResultBox<T>()
         // `unsafeReentrantWrite` (not `writeWithoutTransaction`) so a `mutate`
         // call inside `body` re-enters inline (GRDB Case 2) instead of tripping
         // DatabasePool's "not reentrant" fatal error. `inSavepoint` nests as a
         // SAVEPOINT inside the outer write.
         try dbWriter.unsafeReentrantWrite { db in
             try db.inSavepoint {
-                result = try body()
+                result.value = try body()
                 return .commit
             }
         }
-        return result
+        switch result.value {
+        case .some(let value): return value
+        case .none: throw WikiStoreError.unexpected("transaction completed without a result")
+        }
     }
 
     // MARK: - Source version history

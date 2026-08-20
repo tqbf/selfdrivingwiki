@@ -50,8 +50,12 @@ public struct SourceRefreshService: Sendable {
     /// (on the main actor) switches on this to pick the right store primitive.
     public enum RefreshMaterial: Sendable {
         /// Append a new content version (website refresh). Carries the fresh
-        /// bytes + the provider's own provenance.
-        case contentVersion(data: Data, provenance: SourceProvenance)
+        /// bytes, typed detection hints, and the provider's provenance.
+        case contentVersion(
+            data: Data,
+            detectionHints: ContentTypeDetectionHints,
+            provenance: SourceProvenance
+        )
         /// Append a new derived markdown version (podcast byteless refresh).
         /// Provenance is intentionally omitted — `appendProcessedMarkdown` has
         /// no PROV parameter; the source-level `apple-podcast` agent (recorded
@@ -119,7 +123,10 @@ public struct SourceRefreshService: Sendable {
             throw RefreshError.missingPlan
         }
         _ = url // validated above; the provider re-normalizes from the raw string
-        return .contentVersion(data: source.data, provenance: prov)
+        return .contentVersion(
+            data: source.data,
+            detectionHints: source.detectionHints,
+            provenance: prov)
     }
 
     // MARK: - Apple Podcast

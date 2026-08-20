@@ -220,7 +220,7 @@ public struct URLFetchService {
     // MARK: - Helpers (thin forwarders to FormatMaterializer)
 
     static func normalizedMIME(_ raw: String?) -> String? {
-        FormatMaterializer.normalizedMIME(raw)
+        ContentTypeDetector.normalizeMIMEType(raw)
     }
 
     static func decodeText(_ data: Data) -> String {

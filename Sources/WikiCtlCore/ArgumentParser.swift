@@ -142,6 +142,8 @@ public enum ArgumentParser {
                                                 page versions no ref/workspace references
       admin vacuum-all [--apply] [--json]    report (and with --apply, reclaim)
                                                 orphaned blobs, activities, and page versions
+      admin repair-mime [--apply] [--json]   detect active NULL MIME values
+                                                (dry-run unless --apply is present)
       chat list [--json]                     list chats (TSV, or JSON lines)
       chat get  (--id X | --title T)         print a chat transcript as markdown
       chat search --query X [--limit N]      semantic + keyword search of chats
@@ -422,6 +424,10 @@ public enum ArgumentParser {
             // Combined: blobs + activities + page versions in one pass.
             let options = try Options(rest, booleanFlags: ["--apply", "--json"])
             return .admin(.vacuumAll(
+                dryRun: !options.flag("--apply"), json: options.flag("--json")))
+        case "repair-mime":
+            let options = try Options(rest, booleanFlags: ["--apply", "--json"])
+            return .admin(.repairMIME(
                 dryRun: !options.flag("--apply"), json: options.flag("--json")))
         default:
             throw Failure.usage("admin: unknown subcommand \(sub.debugDescription)")

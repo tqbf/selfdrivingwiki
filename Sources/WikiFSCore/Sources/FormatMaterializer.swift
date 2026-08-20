@@ -51,17 +51,22 @@ public struct FormatPlan: Sendable, Equatable {
     public let filename: String
     public let data: Data
     public let format: SourceFormat
+    public let detectionResult: ContentTypeDetectionResult
     public let extractedMarkdown: String?
 
     public init(
         filename: String,
         data: Data,
         format: SourceFormat,
+        detectionResult: ContentTypeDetectionResult? = nil,
         extractedMarkdown: String? = nil
     ) {
         self.filename = filename
         self.data = data
         self.format = format
+        self.detectionResult = detectionResult ?? ContentTypeDetector.detect(.init(
+            data: data,
+            hints: .init(filename: filename)))
         self.extractedMarkdown = extractedMarkdown
     }
 }
@@ -98,35 +103,42 @@ public enum FormatMaterializer {
     ///     Used as the fallback extension for non-mapped text/binary MIMEs.
     public static func dispatch(
         data: Data,
+        hints: ContentTypeDetectionHints,
+        stem: String,
+        extensionHint: String?
+    ) -> FormatPlan {
+        let detection = ContentTypeDetector.detect(.init(data: data, hints: hints))
+        return dispatch(
+            data: data,
+            detectionResult: detection,
+            stem: stem,
+            extensionHint: extensionHint)
+    }
+
+    public static func dispatch(
+        data: Data,
         contentType: String?,
         stem: String,
         extensionHint: String?
     ) -> FormatPlan {
-        let mime = normalizedMIME(contentType)
+        dispatch(
+            data: data,
+            hints: .init(
+                declaredMIME: contentType.map { .init($0, origin: .httpResponse) },
+                filenameExtension: extensionHint),
+            stem: stem,
+            extensionHint: extensionHint)
+    }
 
-        // Content-sniff the bytes when the declared type is ambiguous
-        // (`text/html`, missing, or `application/octet-stream`). If the bytes
-        // carry a known binary magic number, store them verbatim as the sniffed
-        // type instead of running HTML→Markdown on binary garbage. A specific
-        // declared type is trusted as-is.
-        if shouldSniff(mime), let sniffed = ContentSniff.mimeType(of: data) {
-            let ext = binaryExtension(forMIME: sniffed, extensionHint: extensionHint)
-            let filename = ext.isEmpty ? sanitizeStem(stem) : ensureExtension(sanitizeStem(stem), ext: ext)
-            let format: SourceFormat = MimeType.isPDF(sniffed) ? .pdf : .binary
-            return FormatPlan(filename: filename, data: data, format: format)
-        }
+    public static func dispatch(
+        data: Data,
+        detectionResult: ContentTypeDetectionResult,
+        stem: String,
+        extensionHint: String?
+    ) -> FormatPlan {
+        let mime = detectionResult.normalizedMIMEType
 
         if mime == MimeType.html || mime == MimeType.xhtml {
-            // Issue #799 PR3: extraction no longer runs at ingest time. Still
-            // detect `.html` so the source is tagged correctly, and use the
-            // document `<title>` (when present) for the filename stem — same
-            // naming UX as the old `convert` path, but NO markdown body
-            // computed. The user triggers extraction via the Extract button
-            // (PR2). The cheap `titleOnly` scan (tokenize + scan `<title>`)
-            // avoids the full tag→markdown render at ingest; the snapshot path
-            // uses the same call family for naming before it rewrites image
-            // srcs. The bytes ARE preserved verbatim as the source blob (issue
-            // #599 two-layer model); only the sidecar extraction is gone.
             let html = decodeText(data)
             let resolvedStem = HTMLToMarkdown.titleOnly(from: html)
                 .flatMap { nonEmpty($0) } ?? stem
@@ -135,24 +147,30 @@ public enum FormatMaterializer {
                 filename: filename,
                 data: data,
                 format: .html,
+                detectionResult: detectionResult,
                 extractedMarkdown: nil)
         }
 
         if MimeType.isPDF(mime) {
             let filename = ensureExtension(sanitizeStem(stem), ext: "pdf")
-            return FormatPlan(filename: filename, data: data, format: .pdf)
+            return FormatPlan(
+                filename: filename, data: data, format: .pdf,
+                detectionResult: detectionResult)
         }
 
         if let mime, MimeType.isText(mime) {
             let ext = textExtension(forMIME: mime, extensionHint: extensionHint)
             let filename = ensureExtension(sanitizeStem(stem), ext: ext)
-            return FormatPlan(filename: filename, data: data, format: .text)
+            return FormatPlan(
+                filename: filename, data: data, format: .text,
+                detectionResult: detectionResult)
         }
 
-        // Anything else: keep bytes verbatim with a best-effort extension.
         let ext = binaryExtension(forMIME: mime, extensionHint: extensionHint)
         let filename = ext.isEmpty ? sanitizeStem(stem) : ensureExtension(sanitizeStem(stem), ext: ext)
-        return FormatPlan(filename: filename, data: data, format: .binary)
+        return FormatPlan(
+            filename: filename, data: data, format: .binary,
+            detectionResult: detectionResult)
     }
 
     // MARK: - HTML enrichment (async, injectable)
@@ -191,34 +209,14 @@ public enum FormatMaterializer {
                 filename: filename,
                 data: plan.data,
                 format: .html,
+                detectionResult: plan.detectionResult,
                 extractedMarkdown: result.markdown
             ),
             "defuddle"
         )
     }
 
-    // MARK: - Content sniffing (pure)
-    /// Whether a declared MIME is ambiguous enough to second-guess via the bytes:
-    /// `text/html` (the interstitial case), a missing type, or the catch-all
-    /// `application/octet-stream`. A specific declared type is trusted as-is.
-    static func shouldSniff(_ mime: String?) -> Bool {
-        switch mime {
-        case nil, MimeType.html, MimeType.xhtml, MimeType.octetStream:
-            return true
-        default:
-            return false
-        }
-    }
-
     // MARK: - Helpers (pure)
-
-    /// Lowercased MIME with any `; charset=…` parameter and whitespace stripped.
-    static func normalizedMIME(_ raw: String?) -> String? {
-        guard let raw else { return nil }
-        let base = raw.split(separator: ";", maxSplits: 1).first.map(String.init) ?? raw
-        let trimmed = base.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return trimmed.isEmpty ? nil : trimmed
-    }
 
     /// Decode bytes as text — UTF-8 first, then Latin-1 (which never fails) so
     /// a mis-declared charset still produces *something* the HTML walker can use.

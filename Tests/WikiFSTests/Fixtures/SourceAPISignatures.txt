@@ -24,7 +24,7 @@ Sources/WikiFSCore/Store/WikiStore.swift	func activeContentVersion(sourceID: Sou
 Sources/WikiFSCore/Store/WikiStore.swift	func renameSource(id: SourceID, to newDisplayName: String) throws
 Sources/WikiFSCore/Store/WikiStore.swift	func setSourceDisplayName(id: SourceID, displayName: String) throws
 Sources/WikiFSCore/Store/WikiStore.swift	func markSourceIngested(id: SourceID) throws
-Sources/WikiFSCore/Store/WikiStore.swift	sourceID: SourceID, data: Data, mimeType: String?
+Sources/WikiFSCore/Store/WikiStore.swift	sourceID: SourceID, data: Data,
 Sources/WikiFSCore/Store/WikiStore.swift	func processedMarkdownHead(sourceID: SourceID) throws -> SourceMarkdownVersion?
 Sources/WikiFSCore/Store/WikiStore.swift	func hasProcessedMarkdown(sourceID: SourceID) throws -> Bool
 Sources/WikiFSCore/Store/WikiStore.swift	func processedMarkdownHistory(sourceID: SourceID) throws -> [SourceMarkdownVersion]

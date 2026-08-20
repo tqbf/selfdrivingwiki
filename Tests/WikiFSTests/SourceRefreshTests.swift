@@ -63,6 +63,24 @@ struct SourceRefreshTests {
         #expect(origin.plan == "https://example.com/article")
     }
 
+    @Test func websiteRefreshPreservesDeclaredMIMEHints() async throws {
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+        let fetcher = SwapFetcher(URLFetchService.FetchResponse(
+            data: Data([0x00, 0x01, 0x02]),
+            contentType: "application/x-refresh-test; version=1",
+            finalURL: URL(string: "https://example.com/download")!))
+
+        _ = try await model.addURL("https://example.com/download", fetcher: fetcher)
+        let source = try #require(try store.listSources().first)
+        _ = try await model.refreshSource(source.id, fetcher: fetcher)
+
+        let refreshed = try #require(try store.listSources().first { $0.id == source.id })
+        let activeVersion = try #require(try store.contentVersionHistory(sourceID: source.id).first)
+        #expect(refreshed.mimeType == "application/x-refresh-test")
+        #expect(activeVersion.mimeType == "application/x-refresh-test")
+    }
+
     @Test func websiteRefreshUnchangedBytesStillAppendsVersion() async throws {
         let store = try tempStore()
         let model = WikiStoreModel(store: store)

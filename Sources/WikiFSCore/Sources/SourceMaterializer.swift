@@ -76,12 +76,23 @@ public struct SourceProvenance: Sendable, Equatable {
 /// original bytes AND carries a derived markdown version alongside — mirrors the
 /// PDF → pdf2md model. The store path writes it as a `SourceMarkdownOrigin.extraction`
 /// processed-markdown version after the source row lands.
+public struct SourceIngestMetadata: Sendable, Equatable {
+    public let externalItemID: String?
+    public let externalItemTitle: String?
+
+    public init(externalItemID: String? = nil, externalItemTitle: String? = nil) {
+        self.externalItemID = externalItemID
+        self.externalItemTitle = externalItemTitle
+    }
+}
+
 public struct MaterializedSource: Sendable {
     public let filename: String
     public let data: Data
-    public let mimeType: String?
-    public let zoteroItemKey: String?
-    public let zoteroItemTitle: String?
+    public let detectionHints: ContentTypeDetectionHints
+    public let detectionResult: ContentTypeDetectionResult
+    public var mimeType: String? { detectionResult.normalizedMIMEType }
+    public let ingestMetadata: SourceIngestMetadata?
     public let provenance: SourceProvenance?
     public let extractedMarkdown: String?
     /// Which extractor produced `extractedMarkdown` (`"defuddle"` or
@@ -95,17 +106,21 @@ public struct MaterializedSource: Sendable {
         filename: String,
         data: Data,
         mimeType: String? = nil,
-        zoteroItemKey: String? = nil,
-        zoteroItemTitle: String? = nil,
+        detectionHints: ContentTypeDetectionHints? = nil,
+        detectionResult: ContentTypeDetectionResult? = nil,
+        ingestMetadata: SourceIngestMetadata? = nil,
         provenance: SourceProvenance? = nil,
         extractedMarkdown: String? = nil,
         extractionTechnique: String? = nil
     ) {
         self.filename = filename
         self.data = data
-        self.mimeType = mimeType
-        self.zoteroItemKey = zoteroItemKey
-        self.zoteroItemTitle = zoteroItemTitle
+        let hints = detectionHints ?? .init(
+            declaredMIME: mimeType.map { .init($0, origin: .trustedGenerated) },
+            filename: filename)
+        self.detectionHints = hints
+        self.detectionResult = detectionResult ?? ContentTypeDetector.detect(.init(data: data, hints: hints))
+        self.ingestMetadata = ingestMetadata
         self.provenance = provenance
         self.extractedMarkdown = extractedMarkdown
         self.extractionTechnique = extractionTechnique
@@ -217,13 +232,17 @@ public struct LocalFileMaterializer: SourceMaterializer {
         let mimeType: String? = nil
         #endif
         let (stem, extHint) = URLFetchService.nameHint(for: url)
+        let hints = ContentTypeDetectionHints(
+            filenameExtension: extHint,
+            utiMIME: mimeType)
         let plan = FormatMaterializer.dispatch(
-            data: data, contentType: mimeType,
+            data: data, hints: hints,
             stem: stem, extensionHint: extHint)
         return MaterializedSource(
             filename: plan.filename,
             data: plan.data,
-            mimeType: mimeType,
+            detectionHints: hints,
+            detectionResult: plan.detectionResult,
             provenance: SourceProvenance(
                 agentName: agentName,
                 activityKind: "import",
@@ -270,17 +289,18 @@ public struct WebsiteMaterializer: SourceMaterializer {
         let response = try await fetcher.fetch(url)
         guard !response.data.isEmpty else { throw URLFetchService.FetchError.empty }
         let (stem, extHint) = URLFetchService.nameHint(for: response.finalURL)
+        let hints = ContentTypeDetectionHints(
+            declaredMIME: response.contentType.map { .init($0, origin: .httpResponse) },
+            filenameExtension: extHint)
         let plan = FormatMaterializer.dispatch(
-            data: response.data, contentType: response.contentType,
+            data: response.data, hints: hints,
             stem: stem, extensionHint: extHint)
         let finalURLString = response.finalURL.absoluteString
         let source = MaterializedSource(
             filename: plan.filename,
             data: plan.data,
-            // Pass nil so the store sniffs (the dispatch plan already preserved
-            // the original HTML bytes; mime is for the stored artifact, not the
-            // original response). Mirrors the pre-Phase-3 addURL behavior.
-            mimeType: nil,
+            detectionHints: hints,
+            detectionResult: plan.detectionResult,
             provenance: SourceProvenance(
                 agentName: agentName,
                 activityKind: "fetch",
@@ -310,8 +330,11 @@ public struct WebsiteMaterializer: SourceMaterializer {
         guard !response.data.isEmpty else { throw URLFetchService.FetchError.empty }
 
         let (stem, extHint) = URLFetchService.nameHint(for: response.finalURL)
+        let hints = ContentTypeDetectionHints(
+            declaredMIME: response.contentType.map { .init($0, origin: .httpResponse) },
+            filenameExtension: extHint)
         let plan = FormatMaterializer.dispatch(
-            data: response.data, contentType: response.contentType,
+            data: response.data, hints: hints,
             stem: stem, extensionHint: extHint)
         let finalURLString = response.finalURL.absoluteString
         let provenance = SourceProvenance(
@@ -339,7 +362,10 @@ public struct WebsiteMaterializer: SourceMaterializer {
 
         // Non-HTML: single source, no images.
         let source = MaterializedSource(
-            filename: plan.filename, data: plan.data, mimeType: nil,
+            filename: plan.filename,
+            data: plan.data,
+            detectionHints: hints,
+            detectionResult: plan.detectionResult,
             provenance: provenance)
         return WebsiteSnapshot(page: source, images: [], plan: plan)
     }
@@ -358,17 +384,31 @@ public struct SnapshotImage: Sendable, Equatable {
     /// The filename for the stored image source (last path component).
     public let filename: String
     public let data: Data
-    public let mimeType: String
+    public let detectionHints: ContentTypeDetectionHints
+    public let detectionResult: ContentTypeDetectionResult
+    public var mimeType: String { detectionResult.normalizedMIMEType ?? "application/octet-stream" }
     /// The resolved absolute URL the image was downloaded from — stored as the
     /// version's `external_identity` so a future snapshot-aware refresh can
     /// re-fetch by the same URL.
     public let sourceURL: URL
 
-    public init(originalPath: String, filename: String, data: Data, mimeType: String, sourceURL: URL) {
+    public init(
+        originalPath: String,
+        filename: String,
+        data: Data,
+        mimeType: String,
+        sourceURL: URL,
+        detectionHints: ContentTypeDetectionHints? = nil,
+        detectionResult: ContentTypeDetectionResult? = nil
+    ) {
         self.originalPath = originalPath
         self.filename = filename
         self.data = data
-        self.mimeType = mimeType
+        let resolvedHints: ContentTypeDetectionHints = detectionHints ?? .init(
+            declaredMIME: .init(mimeType, origin: .httpResponse),
+            filename: filename)
+        self.detectionHints = resolvedHints
+        self.detectionResult = detectionResult ?? ContentTypeDetector.detect(.init(data: data, hints: resolvedHints))
         self.sourceURL = sourceURL
     }
 }
@@ -475,17 +515,27 @@ public struct ZoteroMaterializer: SourceMaterializer {
             let ns = filename as NSString
             let stem = ns.deletingPathExtension
             let extRaw = ns.pathExtension.lowercased()
+            let extHint = extRaw.isEmpty ? nil : extRaw
+            #if canImport(UniformTypeIdentifiers)
+            let utiMIME = extHint.flatMap { UTType(filenameExtension: $0)?.preferredMIMEType }
+            #else
+            let utiMIME: String? = nil
+            #endif
+            let hints = ContentTypeDetectionHints(
+                declaredMIME: attachment.contentType.map { .init($0, origin: .zoteroMetadata) },
+                filenameExtension: extHint,
+                utiMIME: utiMIME)
             let plan = FormatMaterializer.dispatch(
-                data: data, contentType: attachment.contentType,
-                stem: stem, extensionHint: extRaw.isEmpty ? nil : extRaw)
+                data: data, hints: hints,
+                stem: stem, extensionHint: extHint)
             return MaterializedSource(
                 filename: plan.filename,
                 data: plan.data,
-                // Pass nil so the store sniffs (the dispatch plan already
-                // preserved the original HTML bytes when applicable).
-                mimeType: nil,
-                zoteroItemKey: parentItem.key,
-                zoteroItemTitle: parentItem.title,
+                detectionHints: hints,
+                detectionResult: plan.detectionResult,
+                ingestMetadata: .init(
+                    externalItemID: parentItem.key,
+                    externalItemTitle: parentItem.title),
                 provenance: SourceProvenance(
                     agentName: agentName,
                     activityKind: "import",
@@ -523,10 +573,22 @@ public struct MarkdownFolderMaterializer: SourceMaterializer {
     }
 
     public func materialize() async throws -> MaterializedSource {
-        MaterializedSource(
+        let ext = (filename as NSString).pathExtension.lowercased()
+        #if canImport(UniformTypeIdentifiers)
+        let utiMIME = ext.isEmpty ? nil : UTType(filenameExtension: ext)?.preferredMIMEType
+        #else
+        let utiMIME: String? = nil
+        #endif
+        let hints = ContentTypeDetectionHints(
+            declaredMIME: mimeType.map { .init($0, origin: .trustedGenerated) },
+            filenameExtension: ext.isEmpty ? nil : ext,
+            utiMIME: utiMIME)
+        let detection = ContentTypeDetector.detect(.init(data: data, hints: hints))
+        return MaterializedSource(
             filename: filename,
             data: data,
-            mimeType: mimeType,
+            detectionHints: hints,
+            detectionResult: detection,
             provenance: SourceProvenance(
                 agentName: agentName,
                 activityKind: "import",

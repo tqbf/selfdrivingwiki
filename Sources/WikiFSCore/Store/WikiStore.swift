@@ -96,6 +96,74 @@ public struct PageVersionVacuumReport: Equatable, Sendable {
 /// Combined result of a `vacuum-all` sweep (blobs + activities). Used by the
 /// app's Help-menu confirm flow and the `wikictl admin vacuum-all` command so
 /// a single pass reports everything reclaimable.
+public enum MIMERepairNullState: String, Codable, Equatable, Sendable {
+    case sourceOnly
+    case activeVersionOnly
+    case both
+}
+
+public struct MIMERepairItem: Codable, Equatable, Sendable {
+    public let sourceID: SourceID
+    public let sourceVersionID: SourceVersionID
+    public let filename: String
+    public let nullState: MIMERepairNullState
+    public let oldSourceMIMEType: String?
+    public let oldVersionMIMEType: String?
+    public let newMIMEType: String?
+    public let detection: ContentTypeDetectionResult
+    public let updated: Bool
+
+    public init(
+        sourceID: SourceID,
+        sourceVersionID: SourceVersionID,
+        filename: String,
+        nullState: MIMERepairNullState,
+        oldSourceMIMEType: String?,
+        oldVersionMIMEType: String?,
+        newMIMEType: String?,
+        detection: ContentTypeDetectionResult,
+        updated: Bool
+    ) {
+        self.sourceID = sourceID
+        self.sourceVersionID = sourceVersionID
+        self.filename = filename
+        self.nullState = nullState
+        self.oldSourceMIMEType = oldSourceMIMEType
+        self.oldVersionMIMEType = oldVersionMIMEType
+        self.newMIMEType = newMIMEType
+        self.detection = detection
+        self.updated = updated
+    }
+}
+
+public struct MIMERepairReport: Codable, Equatable, Sendable {
+    public let scannedCount: Int
+    public let repairableCount: Int
+    public let updatedCount: Int
+    public let skippedBytelessCount: Int
+    public let skippedInconclusiveCount: Int
+    public let applied: Bool
+    public let items: [MIMERepairItem]
+
+    public init(
+        scannedCount: Int,
+        repairableCount: Int,
+        updatedCount: Int,
+        skippedBytelessCount: Int,
+        skippedInconclusiveCount: Int,
+        applied: Bool,
+        items: [MIMERepairItem]
+    ) {
+        self.scannedCount = scannedCount
+        self.repairableCount = repairableCount
+        self.updatedCount = updatedCount
+        self.skippedBytelessCount = skippedBytelessCount
+        self.skippedInconclusiveCount = skippedInconclusiveCount
+        self.applied = applied
+        self.items = items
+    }
+}
+
 public struct VacuumReport: Equatable, Sendable {
     public let blobs: BlobVacuumReport
     public let activities: ActivityVacuumReport
@@ -216,32 +284,9 @@ public protocol WikiStore: Sendable {
     // the File Provider extension uses the concrete read store, exactly as it
     // does for `listAllPagesOrderedByID` / `listAllLinks`.
 
-    /// Store a dropped file's verbatim bytes + metadata as a new ingested-file
-    /// row, returning its summary. Throws if the data exceeds the soft size cap.
-    /// The optional `zoteroItemKey`/`zoteroItemTitle` capture provenance when the
-    /// file was ingested from a Zotero library item; they default to `nil` so
-    /// drag-drop / URL / folder-import callers are unchanged.
-    ///
-    /// Centralized duplicate detection: `data` is hashed (SHA-256) and compared
-    /// against every existing source's `content_hash` BEFORE the insert. A
-    /// byte-identical match throws `WikiStoreError.duplicateContent(existing:)`
-    /// instead of inserting a second copy — every caller funnels through this
-    /// one seam, so drag-drop, URL fetch, Zotero ingest, and folder import all
-    /// get the check automatically.
-    @discardableResult
-    func addSource(
-        filename: String,
-        data: Data,
-        zoteroItemKey: String?,
-        zoteroItemTitle: String?,
-        mimeType: String?,
-        provenance: SourceProvenance?,
-        role: SourceRole,
-        originalPath: String?,
-        activityID: String?,
-        resolvedDisplayName: String??
-    ) throws -> SourceSummary
-
+    /// Store verbatim source bytes with typed detection hints and neutral
+    /// external metadata. The store detects the canonical MIME from these bytes.
+    /// Duplicate detection applies to every caller at this boundary.
     /// 2-arg convenience: store a source with only `filename` + `data` (all
     /// trailing args default to `nil` / `.primary`). Protocol requirements can't
     /// declare default arguments, so both backends implement this forwarder,
@@ -249,6 +294,19 @@ public protocol WikiStore: Sendable {
     /// defaults. This is the most common test call shape.
     @discardableResult
     func addSource(filename: String, data: Data) throws -> SourceSummary
+
+    @discardableResult
+    func addSource(
+        filename: String,
+        data: Data,
+        detectionHints: ContentTypeDetectionHints,
+        ingestMetadata: SourceIngestMetadata?,
+        provenance: SourceProvenance?,
+        role: SourceRole,
+        originalPath: String?,
+        activityID: String?,
+        resolvedDisplayName: String??
+    ) throws -> SourceSummary
 
     /// Store a **byteless** source: a source whose identity row + v1 content
     /// version carry NO blob (`blob_hash = NULL`, `byte_size = 0`,
@@ -368,7 +426,8 @@ public protocol WikiStore: Sendable {
     /// one transaction. Used by the provider refresh path (Phase 3b).
     @discardableResult
     func appendContentVersion(
-        sourceID: SourceID, data: Data, mimeType: String?,
+        sourceID: SourceID, data: Data,
+        detectionHints: ContentTypeDetectionHints,
         provenance: SourceProvenance?
     ) throws -> SourceVersion
 
@@ -416,7 +475,7 @@ public protocol WikiStore: Sendable {
     func addSnapshotImage(
         filename: String,
         data: Data,
-        mimeType: String,
+        detectionHints: ContentTypeDetectionHints,
         originalPath: String,
         sourceURL: URL,
         activityID: String,
@@ -979,6 +1038,10 @@ public protocol WikiStore: Sendable {
     @discardableResult
     func vacuumBlobs(dryRun: Bool) throws -> BlobVacuumReport
 
+    /// Detect canonical MIME values for active byte-bearing sources with a NULL mirror.
+    @discardableResult
+    func repairMIME(dryRun: Bool) throws -> MIMERepairReport
+
     /// Sweep **orphaned** activity rows — activities no version references (the
     /// leak left by `deleteSource`, which cascades version rows but not their
     /// activities, issue #257). `dryRun == true` reports the orphan count
@@ -1083,33 +1146,5 @@ extension WikiStore {
     @available(*, deprecated, message: "Pass an explicit `bm25Leg:` — resolve a Tantivy leg for the BM25 leg, or `nil` for cosine-only. See #637 / #634.")
     public func searchSimilarChats(query: String, limit: Int) throws -> [ChatSummary] {
         try searchSimilarChats(query: query, limit: limit, bm25Leg: nil)
-    }
-}
-
-// MARK: - addSource default-argument convenience
-
-extension WikiStore {
-    /// Convenience overload so existing callers that don't pre-resolve a
-    /// display name can omit `resolvedDisplayName` (defaults to `nil` → resolve
-    /// in-method). Protocol requirements can't have default arguments, so this
-    /// extension provides the zero-arg-by-default entry point.
-    @discardableResult
-    func addSource(
-        filename: String,
-        data: Data,
-        zoteroItemKey: String?,
-        zoteroItemTitle: String?,
-        mimeType: String?,
-        provenance: SourceProvenance?,
-        role: SourceRole,
-        originalPath: String?,
-        activityID: String?
-    ) throws -> SourceSummary {
-        try addSource(
-            filename: filename, data: data,
-            zoteroItemKey: zoteroItemKey, zoteroItemTitle: zoteroItemTitle,
-            mimeType: mimeType, provenance: provenance, role: role,
-            originalPath: originalPath, activityID: activityID,
-            resolvedDisplayName: nil)
     }
 }

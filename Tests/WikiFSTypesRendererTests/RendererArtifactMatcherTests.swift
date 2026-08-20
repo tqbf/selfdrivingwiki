@@ -17,6 +17,16 @@ struct RendererArtifactMatcherTests {
             sniffedBytes: Phase6RendererArtifactFixtures.jsonCanvas) == false)
     }
 
+    @Test func rejectsValidJSONCanvasWhenPrefixIsTruncated() throws {
+        let input = try RendererMatchInput(
+            mimeType: try .init(validating: "application/json"),
+            fileExtension: try .init(validating: "canvas"),
+            sniffedBytes: Phase6RendererArtifactFixtures.jsonCanvas,
+            sniffedBytesAreComplete: false,
+            artifactKind: .source)
+        #expect(RendererMatcher.boundedJSONArtifact(.jsonCanvas).matches(input) == false)
+    }
+
     @Test func rejectsMalformedArtifactsAndOversizedSniffs() throws {
         #expect(RendererJSONArtifact.excalidraw.matches(
             sniffedBytes: Phase6RendererArtifactFixtures.malformedExcalidraw) == false)
