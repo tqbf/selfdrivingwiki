@@ -385,6 +385,12 @@ struct SourceDetailView: View {
         return ext == MermaidSourceDetector.mermaidExtension || ext == "mermaid"
     }
 
+    /// JSON Canvas exposes its own spatial outline inside the native renderer.
+    /// Do not show an empty Markdown-heading outline beside it.
+    private var isPureJSONCanvasSource: Bool {
+        file.ext.lowercased() == "canvas"
+    }
+
     /// `true` when the outline sidebar is meaningful for this source: there's
     /// markdown content AND it isn't a pure Mermaid diagram. Gates both the
     /// outline pane and its toggle button so a `.mmd` source never shows a
@@ -393,7 +399,7 @@ struct SourceDetailView: View {
     /// without this guard it leaks from a previous markdown source).
     /// Issue #642.
     private var isOutlineApplicable: Bool {
-        !isPureMermaidSource && isMarkdownEditable
+        !isPureMermaidSource && !isPureJSONCanvasSource && isMarkdownEditable
     }
 
     private var displayName: String {

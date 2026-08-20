@@ -161,7 +161,10 @@ struct SourceRendererPresentationPlanner: Sendable {
     }
 
     nonisolated static func standaloneDiagramSource(_ source: SourceSummary) -> Bool {
-        MimeType.isMermaid(source.mimeType) || source.ext.lowercased() == MermaidSourceDetector.mermaidExtension || source.ext.lowercased() == "mermaid"
+        MimeType.isMermaid(source.mimeType)
+            || source.ext.lowercased() == MermaidSourceDetector.mermaidExtension
+            || source.ext.lowercased() == "mermaid"
+            || source.ext.lowercased() == "canvas"
     }
 
     private enum MediaMIMECandidate: Sendable, Equatable {

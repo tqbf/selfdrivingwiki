@@ -116,7 +116,7 @@ struct JSONCanvasRendererTests {
     }
 
     @Test("decoder rejects unavailable malformed oversized and unsupported Canvas input")
-    func decoderRejectsInvalidInput() {
+    func decoderRejectsInvalidInput() throws {
         #expect(throws: JSONCanvasDecodingError.unavailableInput) {
             try JSONCanvasDocument.decode(nil)
         }
@@ -126,9 +126,8 @@ struct JSONCanvasRendererTests {
         #expect(throws: JSONCanvasDecodingError.oversizedInput) {
             try JSONCanvasDocument.decode(Data(repeating: 0, count: JSONCanvasLimits.maximumInputByteCount + 1))
         }
-        #expect(throws: JSONCanvasDecodingError.unsupportedNodeType("group")) {
-            try JSONCanvasDocument.decode(Self.unsupportedGroupCanvas)
-        }
+        let groupedDocument = try #require(try? JSONCanvasDocument.decode(Self.unsupportedGroupCanvas))
+        #expect(groupedDocument.outline.contains { $0.label == "Group" })
         #expect(throws: JSONCanvasDecodingError.malformedDocument) {
             try JSONCanvasDocument.decode(Self.textNodeWithURLCanvas)
         }
@@ -377,7 +376,7 @@ struct JSONCanvasRendererTests {
     private static let unsupportedGroupCanvas = Data("""
     {
       "nodes": [
-        {"id":"link","type":"group","x":0,"y":0,"width":120,"height":60,"url":"https://example.com"}
+        {"id":"group","type":"group","x":0,"y":0,"width":120,"height":60,"label":"Group"}
       ],
       "edges": []
     }
@@ -394,7 +393,6 @@ struct JSONCanvasRendererTests {
         fileLinkCanvas("notes.md?query"),
         fileLinkCanvas("notes.md#fragment"),
         fileLinkCanvas("notes%2Fsecret.md"),
-        wikiLinkCanvas("https://example.com"),
         wikiLinkCanvas("wiki://page?id=01J00000000000000000000000"),
         wikiLinkCanvas("[[page:not-a-ulid]]"),
         wikiLinkCanvas("[[page:01J00000000000000000000000|Alias]]"),

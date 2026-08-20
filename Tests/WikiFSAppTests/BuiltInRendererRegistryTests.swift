@@ -144,6 +144,24 @@ import WikiFSTypes
         #expect(id == .jsonCanvas)
     }
 
+    @Test("JSON Canvas sources use the raw source presentation")
+    func plannerUsesRawPresentationForCanvasSources() throws {
+        let source = SourceSummary(
+            id: .init(rawValue: "source"),
+            filename: "diagram.canvas",
+            ext: "canvas",
+            mimeType: MimeType.json,
+            byteSize: 32,
+            createdAt: .distantPast,
+            updatedAt: .distantPast,
+            version: 1)
+
+        #expect(SourceRendererPresentationPlanner.standaloneDiagramSource(source))
+        #expect(SourceRendererPresentationPlanner.usesMarkdownSourcePresentation(
+            for: source,
+            currentMarkdown: "{\"nodes\":[],\"edges\":[]}"))
+    }
+
     @Test("JSON Canvas factory returns nil for unavailable and malformed input so the host keeps Source")
     @MainActor
     func jsonCanvasFactoryFailsClosedToHostFallback() throws {

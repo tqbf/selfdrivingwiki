@@ -46,6 +46,10 @@ public enum MimeType {
     /// `text/x-mermaid` — the `x-` variant some tools emit for Mermaid sources.
     public static let mermaidX = "text/x-mermaid"
 
+    /// `application/json` — JSON Canvas files use JSON as their registered
+    /// media type. The `.canvas` extension remains the format discriminator.
+    public static let json = "application/json"
+
     /// `application/xhtml+xml`.
     public static let xhtml = "application/xhtml+xml"
 
@@ -111,6 +115,7 @@ public enum MimeType {
     public static func mime(forExtension ext: String) -> String? {
         switch ext.lowercased() {
         case "mmd", "mermaid": return mermaid
+        case "canvas": return json
         default: return nil
         }
     }
