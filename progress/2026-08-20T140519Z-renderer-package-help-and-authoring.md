@@ -1,9 +1,13 @@
+---
+timestamp: 2026-08-20T140519Z
+title: Renderer package help and authoring
+branch: feature/renderer-package-help
+status: complete
+---
+
 # Renderer package help and authoring
 
-Date: 2026-08-20
-Branch: `feature/renderer-package-help`
-
-## Implemented
+## Progress
 
 - Added a labeled renderer-package Help control to Settings → Renderers.
 - Added a bounded native popover with system text styles and accessible labels.
@@ -17,7 +21,7 @@ Branch: `feature/renderer-package-help`
 - Added typed JSON output and actionable stderr diagnostics.
 - Added Core, subprocess, documentation, template, and opt-in Settings tests.
 
-## Automated evidence
+## Verification
 
 The following focused command passed with 11 tests:
 
