@@ -15,12 +15,12 @@ enum InspectorTab: String, CaseIterable, Codable {
     case outline
     case history
 
-    static let pageAvailableTabs: [InspectorTab] = [.metadata, .outline, .history]
+    static let pageAvailableTabs: [InspectorTab] = [.metadata, .outline]
     static let persistedChatAvailableTabs: [InspectorTab] = [.metadata, .outline]
     static let metadataOnlyAvailableTabs: [InspectorTab] = [.metadata]
 
     static func sourceAvailableTabs(hasOutline: Bool) -> [InspectorTab] {
-        hasOutline ? pageAvailableTabs : [.metadata, .history]
+        hasOutline ? pageAvailableTabs : [.metadata]
     }
 
     static func decodePersisted(_ rawValue: String?) -> InspectorTab {
@@ -55,8 +55,9 @@ enum InspectorTab: String, CaseIterable, Codable {
 // MARK: - DetailInspectorView
 
 /// Xcode-style inspector panel for detail views. Shows an ordered, caller-
-/// supplied set of Metadata, Outline, and History tabs when more than one is
-/// available.
+/// supplied set of Metadata and Outline tabs when more than one is available.
+/// The legacy History case remains renderable for compatibility with callers
+/// that still supply it, but current page and source registrations do not.
 ///
 /// - **Outline tab**: renders the `@ViewBuilder` closure passed by the caller
 ///   (the page's `PageOutlineView` or the source's outline view).
@@ -97,6 +98,18 @@ struct DetailInspectorView<Outline: View>: View {
     /// The width to render: the in-flight drag value if dragging, else the
     /// persisted `outlineWidth`.
     private var effectiveWidth: Double { liveWidth ?? outlineWidth }
+
+    /// Keep the segmented picker selection valid while a persisted legacy tab
+    /// value is being normalized by the owning detail view's task.
+    private var inspectorTabSelection: Binding<InspectorTab> {
+        Binding(
+            get: {
+                InspectorTab.normalizedFallback(
+                    selection: inspectorTab,
+                    availableTabs: availableTabs)
+            },
+            set: { inspectorTab = $0 })
+    }
 
     /// Clamp a proposed inspector width to the allowed range.
     private func clampedWidth(_ width: Double) -> Double {
@@ -141,7 +154,7 @@ struct DetailInspectorView<Outline: View>: View {
 
             VStack(alignment: .leading, spacing: 0) {
                 if availableTabs.count >= 2 {
-                    Picker("Inspector section", selection: $inspectorTab) {
+                    Picker("Inspector section", selection: inspectorTabSelection) {
                         ForEach(availableTabs, id: \.self) { tab in
                             Label(tab.label, systemImage: tab.symbol).tag(tab)
                         }

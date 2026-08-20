@@ -1052,9 +1052,8 @@ struct SourceDetailView: View {
     /// `body` so the type-checker can resolve each subtree independently.
     ///
     /// Uses the shared `DetailInspectorView` (same as `PageDetailView`) so
-    /// sources get the same tabbed inspector (Outline / History). The outline
-    /// tab renders the source's `PageOutlineView`; the History tab renders
-    /// the shared `ProvenancePanel` with the source's provenance.
+    /// sources get the same tabbed inspector. The outline tab renders the
+    /// source's `PageOutlineView`.
     ///
     /// The explicit `.frame(maxWidth: .infinity, maxHeight: .infinity,
     /// alignment: .topLeading)` on `contentArea` is load-bearing and mirrors
