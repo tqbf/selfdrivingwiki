@@ -527,6 +527,38 @@ struct WikiReaderView: View {
           .sdw-code-operator { color: var(--code-operator); }
           .sdw-code-punctuation { color: var(--code-punctuation); }
           .sdw-code-constant { color: var(--code-constant); }
+          /* Rich-fence renderer cards. `MarkdownHTMLRenderer.rendererCardHTML`
+             emits a `<section class="sdw-renderer-card">` for every approved
+             fence (mermaid stays on its own `.mermaid` path). The card is the
+             static, in-flow surface; its action either mounts a native inline
+             attachment over this rect or opens the full renderer. Styled to
+             match `details.sdw-transclusion` above — same border, fill, and
+             radius — so both embed surfaces read as one family. Without these
+             rules the card degrades to unstyled stacked text. */
+          section.sdw-renderer-card {
+            margin: 0.6em 0; padding: 0.7em 0.9em; border-radius: 8px;
+            background: var(--code-bg); border: 1px solid var(--border);
+          }
+          .sdw-renderer-card__header {
+            font-weight: 600; font-size: 0.95em; color: var(--text);
+          }
+          .sdw-renderer-card__summary {
+            margin: 0.15em 0 0; font-size: 0.9em; color: var(--muted);
+          }
+          .sdw-renderer-card__fallback {
+            margin: 0.1em 0 0; font-size: 0.8em; color: var(--muted);
+          }
+          /* The action is an `<a>` and the collapse control a `<button>`; both
+             are drawn as the same bordered control so the card reads as one
+             affordance either side of activation. */
+          .sdw-renderer-card__action, .sdw-renderer-card__collapse {
+            display: inline-block; margin: 0.7em 0.4em 0 0;
+            padding: 0.2em 0.7em; border: 1px solid var(--border);
+            border-radius: 6px; background: none; font: inherit;
+            font-size: 0.9em; text-decoration: none; cursor: pointer;
+          }
+          .sdw-renderer-card__action { color: -webkit-link; }
+          .sdw-renderer-card__collapse { color: var(--muted); }
           hr { border: none; border-top: 1px solid var(--border); margin: 1.5em 0; }
           table { border-collapse: collapse; margin: 0 0 1em; }
           th, td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; vertical-align: top; }
@@ -681,7 +713,9 @@ final class WikiReaderWebView: WKWebView {
         Object.keys(known).forEach(function(id){if(!current[id])window.webkit.messageHandlers.rendererAttachmentGeometry.postMessage({kind:'removed',generation:g,placeholderID:id});}); known=current; }
       window.__sdwRendererAttachmentReport=function(g){window.__sdwRendererAttachmentGeneration=g;window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();};
       window.__sdwRendererAttachmentReserve=function(id,height){var e=document.getElementById(id); if(!e||!Number.isFinite(height))return; e.style.minHeight=height+'px'; window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1; report();};
-      document.addEventListener('click',function(event){var control=event.target.closest('.sdw-renderer-card__action,.sdw-renderer-card__collapse');if(!control)return;var card=control.closest('.sdw-renderer-card[id]');if(!card)return;event.preventDefault();var collapse=control.classList.contains('sdw-renderer-card__collapse');window.webkit.messageHandlers.rendererAttachmentAction.postMessage({action:collapse?'collapse':'activate',placeholderID:card.id});if(!collapse&&!card.querySelector('.sdw-renderer-card__collapse')){var b=document.createElement('button');b.className='sdw-renderer-card__collapse';b.type='button';b.textContent='Collapse';b.setAttribute('aria-label','Collapse interactive renderer');card.appendChild(b);}});
+      window.__sdwRendererAttachmentPresentCollapse=function(id){var card=document.getElementById(id); if(!card||card.querySelector('.sdw-renderer-card__collapse'))return; var b=document.createElement('button');b.className='sdw-renderer-card__collapse';b.type='button';b.textContent='Collapse';b.setAttribute('aria-label','Collapse interactive renderer');card.appendChild(b);};
+      window.__sdwRendererAttachmentDismissCollapse=function(id){var card=document.getElementById(id); if(!card)return; var b=card.querySelector('.sdw-renderer-card__collapse'); if(b)b.remove();};
+      document.addEventListener('click',function(event){var control=event.target.closest('.sdw-renderer-card__action,.sdw-renderer-card__collapse');if(!control)return;var card=control.closest('.sdw-renderer-card[id]');if(!card)return;event.preventDefault();var collapse=control.classList.contains('sdw-renderer-card__collapse');window.webkit.messageHandlers.rendererAttachmentAction.postMessage({action:collapse?'collapse':'activate',placeholderID:card.id});});
       addEventListener('scroll',report,{passive:true}); addEventListener('resize',report); new MutationObserver(report).observe(document.documentElement,{childList:true,subtree:true,attributes:true});
     })();
     """
@@ -1658,44 +1692,72 @@ internal struct WikiReaderRep: NSViewRepresentable {
             if removedMountedChild { attachmentContainer?.collapseAttachment() }
         }
 
+        /// Activate the card's control. Only a renderer with a **native** inline
+        /// attachment (JSON Canvas today) mounts a child over the card rect;
+        /// every other approved renderer — including the bundled Excalidraw web
+        /// package — is presented in the full renderer through
+        /// `onRendererActivation`. Mounting a contentless child instead would
+        /// paint an empty focus-bordered rectangle over the card and show the
+        /// reader nothing, which is exactly what this path used to do.
         func activateAttachment(_ placeholderID: RendererAttachmentPlaceholderID) -> RendererAttachmentActivationResult {
             guard let attachmentCoordinator, let attachmentContainer else { return .rejected }
-            switch nativeAttachmentContent(for: placeholderID) {
+            // No registered context means there is nothing authorized to show —
+            // neither natively nor in the full renderer.
+            guard let context = webView?.rendererActivationAdmission?.attachmentContext(for: placeholderID) else {
+                failAttachment(placeholderID)
+                return .rejected
+            }
+            switch nativeAttachmentContent(for: context, placeholderID: placeholderID) {
             case .failed:
                 failAttachment(placeholderID)
                 return .rejected
+            case .unsupported:
+                // Deliberately does NOT call `attachmentCoordinator.activate`:
+                // the full renderer is a sheet the coordinator never hears
+                // close, so a record left `.active` could never be re-activated.
+                return presentInFullRenderer(context)
             case .canvas(let content):
                 let result = attachmentCoordinator.activate(placeholderID)
-                if result == .activate {
+                switch result {
+                case .activate:
                     attachmentContainer.activateAttachment(
                         named: placeholderID,
                         content: content,
                         onExit: { [weak self] in self?.collapseAttachment(placeholderID) })
+                    setCollapseControl(true, for: placeholderID)
+                case .showInFullRenderer:
+                    // The single active-attachment budget is already spent.
+                    return presentInFullRenderer(context)
+                case .rejected:
+                    break
                 }
                 return result
-            case .fallback:
-                break
             }
-            let result = attachmentCoordinator.activate(placeholderID)
-            if result == .activate {
-                attachmentContainer.activateAttachment(
-                    named: placeholderID,
-                    onExit: { [weak self] in self?.collapseAttachment(placeholderID) })
-            }
-            return result
+        }
+
+        /// Hand the exact authorized reference + input to the app-layer renderer
+        /// presentation. Returns `.rejected` when no presenter is wired (the
+        /// agent-transcript and preview readers pass none).
+        private func presentInFullRenderer(_ context: RendererEmbedActivationContext) -> RendererAttachmentActivationResult {
+            guard let present = webView?.onRendererActivation else { return .rejected }
+            present(context.rendererReference, context.input)
+            return .showInFullRenderer
         }
 
         private enum NativeAttachmentContent {
-            case fallback
+            /// The renderer has no native inline attachment factory.
+            case unsupported
             case canvas(AnyView)
             case failed
         }
 
-        private func nativeAttachmentContent(for placeholderID: RendererAttachmentPlaceholderID) -> NativeAttachmentContent {
-            guard let context = webView?.rendererActivationAdmission?.attachmentContext(for: placeholderID),
-                  context.rendererReference == BuiltInRendererReference.reference(for: .jsonCanvas),
+        private func nativeAttachmentContent(
+            for context: RendererEmbedActivationContext,
+            placeholderID: RendererAttachmentPlaceholderID
+        ) -> NativeAttachmentContent {
+            guard context.rendererReference == BuiltInRendererReference.reference(for: .jsonCanvas),
                   case .inlineArtifact(let artifact) = context.input
-            else { return .fallback }
+            else { return .unsupported }
             do {
                 let factory = NativeJSONCanvasAttachmentFactory.fencedOnly()
                 return .canvas(try factory.makeView(for: .fenced(artifact)))
@@ -1703,6 +1765,18 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 DebugLog.reader("native JSON Canvas attachment failed for \(placeholderID.rawValue): \(error)")
                 return .failed
             }
+        }
+
+        /// Add or remove the card's Collapse control. The document script no
+        /// longer appends it optimistically on click — only a mounted native
+        /// attachment has anything to collapse.
+        private func setCollapseControl(_ present: Bool, for placeholderID: RendererAttachmentPlaceholderID) {
+            guard let webView else { return }
+            let identifier = WikiReaderRep.jsString(placeholderID.rawValue)
+            let function = present
+                ? "window.__sdwRendererAttachmentPresentCollapse"
+                : "window.__sdwRendererAttachmentDismissCollapse"
+            webView.evaluateJavaScript("\(function) && \(function)(\(identifier));")
         }
 
         func attachmentState(for placeholderID: RendererAttachmentPlaceholderID) -> RendererAttachmentState {
@@ -1719,10 +1793,12 @@ internal struct WikiReaderRep: NSViewRepresentable {
             else { return }
             attachmentCoordinator.collapse(placeholderID)
             attachmentContainer.collapseAttachment()
+            setCollapseControl(false, for: placeholderID)
         }
 
         func failAttachment(_ placeholderID: RendererAttachmentPlaceholderID) {
             attachmentCoordinator?.fail(placeholderID)
+            setCollapseControl(false, for: placeholderID)
             guard attachmentContainer?.ownsMountedAttachment(named: placeholderID) == true else { return }
             attachmentContainer?.collapseAttachment()
         }
