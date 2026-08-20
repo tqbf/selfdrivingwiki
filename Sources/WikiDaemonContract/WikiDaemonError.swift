@@ -12,7 +12,7 @@ public enum WikiDaemonError: Error, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .connectionFailed:
-            return "Could not connect to the wikid daemon. Is it running? (make install-daemon)"
+            return "Could not connect to the wikid daemon."
         case .unexpectedReply:
             return "The wikid daemon returned an unexpected reply."
         }

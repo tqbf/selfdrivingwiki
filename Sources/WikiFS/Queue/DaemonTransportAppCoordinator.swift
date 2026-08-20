@@ -1,4 +1,6 @@
 #if os(macOS)
+// pattern: Imperative Shell
+
 import Foundation
 import WikiCtlCore
 import WikiDaemonContract
@@ -68,6 +70,7 @@ final class DaemonTransportAppCoordinator {
         task?.cancel()
         await task?.value
         connectedCandidateID = nil
+        replaceChatCoordinator(nil)
         await services.stop()
         await bridge.stop()
         observeEvent(.stopped)
@@ -91,6 +94,7 @@ final class DaemonTransportAppCoordinator {
             lifecycle = .stopped
             eventTask = nil
             connectedCandidateID = nil
+            replaceChatCoordinator(nil)
             await bridge.stop()
         case .reconnecting:
             break
@@ -112,12 +116,14 @@ final class DaemonTransportAppCoordinator {
             connection: connection,
             generation: expectedGeneration)
         guard isAdmitted(expectedGeneration) else {
+            replaceChatCoordinator(nil)
             await bridge.remove(id, invalidate: false)
             return
         }
         switch outcome {
         case .connected:
             guard await bridge.markConnected(id) else {
+                replaceChatCoordinator(nil)
                 await services.acknowledge(.init(candidateID: id, outcome: .retry))
                 return
             }
@@ -146,6 +152,11 @@ final class DaemonTransportAppCoordinator {
                     .init(client: proxy, epoch: epoch),
                     ChatDaemonCoordinator(client: workloadClient, eventSink: eventSink))
             }
+            let makeChatCoordinator: @MainActor () -> ChatDaemonCoordinator = {
+                let eventSink = DaemonQueueEventSink()
+                workloadClient.registerEventSink(eventSink)
+                return ChatDaemonCoordinator(client: workloadClient, eventSink: eventSink)
+            }
 
             if case .shutdownBlocked = queueController.state {
                 let status = try await workloadClient.queueOwnershipStatus()
@@ -170,7 +181,8 @@ final class DaemonTransportAppCoordinator {
                     guard isAdmitted(expectedGeneration) else { return .retry }
                     if fellBack {
                         DebugLog.store("WikiFSApp: daemon relinquished queue ownership — local runtime ready")
-                        return .localFallbackReady
+                        replaceChatCoordinator(makeChatCoordinator())
+                        return .connected
                     }
                     return .retry
                 } catch {
@@ -184,7 +196,9 @@ final class DaemonTransportAppCoordinator {
                         daemon.endpoint,
                         expectedEpoch: expectedEpoch)
                     guard isAdmitted(expectedGeneration) else { return .retry }
-                    if accepted { replaceChatCoordinator(daemon.chatCoordinator) }
+                    if accepted {
+                        replaceChatCoordinator(daemon.chatCoordinator)
+                    }
                     return accepted ? .connected : .retry
                 }
             }
@@ -209,19 +223,22 @@ final class DaemonTransportAppCoordinator {
     }
 
     private func handleInvalidation() async {
-        guard let id = connectedCandidateID else { return }
+        let id = connectedCandidateID
         connectedCandidateID = nil
-        await bridge.remove(id, invalidate: false)
-        DebugLog.store("WikiFSApp: daemon disconnected — queue ownership is unresolved")
+        if let id {
+            await bridge.remove(id, invalidate: false)
+        } else {
+            DebugLog.store("WikiFSApp: daemon disconnected before candidate state was published")
+        }
+        replaceChatCoordinator(nil)
         guard case .daemonActive(let epoch) = queueController.state else {
-            DebugLog.store("WikiFSApp: disconnect had no active daemon ownership epoch")
-            replaceChatCoordinator(nil)
+            DebugLog.store("WikiFSApp: daemon disconnected — local queue ownership remains local")
             return
         }
+        DebugLog.store("WikiFSApp: daemon disconnected — queue ownership is unresolved")
         await queueController.daemonOwnershipBecameUnresolved(
             expectedEpoch: epoch,
             reason: "Daemon connection was invalidated")
-        replaceChatCoordinator(nil)
     }
 
     private func handleInterruption(_ id: DaemonTransportCandidateID) async {

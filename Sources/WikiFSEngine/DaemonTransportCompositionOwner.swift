@@ -1,4 +1,6 @@
 #if os(macOS)
+// pattern: Imperative Shell
+
 import Foundation
 import WikiFSCore
 
@@ -12,6 +14,7 @@ extension DaemonTransportRuntimeHandle: DaemonTransportRuntimeOwning {}
 private actor MutableDaemonTransportServices {
     nonisolated let facade: DaemonTransportServices
 
+    private let relay: DaemonTransportServiceRelay
     private var installed: DaemonTransportServices?
     private var startRequested = false
     private var stopped = false
@@ -20,6 +23,7 @@ private actor MutableDaemonTransportServices {
 
     init() {
         let relay = DaemonTransportServiceRelay()
+        self.relay = relay
         facade = relay.facade
         relay.bind(self)
     }
@@ -112,7 +116,7 @@ private actor MutableDaemonTransportServices {
 // swiftlint:disable:next unchecked_sendable
 private final class DaemonTransportServiceRelay: @unchecked Sendable {
     private let lock = NSLock()
-    private var target: MutableDaemonTransportServices?
+    private weak var target: MutableDaemonTransportServices?
 
     lazy var facade = DaemonTransportServices(
         startAdmission: { [weak self] in await self?.readTarget()?.startAdmission() },
@@ -156,13 +160,18 @@ public actor DaemonTransportCompositionOwner {
 
     private let mutableServices: MutableDaemonTransportServices
     private let assemble: AssemblyFactory
+    private let retryInterval: Duration
     private var state: State = .idle
 
-    public init(assemble: @escaping AssemblyFactory) {
+    public init(
+        retryInterval: Duration = .seconds(1),
+        assemble: @escaping AssemblyFactory
+    ) {
         let mutableServices = MutableDaemonTransportServices()
         self.mutableServices = mutableServices
         services = mutableServices.facade
         self.assemble = assemble
+        self.retryInterval = retryInterval
     }
 
     public func start() {
@@ -198,24 +207,35 @@ public actor DaemonTransportCompositionOwner {
     }
 
     private func runStartup() async {
-        do {
-            let handle = try await assemble()
-            guard case .starting = state, !Task.isCancelled else {
-                try await handle.dispose()
+        while !Task.isCancelled {
+            do {
+                let handle = try await assemble()
+                guard case .starting = state, !Task.isCancelled else {
+                    try await handle.dispose()
+                    return
+                }
+                await mutableServices.install(handle.services)
+                guard case .starting = state, !Task.isCancelled else {
+                    try await handle.dispose()
+                    return
+                }
+                state = .installed(handle)
                 return
-            }
-            await mutableServices.install(handle.services)
-            guard case .starting = state, !Task.isCancelled else {
-                try await handle.dispose()
+            } catch is CancellationError {
                 return
+            } catch {
+                guard case .starting = state else { return }
+                DebugLog.store(
+                    "Daemon transport assembly failed; retrying in \(retryInterval): \(error)")
+                do {
+                    try await Task.sleep(for: retryInterval)
+                } catch is CancellationError {
+                    return
+                } catch {
+                    DebugLog.store("Daemon transport assembly retry delay failed: \(error)")
+                    return
+                }
             }
-            state = .installed(handle)
-        } catch is CancellationError {
-            return
-        } catch {
-            guard case .starting = state else { return }
-            state = .idle
-            DebugLog.store("Daemon transport assembly failed; local queue remains active: \(error)")
         }
     }
 }
