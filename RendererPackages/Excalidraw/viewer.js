@@ -24,6 +24,33 @@
     viewer.replaceChildren(Object.assign(document.createElement("p"), { className: "message", textContent: text }));
   }
 
+  // A drawing carries its own canvas colour, and its element colours were
+  // chosen against it. Excalidraw's default `#ffffff` with near-black strokes
+  // disappears on a dark system canvas, so the declared background is applied
+  // and the system colour keywords underneath it (`Canvas`, `CanvasText`) are
+  // resolved for that background rather than for the viewer's appearance.
+  const hexColorPattern = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+
+  function documentBackground(appState) {
+    const value = appState && appState.viewBackgroundColor;
+    return typeof value === "string" && hexColorPattern.test(value) ? value : null;
+  }
+
+  function isLightBackground(hex) {
+    const digits = hex.slice(1);
+    const expanded = digits.length === 3 ? digits.replace(/./g, (d) => d + d) : digits;
+    const channel = (offset) => parseInt(expanded.slice(offset, offset + 2), 16) / 255;
+    // Rec. 601 luma is enough to pick a light or dark colour scheme.
+    return 0.299 * channel(0) + 0.587 * channel(2) + 0.114 * channel(4) > 0.5;
+  }
+
+  function applyDocumentBackground(appState) {
+    const color = documentBackground(appState);
+    if (color === null) return;
+    viewer.style.backgroundColor = color;
+    viewer.style.setProperty("color-scheme", isLightBackground(color) ? "light" : "dark");
+  }
+
   function bounds(elements) {
     const active = elements.filter((element) => element && element.isDeleted !== true && Number.isFinite(element.x) && Number.isFinite(element.y));
     if (active.length === 0) return { x: 0, y: 0, width: 1, height: 1 };
@@ -75,6 +102,7 @@
       showMessage("This drawing is not a supported Excalidraw document.");
       return;
     }
+    applyDocumentBackground(documentValue.appState);
     const svg = makeSVG("svg", { class: "scene", role: "img", "aria-label": "Read-only Excalidraw drawing" });
     const scene = makeSVG("g");
     documentValue.elements.map(renderElement).filter(Boolean).forEach((node) => scene.append(node));

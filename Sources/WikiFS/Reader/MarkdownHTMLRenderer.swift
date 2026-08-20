@@ -515,11 +515,13 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
             else { preconditionFailure("approved jsoncanvas renderer reference must remain valid") }
             return RendererReference(packageID: packageID, version: version, registrationID: registrationID)
         case .excalidraw:
-            guard let packageID = RendererPackageID(rawValue: "org.selfdrivingwiki.excalidraw-readonly"),
-                  let version = RendererPackageVersion(rawValue: "1.0.0"),
-                  let registrationID = RendererRegistrationID(rawValue: "excalidraw")
-            else { preconditionFailure("approved excalidraw renderer reference must remain valid") }
-            return RendererReference(packageID: packageID, version: version, registrationID: registrationID)
+            // Read from the bundled-package constants rather than repeating the
+            // literals: a card whose version drifts from the installed package
+            // resolves to no descriptor and presents nothing.
+            return RendererReference(
+                packageID: BundledRendererPackages.excalidrawPackageID,
+                version: BundledRendererPackages.excalidrawVersion,
+                registrationID: BundledRendererPackages.excalidrawRegistrationID)
         }
     }
 

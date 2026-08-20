@@ -1,6 +1,6 @@
 ## Renderer packages
 
-Self Driving Wiki includes and manages the read-only Excalidraw renderer automatically. The app validates the bundled directory and installs it in the machine renderer store. The package ID is `org.selfdrivingwiki.excalidraw-readonly`. The version is `1.0.0`. The registration ID is `excalidraw`.
+Self Driving Wiki includes and manages the read-only Excalidraw renderer automatically. The app validates the bundled directory and installs it in the machine renderer store. The package ID is `org.selfdrivingwiki.excalidraw-readonly`. The version is `1.0.1`. The registration ID is `excalidraw`.
 
 ### Scope and availability
 

@@ -1,12 +1,12 @@
 {
   "revision": 1,
   "packageID": "org.selfdrivingwiki.excalidraw-readonly",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "descriptors": [
     {
       "reference": {
         "packageID": "org.selfdrivingwiki.excalidraw-readonly",
-        "version": "1.0.0",
+        "version": "1.0.1",
         "registrationID": "excalidraw"
       },
       "displayName": "Excalidraw",
@@ -56,7 +56,7 @@
         },
         {
           "path": "viewer.js",
-          "digest": "9a05ed23438ce8bbf7edbf9d5350c9cec8480a6686c99dc9e1b47579f33bd69b"
+          "digest": "67cebc707a02e1dd769f1af90a27eb2c4f37bfb13c0913c265d15e1a701b0571"
         }
       ],
       "capabilities": [
@@ -98,7 +98,7 @@
     },
     {
       "path": "viewer.js",
-      "digest": "9a05ed23438ce8bbf7edbf9d5350c9cec8480a6686c99dc9e1b47579f33bd69b"
+      "digest": "67cebc707a02e1dd769f1af90a27eb2c4f37bfb13c0913c265d15e1a701b0571"
     }
   ]
 }
