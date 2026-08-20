@@ -49,7 +49,7 @@ The runtime allocates a new `DaemonTransportCandidateID` before each attempt. Th
 
 A successful health probe publishes `awaitingAcceptance`. It does not publish `connected`.
 
-The app validates queue ownership and installs the queue endpoint. The app then sends one acknowledgement for the same candidate ID.
+The app checks queue ownership and tries to install the queue endpoint. After safe queue relinquishment, the app keeps the healthy connection for chat while the local queue runs. It then sends one acknowledgement for the same candidate ID.
 
 The acknowledgement outcome is `connected`, `retry`, or `localFallbackReady`.
 
@@ -65,7 +65,7 @@ The bridge returns only a narrow `DaemonTransportConnection` wrapper to the Engi
 
 `DaemonTransportAppCoordinator` resolves the concrete connection only for the current candidate ID.
 
-The coordinator preserves the existing queue ownership transaction. It installs a chat coordinator only after queue activation succeeds.
+The coordinator preserves the queue ownership transaction. It keeps a healthy chat connection when the app returns to its local queue after safe daemon relinquishment.
 
 The coordinator contains no Cordis context, activation context, or service key.
 

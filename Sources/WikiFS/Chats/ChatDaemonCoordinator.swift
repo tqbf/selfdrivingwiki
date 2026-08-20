@@ -30,9 +30,9 @@ extension DaemonWorkloadClient: ChatDaemonCommands {}
 /// the app no longer runs chat in-process; the daemon owns every chat session.
 ///
 /// Injected via the SwiftUI environment (see `ChatDaemonCoordinatorKey`).
-/// When the daemon is unavailable the environment value is `nil` and
-/// `ChatDetailView` renders an unavailable state — there is no local fallback
-/// for chat (the daemon is the single chat owner).
+/// The environment value is `nil` while transport starts or reconnects.
+/// `ChatDetailView` renders a reconnecting state because the daemon is the
+/// single chat owner and the app has no local fallback.
 ///
 /// **Live indicator aggregate:** the coordinator tracks the set of chatIDs the
 /// daemon reports as running (from `chatState` envelopes), even for chats the
@@ -399,12 +399,12 @@ public final class ChatDaemonCoordinator {
 import SwiftUI
 
 private struct ChatDaemonCoordinatorKey: EnvironmentKey {
-    /// `nil` when the daemon is unavailable — chat renders an unavailable state.
+    /// `nil` while the daemon transport starts or reconnects.
     static let defaultValue: ChatDaemonCoordinator? = nil
 }
 
 extension EnvironmentValues {
-    /// The app-wide chat daemon coordinator (nil when the daemon is down).
+    /// The app-wide chat daemon coordinator. It is nil while transport recovers.
     var chatDaemonCoordinator: ChatDaemonCoordinator? {
         get { self[ChatDaemonCoordinatorKey.self] }
         set { self[ChatDaemonCoordinatorKey.self] = newValue }

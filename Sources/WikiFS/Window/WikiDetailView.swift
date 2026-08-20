@@ -284,19 +284,23 @@ struct WikiDetailView: View {
             // this makes chat→chat behave the same way.
             .id(chatID)
         } else {
-            chatDaemonUnavailable
+            chatDaemonConnecting
         }
     }
 
-    /// Shown when the wikid daemon is unavailable — chat is daemon-hosted
-    /// after Phase C4, so there is no local fallback. The queue/extraction
-    /// surface still works (it has a local fallback), but interactive chat
-    /// requires the daemon.
-    private var chatDaemonUnavailable: some View {
+    /// Shown while the daemon transport is starting or reconnecting. Chat is
+    /// daemon-hosted after Phase C4, so the coordinator is allowed to be nil
+    /// during that short transition but must never present a manual-install
+    /// failure for it.
+    private var chatDaemonConnecting: some View {
         ContentUnavailableView {
-            Label("Chat Unavailable", systemImage: "bubble.left.and.bubble.right.slash")
+            Label("Connecting to Chat", systemImage: "bubble.left.and.bubble.right")
         } description: {
-            Text("Interactive chat requires the wikid daemon. Run “make install-daemon” and relaunch.")
+            VStack(spacing: 8) {
+                Text("The wikid daemon is starting. Chat will connect automatically.")
+                ProgressView()
+                    .controlSize(.small)
+            }
         }
     }
 
