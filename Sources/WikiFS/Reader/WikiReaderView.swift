@@ -548,6 +548,15 @@ struct WikiReaderView: View {
           .sdw-renderer-card__fallback {
             margin: 0.1em 0 0; font-size: 0.8em; color: var(--muted);
           }
+          /* The card's own drawing of the content. The SVG carries a viewBox,
+             so width alone scales it; the height cap keeps a tall diagram from
+             taking over the page — the renderer pane is where it gets room. */
+          .sdw-renderer-card__preview {
+            margin: 0.6em 0 0; border-radius: 6px; overflow: hidden;
+          }
+          .sdw-renderer-card__preview svg {
+            display: block; width: 100%; height: auto; max-height: 320px;
+          }
           /* The action is an `<a>` and the collapse control a `<button>`; both
              are drawn as the same bordered control so the card reads as one
              affordance either side of activation. */
