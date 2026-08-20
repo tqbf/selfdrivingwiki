@@ -76,12 +76,13 @@ struct CordisSourcePolicyTests {
             "Sources/WikiFSEngine/QueueRuntimeAssembly.swift",
             "Sources/WikiFSEngine/ExtractionRuntimeAssembly.swift",
             "Sources/WikiFSEngine/SearchRuntimeAssembly.swift",
+            "Sources/WikiFSEngine/DaemonTransportRuntimeAssembly.swift",
             "Sources/WikiFSEngine/SearchRuntimeRegistry.swift",
             "Sources/WikiCtlCore/CLITantivyLegResolver.swift",
             "Sources/WikiFS/Renderer/RendererRuntimeAssembly.swift",
         ])
         let forbiddenPatterns = [
-            "import Cordis", "CordisContext", "ServiceKey<",
+            "import Cordis", "CordisContext", "ActivationContext", "ServiceKey<",
         ]
         let enumerator = FileManager.default.enumerator(
             at: sources,
@@ -97,8 +98,17 @@ struct CordisSourcePolicyTests {
                   !relative.hasPrefix("Sources/Cordis/") else { continue }
             let source = try String(contentsOf: file, encoding: .utf8)
             for pattern in forbiddenPatterns {
+                let containsForbiddenAPI: Bool
+                if pattern == "ActivationContext" {
+                    let expression = try NSRegularExpression(pattern: #"\bActivationContext\b"#)
+                    containsForbiddenAPI = expression.firstMatch(
+                        in: source,
+                        range: NSRange(source.startIndex..., in: source)) != nil
+                } else {
+                    containsForbiddenAPI = source.contains(pattern)
+                }
                 #expect(
-                    !source.contains(pattern),
+                    !containsForbiddenAPI,
                     "Forbidden Cordis API \(pattern) in \(relative)")
             }
         }
