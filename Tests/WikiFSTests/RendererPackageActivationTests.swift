@@ -26,6 +26,73 @@ struct RendererPackageActivationTests {
         #expect(FileManager.default.fileExists(atPath: package.stagedRoot.path) == false)
     }
 
+    @Test("the machine index rejects two active versions of one logical renderer")
+    func machineIndexRejectsDuplicateActiveLogicalRenderer() throws {
+        let packageID = try RendererPackageID(validating: "org.example.logical")
+        let firstVersion = try RendererPackageVersion(validating: "1.0.0")
+        let secondVersion = try RendererPackageVersion(validating: "1.0.1")
+        let firstManifest = try Fixture.makeManifest(
+            packageID: packageID,
+            version: firstVersion,
+            contents: Data("first renderer".utf8))
+        let secondManifest = try Fixture.makeManifest(
+            packageID: packageID,
+            version: secondVersion,
+            contents: Data("second renderer".utf8))
+        let timestamp = try RFC3339Timestamp(validating: "2026-08-05T12:00:00+00:00")
+        let firstRecord = try RendererPackageInstallRecord(
+            packageID: packageID,
+            version: firstVersion,
+            expectedPackageHash: try firstManifest.packageHash(),
+            state: .validated,
+            reservedAt: timestamp,
+            updatedAt: timestamp,
+            validatedDescriptors: firstManifest.descriptors)
+        let secondRecord = try RendererPackageInstallRecord(
+            packageID: packageID,
+            version: secondVersion,
+            expectedPackageHash: try secondManifest.packageHash(),
+            state: .validated,
+            reservedAt: timestamp,
+            updatedAt: timestamp,
+            validatedDescriptors: secondManifest.descriptors)
+
+        #expect(throws: RendererMachineIndexStoreError.duplicateLogicalRenderer) {
+            _ = try RendererMachineIndex(records: [firstRecord, secondRecord])
+        }
+    }
+
+    @Test("consecutive activation supersedes the prior logical renderer version")
+    func consecutiveActivationProjectsOnlyNewestVersionAndRetainsRollbackData() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let store = RendererMachineIndexStore(layout: fixture.layout)
+        _ = try await store.read()
+
+        let firstPackage = try fixture.validate()
+        let first = try await store.activate(firstPackage, expectedGeneration: 0, clock: fixture.clock)
+        let firstVersion = fixture.version
+
+        let secondVersion = try fixture.rewrite(
+            versionRaw: "1.0.1",
+            contents: Data("<html>new renderer</html>".utf8))
+        let secondPackage = try fixture.validate()
+        let second = try await store.activate(
+            secondPackage,
+            expectedGeneration: first.generation,
+            clock: fixture.clock)
+
+        #expect(second.records.map(\.version) == [firstVersion, secondVersion])
+        #expect(second.records.contains { $0.version == firstVersion && $0.state == .superseded })
+        #expect(second.records.contains {
+            $0.version == secondVersion && $0.state == .validated && $0.rollbackCandidate == firstVersion
+        })
+        #expect(second.availableDescriptorProjection.map(\.reference) == [secondPackage.manifest.descriptors[0].reference])
+        #expect(FileManager.default.fileExists(atPath: fixture.layout.packageURL(
+            packageID: fixture.packageID,
+            version: firstVersion).path))
+    }
+
     @Test func revalidationFailureCleansStagingAndDoesNotActivate() async throws {
         let fixture = try Fixture()
         defer { fixture.remove() }
@@ -323,10 +390,48 @@ struct RendererPackageActivationTests {
         {"schemaVersion":1,"generation":0,"records":[],"safeModeIsEnabled":false}
         """.utf8)
 
-        #expect(RendererMachineIndex.currentSchemaVersion == 3)
+        #expect(RendererMachineIndex.currentSchemaVersion == 4)
         #expect(throws: RendererMachineIndexStoreError.unsupportedSchemaVersion) {
             _ = try JSONDecoder().decode(RendererMachineIndex.self, from: legacy)
         }
+    }
+
+    @Test("schema v3 duplicate active versions migrate to one active renderer")
+    func schemaV3DuplicateActiveVersionsMigrateToNewestVersion() throws {
+        let packageID = try RendererPackageID(validating: "org.example.legacy")
+        let firstVersion = try RendererPackageVersion(validating: "1.0.0")
+        let secondVersion = try RendererPackageVersion(validating: "1.0.1")
+        let timestamp = try RFC3339Timestamp(validating: "2026-08-05T12:00:00+00:00")
+        let records = try [firstVersion, secondVersion].map { version in
+            let manifest = try Fixture.makeManifest(
+                packageID: packageID,
+                version: version,
+                contents: Data(version.rawValue.utf8))
+            return try RendererPackageInstallRecord(
+                packageID: packageID,
+                version: version,
+                expectedPackageHash: try manifest.packageHash(),
+                state: .validated,
+                reservedAt: timestamp,
+                updatedAt: timestamp,
+                validatedDescriptors: manifest.descriptors)
+        }
+        let legacy = LegacyRendererMachineIndex(
+            schemaVersion: 3,
+            generation: 7,
+            records: records,
+            safeModeIsEnabled: false,
+            installedRendererFailures: [])
+
+        let migrated = try JSONDecoder().decode(
+            RendererMachineIndex.self,
+            from: JSONEncoder().encode(legacy))
+
+        #expect(RendererMachineIndex.currentSchemaVersion == 4)
+        #expect(migrated.generation == 7)
+        #expect(migrated.records.map(\.state) == [.superseded, .validated])
+        #expect(migrated.records.last?.rollbackCandidate == firstVersion)
+        #expect(migrated.availableDescriptorProjection.map(\.reference.version) == [secondVersion])
     }
 
     private final class Fixture {
@@ -358,7 +463,15 @@ struct RendererPackageActivationTests {
             try manifest.canonicalJSON().write(to: source.appendingPathComponent("manifest.json"))
         }
 
-        private static func makeManifest(packageID: RendererPackageID, version: RendererPackageVersion, contents: Data) throws -> RendererManifest {
+        func rewrite(versionRaw: String, contents: Data) throws -> RendererPackageVersion {
+            let version = try RendererPackageVersion(validating: versionRaw)
+            try contents.write(to: source.appendingPathComponent("index.html"))
+            manifest = try Self.makeManifest(packageID: packageID, version: version, contents: contents)
+            try manifest.canonicalJSON().write(to: source.appendingPathComponent("manifest.json"))
+            return version
+        }
+
+        static func makeManifest(packageID: RendererPackageID, version: RendererPackageVersion, contents: Data) throws -> RendererManifest {
             let asset = RendererAsset(path: try RendererRelativePath(validating: "index.html"), digest: RendererSHA256.digest(contents))
             let descriptor = try RendererDescriptor(
                 reference: .init(packageID: packageID, version: version, registrationID: try RendererRegistrationID(validating: "viewer")),
@@ -380,6 +493,14 @@ struct RendererPackageActivationTests {
             catch { Issue.record("Fixture cleanup failed: \(error)") }
         }
     }
+}
+
+private struct LegacyRendererMachineIndex: Encodable {
+    let schemaVersion: Int
+    let generation: UInt64
+    let records: [RendererPackageInstallRecord]
+    let safeModeIsEnabled: Bool
+    let installedRendererFailures: [RendererInstalledRendererFailure]
 }
 
 private struct FixedClock: RendererEventClock {

@@ -5,8 +5,8 @@ import Foundation
 /// Versioned, machine-only package index. SQLite stores this value authoritatively;
 /// `derived/index.json` is a regenerated projection of the same validated value.
 public struct RendererMachineIndex: Codable, Equatable, Sendable {
-    /// Version 3 adds persisted installed-renderer failure accounting.
-    public static let currentSchemaVersion = 3
+    /// Version 4 makes one package version authoritative for each logical renderer.
+    public static let currentSchemaVersion = 4
 
     public let schemaVersion: Int
     public let generation: UInt64
@@ -55,16 +55,51 @@ public struct RendererMachineIndex: Codable, Equatable, Sendable {
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
-        guard schemaVersion == 2 || schemaVersion == Self.currentSchemaVersion else {
+        guard schemaVersion == 2 || schemaVersion == 3 || schemaVersion == Self.currentSchemaVersion else {
             throw RendererMachineIndexStoreError.unsupportedSchemaVersion
         }
+        let decodedRecords = try container.decode([RendererPackageInstallRecord].self, forKey: .records)
         try self.init(
             schemaVersion: Self.currentSchemaVersion,
             generation: container.decode(UInt64.self, forKey: .generation),
-            records: container.decode([RendererPackageInstallRecord].self, forKey: .records),
+            records: schemaVersion < Self.currentSchemaVersion
+                ? Self.migratingLegacyActiveVersions(decodedRecords)
+                : decodedRecords,
             safeModeIsEnabled: container.decode(Bool.self, forKey: .safeModeIsEnabled),
             installedRendererFailures: try container.decodeIfPresent([RendererInstalledRendererFailure].self, forKey: .installedRendererFailures) ?? []
         )
+    }
+
+    private static func migratingLegacyActiveVersions(
+        _ records: [RendererPackageInstallRecord]
+    ) throws -> [RendererPackageInstallRecord] {
+        var claimedLogicalReferences: Set<LogicalRendererReference> = []
+        var supersededReservations: Set<RendererPackageReservation> = []
+        for record in records.sorted(by: >) where record.state == .validated {
+            let logicalReferences = Set(record.validatedDescriptors.map(\.logicalReference))
+            if claimedLogicalReferences.isDisjoint(with: logicalReferences) {
+                claimedLogicalReferences.formUnion(logicalReferences)
+            } else {
+                supersededReservations.insert(.init(packageID: record.packageID, version: record.version))
+            }
+        }
+        return try records.map { record in
+            let reservation = RendererPackageReservation(packageID: record.packageID, version: record.version)
+            guard supersededReservations.contains(reservation) else {
+                guard record.state == .validated, record.rollbackCandidate == nil else { return record }
+                let logicalReferences = Set(record.validatedDescriptors.map(\.logicalReference))
+                let rollbackVersion = records
+                    .filter { candidate in
+                        supersededReservations.contains(.init(packageID: candidate.packageID, version: candidate.version)) &&
+                        candidate.validatedDescriptors.contains { logicalReferences.contains($0.logicalReference) }
+                    }
+                    .map(\.version)
+                    .max()
+                guard let rollbackVersion else { return record }
+                return try record.replacing(state: .validated, updatedAt: record.updatedAt, rollbackCandidate: rollbackVersion)
+            }
+            return try record.replacing(state: .superseded, updatedAt: record.updatedAt)
+        }
     }
 
     public func validate() throws {
@@ -72,6 +107,7 @@ public struct RendererMachineIndex: Codable, Equatable, Sendable {
             throw RendererMachineIndexStoreError.unsupportedSchemaVersion
         }
         var reservations: [RendererPackageReservation: RendererSHA256Digest] = [:]
+        var activeLogicalReferences: Set<LogicalRendererReference> = []
         for record in records {
             let key = RendererPackageReservation(packageID: record.packageID, version: record.version)
             if let existingHash = reservations[key], existingHash != record.expectedPackageHash {
@@ -81,6 +117,12 @@ public struct RendererMachineIndex: Codable, Equatable, Sendable {
                 throw RendererMachineIndexStoreError.duplicatePackageVersion
             }
             reservations[key] = record.expectedPackageHash
+            guard record.state == .validated else { continue }
+            for descriptor in record.validatedDescriptors {
+                guard activeLogicalReferences.insert(descriptor.logicalReference).inserted else {
+                    throw RendererMachineIndexStoreError.duplicateLogicalRenderer
+                }
+            }
         }
     }
 
@@ -103,6 +145,26 @@ public struct RendererMachineIndex: Codable, Equatable, Sendable {
     }
 }
 
+private extension RendererPackageInstallRecord {
+    func replacing(
+        state: RendererPackageInstallState,
+        updatedAt: RFC3339Timestamp,
+        rollbackCandidate: RendererPackageVersion? = nil
+    ) throws -> Self {
+        try Self(
+            packageID: packageID,
+            version: version,
+            expectedPackageHash: expectedPackageHash,
+            state: state,
+            reservedAt: reservedAt,
+            updatedAt: updatedAt,
+            diagnostic: diagnostic,
+            rollbackCandidate: rollbackCandidate ?? self.rollbackCandidate,
+            isSafeModeSuppressed: isSafeModeSuppressed,
+            validatedDescriptors: validatedDescriptors)
+    }
+}
+
 public struct RendererPackageReservation: Hashable, Sendable {
     public let packageID: RendererPackageID
     public let version: RendererPackageVersion
@@ -120,6 +182,7 @@ public enum RendererMachineIndexStoreError: Error, Equatable, Sendable {
     case staleGeneration
     case conflictingExpectedHash
     case duplicatePackageVersion
+    case duplicateLogicalRenderer
     case invalidPackagePath
     case corruptIndex
     case sqliteFailure
