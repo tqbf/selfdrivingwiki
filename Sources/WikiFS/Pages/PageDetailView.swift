@@ -36,8 +36,8 @@ struct PageDetailView: View {
     /// Per-view collapse state for the header. Starts collapsed; persists
     /// across same-type tab switches (SwiftUI keeps the view alive).
     @State private var isHeaderExpanded = false
-    /// Provenance for the inspector's History tab. Loaded via `.task(id:)`
-    /// keyed on `currentPageID` so it re-fires on page navigation.
+    /// Legacy provenance payload retained for compatibility with the shared
+    /// inspector. Current page registrations expose Metadata and Outline.
     @State private var provenanceOrigin: PageOrigin?
     @State private var provenanceHistory: [PageOrigin] = []
     @State private var metadataState: MetadataHydrationState = .idle
@@ -565,8 +565,8 @@ struct PageDetailView: View {
         return MarkdownDocumentIdentity(pageID: pageID, pageVersionID: pageVersionID)
     }
 
-    /// Open the Versions window for the current page (#817). Injected into the
-    /// inspector's `ProvenancePanel` as `onCompareVersions` (page-only). The
+    /// Open the Versions window for the current page (#817). The callback is
+    /// retained for legacy history-compatible inspector registrations. The
     /// `WindowGroup(for: PageVersionCompareContext.self)` dedups by pageID +
     /// wikiID, so re-opening focuses the existing window.
     private func openVersionsWindow() {

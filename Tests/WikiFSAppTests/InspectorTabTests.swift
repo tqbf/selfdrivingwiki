@@ -3,13 +3,13 @@ import Testing
 @testable import WikiFS
 
 struct InspectorTabTests {
-    @Test func pageTabsStartWithMetadata() {
-        #expect(InspectorTab.pageAvailableTabs == [.metadata, .outline, .history])
+    @Test func pageTabsExcludeHistory() {
+        #expect(InspectorTab.pageAvailableTabs == [.metadata, .outline])
     }
 
-    @Test func sourceTabsStartWithMetadata() {
-        #expect(InspectorTab.sourceAvailableTabs(hasOutline: true) == [.metadata, .outline, .history])
-        #expect(InspectorTab.sourceAvailableTabs(hasOutline: false) == [.metadata, .history])
+    @Test func sourceTabsExcludeHistory() {
+        #expect(InspectorTab.sourceAvailableTabs(hasOutline: true) == [.metadata, .outline])
+        #expect(InspectorTab.sourceAvailableTabs(hasOutline: false) == [.metadata])
     }
 
     @Test func chatTabsStartWithMetadata() {
@@ -35,6 +35,13 @@ struct InspectorTabTests {
 
     @Test func legacyHistoryDecodes() {
         #expect(InspectorTab.decodePersisted("history") == .history)
+    }
+
+    @Test func persistedHistorySelectionFallsBackToMetadataForPagesAndSources() {
+        let persistedSelection = InspectorTab.decodePersisted("history")
+        #expect(InspectorTab.normalizedFallback(selection: persistedSelection, availableTabs: InspectorTab.pageAvailableTabs) == .metadata)
+        #expect(InspectorTab.normalizedFallback(selection: persistedSelection, availableTabs: InspectorTab.sourceAvailableTabs(hasOutline: true)) == .metadata)
+        #expect(InspectorTab.normalizedFallback(selection: persistedSelection, availableTabs: InspectorTab.sourceAvailableTabs(hasOutline: false)) == .metadata)
     }
 
     @Test func unknownValueDecodesAsMetadata() {
