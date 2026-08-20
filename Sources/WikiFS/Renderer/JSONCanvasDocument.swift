@@ -398,11 +398,24 @@ struct JSONCanvasDocument: Sendable, Equatable {
             let internalLink = JSONCanvasInternalLink.file(reference)
             return (internalLink.displayLabel, internalLink)
         case "link":
-            guard let rawURL = wireNode.url,
-                  let reference = JSONCanvasWikiReference(rawValue: rawURL)
+            guard let rawURL = wireNode.url else {
+                throw JSONCanvasDecodingError.invalidInternalLink(nodeID.rawValue)
+            }
+            if let reference = JSONCanvasWikiReference(rawValue: rawURL) {
+                let internalLink = JSONCanvasInternalLink.wiki(reference)
+                return (internalLink.displayLabel, internalLink)
+            }
+            guard rawURL.hasPrefix("[[") == false,
+                  rawURL.hasSuffix("]]") == false
             else { throw JSONCanvasDecodingError.invalidInternalLink(nodeID.rawValue) }
-            let internalLink = JSONCanvasInternalLink.wiki(reference)
-            return (internalLink.displayLabel, internalLink)
+            guard let url = URL(string: rawURL),
+                  let scheme = url.scheme?.lowercased(),
+                  scheme == "https" || scheme == "http"
+            else { throw JSONCanvasDecodingError.invalidInternalLink(nodeID.rawValue) }
+            return (rawURL, nil)
+        case "group":
+            let label = wireNode.label?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (label?.isEmpty == false ? label ?? "Group" : "Group", nil)
         default:
             throw JSONCanvasDecodingError.unsupportedNodeType(wireNode.type)
         }
@@ -461,6 +474,7 @@ private struct JSONCanvasWireNode: Decodable {
     let text: String?
     let file: String?
     let url: String?
+    let label: String?
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: JSONCanvasWireKey.self)
@@ -471,8 +485,12 @@ private struct JSONCanvasWireNode: Decodable {
             allowedKeys = ["id", "type", "x", "y", "width", "height", "text"]
         case "file":
             allowedKeys = ["id", "type", "x", "y", "width", "height", "file"]
+        case "group":
+            allowedKeys = ["id", "type", "x", "y", "width", "height", "label", "color", "fontSize"]
+        case "link":
+            allowedKeys = ["id", "type", "x", "y", "width", "height", "url", "color", "fontSize"]
         default:
-            allowedKeys = ["id", "type", "x", "y", "width", "height", "url"]
+            allowedKeys = ["id", "type", "x", "y", "width", "height"]
         }
         try JSONCanvasWireValidation.rejectUnknownKeys(container.allKeys, allowed: allowedKeys)
 
@@ -485,6 +503,7 @@ private struct JSONCanvasWireNode: Decodable {
         text = try container.decodeIfPresent(String.self, forKey: .text)
         file = try container.decodeIfPresent(String.self, forKey: .file)
         url = try container.decodeIfPresent(String.self, forKey: .url)
+        label = try container.decodeIfPresent(String.self, forKey: .label)
     }
 }
 
@@ -497,7 +516,7 @@ private struct JSONCanvasWireEdge: Decodable {
         let container = try decoder.container(keyedBy: JSONCanvasWireKey.self)
         try JSONCanvasWireValidation.rejectUnknownKeys(
             container.allKeys,
-            allowed: ["id", "fromNode", "toNode"]
+            allowed: ["id", "fromNode", "toNode", "label", "fromSide", "toSide", "fromEnd", "toEnd"]
         )
         id = try container.decode(String.self, forKey: .id)
         fromNode = try container.decode(String.self, forKey: .fromNode)
@@ -531,6 +550,7 @@ private struct JSONCanvasWireKey: CodingKey, Hashable {
     static let text = Self("text")
     static let file = Self("file")
     static let url = Self("url")
+    static let label = Self("label")
     static let fromNode = Self("fromNode")
     static let toNode = Self("toNode")
 }

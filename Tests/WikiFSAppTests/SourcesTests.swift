@@ -128,6 +128,13 @@ struct SourcesTests {
         #expect(source.mimeType == MimeType.mermaid)
     }
 
+    @Test func canvasExtensionResolvesToJSONMime() throws {
+        let store = try tempStore()
+        let source = try store.addSource(
+            filename: "diagram.canvas", data: Data("{\"nodes\":[],\"edges\":[]}".utf8))
+        #expect(source.mimeType == MimeType.json)
+    }
+
     @Test func explicitMimeStillWinsOverMmdExtension() throws {
         // The `mimeType:` parameter is the first fallback tried; a caller that
         // says "this is application/custom" must win over the `.mmd` map.
