@@ -89,8 +89,7 @@ struct RendererAttachmentCoordinatorTests {
         let generation = try #require(coordinator.attachmentGeneration)
         try Self.admitJSONCanvasPlaceholder(placeholder, coordinator: coordinator, webView: webView)
         try await Self.runJS("var e=document.createElement('section');e.id='dom-removal-canvas';e.className='sdw-renderer-card';e.style.cssText='width:160px;height:96px';document.body.appendChild(e);window.__sdwRendererAttachmentReport(\(generation));", in: webView)
-        try await Self.waitUntil("placeholder admission") { coordinator.attachmentState(for: placeholder) == .card }
-        #expect(coordinator.activateAttachment(placeholder) == .activate)
+        try await Self.waitUntil("placeholder admission") { coordinator.attachmentState(for: placeholder) == .active }
         #expect(coordinator.attachmentState(for: placeholder) == .active)
         #expect(container.subviews.flatMap(\.subviews).contains { $0.accessibilityIdentifier() == "renderer-attachment-dom-removal-canvas" })
         try await Self.runJS("document.getElementById('dom-removal-canvas').remove();", in: webView)
@@ -336,6 +335,75 @@ struct RendererAttachmentCoordinatorTests {
         #expect(container.subviews.isEmpty)
     }
 
+    @Test("auto-mounted attachment shows the focus indicator only while focused")
+    @MainActor
+    func autoMountedAttachmentFocusIndicatorTracksResponder() throws {
+        let webView = WikiReaderWebView()
+        let container = WikiReaderContainerView(webView: webView)
+        container.frame = .init(x: 0, y: 0, width: 400, height: 300)
+        let window = NSWindow(contentRect: container.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        defer { container.teardown(); window.orderOut(nil) }
+
+        let placeholder = try RendererAttachmentPlaceholderID(validating: "focus-indicator-canvas")
+        container.updateAttachmentViewport(.init(x: 40, y: 80, width: 240, height: 160))
+        _ = window.makeFirstResponder(webView)
+        container.activateAttachment(named: placeholder, takesFocus: false)
+
+        let child = try #require(container.subviews.flatMap(\.subviews).first {
+            $0.accessibilityIdentifier() == "renderer-attachment-focus-indicator-canvas"
+        })
+        #expect(window.firstResponder === webView)
+        #expect(child.layer?.borderWidth == 0)
+
+        container.focusAttachment(named: placeholder)
+        #expect(window.firstResponder === child)
+        #expect(child.layer?.borderWidth == 2)
+
+        _ = window.makeFirstResponder(webView)
+        #expect(window.firstResponder === webView)
+        #expect(child.layer?.borderWidth == 0)
+    }
+
+    @Test("hosted attachment header exposes accessible window and collapse actions")
+    @MainActor
+    func hostedAttachmentHeaderActions() throws {
+        let webView = WikiReaderWebView()
+        let container = WikiReaderContainerView(webView: webView)
+        container.frame = .init(x: 0, y: 0, width: 400, height: 300)
+        let window = NSWindow(contentRect: container.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        defer { container.teardown(); window.orderOut(nil) }
+
+        let placeholder = try RendererAttachmentPlaceholderID(validating: "header-actions-canvas")
+        var opened = false
+        var collapsed = false
+        container.updateAttachmentViewport(.init(x: 40, y: 80, width: 240, height: 160))
+        container.activateAttachment(
+            named: placeholder,
+            onOpen: { opened = true },
+            onExit: { collapsed = true })
+
+        let child = try #require(container.subviews.flatMap(\.subviews).first {
+            $0.accessibilityIdentifier() == "renderer-attachment-header-actions-canvas"
+        })
+        let toolbar = try #require(child.subviews.first {
+            $0.accessibilityIdentifier() == "renderer-attachment-toolbar-header-actions-canvas"
+        })
+        let buttons = toolbar.subviews.flatMap(\.subviews).compactMap { $0 as? NSButton }
+        let openButton = try #require(buttons.first { $0.title == "Open in Window" })
+        let collapseButton = try #require(buttons.first { $0.title == "Collapse" })
+        #expect(openButton.accessibilityLabel() == "Open in Window")
+        #expect(collapseButton.accessibilityLabel() == "Collapse")
+
+        openButton.performClick(nil)
+        collapseButton.performClick(nil)
+        #expect(opened)
+        #expect(collapsed)
+    }
+
     @Test("hosted JSON Canvas attachment mounts the factory's native SwiftUI view")
     @MainActor
     func hostedJSONCanvasAttachmentMountsNativeView() throws {
@@ -424,6 +492,268 @@ struct RendererAttachmentCoordinatorTests {
         #expect(Self.containsHostingView(in: child))
         #expect(window.firstResponder === child)
     }
+
+    @Test("an admitted JSON Canvas fence auto-mounts on its first visible geometry report")
+    @MainActor
+    func admittedJSONCanvasFenceAutoMountsWithoutActivation() throws {
+        let webView = WikiReaderWebView()
+        let container = WikiReaderContainerView(webView: webView)
+        container.frame = .init(x: 0, y: 0, width: 400, height: 300)
+        let window = NSWindow(contentRect: container.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        defer { container.teardown(); window.orderOut(nil) }
+
+        let coordinator = WikiReaderRep.Coordinator()
+        coordinator.webView = webView
+        coordinator.attachmentContainer = container
+        Self.startLifecycleLoad(coordinator, webView: webView)
+        let generation = try #require(coordinator.attachmentGeneration)
+        let placeholder = try RendererAttachmentPlaceholderID(validating: "auto-mounted-canvas")
+        try Self.admitJSONCanvasPlaceholder(placeholder, coordinator: coordinator, webView: webView)
+        let geometry = RendererAttachmentGeometryMessage(
+            generation: generation,
+            placeholderID: placeholder,
+            cssRect: .init(x: 40, y: 80, width: 240, height: 160),
+            visible: true,
+            revision: 1)
+
+        _ = window.makeFirstResponder(webView)
+        coordinator.handleAttachmentGeometry(geometry)
+
+        #expect(coordinator.attachmentState(for: placeholder) == .active)
+        let child = try #require(container.subviews.flatMap(\.subviews).first {
+            $0.accessibilityIdentifier() == "renderer-attachment-auto-mounted-canvas"
+        })
+        #expect(Self.containsHostingView(in: child))
+        #expect(window.firstResponder === webView)
+
+        #expect(coordinator.activateAttachment(placeholder) == .activate)
+        #expect(window.firstResponder === child)
+    }
+
+    @Test("reader attachment composition accepts package-style inline renderers through a generic resolver")
+    func packageStyleInlineRendererUsesGenericComposition() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Sources/WikiFS/Reader/WikiReaderView.swift"),
+            encoding: .utf8)
+
+        #expect(source.contains("RendererInlineAttachmentResolver"))
+        #expect(source.contains("BuiltInRendererReference.reference(for: .jsonCanvas)") == false)
+
+        let pageDetail = try String(
+            contentsOf: root.appendingPathComponent("Sources/WikiFS/Pages/PageDetailView.swift"),
+            encoding: .utf8)
+        #expect(pageDetail.contains("RendererInlineAttachmentResolverFactory.make"))
+        #expect(pageDetail.contains("installedRendererFactory"))
+        #expect(pageDetail.contains("installedRendererFactoryInputs"))
+    }
+
+    @Test("a package-style renderer supplied by the inline resolver auto-mounts without full-renderer fallback")
+    @MainActor
+    func packageStyleInlineResolverAutoMounts() throws {
+        let webView = WikiReaderWebView()
+        let container = WikiReaderContainerView(webView: webView)
+        container.frame = .init(x: 0, y: 0, width: 400, height: 300)
+        let window = NSWindow(contentRect: container.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        defer { container.teardown(); window.orderOut(nil) }
+
+        let coordinator = WikiReaderRep.Coordinator()
+        coordinator.webView = webView
+        coordinator.attachmentContainer = container
+        Self.startLifecycleLoad(coordinator, webView: webView)
+        var resolved = false
+        var presented = 0
+        webView.onRendererActivation = { _, _ in presented += 1 }
+        coordinator.inlineAttachmentResolver = { _, _, _ in
+            resolved = true
+            return .content(AnyView(Text("package-style-inline-renderer")))
+        }
+
+        let generation = try #require(coordinator.attachmentGeneration)
+        let admission = try #require(webView.rendererActivationAdmission)
+        let identity = Self.lifecycleIdentity
+        let bytes = Data(#"{"type":"excalidraw","version":2,"elements":[],"appState":{},"files":{}}"#.utf8)
+        let block = try MarkdownFencedBlock(
+            documentIdentity: identity,
+            parserOrdinal: 0,
+            rawInfoString: "excalidraw",
+            bytes: bytes)
+        let artifact = try RendererEmbeddedContent.InlineArtifact(
+            pageID: identity.pageID,
+            pageVersionID: identity.pageVersionID,
+            blockID: try #require(block.blockID),
+            fenceKind: .excalidraw,
+            mimeType: try .init(validating: "application/json"),
+            bytes: bytes)
+        let packageReference = RendererReference(
+            packageID: try .init(validating: "org.example.package-renderer"),
+            version: try .init(validating: "1.0.0"),
+            registrationID: try .init(validating: "package-viewer"))
+        let placeholder = try RendererAttachmentPlaceholderID(validating: "package-inline-renderer")
+        admission.register(context: .init(
+            pageID: identity.pageID,
+            pageVersionID: identity.pageVersionID,
+            blockID: artifact.blockID,
+            rendererReference: packageReference,
+            input: .inlineArtifact(artifact),
+            capability: admission.capability,
+            generation: generation), attachmentPlaceholderID: placeholder)
+
+        coordinator.handleAttachmentGeometry(.init(
+            generation: generation,
+            placeholderID: placeholder,
+            cssRect: .init(x: 40, y: 80, width: 240, height: 160),
+            visible: true,
+            revision: 1))
+
+        #expect(resolved)
+        #expect(coordinator.attachmentState(for: placeholder) == .active)
+        #expect(presented == 0)
+        let child = try #require(container.subviews.flatMap(\.subviews).first {
+            $0.accessibilityIdentifier() == "renderer-attachment-package-inline-renderer"
+        })
+        #expect(Self.containsHostingView(in: child))
+
+        let toolbar = try #require(child.subviews.first {
+            $0.accessibilityIdentifier() == "renderer-attachment-toolbar-package-inline-renderer"
+        })
+        let toolbarStack = try #require(toolbar.subviews.first)
+        let buttons: [NSButton] = toolbarStack.subviews.compactMap { $0 as? NSButton }
+        let openButton = try #require(buttons.first {
+            $0.accessibilityIdentifier() == "renderer-attachment-open-package-inline-renderer"
+        })
+        openButton.performClick(nil)
+        #expect(presented == 1)
+    }
+
+    @Test("a stale package failure cannot fail a remounted attachment in a newer reader generation")
+    @MainActor
+    func stalePackageFailurePreservesNewGenerationAttachment() throws {
+        let webView = WikiReaderWebView()
+        let container = WikiReaderContainerView(webView: webView)
+        container.frame = .init(x: 0, y: 0, width: 400, height: 300)
+        let window = NSWindow(contentRect: container.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        defer { container.teardown(); window.orderOut(nil) }
+
+        let coordinator = WikiReaderRep.Coordinator()
+        coordinator.webView = webView
+        coordinator.attachmentContainer = container
+        Self.startLifecycleLoad(coordinator, webView: webView)
+        var failures: [@MainActor (RendererSessionFailure) -> Void] = []
+        coordinator.inlineAttachmentResolver = { _, _, onFailure in
+            failures.append(onFailure)
+            return .content(AnyView(Text("package-generation-marker")))
+        }
+
+        let reference = RendererReference(
+            packageID: try .init(validating: "org.example.package-renderer"),
+            version: try .init(validating: "1.0.0"),
+            registrationID: try .init(validating: "package-viewer"))
+        let placeholder = try RendererAttachmentPlaceholderID(validating: "stale-package-placeholder")
+        let admitAndReport: () throws -> Void = {
+            let generation = try #require(coordinator.attachmentGeneration)
+            let admission = try #require(webView.rendererActivationAdmission)
+            let identity = Self.lifecycleIdentity
+            let bytes = Self.jsonCanvasBytes
+            let block = try MarkdownFencedBlock(
+                documentIdentity: identity,
+                parserOrdinal: 0,
+                rawInfoString: "excalidraw",
+                bytes: bytes)
+            let artifact = try RendererEmbeddedContent.InlineArtifact(
+                pageID: identity.pageID,
+                pageVersionID: identity.pageVersionID,
+                blockID: try #require(block.blockID),
+                fenceKind: .excalidraw,
+                mimeType: try .init(validating: "application/json"),
+                bytes: bytes)
+            admission.register(context: .init(
+                pageID: identity.pageID,
+                pageVersionID: identity.pageVersionID,
+                blockID: artifact.blockID,
+                rendererReference: reference,
+                input: .inlineArtifact(artifact),
+                capability: admission.capability,
+                generation: generation), attachmentPlaceholderID: placeholder)
+            coordinator.handleAttachmentGeometry(.init(
+                generation: generation,
+                placeholderID: placeholder,
+                cssRect: .init(x: 40, y: 80, width: 240, height: 160),
+                visible: true,
+                revision: 1))
+        }
+
+        try admitAndReport()
+        #expect(coordinator.attachmentState(for: placeholder) == .active)
+        coordinator.startLoad(markdown: "# New generation", documentIdentity: Self.lifecycleIdentity, isLoading: .constant(true))
+        try admitAndReport()
+        #expect(coordinator.attachmentState(for: placeholder) == .active)
+
+        let staleFailure = try #require(failures.first)
+        staleFailure(.init(sessionID: .init(rawValue: UUID()), kind: .navigationFailed))
+
+        #expect(coordinator.attachmentState(for: placeholder) == .active)
+        #expect(container.subviews.flatMap(\.subviews).contains {
+            $0.accessibilityIdentifier() == "renderer-attachment-stale-package-placeholder"
+        })
+    }
+
+    @Test("geometry from an inactive placeholder cannot move the active attachment")
+    @MainActor
+    func inactivePlaceholderGeometryPreservesActiveAttachment() throws {
+        let webView = WikiReaderWebView()
+        let container = WikiReaderContainerView(webView: webView)
+        container.frame = .init(x: 0, y: 0, width: 400, height: 300)
+        container.layout()
+        let window = NSWindow(contentRect: container.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        defer { container.teardown(); window.orderOut(nil) }
+
+        let coordinator = WikiReaderRep.Coordinator()
+        coordinator.webView = webView
+        coordinator.attachmentContainer = container
+        Self.startLifecycleLoad(coordinator, webView: webView)
+        let generation = try #require(coordinator.attachmentGeneration)
+        let active = try RendererAttachmentPlaceholderID(validating: "geometry-active-canvas")
+        let inactive = try RendererAttachmentPlaceholderID(validating: "geometry-inactive-canvas")
+        try Self.admitJSONCanvasPlaceholder(active, coordinator: coordinator, webView: webView)
+        try Self.admitJSONCanvasPlaceholder(inactive, coordinator: coordinator, webView: webView, parserOrdinal: 1)
+
+        coordinator.handleAttachmentGeometry(.init(
+            generation: generation,
+            placeholderID: active,
+            cssRect: .init(x: 20, y: 20, width: 160, height: 96),
+            visible: true,
+            revision: 1))
+        #expect(coordinator.activateAttachment(active) == .activate)
+        container.layoutSubtreeIfNeeded()
+        let child = try #require(container.subviews.flatMap(\.subviews).first {
+            $0.accessibilityIdentifier() == "renderer-attachment-geometry-active-canvas"
+        })
+        let activeFrame = child.frame
+
+        coordinator.handleAttachmentGeometry(.init(
+            generation: generation,
+            placeholderID: inactive,
+            cssRect: .init(x: 220, y: 180, width: 140, height: 80),
+            visible: true,
+            revision: 1))
+
+        #expect(coordinator.attachmentState(for: active) == .active)
+        #expect(coordinator.attachmentState(for: inactive) == .card)
+        #expect(child.frame == activeFrame)
+    }
+
     @Test("an admitted package fence opens the full renderer instead of an empty attachment")
     @MainActor
     func admittedPackageFencePresentsFullRenderer() throws {

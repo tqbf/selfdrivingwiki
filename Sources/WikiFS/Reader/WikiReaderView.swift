@@ -148,6 +148,9 @@ struct WikiReaderView: View {
     /// Hosts that own the full renderer pane can route a typed activation here.
     /// Readers without that pane leave this nil and the card stays inert.
     var onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)? = nil
+    /// Renderer-owned inline attachment construction. The reader owns the
+    /// admitted placeholder lifecycle but does not know renderer formats.
+    var inlineAttachmentResolver: RendererInlineAttachmentResolver = RendererInlineAttachmentResolverFactory.defaultResolver
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
     @State private var isLoading = true
 
@@ -173,6 +176,7 @@ struct WikiReaderView: View {
                           addURLHandler: addURLHandler,
                           addBookmarkHandler: addBookmarkHandler,
                           onRendererActivation: onRendererActivation,
+                          inlineAttachmentResolver: inlineAttachmentResolver,
                           findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
             if isLoading {
                 ProgressView()
@@ -547,15 +551,6 @@ struct WikiReaderView: View {
           }
           .sdw-renderer-card__fallback {
             margin: 0.1em 0 0; font-size: 0.8em; color: var(--muted);
-          }
-          /* The card's own drawing of the content. The SVG carries a viewBox,
-             so width alone scales it; the height cap keeps a tall diagram from
-             taking over the page — the renderer pane is where it gets room. */
-          .sdw-renderer-card__preview {
-            margin: 0.6em 0 0; border-radius: 6px; overflow: hidden;
-          }
-          .sdw-renderer-card__preview svg {
-            display: block; width: 100%; height: auto; max-height: 320px;
           }
           /* The action is an `<a>` and the collapse control a `<button>`; both
              are drawn as the same bordered control so the card reads as one
@@ -1281,6 +1276,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
     let addURLHandler: (@MainActor @Sendable (String) -> Void)?
     let addBookmarkHandler: (@MainActor @Sendable (BookmarkTargetPickerContext) -> Void)?
     let onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)?
+    let inlineAttachmentResolver: RendererInlineAttachmentResolver
     let findText: String?
     let findVersion: Int
     let findOccurrence: Int
@@ -1296,6 +1292,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         webView.addURLHandler = addURLHandler
         webView.addBookmarkHandler = addBookmarkHandler
         webView.onRendererActivation = onRendererActivation
+        context.coordinator.inlineAttachmentResolver = inlineAttachmentResolver
         webView.navigationDelegate = context.coordinator
         webView.coordinator = context.coordinator
         context.coordinator.webView = webView
@@ -1319,6 +1316,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         webView.addURLHandler = addURLHandler
         webView.addBookmarkHandler = addBookmarkHandler
         webView.onRendererActivation = onRendererActivation
+        context.coordinator.inlineAttachmentResolver = inlineAttachmentResolver
         context.coordinator.store = store
         context.coordinator.currentSelection = currentSelection
         if context.coordinator.loadedMarkdown != markdown ||
@@ -1354,6 +1352,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         weak var webView: WikiReaderWebView?
         weak var attachmentContainer: WikiReaderContainerView?
         private var attachmentCoordinator: RendererAttachmentCoordinator?
+        var inlineAttachmentResolver: RendererInlineAttachmentResolver = RendererInlineAttachmentResolverFactory.defaultResolver
         var store: WikiStoreModel?
         var currentSelection: WikiSelection?
         var loadedMarkdown: String?
@@ -1690,8 +1689,10 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 let identifier = WikiReaderRep.jsString(message.placeholderID.rawValue)
                 webView.evaluateJavaScript("window.__sdwRendererAttachmentReserve && window.__sdwRendererAttachmentReserve(\(identifier), \(reservedHeight));")
             }
-            let rect = RendererAttachmentGeometry.overlayRect(cssRect: message.cssRect, pageZoom: webView.pageZoom, readerBounds: webView.bounds)
-            attachmentContainer.updateAttachmentViewport(message.visible ? rect : .zero)
+            updateAttachmentViewport(for: message.placeholderID, in: webView, container: attachmentContainer)
+            automaticallyMountAttachmentIfPossible(
+                message.placeholderID,
+                isVisible: message.visible)
         }
 
         func handleAttachmentRemoval(_ placeholderID: RendererAttachmentPlaceholderID, generation: Int) {
@@ -1701,13 +1702,9 @@ internal struct WikiReaderRep: NSViewRepresentable {
             if removedMountedChild { attachmentContainer?.collapseAttachment() }
         }
 
-        /// Activate the card's control. Only a renderer with a **native** inline
-        /// attachment (JSON Canvas today) mounts a child over the card rect;
-        /// every other approved renderer — including the bundled Excalidraw web
-        /// package — is presented in the full renderer through
-        /// `onRendererActivation`. Mounting a contentless child instead would
-        /// paint an empty focus-bordered rectangle over the card and show the
-        /// reader nothing, which is exactly what this path used to do.
+        /// Activate the card's explicit control. The injected resolver owns the
+        /// renderer-specific inline view; unsupported renderers retain the full
+        /// renderer route.
         func activateAttachment(_ placeholderID: RendererAttachmentPlaceholderID) -> RendererAttachmentActivationResult {
             guard let attachmentCoordinator, let attachmentContainer else { return .rejected }
             // No registered context means there is nothing authorized to show —
@@ -1716,7 +1713,15 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 failAttachment(placeholderID)
                 return .rejected
             }
-            switch nativeAttachmentContent(for: context, placeholderID: placeholderID) {
+            if attachmentCoordinator.state(for: placeholderID) == .active {
+                attachmentContainer.focusAttachment(named: placeholderID)
+                return .activate
+            }
+            switch inlineAttachmentResolver(
+                context,
+                placeholderID,
+                inlineSessionFailureHandler(for: placeholderID, generation: context.generation)
+            ) {
             case .failed:
                 failAttachment(placeholderID)
                 return .rejected
@@ -1725,20 +1730,15 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 // the full renderer is a sheet the coordinator never hears
                 // close, so a record left `.active` could never be re-activated.
                 return presentInFullRenderer(context)
-            case .canvas(let content):
-                let result = attachmentCoordinator.activate(placeholderID)
-                switch result {
-                case .activate:
-                    attachmentContainer.activateAttachment(
-                        named: placeholderID,
-                        content: content,
-                        onExit: { [weak self] in self?.collapseAttachment(placeholderID) })
-                    setCollapseControl(true, for: placeholderID)
-                case .showInFullRenderer:
-                    // The single active-attachment budget is already spent.
+            case .content(let content):
+                let result = mountInlineAttachment(
+                    content,
+                    named: placeholderID,
+                    in: attachmentContainer,
+                    takesFocus: true,
+                    context: context)
+                if result == .showInFullRenderer {
                     return presentInFullRenderer(context)
-                case .rejected:
-                    break
                 }
                 return result
             }
@@ -1753,27 +1753,96 @@ internal struct WikiReaderRep: NSViewRepresentable {
             return .showInFullRenderer
         }
 
-        private enum NativeAttachmentContent {
-            /// The renderer has no native inline attachment factory.
-            case unsupported
-            case canvas(AnyView)
-            case failed
+        /// Mount the first eligible visible card without moving keyboard focus
+        /// away from the reader. Explicit activation uses the same resolver but
+        /// is allowed to move focus into the interactive child.
+        private func automaticallyMountAttachmentIfPossible(
+            _ placeholderID: RendererAttachmentPlaceholderID,
+            isVisible: Bool
+        ) {
+            guard isVisible,
+                  let attachmentCoordinator,
+                  attachmentCoordinator.state(for: placeholderID) == .card,
+                  let attachmentContainer,
+                  attachmentContainer.hasMountedAttachment == false,
+                  let context = webView?.rendererActivationAdmission?.attachmentContext(for: placeholderID)
+            else { return }
+            switch inlineAttachmentResolver(
+                context,
+                placeholderID,
+                inlineSessionFailureHandler(for: placeholderID, generation: context.generation)
+            ) {
+            case .unsupported:
+                // The user can still explicitly Open this renderer in its
+                // full-window presentation.
+                return
+            case .failed:
+                failAttachment(placeholderID)
+            case .content(let content):
+                _ = mountInlineAttachment(
+                    content,
+                    named: placeholderID,
+                    in: attachmentContainer,
+                    takesFocus: false,
+                    context: context)
+            }
         }
 
-        private func nativeAttachmentContent(
-            for context: RendererEmbedActivationContext,
-            placeholderID: RendererAttachmentPlaceholderID
-        ) -> NativeAttachmentContent {
-            guard context.rendererReference == BuiltInRendererReference.reference(for: .jsonCanvas),
-                  case .inlineArtifact(let artifact) = context.input
-            else { return .unsupported }
-            do {
-                let factory = NativeJSONCanvasAttachmentFactory.fencedOnly()
-                return .canvas(try factory.makeView(for: .fenced(artifact)))
-            } catch {
-                DebugLog.reader("native JSON Canvas attachment failed for \(placeholderID.rawValue): \(error)")
-                return .failed
+        private func mountInlineAttachment(
+            _ content: AnyView,
+            named placeholderID: RendererAttachmentPlaceholderID,
+            in attachmentContainer: WikiReaderContainerView,
+            takesFocus: Bool,
+            context: RendererEmbedActivationContext
+        ) -> RendererAttachmentActivationResult {
+            guard let attachmentCoordinator else { return .rejected }
+            let result = attachmentCoordinator.activate(placeholderID)
+            guard result == .activate else { return result }
+            if let webView {
+                updateAttachmentViewport(for: placeholderID, in: webView, container: attachmentContainer)
             }
+            attachmentContainer.activateAttachment(
+                named: placeholderID,
+                content: content,
+                takesFocus: takesFocus,
+                onOpen: { [weak self] in
+                    guard let self else { return }
+                    _ = self.presentInFullRenderer(context)
+                },
+                onExit: { [weak self] in self?.collapseAttachment(placeholderID) })
+            setCollapseControl(true, for: placeholderID)
+            return result
+        }
+
+        private func inlineSessionFailureHandler(
+            for placeholderID: RendererAttachmentPlaceholderID,
+            generation: Int
+        ) -> @MainActor (RendererSessionFailure) -> Void {
+            { [weak self] failure in
+                guard let self,
+                      let attachmentCoordinator = self.attachmentCoordinator,
+                      attachmentCoordinator.generation == generation
+                else { return }
+                let state = attachmentCoordinator.state(for: placeholderID)
+                guard state != .unresolved, state != .closed else { return }
+                DebugLog.reader("inline renderer session failed for \(placeholderID.rawValue): \(failure.kind)")
+                self.failAttachment(placeholderID)
+            }
+        }
+
+        private func updateAttachmentViewport(
+            for placeholderID: RendererAttachmentPlaceholderID,
+            in webView: WikiReaderWebView,
+            container: WikiReaderContainerView
+        ) {
+            guard let geometry = attachmentCoordinator?.geometry(for: placeholderID) else { return }
+            let rect = RendererAttachmentGeometry.overlayRect(
+                cssRect: geometry.cssRect,
+                pageZoom: webView.pageZoom,
+                readerBounds: webView.bounds)
+            container.updateAttachmentViewport(
+                geometry.visible ? rect : .zero,
+                for: placeholderID)
         }
 
         /// Add or remove the card's Collapse control. The document script no

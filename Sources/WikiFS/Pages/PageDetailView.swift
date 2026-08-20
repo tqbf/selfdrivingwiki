@@ -17,6 +17,8 @@ struct PageDetailView: View {
     /// Optional typed renderer admission sink. When absent, rich cards stay
     /// static and do not expose activation metadata.
     let onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)?
+    let installedRendererFactory: InstalledRendererFactory
+    let installedRendererFactoryInputs: InstalledRendererFactory.Inputs
     @State private var isEditing = false
     /// Pending scroll-to-heading for the editor (outline click while editing).
     @State private var editorScrollRequest: EditorScrollRequest?
@@ -63,12 +65,16 @@ struct PageDetailView: View {
         launcher: AgentLauncher,
         session: WikiSession,
         fileProvider: FileProviderFacade,
+        installedRendererFactory: InstalledRendererFactory = .unavailable,
+        installedRendererFactoryInputs: InstalledRendererFactory.Inputs = .unavailable,
         onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)? = nil
     ) {
         self._store = Bindable(wrappedValue: store)
         self._launcher = Bindable(wrappedValue: launcher)
         self.session = session
         self.fileProvider = fileProvider
+        self.installedRendererFactory = installedRendererFactory
+        self.installedRendererFactoryInputs = installedRendererFactoryInputs
         self.onRendererActivation = onRendererActivation
     }
 
@@ -484,6 +490,10 @@ struct PageDetailView: View {
                         documentIdentity: currentPageDocumentIdentity,
                         fileProvider: fileProvider,
                         onRendererActivation: onRendererActivation,
+                        inlineAttachmentResolver: RendererInlineAttachmentResolverFactory.make(
+                            store: store.internalStore,
+                            installedRendererFactory: installedRendererFactory,
+                            installedRendererFactoryInputs: installedRendererFactoryInputs),
                         findText: findText, findVersion: findVersion,
                         findOccurrence: findOccurrence)
             .frame(maxWidth: .infinity)

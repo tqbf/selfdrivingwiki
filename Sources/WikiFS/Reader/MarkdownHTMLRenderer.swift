@@ -319,11 +319,6 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         }()
         let placeholderID = escapeAttribute(plan.placeholderID)
         let summary = escape(plan.semanticContent)
-        // The card used to print the literal "static preview" whenever nothing
-        // had failed, promising a preview it never drew, and the raw enum case
-        // name when something had. Draw the real thing, and say why when there
-        // is nothing to draw.
-        let previewHTML = Self.previewHTML(for: plan)
         let fallbackNoticeHTML: String = {
             guard let reason = plan.fallbackReason else { return "" }
             return #"<p class="sdw-renderer-card__fallback">\#(escape(Self.fallbackNotice(for: reason)))</p>"#
@@ -391,23 +386,10 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         <section class="sdw-renderer-card" id="\(placeholderID)" role="group" aria-label="\(aria)" data-renderer-reference="\(escapeAttribute(refValue))"\(inputAttribute)>
           <header class="sdw-renderer-card__header">\(title)</header>
           <p class="sdw-renderer-card__summary">\(summary)</p>
-          \(previewHTML)\(fallbackNoticeHTML)
+          \(fallbackNoticeHTML)
           \(actionHTML)
         </section>
         """
-    }
-
-    /// The card's own drawing of the content, for the renderers that can be
-    /// drawn without running their package. Absent for everything else, which
-    /// leaves the card as its name, summary, and control.
-    private static func previewHTML(for plan: RendererEmbedPlan) -> String {
-        guard plan.fallbackReason == nil,
-              let input = plan.input,
-              case .inlineArtifact(let artifact) = input,
-              artifact.fenceKind == .excalidraw,
-              let svg = ExcalidrawStaticPreview.svg(from: artifact.bytes)
-        else { return "" }
-        return #"<div class="sdw-renderer-card__preview">\#(svg)</div>"#
     }
 
     /// A reader-facing sentence for a fence the renderer would not take.

@@ -44,6 +44,14 @@ import Testing
         #expect(source.contains("SourceRendererPresentationPlanner.isHTMLSource(file)"))
         #expect(source.contains("refreshRendererPresentation"))
 
+        // Source readers must use the same renderer composition as page
+        // readers. Both markdown paths (HEAD and native source content) need
+        // the installed-package factory and its validated input snapshot so
+        // inline attachments do not silently fall back to the host-only
+        // default resolver.
+        #expect(source.components(separatedBy: "RendererInlineAttachmentResolverFactory.make").count - 1 == 2)
+        #expect(source.components(separatedBy: "installedRendererFactoryInputs: installedRendererFactoryInputs").count - 1 == 2)
+
         let sourceRefreshStart = try #require(source.range(of: ".onChange(of: store.sources)"))
         let sourceRefreshEnd = try #require(source[sourceRefreshStart.lowerBound...].range(of: ".background"))
         let sourceRefresh = source[sourceRefreshStart.lowerBound..<sourceRefreshEnd.lowerBound]

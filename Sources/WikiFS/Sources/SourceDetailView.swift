@@ -1367,6 +1367,10 @@ struct SourceDetailView: View {
                             currentSelection: store.selection,
                             store: store,
                             onRendererActivation: activateRendererPane(reference:input:),
+                            inlineAttachmentResolver: RendererInlineAttachmentResolverFactory.make(
+                                store: store.internalStore,
+                                installedRendererFactory: installedRendererFactory,
+                                installedRendererFactoryInputs: installedRendererFactoryInputs),
                             findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
                 .zoomShortcuts($readerZoom)
                 .zoomScroll($readerZoom)
@@ -1382,6 +1386,10 @@ struct SourceDetailView: View {
                             currentSelection: store.selection,
                             store: store,
                             onRendererActivation: headVersion == nil ? nil : activateRendererPane(reference:input:),
+                            inlineAttachmentResolver: RendererInlineAttachmentResolverFactory.make(
+                                store: store.internalStore,
+                                installedRendererFactory: installedRendererFactory,
+                                installedRendererFactoryInputs: installedRendererFactoryInputs),
                             findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
                 .zoomShortcuts($readerZoom)
                 .zoomScroll($readerZoom)
