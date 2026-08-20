@@ -18,7 +18,8 @@ The process scope owns these services:
 - operation policy resolution;
 - PATH and credential resolution;
 - private provider spawn records;
-- backend construction and reuse by operation snapshot and provider ID.
+- backend construction and reuse by operation snapshot and provider ID;
+- provider catalog discovery with the same command and credential resolvers.
 
 The queue runtime remains a child composition boundary. `QueueRuntimeAssembly` still owns queue stores, providers, factories, output, and engine lifecycle.
 
@@ -70,6 +71,7 @@ Diagnostics can include provider IDs and operation kinds. Diagnostics cannot inc
 
 The app injects the same facade into these clients:
 
+- the provider settings view;
 - the settings launcher;
 - every `WikiSession` launcher;
 - `AppQueueIngestionProvider`.

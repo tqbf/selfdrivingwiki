@@ -134,3 +134,19 @@ The remaining low findings cover PATH error-message quality, daemon-only behavio
 A follow-up removed the daemon cold-start duplicate configuration read. One process-local preparation now supplies claim attribution and launcher startup. Preflight failure closes the prepared runtime before retry, so a released token cannot become a permanent retry failure.
 
 Follow-up verification passed `make build`, `make test` with 3,421 tests, the 10-test store concurrency gate, bare SwiftPM gates, and 112 focused chat/provider tests. GLM 5.2 reviewed the follow-up, found one medium retry defect, verified its fix, and returned `APPROVE WITH NON-BLOCKING FINDINGS`.
+
+## Provider catalog follow-up
+
+The provider runtime now owns ACP catalog discovery. The Cordis graph registers a typed `agent-provider.catalog-probe` capability.
+
+The runtime resolves the draft provider command and credential through its declared dependencies. It returns only the typed catalog observation.
+
+The provider settings view receives the existing stable facade. It no longer resolves the command or constructs `ACPProviderModelProbe`.
+
+The view still owns draft input, refresh presentation state, and configuration persistence. Cordis does not own SwiftUI or persisted configuration state.
+
+Focused tests cover shuffled registration, dependency routing, missing commands, disposal, the fixed service label, and the removed direct construction path.
+
+Final verification passed `make build`. It also passed `make test` with 3,475 tests in 335 suites.
+
+An independent review found two medium safeguards. The implementation now cancels stale provider refresh tasks and rejects stale completions. A source-policy test also restricts direct `AgentProviderRuntime` construction to the approved assembly file.
