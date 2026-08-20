@@ -1,6 +1,10 @@
 # Content-Type Over Extension — make `mime_type` authoritative
 
 **Status:** ✅ Implemented (2026-06-21, branch `feature/content-type-over-extension`).
+
+> **Successor:** [`centralized-mime-detection.md`](centralized-mime-detection.md) replaces
+> the narrow `ContentSniff` policy with the canonical bounded detector. This file remains
+> the historical record for the first content-over-extension change.
 **Parent design:** [`sources-redesign.md`](sources-redesign.md) "Design Principle: Content-Type
 Over Extension" (lines 419-475).
 **Consumed by:** [`phase-c-source-markdown-projection.md`](phase-c-source-markdown-projection.md)

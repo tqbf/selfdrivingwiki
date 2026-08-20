@@ -118,26 +118,20 @@ public enum WebsiteSnapshotExtractor {
         return components.joined(separator: "/")
     }
 
-    /// Infer the MIME type for downloaded image bytes: sniff magic bytes first,
-    /// then trust the response content-type (when image/*), then the URL's
-    /// extension via UTType. Falls back to `application/octet-stream`.
-    public static func inferMIME(
+    public static func detection(
         data: Data, responseContentType: String?, url: URL
-    ) -> String {
-        if let sniffed = ContentSniff.mimeType(of: data) { return sniffed }
-        if let ct = responseContentType,
-           let mime = URLFetchService.normalizedMIME(ct),
-           mime.hasPrefix("image/" ) {
-            return mime
-        }
+    ) -> (hints: ContentTypeDetectionHints, result: ContentTypeDetectionResult) {
         let urlExt = (url.lastPathComponent as NSString).pathExtension.lowercased()
         #if canImport(UniformTypeIdentifiers)
-        if !urlExt.isEmpty,
-           let mime = UTType(filenameExtension: urlExt)?.preferredMIMEType {
-            return mime
-        }
+        let utiMIME = urlExt.isEmpty ? nil : UTType(filenameExtension: urlExt)?.preferredMIMEType
+        #else
+        let utiMIME: String? = nil
         #endif
-        return MimeType.octetStream
+        let hints = ContentTypeDetectionHints(
+            declaredMIME: responseContentType.map { .init($0, origin: .httpResponse) },
+            filenameExtension: urlExt.isEmpty ? nil : urlExt,
+            utiMIME: utiMIME)
+        return (hints, ContentTypeDetector.detect(.init(data: data, hints: hints)))
     }
 
     // MARK: - Disambiguation (pure)
@@ -257,13 +251,16 @@ public enum WebsiteSnapshotExtractor {
             }
         }
 
-        // 3. Infer MIME → extension → candidate path per downloaded image (pure).
-        //    MIME computed once and reused (LOW-2 fix).
-        var mimes: [String: String] = [:]
+        // 3. Detect MIME once, then use the canonical result for path formatting.
+        var detections: [String: (ContentTypeDetectionHints, ContentTypeDetectionResult)] = [:]
         let candidates = downloadOrder.map { urlKey -> String in
             let d = downloadedByURL[urlKey]!
-            let mime = inferMIME(data: d.data, responseContentType: d.responseContentType, url: d.resolved.absoluteURL)
-            mimes[urlKey] = mime
+            let detected = detection(
+                data: d.data,
+                responseContentType: d.responseContentType,
+                url: d.resolved.absoluteURL)
+            detections[urlKey] = (detected.hints, detected.result)
+            let mime = detected.result.normalizedMIMEType ?? MimeType.octetStream
             let ext = URLFetchService.binaryExtension(forMIME: mime, url: d.resolved.absoluteURL)
             return relativePath(for: d.resolved.absoluteURL, fileExtension: ext)
         }
@@ -288,15 +285,18 @@ public enum WebsiteSnapshotExtractor {
         }
         var images: [SnapshotImage] = []
         for urlKey in downloadOrder {
-            guard let d = downloadedByURL[urlKey], let path = pathByURL[urlKey] else { continue }
-            let mime = mimes[urlKey] ?? MimeType.octetStream
+            guard let d = downloadedByURL[urlKey],
+                  let path = pathByURL[urlKey],
+                  let detected = detections[urlKey] else { continue }
             let filename = (path as NSString).lastPathComponent
             images.append(SnapshotImage(
                 originalPath: path,
                 filename: filename,
                 data: d.data,
-                mimeType: mime,
-                sourceURL: d.resolved.absoluteURL))
+                mimeType: detected.1.normalizedMIMEType ?? MimeType.octetStream,
+                sourceURL: d.resolved.absoluteURL,
+                detectionHints: detected.0,
+                detectionResult: detected.1))
         }
 
         // 6. Rewrite srcs in scoped tokens + render markdown (pure).

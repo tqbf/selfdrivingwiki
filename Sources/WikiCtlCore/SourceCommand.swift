@@ -121,9 +121,11 @@ public enum SourceCommand {
         let (material, _) = try await WebsiteMaterializer(rawInput: rawInput, fetcher: fetcher)
             .materializeWithPlan()
         let summary = try store.addSource(
-            filename: material.filename, data: material.data,
-            zoteroItemKey: material.zoteroItemKey, zoteroItemTitle: material.zoteroItemTitle,
-            mimeType: material.mimeType, provenance: material.provenance,
+            filename: material.filename,
+            data: material.data,
+            detectionHints: material.detectionHints,
+            ingestMetadata: material.ingestMetadata,
+            provenance: material.provenance,
             role: .primary, originalPath: nil, activityID: nil,
             resolvedDisplayName: nil)
         return Result(
@@ -418,9 +420,12 @@ public enum SourceCommand {
         in store: WikiStore
     ) throws {
         switch material {
-        case .contentVersion(let data, let prov):
+        case .contentVersion(let data, let detectionHints, let prov):
             _ = try store.appendContentVersion(
-                sourceID: sourceID, data: data, mimeType: nil, provenance: prov)
+                sourceID: sourceID,
+                data: data,
+                detectionHints: detectionHints,
+                provenance: prov)
         case .derivedMarkdown(let content):
             try store.appendDerivedMarkdown(
                 sourceID: sourceID, content: content, origin: .transcript,

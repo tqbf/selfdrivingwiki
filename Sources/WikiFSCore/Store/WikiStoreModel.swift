@@ -2053,10 +2053,14 @@ public final class WikiStoreModel {
         resolvedDisplayName: String?? = nil
     ) throws -> SourceSummary {
         let summary = try store.addSource(
-            filename: m.filename, data: m.data,
-            zoteroItemKey: m.zoteroItemKey, zoteroItemTitle: m.zoteroItemTitle,
-            mimeType: m.mimeType, provenance: m.provenance, role: .primary,
-            originalPath: nil, activityID: nil,
+            filename: m.filename,
+            data: m.data,
+            detectionHints: m.detectionHints,
+            ingestMetadata: m.ingestMetadata,
+            provenance: m.provenance,
+            role: .primary,
+            originalPath: nil,
+            activityID: nil,
             resolvedDisplayName: resolvedDisplayName)
         appendExtractedMarkdown(to: summary, from: m)
         return summary
@@ -2128,9 +2132,9 @@ public final class WikiStoreModel {
         return MaterializedSource(
             filename: enriched.filename,
             data: enriched.data,
-            mimeType: m.mimeType,
-            zoteroItemKey: m.zoteroItemKey,
-            zoteroItemTitle: m.zoteroItemTitle,
+            detectionHints: m.detectionHints,
+            detectionResult: enriched.detectionResult,
+            ingestMetadata: m.ingestMetadata,
             provenance: m.provenance,
             extractedMarkdown: enriched.extractedMarkdown,
             extractionTechnique: technique)
@@ -2177,7 +2181,8 @@ public final class WikiStoreModel {
             // Pre-resolve display name off-main for PDFs (issue #229).
             let resolvedDisplayName = await preResolveDisplayName(
                 filename: materialized.filename, data: materialized.data,
-                mimeType: materialized.mimeType, zoteroItemTitle: materialized.zoteroItemTitle)
+                mimeType: materialized.mimeType,
+                zoteroItemTitle: materialized.ingestMetadata?.externalItemTitle)
 
             do {
                 let summary = try storeMaterialized(materialized, resolvedDisplayName: resolvedDisplayName)
@@ -2583,7 +2588,8 @@ public final class WikiStoreModel {
         // (issue #229). Non-PDFs are unaffected (helper returns nil → inline).
         let resolvedDisplayName = await preResolveDisplayName(
             filename: page.filename, data: page.data,
-            mimeType: page.mimeType, zoteroItemTitle: page.zoteroItemTitle)
+            mimeType: page.mimeType,
+            zoteroItemTitle: page.ingestMetadata?.externalItemTitle)
         var summary: SourceSummary
         if snapshot.plan.format == .html && !snapshot.images.isEmpty {
             summary = try storeSnapshot(snapshot)
@@ -2634,15 +2640,22 @@ public final class WikiStoreModel {
         let activityID = try store.ensureFetchActivity(provenance: prov)
         // 2. Store the page (source-level dedup intact; shares the activity).
         let pageSummary = try store.addSource(
-            filename: snapshot.page.filename, data: snapshot.page.data,
-            zoteroItemKey: nil, zoteroItemTitle: nil,
-            mimeType: snapshot.page.mimeType, provenance: prov, role: .primary,
-            originalPath: nil, activityID: activityID)
+            filename: snapshot.page.filename,
+            data: snapshot.page.data,
+            detectionHints: snapshot.page.detectionHints,
+            ingestMetadata: snapshot.page.ingestMetadata,
+            provenance: prov,
+            role: .primary,
+            originalPath: nil,
+            activityID: activityID,
+            resolvedDisplayName: nil)
         // 3. Store each image as a per-snapshot .media source.
         for image in snapshot.images {
             DebugLog.trying("addSnapshotImage", operation: {
                 try store.addSnapshotImage(
-                    filename: image.filename, data: image.data, mimeType: image.mimeType,
+                    filename: image.filename,
+                    data: image.data,
+                    detectionHints: image.detectionHints,
                     originalPath: image.originalPath, sourceURL: image.sourceURL,
                     activityID: activityID, role: .media)
             })
@@ -2707,9 +2720,12 @@ public final class WikiStoreModel {
         }
         let material = try await service.materialize(origin: origin)
         switch material {
-        case .contentVersion(let data, let prov):
+        case .contentVersion(let data, let detectionHints, let prov):
             _ = try store.appendContentVersion(
-                sourceID: id, data: data, mimeType: nil, provenance: prov)
+                sourceID: id,
+                data: data,
+                detectionHints: detectionHints,
+                provenance: prov)
         case .derivedMarkdown(let content):
             try store.appendDerivedMarkdown(
                 sourceID: id, content: content, origin: .transcript,
@@ -2726,9 +2742,15 @@ public final class WikiStoreModel {
     public func addSource(filename: String, data: Data) {
         do {
             _ = try store.addSource(
-                filename: filename, data: data, zoteroItemKey: nil, zoteroItemTitle: nil,
-                mimeType: nil, provenance: nil, role: .primary,
-                originalPath: nil, activityID: nil)
+                filename: filename,
+                data: data,
+                detectionHints: ContentTypeDetectionHints(filename: filename),
+                ingestMetadata: nil,
+                provenance: nil,
+                role: .primary,
+                originalPath: nil,
+                activityID: nil,
+                resolvedDisplayName: nil)
             // No manual reload — the bus fires reloadFromStore() async after the
             // store write.
         } catch WikiStoreError.duplicateContent(let existing) {
@@ -2768,7 +2790,8 @@ public final class WikiStoreModel {
         // Pre-resolve display name off-main for PDFs (issue #229).
         let resolvedDisplayName = await preResolveDisplayName(
             filename: materialized.filename, data: materialized.data,
-            mimeType: materialized.mimeType, zoteroItemTitle: materialized.zoteroItemTitle)
+            mimeType: materialized.mimeType,
+            zoteroItemTitle: materialized.ingestMetadata?.externalItemTitle)
         do {
             let summary = try storeMaterialized(materialized, resolvedDisplayName: resolvedDisplayName)
             // No manual reload — the bus fires reloadFromStore() async after the

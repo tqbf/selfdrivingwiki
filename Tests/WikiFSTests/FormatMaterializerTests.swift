@@ -229,9 +229,9 @@ struct FormatMaterializerTests {
     // MARK: - Dispatch helpers (pure, mirror URLFetchServiceTests)
 
     @Test func normalizedMIMEStripsCharset() {
-        #expect(FormatMaterializer.normalizedMIME("text/html; charset=UTF-8") == "text/html")
-        #expect(FormatMaterializer.normalizedMIME("  APPLICATION/PDF ") == "application/pdf")
-        #expect(FormatMaterializer.normalizedMIME(nil) == nil)
+        #expect(ContentTypeDetector.normalizeMIMEType("text/html; charset=UTF-8") == "text/html")
+        #expect(ContentTypeDetector.normalizeMIMEType("  APPLICATION/PDF ") == "application/pdf")
+        #expect(ContentTypeDetector.normalizeMIMEType(nil) == nil)
     }
 
     @Test func ensureExtensionDoesNotDouble() {
@@ -247,20 +247,25 @@ struct FormatMaterializerTests {
         #expect(FormatMaterializer.sanitizeStem("   ") == "untitled")
     }
 
-    @Test func shouldSniffOnlyAmbiguousTypes() {
-        #expect(FormatMaterializer.shouldSniff(nil))
-        #expect(FormatMaterializer.shouldSniff("text/html"))
-        #expect(FormatMaterializer.shouldSniff("application/octet-stream"))
-        #expect(!FormatMaterializer.shouldSniff("application/pdf"))
-        #expect(!FormatMaterializer.shouldSniff("image/png"))
-        #expect(!FormatMaterializer.shouldSniff("text/plain"))
+    @Test func dispatchUsesDetectionResult() {
+        let result = ContentTypeDetector.detect(.init(
+            data: Data("%PDF-1.4".utf8),
+            hints: .init(declaredMIME: .init("text/plain", origin: .httpResponse))))
+        let plan = FormatMaterializer.dispatch(
+            data: Data("%PDF-1.4".utf8),
+            detectionResult: result,
+            stem: "renamed",
+            extensionHint: "txt")
+        #expect(plan.format == .pdf)
+        #expect(plan.detectionResult == result)
+        #expect(plan.filename == "renamed.pdf")
     }
 
-    @Test func sniffContentTypeMagicNumbers() {
-        #expect(ContentSniff.mimeType(of: Data("%PDF-1.4".utf8)) == "application/pdf")
-        #expect(ContentSniff.mimeType(of: Data([0x89, 0x50, 0x4E, 0x47])) == "image/png")
-        #expect(ContentSniff.mimeType(of: Data("<!DOCTYPE html>".utf8)) == nil)
-        #expect(ContentSniff.mimeType(of: Data()) == nil)
+    @Test func fullPNGSignatureIsRequired() {
+        let full = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+        let short = Data([0x89, 0x50, 0x4E, 0x47])
+        #expect(ContentTypeDetector.detect(.init(data: full)).normalizedMIMEType == "image/png")
+        #expect(ContentTypeDetector.detect(.init(data: short)).normalizedMIMEType == nil)
     }
 
     // MARK: - AC.7: FormatMaterializer has no URL-type dependency

@@ -9,17 +9,12 @@ import Foundation
 /// place — a typo like `"application/pdf "` can no longer silently mis-guard,
 /// because a single typo'd call site just becomes a compile-time mismatch.
 ///
-/// All matching is **case-insensitive**, per RFC 2045 (MIME types are
-/// case-insensitive). Stored types are normally lowercase already
-/// (`ContentSniff` and `FormatMaterializer.normalizedMIME` both lowercase),
-/// but accepting any casing here makes the predicates correct regardless of
-/// how a type reached the codebase (e.g. a raw `Content-Type` header).
+/// All matching is case-insensitive, per RFC 2045. New stored values pass
+/// through `ContentTypeDetector.normalizeMIMEType` before persistence.
+/// Predicates still accept mixed case for legacy and external values.
 ///
-/// Lives in `WikiFSTypes` (the shared leaf target) so the link-cluster renderer
-/// `WikiLinkMarkdown.embedHTML` (in `WikiFSLinks`) can call `MimeType.isPDF`
-/// without depending on `WikiFSCore`, while the store/ingest paths
-/// (`ContentSniff`, `ExternalEmbed`, in `WikiFSCore`) also reference it (module
-/// restructuring Phase 1, #532). Extracted from `ContentSniff.swift`.
+/// This type stays in the shared `WikiFSTypes` leaf target. Link rendering and
+/// core ingestion can share these MIME constants without a dependency cycle.
 public enum MimeType {
 
     // MARK: - Constants

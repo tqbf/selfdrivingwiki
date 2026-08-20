@@ -222,8 +222,8 @@ struct SourceMaterializerTests {
         #expect(prov.agentName == "zotero")
         #expect(prov.activityKind == "import")
         #expect(prov.externalIdentity == "PARENT1")
-        #expect(source.zoteroItemKey == "PARENT1")
-        #expect(source.zoteroItemTitle == "My Paper")
+        #expect(source.ingestMetadata?.externalItemID == "PARENT1")
+        #expect(source.ingestMetadata?.externalItemTitle == "My Paper")
     }
 
     /// AC.3 — a Zotero HTML attachment now routes through format dispatch and
@@ -341,6 +341,24 @@ struct SourceMaterializerTests {
         let origin = try requireOrigin(store, source.id)
         #expect(origin.agentName == "legacy-import")
         #expect(origin.activityKind == "fetch")
+    }
+
+    @Test func typedAddSourceUsesFilenameUTIFallback() throws {
+        let store = try tempStore()
+        let summary = try store.addSource(
+            filename: "notes.md",
+            data: Data("# Notes".utf8),
+            detectionHints: ContentTypeDetectionHints(filename: "notes.md"),
+            ingestMetadata: nil,
+            provenance: nil,
+            role: .primary,
+            originalPath: nil,
+            activityID: nil,
+            resolvedDisplayName: nil)
+        let activeVersion = try #require(try store.activeContentVersion(sourceID: summary.id))
+
+        #expect(MimeType.isMarkdown(summary.mimeType))
+        #expect(activeVersion.mimeType == summary.mimeType)
     }
 
     // MARK: - appendContentVersion WITH provenance (forward-compat substrate)

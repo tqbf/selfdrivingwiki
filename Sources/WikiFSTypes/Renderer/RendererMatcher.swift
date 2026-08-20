@@ -1,5 +1,41 @@
 import Foundation
 
+/// A structured content kind that byte ingestion and renderer matching can share.
+public enum ContentArtifactKind: String, Codable, CaseIterable, Hashable, Sendable {
+    case jsonCanvas
+}
+
+/// A bounded artifact-validation input. Callers state completeness explicitly.
+public struct BoundedArtifactInput: Hashable, Sendable {
+    public let bytes: Data
+    public let isComplete: Bool
+
+    public init(bytes: Data, isComplete: Bool) {
+        self.bytes = Data(bytes.prefix(ContentArtifactValidationLimits.maximumInputByteCount))
+        self.isComplete = isComplete && bytes.count <= ContentArtifactValidationLimits.maximumInputByteCount
+    }
+}
+
+public enum ContentArtifactValidationLimits {
+    public static let maximumInputByteCount = 64 * 1_024
+}
+
+/// Fail-closed structural validation for supported structured artifacts.
+public enum ContentArtifactValidator {
+    public static func matches(_ kind: ContentArtifactKind, input: BoundedArtifactInput) -> Bool {
+        guard input.isComplete else { return false }
+        switch kind {
+        case .jsonCanvas:
+            do {
+                _ = try JSONDecoder().decode(JSONCanvasSignature.self, from: input.bytes)
+                return true
+            } catch {
+                return false
+            }
+        }
+    }
+}
+
 // pattern: Functional Core
 
 public struct RendererSignature: Codable, Hashable, Sendable {
@@ -37,7 +73,8 @@ public enum RendererMatcher: Codable, Hashable, Sendable {
         case let .normalizedMIME(mime): input.mimeType == mime
         case let .extensionFallback(fileExtension): input.fileExtension == fileExtension
         case let .boundedSignature(signature): input.sniffedBytes.matches(signature)
-        case let .boundedJSONArtifact(artifact): artifact.matches(sniffedBytes: input.sniffedBytes)
+        case let .boundedJSONArtifact(artifact):
+            artifact.matches(sniffedBytes: input.sniffedBytes, isComplete: input.sniffedBytesAreComplete)
         case let .artifactKind(kind): input.artifactKind == kind
         }
     }
@@ -66,7 +103,7 @@ public enum RendererJSONArtifact: String, Codable, CaseIterable, Hashable, Senda
     /// Decodes no more than the established renderer sniff limit and rejects
     /// malformed or format-incomplete values. Callers with a larger byte body
     /// must first take the same bounded prefix used by ``RendererMatchInput``.
-    public func matches(sniffedBytes: Data) -> Bool {
+    public func matches(sniffedBytes: Data, isComplete: Bool = true) -> Bool {
         guard sniffedBytes.count <= RendererMatchingLimits.maximumSniffByteCount else {
             return false
         }
@@ -81,13 +118,9 @@ public enum RendererJSONArtifact: String, Codable, CaseIterable, Hashable, Senda
                 return false
             }
         case .jsonCanvas:
-            do {
-                _ = try JSONDecoder().decode(JSONCanvasSignature.self, from: sniffedBytes)
-                return true
-            } catch {
-                // A malformed sniff is an expected non-match; Source remains available.
-                return false
-            }
+            return ContentArtifactValidator.matches(
+                .jsonCanvas,
+                input: BoundedArtifactInput(bytes: sniffedBytes, isComplete: isComplete))
         }
     }
 }
@@ -96,15 +129,23 @@ public struct RendererMatchInput: Hashable, Sendable {
     public let mimeType: RendererMIMEType?
     public let fileExtension: RendererFileExtension?
     public let sniffedBytes: Data
+    public let sniffedBytesAreComplete: Bool
     public let artifactKind: RendererArtifactKind?
 
-    public init(mimeType: RendererMIMEType?, fileExtension: RendererFileExtension?, sniffedBytes: Data, artifactKind: RendererArtifactKind?) throws {
+    public init(
+        mimeType: RendererMIMEType?,
+        fileExtension: RendererFileExtension?,
+        sniffedBytes: Data,
+        sniffedBytesAreComplete: Bool = true,
+        artifactKind: RendererArtifactKind?
+    ) throws {
         guard sniffedBytes.count <= RendererMatchingLimits.maximumSniffByteCount else {
             throw RendererValidationError.invalidSizeLimit("sniff byte count \(sniffedBytes.count)")
         }
         self.mimeType = mimeType
         self.fileExtension = fileExtension
         self.sniffedBytes = sniffedBytes
+        self.sniffedBytesAreComplete = sniffedBytesAreComplete
         self.artifactKind = artifactKind
     }
 }

@@ -81,6 +81,7 @@ struct SourceRendererPresentationPlanner: Sendable {
             mimeType: mimeType,
             fileExtension: extensionFallback,
             sniffedBytes: sniffedBytes,
+            sniffedBytesAreComplete: source.byteSize == sniffedBytes.count,
             artifactKind: artifactKind)
     }
 
@@ -182,7 +183,7 @@ struct SourceRendererPresentationPlanner: Sendable {
         case .notMediaOrigin:
             break
         }
-        if let mime = source.mimeType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !mime.isEmpty {
+        if let mime = ContentTypeDetector.normalizeMIMEType(source.mimeType) {
             return RendererMIMEType(rawValue: mime)
         }
         return nil

@@ -28,6 +28,7 @@ public enum AdminCommand {
         /// Sweep orphaned blobs, activities, AND page versions in one pass.
         /// The common case — users don't usually care about the distinction.
         case vacuumAll(dryRun: Bool, json: Bool)
+        case repairMIME(dryRun: Bool, json: Bool)
     }
 
     /// Run one action against `store`. Returns a `SourceCommand.Result` so it
@@ -59,7 +60,34 @@ public enum AdminCommand {
                     blobs: blobReport, activities: activityReport,
                     pageVersions: pageVersionReport, json: json)),
                 didCommit: blobReport.applied || activityReport.applied || pageVersionReport.applied)
+        case .repairMIME(let dryRun, let json):
+            let report = try store.repairMIME(dryRun: dryRun)
+            return SourceCommand.Result(
+                payload: .text(try Self.format(report, json: json)),
+                didCommit: report.updatedCount > 0)
         }
+    }
+
+    private static func format(_ report: MIMERepairReport, json: Bool) throws -> String {
+        if json {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            return String(decoding: try encoder.encode(report), as: UTF8.self)
+        }
+        let mode = report.applied ? "apply" : "dry-run; no data changed"
+        var lines = [
+            "MIME repair \(mode)",
+            "scanned=\(report.scannedCount) repairable=\(report.repairableCount) updated=\(report.updatedCount) skipped-byteless=\(report.skippedBytelessCount) skipped-inconclusive=\(report.skippedInconclusiveCount)",
+        ]
+        for item in report.items {
+            let confidence = item.detection.confidence.map { String($0.rawValue) } ?? "none"
+            let evidence = item.detection.evidence.map { $0.origin.rawValue }.joined(separator: ",")
+            let conflicts = item.detection.conflicts.map { $0.conflictingEvidence.origin.rawValue }.joined(separator: ",")
+            let chosenMIME = item.newMIMEType ?? "inconclusive"
+            lines.append(
+                "\(item.sourceID.rawValue)\t\(item.nullState.rawValue)\t\(chosenMIME)\tconfidence=\(confidence)\tevidence=\(evidence)\tconflicts=\(conflicts)")
+        }
+        return lines.joined(separator: "\n")
     }
 
     private static func format(_ report: BlobVacuumReport, json: Bool) -> String {
