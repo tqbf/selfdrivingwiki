@@ -38,6 +38,10 @@ struct EditorScrollRequest: Equatable {
 struct ScrollableTextEditor: NSViewRepresentable {
     @Binding var text: String
     let font: NSFont
+    /// Converts the authoritative Markdown into the text shown by the editor.
+    /// The closure controls presentation only. The default keeps the editor
+    /// byte-for-byte compatible with its previous behavior.
+    var displayText: (String) -> String = { $0 }
     /// When `version` changes, the editor scrolls to `charOffset` and sets the
     /// caret there. Pass `nil` when no scroll is pending.
     var scrollRequest: EditorScrollRequest?
@@ -114,7 +118,7 @@ struct ScrollableTextEditor: NSViewRepresentable {
         // `onCaretChange` — a SwiftUI `@State` write — while `makeNSView` is
         // still running inside SwiftUI's update pass ("Modifying state during
         // view update").
-        textView.string = text
+        textView.string = displayText(text)
         textView.delegate = context.coordinator
         if let dropTV = textView as? DropLinkTextView {
             dropTV.sidebarDropBuilder = sidebarDropBuilder
@@ -136,9 +140,10 @@ struct ScrollableTextEditor: NSViewRepresentable {
         // which would report a caret move back into SwiftUI `@State` from
         // inside the update pass. Flag the window so `reportCaret` ignores it:
         // a programmatic text sync is not a user caret move.
-        if textView.string != text {
+        let displayedText = displayText(text)
+        if textView.string != displayedText {
             context.coordinator.isApplyingProgrammaticChange = true
-            textView.string = text
+            textView.string = displayedText
             context.coordinator.isApplyingProgrammaticChange = false
         }
         if textView.font?.fontName != font.fontName
@@ -266,12 +271,44 @@ struct ScrollableTextEditor: NSViewRepresentable {
             // mutate `store.draftBody` mid-update — and the value would be
             // whatever we just pushed in, so there is nothing to report back.
             guard !isApplyingProgrammaticChange else { return }
-            if parent.text != textView.string {
-                parent.text = textView.string
+            let editedText = textView.string
+            let displayedText = parent.displayText(editedText)
+
+            // Canonical links can be inserted by autocomplete or a sidebar
+            // drop. Re-present them immediately so a ULID does not flash in
+            // the editor between the delegate callback and SwiftUI's next
+            // update pass. Keep the binding's canonical value for the save
+            // seam; ordinary edits continue to flow through unchanged.
+            if editedText != displayedText {
+                let selection = textView.selectedRange()
+                let editedLength = (editedText as NSString).length
+                let start = min(max(selection.location, 0), editedLength)
+                let end = min(
+                    max(selection.location + selection.length, start), editedLength)
+                let displayedSelection = NSRange(
+                    location: displayedOffset(in: editedText, upTo: start),
+                    length: max(
+                        0,
+                        displayedOffset(in: editedText, upTo: end)
+                            - displayedOffset(in: editedText, upTo: start)))
+                isApplyingProgrammaticChange = true
+                textView.string = displayedText
+                textView.setSelectedRange(displayedSelection)
+                isApplyingProgrammaticChange = false
+            }
+
+            if parent.text != editedText {
+                parent.text = editedText
             }
             reportCaret(in: textView)
             ensureAutocompleteController()
             autocompleteController?.textDidChange(textView: textView)
+        }
+
+        private func displayedOffset(in text: String, upTo offset: Int) -> Int {
+            let prefix = (text as NSString).substring(
+                with: NSRange(location: 0, length: offset))
+            return parent.displayText(prefix).utf16.count
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {

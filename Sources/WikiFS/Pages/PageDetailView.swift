@@ -462,6 +462,7 @@ struct PageDetailView: View {
             text: $store.draftBody,
             font: NSFont.monospacedSystemFont(
                 ofSize: CGFloat(13 * editorZoom), weight: .regular),
+            displayText: WikiLinkEditorProjection.displayed,
             scrollRequest: editorScrollRequest,
             onCaretChange: { caretCharIndex = $0 },
             sidebarDropBuilder: { payloads in

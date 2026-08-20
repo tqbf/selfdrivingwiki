@@ -143,11 +143,13 @@ struct EditorAutocompleteHostedTests {
     private func makeHostedEditor(
         text: Binding<String>,
         autocomplete: WikiLinkAutocompleteHooks?,
-        scheduler: ManualScheduler
+        scheduler: ManualScheduler,
+        displayText: @escaping (String) -> String = { $0 }
     ) -> (window: NSWindow, textView: NSTextView, coordinator: ScrollableTextEditor.Coordinator) {
         let parent = ScrollableTextEditor(
             text: text,
             font: bodyFont,
+            displayText: displayText,
             scrollRequest: nil,
             onCaretChange: nil,
             sidebarDropBuilder: nil,
@@ -160,7 +162,7 @@ struct EditorAutocompleteHostedTests {
         let textView = ScrollableTextEditor.makeConfiguredTextView(font: bodyFont)
         textView.delegate = coordinator
         textView.isEditable = true
-        textView.string = text.wrappedValue
+        textView.string = displayText(text.wrappedValue)
 
         let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 300, height: 100))
         scrollView.documentView = textView
@@ -171,6 +173,34 @@ struct EditorAutocompleteHostedTests {
         Self.retainedWindow = window
 
         return (window, textView, coordinator)
+    }
+
+    @Test func canonicalLinksAreDisplayedWithoutULID() async {
+        let lease = await AutocompleteHostedTestGate.shared.acquire()
+        defer { lease.release() }
+        let pageID = "01HXXXXXXXXXXXXXXXXXXXXXXX"
+        var text = "[[page:\(pageID)|Home]]"
+        let textBinding = Binding(get: { text }, set: { text = $0 })
+        let scheduler = ManualScheduler()
+
+        let (window, textView, coordinator) = makeHostedEditor(
+            text: textBinding,
+            autocomplete: nil,
+            scheduler: scheduler,
+            displayText: WikiLinkEditorProjection.displayed)
+        defer { Self.releaseWindow(window) }
+
+        #expect(textView.string == "[[Home]]")
+
+        // A canonical insertion is kept in the binding for save-time
+        // canonicalization while the live editor remains pretty-displayed.
+        textView.string = "[[page:\(pageID)|Home]]"
+        textView.setSelectedRange(NSRange(location: textView.string.utf16.count, length: 0))
+        coordinator.textDidChange(
+            Notification(name: NSText.didChangeNotification, object: textView))
+
+        #expect(text == "[[page:\(pageID)|Home]]")
+        #expect(textView.string == "[[Home]]")
     }
 
     /// Convenience: drive a textDidChange + caret-to-end on the hosted view.
