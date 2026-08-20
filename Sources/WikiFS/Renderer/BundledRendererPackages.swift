@@ -14,7 +14,10 @@ enum BundledRendererPackages {
     }()
 
     static let excalidrawVersion: RendererPackageVersion = {
-        do { return try RendererPackageVersion(validating: "1.0.0") }
+        // Bumped with the package bytes: an installed version pins its exact
+        // hash, so a changed asset at the same version fails closed and the
+        // machine keeps the old package.
+        do { return try RendererPackageVersion(validating: "1.0.1") }
         catch { preconditionFailure("Invalid bundled Excalidraw version: \(error)") }
     }()
 

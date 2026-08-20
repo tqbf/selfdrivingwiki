@@ -319,7 +319,15 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         }()
         let placeholderID = escapeAttribute(plan.placeholderID)
         let summary = escape(plan.semanticContent)
-        let fallback = escape(plan.fallbackReason?.rawValue ?? "static preview")
+        // The card used to print the literal "static preview" whenever nothing
+        // had failed, promising a preview it never drew, and the raw enum case
+        // name when something had. Draw the real thing, and say why when there
+        // is nothing to draw.
+        let previewHTML = Self.previewHTML(for: plan)
+        let fallbackNoticeHTML: String = {
+            guard let reason = plan.fallbackReason else { return "" }
+            return #"<p class="sdw-renderer-card__fallback">\#(escape(Self.fallbackNotice(for: reason)))</p>"#
+        }()
         let control = escape(plan.activationMetadata?.controlLabel ?? "Open")
         let aria = escapeAttribute(plan.activationMetadata?.accessibilityLabel ?? "renderer preview")
         let mimeType: String? = {
@@ -383,10 +391,43 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         <section class="sdw-renderer-card" id="\(placeholderID)" role="group" aria-label="\(aria)" data-renderer-reference="\(escapeAttribute(refValue))"\(inputAttribute)>
           <header class="sdw-renderer-card__header">\(title)</header>
           <p class="sdw-renderer-card__summary">\(summary)</p>
-          <p class="sdw-renderer-card__fallback">\(fallback)</p>
+          \(previewHTML)\(fallbackNoticeHTML)
           \(actionHTML)
         </section>
         """
+    }
+
+    /// The card's own drawing of the content, for the renderers that can be
+    /// drawn without running their package. Absent for everything else, which
+    /// leaves the card as its name, summary, and control.
+    private static func previewHTML(for plan: RendererEmbedPlan) -> String {
+        guard plan.fallbackReason == nil,
+              let input = plan.input,
+              case .inlineArtifact(let artifact) = input,
+              artifact.fenceKind == .excalidraw,
+              let svg = ExcalidrawStaticPreview.svg(from: artifact.bytes)
+        else { return "" }
+        return #"<div class="sdw-renderer-card__preview">\#(svg)</div>"#
+    }
+
+    /// A reader-facing sentence for a fence the renderer would not take.
+    /// `.oversizedInput` returns the original fenced code instead of a card and
+    /// never reaches this.
+    private static func fallbackNotice(for reason: MarkdownFenceFallbackReason) -> String {
+        switch reason {
+        case .emptyInfoString:
+            return "This block does not name a renderer."
+        case .malformedInfoString:
+            return "This block's renderer name could not be read."
+        case .unsupportedAlias:
+            return "No approved renderer draws this kind of block."
+        case .packageAliasDisallowed:
+            return "The renderer for this block is not available here."
+        case .missingDocumentIdentity:
+            return "This block is not tied to a saved version yet, so it cannot open."
+        case .oversizedInput:
+            return "This block is too large to draw."
+        }
     }
 
     private func rendererEmbedPlan(for block: MarkdownFencedBlock, alias: MarkdownRichFenceAlias) -> RendererEmbedPlan? {
@@ -515,11 +556,13 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
             else { preconditionFailure("approved jsoncanvas renderer reference must remain valid") }
             return RendererReference(packageID: packageID, version: version, registrationID: registrationID)
         case .excalidraw:
-            guard let packageID = RendererPackageID(rawValue: "org.selfdrivingwiki.excalidraw-readonly"),
-                  let version = RendererPackageVersion(rawValue: "1.0.0"),
-                  let registrationID = RendererRegistrationID(rawValue: "excalidraw")
-            else { preconditionFailure("approved excalidraw renderer reference must remain valid") }
-            return RendererReference(packageID: packageID, version: version, registrationID: registrationID)
+            // Read from the bundled-package constants rather than repeating the
+            // literals: a card whose version drifts from the installed package
+            // resolves to no descriptor and presents nothing.
+            return RendererReference(
+                packageID: BundledRendererPackages.excalidrawPackageID,
+                version: BundledRendererPackages.excalidrawVersion,
+                registrationID: BundledRendererPackages.excalidrawRegistrationID)
         }
     }
 

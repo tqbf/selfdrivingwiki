@@ -118,15 +118,25 @@ struct WikiAppWebViewRepresentable: NSViewRepresentable {
             }
             identity = nextIdentity
             self.session = session
-            if let hostedView = session.hostedView {
-                hostedView.frame = container.bounds
-                hostedView.autoresizingMask = [.width, .height]
-                container.addSubview(hostedView)
-            }
-            schedule { [weak self, weak session] in
+            // A session that already owns its view (a test double, or one
+            // restarted in place) can attach now.
+            attach(session.hostedView, to: container)
+            schedule { [weak self, weak session, weak container] in
                 guard let self, let session, self.session === session else { return }
                 session.start()
+                // The live session builds its WebView inside `start()`, so its
+                // `hostedView` was nil above. Attach here or the renderer loads
+                // into a detached zero-sized view and never appears.
+                guard let container else { return }
+                attach(session.hostedView, to: container)
             }
+        }
+
+        private func attach(_ hostedView: NSView?, to container: NSView) {
+            guard let hostedView, hostedView.superview !== container else { return }
+            hostedView.frame = container.bounds
+            hostedView.autoresizingMask = [.width, .height]
+            container.addSubview(hostedView)
         }
 
         func teardown(from container: NSView) {

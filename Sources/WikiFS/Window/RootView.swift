@@ -24,7 +24,7 @@ struct RootView: View {
     @Bindable var registry: WikiRegistryClient
     let fileProvider: FileProviderFacade
     let installedRendererHost: InstalledRendererHost
-    @State private var activeRendererPresentation: RendererActivationPresentation?
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         ContentView(
@@ -40,12 +40,6 @@ struct RootView: View {
             onRendererActivation: presentRendererActivation
         )
         .id(session.wikiID)
-        .sheet(item: $activeRendererPresentation) { request in
-            RendererActivationPresentationSheet(
-                store: session.store,
-                installedRendererHost: installedRendererHost,
-                request: request)
-        }
         // Consume a deferred cross-window `wiki://` navigation (set on the
         // session by `SessionManager.applyOrStashWikiLink` when a link was
         // clicked in the Activity window while THIS wiki's window was closed).
@@ -57,11 +51,16 @@ struct RootView: View {
         .onAppear { consumePendingWikiLink() }
     }
 
+    /// Open the activated renderer in its own window rather than a sheet, so a
+    /// diagram can be resized and left open beside the page it came from.
+    /// `WindowGroup(for:)` dedups by `==`, so activating the same content again
+    /// focuses the window already showing it.
     @MainActor
     private func presentRendererActivation(reference: RendererReference, input: RendererBridgeInput) {
-        activeRendererPresentation = RendererActivationPresentation(
+        openWindow(value: RendererActivationPresentation(
             reference: reference,
-            input: input)
+            input: input,
+            wikiID: session.wikiID))
     }
 
     /// Deliver the stashed `wiki://` link (if any) to the app-layer router

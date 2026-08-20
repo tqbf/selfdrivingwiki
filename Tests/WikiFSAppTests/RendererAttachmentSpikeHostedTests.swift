@@ -753,7 +753,12 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
           if (existing) { existing.remove(); }
           var style = document.createElement('style');
           style.id = \(Self.javaScriptString(styleID));
-          style.textContent = \(Self.javaScriptString("\(selector) { background: \(Self.sentinelColor) !important; border-radius: 0 !important; } \(selector) * { visibility: hidden !important; }"));
+          // The sentinel measures the painted area against the card's
+          // border-box rect, so the card's decoration is flattened without
+          // resizing it: a radius would round the painted corners away, and a
+          // border would paint its own colour over the sentinel fill and inset
+          // the measured area. Recolouring the border keeps the box identical.
+          style.textContent = \(Self.javaScriptString("\(selector) { background: \(Self.sentinelColor) !important; border-radius: 0 !important; border-color: \(Self.sentinelColor) !important; } \(selector) * { visibility: hidden !important; }"));
           document.head.appendChild(style);
           return 'styled';
         })()
