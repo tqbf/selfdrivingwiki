@@ -493,7 +493,8 @@ struct PageDetailView: View {
                         inlineAttachmentResolver: RendererInlineAttachmentResolverFactory.make(
                             store: store.internalStore,
                             installedRendererFactory: installedRendererFactory,
-                            installedRendererFactoryInputs: installedRendererFactoryInputs),
+                            installedRendererFactoryInputs: installedRendererFactoryInputs,
+                            onJSONCanvasHostAction: JSONCanvasHostActionRouter.handler(for: store)),
                         findText: findText, findVersion: findVersion,
                         findOccurrence: findOccurrence)
             .frame(maxWidth: .infinity)

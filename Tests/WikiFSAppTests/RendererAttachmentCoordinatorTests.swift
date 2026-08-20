@@ -10,6 +10,12 @@ import WikiFSTypes
 
 @Suite("Reader renderer attachment coordinator", .serialized, .timeLimit(.minutes(5)))
 struct RendererAttachmentCoordinatorTests {
+    @Test("JSON Canvas reserves an expanded inline surface")
+    func jsonCanvasReservesExpandedInlineSurface() {
+        #expect(RendererAttachmentHostPolicy.preferredReservedHeight(
+            for: BuiltInRendererReference.reference(for: .jsonCanvas)) == 480)
+    }
+
     @Test("Escape exits the hosted native attachment and restores reader focus")
     @MainActor
     func escapeExitsNativeAttachment() throws {
@@ -544,6 +550,8 @@ struct RendererAttachmentCoordinatorTests {
 
         #expect(source.contains("RendererInlineAttachmentResolver"))
         #expect(source.contains("BuiltInRendererReference.reference(for: .jsonCanvas)") == false)
+        #expect(source.contains(#"__sdwRendererAttachmentReserve(\"\(identifier)\""#))
+        #expect(source.contains(#"\(function)(\"\(identifier)\")"#))
 
         let pageDetail = try String(
             contentsOf: root.appendingPathComponent("Sources/WikiFS/Pages/PageDetailView.swift"),

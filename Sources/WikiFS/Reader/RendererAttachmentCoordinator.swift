@@ -1,6 +1,7 @@
 #if os(macOS)
 import CoreGraphics
 import Foundation
+import WikiFSTypes
 
 // pattern: Functional Core — bounded attachment state and geometry are deterministic values.
 
@@ -12,6 +13,13 @@ enum RendererAttachmentHostPolicy {
     static let minimumReservedHeight = 96.0
     static let maximumReservedHeight = 1_200.0
     static let maximumActiveAttachments = 1
+    static let jsonCanvasReservedHeight = 480.0
+
+    static func preferredReservedHeight(for renderer: RendererReference?) -> CGFloat {
+        renderer == BuiltInRendererReference.reference(for: .jsonCanvas)
+            ? jsonCanvasReservedHeight
+            : minimumReservedHeight
+    }
 }
 
 struct RendererAttachmentPlaceholderID: Hashable, Sendable, Equatable {

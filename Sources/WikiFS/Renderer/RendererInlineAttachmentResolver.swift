@@ -31,7 +31,8 @@ enum RendererInlineAttachmentResolverFactory {
     static func make(
         store: WikiStore,
         installedRendererFactory: InstalledRendererFactory,
-        installedRendererFactoryInputs: InstalledRendererFactory.Inputs
+        installedRendererFactoryInputs: InstalledRendererFactory.Inputs,
+        onJSONCanvasHostAction: @escaping (JSONCanvasHostAction) -> Void
     ) -> RendererInlineAttachmentResolver {
         { context, placeholderID, onSessionFailure in
             resolve(
@@ -40,7 +41,8 @@ enum RendererInlineAttachmentResolverFactory {
                 onSessionFailure: onSessionFailure,
                 store: store,
                 installedRendererFactory: installedRendererFactory,
-                installedRendererFactoryInputs: installedRendererFactoryInputs)
+                installedRendererFactoryInputs: installedRendererFactoryInputs,
+                onJSONCanvasHostAction: onJSONCanvasHostAction)
         }
     }
 
@@ -60,9 +62,13 @@ enum RendererInlineAttachmentResolverFactory {
         onSessionFailure: @escaping @MainActor (RendererSessionFailure) -> Void,
         store: WikiStore,
         installedRendererFactory: InstalledRendererFactory,
-        installedRendererFactoryInputs: InstalledRendererFactory.Inputs
+        installedRendererFactoryInputs: InstalledRendererFactory.Inputs,
+        onJSONCanvasHostAction: @escaping (JSONCanvasHostAction) -> Void
     ) -> RendererInlineAttachmentResolution {
-        let builtIn = resolveBuiltIn(context: context, placeholderID: placeholderID)
+        let builtIn = resolveBuiltIn(
+            context: context,
+            placeholderID: placeholderID,
+            onJSONCanvasHostAction: onJSONCanvasHostAction)
         guard case .unsupported = builtIn else { return builtIn }
 
         guard let descriptor = installedRendererFactoryInputs.enabledDescriptors.first(where: {
@@ -89,14 +95,17 @@ enum RendererInlineAttachmentResolverFactory {
     @MainActor
     private static func resolveBuiltIn(
         context: RendererEmbedActivationContext,
-        placeholderID: RendererAttachmentPlaceholderID
+        placeholderID: RendererAttachmentPlaceholderID,
+        onJSONCanvasHostAction: @escaping (JSONCanvasHostAction) -> Void = { _ in }
     ) -> RendererInlineAttachmentResolution {
         guard context.rendererReference == BuiltInRendererReference.reference(for: .jsonCanvas),
               case .inlineArtifact(let artifact) = context.input
         else { return .unsupported }
         do {
             let factory = NativeJSONCanvasAttachmentFactory.fencedOnly()
-            return .content(try factory.makeView(for: .fenced(artifact)))
+            return .content(try factory.makeView(
+                for: .fenced(artifact),
+                onHostAction: onJSONCanvasHostAction))
         } catch {
             DebugLog.reader("native JSON Canvas attachment failed for \(placeholderID.rawValue): \(error)")
             return .failed

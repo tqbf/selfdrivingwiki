@@ -40,6 +40,32 @@ struct JSONCanvasViewportState: Sendable, Equatable {
         self.scale = Self.clampedScale(scale)
     }
 
+    mutating func fit(
+        document: JSONCanvasDocument,
+        surfaceWidth: Double,
+        surfaceHeight: Double,
+        padding: Double
+    ) {
+        guard let first = document.renderProjection.nodes.first,
+              surfaceWidth.isFinite, surfaceHeight.isFinite, padding.isFinite,
+              surfaceWidth > padding * 2, surfaceHeight > padding * 2
+        else { return }
+        let bounds = document.renderProjection.nodes.dropFirst().reduce(first.frame) { bounds, node in
+            let minX = min(bounds.origin.x, node.frame.origin.x)
+            let minY = min(bounds.origin.y, node.frame.origin.y)
+            let maxX = max(bounds.origin.x + bounds.width, node.frame.origin.x + node.frame.width)
+            let maxY = max(bounds.origin.y + bounds.height, node.frame.origin.y + node.frame.height)
+            return JSONCanvasRect(origin: .init(x: minX, y: minY), width: maxX - minX, height: maxY - minY)
+        }
+        let fittedScale = min(
+            (surfaceWidth - padding * 2) / bounds.width,
+            (surfaceHeight - padding * 2) / bounds.height)
+        setScale(min(1, fittedScale))
+        setTranslation(.init(
+            x: (surfaceWidth - bounds.width * scale) / 2 - bounds.origin.x * scale,
+            y: (surfaceHeight - bounds.height * scale) / 2 - bounds.origin.y * scale))
+    }
+
     mutating func select(nodeID: JSONCanvasNodeID?) {
         selectedNodeID = nodeID
     }

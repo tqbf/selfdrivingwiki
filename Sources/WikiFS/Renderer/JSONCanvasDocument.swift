@@ -27,9 +27,60 @@ enum JSONCanvasDecodingError: Error, Equatable {
     case duplicateEdgeID(String)
     case unsupportedNodeType(String)
     case invalidGeometry(String)
+    case invalidColor(String)
     case textTooLarge(String)
     case unknownEdgeEndpoint(String)
     case invalidInternalLink(String)
+}
+
+enum JSONCanvasColor: Sendable, Equatable {
+    enum Preset: String, Sendable {
+        case red = "1"
+        case orange = "2"
+        case yellow = "3"
+        case green = "4"
+        case cyan = "5"
+        case purple = "6"
+    }
+
+    case preset(Preset)
+    case hex(red: UInt8, green: UInt8, blue: UInt8)
+
+    init(validating rawValue: String) throws {
+        if let preset = Preset(rawValue: rawValue) {
+            self = .preset(preset)
+            return
+        }
+        guard rawValue.hasPrefix("#") else {
+            throw JSONCanvasDecodingError.invalidColor(rawValue)
+        }
+        let digits = String(rawValue.dropFirst())
+        let expanded: String
+        switch digits.count {
+        case 3:
+            expanded = digits.reduce(into: "") { result, digit in
+                result.append(digit)
+                result.append(digit)
+            }
+        case 6:
+            expanded = digits
+        default:
+            throw JSONCanvasDecodingError.invalidColor(rawValue)
+        }
+        guard let value = UInt32(expanded, radix: 16) else {
+            throw JSONCanvasDecodingError.invalidColor(rawValue)
+        }
+        self = .hex(
+            red: UInt8((value >> 16) & 0xff),
+            green: UInt8((value >> 8) & 0xff),
+            blue: UInt8(value & 0xff))
+    }
+}
+
+enum JSONCanvasBackgroundStyle: String, Sendable, Equatable {
+    case cover
+    case ratio
+    case `repeat`
 }
 
 struct JSONCanvasNodeID: Hashable, Sendable, Comparable, Identifiable {
@@ -76,28 +127,53 @@ struct JSONCanvasRect: Sendable, Equatable {
 
 struct JSONCanvasInternalFileReference: RawRepresentable, Hashable, Sendable {
     let path: RendererRelativePath
+    let subpath: JSONCanvasSubpath?
 
     var rawValue: String { path.rawValue }
 
     init?(rawValue: String) {
-        guard rawValue == rawValue.trimmingCharacters(in: .whitespacesAndNewlines),
-              rawValue.count <= JSONCanvasLimits.maximumIdentifierLength,
-              rawValue.unicodeScalars.allSatisfy({ scalar in
-                  scalar.properties.isWhitespace == false &&
-                      scalar.properties.generalCategory != .control
+        self.init(path: rawValue, subpath: nil)
+    }
+
+    init?(path rawPath: String, subpath rawSubpath: String?) {
+        guard rawPath == rawPath.trimmingCharacters(in: .whitespacesAndNewlines),
+              rawPath.count <= JSONCanvasLimits.maximumIdentifierLength,
+              rawPath.unicodeScalars.allSatisfy({ scalar in
+                  scalar.properties.generalCategory != .control
               }),
-              rawValue.contains(":") == false,
-              rawValue.contains("@") == false,
-              rawValue.contains("?") == false,
-              rawValue.contains("#") == false,
-              rawValue.contains("%") == false,
-              let path = RendererRelativePath(rawValue: rawValue)
+              rawPath.contains(":") == false,
+              rawPath.contains("@") == false,
+              rawPath.contains("?") == false,
+              rawPath.contains("#") == false,
+              rawPath.contains("%") == false,
+              let path = RendererRelativePath(rawValue: rawPath)
         else { return nil }
+        let subpath: JSONCanvasSubpath?
+        if let rawSubpath {
+            guard let validatedSubpath = JSONCanvasSubpath(rawValue: rawSubpath) else { return nil }
+            subpath = validatedSubpath
+        } else {
+            subpath = nil
+        }
         self.path = path
+        self.subpath = subpath
     }
 
     var displayLabel: String {
         path.rawValue.split(separator: "/").last.map(String.init) ?? path.rawValue
+    }
+}
+
+struct JSONCanvasSubpath: RawRepresentable, Hashable, Sendable {
+    let rawValue: String
+
+    init?(rawValue: String) {
+        guard rawValue.hasPrefix("#"),
+              rawValue == rawValue.trimmingCharacters(in: .whitespacesAndNewlines),
+              rawValue.count <= JSONCanvasLimits.maximumTextLength,
+              rawValue.unicodeScalars.allSatisfy({ $0.properties.generalCategory != .control })
+        else { return nil }
+        self.rawValue = rawValue
     }
 }
 
@@ -151,6 +227,7 @@ enum JSONCanvasInternalLink: Hashable, Sendable {
 enum JSONCanvasHostAction: Hashable, Sendable {
     case openFile(JSONCanvasInternalFileReference)
     case openWiki(JSONCanvasWikiReference)
+    case openExternal(URL)
 
     init(internalLink: JSONCanvasInternalLink) {
         switch internalLink {
@@ -176,13 +253,19 @@ struct JSONCanvasNode: Sendable, Equatable, Identifiable {
     let id: JSONCanvasNodeID
     let frame: JSONCanvasRect
     let text: String
+    let color: JSONCanvasColor?
+    let background: JSONCanvasInternalFileReference?
+    let backgroundStyle: JSONCanvasBackgroundStyle?
     let internalLink: JSONCanvasInternalLink?
+    let externalURL: URL?
 }
 
 struct JSONCanvasEdge: Sendable, Equatable, Identifiable {
     let id: String
     let fromNodeID: JSONCanvasNodeID
     let toNodeID: JSONCanvasNodeID
+    let color: JSONCanvasColor?
+    let label: String?
 }
 
 struct JSONCanvasOutlineEntry: Sendable, Equatable, Identifiable {
@@ -197,7 +280,11 @@ struct JSONCanvasRenderProjection: Sendable, Equatable {
         let id: JSONCanvasNodeID
         let frame: JSONCanvasRect
         let text: String
+        let color: JSONCanvasColor?
+        let background: JSONCanvasInternalFileReference?
+        let backgroundStyle: JSONCanvasBackgroundStyle?
         let internalLink: JSONCanvasInternalLink?
+        let externalURL: URL?
     }
 
     struct Edge: Sendable, Equatable, Identifiable {
@@ -206,6 +293,8 @@ struct JSONCanvasRenderProjection: Sendable, Equatable {
         let end: JSONCanvasPoint
         let sourceFrame: JSONCanvasRect
         let destinationFrame: JSONCanvasRect
+        let color: JSONCanvasColor?
+        let label: String?
     }
 
     let nodes: [Node]
@@ -314,11 +403,26 @@ struct JSONCanvasDocument: Sendable, Equatable {
                 throw JSONCanvasDecodingError.textTooLarge(nodeID.rawValue)
             }
             let frame = try Self.validatedFrame(for: wireNode, nodeID: nodeID)
+            let color: JSONCanvasColor?
+            if let rawColor = wireNode.color {
+                do {
+                    color = try JSONCanvasColor(validating: rawColor)
+                } catch {
+                    throw JSONCanvasDecodingError.invalidColor(nodeID.rawValue)
+                }
+            } else {
+                color = nil
+            }
+            let background = try Self.validatedBackground(for: wireNode, nodeID: nodeID)
             decodedNodes.append(.init(
                 id: nodeID,
                 frame: frame,
                 text: content.text,
-                internalLink: content.internalLink))
+                color: color,
+                background: background.reference,
+                backgroundStyle: background.style,
+                internalLink: content.internalLink,
+                externalURL: content.externalURL))
         }
 
         var knownEdgeIDs: Set<String> = []
@@ -337,18 +441,41 @@ struct JSONCanvasDocument: Sendable, Equatable {
             guard knownNodeIDs.contains(toNodeID) else {
                 throw JSONCanvasDecodingError.unknownEdgeEndpoint(toNodeID.rawValue)
             }
-            decodedEdges.append(.init(id: wireEdge.id, fromNodeID: fromNodeID, toNodeID: toNodeID))
+            let color: JSONCanvasColor?
+            if let rawColor = wireEdge.color {
+                do {
+                    color = try JSONCanvasColor(validating: rawColor)
+                } catch {
+                    throw JSONCanvasDecodingError.invalidColor(wireEdge.id)
+                }
+            } else {
+                color = nil
+            }
+            if let label = wireEdge.label,
+               label.count > JSONCanvasLimits.maximumTextLength {
+                throw JSONCanvasDecodingError.textTooLarge(wireEdge.id)
+            }
+            decodedEdges.append(.init(
+                id: wireEdge.id,
+                fromNodeID: fromNodeID,
+                toNodeID: toNodeID,
+                color: color,
+                label: wireEdge.label))
         }
 
         nodes = decodedNodes
         edges = decodedEdges
         let nodesByID = Dictionary(uniqueKeysWithValues: decodedNodes.map { ($0.id, $0) })
-        let renderNodes = decodedNodes.sorted(by: Self.outlineOrder).map {
+        let renderNodes = decodedNodes.map {
             JSONCanvasRenderProjection.Node(
                 id: $0.id,
                 frame: $0.frame,
                 text: $0.text,
-                internalLink: $0.internalLink)
+                color: $0.color,
+                background: $0.background,
+                backgroundStyle: $0.backgroundStyle,
+                internalLink: $0.internalLink,
+                externalURL: $0.externalURL)
         }
         var renderEdges: [JSONCanvasRenderProjection.Edge] = []
         renderEdges.reserveCapacity(decodedEdges.count)
@@ -364,10 +491,12 @@ struct JSONCanvasDocument: Sendable, Equatable {
                 start: source.frame.center,
                 end: destination.frame.center,
                 sourceFrame: source.frame,
-                destinationFrame: destination.frame))
+                destinationFrame: destination.frame,
+                color: edge.color,
+                label: edge.label))
         }
         renderProjection = .init(nodes: renderNodes, edges: renderEdges)
-        outline = renderNodes.map { node in
+        outline = decodedNodes.sorted(by: Self.outlineOrder).map { node in
             .init(nodeID: node.id, label: Self.outlineLabel(for: node.text))
         }
     }
@@ -377,33 +506,35 @@ struct JSONCanvasDocument: Sendable, Equatable {
     }
 
     func hostAction(for nodeID: JSONCanvasNodeID) -> JSONCanvasHostAction? {
-        guard let internalLink = nodes.first(where: { $0.id == nodeID })?.internalLink else { return nil }
-        return .init(internalLink: internalLink)
+        guard let node = nodes.first(where: { $0.id == nodeID }) else { return nil }
+        if let internalLink = node.internalLink { return .init(internalLink: internalLink) }
+        guard let url = node.externalURL else { return nil }
+        return .openExternal(url)
     }
 
     private static func validatedContent(
         for wireNode: JSONCanvasWireNode,
         nodeID: JSONCanvasNodeID
-    ) throws -> (text: String, internalLink: JSONCanvasInternalLink?) {
+    ) throws -> (text: String, internalLink: JSONCanvasInternalLink?, externalURL: URL?) {
         switch wireNode.type {
         case "text":
             guard let text = wireNode.text else {
                 throw JSONCanvasDecodingError.malformedDocument
             }
-            return (text, nil)
+            return (text, nil, nil)
         case "file":
             guard let rawFile = wireNode.file,
-                  let reference = JSONCanvasInternalFileReference(rawValue: rawFile)
+                  let reference = JSONCanvasInternalFileReference(path: rawFile, subpath: wireNode.subpath)
             else { throw JSONCanvasDecodingError.invalidInternalLink(nodeID.rawValue) }
             let internalLink = JSONCanvasInternalLink.file(reference)
-            return (internalLink.displayLabel, internalLink)
+            return (internalLink.displayLabel, internalLink, nil)
         case "link":
             guard let rawURL = wireNode.url else {
                 throw JSONCanvasDecodingError.invalidInternalLink(nodeID.rawValue)
             }
             if let reference = JSONCanvasWikiReference(rawValue: rawURL) {
                 let internalLink = JSONCanvasInternalLink.wiki(reference)
-                return (internalLink.displayLabel, internalLink)
+                return (internalLink.displayLabel, internalLink, nil)
             }
             guard rawURL.hasPrefix("[[") == false,
                   rawURL.hasSuffix("]]") == false
@@ -412,10 +543,10 @@ struct JSONCanvasDocument: Sendable, Equatable {
                   let scheme = url.scheme?.lowercased(),
                   scheme == "https" || scheme == "http"
             else { throw JSONCanvasDecodingError.invalidInternalLink(nodeID.rawValue) }
-            return (rawURL, nil)
+            return (rawURL, nil, url)
         case "group":
             let label = wireNode.label?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return (label?.isEmpty == false ? label ?? "Group" : "Group", nil)
+            return (label?.isEmpty == false ? label ?? "Group" : "Group", nil, nil)
         default:
             throw JSONCanvasDecodingError.unsupportedNodeType(wireNode.type)
         }
@@ -435,6 +566,29 @@ struct JSONCanvasDocument: Sendable, Equatable {
               wireNode.height <= JSONCanvasLimits.maximumCoordinateMagnitude
         else { throw JSONCanvasDecodingError.invalidGeometry(nodeID.rawValue) }
         return .init(origin: .init(x: wireNode.x, y: wireNode.y), width: wireNode.width, height: wireNode.height)
+    }
+
+    private static func validatedBackground(
+        for wireNode: JSONCanvasWireNode,
+        nodeID: JSONCanvasNodeID
+    ) throws -> (reference: JSONCanvasInternalFileReference?, style: JSONCanvasBackgroundStyle?) {
+        guard wireNode.type == "group" else { return (nil, nil) }
+        guard let rawBackground = wireNode.background else {
+            guard wireNode.backgroundStyle == nil else {
+                throw JSONCanvasDecodingError.invalidInternalLink(nodeID.rawValue)
+            }
+            return (nil, nil)
+        }
+        guard let reference = JSONCanvasInternalFileReference(rawValue: rawBackground) else {
+            throw JSONCanvasDecodingError.invalidInternalLink(nodeID.rawValue)
+        }
+        guard let rawStyle = wireNode.backgroundStyle else {
+            return (reference, .cover)
+        }
+        guard let style = JSONCanvasBackgroundStyle(rawValue: rawStyle) else {
+            throw JSONCanvasDecodingError.malformedDocument
+        }
+        return (reference, style)
     }
 
     private static func outlineOrder(_ lhs: JSONCanvasNode, _ rhs: JSONCanvasNode) -> Bool {
@@ -475,6 +629,10 @@ private struct JSONCanvasWireNode: Decodable {
     let file: String?
     let url: String?
     let label: String?
+    let color: String?
+    let subpath: String?
+    let background: String?
+    let backgroundStyle: String?
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: JSONCanvasWireKey.self)
@@ -482,11 +640,11 @@ private struct JSONCanvasWireNode: Decodable {
         let allowedKeys: [String]
         switch type {
         case "text":
-            allowedKeys = ["id", "type", "x", "y", "width", "height", "text"]
+            allowedKeys = ["id", "type", "x", "y", "width", "height", "text", "color"]
         case "file":
-            allowedKeys = ["id", "type", "x", "y", "width", "height", "file"]
+            allowedKeys = ["id", "type", "x", "y", "width", "height", "file", "subpath", "color"]
         case "group":
-            allowedKeys = ["id", "type", "x", "y", "width", "height", "label", "color", "fontSize"]
+            allowedKeys = ["id", "type", "x", "y", "width", "height", "label", "color", "fontSize", "background", "backgroundStyle"]
         case "link":
             allowedKeys = ["id", "type", "x", "y", "width", "height", "url", "color", "fontSize"]
         default:
@@ -504,6 +662,10 @@ private struct JSONCanvasWireNode: Decodable {
         file = try container.decodeIfPresent(String.self, forKey: .file)
         url = try container.decodeIfPresent(String.self, forKey: .url)
         label = try container.decodeIfPresent(String.self, forKey: .label)
+        color = try container.decodeIfPresent(String.self, forKey: .color)
+        subpath = try container.decodeIfPresent(String.self, forKey: .subpath)
+        background = try container.decodeIfPresent(String.self, forKey: .background)
+        backgroundStyle = try container.decodeIfPresent(String.self, forKey: .backgroundStyle)
     }
 }
 
@@ -511,16 +673,20 @@ private struct JSONCanvasWireEdge: Decodable {
     let id: String
     let fromNode: String
     let toNode: String
+    let color: String?
+    let label: String?
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: JSONCanvasWireKey.self)
         try JSONCanvasWireValidation.rejectUnknownKeys(
             container.allKeys,
-            allowed: ["id", "fromNode", "toNode", "label", "fromSide", "toSide", "fromEnd", "toEnd"]
+            allowed: ["id", "fromNode", "toNode", "label", "color", "fromSide", "toSide", "fromEnd", "toEnd"]
         )
         id = try container.decode(String.self, forKey: .id)
         fromNode = try container.decode(String.self, forKey: .fromNode)
         toNode = try container.decode(String.self, forKey: .toNode)
+        color = try container.decodeIfPresent(String.self, forKey: .color)
+        label = try container.decodeIfPresent(String.self, forKey: .label)
     }
 }
 
@@ -551,6 +717,10 @@ private struct JSONCanvasWireKey: CodingKey, Hashable {
     static let file = Self("file")
     static let url = Self("url")
     static let label = Self("label")
+    static let color = Self("color")
+    static let subpath = Self("subpath")
+    static let background = Self("background")
+    static let backgroundStyle = Self("backgroundStyle")
     static let fromNode = Self("fromNode")
     static let toNode = Self("toNode")
 }
