@@ -42,49 +42,22 @@ The bundled package root is `RendererPackages/Excalidraw` at build time. SwiftPM
 
 Excalidraw matches `application/json`, the `excalidraw` extension, and the bounded Excalidraw JSON signature. It is a read-only Web renderer. It declares `input.read` and user-activated external links. It has 48,000-byte input and decoded-input limits. The viewer supports VoiceOver and keyboard navigation.
 
-### Minimal two-file example
+### Create and validate a package
 
-This minimal package has an entry document and no script. A real package must use SHA-256 values calculated from its actual bytes.
+Use the tested package in [`../assets/minimal-renderer-package/`](../assets/minimal-renderer-package/) as the starting point. It contains `manifest.json` and one semantic, read-only `index.html` file.
 
-`manifest.json`:
+Copy the complete folder before you edit it. Change the package, version, and registration identifiers. Add only the static assets that the renderer needs.
 
-```json
-{
-  "revision": 1,
-  "packageID": "org.example.readonly",
-  "version": "1.0.0",
-  "descriptors": [{
-    "reference": {
-      "packageID": "org.example.readonly",
-      "version": "1.0.0",
-      "registrationID": "example"
-    },
-    "displayName": "Example",
-    "implementation": { "webPackage": { "_0": { "path": "index.html" } } },
-    "matchers": [{ "extensionFallback": { "_0": "example" } }],
-    "presentations": ["web"],
-    "approvedAssets": [{
-      "path": "index.html",
-      "digest": "5ce39d66a927d4e2933dc6a637a9c54eee55a1d54da48b87791b0d90bd23022b"
-    }],
-    "capabilities": ["inputRead"],
-    "sizeLimits": { "maximumInputByteCount": 1024, "maximumDecodedByteCount": 1024 },
-    "linkPolicy": "none",
-    "accessibility": { "supportsVoiceOver": true, "supportsKeyboardNavigation": true },
-    "compatibility": { "minimumProtocolRevision": 1, "maximumProtocolRevision": 1 },
-    "priority": 0
-  }],
-  "assets": [{
-    "path": "index.html",
-    "digest": "5ce39d66a927d4e2933dc6a637a9c54eee55a1d54da48b87791b0d90bd23022b"
-  }]
-}
+Calculate each lowercase SHA-256 digest after the final asset edit. Put the same asset records in each descriptor `approvedAssets` list and the top-level `assets` list.
+
+Run this command from the repository root:
+
+```text
+swift run RendererPackageTool validate <package-folder>
 ```
 
-`index.html`:
+The command validates a local folder under an invocation-owned temporary root. It prints the package ID, version, sorted registration IDs, and package hash as JSON.
 
-```html
-<!doctype html><meta charset="utf-8"><title>Example</title><p>Read-only renderer.</p>
-```
+The command removes its temporary data after success or failure. It does not install, activate, remove, refresh, or change a renderer package.
 
-The digest is the lowercase SHA-256 digest of the shown `index.html` bytes. Recalculate both values when you change the file. The validator rejects missing declarations and a digest that does not match `index.html`.
+Fix every validator error before import. Then ask the user to import the validated folder through Settings → Renderers.
