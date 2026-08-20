@@ -32,6 +32,16 @@ struct ShareLinkNormalizerTests {
         #expect(normalized.absoluteString == url.absoluteString)
     }
 
+    @Test func githubBlobURLRewritesToRawContentURL() {
+        let url = URL(string:
+            "https://github.com/obsidianmd/jsoncanvas/blob/main/sample.canvas")!
+
+        #expect(
+            ShareLinkNormalizer.normalize(url).absoluteString
+                == "https://raw.githubusercontent.com/obsidianmd/jsoncanvas/main/sample.canvas"
+        )
+    }
+
     @Test func alreadyDirectDropboxURLUntouched() {
         // A direct-download Dropbox URL doesn't match the share-host rule, so it
         // passes through unchanged (no double rewrite).

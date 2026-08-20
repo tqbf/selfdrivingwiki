@@ -1,7 +1,10 @@
 import Foundation
 
-/// Rewrites recognized file-share "preview" links to their direct-download URL —
-/// PURE, so it is unit-tested value-in/value-out and wired into the real fetch.
+// pattern: Functional Core
+
+/// Rewrites recognized file-share and GitHub "preview" links to their
+/// direct-download URL — PURE, so it is unit-tested value-in/value-out and
+/// wired into the real fetch.
 ///
 /// WHY this exists: file-share hosts hand non-browser clients an HTML *landing
 /// page* (a JS interstitial), not the file, unless you hit the direct-download
@@ -26,9 +29,10 @@ public enum ShareLinkNormalizer {
         let rewrite: @Sendable (URL) -> URL
     }
 
-    /// Provider rules, tried in order. Only Dropbox is implemented today; the
-    /// commented shapes below show how Google Drive / OneDrive slot in.
-    static let rules: [Rule] = [dropbox]
+    /// Provider rules, tried in order. The rewrites preserve the resource path
+    /// and query while changing only a known preview URL into its direct-file
+    /// form.
+    static let rules: [Rule] = [githubBlob, dropbox]
 
     /// Rewrite a recognized share link to its direct-download URL; pass anything
     /// else through unchanged.
@@ -37,6 +41,48 @@ public enum ShareLinkNormalizer {
             return rule.rewrite(url)
         }
         return url
+    }
+
+    // MARK: - GitHub
+
+    /// GitHub's `/blob/` URL is an HTML viewer, even when the path ends in a
+    /// file extension. Rewrite it to the raw-content host so callers receive
+    /// the repository bytes instead of the viewer page.
+    static let githubBlob = Rule(
+        matches: { url in
+            githubBlobPathComponents(for: url) != nil
+        },
+        rewrite: { url in
+            guard let path = githubBlobPathComponents(for: url),
+                  var components = URLComponents(
+                    url: url, resolvingAgainstBaseURL: false)
+            else { return url }
+
+            let rawPath = [path[0], path[1], path[3]]
+                + Array(path.dropFirst(4))
+            components.scheme = "https"
+            components.host = "raw.githubusercontent.com"
+            components.percentEncodedPath = "/"
+                + rawPath.map(String.init).joined(separator: "/")
+            return components.url ?? url
+        })
+
+    /// Return the percent-encoded path segments for a public GitHub blob URL:
+    /// `/owner/repository/blob/ref/file`. Keeping the encoded segments intact
+    /// preserves file names and branch names that contain escaped characters.
+    private static func githubBlobPathComponents(for url: URL) -> [Substring]? {
+        guard let host = url.host?.lowercased(),
+              host == "github.com" || host == "www.github.com",
+              let components = URLComponents(
+                url: url, resolvingAgainstBaseURL: false)
+        else { return nil }
+
+        let path = components.percentEncodedPath.split(
+            separator: "/", omittingEmptySubsequences: true)
+        guard path.count >= 5, path[2].lowercased() == "blob" else {
+            return nil
+        }
+        return path
     }
 
     // MARK: - Dropbox
