@@ -97,6 +97,7 @@ public protocol AgentProviderServices: Sendable {
     func preparation(from token: AgentProviderAttemptToken, stage: AgentProviderStage) async throws -> AgentOperationPreparation
     func fallbackPreparation(from token: AgentProviderAttemptToken, stage: AgentProviderStage, fallbackProviderID: ProviderID) async throws -> AgentOperationPreparation
     func prepareSummarization() async throws -> AgentProviderSummaryPreparation
+    func discoverCatalog(for provider: AgentProvider) async throws -> ACPProviderCatalogObservation
     func modelSummary(text: String, preparation: AgentOperationPreparation) async throws -> String?
     func release(_ token: AgentProviderAttemptToken) async
     func readiness() async -> Bool
@@ -183,6 +184,12 @@ public actor MutableAgentProviderServices: AgentProviderPrivateServices {
         try await installed.prepareSummarization()
     }
 
+    public func discoverCatalog(
+        for provider: AgentProvider
+    ) async throws -> ACPProviderCatalogObservation {
+        try await installed.discoverCatalog(for: provider)
+    }
+
     public func modelSummary(
         text: String,
         preparation: AgentOperationPreparation
@@ -236,6 +243,7 @@ public struct UnavailableAgentProviderServices: AgentProviderServices {
     public func preparation(from token: AgentProviderAttemptToken, stage: AgentProviderStage) async throws -> AgentOperationPreparation { throw AgentProviderRuntimeError.unavailable }
     public func fallbackPreparation(from token: AgentProviderAttemptToken, stage: AgentProviderStage, fallbackProviderID: ProviderID) async throws -> AgentOperationPreparation { throw AgentProviderRuntimeError.unavailable }
     public func prepareSummarization() async throws -> AgentProviderSummaryPreparation { throw AgentProviderRuntimeError.unavailable }
+    public func discoverCatalog(for provider: AgentProvider) async throws -> ACPProviderCatalogObservation { throw AgentProviderRuntimeError.unavailable }
     public func modelSummary(text: String, preparation: AgentOperationPreparation) async throws -> String? { throw AgentProviderRuntimeError.unavailable }
     public func release(_ token: AgentProviderAttemptToken) async {}
     public func readiness() async -> Bool { false }
@@ -261,6 +269,11 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
     public typealias CredentialReader = @Sendable (ProviderID) -> String?
     public typealias PermissionPolicyResolver = @Sendable (PermissionOperationKind) -> PermissionPolicy
     public typealias BackendFactory = @Sendable (PermissionPolicy, Duration?, TimeInterval) -> any AgentBackend
+    public typealias CatalogProbe = @Sendable (
+        AgentProvider,
+        [String],
+        String?
+    ) async throws -> ACPProviderCatalogObservation
 
     private struct SpawnRecord: Sendable { let provider: AgentProvider; let model: ModelID?; let hints: [String: String] }
     private struct Snapshot: Sendable { let policy: AgentOperationPolicy; let thinking: String?; let models: AgentOperationModelSelection; let chains: [AgentProviderStage: [SpawnRecord]] }
@@ -271,14 +284,37 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
     private let readCredential: CredentialReader
     private let resolvePermissionPolicy: PermissionPolicyResolver
     private let makeBackend: BackendFactory
+    private let probeCatalog: CatalogProbe
     private var snapshots: [UUID: Snapshot] = [:]
     private var tokens: [UUID: TokenRecord] = [:]
     private var cachedBackends: [String: any AgentBackend] = [:]
     private var disposed = false
 
-    public init(readConfiguration: @escaping ConfigurationReader, resolveCommand: @escaping CommandResolver, readCredential: @escaping CredentialReader, resolvePermissionPolicy: @escaping PermissionPolicyResolver, makeBackend: @escaping BackendFactory = { AgentBackendFactory.makeBackend(policy: $0, budget: $1, turnCeilingTimeout: $2) }) {
-        self.readConfiguration = readConfiguration; self.resolveCommand = resolveCommand; self.readCredential = readCredential
-        self.resolvePermissionPolicy = resolvePermissionPolicy; self.makeBackend = makeBackend
+    public init(
+        readConfiguration: @escaping ConfigurationReader,
+        resolveCommand: @escaping CommandResolver,
+        readCredential: @escaping CredentialReader,
+        resolvePermissionPolicy: @escaping PermissionPolicyResolver,
+        makeBackend: @escaping BackendFactory = {
+            AgentBackendFactory.makeBackend(
+                policy: $0,
+                budget: $1,
+                turnCeilingTimeout: $2)
+        },
+        probeCatalog: @escaping CatalogProbe = { provider, resolvedCommand, apiKey in
+            try await ACPProviderModelProbe(
+                provider: provider,
+                resolvedCommand: resolvedCommand,
+                apiKey: apiKey)
+                .discoverObservation()
+        }
+    ) {
+        self.readConfiguration = readConfiguration
+        self.resolveCommand = resolveCommand
+        self.readCredential = readCredential
+        self.resolvePermissionPolicy = resolvePermissionPolicy
+        self.makeBackend = makeBackend
+        self.probeCatalog = probeCatalog
     }
 
     public func prepareInteractive(
@@ -368,6 +404,21 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
             policyOverride: policy)
         snapshots[snapshotID] = snapshot
         return .model(try makePreparation(snapshotID: snapshotID, stage: .summarizer, providerID: nil))
+    }
+
+    public func discoverCatalog(
+        for provider: AgentProvider
+    ) async throws -> ACPProviderCatalogObservation {
+        try requireAvailable()
+        let commands = await resolveCommand([provider])
+        try requireAvailable()
+        guard let resolvedCommand = commands[provider.id], !resolvedCommand.isEmpty else {
+            throw ACPProviderModelProbeError.notConfigured
+        }
+        return try await probeCatalog(
+            provider,
+            resolvedCommand,
+            readCredential(provider.id))
     }
 
     public func modelSummary(

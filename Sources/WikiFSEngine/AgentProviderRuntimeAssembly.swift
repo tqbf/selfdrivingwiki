@@ -15,6 +15,7 @@ public struct AgentProviderRuntimeAssembly: Sendable {
         case credentialReader
         case permissionPolicyResolver
         case backendFactory
+        case catalogProbe
         case runtime
         case services
     }
@@ -25,6 +26,7 @@ public struct AgentProviderRuntimeAssembly: Sendable {
         static let credentialReader = ServiceKey<AgentProviderRuntime.CredentialReader>(label: "agent-provider.credential-reader")
         static let permissionPolicyResolver = ServiceKey<AgentProviderRuntime.PermissionPolicyResolver>(label: "agent-provider.permission-policy-resolver")
         static let backendFactory = ServiceKey<AgentProviderRuntime.BackendFactory>(label: "agent-provider.backend-factory")
+        static let catalogProbe = ServiceKey<AgentProviderRuntime.CatalogProbe>(label: "agent-provider.catalog-probe")
         static let runtime = ServiceKey<AgentProviderRuntime>(label: "agent-provider.runtime")
         static let services = ServiceKey<any AgentProviderServices>(label: "agent-provider.services")
     }
@@ -34,6 +36,7 @@ public struct AgentProviderRuntimeAssembly: Sendable {
     public let readCredential: AgentProviderRuntime.CredentialReader
     public let resolvePermissionPolicy: AgentProviderRuntime.PermissionPolicyResolver
     public let makeBackend: AgentProviderRuntime.BackendFactory
+    public let probeCatalog: AgentProviderRuntime.CatalogProbe
 
     public init(
         readConfiguration: @escaping AgentProviderRuntime.ConfigurationReader,
@@ -42,6 +45,13 @@ public struct AgentProviderRuntimeAssembly: Sendable {
         resolvePermissionPolicy: @escaping AgentProviderRuntime.PermissionPolicyResolver,
         makeBackend: @escaping AgentProviderRuntime.BackendFactory = { policy, budget, ceiling in
             AgentBackendFactory.makeBackend(policy: policy, budget: budget, turnCeilingTimeout: ceiling)
+        },
+        probeCatalog: @escaping AgentProviderRuntime.CatalogProbe = { provider, resolvedCommand, apiKey in
+            try await ACPProviderModelProbe(
+                provider: provider,
+                resolvedCommand: resolvedCommand,
+                apiKey: apiKey)
+                .discoverObservation()
         }
     ) {
         self.readConfiguration = readConfiguration
@@ -49,6 +59,7 @@ public struct AgentProviderRuntimeAssembly: Sendable {
         self.readCredential = readCredential
         self.resolvePermissionPolicy = resolvePermissionPolicy
         self.makeBackend = makeBackend
+        self.probeCatalog = probeCatalog
     }
 
     public func assemble() async throws -> AgentProviderRuntimeHandle {
@@ -117,17 +128,22 @@ public struct AgentProviderRuntimeAssembly: Sendable {
             return try ComponentDefinition(label: component.rawValue, provisions: [ServiceDependency(Keys.backendFactory)]) { activation in
                 _ = try await activation.supply(Keys.backendFactory, value: makeBackend)
             }
+        case .catalogProbe:
+            return try ComponentDefinition(label: component.rawValue, provisions: [ServiceDependency(Keys.catalogProbe)]) { activation in
+                _ = try await activation.supply(Keys.catalogProbe, value: probeCatalog)
+            }
         case .runtime:
             return try ComponentDefinition(
                 label: component.rawValue,
-                dependencies: [ServiceDependency(Keys.configurationReader), ServiceDependency(Keys.commandResolver), ServiceDependency(Keys.credentialReader), ServiceDependency(Keys.permissionPolicyResolver), ServiceDependency(Keys.backendFactory)],
+                dependencies: [ServiceDependency(Keys.configurationReader), ServiceDependency(Keys.commandResolver), ServiceDependency(Keys.credentialReader), ServiceDependency(Keys.permissionPolicyResolver), ServiceDependency(Keys.backendFactory), ServiceDependency(Keys.catalogProbe)],
                 provisions: [ServiceDependency(Keys.runtime)]) { activation in
                     let runtime = AgentProviderRuntime(
                         readConfiguration: try await activation.require(Keys.configurationReader),
                         resolveCommand: try await activation.require(Keys.commandResolver),
                         readCredential: try await activation.require(Keys.credentialReader),
                         resolvePermissionPolicy: try await activation.require(Keys.permissionPolicyResolver),
-                        makeBackend: try await activation.require(Keys.backendFactory))
+                        makeBackend: try await activation.require(Keys.backendFactory),
+                        probeCatalog: try await activation.require(Keys.catalogProbe))
                     _ = try await activation.supply(Keys.runtime, value: runtime)
                     _ = try await activation.effect { _ in await runtime.dispose() }
                 }

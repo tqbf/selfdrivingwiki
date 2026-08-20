@@ -824,7 +824,9 @@ struct WikiFSApp: App {
                 ExtractionSettingsView(containerDirectory: containerDirectory, launcher: settingsLauncher)
                     .tag(SettingsTab.extraction)
                     .tabItem { Label("Extraction", systemImage: "doc.viewfinder") }
-                AgentsSettingsView(containerDirectory: containerDirectory)
+                AgentsSettingsView(
+                    containerDirectory: containerDirectory,
+                    providerServices: agentProviderServices)
                     .tag(SettingsTab.agents)
                     .tabItem { Label("Providers", systemImage: "cpu") }
                 OperationsSettingsView(containerDirectory: containerDirectory)

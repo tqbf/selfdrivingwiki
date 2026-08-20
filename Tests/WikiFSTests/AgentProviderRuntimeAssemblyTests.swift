@@ -46,6 +46,86 @@ struct AgentProviderRuntimeAssemblyTests {
         }
     }
 
+    @Test("catalog discovery resolves command and credential through the runtime")
+    func catalogDiscoveryUsesRuntimeDependencies() async throws {
+        let calls = CatalogProbeCalls()
+        let provider = AgentProvider(
+            id: ProviderID(rawValue: "draft"),
+            label: "Draft",
+            command: ["draft-agent", "--acp"],
+            env: ["MODE": "test"])
+        let expected = ACPProviderCatalogObservation(
+            providerID: provider.id,
+            fingerprint: nil,
+            models: [CachedModelInfo(
+                modelId: ModelID(rawValue: "test-model"),
+                name: "Test Model",
+                description: nil)],
+            currentModelID: ModelID(rawValue: "test-model"),
+            thinkingCapability: nil)
+        let assembly = AgentProviderRuntimeAssembly(
+            readConfiguration: { AgentProvidersConfig(providers: []) },
+            resolveCommand: { providers in
+                #expect(providers == [provider])
+                return [provider.id: ["/resolved/draft-agent", "--acp"]]
+            },
+            readCredential: { providerID in
+                #expect(providerID == provider.id)
+                return "secret"
+            },
+            resolvePermissionPolicy: { _ in .bypass },
+            probeCatalog: { receivedProvider, command, credential in
+                await calls.record(
+                    provider: receivedProvider,
+                    command: command,
+                    credential: credential)
+                return expected
+            })
+        let handle = try await assembly.assemble(
+            registrationOrder: AgentProviderRuntimeAssembly.Component.allCases.shuffled())
+
+        let observation = try await handle.services.discoverCatalog(for: provider)
+
+        #expect(observation == expected)
+        #expect(await calls.provider == provider)
+        #expect(await calls.command == ["/resolved/draft-agent", "--acp"])
+        #expect(await calls.credential == "secret")
+        try await handle.dispose()
+    }
+
+    @Test("catalog discovery rejects a missing resolved command")
+    func catalogDiscoveryRejectsMissingCommand() async throws {
+        let handle = try await AgentProviderRuntimeAssembly(
+            readConfiguration: { AgentProvidersConfig(providers: []) },
+            resolveCommand: { _ in [:] },
+            readCredential: { _ in nil },
+            resolvePermissionPolicy: { _ in .bypass })
+            .assemble()
+        let provider = AgentProvider(
+            id: ProviderID(rawValue: "missing"),
+            label: "Missing",
+            command: ["missing-agent"])
+
+        await #expect(throws: ACPProviderModelProbeError.notConfigured) {
+            try await handle.services.discoverCatalog(for: provider)
+        }
+        try await handle.dispose()
+    }
+
+    @Test("disposed runtime rejects catalog discovery")
+    func disposedRuntimeRejectsCatalogDiscovery() async throws {
+        let handle = try await makeAssembly().assemble()
+        try await handle.dispose()
+
+        await #expect(throws: AgentProviderRuntimeError.unavailable) {
+            try await handle.services.discoverCatalog(
+                for: AgentProvider(
+                    id: ProviderID(rawValue: "test"),
+                    label: "Test",
+                    command: ["/test/provider"]))
+        }
+    }
+
     @Test("assembly source contains only approved headless boundaries")
     func assemblyContainsOnlyApprovedHeadlessBoundaries() throws {
         let source = try String(
@@ -58,6 +138,7 @@ struct AgentProviderRuntimeAssemblyTests {
             "agent-provider.credential-reader",
             "agent-provider.permission-policy-resolver",
             "agent-provider.backend-factory",
+            "agent-provider.catalog-probe",
             "agent-provider.runtime",
             "agent-provider.services",
         ]
@@ -97,6 +178,22 @@ struct AgentProviderRuntimeAssemblyTests {
             readCredential: { _ in nil },
             resolvePermissionPolicy: { _ in .bypass },
             makeBackend: { _, _, _ in FakeAgentBackend() })
+    }
+}
+
+private actor CatalogProbeCalls {
+    private(set) var provider: AgentProvider?
+    private(set) var command: [String]?
+    private(set) var credential: String?
+
+    func record(
+        provider: AgentProvider,
+        command: [String],
+        credential: String?
+    ) {
+        self.provider = provider
+        self.command = command
+        self.credential = credential
     }
 }
 

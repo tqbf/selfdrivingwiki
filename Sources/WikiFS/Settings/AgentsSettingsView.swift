@@ -74,9 +74,14 @@ struct AgentsSettingsView: View {
     }
 
     let containerDirectory: URL
+    let providerServices: any AgentProviderServices
 
-    init(containerDirectory: URL) {
+    init(
+        containerDirectory: URL,
+        providerServices: any AgentProviderServices
+    ) {
         self.containerDirectory = containerDirectory
+        self.providerServices = providerServices
         let loaded = AgentProvidersConfig.loadOrSeed(from: containerDirectory)
         _config = State(initialValue: loaded)
         _selectedProviderID = State(initialValue: loaded.providers.first?.id)
@@ -131,7 +136,8 @@ struct AgentsSettingsView: View {
             ProviderDetailPane(
                 provider: provider,
                 config: $config,
-                containerDirectory: containerDirectory)
+                containerDirectory: containerDirectory,
+                providerServices: providerServices)
                 // Re-seed the pane's local edit state when the SELECTED provider
                 // changes, but not when the same provider's config mutates (so
                 // inline edits survive a save round-trip).
@@ -367,6 +373,7 @@ private struct ProviderDetailPane: View {
     let provider: AgentProvider
     @Binding var config: AgentProvidersConfig
     let containerDirectory: URL
+    let providerServices: any AgentProviderServices
 
     @State private var label: String
     @State private var commandText: String
@@ -377,6 +384,7 @@ private struct ProviderDetailPane: View {
     @State private var envText: String
     @State private var isAvailable: Bool = false
     @State private var modelRefreshState: ModelRefreshState = .idle
+    @State private var modelRefreshTask: Task<Void, Never>?
 
     /// The probe's lifecycle state. Equatable so SwiftUI skips body re-renders
     /// when the state hasn't changed.
@@ -387,10 +395,16 @@ private struct ProviderDetailPane: View {
         case error(String)
     }
 
-    init(provider: AgentProvider, config: Binding<AgentProvidersConfig>, containerDirectory: URL) {
+    init(
+        provider: AgentProvider,
+        config: Binding<AgentProvidersConfig>,
+        containerDirectory: URL,
+        providerServices: any AgentProviderServices
+    ) {
         self.provider = provider
         self._config = config
         self.containerDirectory = containerDirectory
+        self.providerServices = providerServices
         self._label = State(initialValue: provider.label)
         self._commandText = State(initialValue: provider.command.map(ShellWords.join) ?? "")
         self._envText = State(initialValue: EnvVarText.seed(for: provider))
@@ -406,6 +420,7 @@ private struct ProviderDetailPane: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear { refreshAvailability() }
+        .onDisappear { cancelModelRefresh() }
     }
 
     // MARK: - Header
@@ -448,6 +463,7 @@ private struct ProviderDetailPane: View {
                     TextField("Command", text: $commandText, prompt: Text("bun x @agentclientprotocol/claude-agent-acp"))
                         .fontDesign(.monospaced)
                         .onChange(of: commandText) {
+                            cancelModelRefresh()
                             commitProviderConfig()
                             refreshAvailability()
                         }
@@ -538,7 +554,10 @@ private struct ProviderDetailPane: View {
             TextEditor(text: $envText)
                 .font(.system(.body, design: .monospaced))
                 .frame(minHeight: 120)
-                .onChange(of: envText) { commitProviderConfig() }
+                .onChange(of: envText) {
+                    cancelModelRefresh()
+                    commitProviderConfig()
+                }
         } header: {
             Text("Environment")
         } footer: {
@@ -623,39 +642,24 @@ private struct ProviderDetailPane: View {
             modelRefreshState = .error("Executable not found on PATH")
             return
         }
+        cancelModelRefresh()
         modelRefreshState = .loading
         DebugLog.agent("ProviderDetailPane.refreshModels: starting probe provider=\(provider.id)")
         let providerID = provider.id
         let env = EnvVarText.parse(envText)
         let cleanLabel = label.trimmingCharacters(in: .whitespaces)
-        Task {
-            let resolved = await PathPreflight.resolveOnLoginShell(executable: exe)
-            let resolvedWords: [String]
-            switch resolved {
-            case .found(let absolutePath):
-                resolvedWords = [absolutePath] + Array(words.dropFirst())
-                await MainActor.run { isAvailable = true }
-            case .missing(let reason):
-                await MainActor.run {
-                    isAvailable = false
-                    modelRefreshState = .error(reason)
-                }
-                return
-            }
-            let providerForProbe = AgentProvider(
-                id: providerID,
-                label: cleanLabel,
-                command: words.isEmpty ? nil : words,
-                env: env,
-                enabled: true,
-                isDefault: false)
-            let probe = ACPProviderModelProbe(
-                provider: providerForProbe,
-                resolvedCommand: resolvedWords,
-                apiKey: nil)
+        let providerForProbe = AgentProvider(
+            id: providerID,
+            label: cleanLabel,
+            command: words,
+            env: env,
+            enabled: true,
+            isDefault: false)
+        modelRefreshTask = Task {
             let outcome: Result<ACPProviderCatalogObservation, Error>
             do {
-                let observation = try await probe.discoverObservation()
+                let observation = try await providerServices.discoverCatalog(
+                    for: providerForProbe)
                 if ACPProviderModelProbe.shouldThrowNoModels(observation.models) {
                     DebugLog.agent("ProviderDetailPane.refreshModels: probe OK but no models advertised provider=\(providerID)")
                     outcome = .failure(ACPProviderModelProbeError.noModelsAdvertised)
@@ -663,12 +667,19 @@ private struct ProviderDetailPane: View {
                     DebugLog.agent("ProviderDetailPane.refreshModels: probe OK models=\(observation.models.count) provider=\(providerID)")
                     outcome = .success(observation)
                 }
+            } catch is CancellationError {
+                return
             } catch {
                 DebugLog.agent("ProviderDetailPane.refreshModels: probe failed provider=\(providerID): \(error.localizedDescription)")
                 outcome = .failure(error)
             }
-            await MainActor.run {
-                switch outcome {
+            guard !Task.isCancelled,
+                  providerForProbe.command == ShellWords.split(commandText),
+                  providerForProbe.env == EnvVarText.parse(envText),
+                  config.providers.contains(where: { $0.id == providerID })
+            else { return }
+            modelRefreshTask = nil
+            switch outcome {
                 case .success(let observation):
                     modelRefreshState = .ready(observation.models)
                     // Persist models, agent fingerprint, and standard ACP
@@ -685,6 +696,13 @@ private struct ProviderDetailPane: View {
                     modelRefreshState = .error(message)
                 }
             }
+        }
+
+    private func cancelModelRefresh() {
+        modelRefreshTask?.cancel()
+        modelRefreshTask = nil
+        if modelRefreshState == .loading {
+            modelRefreshState = .idle
         }
     }
 }

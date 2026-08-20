@@ -6,11 +6,15 @@ struct AgentProviderCompositionBoundaryTests {
     @Test("app queue and wiki sessions receive one stable facade")
     func appQueueAndWikiSessionsReceiveSameFacade() throws {
         let source = try sourceText("Sources/WikiFS/Window/WikiFSApp.swift")
+        let settings = try sourceText("Sources/WikiFS/Settings/AgentsSettingsView.swift")
 
         #expect(source.contains("let providerServices = MutableAgentProviderServices()"))
         #expect(source.contains("providerServices: providerServices"))
         #expect(source.contains("await providerServices.install(handle.services)"))
         #expect(source.contains("agentProviderRuntimeHandle = handle"))
+        #expect(source.contains("providerServices: agentProviderServices"))
+        #expect(settings.contains("providerServices.discoverCatalog("))
+        #expect(!settings.contains("ACPProviderModelProbe("))
         #expect(!source.contains("CordisContext"))
     }
 
@@ -39,6 +43,29 @@ struct AgentProviderCompositionBoundaryTests {
         #expect(controller.contains("runtime.prepareStart("))
         #expect(runtime.contains("providerServices.prepareInteractive("))
         #expect(runtime.contains("preparedInteractiveOperation:"))
+    }
+
+    @Test("only provider assembly constructs the runtime")
+    func onlyProviderAssemblyConstructsRuntime() throws {
+        let root = repositoryRoot()
+        let sourceRoot = root.appendingPathComponent("Sources")
+        let approvedPath = "WikiFSEngine/AgentProviderRuntimeAssembly.swift"
+        let enumerator = try #require(
+            FileManager.default.enumerator(
+                at: sourceRoot,
+                includingPropertiesForKeys: nil))
+        var constructionPaths: [String] = []
+
+        for case let fileURL as URL in enumerator where fileURL.pathExtension == "swift" {
+            let source = try String(contentsOf: fileURL, encoding: .utf8)
+            guard source.contains("AgentProviderRuntime(") else { continue }
+            constructionPaths.append(
+                fileURL.path.replacingOccurrences(
+                    of: sourceRoot.path + "/",
+                    with: ""))
+        }
+
+        #expect(constructionPaths == [approvedPath])
     }
 
     @Test("provider assembly excludes app and process owners")
