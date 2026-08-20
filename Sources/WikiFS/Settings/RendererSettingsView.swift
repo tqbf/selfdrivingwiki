@@ -119,7 +119,7 @@ final class RendererSettingsModel {
 
     private func rebuildRows() {
         rows = (host.machineIndex?.records ?? [])
-            .filter { $0.state != .removed }
+            .filter { $0.state == .validated }
             .sorted()
             .map { record in
                 let descriptor = record.validatedDescriptors.first

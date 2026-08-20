@@ -320,6 +320,28 @@ public actor RendererMachineIndexStore {
                         if let existing, existing.expectedPackageHash != revalidated.packageHash {
                             throw RendererMachineIndexStoreError.conflictingExpectedHash
                         }
+                        let incomingLogicalReferences = Set(revalidated.manifest.descriptors.map(\.logicalReference))
+                        let activeRecord = records.first { candidate in
+                            candidate.state == .validated &&
+                            candidate.validatedDescriptors.contains { incomingLogicalReferences.contains($0.logicalReference) }
+                        }
+                        records = try records.map { candidate in
+                            guard candidate.state == .validated,
+                                  candidate.validatedDescriptors.contains(where: {
+                                      incomingLogicalReferences.contains($0.logicalReference)
+                                  }) else { return candidate }
+                            return try RendererPackageInstallRecord(
+                                packageID: candidate.packageID,
+                                version: candidate.version,
+                                expectedPackageHash: candidate.expectedPackageHash,
+                                state: .superseded,
+                                reservedAt: candidate.reservedAt,
+                                updatedAt: timestamp,
+                                diagnostic: candidate.diagnostic,
+                                rollbackCandidate: candidate.rollbackCandidate,
+                                isSafeModeSuppressed: candidate.isSafeModeSuppressed,
+                                validatedDescriptors: candidate.validatedDescriptors)
+                        }
                         let record = try RendererPackageInstallRecord(
                             packageID: revalidated.manifest.packageID,
                             version: revalidated.manifest.version,
@@ -327,6 +349,7 @@ public actor RendererMachineIndexStore {
                             state: .validated,
                             reservedAt: existing?.reservedAt ?? timestamp,
                             updatedAt: timestamp,
+                            rollbackCandidate: activeRecord?.version,
                             isSafeModeSuppressed: existing?.isSafeModeSuppressed ?? false,
                             validatedDescriptors: revalidated.manifest.descriptors
                         )
@@ -747,7 +770,7 @@ private struct RendererMachineIndexSQLiteStorage: Sendable {
               sqlite3_column_type(statement, 2) == SQLITE_BLOB
         else { throw RendererMachineIndexStoreError.corruptIndex }
         let schemaVersion = Int(sqlite3_column_int64(statement, 0))
-        guard schemaVersion == 2 || schemaVersion == RendererMachineIndex.currentSchemaVersion else {
+        guard schemaVersion == 2 || schemaVersion == 3 || schemaVersion == RendererMachineIndex.currentSchemaVersion else {
             throw RendererMachineIndexStoreError.unsupportedSchemaVersion
         }
         let rawGeneration = sqlite3_column_int64(statement, 1)
@@ -766,8 +789,8 @@ private struct RendererMachineIndexSQLiteStorage: Sendable {
         return .init(index: index, requiresMigration: schemaVersion != RendererMachineIndex.currentSchemaVersion)
     }
 
-    /// Rewrites a proven v2 JSON shape as v3 without changing generation,
-    /// descriptors, or safe mode. The savepoint leaves the v2 authority intact
+    /// Rewrites a proven legacy JSON shape using the current index invariants.
+    /// The savepoint leaves the prior authority intact
     /// if the derived projection cannot be replaced.
     private func migrate(database: OpaquePointer, index: RendererMachineIndex) throws {
         try execute(database, sql: "SAVEPOINT renderer_machine_index_schema_migration")

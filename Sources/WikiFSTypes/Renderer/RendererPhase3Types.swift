@@ -32,6 +32,7 @@ public struct RendererMachineScopeID: RawRepresentable, Codable, Hashable, Senda
 public enum RendererPackageInstallState: String, Codable, CaseIterable, Hashable, Sendable {
     case unvalidated
     case validated
+    case superseded
     case quarantined
     case removed
 }
@@ -85,10 +86,10 @@ public struct RendererPackageInstallRecord: Codable, Hashable, Sendable, Compara
         else {
             throw RendererValidationError.invalidIdentifier(kind: "renderer package install record", value: "inconsistent validated descriptors")
         }
-        guard state != .validated || descriptors.isEmpty == false else {
-            throw RendererValidationError.invalidIdentifier(kind: "renderer package install record", value: "validated record missing descriptors")
+        guard (state != .validated && state != .superseded) || descriptors.isEmpty == false else {
+            throw RendererValidationError.invalidIdentifier(kind: "renderer package install record", value: "available record missing descriptors")
         }
-        guard state == .validated || descriptors.isEmpty else {
+        guard state == .validated || state == .superseded || descriptors.isEmpty else {
             throw RendererValidationError.invalidIdentifier(kind: "renderer package install record", value: "unavailable record has descriptors")
         }
         self.packageID = packageID

@@ -39,7 +39,7 @@ struct RendererSettingsManagementViewTests {
         #expect(!source.contains("Application Support"))
         #expect(!source.contains("App Group"))
         #expect(source.contains("Source data and wiki preferences were preserved"))
-        #expect(source.contains(".filter { $0.state != .removed }"))
+        #expect(source.contains(".filter { $0.state == .validated }"))
         #expect(source.contains(".task(id: wikiID)"))
         #expect(source.contains("model.updateWiki(wiki)"))
         #expect(source.contains("rendererSourcePreference(for: source.id)"))
