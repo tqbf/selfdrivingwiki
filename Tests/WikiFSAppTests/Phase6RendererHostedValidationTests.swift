@@ -168,6 +168,111 @@ struct Phase6RendererHostedValidationTests {
         }
     }
 
+    /// The viewer must render from its OWN startup request. The test above
+    /// re-posts `input.read` from the page after the session reports ready,
+    /// which hides whether the package's document-load request is ever
+    /// answered -- and that unassisted request is the only one production
+    /// makes.
+    @Test("Excalidraw renders from the package's own startup input request")
+    func excalidrawRendersWithoutAReplayedBridgeRequest() async throws {
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        defer { lease.release() }
+        Self.prepareApplication()
+
+        let fixture = try ExcalidrawHostedFixture()
+        defer { fixture.remove() }
+        let package = try fixture.validator.validate(directory: fixture.packageDirectory)
+        let descriptor = try #require(package.manifest.descriptors.only)
+        let entryPoint = try #require(descriptor.webEntryPoint)
+        let provider = try ValidatedRendererPackageResourceProvider(
+            packageID: descriptor.reference.packageID,
+            version: descriptor.reference.version,
+            expectedPackageHash: package.packageHash,
+            installedRoot: package.stagedRoot,
+            validatedPackage: package)
+        let entryURL = RendererPackageScheme.url(
+            packageID: descriptor.reference.packageID,
+            version: descriptor.reference.version,
+            path: entryPoint.path)
+        let reservation = RendererPackageReservation(
+            packageID: descriptor.reference.packageID,
+            version: descriptor.reference.version)
+        // An inline artifact, not a source version: a fenced ```excalidraw
+        // block on a page is the only input the reader's cards produce.
+        let store = try GRDBWikiStore()
+        let documentIdentity = MarkdownDocumentIdentity(
+            pageID: PageID(rawValue: "01JHOSTEDEXCALIDRAWPAGE00001"),
+            pageVersionID: PageVersionID(rawValue: "01JHOSTEDEXCALIDRAWVERSION01"))
+        let block = try MarkdownFencedBlock(
+            documentIdentity: documentIdentity,
+            parserOrdinal: 0,
+            rawInfoString: "excalidraw",
+            bytes: Self.excalidrawInput)
+        let artifact = try RendererEmbeddedContent.InlineArtifact(
+            pageID: documentIdentity.pageID,
+            pageVersionID: documentIdentity.pageVersionID,
+            blockID: try #require(block.blockID),
+            fenceKind: .excalidraw,
+            mimeType: try .init(validating: "application/json"),
+            bytes: Self.excalidrawInput)
+        let reader = RendererAuthorizedInputReader(
+            store: store,
+            authorizedInput: .inlineArtifact(artifact))
+        let identity = InstalledRendererWebViewIdentity(
+            rendererReference: descriptor.reference,
+            entryURL: entryURL)
+        var session: WikiAppWebViewSession?
+        let view = WikiAppWebView(
+            identity: identity,
+            makeSession: { _, reportFailure in
+                let value = WikiAppWebViewSession(
+                    entryURL: entryURL,
+                    resourceProvider: provider,
+                    installedPackage: reservation,
+                    lifecycleFailureHandler: reportFailure,
+                    bridgeFactory: { sessionID in
+                        RendererContentWorldBroker(
+                            sessionID: sessionID,
+                            capability: .init(rawValue: UUID().uuidString),
+                            inputReader: reader,
+                            expectedOrigin: entryURL)
+                    },
+                    externalActivationPolicy: .enabled)
+                session = value
+                return value
+            },
+            onFailure: { failure in
+                Issue.record("Hosted Excalidraw session failed: \(failure.kind)")
+            })
+        let host = NSHostingController(rootView: AnyView(view))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 720, height: 480),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false)
+        window.contentViewController = host
+        window.orderFront(nil)
+        defer {
+            host.rootView = AnyView(EmptyView())
+            session?.close()
+            window.orderOut(nil)
+            window.contentView = nil
+        }
+
+        try await Self.waitFor(description: "hosted Excalidraw session") { session != nil }
+        let liveSession = try #require(session)
+        try await Self.waitForReady(liveSession, description: "hosted Excalidraw package session")
+        let webView = try #require(liveSession.webView)
+
+        // No replayed envelope: whatever the page posted on its own must have
+        // been answered.
+        _ = try await Self.waitForJavaScriptString(
+            "document.querySelector('svg.scene') ? 'scene-rendered' : 'pending'",
+            expectedValue: "scene-rendered",
+            in: webView,
+            description: "unassisted Excalidraw scene")
+    }
+
     private static func prepareApplication() {
         let application = NSApplication.shared
         application.setActivationPolicy(.accessory)
