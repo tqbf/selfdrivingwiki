@@ -1,6 +1,7 @@
 #if os(macOS)
 import Foundation
 import Testing
+@testable import WikiDaemonContract
 
 @Suite("Daemon transport boundary policy")
 struct DaemonTransportBoundaryPolicyTests {
@@ -76,6 +77,27 @@ struct DaemonTransportBoundaryPolicyTests {
                 #expect(!source.contains(symbol), "Forbidden \(symbol) in \(path)")
             }
         }
+    }
+
+    @Test("chat nil state is a reconnecting state, not a manual install failure")
+    func chatUnavailableCopyDoesNotRequireManualDaemonInstall() throws {
+        let source = try read(
+            "Sources/WikiFS/Window/WikiDetailView.swift",
+            root: repositoryRoot())
+
+        #expect(!source.contains("make install-daemon"))
+        #expect(source.contains("Chat will connect automatically"))
+        #expect(!WikiDaemonError.connectionFailed.localizedDescription.contains("make install-daemon"))
+    }
+
+    @Test("safe queue relinquishment keeps chat connected")
+    func safeQueueRelinquishmentKeepsChatConnected() throws {
+        let source = try read(
+            "Sources/WikiFS/Queue/DaemonTransportAppCoordinator.swift",
+            root: repositoryRoot())
+
+        #expect(!source.contains("return .localFallbackReady"))
+        #expect(source.contains("replaceChatCoordinator(makeChatCoordinator())"))
     }
 }
 

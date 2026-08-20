@@ -103,7 +103,8 @@ struct WikiFSApp: App {
     /// App-wide chat daemon coordinator (Phase C4). Owns the per-chat
     /// `RemoteChatSession` registry + wraps the 6 chat XPC commands. `nil`
     /// when the daemon is unavailable — chat surfaces then render an
-    /// unavailable state (no local fallback; the daemon owns chat).
+    /// reconnecting state while transport starts or recovers. Chat has no local
+    /// fallback because the daemon owns chat.
     @State private var chatDaemonCoordinator: ChatDaemonCoordinator?
 
     /// Presentation-only adapter for typed daemon transport events.
@@ -603,6 +604,9 @@ struct WikiFSApp: App {
 
     @MainActor
     private func connectToDaemon() {
+        // Start composition if needed. The owner ignores duplicate calls and
+        // retries assembly while startup remains in progress.
+        Task { await daemonTransportCompositionOwner.start() }
         daemonTransportCoordinator.installChatReplacement { coordinator in
             replaceChatDaemonCoordinator(coordinator)
         }
