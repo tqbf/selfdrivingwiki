@@ -445,14 +445,23 @@ struct ContentView: View {
 
 }
 
-struct RendererActivationPresentation: Identifiable, Equatable {
+/// The window key for one activated renderer. `WindowGroup(for:)` dedups by
+/// `==`, so activating the same content twice focuses the open window instead
+/// of stacking a second one.
+///
+/// `id` covers the renderer and the exact bytes but not the block that carried
+/// them, so the same drawing embedded on two pages deliberately shares one
+/// window: the windows would be identical.
+struct RendererActivationPresentation: Identifiable, Codable, Hashable {
     let reference: RendererReference
     let input: RendererBridgeInput
+    let wikiID: WikiID
     let id: String
 
-    init(reference: RendererReference, input: RendererBridgeInput) {
+    init(reference: RendererReference, input: RendererBridgeInput, wikiID: WikiID) {
         self.reference = reference
         self.input = input
+        self.wikiID = wikiID
         let encodedInput: String
         switch input {
         case .inlineArtifact(let artifact):
@@ -469,25 +478,61 @@ struct RendererActivationPresentation: Identifiable, Equatable {
             encodedInput
         ].joined(separator: "|")
     }
+
+    /// `RendererBridgeInput` is `Equatable` but not `Hashable`, and widening a
+    /// Core contract to key a window would be the wrong trade — `id` already
+    /// encodes the renderer and its exact bytes.
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.id == rhs.id && lhs.wikiID == rhs.wikiID
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(wikiID)
+    }
 }
 
-struct RendererActivationPresentationSheet: View {
+/// Resolves the activating wiki's store for the renderer window through the
+/// shared `SessionManager`, mirroring `PageVersionCompareWindow`. A restored
+/// window whose wiki is not open lands on the unavailable state rather than
+/// holding a stale store.
+struct RendererActivationWindow: View {
+    let sessionManager: SessionManager
+    let installedRendererHost: InstalledRendererHost
+    let context: RendererActivationPresentation?
+
+    var body: some View {
+        if let context, let session = sessionManager.sessions[context.wikiID] {
+            RendererActivationView(
+                store: session.store,
+                installedRendererHost: installedRendererHost,
+                request: context)
+        } else {
+            ContentUnavailableView {
+                Label("Renderer Unavailable", systemImage: "rectangle.slash")
+            } description: {
+                Text("Open the wiki that holds this content, then activate the renderer again.")
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
+/// One activated renderer, hosted as the content of a value-driven
+/// `WindowGroup` — a real, resizable, non-modal window (see `WikiFSApp`). The
+/// window's own traffic lights close it, so there is no in-content Close
+/// control; Escape closes it too, the habit a reader brings from Quick Look.
+struct RendererActivationView: View {
     @Environment(\.dismiss) private var dismiss
     @Bindable var store: WikiStoreModel
     let installedRendererHost: InstalledRendererHost
     let request: RendererActivationPresentation
 
     var body: some View {
-        NavigationStack {
-            rendererContent
-                .navigationTitle(title)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Close") { dismiss() }
-                    }
-                }
-        }
-        .frame(minWidth: 520, minHeight: 420)
+        rendererContent
+            .frame(minWidth: 520, minHeight: 420)
+            .navigationTitle(title)
+            .onExitCommand { dismiss() }
     }
 
     @ViewBuilder

@@ -776,6 +776,21 @@ struct WikiFSApp: App {
         .defaultSize(width: 1080, height: 740)
         .windowResizability(.contentMinSize)
 
+        // Renderers: a real, resizable, non-modal window per activated
+        // renderer + wiki, opened via `openWindow(value:)` from `RootView`
+        // when a reader card's control fires. Mirrors the two compare groups
+        // above. The group title is generic because every renderer arrives
+        // here — the content sets the window's own title.
+        WindowGroup("Renderer", for: RendererActivationPresentation.self) { $context in
+            RendererActivationWindow(
+                sessionManager: sessionManager,
+                installedRendererHost: installedRendererHost,
+                context: context)
+                .preferredColorScheme(appearanceColorScheme)
+        }
+        .defaultSize(width: 900, height: 640)
+        .windowResizability(.contentMinSize)
+
         // Queue Activity windows: one per `QueueKind` (Ingestion + Extraction),
         // opened via `openWindow(value:)` / `openWindowBridge.openQueueWindow`.
         // `WindowGroup(for:)` deduplicates by `==`, so re-opening a queue's
