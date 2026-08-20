@@ -116,6 +116,7 @@ final class RendererAttachmentCoordinator {
         var latestRevision = -1
         var updateCount = 0
         var reservedHeight = RendererAttachmentHostPolicy.minimumReservedHeight
+        var latestGeometry: RendererAttachmentGeometryMessage?
     }
 
     let generation: Int
@@ -146,9 +147,14 @@ final class RendererAttachmentCoordinator {
         else { return false }
         record.latestRevision = message.revision
         record.updateCount += 1
+        record.latestGeometry = message
         if record.state == .unresolved { record.state = .card }
         records[message.placeholderID] = record
         return true
+    }
+
+    func geometry(for placeholderID: RendererAttachmentPlaceholderID) -> RendererAttachmentGeometryMessage? {
+        records[placeholderID]?.latestGeometry
     }
 
     func reserveHeight(_ requested: CGFloat, for placeholderID: RendererAttachmentPlaceholderID) -> CGFloat {

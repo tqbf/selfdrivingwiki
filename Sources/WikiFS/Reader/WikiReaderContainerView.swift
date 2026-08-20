@@ -39,7 +39,16 @@ final class WikiReaderContainerView: NSView {
         return webView
     }
 
-    func updateAttachmentViewport(_ rect: CGRect) {
+    /// Updates the one mounted attachment only when the report belongs to it.
+    /// Before mounting, the latest candidate rect is retained so the child can
+    /// be positioned before it enters the view hierarchy.
+    func updateAttachmentViewport(
+        _ rect: CGRect,
+        for placeholderID: RendererAttachmentPlaceholderID? = nil
+    ) {
+        guard placeholderID == nil || attachmentChild == nil || attachmentChild?.placeholderID == placeholderID else {
+            return
+        }
         attachmentOverlay.attachmentClipRect = rect.intersection(bounds)
         attachmentChild?.frame = attachmentOverlay.attachmentClipRect
     }
@@ -47,17 +56,25 @@ final class WikiReaderContainerView: NSView {
     func activateAttachment(
         named placeholderID: RendererAttachmentPlaceholderID,
         content: AnyView? = nil,
+        takesFocus: Bool = true,
+        onOpen: (() -> Void)? = nil,
         onExit: (() -> Void)? = nil
     ) {
         removeAttachmentChild()
-        let child = RendererAttachmentNativeChildView(placeholderID: placeholderID, content: content) { [weak self] in
-            if let onExit { onExit() }
-            else { self?.collapseAttachment() }
-        }
+        let child = RendererAttachmentNativeChildView(
+            placeholderID: placeholderID,
+            content: content,
+            onOpen: onOpen,
+            onExit: { [weak self] in
+                if let onExit { onExit() }
+                else { self?.collapseAttachment() }
+            })
         attachmentOverlay.addSubview(child)
         attachmentChild = child
         child.frame = attachmentOverlay.attachmentClipRect
-        window?.makeFirstResponder(child)
+        if takesFocus {
+            window?.makeFirstResponder(child)
+        }
     }
 
     func collapseAttachment() {
@@ -69,6 +86,15 @@ final class WikiReaderContainerView: NSView {
     func ownsMountedAttachment(named placeholderID: RendererAttachmentPlaceholderID) -> Bool {
         attachmentChild?.placeholderID == placeholderID
     }
+
+    func focusAttachment(named placeholderID: RendererAttachmentPlaceholderID) {
+        guard attachmentChild?.placeholderID == placeholderID,
+              let attachmentChild
+        else { return }
+        window?.makeFirstResponder(attachmentChild)
+    }
+
+    var hasMountedAttachment: Bool { attachmentChild != nil }
 
     private func removeAttachmentChild() {
         attachmentChild?.removeFromSuperview()
@@ -100,28 +126,77 @@ private final class RendererAttachmentOverlayView: NSView {
 @MainActor
 private final class RendererAttachmentNativeChildView: NSView {
     let placeholderID: RendererAttachmentPlaceholderID
+    private let onOpen: () -> Void
     private let onExit: () -> Void
     private let hostedContent: NSHostingView<AnyView>?
+    private let toolbar: NSVisualEffectView
+    private let toolbarStack: NSStackView
 
     init(
         placeholderID: RendererAttachmentPlaceholderID,
         content: AnyView?,
+        onOpen: (() -> Void)?,
         onExit: @escaping () -> Void
     ) {
         self.placeholderID = placeholderID
+        self.onOpen = onOpen ?? {}
         self.onExit = onExit
         hostedContent = content.map(NSHostingView.init(rootView:))
+        toolbar = NSVisualEffectView()
+        toolbarStack = NSStackView()
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.borderWidth = 2
         layer?.borderColor = NSColor.keyboardFocusIndicatorColor.cgColor
+        updateKeyboardFocusIndicator()
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
         setAccessibilityLabel("Interactive renderer attachment")
         setAccessibilityIdentifier("renderer-attachment-\(placeholderID.rawValue)")
+
+        toolbar.material = .headerView
+        toolbar.blendingMode = .withinWindow
+        toolbar.state = .active
+        toolbar.setAccessibilityElement(true)
+        toolbar.setAccessibilityRole(.toolbar)
+        toolbar.setAccessibilityLabel("Interactive renderer controls")
+        toolbar.setAccessibilityIdentifier("renderer-attachment-toolbar-\(placeholderID.rawValue)")
+        addSubview(toolbar)
+
+        let title = NSTextField(labelWithString: "Interactive renderer")
+        title.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold)
+        title.textColor = .secondaryLabelColor
+        title.setAccessibilityElement(true)
+        title.setAccessibilityRole(.staticText)
+        title.setAccessibilityLabel("Interactive renderer")
+
+        let openButton = NSButton(title: "Open in Window", target: self, action: #selector(openInWindow))
+        openButton.bezelStyle = .texturedRounded
+        openButton.controlSize = .small
+        openButton.setAccessibilityLabel("Open in Window")
+        openButton.setAccessibilityHelp("Open this renderer in a separate window.")
+        openButton.setAccessibilityIdentifier("renderer-attachment-open-\(placeholderID.rawValue)")
+
+        let collapseButton = NSButton(title: "Collapse", target: self, action: #selector(collapse))
+        collapseButton.bezelStyle = .texturedRounded
+        collapseButton.controlSize = .small
+        collapseButton.setAccessibilityLabel("Collapse")
+        collapseButton.setAccessibilityHelp("Hide this inline renderer and show the document card.")
+        collapseButton.setAccessibilityIdentifier("renderer-attachment-collapse-\(placeholderID.rawValue)")
+
+        toolbarStack.orientation = .horizontal
+        toolbarStack.alignment = .centerY
+        toolbarStack.distribution = .fill
+        toolbarStack.spacing = 8
+        toolbarStack.addArrangedSubview(title)
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        toolbarStack.addArrangedSubview(spacer)
+        toolbarStack.addArrangedSubview(openButton)
+        toolbarStack.addArrangedSubview(collapseButton)
+        toolbar.addSubview(toolbarStack)
+
         if let hostedContent {
-            hostedContent.frame = bounds
-            hostedContent.autoresizingMask = [.width, .height]
             addSubview(hostedContent)
         }
     }
@@ -131,10 +206,60 @@ private final class RendererAttachmentNativeChildView: NSView {
 
     override var acceptsFirstResponder: Bool { true }
 
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        updateKeyboardFocusIndicator()
+        return accepted
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let resigned = super.resignFirstResponder()
+        // AppKit invokes this callback before it updates window.firstResponder,
+        // so consulting the window here still sees this child as focused. A
+        // successful resignation is the authoritative transition; clear the
+        // indicator immediately and let viewDidMoveToWindow re-check when the
+        // child is attached to a new window.
+        if resigned {
+            layer?.borderWidth = 0
+        } else {
+            updateKeyboardFocusIndicator()
+        }
+        return resigned
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateKeyboardFocusIndicator()
+    }
+
+    override func layout() {
+        super.layout()
+        let toolbarHeight: CGFloat = 32
+        toolbar.frame = CGRect(x: 0, y: bounds.height - toolbarHeight, width: bounds.width, height: toolbarHeight)
+        toolbarStack.frame = toolbar.bounds.insetBy(dx: 8, dy: 4)
+        hostedContent?.frame = CGRect(x: 0, y: 0, width: bounds.width, height: max(0, bounds.height - toolbarHeight))
+    }
+
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard bounds.contains(point) else { return nil }
+        let toolbarPoint = toolbar.convert(point, from: self)
+        if let toolbarHit = toolbar.hitTest(toolbarPoint) {
+            return toolbarHit
+        }
         guard let hostedContent else { return self }
         return hostedContent.hitTest(hostedContent.convert(point, from: self)) ?? self
+    }
+
+    @objc private func openInWindow() {
+        onOpen()
+    }
+
+    @objc private func collapse() {
+        onExit()
+    }
+
+    private func updateKeyboardFocusIndicator() {
+        layer?.borderWidth = isSelfOrDescendantFirstResponder() ? 2 : 0
     }
 
     override func keyDown(with event: NSEvent) {

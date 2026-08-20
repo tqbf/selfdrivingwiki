@@ -2,6 +2,10 @@
 
 Status: retained design record for PR 2.
 
+> Superseded scope note, 2026-08-19: The static-card and no-PR-3 attachment
+> limits in this record apply to the retained PR 2 history. The active inline
+> attachment design is in [`dynamic-inline-renderer-attachments.md`](dynamic-inline-renderer-attachments.md).
+
 This document records the approved PR 2 contract for typed Markdown embeds,
 rich fences, and static renderer cards. It inherits the Phase 1 ordinary code
 highlighter but does not widen the reader boundary. Ordinary fenced code stays
@@ -44,6 +48,9 @@ The typed embedded-content model is also closed:
   makes later reads fail with a typed closed or unauthorized error.
 
 ## Static cards and fallback
+
+This section records the PR 2 static-card contract. The current inline
+attachment contract is in `dynamic-inline-renderer-attachments.md`.
 
 Renderer-backed content renders as a semantic HTML card or placeholder. The
 card includes a stable opaque DOM ID, renderer name, content or source label, a
@@ -99,6 +106,9 @@ chains.
   versions, page versions, provenance activity, File Provider projection state,
   or search-index content.
 - No PR 3 attachment behavior is introduced here.
+
+This historical limit is superseded for new work. Keep it to describe the PR 2
+scope. Use `dynamic-inline-renderer-attachments.md` for the current design.
 
 ## Test strategy
 

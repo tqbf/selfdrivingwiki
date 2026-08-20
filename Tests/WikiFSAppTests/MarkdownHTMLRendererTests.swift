@@ -408,8 +408,8 @@ struct MarkdownHTMLRendererTests {
         #expect(!mermaid.contains("sdw-renderer-card"))
     }
 
-    @Test("an Excalidraw card draws the drawing instead of promising a preview")
-    func excalidrawCardDrawsItsOwnPreview() throws {
+    @Test("an Excalidraw card delegates drawing to the dynamic renderer")
+    func excalidrawCardDelegatesToDynamicRenderer() throws {
         let projection = RendererEmbedProjection(
             sourceEmbeds: [:],
             richFenceAliases: Set(MarkdownRichFenceAlias.allCases))
@@ -437,61 +437,12 @@ struct MarkdownHTMLRendererTests {
         ```
         """
         let card = MarkdownHTMLRenderer.render(drawing, options: options)
-        #expect(card.contains(#"class="sdw-renderer-card__preview""#))
-        #expect(card.contains("<svg "))
-        #expect(card.contains("<rect "))
-        #expect(card.contains(">Client</text>"))
-        #expect(card.contains(##"fill="#dbeafe""##))
-        // The drawing's own canvas, so its near-black strokes stay legible on
-        // the reader's dark background.
-        #expect(card.contains(##"fill="#ffffff""##))
-        // The label the card used to print in place of a drawing.
-        #expect(!card.contains("static preview"))
-
-        // A fence the preview cannot read leaves a card with no preview and no
-        // claim that there is one.
-        let unreadable = MarkdownHTMLRenderer.render(
-            "```excalidraw\n{\"type\":\"excalidraw\",\"version\":2,\"elements\":[]}\n```",
-            options: options)
-        #expect(unreadable.contains("sdw-renderer-card"))
-        #expect(!unreadable.contains("sdw-renderer-card__preview"))
-        #expect(!unreadable.contains("static preview"))
-        #expect(unreadable.contains("Interact"))
-    }
-
-    @Test("preview markup escapes drawing text and drops author colours and links")
-    func previewMarkupIsSafeForReaderHTML() throws {
-        let hostile = Data("""
-        {"type":"excalidraw","version":2,"elements":[\
-        {"id":"a","type":"text","x":0,"y":0,"width":10,"height":10,\
-        "text":"</text><script>alert('x')</script>","link":"javascript:alert(1)"},\
-        {"id":"b","type":"rectangle","x":0,"y":0,"width":10,"height":10,\
-        "strokeColor":"red; content: url(x)","backgroundColor":"transparent"}],\
-        "appState":{"viewBackgroundColor":"url(evil)"}}
-        """.utf8)
-        let svg = try #require(ExcalidrawStaticPreview.svg(from: hostile))
-
-        #expect(!svg.contains("<script>"))
-        #expect(svg.contains("&lt;/text&gt;&lt;script&gt;"))
-        // An element link never becomes an href in the reader document.
-        #expect(!svg.contains("javascript:"))
-        #expect(!svg.contains("<a "))
-        // Colours that are not plain hex fall back to the safe defaults.
-        #expect(!svg.contains("content: url"))
-        #expect(!svg.contains("url(evil)"))
-        #expect(svg.contains(##"stroke="#1e1e1e""##))
-        #expect(svg.contains(#"fill="none""#))
-        #expect(svg.contains(##"fill="#ffffff""##))
-    }
-
-    @Test("preview returns nothing for input it cannot draw")
-    func previewDeclinesUnreadableInput() {
-        #expect(ExcalidrawStaticPreview.svg(from: Data("not json".utf8)) == nil)
-        #expect(ExcalidrawStaticPreview.svg(from: Data(#"{"type":"mermaid","elements":[]}"#.utf8)) == nil)
-        #expect(ExcalidrawStaticPreview.svg(from: Data(#"{"type":"excalidraw","version":2}"#.utf8)) == nil)
-        // Every element deleted leaves nothing to draw.
-        let deleted = #"{"type":"excalidraw","version":2,"elements":[{"id":"a","type":"rectangle","x":0,"y":0,"width":4,"height":4,"isDeleted":true}]}"#
-        #expect(ExcalidrawStaticPreview.svg(from: Data(deleted.utf8)) == nil)
+        #expect(card.contains("sdw-renderer-card"))
+        #expect(card.contains("Excalidraw"))
+        #expect(card.contains("Interact"))
+        #expect(card.contains("renderer-action://open"))
+        #expect(!card.contains("sdw-renderer-card__preview"))
+        #expect(!card.contains("<svg "))
     }
 
     @Test("oversized rich fences fall back to escaped code without renderer metadata")

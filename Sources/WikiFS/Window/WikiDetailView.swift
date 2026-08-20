@@ -204,6 +204,8 @@ struct WikiDetailView: View {
                 launcher: launcher,
                 session: session,
                 fileProvider: fileProvider,
+                installedRendererFactory: installedRendererHost.factory,
+                installedRendererFactoryInputs: installedRendererHost.inputs,
                 onRendererActivation: onRendererActivation)
         case .source(let id):
             if let file = store.sources.first(where: { $0.id == id }) {
