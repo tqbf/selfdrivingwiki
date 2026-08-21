@@ -332,6 +332,19 @@ struct MarkdownHTMLRendererTests {
         #expect(html.contains("A--&gt;B"))   // escape(): > → &gt;
     }
 
+    @Test("a Mermaid fence title remains presentation metadata")
+    func titledMermaidFenceKeepsTitleOutOfClassAndSource() {
+        let source = "graph TD\nA-->B\n"
+        let title = "System architecture"
+        let html = MarkdownHTMLRenderer.render(
+            "```mermaid \"\(title)\"\n\(source)```",
+            options: .disabled)
+
+        #expect(html == "<pre><code class=\"language-mermaid\">graph TD\nA--&gt;B\n</code></pre>")
+        #expect(!html.contains("language-mermaid \(title)"))
+        #expect(!html.contains(title))
+    }
+
     @Test func richFenceCardsRenderStaticMarkupWhenProjectionAllowsThem() throws {
         let projection = RendererEmbedProjection(
             sourceEmbeds: [:],
@@ -607,11 +620,15 @@ struct MarkdownHTMLRendererTests {
         #expect(html.contains("data-renderer-expanded=\"true\""))
         #expect(html.contains("aria-label=\"JSON Canvas renderer\""))
         #expect(html.contains("aria-expanded=\"true\""))
+        #expect(html.contains("aria-label=\"JSON Canvas renderer fallback shown\""))
         #expect(!html.contains("renderer-action://open"))
         #expect(!html.contains("data-renderer-input="))
+        #expect(!html.contains("data-renderer-action=\"expand\""))
+        #expect(html.contains(#"<p class="sdw-renderer-card__summary">JSON Canvas document fence</p>"#))
         #expect(html.contains("disabled aria-disabled=\"true\""))
         #expect(html.contains("aria-hidden=\"false\""))
         #expect(html.contains("hidden aria-hidden=\"true\"") == false)
+        #expect(!html.contains("aria-label=\"Expand JSON Canvas renderer\""))
     }
 
     @Test("long renderer titles retain an accessible value while visually ellipsizing")

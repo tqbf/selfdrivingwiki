@@ -396,10 +396,16 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         let isExpandable = activationState.isExpandable
         let isExpanded = isExpandable == false
         let actionHTML: String
+        let disclosureActionAttribute: String
+        let disclosureAccessibilityLabel: String
         if case .admitted(let actionURL) = activationState {
             actionHTML = #"<a class="sdw-renderer-card__action" data-renderer-action="open-window" href="\#(escapeAttribute(actionURL))" aria-label="Open \#(accessibilityLabelAttribute) in Window" style="flex:0 0 auto">Open in Window</a>"#
+            disclosureActionAttribute = #" data-renderer-action="expand""#
+            disclosureAccessibilityLabel = "Expand \(accessibilityLabel)"
         } else {
             actionHTML = ""
+            disclosureActionAttribute = ""
+            disclosureAccessibilityLabel = "\(accessibilityLabel) fallback shown"
         }
         let disabledAttribute = isExpandable ? "" : #" disabled aria-disabled="true""#
         let expansionVisibilityAttributes = isExpandable
@@ -408,7 +414,7 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         return """
         <section class="sdw-renderer-card" id="\(placeholderID)" role="group" aria-label="\(accessibilityLabelAttribute)" data-renderer-expanded="\(isExpanded)" data-renderer-reference="\(escapeAttribute(refValue))"\(inputAttribute)>
           <div class="sdw-renderer-card__row" style="display:flex;align-items:center;min-width:0">
-            <button class="sdw-renderer-card__disclosure" data-renderer-action="expand" type="button" aria-expanded="\(isExpanded)" aria-controls="\(expansionID)" aria-label="Expand \(accessibilityLabelAttribute)"\(disabledAttribute)><span aria-hidden="true">▸</span></button>
+            <button class="sdw-renderer-card__disclosure"\(disclosureActionAttribute) type="button" aria-expanded="\(isExpanded)" aria-controls="\(expansionID)" aria-label="\(escapeAttribute(disclosureAccessibilityLabel))"\(disabledAttribute)><span aria-hidden="true">▸</span></button>
             <span class="sdw-renderer-card__title sdw-renderer-card__title--truncated" title="\(titleAttribute)" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 auto">\(titleText)</span>
             \(actionHTML)
           </div>
