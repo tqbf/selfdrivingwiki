@@ -410,6 +410,53 @@ struct RendererAttachmentCoordinatorTests {
         #expect(collapsed)
     }
 
+    @Test("attachment header routes genuine pointer clicks to its controls")
+    @MainActor
+    func attachmentHeaderRoutesPointerClicks() throws {
+        let webView = WikiReaderWebView()
+        let container = WikiReaderContainerView(webView: webView)
+        container.frame = .init(x: 0, y: 0, width: 400, height: 300)
+        let window = NSWindow(contentRect: container.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        defer { container.teardown(); window.orderOut(nil) }
+
+        let placeholder = try RendererAttachmentPlaceholderID(validating: "pointer-header-canvas")
+        var opened = false
+        var collapsed = false
+        container.updateAttachmentViewport(.init(x: 40, y: 80, width: 300, height: 180))
+        container.activateAttachment(
+            named: placeholder,
+            onOpen: { opened = true },
+            onExit: { collapsed = true })
+        container.layoutSubtreeIfNeeded()
+
+        let child = try #require(container.subviews.flatMap(\.subviews).first {
+            $0.accessibilityIdentifier() == "renderer-attachment-pointer-header-canvas"
+        })
+        let toolbar = try #require(child.subviews.first {
+            $0.accessibilityIdentifier() == "renderer-attachment-toolbar-pointer-header-canvas"
+        })
+        let buttons = toolbar.subviews.flatMap(\.subviews).compactMap { $0 as? NSButton }
+        let openButton = try #require(buttons.first { $0.title == "Open in Window" })
+        let collapseButton = try #require(buttons.first { $0.title == "Collapse" })
+
+        let openPoint = openButton.convert(
+            NSPoint(x: openButton.bounds.midX, y: openButton.bounds.midY),
+            to: container)
+        let collapsePoint = collapseButton.convert(
+            NSPoint(x: collapseButton.bounds.midX, y: collapseButton.bounds.midY),
+            to: container)
+        #expect(container.hitTest(openPoint) === openButton)
+        #expect(container.hitTest(collapsePoint) === collapseButton)
+
+        Self.sendPointerClick(to: window, view: openButton)
+        Self.sendPointerClick(to: window, view: collapseButton)
+
+        #expect(opened)
+        #expect(collapsed)
+    }
+
     @Test("hosted JSON Canvas attachment mounts the factory's native SwiftUI view")
     @MainActor
     func hostedJSONCanvasAttachmentMountsNativeView() throws {
@@ -432,11 +479,15 @@ struct RendererAttachmentCoordinatorTests {
         container.updateAttachmentViewport(.init(x: 40, y: 80, width: 160, height: 96))
 
         container.activateAttachment(named: placeholder, content: try factory.makeView(for: input))
+        container.layoutSubtreeIfNeeded()
 
         let child = try #require(container.subviews.flatMap(\.subviews).first {
             $0.accessibilityIdentifier() == "renderer-attachment-mounted-json-canvas"
         })
         #expect(Self.containsHostingView(in: child))
+        let canvasHit = container.hitTest(.init(x: 100, y: 100))
+        #expect(canvasHit !== child)
+        #expect(canvasHit !== webView)
         #expect(window.firstResponder === child)
     }
 
@@ -948,6 +999,28 @@ struct RendererAttachmentCoordinatorTests {
     private static func containsHostingView(in view: NSView) -> Bool {
         String(describing: type(of: view)).contains("NSHostingView") ||
             view.subviews.contains(where: containsHostingView)
+    }
+
+    @MainActor
+    private static func sendPointerClick(to window: NSWindow, view: NSView) {
+        let point = view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil)
+        for eventType in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            guard let event = NSEvent.mouseEvent(
+                with: eventType,
+                location: point,
+                modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: 0,
+                clickCount: 1,
+                pressure: eventType == .leftMouseDown ? 1 : 0)
+            else {
+                Issue.record("failed to construct attachment pointer event")
+                return
+            }
+            window.sendEvent(event)
+        }
     }
 
     private static let jsonCanvasBytes = Data("""
