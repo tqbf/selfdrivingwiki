@@ -151,6 +151,9 @@ struct WikiReaderView: View {
     /// Renderer-owned inline attachment construction. The reader owns the
     /// admitted placeholder lifecycle but does not know renderer formats.
     var inlineAttachmentResolver: RendererInlineAttachmentResolver = RendererInlineAttachmentResolverFactory.defaultResolver
+    /// Validated installed descriptor snapshot supplied by the reader host.
+    /// It is data-only; constructing renderer sessions remains downstream.
+    var inlineImageRendererDescriptors: [RendererDescriptor] = []
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
     @State private var isLoading = true
 
@@ -177,6 +180,7 @@ struct WikiReaderView: View {
                           addBookmarkHandler: addBookmarkHandler,
                           onRendererActivation: onRendererActivation,
                           inlineAttachmentResolver: inlineAttachmentResolver,
+                          inlineImageRendererDescriptors: inlineImageRendererDescriptors,
                           findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
             if isLoading {
                 ProgressView()
@@ -1277,6 +1281,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
     let addBookmarkHandler: (@MainActor @Sendable (BookmarkTargetPickerContext) -> Void)?
     let onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)?
     let inlineAttachmentResolver: RendererInlineAttachmentResolver
+    let inlineImageRendererDescriptors: [RendererDescriptor]
     let findText: String?
     let findVersion: Int
     let findOccurrence: Int
@@ -1293,6 +1298,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         webView.addBookmarkHandler = addBookmarkHandler
         webView.onRendererActivation = onRendererActivation
         context.coordinator.inlineAttachmentResolver = inlineAttachmentResolver
+        context.coordinator.inlineImageRendererDescriptors = inlineImageRendererDescriptors
         webView.navigationDelegate = context.coordinator
         webView.coordinator = context.coordinator
         context.coordinator.webView = webView
@@ -1317,6 +1323,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         webView.addBookmarkHandler = addBookmarkHandler
         webView.onRendererActivation = onRendererActivation
         context.coordinator.inlineAttachmentResolver = inlineAttachmentResolver
+        context.coordinator.inlineImageRendererDescriptors = inlineImageRendererDescriptors
         context.coordinator.store = store
         context.coordinator.currentSelection = currentSelection
         if context.coordinator.loadedMarkdown != markdown ||
@@ -1353,6 +1360,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         weak var attachmentContainer: WikiReaderContainerView?
         private var attachmentCoordinator: RendererAttachmentCoordinator?
         var inlineAttachmentResolver: RendererInlineAttachmentResolver = RendererInlineAttachmentResolverFactory.defaultResolver
+        var inlineImageRendererDescriptors: [RendererDescriptor] = []
         var store: WikiStoreModel?
         var currentSelection: WikiSelection?
         var loadedMarkdown: String?
@@ -1438,9 +1446,14 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     capability: RendererSessionCapability(rawValue: UUID().uuidString),
                     generation: generation)
             }()
+            let imageEmbedProjection = Self.imageEmbedProjection(
+                siblingSourceMap: renderedSourceMap,
+                store: store?.internalStore,
+                installedDescriptors: inlineImageRendererDescriptors)
             let documentRenderOptions = MarkdownRenderOptions(
                 codeHighlighting: .enabled(HighlightedCodeBlockBudget()),
                 rendererEmbedProjection: context?.rendererEmbedProjection,
+                imageEmbedProjection: imageEmbedProjection,
                 documentIdentity: documentIdentity,
                 rendererActivationAdmission: rendererActivationAdmission)
             self.renderOptions = documentRenderOptions
@@ -1521,6 +1534,60 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     // stamped onto the YouTube embed URL in ExternalEmbed.
                     webView.loadHTMLString(html, baseURL: WikiReaderOrigin.url)
                 }
+            }
+        }
+
+        private static func imageEmbedProjection(
+            siblingSourceMap: [String: SourceID]?,
+            store: WikiStore?,
+            installedDescriptors: [RendererDescriptor]
+        ) -> MarkdownImageEmbedProjection? {
+            guard let siblingSourceMap, siblingSourceMap.isEmpty == false, let store else { return nil }
+            let registry: RendererRegistrySnapshot
+            do {
+                registry = try RendererRegistrySnapshot(
+                    builtInDescriptors: BuiltInRendererDescriptors.all,
+                    enabledInstalledDescriptors: installedDescriptors)
+            } catch {
+                DebugLog.reader("Image renderer projection rejected an invalid descriptor snapshot.")
+                return nil
+            }
+            var sources = [String: RendererEmbeddedContent.Source]()
+            for (target, sourceID) in siblingSourceMap {
+                do {
+                    guard let version = try store.activeContentVersion(sourceID: sourceID),
+                          version.sourceID == sourceID,
+                          let mimeType = version.mimeType,
+                          let blobHash = version.blobHash,
+                          blobHash.isEmpty == false
+                    else { continue }
+                    let sourceVersionID = version.id
+                    let bytes = try store.sourceContent(versionID: sourceVersionID)
+                    guard bytes.count <= WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount else { continue }
+                    sources[target] = try RendererEmbeddedContent.Source(
+                        sourceID: sourceID,
+                        sourceVersionID: sourceVersionID,
+                        mimeType: try RendererMIMEType(validating: mimeType),
+                        bytes: bytes)
+                } catch {
+                    DebugLog.reader("Image renderer projection could not pin a sibling source; keeping the ordinary image.")
+                }
+            }
+            guard sources.isEmpty == false else { return nil }
+            let inlineCapableReferences = Set(BuiltInRendererID.allCases.compactMap { id in
+                id == .jsonCanvas ? BuiltInRendererReference.reference(for: id) : nil
+            }).union(installedDescriptors.compactMap { descriptor in
+                if case .webPackage = descriptor.implementation { return descriptor.reference }
+                return nil
+            })
+            do {
+                return try MarkdownImageEmbedProjection(
+                    siblingSources: sources,
+                    registry: registry,
+                    inlineCapableReferences: inlineCapableReferences)
+            } catch {
+                DebugLog.reader("Image renderer projection could not validate sibling facts; keeping ordinary images.")
+                return nil
             }
         }
 

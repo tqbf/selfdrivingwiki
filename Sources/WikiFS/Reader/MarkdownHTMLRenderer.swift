@@ -18,20 +18,36 @@ enum MarkdownCodeHighlightingPolicy: Sendable {
 struct MarkdownRenderOptions: Sendable {
     let codeHighlighting: MarkdownCodeHighlightingPolicy
     let rendererEmbedProjection: RendererEmbedProjection?
+    let imageEmbedProjection: MarkdownImageEmbedProjection?
     let documentIdentity: MarkdownDocumentIdentity?
     let rendererActivationAdmission: RendererEmbedActivationAdmission?
+
+    init(
+        codeHighlighting: MarkdownCodeHighlightingPolicy,
+        rendererEmbedProjection: RendererEmbedProjection?,
+        imageEmbedProjection: MarkdownImageEmbedProjection? = nil,
+        documentIdentity: MarkdownDocumentIdentity?,
+        rendererActivationAdmission: RendererEmbedActivationAdmission?
+    ) {
+        self.codeHighlighting = codeHighlighting
+        self.rendererEmbedProjection = rendererEmbedProjection
+        self.imageEmbedProjection = imageEmbedProjection
+        self.documentIdentity = documentIdentity
+        self.rendererActivationAdmission = rendererActivationAdmission
+    }
 
     static var reader: Self {
         Self(
             codeHighlighting: .enabled(HighlightedCodeBlockBudget()),
             rendererEmbedProjection: nil,
+            imageEmbedProjection: nil,
             documentIdentity: nil,
             rendererActivationAdmission: nil)
     }
 
     /// Fail-closed policy for callers without an authoritative reader context.
-    static let disabled = Self(codeHighlighting: .disabled, rendererEmbedProjection: nil, documentIdentity: nil, rendererActivationAdmission: nil)
-    static let chat = Self(codeHighlighting: .disabled, rendererEmbedProjection: nil, documentIdentity: nil, rendererActivationAdmission: nil)
+    static let disabled = Self(codeHighlighting: .disabled, rendererEmbedProjection: nil, imageEmbedProjection: nil, documentIdentity: nil, rendererActivationAdmission: nil)
+    static let chat = Self(codeHighlighting: .disabled, rendererEmbedProjection: nil, imageEmbedProjection: nil, documentIdentity: nil, rendererActivationAdmission: nil)
 }
 
 /// A document-scoped fence budget. The mutex protects only the remaining
@@ -86,6 +102,7 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         renderer.imageResolver = imageResolver
         renderer.codeHighlighting = options.codeHighlighting
         renderer.rendererEmbedProjection = options.rendererEmbedProjection
+        renderer.imageEmbedProjection = options.imageEmbedProjection
         renderer.documentIdentity = options.documentIdentity
         renderer.rendererActivationAdmission = options.rendererActivationAdmission
         renderer.isCancelled = isCancelled
@@ -102,6 +119,7 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
     private var imageResolver: ((String) -> String?)?
     private var codeHighlighting: MarkdownCodeHighlightingPolicy = .disabled
     private var rendererEmbedProjection: RendererEmbedProjection?
+    private var imageEmbedProjection: MarkdownImageEmbedProjection?
     private var documentIdentity: MarkdownDocumentIdentity?
     private var rendererActivationAdmission: RendererEmbedActivationAdmission?
     private var isCancelled: @Sendable () -> Bool = { Task.isCancelled }
@@ -256,7 +274,21 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
     mutating func visitImage(_ image: Image) -> String {
         let rawSrc = image.source ?? ""
         let src = resolvedImageSrc(rawSrc)
-        return "<img src=\"\(escapeAttribute(src))\" alt=\"\(escape(plainText(image)))\">"
+        let altText = plainText(image)
+        let fallbackHTML = ordinaryImageHTML(src: src, altText: altText)
+        guard case let .interactive(candidate) = imageEmbedProjection?.outcome(for: rawSrc) else {
+            return fallbackHTML
+        }
+        fenceOrdinal += 1
+        let placeholderID = "sdw-image-renderer-\(candidate.source.digest.hex)-\(fenceOrdinal)"
+        return rendererCardHTML(
+            plan: RendererEmbedPlan(
+                placeholderID: placeholderID,
+                rendererReference: candidate.rendererReference,
+                input: .source(candidate.source),
+                semanticContent: "Image source available as \(candidate.source.mimeType.rawValue).",
+                displayTitle: altText.isEmpty ? nil : altText),
+            fallbackHTML: fallbackHTML)
     }
 
     /// Phase 4: resolve a relative image src through the `imageResolver` (when
@@ -314,6 +346,10 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         "<pre><code\(cls)>\(escape(code))</code></pre>"
     }
 
+    private func ordinaryImageHTML(src: String, altText: String) -> String {
+        "<img src=\"\(escapeAttribute(src))\" alt=\"\(escape(altText))\">"
+    }
+
     private func rendererCardHTML(plan: RendererEmbedPlan?, fallbackHTML: String) -> String {
         guard let plan else { return fallbackHTML }
         if plan.fallbackReason == .oversizedInput {
@@ -341,7 +377,8 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
             return artifact.mimeType.rawValue
         }()
         let activationContext: RendererEmbedActivationContext? = {
-            guard let input = plan.input,
+            guard plan.activationMetadata != nil,
+                  let input = plan.input,
                   let admission = rendererActivationAdmission,
                   case .inlineArtifact(let artifact) = input
             else { return nil }
