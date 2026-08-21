@@ -148,9 +148,10 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
                 : " class=\"language-\(escapeAttribute(codeBlock.language ?? ""))\""
             return plainCodeBlockHTML(codeBlock.code, cls: cls)
         }
-        let cls = (codeBlock.language ?? "").isEmpty
+        let languageClass = fenced.fenceInfo?.alias.rawValue ?? codeBlock.language ?? ""
+        let cls = languageClass.isEmpty
             ? ""
-            : " class=\"language-\(escapeAttribute(codeBlock.language ?? ""))\""
+            : " class=\"language-\(escapeAttribute(languageClass))\""
         switch fenced.presentationPolicy {
         case .hostApprovedRichRequest(.mermaid):
             return plainCodeBlockHTML(codeBlock.code, cls: cls)
@@ -310,21 +311,16 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         }
         let ref = plan.rendererReference
         let refValue = "\(ref.packageID.rawValue)/\(ref.version.rawValue)/\(ref.registrationID.rawValue)"
-        let title: String = {
-            switch plan.rendererReference.registrationID.rawValue {
-            case "json-canvas": return "JSON Canvas"
-            case "excalidraw": return "Excalidraw"
-            default: return plan.rendererReference.registrationID.rawValue
-            }
-        }()
+        let title = plan.displayTitle ?? Self.rendererDisplayName(for: plan.rendererReference)
         let placeholderID = escapeAttribute(plan.placeholderID)
+        let expansionID = escapeAttribute("\(plan.placeholderID)-expansion")
+        let titleText = escape(title)
+        let titleAttribute = escapeAttribute(title)
         let summary = escape(plan.semanticContent)
         let fallbackNoticeHTML: String = {
             guard let reason = plan.fallbackReason else { return "" }
             return #"<p class="sdw-renderer-card__fallback">\#(escape(Self.fallbackNotice(for: reason)))</p>"#
         }()
-        let control = escape(plan.activationMetadata?.controlLabel ?? "Open")
-        let aria = escapeAttribute(plan.activationMetadata?.accessibilityLabel ?? "renderer preview")
         let mimeType: String? = {
             guard case .inlineArtifact(let artifact) = plan.input else { return nil }
             return artifact.mimeType.rawValue
@@ -378,16 +374,26 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
                 blockParserOrdinal: activationContext.blockID.parserOrdinal,
                 mimeType: mimeType
             )
-            actionHTML = #"<a class="sdw-renderer-card__action" href="\#(escapeAttribute(actionURL))">\#(control)</a>"#
+            actionHTML = #"<a class="sdw-renderer-card__action" data-renderer-action="open-window" href="\#(escapeAttribute(actionURL))" aria-label="Open \#(titleAttribute) in Window">Open in Window</a>"#
         } else {
             actionHTML = ""
         }
+        let isExpandable = actionHTML.isEmpty == false
+        let disabledAttribute = isExpandable ? "" : #" disabled aria-disabled="true""#
+        let expansionVisibilityAttributes = isExpandable
+            ? #" hidden aria-hidden="true""#
+            : #" aria-hidden="false""#
         return """
-        <section class="sdw-renderer-card" id="\(placeholderID)" role="group" aria-label="\(aria)" data-renderer-reference="\(escapeAttribute(refValue))"\(inputAttribute)>
-          <header class="sdw-renderer-card__header">\(title)</header>
-          <p class="sdw-renderer-card__summary">\(summary)</p>
-          \(fallbackNoticeHTML)
-          \(actionHTML)
+        <section class="sdw-renderer-card" id="\(placeholderID)" role="group" aria-label="\(titleAttribute)" data-renderer-expanded="false" data-renderer-reference="\(escapeAttribute(refValue))"\(inputAttribute)>
+          <div class="sdw-renderer-card__row">
+            <button class="sdw-renderer-card__disclosure" data-renderer-action="expand" type="button" aria-expanded="false" aria-controls="\(expansionID)" aria-label="Expand \(titleAttribute)"\(disabledAttribute)><span aria-hidden="true">▸</span></button>
+            <span class="sdw-renderer-card__title sdw-renderer-card__title--truncated">\(titleText)</span>
+            \(actionHTML)
+          </div>
+          <div class="sdw-renderer-card__expansion" id="\(expansionID)" role="region" aria-label="\(titleAttribute) details"\(expansionVisibilityAttributes)>
+            <p class="sdw-renderer-card__summary">\(summary)</p>
+            \(fallbackNoticeHTML)
+          </div>
         </section>
         """
     }
@@ -417,11 +423,13 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         let reference = Self.rendererReference(for: alias)
         let placeholderID = Self.placeholderID(for: block)
         let summary = Self.semanticSummary(for: alias)
+        let displayTitle = block.fenceInfo?.displayTitle
         guard block.bytes.count <= WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount else {
             return RendererEmbedPlan(
                 placeholderID: placeholderID,
                 rendererReference: reference,
                 semanticContent: summary,
+                displayTitle: displayTitle,
                 fallbackReason: .oversizedInput,
                 activationMetadata: nil)
         }
@@ -430,6 +438,7 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
                 placeholderID: placeholderID,
                 rendererReference: reference,
                 semanticContent: summary,
+                displayTitle: displayTitle,
                 fallbackReason: .missingDocumentIdentity,
                 activationMetadata: nil)
         }
@@ -439,6 +448,7 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
                 placeholderID: placeholderID,
                 rendererReference: reference,
                 semanticContent: summary,
+                displayTitle: displayTitle,
                 fallbackReason: nil,
                 activationMetadata: nil)
         }
@@ -456,6 +466,7 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
                 placeholderID: placeholderID,
                 rendererReference: reference,
                 semanticContent: summary,
+                displayTitle: displayTitle,
                 fallbackReason: .missingDocumentIdentity,
                 activationMetadata: nil)
         }
@@ -467,6 +478,7 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
                 rendererReference: reference,
                 input: .inlineArtifact(artifact),
                 semanticContent: summary,
+                displayTitle: displayTitle,
                 fallbackReason: nil,
                 activationMetadata: nil)
         }
@@ -475,6 +487,7 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
             rendererReference: reference,
             input: .inlineArtifact(artifact),
             semanticContent: summary,
+            displayTitle: displayTitle,
             fallbackReason: nil,
             activationMetadata: Self.activationMetadata(for: alias))
     }
@@ -491,6 +504,17 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
             return "JSON Canvas document fence"
         case .excalidraw:
             return "Excalidraw document fence"
+        }
+    }
+
+    /// User-facing renderer names are centralized so untitled rows remain
+    /// readable without coupling presentation to raw registration identifiers.
+    private static func rendererDisplayName(for reference: RendererReference) -> String {
+        switch reference.registrationID.rawValue {
+        case "json-canvas": return "JSON Canvas"
+        case "excalidraw": return "Excalidraw"
+        case "mermaid": return "Mermaid"
+        default: return reference.registrationID.rawValue
         }
     }
 

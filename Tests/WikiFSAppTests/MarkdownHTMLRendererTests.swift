@@ -350,11 +350,12 @@ struct MarkdownHTMLRendererTests {
             documentIdentity: document,
             rendererActivationAdmission: admission)
 
-        let bytes = Data("{\"nodes\":[],\"edges\":[]}".utf8)
+        let bytes = Data("{\"nodes\":[],\"edges\":[]}\n".utf8)
+        let fenceInfo = "jsoncanvas \"Roadmap <&>\""
         let expectedBlock = try! MarkdownFencedBlock(
             documentIdentity: document,
             parserOrdinal: 0,
-            rawInfoString: "jsoncanvas",
+            rawInfoString: fenceInfo,
             bytes: bytes)
         guard let blockID = expectedBlock.blockID else {
             Issue.record("expected a block ID for the document-backed JSON Canvas fence")
@@ -383,10 +384,24 @@ struct MarkdownHTMLRendererTests {
             capability: admission.capability,
             generation: admission.generation))
 
-        let jsonCanvas = MarkdownHTMLRenderer.render("```jsoncanvas\n{\"nodes\":[],\"edges\":[]}\n```", options: options)
+        let jsonCanvas = MarkdownHTMLRenderer.render("```\(fenceInfo)\n{\"nodes\":[],\"edges\":[]}\n```", options: options)
         #expect(jsonCanvas.contains("sdw-renderer-card"))
-        #expect(jsonCanvas.contains("JSON Canvas"))
+        #expect(jsonCanvas.contains("data-renderer-expanded=\"false\""))
+        #expect(jsonCanvas.contains("sdw-renderer-card__row"))
+        #expect(jsonCanvas.contains("sdw-renderer-card__disclosure"))
+        #expect(jsonCanvas.contains("type=\"button\""))
+        #expect(jsonCanvas.contains("aria-expanded=\"false\""))
+        let expectedExpansionID = "sdw-renderer-\(expectedBlock.digest.hex.prefix(16))-0-expansion"
+        #expect(jsonCanvas.contains("aria-controls=\"\(expectedExpansionID)\""))
+        #expect(jsonCanvas.contains("id=\"\(expectedExpansionID)\""))
+        #expect(jsonCanvas.contains("hidden aria-hidden=\"true\""))
+        #expect(jsonCanvas.contains("sdw-renderer-card__expansion"))
+        #expect(jsonCanvas.contains("sdw-renderer-card__title"))
+        #expect(jsonCanvas.contains("Roadmap &lt;&amp;&gt;"))
+        #expect(jsonCanvas.contains("aria-label=\"Expand Roadmap &lt;&amp;&gt;\""))
         #expect(jsonCanvas.contains("renderer-action://open"))
+        #expect(jsonCanvas.contains("sdw-renderer-card__action"))
+        #expect(jsonCanvas.contains(">Open in Window</a>"))
         #expect(jsonCanvas.contains("package=org.selfdrivingwiki.builtin"))
         #expect(jsonCanvas.contains("registration=json-canvas"))
         #expect(jsonCanvas.contains("input="))
@@ -401,7 +416,8 @@ struct MarkdownHTMLRendererTests {
         let excalidraw = MarkdownHTMLRenderer.render("```excalidraw\n{\"type\":\"excalidraw\",\"version\":2,\"elements\":[]}\n```", options: options)
         #expect(excalidraw.contains("sdw-renderer-card"))
         #expect(excalidraw.contains("Excalidraw"))
-        #expect(excalidraw.contains("Interact"))
+        #expect(excalidraw.contains("sdw-renderer-card__title"))
+        #expect(excalidraw.contains("Open in Window"))
 
         let mermaid = MarkdownHTMLRenderer.render("```mermaid\ngraph TD\nA-->B\n```", options: options)
         #expect(mermaid.contains(#"class="language-mermaid""#))
@@ -439,7 +455,9 @@ struct MarkdownHTMLRendererTests {
         let card = MarkdownHTMLRenderer.render(drawing, options: options)
         #expect(card.contains("sdw-renderer-card"))
         #expect(card.contains("Excalidraw"))
-        #expect(card.contains("Interact"))
+        #expect(card.contains("sdw-renderer-card__title"))
+        #expect(card.contains("Open in Window"))
+        #expect(card.contains("sdw-renderer-card__title--truncated"))
         #expect(card.contains("renderer-action://open"))
         #expect(!card.contains("sdw-renderer-card__preview"))
         #expect(!card.contains("<svg "))
@@ -586,6 +604,18 @@ struct MarkdownHTMLRendererTests {
         #expect(html.contains("sdw-renderer-card"))
         #expect(!html.contains("renderer-action://open"))
         #expect(!html.contains("data-renderer-input="))
+        #expect(html.contains("disabled aria-disabled=\"true\""))
+        #expect(html.contains("aria-hidden=\"false\""))
+    }
+
+    @Test("ordinary Markdown images remain unchanged by renderer-card markup")
+    func ordinaryMarkdownImagesRemainOrdinaryImages() {
+        let html = MarkdownHTMLRenderer.render(
+            "![Diagram <&>](https://example.com/diagram.png)",
+            options: .disabled)
+
+        #expect(html == #"<p><img src="https://example.com/diagram.png" alt="Diagram &lt;&amp;&gt;"></p>"#)
+        #expect(html.contains("sdw-renderer-card") == false)
     }
 
     @Test func documentHTMLEmbedsNoScriptWhenLibAbsent() {
