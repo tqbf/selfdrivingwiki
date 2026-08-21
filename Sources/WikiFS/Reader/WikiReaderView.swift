@@ -1556,19 +1556,13 @@ internal struct WikiReaderRep: NSViewRepresentable {
             for (target, sourceID) in siblingSourceMap {
                 do {
                     guard let version = try store.activeContentVersion(sourceID: sourceID),
-                          version.sourceID == sourceID,
-                          let mimeType = version.mimeType,
-                          let blobHash = version.blobHash,
-                          blobHash.isEmpty == false
+                          let source = try Self.pinnedImageSource(
+                              sourceID: sourceID,
+                              version: version,
+                              inputByteCount: { input in try store.rendererInputByteCount(input) },
+                              readBytes: { versionID in try store.sourceContent(versionID: versionID) })
                     else { continue }
-                    let sourceVersionID = version.id
-                    let bytes = try store.sourceContent(versionID: sourceVersionID)
-                    guard bytes.count <= WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount else { continue }
-                    sources[target] = try RendererEmbeddedContent.Source(
-                        sourceID: sourceID,
-                        sourceVersionID: sourceVersionID,
-                        mimeType: try RendererMIMEType(validating: mimeType),
-                        bytes: bytes)
+                    sources[target] = source
                 } catch {
                     DebugLog.reader("Image renderer projection could not pin a sibling source; keeping the ordinary image.")
                 }
@@ -1589,6 +1583,36 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 DebugLog.reader("Image renderer projection could not validate sibling facts; keeping ordinary images.")
                 return nil
             }
+        }
+
+        /// Verifies metadata for one exact source version before requesting its
+        /// payload. A missing or oversized metadata count intentionally keeps
+        /// the Markdown image ordinary without materializing blob bytes.
+        static func pinnedImageSource(
+            sourceID: SourceID,
+            version: SourceVersion,
+            inputByteCount: (RendererBridgeInput) throws -> Int?,
+            readBytes: (SourceVersionID) throws -> Data
+        ) throws -> RendererEmbeddedContent.Source? {
+            guard version.sourceID == sourceID,
+                  let mimeType = version.mimeType,
+                  let blobHash = version.blobHash,
+                  blobHash.isEmpty == false
+            else { return nil }
+            let input = RendererBridgeInput.source(versionID: version.id)
+            guard let byteCount = try inputByteCount(input),
+                  byteCount >= 0,
+                  byteCount <= WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount
+            else { return nil }
+            let bytes = try readBytes(version.id)
+            guard bytes.count == byteCount,
+                  bytes.count <= WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount
+            else { return nil }
+            return try RendererEmbeddedContent.Source(
+                sourceID: sourceID,
+                sourceVersionID: version.id,
+                mimeType: try RendererMIMEType(validating: mimeType),
+                bytes: bytes)
         }
 
         func teardown() {

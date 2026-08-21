@@ -288,7 +288,8 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
                 input: .source(candidate.source),
                 semanticContent: "Image source available as \(candidate.source.mimeType.rawValue).",
                 displayTitle: altText.isEmpty ? nil : altText),
-            fallbackHTML: fallbackHTML)
+            fallbackHTML: fallbackHTML,
+            readableFallbackHTML: fallbackHTML)
     }
 
     /// Phase 4: resolve a relative image src through the `imageResolver` (when
@@ -350,7 +351,11 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         "<img src=\"\(escapeAttribute(src))\" alt=\"\(escape(altText))\">"
     }
 
-    private func rendererCardHTML(plan: RendererEmbedPlan?, fallbackHTML: String) -> String {
+    private func rendererCardHTML(
+        plan: RendererEmbedPlan?,
+        fallbackHTML: String,
+        readableFallbackHTML: String? = nil
+    ) -> String {
         guard let plan else { return fallbackHTML }
         if plan.fallbackReason == .oversizedInput {
             return fallbackHTML
@@ -458,6 +463,7 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
           <div class="sdw-renderer-card__expansion" id="\(expansionID)" role="region" aria-label="\(accessibilityLabelAttribute) details"\(expansionVisibilityAttributes)>
             <p class="sdw-renderer-card__summary">\(summary)</p>
             \(fallbackNoticeHTML)
+            \(readableFallbackHTML ?? "")
           </div>
         </section>
         """

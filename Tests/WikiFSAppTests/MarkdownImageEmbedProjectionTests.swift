@@ -99,8 +99,56 @@ struct MarkdownImageEmbedProjectionTests {
 
         #expect(html.contains("sdw-renderer-card"))
         #expect(html.contains("System &lt;&amp;&gt;"))
+        #expect(html.contains(#"<img src="images/board.canvas" alt="System &lt;&amp;&gt;">"#))
+        #expect(html.contains(#"data-renderer-expanded="true""#))
+        #expect(html.contains(#"aria-expanded="true""#))
         #expect(!html.contains("renderer-action://open"))
         #expect(!html.contains("data-renderer-input="))
+    }
+
+    @Test("missing oversized and untrusted metadata never materialize image bytes")
+    @MainActor
+    func rejectedMetadataNeverReadsImageBytes() throws {
+        let sourceID = SourceID(rawValue: "01HIMAGEPROJECTION0000000001")
+        let version = SourceVersion(
+            id: SourceVersionID(rawValue: "01HIMAGEVERSION00000000001"),
+            sourceID: sourceID,
+            parentID: nil,
+            blobHash: "pinned-blob",
+            mimeType: "application/json",
+            activityID: nil,
+            externalIdentity: nil,
+            fetchedAt: .distantPast)
+        let rejectedCounts: [Int?] = [
+            nil,
+            WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount + 1,
+        ]
+
+        for byteCount in rejectedCounts {
+            var readCalls = 0
+            let source = try WikiReaderRep.Coordinator.pinnedImageSource(
+                sourceID: sourceID,
+                version: version,
+                inputByteCount: { _ in byteCount },
+                readBytes: { _ in
+                    readCalls += 1
+                    return Self.jsonCanvasBytes
+                })
+            #expect(source == nil)
+            #expect(readCalls == 0)
+        }
+
+        var untrustedReadCalls = 0
+        let untrustedSource = try WikiReaderRep.Coordinator.pinnedImageSource(
+            sourceID: SourceID(rawValue: "01HUNTRUSTEDSOURCE000000001"),
+            version: version,
+            inputByteCount: { _ in Self.jsonCanvasBytes.count },
+            readBytes: { _ in
+                untrustedReadCalls += 1
+                return Self.jsonCanvasBytes
+            })
+        #expect(untrustedSource == nil)
+        #expect(untrustedReadCalls == 0)
     }
 
     private static let jsonCanvasBytes = Data(#"{"nodes":[],"edges":[]}"#.utf8)
