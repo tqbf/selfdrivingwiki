@@ -1383,7 +1383,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
             loadGeneration += 1
             let generation = loadGeneration
             attachmentCoordinator?.closeAll()
-            attachmentContainer?.collapseAttachment()
+            attachmentContainer?.removeAllAttachments()
             attachmentCoordinator = RendererAttachmentCoordinator(generation: generation)
             loadedMarkdown = markdown
             loadedDocumentIdentity = documentIdentity
@@ -1536,6 +1536,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
             isLoadingBinding = nil
             renderOptions = nil
             attachmentCoordinator?.closeAll()
+            attachmentContainer?.removeAllAttachments()
             attachmentCoordinator = nil
             attachmentContainer = nil
             webView = nil
@@ -1677,7 +1678,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
             // A real reload begins a new document generation before didFinish;
             // no native child may survive while WebKit replaces its DOM.
             attachmentCoordinator?.closeAll()
-            attachmentContainer?.collapseAttachment()
+            attachmentContainer?.removeAllAttachments()
         }
 
         func handleAttachmentGeometry(_ message: RendererAttachmentGeometryMessage) {
@@ -1705,7 +1706,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
             guard let attachmentCoordinator, attachmentCoordinator.generation == generation else { return }
             let removedMountedChild = attachmentContainer?.ownsMountedAttachment(named: placeholderID) == true
             attachmentCoordinator.close(placeholderID)
-            if removedMountedChild { attachmentContainer?.collapseAttachment() }
+            if removedMountedChild { attachmentContainer?.removeAttachment(named: placeholderID) }
         }
 
         /// Activate the card's explicit control. The injected resolver owns the
@@ -1770,7 +1771,6 @@ internal struct WikiReaderRep: NSViewRepresentable {
                   let attachmentCoordinator,
                   attachmentCoordinator.state(for: placeholderID) == .card,
                   let attachmentContainer,
-                  attachmentContainer.hasMountedAttachment == false,
                   let context = webView?.rendererActivationAdmission?.attachmentContext(for: placeholderID)
             else { return }
             switch inlineAttachmentResolver(
@@ -1882,7 +1882,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                   attachmentContainer.ownsMountedAttachment(named: placeholderID)
             else { return }
             attachmentCoordinator.collapse(placeholderID)
-            attachmentContainer.collapseAttachment()
+            attachmentContainer.removeAttachment(named: placeholderID)
             setCollapseControl(false, for: placeholderID)
         }
 
@@ -1890,7 +1890,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
             attachmentCoordinator?.fail(placeholderID)
             setCollapseControl(false, for: placeholderID)
             guard attachmentContainer?.ownsMountedAttachment(named: placeholderID) == true else { return }
-            attachmentContainer?.collapseAttachment()
+            attachmentContainer?.removeAttachment(named: placeholderID)
         }
 
         func webView(

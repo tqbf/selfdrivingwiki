@@ -25,7 +25,7 @@ struct RendererAttachmentCoordinatorTests {
         window.contentView = container; window.makeKeyAndOrderFront(nil)
         defer { container.teardown(); window.orderOut(nil) }
         let placeholder = try RendererAttachmentPlaceholderID(validating: "escape-canvas")
-        container.updateAttachmentViewport(.init(x: 40, y: 80, width: 160, height: 96))
+        container.updateAttachmentViewport(.init(x: 40, y: 80, width: 160, height: 96), for: placeholder)
         container.activateAttachment(named: placeholder)
         let child = try #require(container.subviews.flatMap(\.subviews).first { $0.accessibilityIdentifier() == "renderer-attachment-escape-canvas" })
         #expect(window.firstResponder === child)
@@ -319,7 +319,7 @@ struct RendererAttachmentCoordinatorTests {
 
         let placeholder = try RendererAttachmentPlaceholderID(validating: "hosted-canvas")
         let expectedVisibleRect = CGRect(x: 40, y: 80, width: 160, height: 96)
-        container.updateAttachmentViewport(expectedVisibleRect)
+        container.updateAttachmentViewport(expectedVisibleRect, for: placeholder)
         container.activateAttachment(named: placeholder)
 
         let child = try #require(container.subviews.flatMap(\.subviews).first {
@@ -331,7 +331,7 @@ struct RendererAttachmentCoordinatorTests {
         #expect(container.hitTest(.init(x: 80, y: 100)) === child)
         #expect(container.hitTest(.init(x: 300, y: 260)) === webView)
 
-        container.collapseAttachment()
+        container.removeAttachment(named: placeholder)
         #expect(container.subviews.flatMap(\.subviews).contains { $0 === child } == false)
         #expect(window.firstResponder === webView)
 
@@ -339,6 +339,69 @@ struct RendererAttachmentCoordinatorTests {
         #expect(container.subviews.flatMap(\.subviews).contains { $0.accessibilityIdentifier() == "renderer-attachment-hosted-canvas" })
         container.teardown()
         #expect(container.subviews.isEmpty)
+    }
+
+    @Test("keyed children retain independent frames and route overlap to the focused child")
+    @MainActor
+    func keyedChildrenRetainFramesAndRouteOverlapToFocusedChild() throws {
+        let webView = WikiReaderWebView()
+        let container = WikiReaderContainerView(webView: webView)
+        container.frame = .init(x: 0, y: 0, width: 400, height: 300)
+        let window = NSWindow(contentRect: container.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        defer { container.teardown(); window.orderOut(nil) }
+
+        let first = try RendererAttachmentPlaceholderID(validating: "keyed-first-canvas")
+        let second = try RendererAttachmentPlaceholderID(validating: "keyed-second-canvas")
+        let firstRect = CGRect(x: 20, y: 20, width: 140, height: 120)
+        let secondRect = CGRect(x: 220, y: 20, width: 140, height: 120)
+        container.updateAttachmentViewport(firstRect, for: first)
+        container.updateAttachmentViewport(secondRect, for: second)
+        container.activateAttachment(named: first, takesFocus: false)
+        container.activateAttachment(named: second, takesFocus: false)
+
+        let firstChild = try #require(container.attachmentChild(named: first))
+        let secondChild = try #require(container.attachmentChild(named: second))
+        #expect(container.mountedAttachmentCount == 2)
+        #expect(firstChild.frame == firstRect)
+        #expect(secondChild.frame == secondRect)
+        #expect(container.hitTest(.init(x: 260, y: 80)) === secondChild)
+
+        let overlapRect = CGRect(x: 80, y: 20, width: 140, height: 120)
+        container.updateAttachmentViewport(overlapRect, for: first)
+        container.focusAttachment(named: first)
+        #expect(container.hitTest(.init(x: 100, y: 80)) === firstChild)
+
+        container.updateAttachmentViewport(overlapRect, for: second)
+        container.focusAttachment(named: second)
+        #expect(container.hitTest(.init(x: 100, y: 80)) === secondChild)
+    }
+
+    @Test("removing one keyed child preserves the other mounted child")
+    @MainActor
+    func removingOneKeyedChildPreservesOtherMountedChild() throws {
+        let webView = WikiReaderWebView()
+        let container = WikiReaderContainerView(webView: webView)
+        container.frame = .init(x: 0, y: 0, width: 400, height: 300)
+        let window = NSWindow(contentRect: container.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        defer { container.teardown(); window.orderOut(nil) }
+
+        let first = try RendererAttachmentPlaceholderID(validating: "removal-first-canvas")
+        let second = try RendererAttachmentPlaceholderID(validating: "removal-second-canvas")
+        container.updateAttachmentViewport(.init(x: 20, y: 20, width: 140, height: 120), for: first)
+        container.updateAttachmentViewport(.init(x: 220, y: 20, width: 140, height: 120), for: second)
+        container.activateAttachment(named: first, takesFocus: false)
+        container.activateAttachment(named: second, takesFocus: false)
+        let retainedChild = try #require(container.attachmentChild(named: second))
+
+        container.removeAttachment(named: first)
+
+        #expect(container.attachmentChild(named: first) == nil)
+        #expect(container.attachmentChild(named: second) === retainedChild)
+        #expect(container.mountedAttachmentCount == 1)
     }
 
     @Test("auto-mounted attachment shows the focus indicator only while focused")
@@ -353,7 +416,7 @@ struct RendererAttachmentCoordinatorTests {
         defer { container.teardown(); window.orderOut(nil) }
 
         let placeholder = try RendererAttachmentPlaceholderID(validating: "focus-indicator-canvas")
-        container.updateAttachmentViewport(.init(x: 40, y: 80, width: 240, height: 160))
+        container.updateAttachmentViewport(.init(x: 40, y: 80, width: 240, height: 160), for: placeholder)
         _ = window.makeFirstResponder(webView)
         container.activateAttachment(named: placeholder, takesFocus: false)
 
@@ -386,7 +449,7 @@ struct RendererAttachmentCoordinatorTests {
         let placeholder = try RendererAttachmentPlaceholderID(validating: "header-actions-canvas")
         var opened = false
         var collapsed = false
-        container.updateAttachmentViewport(.init(x: 40, y: 80, width: 240, height: 160))
+        container.updateAttachmentViewport(.init(x: 40, y: 80, width: 240, height: 160), for: placeholder)
         container.activateAttachment(
             named: placeholder,
             onOpen: { opened = true },
@@ -424,7 +487,7 @@ struct RendererAttachmentCoordinatorTests {
         let placeholder = try RendererAttachmentPlaceholderID(validating: "pointer-header-canvas")
         var opened = false
         var collapsed = false
-        container.updateAttachmentViewport(.init(x: 40, y: 80, width: 300, height: 180))
+        container.updateAttachmentViewport(.init(x: 40, y: 80, width: 300, height: 180), for: placeholder)
         container.activateAttachment(
             named: placeholder,
             onOpen: { opened = true },
@@ -476,7 +539,7 @@ struct RendererAttachmentCoordinatorTests {
         let input = NativeJSONCanvasAttachmentInput.source(try .init(validating: source))
         let factory = NativeJSONCanvasAttachmentFactory { _ in Self.jsonCanvasBytes }
         let placeholder = try RendererAttachmentPlaceholderID(validating: "mounted-json-canvas")
-        container.updateAttachmentViewport(.init(x: 40, y: 80, width: 160, height: 96))
+        container.updateAttachmentViewport(.init(x: 40, y: 80, width: 160, height: 96), for: placeholder)
 
         container.activateAttachment(named: placeholder, content: try factory.makeView(for: input))
         container.layoutSubtreeIfNeeded()
