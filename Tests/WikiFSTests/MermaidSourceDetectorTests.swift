@@ -78,6 +78,12 @@ struct MermaidSourceDetectorTests {
             mimeType: "text/plain", filename: "g.txt", content: md))
     }
 
+    @Test func detectsTitledMermaidFence() {
+        let md = "```mermaid \"System architecture\"\nflowchart TD\n  A --> B\n```\n"
+        #expect(MermaidSourceDetector.isMermaidSource(
+            mimeType: "text/plain", filename: "architecture.txt", content: md))
+    }
+
     @Test func doesNotMatchMermaidMentionedAsProse() {
         // The word "mermaid" in prose (no fence) is not a diagram.
         let md = "We use mermaid diagrams elsewhere.\nflowchart TD"

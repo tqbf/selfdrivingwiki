@@ -618,7 +618,8 @@ public enum WikiLinkMarkdown {
                 // is 3 (standard GFM).
                 let source = target.content ?? ""
                 let n = String(repeating: "`", count: mermaidFenceLength(for: source))
-                return "\n\(n)mermaid\n\(source)\n\(n)\n"
+                let fenceInfo = MarkdownFenceInfo(alias: .mermaid).canonicalInfoString
+                return "\n\(n)\(fenceInfo)\n\(source)\n\(n)\n"
             }
         }
         // 2. Byteful blob dispatch (Phase 4a) — unchanged.
