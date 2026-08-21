@@ -1,9 +1,13 @@
+---
+timestamp: 2026-08-20T144800Z
+title: Editor pretty links
+branch: feature/hide-ulids-in-text-editor-links
+status: complete
+---
+
 # Editor pretty links
 
-Date: 2026-08-20
-Issue: #255
-
-## Result
+## Progress
 
 The page editor now hides canonical page ULIDs when a link has a safe alias.
 For example, it shows `[[page:01H...|Home]]` as `[[Home]]`.
@@ -16,8 +20,6 @@ the existing page save path still owns canonicalization.
 
 Links in code, unresolved links, links without aliases, and ambiguous aliases
 remain unchanged. This prevents the editor view from changing link meaning.
-
-## Implementation
 
 - `WikiLinkEditorProjection` provides a pure, code-span-safe display transform.
 - `ScrollableTextEditor` accepts an optional display transform.
