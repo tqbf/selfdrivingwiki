@@ -106,6 +106,16 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
     private var rendererActivationAdmission: RendererEmbedActivationAdmission?
     private var isCancelled: @Sendable () -> Bool = { Task.isCancelled }
 
+    private enum RendererCardActivationState {
+        case admitted(actionURL: String)
+        case unavailable
+
+        var isExpandable: Bool {
+            if case .admitted = self { return true }
+            return false
+        }
+    }
+
     private mutating func visitChildren(_ markup: Markup) -> String {
         var s = ""
         for child in markup.children { s += visit(child) }
@@ -311,11 +321,16 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         }
         let ref = plan.rendererReference
         let refValue = "\(ref.packageID.rawValue)/\(ref.version.rawValue)/\(ref.registrationID.rawValue)"
-        let title = plan.displayTitle ?? Self.rendererDisplayName(for: plan.rendererReference)
+        let rendererName = Self.rendererDisplayName(for: plan.rendererReference)
+        let title = plan.displayTitle ?? rendererName
+        let accessibilityLabel = title == rendererName
+            ? "\(rendererName) renderer"
+            : "\(rendererName) renderer: \(title)"
         let placeholderID = escapeAttribute(plan.placeholderID)
         let expansionID = escapeAttribute("\(plan.placeholderID)-expansion")
         let titleText = escape(title)
         let titleAttribute = escapeAttribute(title)
+        let accessibilityLabelAttribute = escapeAttribute(accessibilityLabel)
         let summary = escape(plan.semanticContent)
         let fallbackNoticeHTML: String = {
             guard let reason = plan.fallbackReason else { return "" }
@@ -357,7 +372,7 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
             inputJSON = nil
             inputAttribute = ""
         }
-        let actionHTML: String
+        let activationState: RendererCardActivationState
         if plan.activationMetadata != nil, let activationContext, let inputJSON, let mimeType {
             let actionURL = Self.rendererActionURL(
                 packageID: ref.packageID.rawValue,
@@ -374,23 +389,30 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
                 blockParserOrdinal: activationContext.blockID.parserOrdinal,
                 mimeType: mimeType
             )
-            actionHTML = #"<a class="sdw-renderer-card__action" data-renderer-action="open-window" href="\#(escapeAttribute(actionURL))" aria-label="Open \#(titleAttribute) in Window">Open in Window</a>"#
+            activationState = .admitted(actionURL: actionURL)
+        } else {
+            activationState = .unavailable
+        }
+        let isExpandable = activationState.isExpandable
+        let isExpanded = isExpandable == false
+        let actionHTML: String
+        if case .admitted(let actionURL) = activationState {
+            actionHTML = #"<a class="sdw-renderer-card__action" data-renderer-action="open-window" href="\#(escapeAttribute(actionURL))" aria-label="Open \#(accessibilityLabelAttribute) in Window" style="flex:0 0 auto">Open in Window</a>"#
         } else {
             actionHTML = ""
         }
-        let isExpandable = actionHTML.isEmpty == false
         let disabledAttribute = isExpandable ? "" : #" disabled aria-disabled="true""#
         let expansionVisibilityAttributes = isExpandable
             ? #" hidden aria-hidden="true""#
             : #" aria-hidden="false""#
         return """
-        <section class="sdw-renderer-card" id="\(placeholderID)" role="group" aria-label="\(titleAttribute)" data-renderer-expanded="false" data-renderer-reference="\(escapeAttribute(refValue))"\(inputAttribute)>
-          <div class="sdw-renderer-card__row">
-            <button class="sdw-renderer-card__disclosure" data-renderer-action="expand" type="button" aria-expanded="false" aria-controls="\(expansionID)" aria-label="Expand \(titleAttribute)"\(disabledAttribute)><span aria-hidden="true">▸</span></button>
-            <span class="sdw-renderer-card__title sdw-renderer-card__title--truncated">\(titleText)</span>
+        <section class="sdw-renderer-card" id="\(placeholderID)" role="group" aria-label="\(accessibilityLabelAttribute)" data-renderer-expanded="\(isExpanded)" data-renderer-reference="\(escapeAttribute(refValue))"\(inputAttribute)>
+          <div class="sdw-renderer-card__row" style="display:flex;align-items:center;min-width:0">
+            <button class="sdw-renderer-card__disclosure" data-renderer-action="expand" type="button" aria-expanded="\(isExpanded)" aria-controls="\(expansionID)" aria-label="Expand \(accessibilityLabelAttribute)"\(disabledAttribute)><span aria-hidden="true">▸</span></button>
+            <span class="sdw-renderer-card__title sdw-renderer-card__title--truncated" title="\(titleAttribute)" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 auto">\(titleText)</span>
             \(actionHTML)
           </div>
-          <div class="sdw-renderer-card__expansion" id="\(expansionID)" role="region" aria-label="\(titleAttribute) details"\(expansionVisibilityAttributes)>
+          <div class="sdw-renderer-card__expansion" id="\(expansionID)" role="region" aria-label="\(accessibilityLabelAttribute) details"\(expansionVisibilityAttributes)>
             <p class="sdw-renderer-card__summary">\(summary)</p>
             \(fallbackNoticeHTML)
           </div>

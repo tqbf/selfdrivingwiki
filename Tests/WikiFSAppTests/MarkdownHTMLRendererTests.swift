@@ -387,6 +387,7 @@ struct MarkdownHTMLRendererTests {
         let jsonCanvas = MarkdownHTMLRenderer.render("```\(fenceInfo)\n{\"nodes\":[],\"edges\":[]}\n```", options: options)
         #expect(jsonCanvas.contains("sdw-renderer-card"))
         #expect(jsonCanvas.contains("data-renderer-expanded=\"false\""))
+        #expect(jsonCanvas.contains("aria-label=\"JSON Canvas renderer: Roadmap &lt;&amp;&gt;\""))
         #expect(jsonCanvas.contains("sdw-renderer-card__row"))
         #expect(jsonCanvas.contains("sdw-renderer-card__disclosure"))
         #expect(jsonCanvas.contains("type=\"button\""))
@@ -398,7 +399,8 @@ struct MarkdownHTMLRendererTests {
         #expect(jsonCanvas.contains("sdw-renderer-card__expansion"))
         #expect(jsonCanvas.contains("sdw-renderer-card__title"))
         #expect(jsonCanvas.contains("Roadmap &lt;&amp;&gt;"))
-        #expect(jsonCanvas.contains("aria-label=\"Expand Roadmap &lt;&amp;&gt;\""))
+        #expect(jsonCanvas.contains("aria-label=\"Expand JSON Canvas renderer: Roadmap &lt;&amp;&gt;\""))
+        #expect(jsonCanvas.contains(#"style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 auto""#))
         #expect(jsonCanvas.contains("renderer-action://open"))
         #expect(jsonCanvas.contains("sdw-renderer-card__action"))
         #expect(jsonCanvas.contains(">Open in Window</a>"))
@@ -602,10 +604,43 @@ struct MarkdownHTMLRendererTests {
         let html = MarkdownHTMLRenderer.render("```jsoncanvas\n{\"nodes\":[],\"edges\":[]}\n```", options: options)
 
         #expect(html.contains("sdw-renderer-card"))
+        #expect(html.contains("data-renderer-expanded=\"true\""))
+        #expect(html.contains("aria-label=\"JSON Canvas renderer\""))
+        #expect(html.contains("aria-expanded=\"true\""))
         #expect(!html.contains("renderer-action://open"))
         #expect(!html.contains("data-renderer-input="))
         #expect(html.contains("disabled aria-disabled=\"true\""))
         #expect(html.contains("aria-hidden=\"false\""))
+        #expect(html.contains("hidden aria-hidden=\"true\"") == false)
+    }
+
+    @Test("long renderer titles retain an accessible value while visually ellipsizing")
+    func longRendererTitlesRetainAccessibleValueWhileVisuallyEllipsizing() {
+        let projection = RendererEmbedProjection(
+            sourceEmbeds: [:],
+            richFenceAliases: [.jsoncanvas])
+        let document = MarkdownDocumentIdentity(
+            pageID: PageID(rawValue: "01HTESTPAGE000000000000001"),
+            pageVersionID: PageVersionID(rawValue: "01HTESTPV00000000000000001"))
+        let admission = RendererEmbedActivationAdmission(
+            pageID: document.pageID,
+            pageVersionID: document.pageVersionID,
+            capability: .init(rawValue: "capability"),
+            generation: 1)
+        let options = MarkdownRenderOptions(
+            codeHighlighting: .disabled,
+            rendererEmbedProjection: projection,
+            documentIdentity: document,
+            rendererActivationAdmission: admission)
+        let longTitle = String(repeating: "Long renderer title ", count: 12)
+        let html = MarkdownHTMLRenderer.render(
+            "```jsoncanvas \"\(longTitle)\"\n{\"nodes\":[],\"edges\":[]}\n```",
+            options: options)
+
+        #expect(html.contains("title=\"\(longTitle)\""))
+        #expect(html.contains(#"style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 auto""#))
+        #expect(html.contains(#"class="sdw-renderer-card__action""#))
+        #expect(html.contains(#"style="flex:0 0 auto""#))
     }
 
     @Test("ordinary Markdown images remain unchanged by renderer-card markup")
