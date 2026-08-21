@@ -1,5 +1,7 @@
 #if os(macOS)
+import AppKit
 import SwiftUI
+import WikiFSCore
 
 // pattern: Mixed (unavoidable)
 // Reason: This native surface binds SwiftUI gesture state to the functional
@@ -14,6 +16,59 @@ struct JSONCanvasInteractionSnapshot: Equatable {
         selectedNodeID = viewport.selectedNodeID
         scale = viewport.scale
         translation = viewport.translation
+    }
+}
+
+enum JSONCanvasNavigationTarget: Equatable, Sendable {
+    case namedContent(title: String, anchor: String?)
+    case page(PageID)
+    case source(SourceID)
+    case external(URL)
+}
+
+@MainActor
+enum JSONCanvasHostActionRouter {
+    nonisolated static func target(for action: JSONCanvasHostAction) -> JSONCanvasNavigationTarget {
+        switch action {
+        case .openFile(let reference):
+            let filename = reference.path.rawValue.split(separator: "/").last.map(String.init)
+                ?? reference.path.rawValue
+            let title = (filename as NSString).deletingPathExtension
+            return .namedContent(
+                title: title,
+                anchor: reference.subpath.map { String($0.rawValue.dropFirst()) })
+        case .openWiki(.page(let pageID)):
+            return .page(pageID)
+        case .openWiki(.source(let sourceID)):
+            return .source(sourceID)
+        case .openExternal(let url):
+            return .external(url)
+        }
+    }
+
+    static func handler(for store: WikiStoreModel) -> (JSONCanvasHostAction) -> Void {
+        { action in route(action, store: store) }
+    }
+
+    static func route(
+        _ action: JSONCanvasHostAction,
+        store: WikiStoreModel,
+        openExternal: (URL) -> Bool = { NSWorkspace.shared.open($0) }
+    ) {
+        switch target(for: action) {
+        case .namedContent(let title, let anchor):
+            if store.selectPage(byTitle: title, anchor: anchor) == false {
+                _ = store.selectSource(byDisplayName: title, anchor: anchor)
+            }
+        case .page(let pageID):
+            _ = store.selectPage(byID: pageID)
+        case .source(let sourceID):
+            _ = store.selectSource(byID: sourceID)
+        case .external(let url):
+            if openExternal(url) == false {
+                DebugLog.reader("JSON Canvas could not open external URL: \(url.absoluteString)")
+            }
+        }
     }
 }
 
@@ -33,6 +88,7 @@ struct JSONCanvasRendererView: View {
     @State private var dragStart: JSONCanvasPoint?
     @State private var dragInitialTranslation = JSONCanvasPoint.zero
     @State private var magnificationBaseline = 1.0
+    @State private var fittedSurface = false
     @FocusState private var focusedSurface: FocusSurface?
 
     init(
@@ -96,7 +152,7 @@ struct JSONCanvasRendererView: View {
     }
 
     private var canvas: some View {
-        GeometryReader { _ in
+        GeometryReader { geometry in
                 ZStack {
                     Canvas { context, _ in
                         context.concatenate(CGAffineTransform(
@@ -108,17 +164,26 @@ struct JSONCanvasRendererView: View {
                             let geometry = JSONCanvasEdgeGeometry(
                                 source: edge.sourceFrame,
                                 destination: edge.destinationFrame)
+                            let edgeColor = rendererColor(for: edge.color) ?? .secondary
                             var path = Path()
                             path.move(to: CGPoint(x: geometry.start.x, y: geometry.start.y))
                             path.addLine(to: CGPoint(x: geometry.end.x, y: geometry.end.y))
-                            context.stroke(path, with: .color(.secondary), lineWidth: 1)
+                            context.stroke(path, with: .color(edgeColor), lineWidth: 1)
 
                             var arrowhead = Path()
                             arrowhead.move(to: CGPoint(x: geometry.end.x, y: geometry.end.y))
                             arrowhead.addLine(to: CGPoint(x: geometry.arrowBaseLeft.x, y: geometry.arrowBaseLeft.y))
                             arrowhead.addLine(to: CGPoint(x: geometry.arrowBaseRight.x, y: geometry.arrowBaseRight.y))
                             arrowhead.closeSubpath()
-                            context.fill(arrowhead, with: .color(.secondary))
+                            context.fill(arrowhead, with: .color(edgeColor))
+
+                            if let label = edge.label, label.isEmpty == false {
+                                let text = context.resolve(
+                                    Text(label).font(.caption).foregroundStyle(edgeColor))
+                                context.draw(text, at: CGPoint(
+                                    x: (geometry.start.x + geometry.end.x) / 2,
+                                    y: (geometry.start.y + geometry.end.y) / 2))
+                            }
                         }
 
                         for node in document.renderProjection.nodes {
@@ -128,42 +193,30 @@ struct JSONCanvasRendererView: View {
                                 width: node.frame.width,
                                 height: node.frame.height)
                             let path = Path(roundedRect: rect, cornerRadius: 8)
-                            context.fill(path, with: .color(.secondary.opacity(0.08)))
+                            let nodeColor = rendererColor(for: node.color)
+                            context.fill(path, with: .color(nodeColor?.opacity(0.16) ?? .secondary.opacity(0.08)))
                             context.stroke(
                                 path,
-                                with: .color(viewport.selectedNodeID == node.id ? .accentColor : .secondary),
+                                with: .color(viewport.selectedNodeID == node.id ? .accentColor : nodeColor ?? .secondary),
                                 lineWidth: viewport.selectedNodeID == node.id ? 2 : 1)
                             let text = context.resolve(Text(node.text).font(.body).foregroundStyle(.primary))
                             context.draw(text, in: rect.insetBy(dx: 10, dy: 8))
+                            if let background = node.background,
+                               let style = node.backgroundStyle {
+                                let caption = context.resolve(
+                                    Text("\(background.displayLabel) · \(style.rawValue)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary))
+                                context.draw(
+                                    caption,
+                                    at: CGPoint(x: rect.minX + 10, y: rect.maxY - 10),
+                                    anchor: .bottomLeading)
+                            }
                         }
                     }
 
                     ForEach(document.renderProjection.nodes) { node in
-                        Button {
-                            selectCanvasNode(node.id)
-                        } label: {
-                            Color.clear.contentShape(.rect)
-                        }
-                        .buttonStyle(.plain)
-                        .frame(
-                            width: node.frame.width * viewport.scale,
-                            height: node.frame.height * viewport.scale)
-                        .position(nodePosition(for: node))
-                        .accessibilityIdentifier("json-canvas-node-\(node.id.rawValue)")
-                        .accessibilityLabel("Canvas node: \(accessibilityLabel(for: node))")
-                        .accessibilityValue(viewport.selectedNodeID == node.id ? "Selected" : "Not selected")
-                        .accessibilityHint("Press Return to select this read-only canvas node.")
-                        .accessibilityAction(named: Text("Select")) {
-                            selectCanvasNode(node.id)
-                        }
-                        .onMoveCommand { handleMoveCommand($0, from: .canvas) }
-                        .contextMenu {
-                            if document.hostAction(for: node.id) != nil {
-                                Button("Open Internal Link") {
-                                    requestHostAction(for: node.id)
-                                }
-                            }
-                        }
+                        nodeOverlay(node)
                     }
                 }
                 .background(.background)
@@ -175,12 +228,51 @@ struct JSONCanvasRendererView: View {
                 .simultaneousGesture(magnifyGesture)
                 .accessibilityLabel("JSON Canvas nodes")
                 .accessibilityHint("Use the Up and Down Arrow keys to select a canvas node.")
+                .onAppear {
+                    fitCanvasOnce(to: geometry.size)
+                }
             }
     }
 
     private enum FocusSurface: Hashable {
         case outline
         case canvas
+    }
+
+    private func nodeOverlay(_ node: JSONCanvasRenderProjection.Node) -> some View {
+        Button {
+            selectCanvasNode(node.id)
+        } label: {
+            Color.clear.contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .frame(
+            width: node.frame.width * viewport.scale,
+            height: node.frame.height * viewport.scale)
+        .position(nodePosition(for: node))
+        .accessibilityIdentifier("json-canvas-node-\(node.id.rawValue)")
+        .accessibilityLabel("Canvas node: \(accessibilityLabel(for: node))")
+        .accessibilityValue(viewport.selectedNodeID == node.id ? "Selected" : "Not selected")
+        .accessibilityHint(document.hostAction(for: node.id) == nil
+            ? "Press Return to select this read-only canvas node."
+            : "Press Return to select, or use Open to follow this canvas node.")
+        .accessibilityAction(named: Text("Select")) {
+            selectCanvasNode(node.id)
+        }
+        .accessibilityAction(named: Text("Open")) {
+            requestHostAction(for: node.id)
+        }
+        .simultaneousGesture(TapGesture(count: 2).onEnded {
+            requestHostAction(for: node.id)
+        })
+        .onMoveCommand { handleMoveCommand($0, from: .canvas) }
+        .contextMenu {
+            if document.hostAction(for: node.id) != nil {
+                Button("Open") {
+                    requestHostAction(for: node.id)
+                }
+            }
+        }
     }
 
     private var dragGesture: some Gesture {
@@ -262,6 +354,18 @@ struct JSONCanvasRendererView: View {
         interactionObserver(.init(viewport: viewport))
     }
 
+    private func fitCanvasOnce(to size: CGSize) {
+        guard fittedSurface == false else { return }
+        viewport.fit(
+            document: document,
+            surfaceWidth: size.width,
+            surfaceHeight: size.height,
+            padding: 20)
+        magnificationBaseline = viewport.scale
+        fittedSurface = true
+        reportInteraction()
+    }
+
     private func nodePosition(for node: JSONCanvasRenderProjection.Node) -> CGPoint {
         CGPoint(
             x: node.frame.origin.x * viewport.scale + viewport.translation.x + node.frame.width * viewport.scale / 2,
@@ -271,6 +375,32 @@ struct JSONCanvasRendererView: View {
     private func accessibilityLabel(for node: JSONCanvasRenderProjection.Node) -> String {
         let label = node.text.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
         return label.isEmpty ? "Text node" : label
+    }
+
+    private func rendererColor(for color: JSONCanvasColor?) -> Color? {
+        switch color {
+        case .none:
+            nil
+        case .preset(.red):
+            .red
+        case .preset(.orange):
+            .orange
+        case .preset(.yellow):
+            .yellow
+        case .preset(.green):
+            .green
+        case .preset(.cyan):
+            .cyan
+        case .preset(.purple):
+            .purple
+        case .hex(let red, let green, let blue):
+            Color(
+                .sRGB,
+                red: Double(red) / 255,
+                green: Double(green) / 255,
+                blue: Double(blue) / 255,
+                opacity: 1)
+        }
     }
 }
 #endif

@@ -31,8 +31,8 @@ final class WikiReaderContainerView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         if attachmentOverlay.attachmentClipRect.contains(point), let attachmentChild {
-            let childPoint = attachmentChild.convert(point, from: self)
-            if let hitView = attachmentChild.hitTest(childPoint) {
+            let overlayPoint = attachmentOverlay.convert(point, from: self)
+            if let hitView = attachmentChild.hitTest(overlayPoint) {
                 return hitView
             }
         }
@@ -241,13 +241,13 @@ private final class RendererAttachmentNativeChildView: NSView {
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        guard bounds.contains(point) else { return nil }
-        let toolbarPoint = toolbar.convert(point, from: self)
-        if let toolbarHit = toolbar.hitTest(toolbarPoint) {
+        let localPoint = convert(point, from: superview)
+        guard bounds.contains(localPoint) else { return nil }
+        if let toolbarHit = toolbar.hitTest(localPoint) {
             return toolbarHit
         }
         guard let hostedContent else { return self }
-        return hostedContent.hitTest(hostedContent.convert(point, from: self)) ?? self
+        return hostedContent.hitTest(localPoint) ?? self
     }
 
     @objc private func openInWindow() {

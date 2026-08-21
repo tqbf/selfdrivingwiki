@@ -100,7 +100,9 @@ enum BuiltInRendererFactoryMap {
     private static func makeJSONCanvas(_ inputs: BuiltInRendererFactoryInputs) -> AnyView? {
         do {
             let document = try JSONCanvasDocument.decode(inputs.sourceBytes)
-            return AnyView(JSONCanvasRendererView(document: document))
+            return AnyView(JSONCanvasRendererView(
+                document: document,
+                onHostAction: JSONCanvasHostActionRouter.handler(for: inputs.store)))
         } catch {
             DebugLog.tabs("BuiltInRendererFactoryMap: JSON Canvas decode failed: \(error)")
             return nil

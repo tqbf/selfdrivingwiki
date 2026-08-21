@@ -1681,13 +1681,19 @@ internal struct WikiReaderRep: NSViewRepresentable {
         }
 
         func handleAttachmentGeometry(_ message: RendererAttachmentGeometryMessage) {
-            guard let attachmentCoordinator, attachmentCoordinator.ingest(message),
+            guard let attachmentCoordinator else { return }
+            let isFirstAcceptedGeometry = attachmentCoordinator.state(for: message.placeholderID) == .unresolved
+            guard attachmentCoordinator.ingest(message),
                   let webView, let attachmentContainer else { return }
-            if message.revision == 1 {
+            if isFirstAcceptedGeometry {
+                let renderer = webView.rendererActivationAdmission?
+                    .attachmentContext(for: message.placeholderID)?
+                    .rendererReference
                 let reservedHeight = attachmentCoordinator.reserveHeight(
-                    RendererAttachmentHostPolicy.minimumReservedHeight, for: message.placeholderID)
+                    RendererAttachmentHostPolicy.preferredReservedHeight(for: renderer),
+                    for: message.placeholderID)
                 let identifier = WikiReaderRep.jsString(message.placeholderID.rawValue)
-                webView.evaluateJavaScript("window.__sdwRendererAttachmentReserve && window.__sdwRendererAttachmentReserve(\(identifier), \(reservedHeight));")
+                webView.evaluateJavaScript("window.__sdwRendererAttachmentReserve && window.__sdwRendererAttachmentReserve(\"\(identifier)\", \(reservedHeight));")
             }
             updateAttachmentViewport(for: message.placeholderID, in: webView, container: attachmentContainer)
             automaticallyMountAttachmentIfPossible(
@@ -1799,6 +1805,12 @@ internal struct WikiReaderRep: NSViewRepresentable {
             let result = attachmentCoordinator.activate(placeholderID)
             guard result == .activate else { return result }
             if let webView {
+                let reservedHeight = attachmentCoordinator.reserveHeight(
+                    RendererAttachmentHostPolicy.preferredReservedHeight(for: context.rendererReference),
+                    for: placeholderID)
+                let identifier = WikiReaderRep.jsString(placeholderID.rawValue)
+                webView.evaluateJavaScript(
+                    "window.__sdwRendererAttachmentReserve && window.__sdwRendererAttachmentReserve(\"\(identifier)\", \(reservedHeight));")
                 updateAttachmentViewport(for: placeholderID, in: webView, container: attachmentContainer)
             }
             attachmentContainer.activateAttachment(
@@ -1854,7 +1866,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
             let function = present
                 ? "window.__sdwRendererAttachmentPresentCollapse"
                 : "window.__sdwRendererAttachmentDismissCollapse"
-            webView.evaluateJavaScript("\(function) && \(function)(\(identifier));")
+            webView.evaluateJavaScript("\(function) && \(function)(\"\(identifier)\");")
         }
 
         func attachmentState(for placeholderID: RendererAttachmentPlaceholderID) -> RendererAttachmentState {

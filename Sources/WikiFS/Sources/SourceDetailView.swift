@@ -1375,7 +1375,8 @@ struct SourceDetailView: View {
                             inlineAttachmentResolver: RendererInlineAttachmentResolverFactory.make(
                                 store: store.internalStore,
                                 installedRendererFactory: installedRendererFactory,
-                                installedRendererFactoryInputs: installedRendererFactoryInputs),
+                                installedRendererFactoryInputs: installedRendererFactoryInputs,
+                                onJSONCanvasHostAction: JSONCanvasHostActionRouter.handler(for: store)),
                             findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
                 .zoomShortcuts($readerZoom)
                 .zoomScroll($readerZoom)
@@ -1394,7 +1395,8 @@ struct SourceDetailView: View {
                             inlineAttachmentResolver: RendererInlineAttachmentResolverFactory.make(
                                 store: store.internalStore,
                                 installedRendererFactory: installedRendererFactory,
-                                installedRendererFactoryInputs: installedRendererFactoryInputs),
+                                installedRendererFactoryInputs: installedRendererFactoryInputs,
+                                onJSONCanvasHostAction: JSONCanvasHostActionRouter.handler(for: store)),
                             findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
                 .zoomShortcuts($readerZoom)
                 .zoomScroll($readerZoom)
