@@ -827,9 +827,13 @@ struct RendererAttachmentCoordinatorTests {
         }
 
         try admitAndReport()
+        #expect(coordinator.attachmentState(for: placeholder) == .card)
+        #expect(coordinator.activateAttachment(placeholder) == .activate)
         #expect(coordinator.attachmentState(for: placeholder) == .active)
         coordinator.startLoad(markdown: "# New generation", documentIdentity: Self.lifecycleIdentity, isLoading: .constant(true))
         try admitAndReport()
+        #expect(coordinator.attachmentState(for: placeholder) == .card)
+        #expect(coordinator.activateAttachment(placeholder) == .activate)
         #expect(coordinator.attachmentState(for: placeholder) == .active)
 
         let staleFailure = try #require(failures.first)
