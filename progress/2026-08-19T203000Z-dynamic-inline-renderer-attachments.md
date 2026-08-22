@@ -79,10 +79,18 @@ Unsupported disclosure requests stay collapsed. They do not open a separate rend
 - An independent security review found one high-severity installed-input validation gap. The implementation now validates the reread store payload against the admitted MIME, bytes, and digest.
 - The security re-review confirmed the production fix. Its one medium test-fixture finding was fixed, and all 7 authorized-reader tests passed.
 
-### Remaining validation
+### Final validation
 
-- Complete accessibility, macOS interaction, typography, and SwiftUI reviews.
-- Run the full SwiftPM build and test gates.
-- Run the signed-app manual smoke checks that the environment supports.
-- Complete the final implementation review.
-- Push the branch and open a pull request without merging it.
+- `make test` passed with 3,527 tests in 342 suites.
+- `make build` passed and produced a signed app with the File Provider enabled.
+- `make prompts && make version && swift build` passed.
+- `make prompts && make version && swift test` passed with 3,527 tests in 342 suites.
+- The final accessibility, macOS interaction, typography, SwiftUI, security, and general implementation review found no unresolved critical, high, or medium issues.
+- The native header uses the authored renderer row title, regular system weight, trailing controls, title truncation, and typed accessibility labels.
+- The HTML renderer row uses relative type sizes, a flat in-flow treatment, visible focus rings, and reduced-motion handling.
+
+### Manual validation limit
+
+The automated hosted suites validate AppKit hit testing, keyboard focus, Escape, keyed geometry, zoom reprojection, and renderer teardown. The signed app build passed.
+
+This environment did not perform a human visual check of light and dark appearance or pointer gestures in the signed app. The pull request must keep that limitation visible for operator approval.
