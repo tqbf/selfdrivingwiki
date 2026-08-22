@@ -49,28 +49,18 @@ struct JSONCanvasAttachmentHostedTests {
 
         let sourcePoint = Self.firstNodePoint(in: sourceHost.host.view.bounds)
         let fencedPoint = Self.firstNodePoint(in: fencedHost.host.view.bounds)
-        Self.sendClick(to: sourceHost.window, at: sourcePoint)
-        Self.sendClick(to: fencedHost.window, at: fencedPoint)
-        do {
-            try await Self.waitFor(description: "source JSON Canvas selection") {
-                sourceSnapshots.last?.selectedNodeID?.rawValue == "first"
-            }
-        } catch {
-            throw Self.interactionDeliveryError(
-                hosted: sourceHost,
-                point: sourcePoint,
-                snapshot: sourceSnapshots.last)
-        }
-        do {
-            try await Self.waitFor(description: "fenced JSON Canvas selection") {
-                fencedSnapshots.last?.selectedNodeID?.rawValue == "first"
-            }
-        } catch {
-            throw Self.interactionDeliveryError(
-                hosted: fencedHost,
-                point: fencedPoint,
-                snapshot: fencedSnapshots.last)
-        }
+        try await Self.sendClick(to: sourceHost, at: sourcePoint)
+        try await Self.waitForSelection(
+            in: sourceHost,
+            point: sourcePoint,
+            snapshot: { sourceSnapshots.last },
+            description: "source JSON Canvas selection")
+        try await Self.sendClick(to: fencedHost, at: fencedPoint)
+        try await Self.waitForSelection(
+            in: fencedHost,
+            point: fencedPoint,
+            snapshot: { fencedSnapshots.last },
+            description: "fenced JSON Canvas selection")
 
         #expect(resolvedPins == [pin])
         let expectedSelection = try JSONCanvasNodeID(validating: "first")
@@ -172,14 +162,18 @@ struct JSONCanvasAttachmentHostedTests {
 
         let sourcePoint = Self.firstNodePoint(in: sourceHost.host.view.bounds)
         let fencedPoint = Self.firstNodePoint(in: fencedHost.host.view.bounds)
-        Self.sendClick(to: sourceHost.window, at: sourcePoint)
-        Self.sendClick(to: fencedHost.window, at: fencedPoint)
-        try await Self.waitFor(description: "source persistence-proof selection") {
-            sourceSnapshots.last?.selectedNodeID?.rawValue == "first"
-        }
-        try await Self.waitFor(description: "fenced persistence-proof selection") {
-            fencedSnapshots.last?.selectedNodeID?.rawValue == "first"
-        }
+        try await Self.sendClick(to: sourceHost, at: sourcePoint)
+        try await Self.waitForSelection(
+            in: sourceHost,
+            point: sourcePoint,
+            snapshot: { sourceSnapshots.last },
+            description: "source persistence-proof selection")
+        try await Self.sendClick(to: fencedHost, at: fencedPoint)
+        try await Self.waitForSelection(
+            in: fencedHost,
+            point: fencedPoint,
+            snapshot: { fencedSnapshots.last },
+            description: "fenced persistence-proof selection")
 
         let badSourceFactory = NativeJSONCanvasAttachmentFactory { _ in Data("mismatched".utf8) }
         let sourceFailure = try Self.fallbackFailure {
@@ -221,6 +215,11 @@ struct JSONCanvasAttachmentHostedTests {
     private static let hostedCanvasSize = CGSize(width: 520, height: 260)
     private static let firstNodeOrigin = CGPoint(x: 20, y: 10)
     private static let firstNodeSize = CGSize(width: 160, height: 80)
+    private static let application: NSApplication = {
+        let application = NSApplication.shared
+        application.setActivationPolicy(.accessory)
+        return application
+    }()
 
     private static func host(_ rootView: AnyView) -> (host: NSHostingController<AnyView>, window: NSWindow) {
         let host = NSHostingController(rootView: AnyView(rootView.frame(
@@ -235,7 +234,7 @@ struct JSONCanvasAttachmentHostedTests {
         window.setContentSize(hostedCanvasSize)
         host.view.frame = .init(origin: .zero, size: hostedCanvasSize)
         host.view.layoutSubtreeIfNeeded()
-        window.makeKeyAndOrderFront(nil)
+        window.orderFront(nil)
         return (host, window)
     }
 
@@ -254,7 +253,12 @@ struct JSONCanvasAttachmentHostedTests {
             y: bounds.maxY - firstNodeCenter.y)
     }
 
-    private static func sendClick(to window: NSWindow, at point: NSPoint) {
+    private static func sendClick(
+        to hosted: (host: NSHostingController<AnyView>, window: NSWindow),
+        at point: NSPoint
+    ) async throws {
+        try await prepareForMouseDelivery(to: hosted)
+        let window = hosted.window
         guard let mouseDown = NSEvent.mouseEvent(
             with: .leftMouseDown,
             location: point,
@@ -274,13 +278,91 @@ struct JSONCanvasAttachmentHostedTests {
                 context: nil,
                 eventNumber: 0,
                 clickCount: 1,
-                pressure: 0)
+            pressure: 0)
         else {
-            Issue.record("failed to construct hosted JSON Canvas mouse events")
-            return
+            throw HostedJSONCanvasAttachmentError.eventConstruction(windowNumber: window.windowNumber)
         }
         window.sendEvent(mouseDown)
         window.sendEvent(mouseUp)
+    }
+
+    private static func prepareForMouseDelivery(
+        to hosted: (host: NSHostingController<AnyView>, window: NSWindow)
+    ) async throws {
+        let application = Self.application
+        application.activate(ignoringOtherApps: true)
+        hosted.window.makeKeyAndOrderFront(nil)
+        hosted.host.view.layoutSubtreeIfNeeded()
+        try await waitForWindowPresentation(hosted)
+        // Reassert the matching window immediately before dispatching its
+        // genuine mouse down/up pair; this never assumes two windows are key.
+        application.activate(ignoringOtherApps: true)
+        hosted.window.makeKeyAndOrderFront(nil)
+        guard windowIsReadyForMouseDelivery(hosted) else {
+            throw windowPresentationError(hosted)
+        }
+    }
+
+    private static func waitForWindowPresentation(
+        _ hosted: (host: NSHostingController<AnyView>, window: NSWindow)
+    ) async throws {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while windowIsReadyForMouseDelivery(hosted) == false {
+            guard ContinuousClock.now < deadline else {
+                throw windowPresentationError(hosted)
+            }
+            // Yield the main actor, then suspend rather than blocking a
+            // cooperative executor thread while AppKit presents this window.
+            try Task.checkCancellation()
+            await Task.yield()
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    private static func windowIsReadyForMouseDelivery(
+        _ hosted: (host: NSHostingController<AnyView>, window: NSWindow)
+    ) -> Bool {
+        let window = hosted.window
+        return Self.application.isActive &&
+            window.isVisible &&
+            window.isKeyWindow &&
+            window.canBecomeKey &&
+            window.screen != nil &&
+            window.contentView === hosted.host.view &&
+            hosted.host.view.window === window
+    }
+
+    private static func waitForSelection(
+        in hosted: (host: NSHostingController<AnyView>, window: NSWindow),
+        point: NSPoint,
+        snapshot: @escaping @MainActor () -> JSONCanvasInteractionSnapshot?,
+        description: String
+    ) async throws {
+        do {
+            try await Self.waitFor(description: description) {
+                snapshot()?.selectedNodeID?.rawValue == "first"
+            }
+        } catch {
+            throw Self.interactionDeliveryError(
+                hosted: hosted,
+                point: point,
+                snapshot: snapshot())
+        }
+    }
+
+    private static func windowPresentationError(
+        _ hosted: (host: NSHostingController<AnyView>, window: NSWindow)
+    ) -> HostedJSONCanvasAttachmentError {
+        let window = hosted.window
+        return .windowPresentation(
+            applicationIsActive: Self.application.isActive,
+            windowNumber: window.windowNumber,
+            isVisible: window.isVisible,
+            isKeyWindow: window.isKeyWindow,
+            canBecomeKey: window.canBecomeKey,
+            hasScreen: window.screen != nil,
+            contentViewAttached: window.contentView === hosted.host.view,
+            hostViewAttached: hosted.host.view.window === window)
     }
 
     private static func interactionDeliveryError(
@@ -304,8 +386,7 @@ struct JSONCanvasAttachmentHostedTests {
     }
 
     private static func prepareApplication() {
-        let application = NSApplication.shared
-        application.setActivationPolicy(.accessory)
+        _ = Self.application
     }
 
     private static func source(bytes: Data) throws -> RendererEmbeddedContent.Source {
@@ -383,6 +464,16 @@ private enum HostedJSONCanvasAttachmentError: Error {
     case timeout(String)
     case unexpectedSourcePin
     case expectedFallbackFailure
+    case eventConstruction(windowNumber: Int)
+    case windowPresentation(
+        applicationIsActive: Bool,
+        windowNumber: Int,
+        isVisible: Bool,
+        isKeyWindow: Bool,
+        canBecomeKey: Bool,
+        hasScreen: Bool,
+        contentViewAttached: Bool,
+        hostViewAttached: Bool)
     case interactionDelivery(
         applicationKeyWindowNumber: Int?,
         applicationCurrentEventType: String,
