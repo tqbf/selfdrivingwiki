@@ -95,7 +95,8 @@ struct RendererAttachmentCoordinatorTests {
         let generation = try #require(coordinator.attachmentGeneration)
         try Self.admitJSONCanvasPlaceholder(placeholder, coordinator: coordinator, webView: webView)
         try await Self.runJS("var e=document.createElement('section');e.id='dom-removal-canvas';e.className='sdw-renderer-card';e.style.cssText='width:160px;height:96px';document.body.appendChild(e);window.__sdwRendererAttachmentReport(\(generation));", in: webView)
-        try await Self.waitUntil("placeholder admission") { coordinator.attachmentState(for: placeholder) == .active }
+        try await Self.waitUntil("placeholder card") { coordinator.attachmentState(for: placeholder) == .card }
+        #expect(coordinator.activateAttachment(placeholder) == .activate)
         #expect(coordinator.attachmentState(for: placeholder) == .active)
         #expect(container.subviews.flatMap(\.subviews).contains { $0.accessibilityIdentifier() == "renderer-attachment-dom-removal-canvas" })
         try await Self.runJS("document.getElementById('dom-removal-canvas').remove();", in: webView)
@@ -613,7 +614,7 @@ struct RendererAttachmentCoordinatorTests {
         #expect(window.firstResponder === child)
     }
 
-    @Test("an admitted JSON Canvas fence auto-mounts on its first visible geometry report")
+    @Test("an admitted JSON Canvas fence mounts only after disclosure activation")
     @MainActor
     func admittedJSONCanvasFenceAutoMountsWithoutActivation() throws {
         let webView = WikiReaderWebView()
@@ -641,14 +642,14 @@ struct RendererAttachmentCoordinatorTests {
         _ = window.makeFirstResponder(webView)
         coordinator.handleAttachmentGeometry(geometry)
 
-        #expect(coordinator.attachmentState(for: placeholder) == .active)
+        #expect(coordinator.attachmentState(for: placeholder) == .card)
+        #expect(window.firstResponder === webView)
+
+        #expect(coordinator.activateAttachment(placeholder) == .activate)
         let child = try #require(container.subviews.flatMap(\.subviews).first {
             $0.accessibilityIdentifier() == "renderer-attachment-auto-mounted-canvas"
         })
         #expect(Self.containsHostingView(in: child))
-        #expect(window.firstResponder === webView)
-
-        #expect(coordinator.activateAttachment(placeholder) == .activate)
         #expect(window.firstResponder === child)
     }
 
@@ -1048,6 +1049,46 @@ struct RendererAttachmentCoordinatorTests {
         #expect(coordinator.activate(second) == .showInFullRenderer)
         #expect(coordinator.state(for: first) == .active)
         #expect(coordinator.state(for: second) == .card)
+    }
+
+    @Test("four attachments expand independently and the fifth is refused before work")
+    @MainActor
+    func fourAttachmentsExpandIndependently() throws {
+        let coordinator = RendererAttachmentCoordinator(generation: 1)
+        let placeholders = try (0...4).map { try RendererAttachmentPlaceholderID(validating: "budget-\($0)") }
+        for placeholder in placeholders {
+            #expect(coordinator.ingest(.init(
+                generation: 1,
+                placeholderID: placeholder,
+                cssRect: .init(x: 0, y: 0, width: 100, height: 100),
+                visible: true,
+                revision: 1)))
+        }
+        for placeholder in placeholders.prefix(4) {
+            #expect(coordinator.activate(placeholder) == .activate)
+            #expect(coordinator.state(for: placeholder) == .active)
+        }
+        #expect(coordinator.activate(placeholders[4]) == .refused(.rowBudget))
+        #expect(coordinator.state(for: placeholders[4]) == .card)
+        #expect(coordinator.activationRefusal(for: placeholders[4]) == .rowBudget)
+    }
+
+    @Test("resource pressure stays retryable after a permit is released")
+    @MainActor
+    func retrySucceedsAfterPermitRelease() throws {
+        let coordinator = RendererAttachmentCoordinator(generation: 1)
+        let placeholder = try RendererAttachmentPlaceholderID(validating: "retry-pressure")
+        #expect(coordinator.ingest(.init(
+            generation: 1,
+            placeholderID: placeholder,
+            cssRect: .init(x: 0, y: 0, width: 100, height: 100),
+            visible: true,
+            revision: 1)))
+        coordinator.refuse(placeholder, reason: .resourcePressure)
+        #expect(coordinator.state(for: placeholder) == .card)
+        #expect(coordinator.activationRefusal(for: placeholder) == .resourcePressure)
+        #expect(coordinator.activate(placeholder) == .activate)
+        #expect(coordinator.activationRefusal(for: placeholder) == nil)
     }
 
     @Test("attachment FSM does not expose synchronous transient states")

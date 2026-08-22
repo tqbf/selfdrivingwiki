@@ -723,7 +723,7 @@ final class WikiReaderWebView: WKWebView {
       window.__sdwRendererAttachmentReserve=function(id,height){var e=document.getElementById(id); if(!e||!Number.isFinite(height))return; e.style.minHeight=height+'px'; window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1; report();};
       window.__sdwRendererAttachmentPresentCollapse=function(id){var card=document.getElementById(id); if(!card||card.querySelector('.sdw-renderer-card__collapse'))return; var b=document.createElement('button');b.className='sdw-renderer-card__collapse';b.type='button';b.textContent='Collapse';b.setAttribute('aria-label','Collapse interactive renderer');card.appendChild(b);};
       window.__sdwRendererAttachmentDismissCollapse=function(id){var card=document.getElementById(id); if(!card)return; var b=card.querySelector('.sdw-renderer-card__collapse'); if(b)b.remove();};
-      document.addEventListener('click',function(event){var control=event.target.closest('.sdw-renderer-card__action,.sdw-renderer-card__collapse');if(!control)return;var card=control.closest('.sdw-renderer-card[id]');if(!card)return;event.preventDefault();var collapse=control.classList.contains('sdw-renderer-card__collapse');window.webkit.messageHandlers.rendererAttachmentAction.postMessage({action:collapse?'collapse':'activate',placeholderID:card.id});});
+      document.addEventListener('click',function(event){var control=event.target.closest('[data-renderer-action="expand"],.sdw-renderer-card__collapse');if(!control)return;var card=control.closest('.sdw-renderer-card[id]');if(!card)return;event.preventDefault();var collapse=control.classList.contains('sdw-renderer-card__collapse');window.webkit.messageHandlers.rendererAttachmentAction.postMessage({action:collapse?'collapse':'activate',placeholderID:card.id});});
       addEventListener('scroll',report,{passive:true}); addEventListener('resize',report); new MutationObserver(report).observe(document.documentElement,{childList:true,subtree:true,attributes:true});
     })();
     """
@@ -1314,7 +1314,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
 
     func updateNSView(_ container: WikiReaderContainerView, context: Context) {
         let webView = container.webView
-        webView.pageZoom = readerZoom
+        context.coordinator.applyReaderZoom(readerZoom, to: webView, container: container)
         webView.store = store
         webView.blobHandler.store = store
         webView.fileProvider = fileProvider
@@ -1374,6 +1374,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         private var convertTask: Task<Void, Never>?
         private var loadStart: DispatchTime?
         private var loadGeneration = 0
+        private var appliedReaderZoom: CGFloat?
         private var isDismantled = false
         /// Timestamp captured right before `loadHTMLString`, to split
         /// `appear-to-painted` into the async hop (startLoad→loadHTMLString) vs.
@@ -1788,9 +1789,6 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 webView.evaluateJavaScript("window.__sdwRendererAttachmentReserve && window.__sdwRendererAttachmentReserve(\"\(identifier)\", \(reservedHeight));")
             }
             updateAttachmentViewport(for: message.placeholderID, in: webView, container: attachmentContainer)
-            automaticallyMountAttachmentIfPossible(
-                message.placeholderID,
-                isVisible: message.visible)
         }
 
         func handleAttachmentRemoval(_ placeholderID: RendererAttachmentPlaceholderID, generation: Int) {
@@ -1815,18 +1813,22 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 attachmentContainer.focusAttachment(named: placeholderID)
                 return .activate
             }
+            let admission = attachmentCoordinator.activate(placeholderID)
+            guard admission == .activate else { return admission }
             switch inlineAttachmentResolver(
                 context,
                 placeholderID,
                 inlineSessionFailureHandler(for: placeholderID, generation: context.generation)
             ) {
             case .failed:
+                attachmentCoordinator.collapse(placeholderID)
                 failAttachment(placeholderID)
                 return .rejected
             case .unsupported:
                 // Deliberately does NOT call `attachmentCoordinator.activate`:
                 // the full renderer is a sheet the coordinator never hears
                 // close, so a record left `.active` could never be re-activated.
+                attachmentCoordinator.collapse(placeholderID)
                 return presentInFullRenderer(context)
             case .content(let content):
                 let result = mountInlineAttachment(
@@ -1835,9 +1837,6 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     in: attachmentContainer,
                     takesFocus: true,
                     context: context)
-                if result == .showInFullRenderer {
-                    return presentInFullRenderer(context)
-                }
                 return result
             }
         }
@@ -1851,40 +1850,6 @@ internal struct WikiReaderRep: NSViewRepresentable {
             return .showInFullRenderer
         }
 
-        /// Mount the first eligible visible card without moving keyboard focus
-        /// away from the reader. Explicit activation uses the same resolver but
-        /// is allowed to move focus into the interactive child.
-        private func automaticallyMountAttachmentIfPossible(
-            _ placeholderID: RendererAttachmentPlaceholderID,
-            isVisible: Bool
-        ) {
-            guard isVisible,
-                  let attachmentCoordinator,
-                  attachmentCoordinator.state(for: placeholderID) == .card,
-                  let attachmentContainer,
-                  let context = webView?.rendererActivationAdmission?.attachmentContext(for: placeholderID)
-            else { return }
-            switch inlineAttachmentResolver(
-                context,
-                placeholderID,
-                inlineSessionFailureHandler(for: placeholderID, generation: context.generation)
-            ) {
-            case .unsupported:
-                // The user can still explicitly Open this renderer in its
-                // full-window presentation.
-                return
-            case .failed:
-                failAttachment(placeholderID)
-            case .content(let content):
-                _ = mountInlineAttachment(
-                    content,
-                    named: placeholderID,
-                    in: attachmentContainer,
-                    takesFocus: false,
-                    context: context)
-            }
-        }
-
         private func mountInlineAttachment(
             _ content: AnyView,
             named placeholderID: RendererAttachmentPlaceholderID,
@@ -1893,8 +1858,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
             context: RendererEmbedActivationContext
         ) -> RendererAttachmentActivationResult {
             guard let attachmentCoordinator else { return .rejected }
-            let result = attachmentCoordinator.activate(placeholderID)
-            guard result == .activate else { return result }
+            guard attachmentCoordinator.state(for: placeholderID) == .active else { return .rejected }
             if let webView {
                 let reservedHeight = attachmentCoordinator.reserveHeight(
                     RendererAttachmentHostPolicy.preferredReservedHeight(for: context.rendererReference),
@@ -1914,7 +1878,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 },
                 onExit: { [weak self] in self?.collapseAttachment(placeholderID) })
             setCollapseControl(true, for: placeholderID)
-            return result
+            return .activate
         }
 
         private func inlineSessionFailureHandler(
@@ -1929,6 +1893,12 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 let state = attachmentCoordinator.state(for: placeholderID)
                 guard state != .unresolved, state != .closed else { return }
                 DebugLog.reader("inline renderer session failed for \(placeholderID.rawValue): \(failure.kind)")
+                if failure.kind == .concurrencyLimitReached {
+                    attachmentCoordinator.refuse(placeholderID, reason: .resourcePressure)
+                    self.attachmentContainer?.removeAttachment(named: placeholderID)
+                    self.setCollapseControl(false, for: placeholderID)
+                    return
+                }
                 self.failAttachment(placeholderID)
             }
         }
@@ -1946,6 +1916,21 @@ internal struct WikiReaderRep: NSViewRepresentable {
             container.updateAttachmentViewport(
                 geometry.visible ? rect : .zero,
                 for: placeholderID)
+        }
+
+        func applyReaderZoom(
+            _ readerZoom: Double,
+            to webView: WikiReaderWebView,
+            container: WikiReaderContainerView
+        ) {
+            let zoom = CGFloat(readerZoom)
+            guard appliedReaderZoom != zoom else { return }
+            appliedReaderZoom = zoom
+            webView.pageZoom = zoom
+            for placeholderID in attachmentCoordinator?.placeholderIDs ?? [] {
+                updateAttachmentViewport(for: placeholderID, in: webView, container: container)
+            }
+            webView.evaluateJavaScript("window.__sdwRendererAttachmentReport && window.__sdwRendererAttachmentReport(\(loadGeneration));")
         }
 
         /// Add or remove the card's Collapse control. The document script no
