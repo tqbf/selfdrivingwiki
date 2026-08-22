@@ -287,7 +287,11 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
                 rendererReference: candidate.rendererReference,
                 input: .source(candidate.source),
                 semanticContent: "Image source available as \(candidate.source.mimeType.rawValue).",
-                displayTitle: altText.isEmpty ? nil : altText),
+                displayTitle: altText.isEmpty ? nil : altText,
+                activationMetadata: RendererEmbedActivationMetadata(
+                    controlLabel: "Open",
+                    accessibilityLabel: "Open image renderer",
+                    summary: "Open the image source in the renderer pane.")),
             fallbackHTML: fallbackHTML,
             readableFallbackHTML: fallbackHTML)
     }
@@ -381,9 +385,7 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
                     registrationID: reference.registrationID.rawValue, inputJSON: encoded,
                     capability: context.capability.rawValue, generation: context.generation,
                     pageID: context.pageID.rawValue, pageVersionID: context.pageVersionID.rawValue,
-                    blockID: context.blockID.digest.hex, blockPageID: context.blockID.pageID.rawValue,
-                    blockPageVersionID: context.blockID.pageVersionID.rawValue,
-                    blockParserOrdinal: context.blockID.parserOrdinal, mimeType: artifact.mimeType.rawValue)
+                    identity: .block(artifact.blockID), mimeType: artifact.mimeType.rawValue)
                 actionHTML = "<a class=\"sdw-renderer-card__action\" data-renderer-action=\"open-window\" href=\"\(escapeAttribute(url))\" aria-label=\"Open \(escapeAttribute(label)) in Window\" style=\"flex:0 0 auto\">Open in Window</a>"
             } catch {
                 DebugLog.reader("Mermaid renderer action encoding failed: \(error.localizedDescription)")
@@ -432,32 +434,50 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
             return #"<p class="sdw-renderer-card__fallback">\#(escape(Self.fallbackNotice(for: reason)))</p>"#
         }()
         let mimeType: String? = {
-            guard case .inlineArtifact(let artifact) = plan.input else { return nil }
-            return artifact.mimeType.rawValue
+            switch plan.input {
+            case .inlineArtifact(let artifact): return artifact.mimeType.rawValue
+            case .source(let source): return source.mimeType.rawValue
+            case nil: return nil
+            }
         }()
         let activationContext: RendererEmbedActivationContext? = {
             guard plan.activationMetadata != nil,
                   let input = plan.input,
-                  let admission = rendererActivationAdmission,
-                  case .inlineArtifact(let artifact) = input
-            else { return nil }
-            let context = RendererEmbedActivationContext(
-                pageID: artifact.pageID,
-                pageVersionID: artifact.pageVersionID,
-                blockID: artifact.blockID,
-                rendererReference: ref,
-                input: .inlineArtifact(artifact),
-                capability: admission.capability,
-                generation: admission.generation)
+                  let admission = rendererActivationAdmission else { return nil }
+            let context: RendererEmbedActivationContext
+            switch input {
+            case .inlineArtifact(let artifact):
+                context = RendererEmbedActivationContext(
+                    pageID: artifact.pageID, pageVersionID: artifact.pageVersionID,
+                    blockID: artifact.blockID, rendererReference: ref,
+                    input: .inlineArtifact(artifact), capability: admission.capability, generation: admission.generation)
+            case .source(let source):
+                guard let identity = documentIdentity,
+                      identity.pageID == admission.pageID,
+                      identity.pageVersionID == admission.pageVersionID else { return nil }
+                let bridgeInput: RendererBridgeInput
+                if let sourceVersionID = source.sourceVersionID {
+                    bridgeInput = .source(versionID: sourceVersionID)
+                } else if let sourceMarkdownVersionID = source.sourceMarkdownVersionID {
+                    bridgeInput = .markdown(versionID: sourceMarkdownVersionID)
+                } else {
+                    return nil
+                }
+                context = RendererEmbedActivationContext(
+                    pageID: identity.pageID, pageVersionID: identity.pageVersionID,
+                    identity: .source(source), rendererReference: ref,
+                    input: bridgeInput,
+                    capability: admission.capability, generation: admission.generation)
+            }
             let placeholder = RendererAttachmentPlaceholderID.validatedOrNil(plan.placeholderID)
             admission.register(context: context, attachmentPlaceholderID: placeholder)
             return context
         }()
         let inputAttribute: String
         let inputJSON: String?
-        if let input = plan.input, activationContext != nil {
+        if let activationContext {
             do {
-                let encoded = try String(decoding: JSONEncoder().encode(input), as: UTF8.self)
+                let encoded = try String(decoding: JSONEncoder().encode(activationContext.input), as: UTF8.self)
                 inputJSON = encoded
                 inputAttribute = #" data-renderer-input="\#(escapeAttribute(encoded))""#
             } catch {
@@ -479,10 +499,7 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
                 generation: activationContext.generation,
                 pageID: activationContext.pageID.rawValue,
                 pageVersionID: activationContext.pageVersionID.rawValue,
-                blockID: activationContext.blockID.digest.hex,
-                blockPageID: activationContext.blockID.pageID.rawValue,
-                blockPageVersionID: activationContext.blockID.pageVersionID.rawValue,
-                blockParserOrdinal: activationContext.blockID.parserOrdinal,
+                identity: activationContext.identity,
                 mimeType: mimeType
             )
             activationState = .admitted(actionURL: actionURL)
@@ -706,10 +723,7 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         generation: Int,
         pageID: String,
         pageVersionID: String,
-        blockID: String,
-        blockPageID: String,
-        blockPageVersionID: String,
-        blockParserOrdinal: Int,
+        identity: RendererEmbedActivationContext.Identity,
         mimeType: String
     ) -> String {
         var components = URLComponents()
@@ -724,12 +738,24 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
             URLQueryItem(name: "generation", value: String(generation)),
             URLQueryItem(name: "page", value: pageID),
             URLQueryItem(name: "pageVersion", value: pageVersionID),
-            URLQueryItem(name: "block", value: blockID),
-            URLQueryItem(name: "blockPage", value: blockPageID),
-            URLQueryItem(name: "blockPageVersion", value: blockPageVersionID),
-            URLQueryItem(name: "blockOrdinal", value: String(blockParserOrdinal)),
             URLQueryItem(name: "mime", value: mimeType)
         ]
+        switch identity {
+        case .block(let blockID):
+            components.queryItems?.append(contentsOf: [
+                URLQueryItem(name: "block", value: blockID.digest.hex),
+                URLQueryItem(name: "blockPage", value: blockID.pageID.rawValue),
+                URLQueryItem(name: "blockPageVersion", value: blockID.pageVersionID.rawValue),
+                URLQueryItem(name: "blockOrdinal", value: String(blockID.parserOrdinal))
+            ])
+        case .source(let source):
+            components.queryItems?.append(contentsOf: [
+                URLQueryItem(name: "sourceID", value: source.sourceID.rawValue),
+                URLQueryItem(name: "sourceDigest", value: source.digest.hex),
+                URLQueryItem(name: "sourceVersion", value: source.sourceVersionID?.rawValue),
+                URLQueryItem(name: "sourceMarkdownVersion", value: source.sourceMarkdownVersionID?.rawValue)
+            ])
+        }
         return components.url?.absoluteString ?? "renderer-action://open"
     }
 }

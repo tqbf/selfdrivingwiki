@@ -28,6 +28,37 @@ Every compatible installed renderer is available to every wiki on this Mac. You 
 
 Import accepts one local folder. It does not accept ZIP files, other archives, remote catalogs, signing services, or network installation.
 
+## Renderer rows in Markdown
+
+A supported interactive embed appears as a renderer row. The row starts collapsed and shows **Open in Window** at the trailing edge.
+
+Use a quoted title after an approved rich-fence name:
+
+````markdown
+```mermaid "System architecture"
+graph TD
+  A --> B
+```
+````
+
+The quoted title does not change the renderer input or the block identity. An untitled fence uses the registered renderer name.
+
+Use Markdown image syntax for a renderer-claimed sibling source:
+
+```markdown
+![System architecture](images/architecture.canvas)
+```
+
+The alt text becomes the renderer row title. The app creates a renderer row only when an approved renderer claims the exact source MIME type and supports inline use.
+
+Interactive image input has a 48,384-byte limit. A larger image stays an ordinary Markdown image.
+
+An unclaimed, unresolved, external, or data image also stays an ordinary image. The app preserves the alt text in every fallback.
+
+A reader can keep four native or installed renderer rows expanded. A fifth row stays collapsed until another row closes. **Open in Window** remains available.
+
+Mermaid uses the same renderer row interaction, but its SVG stays in the Markdown document. Mermaid does not use the four-row native renderer limit.
+
 ## Preferences and fallback
 
 A source can use a logical renderer preference or an exact package version. A preference does not install a package or change another source.

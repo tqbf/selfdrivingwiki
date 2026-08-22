@@ -529,6 +529,39 @@ struct MarkdownHTMLRendererTests {
         #expect(route.input == fixture.input)
     }
 
+    @Test("image renderer action routes preserve exact content and Markdown source versions", arguments: [false, true])
+    func imageRendererActionRoutesPreserveExactSourceVersion(useMarkdownVersion: Bool) throws {
+        let fixture = try makeImageRendererActivationFixture(useMarkdownVersion: useMarkdownVersion)
+        let route = try #require(
+            WikiReaderView.rendererActivationRoute(
+                for: fixture.url,
+                admission: fixture.admission,
+                isMainFrame: true))
+
+        #expect(route.reference == fixture.reference)
+        #expect(route.input == fixture.input)
+    }
+
+    @Test("image renderer action routes reject source identity substitutions")
+    func imageRendererActionRoutesRejectSourceIdentitySubstitutions() throws {
+        let fixture = try makeImageRendererActivationFixture(useMarkdownVersion: false)
+        for mutation in [
+            ("sourceID", "01HTESTSOURCE0000000000099"),
+            ("sourceVersion", "01HTESTSOURCEVERSION000099"),
+            ("sourceDigest", String(repeating: "f", count: 64)),
+            ("mime", "image/jpeg"),
+            ("registration", "other")
+        ] {
+            var components = try #require(URLComponents(url: fixture.url, resolvingAgainstBaseURL: false))
+            components.queryItems = (components.queryItems ?? []).map { item in
+                item.name == mutation.0 ? URLQueryItem(name: item.name, value: mutation.1) : item
+            }
+            let forgedURL = try #require(components.url)
+            #expect(WikiReaderView.rendererActivationRoute(
+                for: forgedURL, admission: fixture.admission, isMainFrame: true) == nil)
+        }
+    }
+
     @Test("renderer action URLs preserve plus-bearing base64 through URLComponents round-trip")
     func rendererActionURLPreservesPlusBearingBase64RoundTrip() throws {
         let fixture = try makeRendererActivationFixture(bytes: Data("~~~\n".utf8))
@@ -835,6 +868,45 @@ private struct RendererActivationFixture {
 }
 
 private extension MarkdownHTMLRendererTests {
+    func makeImageRendererActivationFixture(useMarkdownVersion: Bool) throws -> RendererActivationFixture {
+        let pageID = PageID(rawValue: "01HTESTPAGE000000000000001")
+        let pageVersionID = PageVersionID(rawValue: "01HTESTPV00000000000000001")
+        let sourceID = SourceID(rawValue: "01HTESTSOURCE0000000000001")
+        let bytes = Data(#"{"nodes":[],"edges":[]}"#.utf8)
+        let descriptor = BuiltInRendererDescriptors.descriptor(for: .jsonCanvas)
+        let mimeType = try RendererMIMEType(validating: "application/json")
+        let source = try RendererEmbeddedContent.Source(
+            sourceID: sourceID,
+            sourceVersionID: useMarkdownVersion ? nil : SourceVersionID(rawValue: "01HTESTSOURCEVERSION000001"),
+            sourceMarkdownVersionID: useMarkdownVersion ? SourceMarkdownVersionID(rawValue: "01HTESTMARKDOWNVERSION0001") : nil,
+            mimeType: mimeType,
+            bytes: bytes)
+        let reference = descriptor.reference
+        let projection = try MarkdownImageEmbedProjection(
+            siblingSources: ["image.png": source],
+            registry: try RendererRegistrySnapshot(builtInDescriptors: [descriptor]),
+            inlineCapableReferences: [reference])
+        let admission = RendererEmbedActivationAdmission(
+            pageID: pageID,
+            pageVersionID: pageVersionID,
+            capability: .init(rawValue: "capability"),
+            generation: 7)
+        let options = MarkdownRenderOptions(
+            codeHighlighting: .disabled,
+            rendererEmbedProjection: nil,
+            imageEmbedProjection: projection,
+            documentIdentity: .init(pageID: pageID, pageVersionID: pageVersionID),
+            rendererActivationAdmission: admission)
+        let html = MarkdownHTMLRenderer.render("![System architecture](image.png)", options: options)
+        let url = try #require(rendererActionURL(in: html))
+        let input: RendererBridgeInput = if let versionID = source.sourceVersionID {
+            .source(versionID: versionID)
+        } else {
+            .markdown(versionID: try #require(source.sourceMarkdownVersionID))
+        }
+        return RendererActivationFixture(admission: admission, reference: reference, input: input, url: url)
+    }
+
     func makeRendererActivationFixture(bytes: Data = Data("{\"nodes\":[],\"edges\":[]}".utf8)) throws -> RendererActivationFixture {
         let pageID = PageID(rawValue: "01HTESTPAGE000000000000001")
         let pageVersionID = PageVersionID(rawValue: "01HTESTPV00000000000000001")

@@ -22,6 +22,95 @@ struct RendererAuthorizedInputReaderTests {
         #expect(payload.bytes == Data("# pinned".utf8))
     }
 
+    @Test("admitted source reads require exact pinned bytes MIME digest and typed version", arguments: [false, true])
+    func admittedSourceReadsRequireExactPinnedPayload(useMarkdownVersion: Bool) throws {
+        let store = try GRDBWikiStore()
+        let stored = try store.addSource(filename: "admitted.json", data: Data("source-bytes".utf8))
+        let source: RendererEmbeddedContent.Source
+        let input: RendererBridgeInput
+        if useMarkdownVersion {
+            let version = try store.appendProcessedMarkdown(
+                sourceID: stored.id, content: "markdown-bytes", origin: .user, note: nil)
+            input = .markdown(versionID: version.id)
+            source = try .init(
+                sourceID: stored.id,
+                sourceMarkdownVersionID: version.id,
+                mimeType: try RendererMIMEType(validating: "text/markdown"),
+                bytes: Data("markdown-bytes".utf8))
+        } else {
+            let version = try #require(try store.activeContentVersion(sourceID: stored.id))
+            input = .source(versionID: version.id)
+            source = try .init(
+                sourceID: stored.id,
+                sourceVersionID: version.id,
+                mimeType: try RendererMIMEType(validating: version.mimeType ?? "application/octet-stream"),
+                bytes: Data("source-bytes".utf8))
+        }
+        let reader = try RendererAuthorizedInputReader(
+            store: store,
+            authorizedInput: input,
+            admittedSource: source)
+
+        let payload = try reader.read(input)
+
+        #expect(payload.mimeType == source.mimeType.rawValue)
+        #expect(payload.bytes == source.bytes)
+        #expect(RendererSHA256.digest(payload.bytes) == source.digest)
+    }
+
+    @Test("admitted source reader rejects mismatched typed versions")
+    func admittedSourceReaderRejectsMismatchedTypedVersion() throws {
+        let store = try GRDBWikiStore()
+        let stored = try store.addSource(filename: "admitted.json", data: Data("source-bytes".utf8))
+        let version = try #require(try store.activeContentVersion(sourceID: stored.id))
+        let source = try RendererEmbeddedContent.Source(
+            sourceID: stored.id,
+            sourceVersionID: version.id,
+            mimeType: try RendererMIMEType(validating: version.mimeType ?? "application/octet-stream"),
+            bytes: Data("source-bytes".utf8))
+
+        #expect(throws: RendererAuthorizedInputReader.ReaderError.unauthorizedInput) {
+            _ = try RendererAuthorizedInputReader(
+                store: store,
+                authorizedInput: .source(versionID: SourceVersionID(rawValue: "other-version")),
+                admittedSource: source)
+        }
+        #expect(throws: RendererAuthorizedInputReader.ReaderError.unauthorizedInput) {
+            _ = try RendererAuthorizedInputReader(
+                store: store,
+                authorizedInput: .markdown(versionID: SourceMarkdownVersionID(rawValue: version.id.rawValue)),
+                admittedSource: source)
+        }
+    }
+
+    @Test("admitted source reader rejects store MIME and byte drift")
+    func admittedSourceReaderRejectsStorePayloadDrift() throws {
+        let store = try GRDBWikiStore()
+        let stored = try store.addSource(filename: "admitted.json", data: Data("stored-bytes".utf8))
+        let version = try #require(try store.activeContentVersion(sourceID: stored.id))
+        let input = RendererBridgeInput.source(versionID: version.id)
+        let admittedMIME = try RendererEmbeddedContent.Source(
+            sourceID: stored.id,
+            sourceVersionID: version.id,
+            mimeType: try RendererMIMEType(validating: "image/png"),
+            bytes: Data("stored-bytes".utf8))
+        let admittedBytes = try RendererEmbeddedContent.Source(
+            sourceID: stored.id,
+            sourceVersionID: version.id,
+            mimeType: try RendererMIMEType(validating: version.mimeType ?? "application/octet-stream"),
+            bytes: Data("different-bytes".utf8))
+
+        for admittedSource in [admittedMIME, admittedBytes] {
+            let reader = try RendererAuthorizedInputReader(
+                store: store,
+                authorizedInput: input,
+                admittedSource: admittedSource)
+            #expect(throws: RendererAuthorizedInputReader.ReaderError.unavailablePinnedInput) {
+                try reader.read(input)
+            }
+        }
+    }
+
     @Test("oversized pinned inputs fail before the payload reader runs")
     func oversizedPinnedInputsDoNotMaterializePayloads() throws {
         for input in [

@@ -892,9 +892,9 @@ struct RendererAttachmentCoordinatorTests {
         #expect(child.frame == activeFrame)
     }
 
-    @Test("an admitted package fence opens the full renderer instead of an empty attachment")
+    @Test("unsupported disclosure stays collapsed without opening a window")
     @MainActor
-    func admittedPackageFencePresentsFullRenderer() throws {
+    func unsupportedDisclosureStaysCollapsed() throws {
         let webView = WikiReaderWebView()
         let container = WikiReaderContainerView(webView: webView)
         container.frame = .init(x: 0, y: 0, width: 400, height: 300)
@@ -946,18 +946,18 @@ struct RendererAttachmentCoordinatorTests {
             visible: true,
             revision: 1))
 
-        #expect(coordinator.activateAttachment(placeholder) == .showInFullRenderer)
-        #expect(presented == [reference])
+        #expect(coordinator.activateAttachment(placeholder) == .rejected)
+        #expect(presented.isEmpty)
         // No native child: a contentless mount would paint an empty bordered
-        // rectangle over the card and show the reader nothing.
+        // rectangle over the row and show the reader nothing.
         #expect(container.subviews.flatMap(\.subviews).contains {
             $0.accessibilityIdentifier() == "renderer-attachment-admitted-excalidraw"
         } == false)
-        // The record stays on `.card` so the control keeps working — the full
-        // renderer is a sheet whose dismissal the coordinator never observes.
+        // Expansion and Open in Window are separate actions. Unsupported inline
+        // content stays collapsed and keeps its row-budget slot free.
         #expect(coordinator.attachmentState(for: placeholder) == .card)
-        #expect(coordinator.activateAttachment(placeholder) == .showInFullRenderer)
-        #expect(presented.count == 2)
+        #expect(coordinator.activateAttachment(placeholder) == .rejected)
+        #expect(presented.isEmpty)
     }
 
     @Test("an unadmitted placeholder fails closed instead of mounting an empty attachment")

@@ -7,42 +7,63 @@ import WikiFSCore
 // pattern: Mixed (unavoidable)
 
 internal struct RendererEmbedActivationContext: Hashable, Sendable {
+    enum Identity: Hashable, Sendable {
+        case block(MarkdownBlockID)
+        case source(RendererEmbeddedContent.Source)
+    }
+
     let pageID: PageID
     let pageVersionID: PageVersionID
-    let blockID: MarkdownBlockID
+    let identity: Identity
     let rendererReference: RendererReference
     let input: RendererBridgeInput
     let capability: RendererSessionCapability
     let generation: Int
 
+    /// Compatibility accessor for inline-artifact callers. Source identities are
+    /// deliberately not coerced into a fake block.
+    var blockID: MarkdownBlockID? {
+        if case .block(let blockID) = identity { return blockID }
+        return nil
+    }
+
+    init(pageID: PageID, pageVersionID: PageVersionID, blockID: MarkdownBlockID,
+         rendererReference: RendererReference, input: RendererBridgeInput,
+         capability: RendererSessionCapability, generation: Int) {
+        self.init(pageID: pageID, pageVersionID: pageVersionID, identity: .block(blockID),
+                  rendererReference: rendererReference, input: input,
+                  capability: capability, generation: generation)
+    }
+
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.pageID == rhs.pageID &&
-        lhs.pageVersionID == rhs.pageVersionID &&
-        lhs.blockID == rhs.blockID &&
-        lhs.rendererReference == rhs.rendererReference &&
-        lhs.input == rhs.input &&
-        lhs.capability == rhs.capability &&
-        lhs.generation == rhs.generation
+        lhs.pageID == rhs.pageID && lhs.pageVersionID == rhs.pageVersionID && lhs.identity == rhs.identity &&
+        lhs.rendererReference == rhs.rendererReference && lhs.input == rhs.input &&
+        lhs.capability == rhs.capability && lhs.generation == rhs.generation
     }
 
     func hash(into hasher: inout Hasher) {
-        hasher.combine(pageID)
-        hasher.combine(pageVersionID)
-        hasher.combine(blockID)
-        hasher.combine(rendererReference)
-        hasher.combine(capability)
-        hasher.combine(generation)
+        hasher.combine(pageID); hasher.combine(pageVersionID); hasher.combine(identity)
+        hasher.combine(rendererReference); hasher.combine(capability); hasher.combine(generation)
         switch input {
         case .source(let versionID):
-            hasher.combine(0)
-            hasher.combine(versionID)
+            hasher.combine(0); hasher.combine(versionID)
         case .markdown(let versionID):
-            hasher.combine(1)
-            hasher.combine(versionID)
+            hasher.combine(1); hasher.combine(versionID)
         case .inlineArtifact(let artifact):
-            hasher.combine(2)
-            hasher.combine(artifact)
+            hasher.combine(2); hasher.combine(artifact)
         }
+    }
+
+    init(pageID: PageID, pageVersionID: PageVersionID, identity: Identity,
+         rendererReference: RendererReference, input: RendererBridgeInput,
+         capability: RendererSessionCapability, generation: Int) {
+        self.pageID = pageID
+        self.pageVersionID = pageVersionID
+        self.identity = identity
+        self.rendererReference = rendererReference
+        self.input = input
+        self.capability = capability
+        self.generation = generation
     }
 }
 
@@ -104,6 +125,21 @@ internal final class RendererEmbedActivationAdmission: @unchecked Sendable {
             return nil
         }
         return context
+    }
+
+    func sourceContext(
+        sourceID: SourceID,
+        digest: RendererSHA256Digest,
+        mimeType: RendererMIMEType,
+        input: RendererBridgeInput
+    ) -> RendererEmbedActivationContext? {
+        lock.lock()
+        defer { lock.unlock() }
+        return registeredContexts.first { context in
+            guard case .source(let source) = context.identity else { return false }
+            return source.sourceID == sourceID && source.digest == digest && source.mimeType == mimeType
+                && context.input == input
+        }
     }
 }
 
@@ -224,51 +260,58 @@ struct WikiReaderView: View {
         } catch {
             return nil
         }
-        let blockPageID = PageID(rawValue: items["blockPage"] ?? "")
-        let blockPageVersionID = PageVersionID(rawValue: items["blockPageVersion"] ?? "")
-        guard case .inlineArtifact(let artifact) = input,
-              let blockDigest = items["block"],
-              let blockOrdinal = Int(items["blockOrdinal"] ?? ""),
-              let mimeType = items["mime"],
-              blockPageID == admission.pageID,
-              blockPageVersionID == admission.pageVersionID,
-              artifact.pageID == admission.pageID,
-              artifact.pageVersionID == admission.pageVersionID,
-              artifact.blockID.pageID == admission.pageID,
-              artifact.blockID.pageVersionID == admission.pageVersionID,
-              artifact.blockID.parserOrdinal == blockOrdinal,
-              artifact.blockID.digest.hex == blockDigest,
-              artifact.digest.hex == blockDigest,
-              artifact.mimeType.rawValue == mimeType
-        else { return nil }
-        do {
-            let revalidated = try RendererEmbeddedContent.InlineArtifact(
-                pageID: artifact.pageID,
-                pageVersionID: artifact.pageVersionID,
-                blockID: artifact.blockID,
-                fenceKind: artifact.fenceKind,
-                mimeType: artifact.mimeType,
-                bytes: artifact.bytes)
-            guard revalidated == artifact else { return nil }
-            let reference = RendererReference(
-                packageID: packageID,
-                version: version,
-                registrationID: registrationID)
-            let activationContext = RendererEmbedActivationContext(
-                pageID: admission.pageID,
-                pageVersionID: admission.pageVersionID,
-                blockID: revalidated.blockID,
-                rendererReference: reference,
-                input: .inlineArtifact(revalidated),
-                capability: admission.capability,
-                generation: admission.generation)
-            guard admission.authorizes(context: activationContext) else { return nil }
-            return (
-                reference: reference,
-                input: .inlineArtifact(revalidated)
-            )
-        } catch {
-            return nil
+        guard let mimeType = items["mime"] else { return nil }
+        switch input {
+        case .inlineArtifact(let artifact):
+            let blockPageID = PageID(rawValue: items["blockPage"] ?? "")
+            let blockPageVersionID = PageVersionID(rawValue: items["blockPageVersion"] ?? "")
+            guard let blockDigest = items["block"],
+                  let blockOrdinal = Int(items["blockOrdinal"] ?? ""),
+                  blockPageID == admission.pageID,
+                  blockPageVersionID == admission.pageVersionID,
+                  artifact.pageID == admission.pageID,
+                  artifact.pageVersionID == admission.pageVersionID,
+                  artifact.blockID.pageID == admission.pageID,
+                  artifact.blockID.pageVersionID == admission.pageVersionID,
+                  artifact.blockID.parserOrdinal == blockOrdinal,
+                  artifact.blockID.digest.hex == blockDigest,
+                  artifact.digest.hex == blockDigest,
+                  artifact.mimeType.rawValue == mimeType else { return nil }
+            let reference = RendererReference(packageID: packageID, version: version, registrationID: registrationID)
+            let context = RendererEmbedActivationContext(pageID: admission.pageID, pageVersionID: admission.pageVersionID,
+                                                         blockID: artifact.blockID, rendererReference: reference,
+                                                         input: input, capability: admission.capability, generation: admission.generation)
+            guard admission.authorizes(context: context) else { return nil }
+            return (reference: reference, input: .inlineArtifact(artifact))
+        case .source, .markdown:
+            let sourceID = SourceID(rawValue: items["sourceID"] ?? "")
+            guard let digestHex = items["sourceDigest"] else { return nil }
+            let digest: RendererSHA256Digest
+            do { digest = try RendererSHA256Digest(hex: digestHex) } catch { return nil }
+            guard let sourceMIME = RendererMIMEType(rawValue: mimeType),
+                  let context = admission.sourceContext(
+                      sourceID: sourceID, digest: digest, mimeType: sourceMIME, input: input),
+                  case .source(let admittedSource) = context.identity,
+                  admittedSource.bytes.count <= WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount,
+                  RendererSHA256.digest(admittedSource.bytes) == admittedSource.digest,
+                  admittedSource.mimeType.rawValue == mimeType
+            else { return nil }
+            switch input {
+            case .source(let versionID):
+                guard admittedSource.sourceVersionID == versionID,
+                      items["sourceVersion"] == versionID.rawValue,
+                      items["sourceMarkdownVersion"] == nil else { return nil }
+            case .markdown(let versionID):
+                guard admittedSource.sourceMarkdownVersionID == versionID,
+                      items["sourceMarkdownVersion"] == versionID.rawValue,
+                      items["sourceVersion"] == nil else { return nil }
+            case .inlineArtifact:
+                return nil
+            }
+            let reference = RendererReference(packageID: packageID, version: version, registrationID: registrationID)
+            guard context.rendererReference == reference,
+                  admission.authorizes(context: context) else { return nil }
+            return (reference: reference, input: input)
         }
     }
 
@@ -1842,11 +1885,14 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 failAttachment(placeholderID)
                 return .rejected
             case .unsupported:
-                // Deliberately does NOT call `attachmentCoordinator.activate`:
-                // the full renderer is a sheet the coordinator never hears
-                // close, so a record left `.active` could never be re-activated.
+                // Expansion and Open in Window are separate user actions. Keep
+                // this row collapsed when no inline factory accepts its input.
                 attachmentCoordinator.collapse(placeholderID)
-                return presentInFullRenderer(context)
+                setRowExpansion(
+                    false,
+                    for: placeholderID,
+                    status: "This renderer is not available inline. Use Open in Window.")
+                return .rejected
             case .content(let content):
                 let result = mountInlineAttachment(
                     content,

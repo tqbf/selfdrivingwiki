@@ -2,6 +2,7 @@
 import Foundation
 import Testing
 @testable import WikiFS
+import WikiFSCore
 import WikiFSTypes
 
 @Suite("JSON Canvas native renderer", .serialized, .timeLimit(.minutes(1)))
@@ -23,6 +24,61 @@ struct JSONCanvasRendererTests {
         #expect(sourceDocument == fencedDocument)
         #expect(resolvedPins == [sourcePin])
         #expect(NativeJSONCanvasAttachmentInput.source(sourcePin) != .fenced(fencedInput))
+    }
+
+    @Test("default inline resolver accepts exact content and Markdown source identities", arguments: [false, true])
+    @MainActor
+    func defaultInlineResolverAcceptsExactSourceIdentities(useMarkdownVersion: Bool) throws {
+        let source = try Self.sourceInput(bytes: Self.validCanvas, useMarkdownVersion: useMarkdownVersion)
+        let input: RendererBridgeInput = if let versionID = source.sourceVersionID {
+            .source(versionID: versionID)
+        } else {
+            .markdown(versionID: try #require(source.sourceMarkdownVersionID))
+        }
+        let context = RendererEmbedActivationContext(
+            pageID: PageID(rawValue: "01J00000000000000000000021"),
+            pageVersionID: PageVersionID(rawValue: "01J00000000000000000000022"),
+            identity: .source(source),
+            rendererReference: BuiltInRendererReference.reference(for: .jsonCanvas),
+            input: input,
+            capability: .init(rawValue: "capability"),
+            generation: 1)
+        let placeholder = try RendererAttachmentPlaceholderID(validating: "source-canvas")
+
+        let result = RendererInlineAttachmentResolverFactory.defaultResolver(
+            context: context,
+            placeholderID: placeholder,
+            onSessionFailure: { _ in })
+
+        guard case .content = result else {
+            Issue.record("expected an exact admitted source to resolve native JSON Canvas content")
+            return
+        }
+    }
+
+    @Test("default inline resolver rejects a mismatched source bridge identity")
+    @MainActor
+    func defaultInlineResolverRejectsMismatchedSourceIdentity() throws {
+        let source = try Self.sourceInput(bytes: Self.validCanvas)
+        let context = RendererEmbedActivationContext(
+            pageID: PageID(rawValue: "01J00000000000000000000021"),
+            pageVersionID: PageVersionID(rawValue: "01J00000000000000000000022"),
+            identity: .source(source),
+            rendererReference: BuiltInRendererReference.reference(for: .jsonCanvas),
+            input: .source(versionID: SourceVersionID(rawValue: "01J00000000000000000000999")),
+            capability: .init(rawValue: "capability"),
+            generation: 1)
+        let placeholder = try RendererAttachmentPlaceholderID(validating: "source-canvas")
+
+        let result = RendererInlineAttachmentResolverFactory.defaultResolver(
+            context: context,
+            placeholderID: placeholder,
+            onSessionFailure: { _ in })
+
+        guard case .unsupported = result else {
+            Issue.record("expected a mismatched source version to stay unsupported")
+            return
+        }
     }
 
     @Test("native attachment factory never resolves fenced inline artifact bytes")
@@ -406,10 +462,14 @@ struct JSONCanvasRendererTests {
             encoding: .utf8)
     }
 
-    private static func sourceInput(bytes: Data) throws -> RendererEmbeddedContent.Source {
+    private static func sourceInput(
+        bytes: Data,
+        useMarkdownVersion: Bool = false
+    ) throws -> RendererEmbeddedContent.Source {
         try .init(
             sourceID: SourceID(rawValue: "01J00000000000000000000011"),
-            sourceVersionID: SourceVersionID(rawValue: "01J00000000000000000000012"),
+            sourceVersionID: useMarkdownVersion ? nil : SourceVersionID(rawValue: "01J00000000000000000000012"),
+            sourceMarkdownVersionID: useMarkdownVersion ? SourceMarkdownVersionID(rawValue: "01J00000000000000000000013") : nil,
             mimeType: try RendererMIMEType(validating: "application/json"),
             bytes: bytes)
     }
