@@ -676,9 +676,9 @@ struct RendererAttachmentCoordinatorTests {
         #expect(pageDetail.contains("installedRendererFactoryInputs"))
     }
 
-    @Test("a package-style renderer supplied by the inline resolver auto-mounts without full-renderer fallback")
+    @Test("a package-style renderer remains collapsed until its disclosure activates generic composition")
     @MainActor
-    func packageStyleInlineResolverAutoMounts() throws {
+    func packageStyleInlineRendererStartsCollapsedUntilDisclosureActivation() throws {
         let webView = WikiReaderWebView()
         let container = WikiReaderContainerView(webView: webView)
         container.frame = .init(x: 0, y: 0, width: 400, height: 300)
@@ -691,11 +691,11 @@ struct RendererAttachmentCoordinatorTests {
         coordinator.webView = webView
         coordinator.attachmentContainer = container
         Self.startLifecycleLoad(coordinator, webView: webView)
-        var resolved = false
+        var resolverCalls = 0
         var presented = 0
         webView.onRendererActivation = { _, _ in presented += 1 }
         coordinator.inlineAttachmentResolver = { _, _, _ in
-            resolved = true
+            resolverCalls += 1
             return .content(AnyView(Text("package-style-inline-renderer")))
         }
 
@@ -736,9 +736,20 @@ struct RendererAttachmentCoordinatorTests {
             visible: true,
             revision: 1))
 
-        #expect(resolved)
-        #expect(coordinator.attachmentState(for: placeholder) == .active)
+        // Geometry registers the collapsed card only. It must not start the
+        // resolver/factory path, mount a host child, begin a session, or open
+        // the full renderer before the row's explicit disclosure action.
+        #expect(resolverCalls == 0)
+        #expect(coordinator.attachmentState(for: placeholder) == .card)
+        #expect(container.subviews.flatMap(\.subviews).contains {
+            $0.accessibilityIdentifier() == "renderer-attachment-package-inline-renderer"
+        } == false)
         #expect(presented == 0)
+
+        // This is the same explicit entry point used by the disclosure bridge.
+        #expect(coordinator.activateAttachment(placeholder) == .activate)
+        #expect(resolverCalls == 1)
+        #expect(coordinator.attachmentState(for: placeholder) == .active)
         let child = try #require(container.subviews.flatMap(\.subviews).first {
             $0.accessibilityIdentifier() == "renderer-attachment-package-inline-renderer"
         })
