@@ -1032,23 +1032,21 @@ struct RendererAttachmentCoordinatorTests {
             to: .init(x: 0, y: 240, width: 400, height: 60)) == .init(x: 12.5, y: 240, width: 125, height: 35))
     }
 
-    @Test("activation never silently evicts an existing active attachment")
+    @Test("fifth row remains a typed collapsed budget refusal")
     @MainActor
-    func activationLimitPreservesExistingAttachment() throws {
-        let coordinator = RendererAttachmentCoordinator(generation: 1, activeLimit: 1)
-        let first = try RendererAttachmentPlaceholderID(validating: "first")
-        let second = try RendererAttachmentPlaceholderID(validating: "second")
+    func fifthRowCreatesNoImplicitWindow() throws {
+        let coordinator = RendererAttachmentCoordinator(generation: 1)
+        let placeholders = try (0...4).map { try RendererAttachmentPlaceholderID(validating: "fifth-contract-\($0)") }
         let geometry = { (id: RendererAttachmentPlaceholderID) in
             RendererAttachmentGeometryMessage(
                 generation: 1, placeholderID: id,
                 cssRect: .init(x: 0, y: 0, width: 100, height: 100), visible: true, revision: 1)
         }
-        #expect(coordinator.ingest(geometry(first)))
-        #expect(coordinator.ingest(geometry(second)))
-        #expect(coordinator.activate(first) == .activate)
-        #expect(coordinator.activate(second) == .showInFullRenderer)
-        #expect(coordinator.state(for: first) == .active)
-        #expect(coordinator.state(for: second) == .card)
+        for placeholder in placeholders { #expect(coordinator.ingest(geometry(placeholder))) }
+        for placeholder in placeholders.prefix(4) { #expect(coordinator.activate(placeholder) == .activate) }
+        #expect(coordinator.activate(placeholders[4]) == .refused(.rowBudget))
+        #expect(coordinator.state(for: placeholders[4]) == .card)
+        #expect(coordinator.activationRefusal(for: placeholders[4]) == .rowBudget)
     }
 
     @Test("four attachments expand independently and the fifth is refused before work")
@@ -1088,6 +1086,18 @@ struct RendererAttachmentCoordinatorTests {
         #expect(coordinator.state(for: placeholder) == .card)
         #expect(coordinator.activationRefusal(for: placeholder) == .resourcePressure)
         #expect(coordinator.activate(placeholder) == .activate)
+        #expect(coordinator.activationRefusal(for: placeholder) == nil)
+    }
+
+    @Test("terminal failure cannot be resurrected by a refusal")
+    @MainActor
+    func terminalFailureCannotBeResurrected() throws {
+        let coordinator = RendererAttachmentCoordinator(generation: 1)
+        let placeholder = try RendererAttachmentPlaceholderID(validating: "terminal-failure")
+        #expect(coordinator.ingest(.init(generation: 1, placeholderID: placeholder, cssRect: .init(x: 0, y: 0, width: 10, height: 10), visible: true, revision: 1)))
+        coordinator.fail(placeholder)
+        coordinator.refuse(placeholder, reason: .resourcePressure)
+        #expect(coordinator.state(for: placeholder) == .failed)
         #expect(coordinator.activationRefusal(for: placeholder) == nil)
     }
 

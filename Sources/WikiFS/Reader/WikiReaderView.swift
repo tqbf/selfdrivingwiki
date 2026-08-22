@@ -723,6 +723,7 @@ final class WikiReaderWebView: WKWebView {
       window.__sdwRendererAttachmentReserve=function(id,height){var e=document.getElementById(id); if(!e||!Number.isFinite(height))return; e.style.minHeight=height+'px'; window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1; report();};
       window.__sdwRendererAttachmentPresentCollapse=function(id){var card=document.getElementById(id); if(!card||card.querySelector('.sdw-renderer-card__collapse'))return; var b=document.createElement('button');b.className='sdw-renderer-card__collapse';b.type='button';b.textContent='Collapse';b.setAttribute('aria-label','Collapse interactive renderer');card.appendChild(b);};
       window.__sdwRendererAttachmentDismissCollapse=function(id){var card=document.getElementById(id); if(!card)return; var b=card.querySelector('.sdw-renderer-card__collapse'); if(b)b.remove();};
+      window.__sdwRendererAttachmentState=function(id,expanded,status){var card=document.getElementById(id);if(!card)return;card.dataset.rendererExpanded=expanded?'true':'false';var disclosure=card.querySelector('.sdw-renderer-card__disclosure');if(disclosure)disclosure.setAttribute('aria-expanded',expanded?'true':'false');var expansion=card.querySelector('.sdw-renderer-card__expansion');if(expansion){expansion.hidden=!expanded;expansion.setAttribute('aria-hidden',expanded?'false':'true');}var prior=card.querySelector('.sdw-renderer-card__status');if(prior)prior.remove();if(status){var node=document.createElement('p');node.className='sdw-renderer-card__status';node.setAttribute('role','status');node.textContent=status;card.querySelector('.sdw-renderer-card__expansion').appendChild(node);}};
       document.addEventListener('click',function(event){var control=event.target.closest('[data-renderer-action="expand"],.sdw-renderer-card__collapse');if(!control)return;var card=control.closest('.sdw-renderer-card[id]');if(!card)return;event.preventDefault();var collapse=control.classList.contains('sdw-renderer-card__collapse');window.webkit.messageHandlers.rendererAttachmentAction.postMessage({action:collapse?'collapse':'activate',placeholderID:card.id});});
       addEventListener('scroll',report,{passive:true}); addEventListener('resize',report); new MutationObserver(report).observe(document.documentElement,{childList:true,subtree:true,attributes:true});
     })();
@@ -1796,6 +1797,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
             let removedMountedChild = attachmentContainer?.ownsMountedAttachment(named: placeholderID) == true
             attachmentCoordinator.close(placeholderID)
             if removedMountedChild { attachmentContainer?.removeAttachment(named: placeholderID) }
+            setRowExpansion(false, for: placeholderID)
         }
 
         /// Activate the card's explicit control. The injected resolver owns the
@@ -1814,7 +1816,10 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 return .activate
             }
             let admission = attachmentCoordinator.activate(placeholderID)
-            guard admission == .activate else { return admission }
+            guard admission == .activate else {
+                if case let .refused(reason) = admission { surfaceRefusal(reason, for: placeholderID) }
+                return admission
+            }
             switch inlineAttachmentResolver(
                 context,
                 placeholderID,
@@ -1878,6 +1883,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 },
                 onExit: { [weak self] in self?.collapseAttachment(placeholderID) })
             setCollapseControl(true, for: placeholderID)
+            setRowExpansion(true, for: placeholderID)
             return .activate
         }
 
@@ -1897,6 +1903,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     attachmentCoordinator.refuse(placeholderID, reason: .resourcePressure)
                     self.attachmentContainer?.removeAttachment(named: placeholderID)
                     self.setCollapseControl(false, for: placeholderID)
+                    self.surfaceRefusal(.resourcePressure, for: placeholderID)
                     return
                 }
                 self.failAttachment(placeholderID)
@@ -1945,6 +1952,22 @@ internal struct WikiReaderRep: NSViewRepresentable {
             webView.evaluateJavaScript("\(function) && \(function)(\"\(identifier)\");")
         }
 
+        private func setRowExpansion(_ expanded: Bool, for placeholderID: RendererAttachmentPlaceholderID, status: String? = nil) {
+            guard let webView else { return }
+            let identifier = WikiReaderRep.jsString(placeholderID.rawValue)
+            let message = status.map(WikiReaderRep.jsString) ?? ""
+            webView.evaluateJavaScript("window.__sdwRendererAttachmentState && window.__sdwRendererAttachmentState(\"\(identifier)\", \(expanded), \"\(message)\");")
+        }
+
+        private func surfaceRefusal(_ refusal: RendererAttachmentActivationRefusal, for placeholderID: RendererAttachmentPlaceholderID) {
+            let message = switch refusal {
+            case .rowBudget: "Four renderer rows are already expanded. Collapse one to expand this row."
+            case .resourcePressure: "Renderer resources are busy. Try expanding this row again."
+            }
+            setCollapseControl(false, for: placeholderID)
+            setRowExpansion(false, for: placeholderID, status: message)
+        }
+
         func attachmentState(for placeholderID: RendererAttachmentPlaceholderID) -> RendererAttachmentState {
             attachmentCoordinator?.state(for: placeholderID) ?? .unresolved
         }
@@ -1960,11 +1983,13 @@ internal struct WikiReaderRep: NSViewRepresentable {
             attachmentCoordinator.collapse(placeholderID)
             attachmentContainer.removeAttachment(named: placeholderID)
             setCollapseControl(false, for: placeholderID)
+            setRowExpansion(false, for: placeholderID)
         }
 
         func failAttachment(_ placeholderID: RendererAttachmentPlaceholderID) {
             attachmentCoordinator?.fail(placeholderID)
             setCollapseControl(false, for: placeholderID)
+            setRowExpansion(false, for: placeholderID)
             guard attachmentContainer?.ownsMountedAttachment(named: placeholderID) == true else { return }
             attachmentContainer?.removeAttachment(named: placeholderID)
         }

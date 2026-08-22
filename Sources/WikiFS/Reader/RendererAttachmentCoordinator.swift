@@ -212,7 +212,7 @@ final class RendererAttachmentCoordinator {
     }
 
     func refuse(_ placeholderID: RendererAttachmentPlaceholderID, reason: RendererAttachmentActivationRefusal) {
-        guard var record = records[placeholderID], record.state != .closed else { return }
+        guard var record = records[placeholderID], record.state == .card else { return }
         record.state = .card
         record.activationRefusal = reason
         records[placeholderID] = record
