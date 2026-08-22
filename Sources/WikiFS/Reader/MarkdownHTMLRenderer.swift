@@ -182,7 +182,7 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
             : " class=\"language-\(escapeAttribute(languageClass))\""
         switch fenced.presentationPolicy {
         case .hostApprovedRichRequest(.mermaid):
-            return plainCodeBlockHTML(codeBlock.code, cls: cls)
+            return mermaidRendererCardHTML(block: fenced, fallbackHTML: plainCodeBlockHTML(codeBlock.code, cls: cls))
         case .hostApprovedRichRequest(.jsoncanvas):
             return rendererCardHTML(
                 plan: rendererEmbedPlan(for: fenced, alias: .jsoncanvas),
@@ -349,6 +349,60 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
 
     private func ordinaryImageHTML(src: String, altText: String) -> String {
         "<img src=\"\(escapeAttribute(src))\" alt=\"\(escape(altText))\">"
+    }
+
+    private func mermaidRendererCardHTML(block: MarkdownFencedBlock, fallbackHTML: String) -> String {
+        guard let plan = rendererEmbedPlan(for: block, alias: .mermaid),
+              plan.fallbackReason != .oversizedInput else { return fallbackHTML }
+        let reference = plan.rendererReference
+        let rendererName = Self.rendererDisplayName(for: reference)
+        let title = plan.displayTitle ?? rendererName
+        let label = title == rendererName ? "\(rendererName) renderer" : "\(rendererName) renderer: \(title)"
+        let placeholderID = Self.placeholderID(for: block)
+        let expansionID = "\(placeholderID)-expansion"
+        let refValue = "\(reference.packageID.rawValue)/\(reference.version.rawValue)/\(reference.registrationID.rawValue)"
+        var actionHTML = ""
+        if let input = plan.input,
+           let admission = rendererActivationAdmission,
+           case .inlineArtifact(let artifact) = input,
+           plan.activationMetadata != nil,
+           admission.pageID == artifact.pageID,
+           admission.pageVersionID == artifact.pageVersionID {
+            let context = RendererEmbedActivationContext(
+                pageID: artifact.pageID, pageVersionID: artifact.pageVersionID,
+                blockID: artifact.blockID, rendererReference: reference,
+                input: .inlineArtifact(artifact), capability: admission.capability, generation: admission.generation)
+            let placeholder = RendererAttachmentPlaceholderID.validatedOrNil(placeholderID)
+            admission.register(context: context, attachmentPlaceholderID: placeholder)
+            do {
+                let encoded = try String(decoding: JSONEncoder().encode(input), as: UTF8.self)
+                let url = Self.rendererActionURL(
+                    packageID: reference.packageID.rawValue, version: reference.version.rawValue,
+                    registrationID: reference.registrationID.rawValue, inputJSON: encoded,
+                    capability: context.capability.rawValue, generation: context.generation,
+                    pageID: context.pageID.rawValue, pageVersionID: context.pageVersionID.rawValue,
+                    blockID: context.blockID.digest.hex, blockPageID: context.blockID.pageID.rawValue,
+                    blockPageVersionID: context.blockID.pageVersionID.rawValue,
+                    blockParserOrdinal: context.blockID.parserOrdinal, mimeType: artifact.mimeType.rawValue)
+                actionHTML = "<a class=\"sdw-renderer-card__action\" data-renderer-action=\"open-window\" href=\"\(escapeAttribute(url))\" aria-label=\"Open \(escapeAttribute(label)) in Window\" style=\"flex:0 0 auto\">Open in Window</a>"
+            } catch {
+                DebugLog.reader("Mermaid renderer action encoding failed: \(error.localizedDescription)")
+            }
+        }
+        let raw = escape(block.rawText)
+        return """
+        <section class="sdw-renderer-card" id="\(escapeAttribute(placeholderID))" role="group" aria-label="\(escapeAttribute(label))" data-renderer-kind="mermaid" data-renderer-expanded="false" data-renderer-reference="\(escapeAttribute(refValue))">
+          <div class="sdw-renderer-card__row" style="display:flex;align-items:center;min-width:0">
+            <button class="sdw-renderer-card__disclosure" data-mermaid-disclosure="true" type="button" aria-expanded="false" aria-controls="\(escapeAttribute(expansionID))" aria-label="Expand \(escapeAttribute(label))"><span aria-hidden="true">▸</span></button>
+            <span class="sdw-renderer-card__title sdw-renderer-card__title--truncated" title="\(escapeAttribute(title))" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 auto">\(escape(title))</span>
+            \(actionHTML)
+          </div>
+          <div class="sdw-renderer-card__expansion sdw-mermaid-row__expansion" id="\(escapeAttribute(expansionID))" role="region" aria-label="\(escapeAttribute(label)) details" hidden aria-hidden="true">
+            <div class="mermaid sdw-mermaid-row__diagram"></div>
+            <pre><code class="language-mermaid">\(raw)</code></pre>
+          </div>
+        </section>
+        """
     }
 
     private func rendererCardHTML(

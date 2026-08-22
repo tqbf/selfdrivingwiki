@@ -372,22 +372,28 @@ struct WikiReaderView: View {
     (function(){
       try {
         var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-        mermaid.initialize({ startOnLoad:false, securityLevel:'strict', theme: dark ? 'dark' : 'default' });
-        var codes = document.querySelectorAll('code.language-mermaid');
-        codes.forEach(function(code){
-          var pre = code.parentElement;
-          if(!pre || pre.tagName !== 'PRE') return;
-          var div = document.createElement('div');
-          div.className = 'mermaid';
-          div.textContent = code.textContent;
-          pre.parentNode.replaceChild(div, pre);
-        });
-        mermaid.run({ querySelector: '.mermaid' }).catch(function(e){
-          console.error('mermaid run failed', e);
-        });
-      } catch(e) {
-        console.error('mermaid init failed', e);
-      }
+        if (!window.__sdwMermaidInitialized) {
+          mermaid.initialize({ startOnLoad:false, securityLevel:'strict', theme: dark ? 'dark' : 'default' });
+          window.__sdwMermaidInitialized = true;
+        }
+        window.__sdwRenderMermaidRow = function(row) {
+          if (!row || row.getAttribute('data-renderer-kind') !== 'mermaid') return;
+          var expansion = row.querySelector('.sdw-mermaid-row__expansion');
+          var code = expansion && expansion.querySelector('code.language-mermaid');
+          var diagram = expansion && expansion.querySelector('.sdw-mermaid-row__diagram');
+          if (!expansion || !code || !diagram || diagram.getAttribute('data-mermaid-rendered') === 'true' || diagram.getAttribute('data-mermaid-rendering') === 'true') return;
+          diagram.setAttribute('data-mermaid-rendering', 'true');
+          diagram.textContent = code.textContent;
+          try {
+            mermaid.run({ nodes: [diagram] }).then(function(){
+              diagram.removeAttribute('data-mermaid-rendering');
+              diagram.setAttribute('data-mermaid-rendered', 'true');
+              code.parentElement.hidden = true;
+              if (window.__sdwRendererAttachmentReport) window.__sdwRendererAttachmentReport();
+            }).catch(function(e){ diagram.removeAttribute('data-mermaid-rendering'); diagram.textContent = ''; code.parentElement.hidden = false; console.error('mermaid row render failed', e); });
+          } catch(e) { diagram.removeAttribute('data-mermaid-rendering'); diagram.textContent = ''; code.parentElement.hidden = false; console.error('mermaid row render failed', e); }
+        };
+      } catch(e) { console.error('mermaid init failed', e); }
     })();
     """
 
@@ -580,6 +586,12 @@ struct WikiReaderView: View {
           mark.sdwhl { background: rgba(255, 213, 79, 0.8); border-radius: 2px; }
           .mermaid { text-align:center; margin:0 0 1em; overflow:auto; }
           .mermaid svg { max-width:100%; height:auto; }
+          .sdw-mermaid-row__expansion { margin-top:0.6em; }
+          .sdw-mermaid-row__diagram { min-height:0; }
+          .sdw-mermaid-row__expansion[aria-hidden="true"] { display:none; }
+          @media (prefers-reduced-motion: reduce) {
+            .sdw-renderer-card__disclosure span { transition:none; }
+          }
         </style></head>
         <body><article>\(body)</article>\(mermaidScripts)</body></html>
         """
@@ -713,7 +725,7 @@ final class WikiReaderWebView: WKWebView {
         attachmentActionProxy.target = self
     }
 
-    private static let rendererAttachmentGeometryJS = """
+    nonisolated static let rendererAttachmentGeometryJS = """
     (function(){
       var known={}; function report(){ var g=window.__sdwRendererAttachmentGeneration; if(typeof g!=='number')return; var current={};
         document.querySelectorAll('.sdw-renderer-card[id]').forEach(function(e,i){current[e.id]=true;var r=e.getBoundingClientRect();
@@ -724,7 +736,7 @@ final class WikiReaderWebView: WKWebView {
       window.__sdwRendererAttachmentPresentCollapse=function(id){var card=document.getElementById(id); if(!card||card.querySelector('.sdw-renderer-card__collapse'))return; var b=document.createElement('button');b.className='sdw-renderer-card__collapse';b.type='button';b.textContent='Collapse';b.setAttribute('aria-label','Collapse interactive renderer');card.appendChild(b);};
       window.__sdwRendererAttachmentDismissCollapse=function(id){var card=document.getElementById(id); if(!card)return; var b=card.querySelector('.sdw-renderer-card__collapse'); if(b)b.remove();};
       window.__sdwRendererAttachmentState=function(id,expanded,status){var card=document.getElementById(id);if(!card)return;card.dataset.rendererExpanded=expanded?'true':'false';var disclosure=card.querySelector('.sdw-renderer-card__disclosure');if(disclosure)disclosure.setAttribute('aria-expanded',expanded?'true':'false');var expansion=card.querySelector('.sdw-renderer-card__expansion');if(expansion){expansion.hidden=!expanded;expansion.setAttribute('aria-hidden',expanded?'false':'true');}var prior=card.querySelector('.sdw-renderer-card__status');if(prior)prior.remove();if(status){var node=document.createElement('p');node.className='sdw-renderer-card__status';node.setAttribute('role','status');node.textContent=status;card.querySelector('.sdw-renderer-card__expansion').appendChild(node);}};
-      document.addEventListener('click',function(event){var control=event.target.closest('[data-renderer-action="expand"],.sdw-renderer-card__collapse');if(!control)return;var card=control.closest('.sdw-renderer-card[id]');if(!card)return;event.preventDefault();var collapse=control.classList.contains('sdw-renderer-card__collapse');window.webkit.messageHandlers.rendererAttachmentAction.postMessage({action:collapse?'collapse':'activate',placeholderID:card.id});});
+      document.addEventListener('click',function(event){var mermaid=event.target.closest('[data-mermaid-disclosure="true"]');if(mermaid){var row=mermaid.closest('[data-renderer-kind="mermaid"]');if(!row)return;event.preventDefault();var expanded=row.dataset.rendererExpanded==='true';row.dataset.rendererExpanded=expanded?'false':'true';mermaid.setAttribute('aria-expanded',expanded?'false':'true');var region=row.querySelector('.sdw-mermaid-row__expansion');if(region){region.hidden=expanded;region.setAttribute('aria-hidden',expanded?'true':'false');}if(!expanded&&window.__sdwRenderMermaidRow)window.__sdwRenderMermaidRow(row);report();return;}var control=event.target.closest('[data-renderer-action="expand"],.sdw-renderer-card__collapse');if(!control)return;var card=control.closest('.sdw-renderer-card[id]');if(!card)return;event.preventDefault();var collapse=control.classList.contains('sdw-renderer-card__collapse');window.webkit.messageHandlers.rendererAttachmentAction.postMessage({action:collapse?'collapse':'activate',placeholderID:card.id});});
       addEventListener('scroll',report,{passive:true}); addEventListener('resize',report); new MutationObserver(report).observe(document.documentElement,{childList:true,subtree:true,attributes:true});
     })();
     """
