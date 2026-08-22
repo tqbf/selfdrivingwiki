@@ -59,6 +59,7 @@ final class WikiReaderContainerView: NSView {
 
     func activateAttachment(
         named placeholderID: RendererAttachmentPlaceholderID,
+        title: String = "Interactive",
         content: AnyView? = nil,
         takesFocus: Bool = true,
         onOpen: (() -> Void)? = nil,
@@ -71,6 +72,7 @@ final class WikiReaderContainerView: NSView {
         }
         let child = RendererAttachmentNativeChildView(
             placeholderID: placeholderID,
+            title: title,
             content: content,
             onOpen: onOpen,
             onFocus: { [weak self] in self?.markFocused(placeholderID) },
@@ -178,6 +180,7 @@ private final class RendererAttachmentNativeChildView: NSView {
 
     init(
         placeholderID: RendererAttachmentPlaceholderID,
+        title: String,
         content: AnyView?,
         onOpen: (() -> Void)?,
         onFocus: @escaping () -> Void,
@@ -196,7 +199,7 @@ private final class RendererAttachmentNativeChildView: NSView {
         updateKeyboardFocusIndicator()
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
-        setAccessibilityLabel("Interactive renderer attachment")
+        setAccessibilityLabel("\(title) renderer")
         setAccessibilityIdentifier("renderer-attachment-\(placeholderID.rawValue)")
 
         toolbar.material = .headerView
@@ -204,16 +207,18 @@ private final class RendererAttachmentNativeChildView: NSView {
         toolbar.state = .active
         toolbar.setAccessibilityElement(true)
         toolbar.setAccessibilityRole(.toolbar)
-        toolbar.setAccessibilityLabel("Interactive renderer controls")
+        toolbar.setAccessibilityLabel("\(title) renderer controls")
         toolbar.setAccessibilityIdentifier("renderer-attachment-toolbar-\(placeholderID.rawValue)")
         addSubview(toolbar)
 
-        let title = NSTextField(labelWithString: "Interactive renderer")
-        title.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold)
-        title.textColor = .secondaryLabelColor
-        title.setAccessibilityElement(true)
-        title.setAccessibilityRole(.staticText)
-        title.setAccessibilityLabel("Interactive renderer")
+        let titleLabel = NSTextField(labelWithString: title)
+        titleLabel.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        titleLabel.textColor = .secondaryLabelColor
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        titleLabel.setAccessibilityElement(true)
+        titleLabel.setAccessibilityRole(.staticText)
+        titleLabel.setAccessibilityLabel(title)
 
         let openButton = NSButton(title: "Open in Window", target: self, action: #selector(openInWindow))
         openButton.bezelStyle = .texturedRounded
@@ -233,7 +238,7 @@ private final class RendererAttachmentNativeChildView: NSView {
         toolbarStack.alignment = .centerY
         toolbarStack.distribution = .fill
         toolbarStack.spacing = 8
-        toolbarStack.addArrangedSubview(title)
+        toolbarStack.addArrangedSubview(titleLabel)
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)

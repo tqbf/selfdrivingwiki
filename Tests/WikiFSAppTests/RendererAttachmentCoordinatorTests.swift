@@ -328,7 +328,7 @@ struct RendererAttachmentCoordinatorTests {
         })
         #expect(child.frame == expectedVisibleRect)
         #expect(child.accessibilityRole() == .group)
-        #expect(child.accessibilityLabel() == "Interactive renderer attachment")
+        #expect(child.accessibilityLabel() == "Interactive renderer")
         #expect(container.hitTest(.init(x: 80, y: 100)) === child)
         #expect(container.hitTest(.init(x: 300, y: 260)) === webView)
 
@@ -448,11 +448,13 @@ struct RendererAttachmentCoordinatorTests {
         defer { container.teardown(); window.orderOut(nil) }
 
         let placeholder = try RendererAttachmentPlaceholderID(validating: "header-actions-canvas")
+        let authoredTitle = "System architecture with a long descriptive title"
         var opened = false
         var collapsed = false
         container.updateAttachmentViewport(.init(x: 40, y: 80, width: 240, height: 160), for: placeholder)
         container.activateAttachment(
             named: placeholder,
+            title: authoredTitle,
             onOpen: { opened = true },
             onExit: { collapsed = true })
 
@@ -462,9 +464,15 @@ struct RendererAttachmentCoordinatorTests {
         let toolbar = try #require(child.subviews.first {
             $0.accessibilityIdentifier() == "renderer-attachment-toolbar-header-actions-canvas"
         })
-        let buttons = toolbar.subviews.flatMap(\.subviews).compactMap { $0 as? NSButton }
+        let toolbarSubviews = toolbar.subviews.flatMap(\.subviews)
+        let titleLabel = try #require(toolbarSubviews.compactMap { $0 as? NSTextField }.first)
+        let buttons = toolbarSubviews.compactMap { $0 as? NSButton }
         let openButton = try #require(buttons.first { $0.title == "Open in Window" })
         let collapseButton = try #require(buttons.first { $0.title == "Collapse" })
+        #expect(child.accessibilityLabel() == "\(authoredTitle) renderer")
+        #expect(toolbar.accessibilityLabel() == "\(authoredTitle) renderer controls")
+        #expect(titleLabel.accessibilityLabel() == authoredTitle)
+        #expect(titleLabel.lineBreakMode == .byTruncatingTail)
         #expect(openButton.accessibilityLabel() == "Open in Window")
         #expect(collapseButton.accessibilityLabel() == "Collapse")
 

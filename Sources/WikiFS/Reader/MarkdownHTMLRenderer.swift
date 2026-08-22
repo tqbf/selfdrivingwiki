@@ -375,7 +375,8 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
             let context = RendererEmbedActivationContext(
                 pageID: artifact.pageID, pageVersionID: artifact.pageVersionID,
                 blockID: artifact.blockID, rendererReference: reference,
-                input: .inlineArtifact(artifact), capability: admission.capability, generation: admission.generation)
+                input: .inlineArtifact(artifact), capability: admission.capability,
+                generation: admission.generation, displayTitle: title)
             let placeholder = RendererAttachmentPlaceholderID.validatedOrNil(placeholderID)
             admission.register(context: context, attachmentPlaceholderID: placeholder)
             do {
@@ -450,7 +451,8 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
                 context = RendererEmbedActivationContext(
                     pageID: artifact.pageID, pageVersionID: artifact.pageVersionID,
                     blockID: artifact.blockID, rendererReference: ref,
-                    input: .inlineArtifact(artifact), capability: admission.capability, generation: admission.generation)
+                    input: .inlineArtifact(artifact), capability: admission.capability,
+                    generation: admission.generation, displayTitle: title)
             case .source(let source):
                 guard let identity = documentIdentity,
                       identity.pageID == admission.pageID,
@@ -467,7 +469,8 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
                     pageID: identity.pageID, pageVersionID: identity.pageVersionID,
                     identity: .source(source), rendererReference: ref,
                     input: bridgeInput,
-                    capability: admission.capability, generation: admission.generation)
+                    capability: admission.capability, generation: admission.generation,
+                    displayTitle: title)
             }
             let placeholder = RendererAttachmentPlaceholderID.validatedOrNil(plan.placeholderID)
             admission.register(context: context, attachmentPlaceholderID: placeholder)

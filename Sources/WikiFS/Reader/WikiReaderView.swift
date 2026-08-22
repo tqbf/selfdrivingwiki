@@ -19,6 +19,9 @@ internal struct RendererEmbedActivationContext: Hashable, Sendable {
     let input: RendererBridgeInput
     let capability: RendererSessionCapability
     let generation: Int
+    /// Presentation metadata only. It does not participate in authorization,
+    /// equality, hashing, renderer input, or stable content identity.
+    let displayTitle: String?
 
     /// Compatibility accessor for inline-artifact callers. Source identities are
     /// deliberately not coerced into a fake block.
@@ -29,10 +32,11 @@ internal struct RendererEmbedActivationContext: Hashable, Sendable {
 
     init(pageID: PageID, pageVersionID: PageVersionID, blockID: MarkdownBlockID,
          rendererReference: RendererReference, input: RendererBridgeInput,
-         capability: RendererSessionCapability, generation: Int) {
+         capability: RendererSessionCapability, generation: Int,
+         displayTitle: String? = nil) {
         self.init(pageID: pageID, pageVersionID: pageVersionID, identity: .block(blockID),
                   rendererReference: rendererReference, input: input,
-                  capability: capability, generation: generation)
+                  capability: capability, generation: generation, displayTitle: displayTitle)
     }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -56,7 +60,8 @@ internal struct RendererEmbedActivationContext: Hashable, Sendable {
 
     init(pageID: PageID, pageVersionID: PageVersionID, identity: Identity,
          rendererReference: RendererReference, input: RendererBridgeInput,
-         capability: RendererSessionCapability, generation: Int) {
+         capability: RendererSessionCapability, generation: Int,
+         displayTitle: String? = nil) {
         self.pageID = pageID
         self.pageVersionID = pageVersionID
         self.identity = identity
@@ -64,6 +69,7 @@ internal struct RendererEmbedActivationContext: Hashable, Sendable {
         self.input = input
         self.capability = capability
         self.generation = generation
+        self.displayTitle = displayTitle
     }
 }
 
@@ -584,38 +590,42 @@ struct WikiReaderView: View {
           .sdw-code-operator { color: var(--code-operator); }
           .sdw-code-punctuation { color: var(--code-punctuation); }
           .sdw-code-constant { color: var(--code-constant); }
-          /* Rich-fence renderer cards. `MarkdownHTMLRenderer.rendererCardHTML`
-             emits a `<section class="sdw-renderer-card">` for every approved
-             fence (mermaid stays on its own `.mermaid` path). The card is the
-             static, in-flow surface; its action either mounts a native inline
-             attachment over this rect or opens the full renderer. Styled to
-             match `details.sdw-transclusion` above — same border, fill, and
-             radius — so both embed surfaces read as one family. Without these
-             rules the card degrades to unstyled stacked text. */
+          /* Renderer rows stay in normal document flow. The expanded native
+             renderer projects onto the matching expansion rectangle. */
           section.sdw-renderer-card {
-            margin: 0.6em 0; padding: 0.7em 0.9em; border-radius: 8px;
-            background: var(--code-bg); border: 1px solid var(--border);
+            margin: 0.35em 0; padding: 0.2em 0; border-bottom: 1px solid var(--border);
+            background: transparent;
           }
-          .sdw-renderer-card__header {
-            font-weight: 600; font-size: 0.95em; color: var(--text);
+          .sdw-renderer-card__row { gap: 0.35em; min-height: 2em; }
+          .sdw-renderer-card__title {
+            color: var(--text); font-size: 0.95em; font-weight: 400; line-height: 1.3;
           }
+          .sdw-renderer-card__disclosure {
+            inline-size: 2em; block-size: 2em; padding: 0; border: 0;
+            border-radius: 5px; background: transparent; color: var(--muted);
+            font: inherit; cursor: pointer;
+          }
+          .sdw-renderer-card__disclosure[aria-expanded="true"] span { display:inline-block; transform:rotate(90deg); }
           .sdw-renderer-card__summary {
-            margin: 0.15em 0 0; font-size: 0.9em; color: var(--muted);
+            margin: 0.35em 0 0; font-size: 0.9em; color: var(--muted);
           }
-          .sdw-renderer-card__fallback {
-            margin: 0.1em 0 0; font-size: 0.8em; color: var(--muted);
+          .sdw-renderer-card__fallback, .sdw-renderer-card__status {
+            margin: 0.25em 0 0; font-size: 0.85em; color: var(--muted);
           }
-          /* The action is an `<a>` and the collapse control a `<button>`; both
-             are drawn as the same bordered control so the card reads as one
-             affordance either side of activation. */
+          .sdw-renderer-card__expansion { margin-top: 0.4em; }
           .sdw-renderer-card__action, .sdw-renderer-card__collapse {
-            display: inline-block; margin: 0.7em 0.4em 0 0;
-            padding: 0.2em 0.7em; border: 1px solid var(--border);
-            border-radius: 6px; background: none; font: inherit;
-            font-size: 0.9em; text-decoration: none; cursor: pointer;
+            display: inline-block; margin: 0; padding: 0.3em 0.65em;
+            border: 1px solid var(--border); border-radius: 6px;
+            background: transparent; font: inherit; font-size: 0.9em;
+            line-height: 1.25; text-decoration: none; cursor: pointer;
           }
           .sdw-renderer-card__action { color: -webkit-link; }
           .sdw-renderer-card__collapse { color: var(--muted); }
+          .sdw-renderer-card__disclosure:focus-visible,
+          .sdw-renderer-card__action:focus-visible,
+          .sdw-renderer-card__collapse:focus-visible {
+            outline: 2px solid -webkit-focus-ring-color; outline-offset: 2px;
+          }
           hr { border: none; border-top: 1px solid var(--border); margin: 1.5em 0; }
           table { border-collapse: collapse; margin: 0 0 1em; }
           th, td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; vertical-align: top; }
@@ -1933,6 +1943,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
             }
             attachmentContainer.activateAttachment(
                 named: placeholderID,
+                title: context.displayTitle ?? context.rendererReference.registrationID.rawValue,
                 content: content,
                 takesFocus: takesFocus,
                 onOpen: { [weak self] in

@@ -717,6 +717,17 @@ struct MarkdownHTMLRendererTests {
         #expect(html.contains("sdw-renderer-card") == false)
     }
 
+    @Test("renderer row stylesheet stays compact, relative, focus-visible, and motion-aware")
+    func rendererRowStylesUseNativeReaderScaleAndFocus() {
+        let html = WikiReaderView.documentHTML("<p>Body</p>")
+
+        #expect(html.contains("background: transparent"))
+        #expect(html.contains("font-size: 0.95em; font-weight: 400"))
+        #expect(html.contains(".sdw-renderer-card__disclosure:focus-visible"))
+        #expect(html.contains("outline: 2px solid -webkit-focus-ring-color"))
+        #expect(html.contains("@media (prefers-reduced-motion: reduce)"))
+    }
+
     @Test func documentHTMLEmbedsNoScriptWhenLibAbsent() {
         // Under `swift test` there's no .app bundle, so `mermaidLib` is nil →
         // documentHTML embeds NO <script>, and the mermaid block is preserved as
