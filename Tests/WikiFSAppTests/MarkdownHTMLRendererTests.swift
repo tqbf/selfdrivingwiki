@@ -725,8 +725,8 @@ struct MarkdownHTMLRendererTests {
             library: "window.mermaid = window.mermaid || {};"
         )
 
-        #expect(html.contains(#"id="diagram""#))
-        #expect(html.contains(#"id="source" hidden"#))
+        #expect(html.contains(#"id="diagram" class="mermaid""#))
+        #expect(html.contains(#"id="source" hidden"#) == false)
         #expect(html.contains(#"id="error" role="alert" hidden"#))
         #expect(html.contains("securityLevel:'strict'"))
         #expect(html.contains("default-src 'none'"))
