@@ -334,8 +334,8 @@ struct WikiAppWebViewTests {
         #expect(model.loadedPageHeadVersionID(for: PageID(rawValue: "01JVERSIONMISSING000000000")) == nil)
     }
 
-    @Test("hosted production root opens an inline renderer attachment from a rich fence card")
-    func productionRootOpensInlineRendererForRichFenceCards() async throws {
+    @Test("hosted production root expands an inline renderer through its disclosure control")
+    func productionRootExpandsInlineRendererThroughDisclosure() async throws {
         let lease = await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
         _ = NSApplication.shared
@@ -403,7 +403,7 @@ struct WikiAppWebViewTests {
 
         _ = await evaluateJavaScriptWithTimeout(
             webView,
-            "document.querySelector('a.sdw-renderer-card__action')?.click(); 'clicked'",
+            "document.querySelector('button[data-renderer-action=\"expand\"]')?.click(); 'clicked'",
             timeout: .seconds(5)
         )
 
