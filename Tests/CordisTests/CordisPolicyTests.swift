@@ -116,6 +116,10 @@ struct CordisSourcePolicyTests {
             "Sources/WikiFSEngine/RendererPlugins.swift",
             "Sources/WikiFSEngine/TransportServiceKeys.swift",
             "Sources/WikiFSEngine/TransportPlugins.swift",
+            // Phase 4.11 integration composition boundary: one lazy capability
+            // registry with reversible Zotero, podcast, and URL-fetch adapters.
+            "Sources/WikiFSEngine/IntegrationServiceKeys.swift",
+            "Sources/WikiFSEngine/IntegrationPlugins.swift",
             "Sources/WikiCtlCore/CLITantivyLegResolver.swift",
             "Sources/WikiFS/Renderer/RendererRuntimeAssembly.swift",
         ])
