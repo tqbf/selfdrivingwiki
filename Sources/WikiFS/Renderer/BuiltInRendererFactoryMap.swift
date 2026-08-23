@@ -67,7 +67,9 @@ enum BuiltInRendererFactoryMap {
 
     private static func makeMermaid(_ inputs: BuiltInRendererFactoryInputs) -> AnyView? {
         AnyView(Group {
-            if let markdown = inputs.mermaidMarkdown {
+            if let source = inputs.mermaidDiagramSource {
+                MermaidRendererView(source: source)
+            } else if let markdown = inputs.mermaidMarkdown {
                 WikiReaderView(markdown: markdown, currentSelection: inputs.selection, store: inputs.store)
                     .zoomShortcuts(inputs.readerZoom)
                     .zoomScroll(inputs.readerZoom)
@@ -116,9 +118,32 @@ struct BuiltInRendererFactoryInputs {
     let pdfQuote: String?
     let htmlSource: String?
     let mermaidMarkdown: String?
+    let mermaidDiagramSource: String?
     let mediaTarget: EmbedTarget?
     let selection: WikiSelection?
     let store: WikiStoreModel
     let readerZoom: Binding<Double>
+
+    init(
+        sourceBytes: Data?,
+        pdfQuote: String?,
+        htmlSource: String?,
+        mermaidMarkdown: String?,
+        mermaidDiagramSource: String? = nil,
+        mediaTarget: EmbedTarget?,
+        selection: WikiSelection?,
+        store: WikiStoreModel,
+        readerZoom: Binding<Double>
+    ) {
+        self.sourceBytes = sourceBytes
+        self.pdfQuote = pdfQuote
+        self.htmlSource = htmlSource
+        self.mermaidMarkdown = mermaidMarkdown
+        self.mermaidDiagramSource = mermaidDiagramSource
+        self.mediaTarget = mediaTarget
+        self.selection = selection
+        self.store = store
+        self.readerZoom = readerZoom
+    }
 }
 #endif

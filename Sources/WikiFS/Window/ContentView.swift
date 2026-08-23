@@ -567,24 +567,24 @@ struct RendererActivationView: View {
 
     private var builtInInputs: BuiltInRendererFactoryInputs {
         let inputBytes: Data?
-        let mermaidMarkdown: String?
+        let mermaidDiagramSource: String?
         switch request.input {
         case .inlineArtifact(let artifact):
             inputBytes = artifact.bytes
-            let rawMarkdown = String(decoding: artifact.bytes, as: UTF8.self)
-            mermaidMarkdown = MermaidSourceDetector.renderableMarkdown(from: rawMarkdown)
+            mermaidDiagramSource = String(decoding: artifact.bytes, as: UTF8.self)
         case .source:
             inputBytes = nil
-            mermaidMarkdown = nil
+            mermaidDiagramSource = nil
         case .markdown:
             inputBytes = nil
-            mermaidMarkdown = nil
+            mermaidDiagramSource = nil
         }
         return BuiltInRendererFactoryInputs(
             sourceBytes: inputBytes,
             pdfQuote: nil,
             htmlSource: nil,
-            mermaidMarkdown: mermaidMarkdown,
+            mermaidMarkdown: nil,
+            mermaidDiagramSource: mermaidDiagramSource,
             mediaTarget: nil,
             selection: store.selection,
             store: store,
