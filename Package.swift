@@ -380,6 +380,7 @@ let package = Package(
             name: "WikiCtlCore",
             dependencies: [
                 "WikiFSCore",
+                "CordisLoader",
                 // The XPC contract — the typed client (WikiDaemonConnection +
                 // DaemonWorkloadClient) speaks WikiDaemonProtocol + throws
                 // WikiDaemonError. Empty on Linux; harmless there.

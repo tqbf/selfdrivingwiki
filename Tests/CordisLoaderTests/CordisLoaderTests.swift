@@ -232,6 +232,36 @@ struct CordisLoaderTests {
         try await booted.shutdown()
     }
 
+    @Test("profile bundles resolve real files in bundle, profile, home, overlay order")
+    func profileBundlePrecedence() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            do {
+                try FileManager.default.removeItem(at: root)
+            } catch {
+                Issue.record("failed to remove fixture directory: \(error)")
+            }
+        }
+        let base = root.appendingPathComponent("base", isDirectory: true)
+        let profile = root.appendingPathComponent("profile", isDirectory: true)
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: profile, withIntermediateDirectories: true)
+        try Data("entries:\n  - id: value\n    plugin: wiki.noop\n    config: {source: bundle}\n".utf8)
+            .write(to: base.appendingPathComponent(ProfileBundle.patchFileName))
+        try Data("entries:\n  - id: value\n    plugin: wiki.noop\n    config: {source: profile}\n".utf8)
+            .write(to: profile.appendingPathComponent(ProfileBundle.patchFileName))
+        let home = Data("entries:\n  - id: value\n    plugin: wiki.noop\n    config: {source: home}\n".utf8)
+        let overlay = "entries:\n  - id: value\n    plugin: wiki.noop\n    config: {source: overlay}\n"
+
+        let resolved = try ProfileBundle.resolve(
+            bundleNames: ["base"], profileName: "profile", in: root,
+            homePatchData: home, overlay: overlay)
+        #expect(resolved.entries.first?.config?["source"] == .string("overlay"))
+        let dump = try resolved.dump()
+        #expect(try PatchFileCodec.decode(dump).entries == resolved.entries)
+    }
+
     @Test("disabled entries do not mount")
     func disabledEntries() async throws {
         let catalog = try makeCatalog()

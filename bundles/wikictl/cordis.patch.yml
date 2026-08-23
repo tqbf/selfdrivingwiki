@@ -1,0 +1,6 @@
+# CLI diagnostics do not activate the daemon transport adapter. The adapter is
+# factory-backed and remains app-wired until Phase 5b.
+entries:
+  - id: transport
+    plugin: wiki.transport
+    disabled: true

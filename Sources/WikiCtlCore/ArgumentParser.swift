@@ -57,6 +57,8 @@ public enum ArgumentParser {
         case workspace(WorkspaceCommand.Action)
         /// Print build version info. Does not require a wiki selection.
         case version(json: Bool)
+        /// Print the resolved Cordis profile. Does not require a wiki selection.
+        case dumpConfig(overlay: String?)
         /// `wikictl wiki list/create/delete/rename` — registry operations routed
         /// through the `wikid` daemon via XPC. These bypass the `--wiki` selector
         /// requirement (they operate on the registry, not a specific wiki's store).
@@ -90,6 +92,7 @@ public enum ArgumentParser {
 
     commands:
       version [--json]                       print build version info; --json for machine-readable
+      --dump-config [--patch <yaml>]          print the resolved Cordis profile
       page list [--json]                     list pages (TSV, or JSON lines)
       page get  (--title X | --id Y) [--json] [--workspace W]
                                               print a page body; --json adds head_version_id;
@@ -190,6 +193,10 @@ public enum ArgumentParser {
             }
             if first == "--version" || first == "-v" {
                 return Invocation(wikiSelector: "", command: .version(json: false))
+            }
+            if first == "--dump-config" {
+                let options = try Options(Array(args.dropFirst()))
+                return Invocation(wikiSelector: "", command: .dumpConfig(overlay: options.value("--patch")))
             }
             // `wiki` subcommands — registry operations via the wikid daemon.
             // Bypass the --wiki selector requirement (same as `version`).

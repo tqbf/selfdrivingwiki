@@ -121,6 +121,9 @@ struct CordisSourcePolicyTests {
             "Sources/WikiFSEngine/IntegrationServiceKeys.swift",
             "Sources/WikiFSEngine/IntegrationPlugins.swift",
             "Sources/WikiCtlCore/CLITantivyLegResolver.swift",
+            // Phase 5a diagnostic composition boundary: resolves loader data
+            // without exposing a Cordis context to command implementations.
+            "Sources/WikiCtlCore/DumpConfigCommand.swift",
             "Sources/WikiFS/Renderer/RendererRuntimeAssembly.swift",
         ])
         let forbiddenPatterns = [
