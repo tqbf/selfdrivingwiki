@@ -781,14 +781,14 @@ final class WikiReaderWebView: WKWebView {
     nonisolated static let rendererAttachmentGeometryJS = """
     (function(){
       var known={}; function report(){ var g=window.__sdwRendererAttachmentGeneration; if(typeof g!=='number')return; var current={};
-        document.querySelectorAll('.sdw-renderer-card[id]').forEach(function(e,i){current[e.id]=true;var r=e.getBoundingClientRect();
+        document.querySelectorAll('.sdw-renderer-card[id]').forEach(function(e,i){current[e.id]=true;var expansion=e.querySelector('.sdw-renderer-card__expansion');var target=e.dataset.rendererExpanded==='true'&&expansion?expansion:e;var r=target.getBoundingClientRect();
           window.webkit.messageHandlers.rendererAttachmentGeometry.postMessage({generation:g,placeholderID:e.id,x:r.x,y:r.y,width:r.width,height:r.height,visible:r.bottom>0&&r.right>0&&r.top<innerHeight&&r.left<innerWidth,revision:(window.__sdwRendererAttachmentRevision||0)});});
         Object.keys(known).forEach(function(id){if(!current[id])window.webkit.messageHandlers.rendererAttachmentGeometry.postMessage({kind:'removed',generation:g,placeholderID:id});}); known=current; }
       window.__sdwRendererAttachmentReport=function(g){window.__sdwRendererAttachmentGeneration=g;window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();};
-      window.__sdwRendererAttachmentReserve=function(id,height){var e=document.getElementById(id); if(!e||!Number.isFinite(height))return; e.style.minHeight=height+'px'; window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1; report();};
+      window.__sdwRendererAttachmentReserve=function(id,height){var card=document.getElementById(id);var expansion=card&&card.querySelector('.sdw-renderer-card__expansion');if(!expansion||!Number.isFinite(height))return;expansion.style.minHeight=height+'px';window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();};
       window.__sdwRendererAttachmentPresentCollapse=function(id){var card=document.getElementById(id); if(!card||card.querySelector('.sdw-renderer-card__collapse'))return; var b=document.createElement('button');b.className='sdw-renderer-card__collapse';b.type='button';b.textContent='Collapse';b.setAttribute('aria-label','Collapse interactive renderer');card.appendChild(b);};
       window.__sdwRendererAttachmentDismissCollapse=function(id){var card=document.getElementById(id); if(!card)return; var b=card.querySelector('.sdw-renderer-card__collapse'); if(b)b.remove();};
-      window.__sdwRendererAttachmentState=function(id,expanded,status){var card=document.getElementById(id);if(!card)return;card.dataset.rendererExpanded=expanded?'true':'false';var disclosure=card.querySelector('.sdw-renderer-card__disclosure');if(disclosure)disclosure.setAttribute('aria-expanded',expanded?'true':'false');var expansion=card.querySelector('.sdw-renderer-card__expansion');if(expansion){expansion.hidden=!expanded;expansion.setAttribute('aria-hidden',expanded?'false':'true');}var prior=card.querySelector('.sdw-renderer-card__status');if(prior)prior.remove();if(status){var node=document.createElement('p');node.className='sdw-renderer-card__status';node.setAttribute('role','status');node.textContent=status;card.querySelector('.sdw-renderer-card__expansion').appendChild(node);}};
+      window.__sdwRendererAttachmentState=function(id,expanded,status){var card=document.getElementById(id);if(!card)return;card.dataset.rendererExpanded=expanded?'true':'false';var disclosure=card.querySelector('.sdw-renderer-card__disclosure');if(disclosure)disclosure.setAttribute('aria-expanded',expanded?'true':'false');var expansion=card.querySelector('.sdw-renderer-card__expansion');if(expansion){expansion.hidden=!expanded;expansion.setAttribute('aria-hidden',expanded?'false':'true');}var prior=card.querySelector('.sdw-renderer-card__status');if(prior)prior.remove();if(status){var node=document.createElement('p');node.className='sdw-renderer-card__status';node.setAttribute('role','status');node.textContent=status;expansion.appendChild(node);}window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();};
       document.addEventListener('click',function(event){var mermaid=event.target.closest('[data-mermaid-disclosure="true"]');if(mermaid){var row=mermaid.closest('[data-renderer-kind="mermaid"]');if(!row)return;event.preventDefault();var expanded=row.dataset.rendererExpanded==='true';row.dataset.rendererExpanded=expanded?'false':'true';mermaid.setAttribute('aria-expanded',expanded?'false':'true');var region=row.querySelector('.sdw-mermaid-row__expansion');if(region){region.hidden=expanded;region.setAttribute('aria-hidden',expanded?'true':'false');}if(!expanded&&window.__sdwRenderMermaidRow)window.__sdwRenderMermaidRow(row);report();return;}var control=event.target.closest('[data-renderer-action="expand"],.sdw-renderer-card__collapse');if(!control)return;var card=control.closest('.sdw-renderer-card[id]');if(!card)return;event.preventDefault();var collapse=control.classList.contains('sdw-renderer-card__collapse');window.webkit.messageHandlers.rendererAttachmentAction.postMessage({action:collapse?'collapse':'activate',placeholderID:card.id});});
       addEventListener('scroll',report,{passive:true}); addEventListener('resize',report); new MutationObserver(report).observe(document.documentElement,{childList:true,subtree:true,attributes:true});
     })();
@@ -1932,6 +1932,11 @@ internal struct WikiReaderRep: NSViewRepresentable {
         ) -> RendererAttachmentActivationResult {
             guard let attachmentCoordinator else { return .rejected }
             guard attachmentCoordinator.state(for: placeholderID) == .active else { return .rejected }
+            // The latest geometry still describes the collapsed row. Expand the
+            // DOM region first and keep the native child hidden until WebKit
+            // reports that region's rectangle.
+            attachmentContainer.updateAttachmentViewport(.zero, for: placeholderID)
+            setRowExpansion(true, for: placeholderID)
             if let webView {
                 let reservedHeight = attachmentCoordinator.reserveHeight(
                     RendererAttachmentHostPolicy.preferredReservedHeight(for: context.rendererReference),
@@ -1939,7 +1944,6 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 let identifier = WikiReaderRep.jsString(placeholderID.rawValue)
                 webView.evaluateJavaScript(
                     "window.__sdwRendererAttachmentReserve && window.__sdwRendererAttachmentReserve(\"\(identifier)\", \(reservedHeight));")
-                updateAttachmentViewport(for: placeholderID, in: webView, container: attachmentContainer)
             }
             attachmentContainer.activateAttachment(
                 named: placeholderID,
@@ -1952,7 +1956,6 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 },
                 onExit: { [weak self] in self?.collapseAttachment(placeholderID) })
             setCollapseControl(true, for: placeholderID)
-            setRowExpansion(true, for: placeholderID)
             return .activate
         }
 

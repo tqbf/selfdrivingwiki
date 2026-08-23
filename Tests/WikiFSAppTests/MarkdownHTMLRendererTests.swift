@@ -728,6 +728,17 @@ struct MarkdownHTMLRendererTests {
         #expect(html.contains("@media (prefers-reduced-motion: reduce)"))
     }
 
+    @Test("native renderer reservation and geometry use the expansion region below the row")
+    func nativeRendererLayoutTargetsExpansionRegion() {
+        let script = WikiReaderWebView.rendererAttachmentGeometryJS
+
+        #expect(script.contains("expansion.style.minHeight=height+'px'"))
+        #expect(script.contains("e.style.minHeight=height+'px'") == false)
+        #expect(script.contains("e.dataset.rendererExpanded==='true'&&expansion?expansion:e"))
+        #expect(script.contains("var r=e.getBoundingClientRect()") == false)
+        #expect(script.contains("window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();"))
+    }
+
     @Test func documentHTMLEmbedsNoScriptWhenLibAbsent() {
         // Under `swift test` there's no .app bundle, so `mermaidLib` is nil →
         // documentHTML embeds NO <script>, and the mermaid block is preserved as

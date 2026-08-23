@@ -658,6 +658,7 @@ struct RendererAttachmentCoordinatorTests {
             $0.accessibilityIdentifier() == "renderer-attachment-auto-mounted-canvas"
         })
         #expect(Self.containsHostingView(in: child))
+        #expect(child.frame == .zero)
         #expect(window.firstResponder === child)
     }
 
