@@ -26,7 +26,7 @@ struct AppProfileBootTests {
             id: ProfileBootFixture.listenerEntryID,
             plugin: ProfileBootFixture.listenerPluginID))
         let booted = try await CordisBoot.boot(.init(
-            catalog: try ProfileBootFixture.catalog(recorder: recorder),
+            catalog: try ProfileBootFixture.appCatalog(recorder: recorder),
             layers: [PatchFile(entries: entries)]))
         #expect(await booted.tree.mountedEntryIDs.count == entries.count)
         try await ProfileBootFixture.assertRequiredServices(in: booted.context)

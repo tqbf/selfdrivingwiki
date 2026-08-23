@@ -17,12 +17,24 @@ enum ProfileBootFixture {
         return url
     }
 
-    static func catalog(recorder: ProfileStoreEventRecorder? = nil) throws -> PluginCatalog {
-        var definitions = fixtureDefinitions
-        if let recorder {
-            definitions.append(listenerDefinition(recorder: recorder))
-        }
-        return try PluginCatalog(definitions)
+    static func appCatalog(recorder: ProfileStoreEventRecorder? = nil) throws -> PluginCatalog {
+        let additionalDefinitions = recorder.map { [listenerDefinition(recorder: $0)] } ?? []
+        return try AppPluginCatalog.build(
+            factories: AppPluginCatalogFactories(
+                base: baseFactories,
+                makeRendererServices: { ProfileRendererServices() },
+                makeDefuddleExtractor: { ProfileHTMLExtractor() },
+                makeDaemonTransport: { fixtureTransportServices() },
+                makeURLFetcher: { ProfileIntegrationEntryPoint() }),
+            additionalDefinitions: additionalDefinitions)
+    }
+
+    static func daemonCatalog() throws -> PluginCatalog {
+        try DaemonPluginCatalog.build(factories: DaemonPluginCatalogFactories(base: baseFactories))
+    }
+
+    static func cliCatalog() throws -> PluginCatalog {
+        try CLIPluginCatalog.build()
     }
 
     static func entries(databaseURL: URL, wikiID: String, includeAppProviders: Bool) -> [Entry] {
@@ -66,31 +78,13 @@ enum ProfileBootFixture {
         _ = try #require(try await context.find(IntegrationServiceKeys.capabilities))
     }
 
-    private static var fixtureDefinitions: [PluginDefinition] {
-        [
-            StorePlugin.definition,
-            SessionsPlugin.definition,
-            ChatsPersistencePlugin.definition,
-            LlmRuntimePlugin.definition,
-            ACPModelAdapterPlugin.definition(services: UnavailableAgentProviderServices()),
-            ToolsPlugin.definition,
-            NoOpToolPlugin.definition,
-            SystemPromptPlugin.definition,
-            AgentLoopPlugin.definition,
-            ExtractionPlugin.definition,
-            Pdf2mdExtractionPlugin.definition { ProfilePDFExtractor() },
-            SearchPlugin.definition,
-            EmbeddingsSearchPlugin.definition(
-                configure: {},
-                selectedIdentifier: { "fixture-embedding" },
-                isAvailable: { false }),
-            RenderersPlugin.definition,
-            RendererServicesPlugin.definition { ProfileRendererServices() },
-            TransportPlugin.definition,
-            DaemonTransportPlugin.definition { fixtureTransportServices() },
-            IntegrationsPlugin.definition,
-            URLFetchIntegrationPlugin.definition { ProfileIntegrationEntryPoint() },
-        ]
+    private static var baseFactories: BasePluginCatalogFactories {
+        BasePluginCatalogFactories(
+            agentProviderServices: UnavailableAgentProviderServices(),
+            makePDFExtractor: { ProfilePDFExtractor() },
+            configureEmbeddings: {},
+            selectedEmbeddingIdentifier: { "fixture-embedding" },
+            embeddingsAvailable: { false })
     }
 
     private static func listenerDefinition(recorder: ProfileStoreEventRecorder) -> PluginDefinition {
@@ -130,6 +124,12 @@ private struct ProfilePDFExtractor: MarkdownExtractor {
         filename: String,
         onProgress: (@Sendable (String) -> Void)?
     ) async throws -> String { "fixture" }
+}
+
+private struct ProfileHTMLExtractor: HtmlMarkdownExtractor {
+    func extract(html: String) async -> HtmlExtractionResult? {
+        HtmlExtractionResult(markdown: "fixture", title: nil)
+    }
 }
 
 private struct ProfileRendererServices: Sendable {}

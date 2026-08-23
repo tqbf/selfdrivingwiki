@@ -287,13 +287,13 @@ public enum CLITantivyLegResolver {
         var handle: SearchRuntimeHandle?
         do {
             let child = try await root.child()
-            let assembly = SearchRuntimeAssembly(
+            let runtime = SearchRuntimeAssembly.runtimeFactory(
                 identity: SearchRuntimeIdentity(
                     wikiID: wikiID,
                     containerDirectory: containerDirectory),
                 contentSource: StoreBackedTantivyContentSource(store: store),
                 changeStreamFactory: FinishedSearchChangeStreamFactory())
-            let assembled = try await assembly.assemble(in: child)
+            let assembled = try await runtime.assemble(in: child)
             handle = assembled
             let hits = try await assembled.services.search(
                 query: query,

@@ -62,7 +62,7 @@ public enum Pdf2mdExtractionPlugin {
     public static let key = ExtractionBackendKey(kind: .pdf, backendID: ExtractionBackend.localPdf2md.rawValue)
 
     public static func definition(
-        makeExtractor: @escaping ExtractionRuntimeAssembly.LocalExtractorFactory
+        makeExtractor: @escaping ExtractionPluginFactory.LocalExtractor
     ) -> PluginDefinition {
         adapterDefinition(id: id, label: "Local pdf2md extraction", key: key) {
             .pdf(ExtractionPreparation(
@@ -79,8 +79,8 @@ public enum ACPExtractionPlugin {
 
     public static func definition(
         configuration: ExtractionConfig,
-        resolve: @escaping ExtractionRuntimeAssembly.ACPResolver,
-        fallback: @escaping ExtractionRuntimeAssembly.LocalExtractorFactory
+        resolve: @escaping ExtractionPluginFactory.ACPResolver,
+        fallback: @escaping ExtractionPluginFactory.LocalExtractor
     ) -> PluginDefinition {
         adapterDefinition(id: id, label: "ACP extraction", key: key) {
             let extractor: any MarkdownExtractor
@@ -102,7 +102,7 @@ public enum AnthropicExtractionPlugin {
     public static let key = ExtractionBackendKey(kind: .pdf, backendID: ExtractionBackend.anthropic.rawValue)
 
     public static func definition(
-        readCredential: @escaping ExtractionRuntimeAssembly.CredentialReader,
+        readCredential: @escaping ExtractionPluginFactory.CredentialReader,
         fetcher: any HTTPRequestFetcher
     ) -> PluginDefinition {
         PluginDefinition(
@@ -130,7 +130,7 @@ public enum GeminiExtractionPlugin {
     public static let key = ExtractionBackendKey(kind: .pdf, backendID: ExtractionBackend.gemini.rawValue)
 
     public static func definition(
-        readCredential: @escaping ExtractionRuntimeAssembly.CredentialReader,
+        readCredential: @escaping ExtractionPluginFactory.CredentialReader,
         fetcher: any HTTPRequestFetcher
     ) -> PluginDefinition {
         PluginDefinition(
@@ -158,7 +158,7 @@ public enum DoclingExtractionPlugin {
     public static let key = ExtractionBackendKey(kind: .pdf, backendID: ExtractionBackend.doclingServe.rawValue)
 
     public static func definition(
-        readCredential: @escaping ExtractionRuntimeAssembly.CredentialReader,
+        readCredential: @escaping ExtractionPluginFactory.CredentialReader,
         fetcher: any HTTPRequestFetcher
     ) -> PluginDefinition {
         PluginDefinition(

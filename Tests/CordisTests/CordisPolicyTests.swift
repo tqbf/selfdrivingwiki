@@ -76,6 +76,8 @@ struct CordisSourcePolicyTests {
             "Sources/WikiFSEngine/QueueRuntimeAssembly.swift",
             "Sources/WikiFSEngine/ExtractionRuntimeAssembly.swift",
             "Sources/WikiFSEngine/SearchRuntimeAssembly.swift",
+            "Sources/WikiFSEngine/SearchRuntimeFactory.swift",
+            "Sources/WikiFSEngine/ProductionPluginCatalogs.swift",
             "Sources/WikiFSEngine/DaemonTransportRuntimeAssembly.swift",
             "Sources/WikiFSEngine/SearchRuntimeRegistry.swift",
             // Phase 4.1 store-domain composition boundary: typed keys and the
@@ -121,6 +123,7 @@ struct CordisSourcePolicyTests {
             "Sources/WikiFSEngine/IntegrationServiceKeys.swift",
             "Sources/WikiFSEngine/IntegrationPlugins.swift",
             "Sources/WikiCtlCore/CLITantivyLegResolver.swift",
+            "Sources/WikiCtlCore/CLIPluginCatalog.swift",
             // Phase 5a diagnostic composition boundary: resolves loader data
             // without exposing a Cordis context to command implementations.
             "Sources/WikiCtlCore/DumpConfigCommand.swift",

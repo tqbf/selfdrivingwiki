@@ -47,6 +47,21 @@ public struct SearchRuntimeAssembly: Sendable {
         self.changeStreamFactory = changeStreamFactory
     }
 
+    public static func runtimeFactory(
+        identity: SearchRuntimeIdentity,
+        contentSource: any TantivyContentSource,
+        changeStreamFactory: any SearchChangeStreamFactory
+    ) -> SearchRuntimeFactory {
+        let assembly = Self(
+            identity: identity,
+            contentSource: contentSource,
+            changeStreamFactory: changeStreamFactory)
+        return SearchRuntimeFactory(
+            identity: identity,
+            changeStreamFactory: changeStreamFactory,
+            assemble: { context in try await assembly.assemble(in: context) })
+    }
+
     public func assemble(in childContext: CordisContext) async throws -> SearchRuntimeHandle {
         try await assemble(in: childContext, registrationOrder: Component.allCases)
     }

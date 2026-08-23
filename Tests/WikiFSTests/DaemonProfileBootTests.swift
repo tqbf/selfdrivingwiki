@@ -21,7 +21,7 @@ struct DaemonProfileBootTests {
             wikiID: "daemon-profile-test",
             includeAppProviders: false)
         let booted = try await CordisBoot.boot(.init(
-            catalog: try ProfileBootFixture.catalog(),
+            catalog: try ProfileBootFixture.daemonCatalog(),
             layers: [PatchFile(entries: entries)]))
 
         #expect(await booted.tree.mountedEntryIDs.count == entries.count)
@@ -30,6 +30,7 @@ struct DaemonProfileBootTests {
         let transport = try #require(try await booted.context.find(TransportServiceKeys.transport))
         #expect(await renderers.providerIDs().isEmpty)
         #expect(await transport.providerIDs().isEmpty)
+        _ = try ProfileBootFixture.cliCatalog()
 
         try await booted.shutdown()
     }

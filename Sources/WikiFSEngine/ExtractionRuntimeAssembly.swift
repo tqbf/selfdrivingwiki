@@ -10,9 +10,6 @@ public enum ExtractionRuntimeAssemblyError: Error, Equatable, Sendable {
 }
 
 public struct ExtractionRuntimeAssembly: Sendable {
-    public typealias CredentialReader = @Sendable (ExtractionSecret) -> String?
-    public typealias ACPResolver = @Sendable (ExtractionConfig) -> (any MarkdownExtractor)?
-    public typealias LocalExtractorFactory = @Sendable () async -> any MarkdownExtractor
     public typealias BackendResolver = ExtractionRuntime.BackendResolver
 
     internal enum Component: String, CaseIterable, Sendable {
@@ -29,13 +26,13 @@ public struct ExtractionRuntimeAssembly: Sendable {
     private enum Keys {
         static let configurationReader = ServiceKey<ExtractionRuntime.ConfigurationReader>(
             label: "extraction.configuration-reader")
-        static let credentialReader = ServiceKey<CredentialReader>(
+        static let credentialReader = ServiceKey<ExtractionPluginFactory.CredentialReader>(
             label: "extraction.credential-reader")
-        static let acpResolver = ServiceKey<ACPResolver>(
+        static let acpResolver = ServiceKey<ExtractionPluginFactory.ACPResolver>(
             label: "extraction.acp-resolver")
         static let httpFetcher = ServiceKey<any HTTPRequestFetcher>(
             label: "extraction.http-fetcher")
-        static let localExtractorFactory = ServiceKey<LocalExtractorFactory>(
+        static let localExtractorFactory = ServiceKey<ExtractionPluginFactory.LocalExtractor>(
             label: "extraction.local-extractor-factory")
         static let backendResolver = ServiceKey<BackendResolver>(
             label: "extraction.backend-resolver")
@@ -46,17 +43,17 @@ public struct ExtractionRuntimeAssembly: Sendable {
     }
 
     public let readConfiguration: ExtractionRuntime.ConfigurationReader
-    public let readCredential: CredentialReader
-    public let resolveACP: ACPResolver
+    public let readCredential: ExtractionPluginFactory.CredentialReader
+    public let resolveACP: ExtractionPluginFactory.ACPResolver
     public let httpFetcher: any HTTPRequestFetcher
-    public let makeLocalExtractor: LocalExtractorFactory
+    public let makeLocalExtractor: ExtractionPluginFactory.LocalExtractor
 
     public init(
         readConfiguration: @escaping ExtractionRuntime.ConfigurationReader,
-        readCredential: @escaping CredentialReader,
-        resolveACP: @escaping ACPResolver,
+        readCredential: @escaping ExtractionPluginFactory.CredentialReader,
+        resolveACP: @escaping ExtractionPluginFactory.ACPResolver,
         httpFetcher: any HTTPRequestFetcher,
-        makeLocalExtractor: @escaping LocalExtractorFactory
+        makeLocalExtractor: @escaping ExtractionPluginFactory.LocalExtractor
     ) {
         self.readConfiguration = readConfiguration
         self.readCredential = readCredential

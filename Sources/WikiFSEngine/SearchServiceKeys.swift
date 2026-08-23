@@ -21,26 +21,20 @@ public struct SearchProviderKey: Hashable, Sendable, CustomStringConvertible {
 }
 
 #if os(macOS)
-/// Lazy factory for the existing per-wiki Tantivy runtime composition.
+/// Lazy factory for one per-wiki Tantivy runtime composition.
 public struct TantivySearchProvider: Sendable {
-    public typealias Factory = @Sendable (
-        SearchRuntimeIdentity,
-        any TantivyContentSource,
-        any SearchChangeStreamFactory
-    ) -> SearchRuntimeAssembly
+    private let makeRuntime: SearchRuntimeFactory.Factory
 
-    private let makeAssembly: Factory
-
-    public init(makeAssembly: @escaping Factory) {
-        self.makeAssembly = makeAssembly
+    public init(makeRuntime: @escaping SearchRuntimeFactory.Factory) {
+        self.makeRuntime = makeRuntime
     }
 
-    public func assembly(
+    public func runtime(
         identity: SearchRuntimeIdentity,
         contentSource: any TantivyContentSource,
         changeStreamFactory: any SearchChangeStreamFactory
-    ) -> SearchRuntimeAssembly {
-        makeAssembly(identity, contentSource, changeStreamFactory)
+    ) -> SearchRuntimeFactory {
+        makeRuntime(identity, contentSource, changeStreamFactory)
     }
 }
 #endif

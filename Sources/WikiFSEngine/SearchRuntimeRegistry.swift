@@ -66,8 +66,15 @@ public actor SearchRuntimeRegistry {
     }
 
     public func assemble(_ assembly: SearchRuntimeAssembly) async throws -> SearchRuntimeLease {
+        try await assemble(SearchRuntimeFactory(
+            identity: assembly.identity,
+            changeStreamFactory: assembly.changeStreamFactory,
+            assemble: { context in try await assembly.assemble(in: context) }))
+    }
+
+    public func assemble(_ runtime: SearchRuntimeFactory) async throws -> SearchRuntimeLease {
         guard !shuttingDown else { throw SearchRuntimeRegistryError.shuttingDown }
-        let wikiID = assembly.identity.wikiID
+        let wikiID = runtime.identity.wikiID
         guard active[wikiID] == nil, starting[wikiID] == nil else {
             throw SearchRuntimeRegistryError.wikiAlreadyActive(wikiID)
         }
@@ -90,7 +97,7 @@ public actor SearchRuntimeRegistry {
             throw SearchRuntimeRegistryError.shuttingDown
         }
         starting[wikiID]?.childContext = child
-        let handle = try await assembly.assemble(in: child)
+        let handle = try await runtime.assemble(in: child)
         guard !shuttingDown else {
             try await handle.dispose()
             throw SearchRuntimeRegistryError.shuttingDown
