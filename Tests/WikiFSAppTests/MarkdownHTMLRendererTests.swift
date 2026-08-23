@@ -728,6 +728,7 @@ struct MarkdownHTMLRendererTests {
         #expect(html.contains(#"id="diagram" class="mermaid""#))
         #expect(html.contains(#"data-mermaid-theme="dark""#))
         #expect(html.contains("theme:'dark'"))
+        #expect(html.contains(#"rendered.\n\n' + String(reason)"#))
         #expect(html.contains("width: \(Int(PageEditorMetrics.readableContentWidth))px"))
         #expect(html.contains(MermaidRendererAssets.sharedCSS))
         #expect(html.contains(#"id="source" hidden"#) == false)

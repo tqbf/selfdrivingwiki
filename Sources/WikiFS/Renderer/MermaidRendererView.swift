@@ -167,12 +167,12 @@ struct MermaidRendererWebView: NSViewRepresentable {
                 mermaid.run({ nodes:[diagram] }).catch(function(reason){
                   diagram.hidden = true;
                   error.hidden = false;
-                  error.textContent = 'The Mermaid diagram could not be rendered.\n\n' + String(reason);
+                  error.textContent = 'The Mermaid diagram could not be rendered.\\n\\n' + String(reason);
                 });
               } catch (reason) {
                 diagram.hidden = true;
                 error.hidden = false;
-                error.textContent = 'The Mermaid diagram could not be rendered.\n\n' + String(reason);
+                error.textContent = 'The Mermaid diagram could not be rendered.\\n\\n' + String(reason);
               }
             })();
             </script></body></html>

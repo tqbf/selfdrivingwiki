@@ -15,7 +15,7 @@ struct MermaidRendererHostedTests {
     }()
 
     @Test(
-        "standalone Mermaid renderer paints the Testbed diagram at reader size and app theme",
+        "standalone Mermaid renderer paints the requested palette at reader size",
         arguments: [ColorScheme.light, .dark])
     func standaloneRendererMatchesReaderPresentation(colorScheme: ColorScheme) async throws {
         _ = Self.app
@@ -54,7 +54,10 @@ struct MermaidRendererHostedTests {
               var diagram = document.getElementById('diagram');
               var svg = diagram && diagram.querySelector('svg');
               if (svg) {
-                return 'svg:' + diagram.dataset.mermaidTheme + ':'
+                var node = svg.querySelector('.node rect, .node polygon, .node circle');
+                var fill = node ? getComputedStyle(node).fill : 'missing';
+                var configuredTheme = mermaid.mermaidAPI.getConfig().theme || 'missing';
+                return 'svg:' + configuredTheme + ':' + fill + ':'
                   + Math.round(diagram.getBoundingClientRect().width) + ':'
                   + Math.round(svg.getBoundingClientRect().width);
               }
@@ -67,11 +70,18 @@ struct MermaidRendererHostedTests {
             try await Task.sleep(for: .milliseconds(50))
         }
 
-        let expectedTheme = MermaidRendererTheme(colorScheme: colorScheme).mermaidName
         let expectedWidth = Int(PageEditorMetrics.readableContentWidth)
-        #expect(
-            result == "svg:\(expectedTheme):\(expectedWidth):\(expectedWidth)",
-            "standalone Mermaid runtime result: \(result)")
+        let expectedTheme = MermaidRendererTheme(colorScheme: colorScheme).mermaidName
+        let expectedFill = colorScheme == .dark ? "rgb(31, 32, 32)" : "rgb(236, 236, 255)"
+        let fields = result.split(separator: ":")
+        #expect(fields.count == 5, "standalone Mermaid runtime result: \(result)")
+        if fields.count == 5 {
+            #expect(fields[0] == "svg")
+            #expect(fields[1] == Substring(expectedTheme))
+            #expect(fields[2] == Substring(expectedFill), "Mermaid node fill: \(fields[2])")
+            #expect(fields[3] == Substring(String(expectedWidth)))
+            #expect(fields[4] == Substring(String(expectedWidth)))
+        }
     }
 
     private func waitForWebView(in window: NSWindow, timeout: Duration = .seconds(5)) async throws -> WKWebView {
