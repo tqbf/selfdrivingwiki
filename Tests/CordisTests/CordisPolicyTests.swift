@@ -110,6 +110,12 @@ struct CordisSourcePolicyTests {
             // plus lazy Tantivy and embeddings adapter registrations.
             "Sources/WikiFSEngine/SearchServiceKeys.swift",
             "Sources/WikiFSEngine/SearchPlugins.swift",
+            // Phases 4.9–4.10 renderer and transport composition boundaries:
+            // typed lazy registries with reversible adapter registrations.
+            "Sources/WikiFSEngine/RendererServiceKeys.swift",
+            "Sources/WikiFSEngine/RendererPlugins.swift",
+            "Sources/WikiFSEngine/TransportServiceKeys.swift",
+            "Sources/WikiFSEngine/TransportPlugins.swift",
             "Sources/WikiCtlCore/CLITantivyLegResolver.swift",
             "Sources/WikiFS/Renderer/RendererRuntimeAssembly.swift",
         ])
