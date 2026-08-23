@@ -82,6 +82,10 @@ struct CordisSourcePolicyTests {
             // plugin that owns store construction plus reversible bus bridging.
             "Sources/WikiFSEngine/StoreServiceKeys.swift",
             "Sources/WikiFSEngine/StorePlugin.swift",
+            // Phase 4.2 session-log composition boundary: append-only event
+            // facade and the reversible chat-persistence projection.
+            "Sources/WikiFSEngine/SessionServiceKeys.swift",
+            "Sources/WikiFSEngine/SessionsPlugin.swift",
             "Sources/WikiCtlCore/CLITantivyLegResolver.swift",
             "Sources/WikiFS/Renderer/RendererRuntimeAssembly.swift",
         ])
