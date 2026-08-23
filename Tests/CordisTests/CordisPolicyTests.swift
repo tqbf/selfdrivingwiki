@@ -102,6 +102,10 @@ struct CordisSourcePolicyTests {
             // events plus pre-step and request waterfalls.
             "Sources/WikiFSEngine/AgentLoopServiceKeys.swift",
             "Sources/WikiFSEngine/AgentLoopPlugin.swift",
+            // Phase 4.7 extraction composition boundary: typed lazy adapter
+            // registry and reversible backend registrations.
+            "Sources/WikiFSEngine/ExtractionServiceKeys.swift",
+            "Sources/WikiFSEngine/ExtractionPlugins.swift",
             "Sources/WikiCtlCore/CLITantivyLegResolver.swift",
             "Sources/WikiFS/Renderer/RendererRuntimeAssembly.swift",
         ])
