@@ -31,6 +31,32 @@ public final class RendererAuthorizedInputReader {
         state = Mutex(State())
     }
 
+    public init(
+        store: any WikiStore,
+        authorizedInput: RendererBridgeInput,
+        admittedSource: RendererEmbeddedContent.Source
+    ) throws {
+        guard Self.matchesVersion(admittedSource, input: authorizedInput) else {
+            throw ReaderError.unauthorizedInput
+        }
+        self.authorizedInput = authorizedInput
+        inputByteCount = { requestedInput in
+            guard requestedInput == authorizedInput else { throw ReaderError.unauthorizedInput }
+            return admittedSource.bytes.count
+        }
+        readPayload = { requestedInput in
+            guard requestedInput == authorizedInput else { throw ReaderError.unauthorizedInput }
+            let payload = try Self.readPinnedPayload(from: store, input: requestedInput)
+            guard payload.mimeType == admittedSource.mimeType.rawValue,
+                  payload.bytes == admittedSource.bytes,
+                  RendererSHA256.digest(payload.bytes) == admittedSource.digest else {
+                throw ReaderError.unavailablePinnedInput
+            }
+            return payload
+        }
+        state = Mutex(State())
+    }
+
     init(
         authorizedInput: RendererBridgeInput,
         inputByteCount: @escaping (RendererBridgeInput) throws -> Int?,
@@ -79,6 +105,20 @@ public final class RendererAuthorizedInputReader {
         }
         guard byteCount >= 0, byteCount <= maximumInputByteCount else {
             throw ReaderError.oversizedInput
+        }
+    }
+
+    private static func matchesVersion(
+        _ source: RendererEmbeddedContent.Source,
+        input: RendererBridgeInput
+    ) -> Bool {
+        switch input {
+        case .source(let versionID):
+            return source.sourceVersionID == versionID && source.sourceMarkdownVersionID == nil
+        case .markdown(let versionID):
+            return source.sourceVersionID == nil && source.sourceMarkdownVersionID == versionID
+        case .inlineArtifact:
+            return false
         }
     }
 

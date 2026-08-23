@@ -198,6 +198,82 @@ public enum MarkdownRichFenceAlias: String, Codable, CaseIterable, Hashable, Sen
     case excalidraw
 }
 
+/// The parsed host-approved metadata from a rich Markdown fence info string.
+/// Display metadata remains separate from the canonical renderer input.
+public struct MarkdownFenceInfo: Codable, Hashable, Sendable {
+    public let alias: MarkdownRichFenceAlias
+    public let displayTitle: String?
+
+    public init(alias: MarkdownRichFenceAlias, displayTitle: String? = nil) {
+        self.alias = alias
+        self.displayTitle = displayTitle
+    }
+
+    /// The stable renderer identity component. A display title is presentation
+    /// metadata and therefore never participates in canonical fence identity.
+    public var canonicalInfoString: String { alias.rawValue }
+
+    /// Parses one approved alias followed by an optional quoted title.
+    public static func parse(_ rawInfoString: String?) -> MarkdownFenceInfoParseResult {
+        guard let rawInfoString else { return .empty }
+        let trimmed = rawInfoString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return .empty }
+
+        let components = trimmed.split(maxSplits: 1, whereSeparator: \.isWhitespace)
+        guard let aliasComponent = components.first else { return .empty }
+        let normalizedAlias = aliasComponent.lowercased()
+        guard let alias = MarkdownRichFenceAlias(rawValue: normalizedAlias) else {
+            return components.count == 1
+                ? .unrecognizedAlias(normalizedAlias)
+                : .malformed
+        }
+        guard components.count == 2 else { return .rich(.init(alias: alias)) }
+        guard let displayTitle = quotedTitle(from: String(components[1])) else {
+            return .malformed
+        }
+        return .rich(.init(alias: alias, displayTitle: displayTitle))
+    }
+
+    private static func quotedTitle(from value: String) -> String? {
+        let titleSource = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard titleSource.first == "\"" else { return nil }
+
+        var title = ""
+        var isEscaping = false
+        var index = titleSource.index(after: titleSource.startIndex)
+        while index < titleSource.endIndex {
+            let character = titleSource[index]
+            if isEscaping {
+                guard character == "\"" || character == "\\" else { return nil }
+                title.append(character)
+                isEscaping = false
+            } else if character == "\\" {
+                isEscaping = true
+            } else if character == "\"" {
+                let trailing = titleSource[titleSource.index(after: index)...]
+                guard trailing.allSatisfy({ $0.isWhitespace }),
+                      !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                else { return nil }
+                return title
+            } else {
+                title.append(character)
+            }
+            index = titleSource.index(after: index)
+        }
+        return nil
+    }
+}
+
+/// The complete result of parsing a Markdown fence info string. Keeping
+/// malformed rich metadata distinct lets consumers preserve the typed raw-code
+/// fallback rather than guessing from unstructured strings.
+public enum MarkdownFenceInfoParseResult: Codable, Hashable, Sendable {
+    case empty
+    case rich(MarkdownFenceInfo)
+    case unrecognizedAlias(String)
+    case malformed
+}
+
 /// Typed reasons a fenced block stays as raw code instead of becoming a richer
 /// host presentation.
 public enum MarkdownFenceFallbackReason: String, Codable, CaseIterable, Hashable, Sendable {
@@ -260,6 +336,7 @@ public struct MarkdownFencedBlock: Codable, Hashable, Sendable {
     public let parserOrdinal: Int
     public let rawInfoString: String?
     public let normalizedInfoString: String?
+    public let fenceInfo: MarkdownFenceInfo?
     public let bytes: Data
     public let digest: RendererSHA256Digest
     public let blockID: MarkdownBlockID?
@@ -275,7 +352,14 @@ public struct MarkdownFencedBlock: Codable, Hashable, Sendable {
             throw RendererValidationError.invalidIdentifier(kind: "markdown fence ordinal", value: String(parserOrdinal))
         }
         let normalized = Self.normalizedInfoString(from: rawInfoString)
-        let digest = RendererSHA256.digest(Self.makeCanonicalDigestInput(bytes: bytes, normalizedInfoString: normalized))
+        let parsedInfo = MarkdownFenceInfo.parse(rawInfoString)
+        let canonicalInfoString: String?
+        if case .rich(let fenceInfo) = parsedInfo {
+            canonicalInfoString = fenceInfo.canonicalInfoString
+        } else {
+            canonicalInfoString = normalized
+        }
+        let digest = RendererSHA256.digest(Self.makeCanonicalDigestInput(bytes: bytes, normalizedInfoString: canonicalInfoString))
         let blockID: MarkdownBlockID?
         if let documentIdentity {
             blockID = try MarkdownBlockID(
@@ -291,10 +375,15 @@ public struct MarkdownFencedBlock: Codable, Hashable, Sendable {
         self.parserOrdinal = parserOrdinal
         self.rawInfoString = rawInfoString
         self.normalizedInfoString = normalized
+        if case .rich(let fenceInfo) = parsedInfo {
+            self.fenceInfo = fenceInfo
+        } else {
+            self.fenceInfo = nil
+        }
         self.bytes = bytes
         self.digest = digest
         self.blockID = blockID
-        self.presentationPolicy = Self.presentationPolicy(for: normalized)
+        self.presentationPolicy = Self.presentationPolicy(for: parsedInfo)
     }
 
     internal static func canonicalDigestInput(bytes: Data, normalizedInfoString: String?) -> Data {
@@ -319,7 +408,9 @@ public struct MarkdownFencedBlock: Codable, Hashable, Sendable {
     }
 
     public var canonicalDigestPayload: Data {
-        Self.makeCanonicalDigestInput(bytes: bytes, normalizedInfoString: normalizedInfoString)
+        Self.makeCanonicalDigestInput(
+            bytes: bytes,
+            normalizedInfoString: fenceInfo?.canonicalInfoString ?? normalizedInfoString)
     }
 
     fileprivate static func makeCanonicalDigestInput(bytes: Data, normalizedInfoString: String?) -> Data {
@@ -340,27 +431,24 @@ public struct MarkdownFencedBlock: Codable, Hashable, Sendable {
     }
 
     public static func presentationPolicy(for normalizedInfoString: String?) -> MarkdownFencePresentationPolicy {
-        guard let normalizedInfoString else {
+        presentationPolicy(for: MarkdownFenceInfo.parse(normalizedInfoString))
+    }
+
+    private static func presentationPolicy(for parsedInfo: MarkdownFenceInfoParseResult) -> MarkdownFencePresentationPolicy {
+        switch parsedInfo {
+        case .empty:
             return .typedRawCodeFallback(.emptyInfoString)
-        }
-        let components = normalizedInfoString.split(whereSeparator: \.isWhitespace)
-        guard let first = components.first else {
-            return .typedRawCodeFallback(.emptyInfoString)
-        }
-        guard components.count == 1 else {
+        case .malformed:
             return .typedRawCodeFallback(.malformedInfoString)
-        }
-        switch first {
-        case "mermaid":
-            return .hostApprovedRichRequest(.mermaid)
-        case "jsoncanvas":
-            return .hostApprovedRichRequest(.jsoncanvas)
-        case "excalidraw":
-            return .hostApprovedRichRequest(.excalidraw)
+        case .rich(let fenceInfo):
+            return .hostApprovedRichRequest(fenceInfo.alias)
+        case .unrecognizedAlias(let alias):
+            switch alias {
         case "html", "scala", "java", "swift", "json":
             return .ordinaryCode
         default:
             return .typedRawCodeFallback(.unsupportedAlias)
+            }
         }
     }
 }
@@ -384,6 +472,9 @@ public struct RendererEmbedPlan: Codable, Hashable, Sendable {
     public let rendererReference: RendererReference
     public let input: RendererEmbeddedContent?
     public let semanticContent: String
+    /// Optional authored display metadata. It does not authorize input or alter
+    /// canonical renderer identity.
+    public let displayTitle: String?
     public let fallbackReason: MarkdownFenceFallbackReason?
     public let activationMetadata: RendererEmbedActivationMetadata?
 
@@ -392,6 +483,7 @@ public struct RendererEmbedPlan: Codable, Hashable, Sendable {
         rendererReference: RendererReference,
         input: RendererEmbeddedContent? = nil,
         semanticContent: String,
+        displayTitle: String? = nil,
         fallbackReason: MarkdownFenceFallbackReason? = nil,
         activationMetadata: RendererEmbedActivationMetadata? = nil
     ) {
@@ -399,6 +491,7 @@ public struct RendererEmbedPlan: Codable, Hashable, Sendable {
         self.rendererReference = rendererReference
         self.input = input
         self.semanticContent = semanticContent
+        self.displayTitle = displayTitle
         self.fallbackReason = fallbackReason
         self.activationMetadata = activationMetadata
     }

@@ -1,4 +1,5 @@
 import Foundation
+import WikiFSTypes
 #if canImport(JavaScriptCore)
 import JavaScriptCore
 #endif
@@ -213,7 +214,8 @@ public final class MermaidValidator: @unchecked Sendable {
         var i = 0
         while i < lines.count {
             if let fence = fenceOpening(lines[i]) {
-                if fence.language.lowercased() == "mermaid" {
+                if case .rich(let fenceInfo) = MarkdownFenceInfo.parse(fence.infoString),
+                   fenceInfo.alias == .mermaid {
                     var inner: [String] = []
                     i += 1
                     while i < lines.count && !isClosingFence(lines[i], char: fence.char, minLength: fence.length) {
@@ -235,7 +237,7 @@ public final class MermaidValidator: @unchecked Sendable {
         return blocks
     }
 
-    private struct Fence { let char: Character; let length: Int; let language: String }
+    private struct Fence { let char: Character; let length: Int; let infoString: String }
 
     /// Recognize an opening fence: ≤3 leading spaces, then ≥3 of ``` or `~`, then
     /// an optional info string whose first token is the language.
@@ -249,8 +251,7 @@ public final class MermaidValidator: @unchecked Sendable {
         while rest.first == char { rest = rest.dropFirst(); len += 1 }
         guard len >= 3 else { return nil }
         let info = rest.trimmingCharacters(in: .whitespaces)
-        let language = info.split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? ""
-        return Fence(char: char, length: len, language: language)
+        return Fence(char: char, length: len, infoString: String(info))
     }
 
     /// A closing fence: same char, at least as long, nothing but spaces after.

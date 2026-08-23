@@ -12,7 +12,8 @@ enum RendererAttachmentHostPolicy {
     static let maximumCoordinateMagnitude = 1_000_000.0
     static let minimumReservedHeight = 96.0
     static let maximumReservedHeight = 1_200.0
-    static let maximumActiveAttachments = 1
+    /// Per-document reader policy; unrelated to the process-wide WebKit permit pool.
+    static let maximumExpandedRendererRows = 4
     static let jsonCanvasReservedHeight = 480.0
 
     static func preferredReservedHeight(for renderer: RendererReference?) -> CGFloat {
@@ -114,7 +115,13 @@ enum RendererAttachmentState: Equatable {
 enum RendererAttachmentActivationResult: Equatable {
     case activate
     case showInFullRenderer
+    case refused(RendererAttachmentActivationRefusal)
     case rejected
+}
+
+enum RendererAttachmentActivationRefusal: Equatable {
+    case rowBudget
+    case resourcePressure
 }
 
 @MainActor
@@ -125,13 +132,14 @@ final class RendererAttachmentCoordinator {
         var updateCount = 0
         var reservedHeight = RendererAttachmentHostPolicy.minimumReservedHeight
         var latestGeometry: RendererAttachmentGeometryMessage?
+        var activationRefusal: RendererAttachmentActivationRefusal?
     }
 
     let generation: Int
     private let activeLimit: Int
     private var records: [RendererAttachmentPlaceholderID: Record] = [:]
 
-    init(generation: Int, activeLimit: Int = RendererAttachmentHostPolicy.maximumActiveAttachments) {
+    init(generation: Int, activeLimit: Int = RendererAttachmentHostPolicy.maximumExpandedRendererRows) {
         self.generation = generation
         self.activeLimit = max(0, activeLimit)
     }
@@ -165,6 +173,12 @@ final class RendererAttachmentCoordinator {
         records[placeholderID]?.latestGeometry
     }
 
+    var placeholderIDs: [RendererAttachmentPlaceholderID] { Array(records.keys) }
+
+    func activationRefusal(for placeholderID: RendererAttachmentPlaceholderID) -> RendererAttachmentActivationRefusal? {
+        records[placeholderID]?.activationRefusal
+    }
+
     func reserveHeight(_ requested: CGFloat, for placeholderID: RendererAttachmentPlaceholderID) -> CGFloat {
         let height = min(
             RendererAttachmentHostPolicy.maximumReservedHeight,
@@ -179,8 +193,13 @@ final class RendererAttachmentCoordinator {
     func activate(_ placeholderID: RendererAttachmentPlaceholderID) -> RendererAttachmentActivationResult {
         guard var record = records[placeholderID], record.state == .card else { return .rejected }
         let activeCount = records.values.filter { $0.state == .active }.count
-        guard activeCount < activeLimit else { return .showInFullRenderer }
+        guard activeCount < activeLimit else {
+            record.activationRefusal = .rowBudget
+            records[placeholderID] = record
+            return .refused(.rowBudget)
+        }
         record.state = .active
+        record.activationRefusal = nil
         records[placeholderID] = record
         return .activate
     }
@@ -188,6 +207,14 @@ final class RendererAttachmentCoordinator {
     func collapse(_ placeholderID: RendererAttachmentPlaceholderID) {
         guard var record = records[placeholderID], record.state == .active else { return }
         record.state = .card
+        record.activationRefusal = nil
+        records[placeholderID] = record
+    }
+
+    func refuse(_ placeholderID: RendererAttachmentPlaceholderID, reason: RendererAttachmentActivationRefusal) {
+        guard var record = records[placeholderID], record.state == .card else { return }
+        record.state = .card
+        record.activationRefusal = reason
         records[placeholderID] = record
     }
 

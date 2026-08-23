@@ -25,7 +25,7 @@ struct RendererAttachmentCoordinatorTests {
         window.contentView = container; window.makeKeyAndOrderFront(nil)
         defer { container.teardown(); window.orderOut(nil) }
         let placeholder = try RendererAttachmentPlaceholderID(validating: "escape-canvas")
-        container.updateAttachmentViewport(.init(x: 40, y: 80, width: 160, height: 96))
+        container.updateAttachmentViewport(.init(x: 40, y: 80, width: 160, height: 96), for: placeholder)
         container.activateAttachment(named: placeholder)
         let child = try #require(container.subviews.flatMap(\.subviews).first { $0.accessibilityIdentifier() == "renderer-attachment-escape-canvas" })
         #expect(window.firstResponder === child)
@@ -95,7 +95,8 @@ struct RendererAttachmentCoordinatorTests {
         let generation = try #require(coordinator.attachmentGeneration)
         try Self.admitJSONCanvasPlaceholder(placeholder, coordinator: coordinator, webView: webView)
         try await Self.runJS("var e=document.createElement('section');e.id='dom-removal-canvas';e.className='sdw-renderer-card';e.style.cssText='width:160px;height:96px';document.body.appendChild(e);window.__sdwRendererAttachmentReport(\(generation));", in: webView)
-        try await Self.waitUntil("placeholder admission") { coordinator.attachmentState(for: placeholder) == .active }
+        try await Self.waitUntil("placeholder card") { coordinator.attachmentState(for: placeholder) == .card }
+        #expect(coordinator.activateAttachment(placeholder) == .activate)
         #expect(coordinator.attachmentState(for: placeholder) == .active)
         #expect(container.subviews.flatMap(\.subviews).contains { $0.accessibilityIdentifier() == "renderer-attachment-dom-removal-canvas" })
         try await Self.runJS("document.getElementById('dom-removal-canvas').remove();", in: webView)
@@ -319,7 +320,7 @@ struct RendererAttachmentCoordinatorTests {
 
         let placeholder = try RendererAttachmentPlaceholderID(validating: "hosted-canvas")
         let expectedVisibleRect = CGRect(x: 40, y: 80, width: 160, height: 96)
-        container.updateAttachmentViewport(expectedVisibleRect)
+        container.updateAttachmentViewport(expectedVisibleRect, for: placeholder)
         container.activateAttachment(named: placeholder)
 
         let child = try #require(container.subviews.flatMap(\.subviews).first {
@@ -327,11 +328,11 @@ struct RendererAttachmentCoordinatorTests {
         })
         #expect(child.frame == expectedVisibleRect)
         #expect(child.accessibilityRole() == .group)
-        #expect(child.accessibilityLabel() == "Interactive renderer attachment")
+        #expect(child.accessibilityLabel() == "Interactive renderer")
         #expect(container.hitTest(.init(x: 80, y: 100)) === child)
         #expect(container.hitTest(.init(x: 300, y: 260)) === webView)
 
-        container.collapseAttachment()
+        container.removeAttachment(named: placeholder)
         #expect(container.subviews.flatMap(\.subviews).contains { $0 === child } == false)
         #expect(window.firstResponder === webView)
 
@@ -339,6 +340,69 @@ struct RendererAttachmentCoordinatorTests {
         #expect(container.subviews.flatMap(\.subviews).contains { $0.accessibilityIdentifier() == "renderer-attachment-hosted-canvas" })
         container.teardown()
         #expect(container.subviews.isEmpty)
+    }
+
+    @Test("keyed children retain independent frames and route overlap to the focused child")
+    @MainActor
+    func keyedChildrenRetainFramesAndRouteOverlapToFocusedChild() throws {
+        let webView = WikiReaderWebView()
+        let container = WikiReaderContainerView(webView: webView)
+        container.frame = .init(x: 0, y: 0, width: 400, height: 300)
+        let window = NSWindow(contentRect: container.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        defer { container.teardown(); window.orderOut(nil) }
+
+        let first = try RendererAttachmentPlaceholderID(validating: "keyed-first-canvas")
+        let second = try RendererAttachmentPlaceholderID(validating: "keyed-second-canvas")
+        let firstRect = CGRect(x: 20, y: 20, width: 140, height: 120)
+        let secondRect = CGRect(x: 220, y: 20, width: 140, height: 120)
+        container.updateAttachmentViewport(firstRect, for: first)
+        container.updateAttachmentViewport(secondRect, for: second)
+        container.activateAttachment(named: first, takesFocus: false)
+        container.activateAttachment(named: second, takesFocus: false)
+
+        let firstChild = try #require(container.attachmentChild(named: first))
+        let secondChild = try #require(container.attachmentChild(named: second))
+        #expect(container.mountedAttachmentCount == 2)
+        #expect(firstChild.frame == firstRect)
+        #expect(secondChild.frame == secondRect)
+        #expect(container.hitTest(.init(x: 260, y: 80)) === secondChild)
+
+        let overlapRect = CGRect(x: 80, y: 20, width: 140, height: 120)
+        container.updateAttachmentViewport(overlapRect, for: first)
+        container.focusAttachment(named: first)
+        #expect(container.hitTest(.init(x: 100, y: 80)) === firstChild)
+
+        container.updateAttachmentViewport(overlapRect, for: second)
+        container.focusAttachment(named: second)
+        #expect(container.hitTest(.init(x: 100, y: 80)) === secondChild)
+    }
+
+    @Test("removing one keyed child preserves the other mounted child")
+    @MainActor
+    func removingOneKeyedChildPreservesOtherMountedChild() throws {
+        let webView = WikiReaderWebView()
+        let container = WikiReaderContainerView(webView: webView)
+        container.frame = .init(x: 0, y: 0, width: 400, height: 300)
+        let window = NSWindow(contentRect: container.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        defer { container.teardown(); window.orderOut(nil) }
+
+        let first = try RendererAttachmentPlaceholderID(validating: "removal-first-canvas")
+        let second = try RendererAttachmentPlaceholderID(validating: "removal-second-canvas")
+        container.updateAttachmentViewport(.init(x: 20, y: 20, width: 140, height: 120), for: first)
+        container.updateAttachmentViewport(.init(x: 220, y: 20, width: 140, height: 120), for: second)
+        container.activateAttachment(named: first, takesFocus: false)
+        container.activateAttachment(named: second, takesFocus: false)
+        let retainedChild = try #require(container.attachmentChild(named: second))
+
+        container.removeAttachment(named: first)
+
+        #expect(container.attachmentChild(named: first) == nil)
+        #expect(container.attachmentChild(named: second) === retainedChild)
+        #expect(container.mountedAttachmentCount == 1)
     }
 
     @Test("auto-mounted attachment shows the focus indicator only while focused")
@@ -353,7 +417,7 @@ struct RendererAttachmentCoordinatorTests {
         defer { container.teardown(); window.orderOut(nil) }
 
         let placeholder = try RendererAttachmentPlaceholderID(validating: "focus-indicator-canvas")
-        container.updateAttachmentViewport(.init(x: 40, y: 80, width: 240, height: 160))
+        container.updateAttachmentViewport(.init(x: 40, y: 80, width: 240, height: 160), for: placeholder)
         _ = window.makeFirstResponder(webView)
         container.activateAttachment(named: placeholder, takesFocus: false)
 
@@ -372,9 +436,9 @@ struct RendererAttachmentCoordinatorTests {
         #expect(child.layer?.borderWidth == 0)
     }
 
-    @Test("hosted attachment header exposes accessible window and collapse actions")
+    @Test("hosted attachment exposes renderer content without duplicate native controls")
     @MainActor
-    func hostedAttachmentHeaderActions() throws {
+    func hostedAttachmentHasNoDuplicateNativeControls() throws {
         let webView = WikiReaderWebView()
         let container = WikiReaderContainerView(webView: webView)
         container.frame = .init(x: 0, y: 0, width: 400, height: 300)
@@ -383,78 +447,20 @@ struct RendererAttachmentCoordinatorTests {
         window.makeKeyAndOrderFront(nil)
         defer { container.teardown(); window.orderOut(nil) }
 
-        let placeholder = try RendererAttachmentPlaceholderID(validating: "header-actions-canvas")
-        var opened = false
-        var collapsed = false
-        container.updateAttachmentViewport(.init(x: 40, y: 80, width: 240, height: 160))
-        container.activateAttachment(
-            named: placeholder,
-            onOpen: { opened = true },
-            onExit: { collapsed = true })
-
-        let child = try #require(container.subviews.flatMap(\.subviews).first {
-            $0.accessibilityIdentifier() == "renderer-attachment-header-actions-canvas"
-        })
-        let toolbar = try #require(child.subviews.first {
-            $0.accessibilityIdentifier() == "renderer-attachment-toolbar-header-actions-canvas"
-        })
-        let buttons = toolbar.subviews.flatMap(\.subviews).compactMap { $0 as? NSButton }
-        let openButton = try #require(buttons.first { $0.title == "Open in Window" })
-        let collapseButton = try #require(buttons.first { $0.title == "Collapse" })
-        #expect(openButton.accessibilityLabel() == "Open in Window")
-        #expect(collapseButton.accessibilityLabel() == "Collapse")
-
-        openButton.performClick(nil)
-        collapseButton.performClick(nil)
-        #expect(opened)
-        #expect(collapsed)
-    }
-
-    @Test("attachment header routes genuine pointer clicks to its controls")
-    @MainActor
-    func attachmentHeaderRoutesPointerClicks() throws {
-        let webView = WikiReaderWebView()
-        let container = WikiReaderContainerView(webView: webView)
-        container.frame = .init(x: 0, y: 0, width: 400, height: 300)
-        let window = NSWindow(contentRect: container.bounds, styleMask: [.titled], backing: .buffered, defer: false)
-        window.contentView = container
-        window.makeKeyAndOrderFront(nil)
-        defer { container.teardown(); window.orderOut(nil) }
-
-        let placeholder = try RendererAttachmentPlaceholderID(validating: "pointer-header-canvas")
-        var opened = false
-        var collapsed = false
-        container.updateAttachmentViewport(.init(x: 40, y: 80, width: 300, height: 180))
-        container.activateAttachment(
-            named: placeholder,
-            onOpen: { opened = true },
-            onExit: { collapsed = true })
+        let placeholder = try RendererAttachmentPlaceholderID(validating: "renderer-content-canvas")
+        let authoredTitle = "System architecture with a long descriptive title"
+        let content = AnyView(Color.blue.accessibilityIdentifier("renderer-content"))
+        container.updateAttachmentViewport(.init(x: 40, y: 80, width: 240, height: 160), for: placeholder)
+        container.activateAttachment(named: placeholder, title: authoredTitle, content: content)
         container.layoutSubtreeIfNeeded()
 
         let child = try #require(container.subviews.flatMap(\.subviews).first {
-            $0.accessibilityIdentifier() == "renderer-attachment-pointer-header-canvas"
+            $0.accessibilityIdentifier() == "renderer-attachment-renderer-content-canvas"
         })
-        let toolbar = try #require(child.subviews.first {
-            $0.accessibilityIdentifier() == "renderer-attachment-toolbar-pointer-header-canvas"
-        })
-        let buttons = toolbar.subviews.flatMap(\.subviews).compactMap { $0 as? NSButton }
-        let openButton = try #require(buttons.first { $0.title == "Open in Window" })
-        let collapseButton = try #require(buttons.first { $0.title == "Collapse" })
-
-        let openPoint = openButton.convert(
-            NSPoint(x: openButton.bounds.midX, y: openButton.bounds.midY),
-            to: container)
-        let collapsePoint = collapseButton.convert(
-            NSPoint(x: collapseButton.bounds.midX, y: collapseButton.bounds.midY),
-            to: container)
-        #expect(container.hitTest(openPoint) === openButton)
-        #expect(container.hitTest(collapsePoint) === collapseButton)
-
-        Self.sendPointerClick(to: window, view: openButton)
-        Self.sendPointerClick(to: window, view: collapseButton)
-
-        #expect(opened)
-        #expect(collapsed)
+        #expect(child.accessibilityLabel() == "\(authoredTitle) renderer")
+        #expect(child.subviews.flatMap(\.subviews).contains { $0 is NSButton } == false)
+        let center = child.convert(NSPoint(x: child.bounds.midX, y: child.bounds.midY), to: container)
+        #expect(container.hitTest(center) !== webView)
     }
 
     @Test("hosted JSON Canvas attachment mounts the factory's native SwiftUI view")
@@ -476,7 +482,7 @@ struct RendererAttachmentCoordinatorTests {
         let input = NativeJSONCanvasAttachmentInput.source(try .init(validating: source))
         let factory = NativeJSONCanvasAttachmentFactory { _ in Self.jsonCanvasBytes }
         let placeholder = try RendererAttachmentPlaceholderID(validating: "mounted-json-canvas")
-        container.updateAttachmentViewport(.init(x: 40, y: 80, width: 160, height: 96))
+        container.updateAttachmentViewport(.init(x: 40, y: 80, width: 160, height: 96), for: placeholder)
 
         container.activateAttachment(named: placeholder, content: try factory.makeView(for: input))
         container.layoutSubtreeIfNeeded()
@@ -550,9 +556,9 @@ struct RendererAttachmentCoordinatorTests {
         #expect(window.firstResponder === child)
     }
 
-    @Test("an admitted JSON Canvas fence auto-mounts on its first visible geometry report")
+    @Test("an admitted JSON Canvas fence mounts only after disclosure activation")
     @MainActor
-    func admittedJSONCanvasFenceAutoMountsWithoutActivation() throws {
+    func admittedJSONCanvasFenceMountsAfterDisclosureActivation() throws {
         let webView = WikiReaderWebView()
         let container = WikiReaderContainerView(webView: webView)
         container.frame = .init(x: 0, y: 0, width: 400, height: 300)
@@ -578,15 +584,22 @@ struct RendererAttachmentCoordinatorTests {
         _ = window.makeFirstResponder(webView)
         coordinator.handleAttachmentGeometry(geometry)
 
-        #expect(coordinator.attachmentState(for: placeholder) == .active)
+        #expect(coordinator.attachmentState(for: placeholder) == .card)
+        #expect(window.firstResponder === webView)
+
+        #expect(coordinator.activateAttachment(placeholder) == .activate)
         let child = try #require(container.subviews.flatMap(\.subviews).first {
             $0.accessibilityIdentifier() == "renderer-attachment-auto-mounted-canvas"
         })
         #expect(Self.containsHostingView(in: child))
-        #expect(window.firstResponder === webView)
-
-        #expect(coordinator.activateAttachment(placeholder) == .activate)
+        #expect(child.frame == .zero)
         #expect(window.firstResponder === child)
+
+        coordinator.collapseAttachment(placeholder)
+
+        #expect(coordinator.attachmentState(for: placeholder) == .card)
+        #expect(container.ownsMountedAttachment(named: placeholder) == false)
+        #expect(window.firstResponder === webView)
     }
 
     @Test("reader attachment composition accepts package-style inline renderers through a generic resolver")
@@ -602,7 +615,8 @@ struct RendererAttachmentCoordinatorTests {
         #expect(source.contains("RendererInlineAttachmentResolver"))
         #expect(source.contains("BuiltInRendererReference.reference(for: .jsonCanvas)") == false)
         #expect(source.contains(#"__sdwRendererAttachmentReserve(\"\(identifier)\""#))
-        #expect(source.contains(#"\(function)(\"\(identifier)\")"#))
+        #expect(source.contains("setRowExpansion(true, for: placeholderID)"))
+        #expect(source.contains("setCollapseControl") == false)
 
         let pageDetail = try String(
             contentsOf: root.appendingPathComponent("Sources/WikiFS/Pages/PageDetailView.swift"),
@@ -612,9 +626,9 @@ struct RendererAttachmentCoordinatorTests {
         #expect(pageDetail.contains("installedRendererFactoryInputs"))
     }
 
-    @Test("a package-style renderer supplied by the inline resolver auto-mounts without full-renderer fallback")
+    @Test("a package-style renderer remains collapsed until its disclosure activates generic composition")
     @MainActor
-    func packageStyleInlineResolverAutoMounts() throws {
+    func packageStyleInlineRendererStartsCollapsedUntilDisclosureActivation() throws {
         let webView = WikiReaderWebView()
         let container = WikiReaderContainerView(webView: webView)
         container.frame = .init(x: 0, y: 0, width: 400, height: 300)
@@ -627,11 +641,11 @@ struct RendererAttachmentCoordinatorTests {
         coordinator.webView = webView
         coordinator.attachmentContainer = container
         Self.startLifecycleLoad(coordinator, webView: webView)
-        var resolved = false
+        var resolverCalls = 0
         var presented = 0
         webView.onRendererActivation = { _, _ in presented += 1 }
         coordinator.inlineAttachmentResolver = { _, _, _ in
-            resolved = true
+            resolverCalls += 1
             return .content(AnyView(Text("package-style-inline-renderer")))
         }
 
@@ -672,24 +686,26 @@ struct RendererAttachmentCoordinatorTests {
             visible: true,
             revision: 1))
 
-        #expect(resolved)
-        #expect(coordinator.attachmentState(for: placeholder) == .active)
+        // Geometry registers the collapsed card only. It must not start the
+        // resolver/factory path, mount a host child, begin a session, or open
+        // the full renderer before the row's explicit disclosure action.
+        #expect(resolverCalls == 0)
+        #expect(coordinator.attachmentState(for: placeholder) == .card)
+        #expect(container.subviews.flatMap(\.subviews).contains {
+            $0.accessibilityIdentifier() == "renderer-attachment-package-inline-renderer"
+        } == false)
         #expect(presented == 0)
+
+        // This is the same explicit entry point used by the disclosure bridge.
+        #expect(coordinator.activateAttachment(placeholder) == .activate)
+        #expect(resolverCalls == 1)
+        #expect(coordinator.attachmentState(for: placeholder) == .active)
         let child = try #require(container.subviews.flatMap(\.subviews).first {
             $0.accessibilityIdentifier() == "renderer-attachment-package-inline-renderer"
         })
         #expect(Self.containsHostingView(in: child))
-
-        let toolbar = try #require(child.subviews.first {
-            $0.accessibilityIdentifier() == "renderer-attachment-toolbar-package-inline-renderer"
-        })
-        let toolbarStack = try #require(toolbar.subviews.first)
-        let buttons: [NSButton] = toolbarStack.subviews.compactMap { $0 as? NSButton }
-        let openButton = try #require(buttons.first {
-            $0.accessibilityIdentifier() == "renderer-attachment-open-package-inline-renderer"
-        })
-        openButton.performClick(nil)
-        #expect(presented == 1)
+        #expect(child.subviews.flatMap(\.subviews).contains { $0 is NSButton } == false)
+        #expect(presented == 0)
     }
 
     @Test("a stale package failure cannot fail a remounted attachment in a newer reader generation")
@@ -752,9 +768,13 @@ struct RendererAttachmentCoordinatorTests {
         }
 
         try admitAndReport()
+        #expect(coordinator.attachmentState(for: placeholder) == .card)
+        #expect(coordinator.activateAttachment(placeholder) == .activate)
         #expect(coordinator.attachmentState(for: placeholder) == .active)
         coordinator.startLoad(markdown: "# New generation", documentIdentity: Self.lifecycleIdentity, isLoading: .constant(true))
         try admitAndReport()
+        #expect(coordinator.attachmentState(for: placeholder) == .card)
+        #expect(coordinator.activateAttachment(placeholder) == .activate)
         #expect(coordinator.attachmentState(for: placeholder) == .active)
 
         let staleFailure = try #require(failures.first)
@@ -813,9 +833,9 @@ struct RendererAttachmentCoordinatorTests {
         #expect(child.frame == activeFrame)
     }
 
-    @Test("an admitted package fence opens the full renderer instead of an empty attachment")
+    @Test("unsupported disclosure stays collapsed without opening a window")
     @MainActor
-    func admittedPackageFencePresentsFullRenderer() throws {
+    func unsupportedDisclosureStaysCollapsed() throws {
         let webView = WikiReaderWebView()
         let container = WikiReaderContainerView(webView: webView)
         container.frame = .init(x: 0, y: 0, width: 400, height: 300)
@@ -867,18 +887,18 @@ struct RendererAttachmentCoordinatorTests {
             visible: true,
             revision: 1))
 
-        #expect(coordinator.activateAttachment(placeholder) == .showInFullRenderer)
-        #expect(presented == [reference])
+        #expect(coordinator.activateAttachment(placeholder) == .rejected)
+        #expect(presented.isEmpty)
         // No native child: a contentless mount would paint an empty bordered
-        // rectangle over the card and show the reader nothing.
+        // rectangle over the row and show the reader nothing.
         #expect(container.subviews.flatMap(\.subviews).contains {
             $0.accessibilityIdentifier() == "renderer-attachment-admitted-excalidraw"
         } == false)
-        // The record stays on `.card` so the control keeps working — the full
-        // renderer is a sheet whose dismissal the coordinator never observes.
+        // Expansion and Open in Window are separate actions. Unsupported inline
+        // content stays collapsed and keeps its row-budget slot free.
         #expect(coordinator.attachmentState(for: placeholder) == .card)
-        #expect(coordinator.activateAttachment(placeholder) == .showInFullRenderer)
-        #expect(presented.count == 2)
+        #expect(coordinator.activateAttachment(placeholder) == .rejected)
+        #expect(presented.isEmpty)
     }
 
     @Test("an unadmitted placeholder fails closed instead of mounting an empty attachment")
@@ -968,23 +988,73 @@ struct RendererAttachmentCoordinatorTests {
             to: .init(x: 0, y: 240, width: 400, height: 60)) == .init(x: 12.5, y: 240, width: 125, height: 35))
     }
 
-    @Test("activation never silently evicts an existing active attachment")
+    @Test("fifth row remains a typed collapsed budget refusal")
     @MainActor
-    func activationLimitPreservesExistingAttachment() throws {
-        let coordinator = RendererAttachmentCoordinator(generation: 1, activeLimit: 1)
-        let first = try RendererAttachmentPlaceholderID(validating: "first")
-        let second = try RendererAttachmentPlaceholderID(validating: "second")
+    func fifthRowCreatesNoImplicitWindow() throws {
+        let coordinator = RendererAttachmentCoordinator(generation: 1)
+        let placeholders = try (0...4).map { try RendererAttachmentPlaceholderID(validating: "fifth-contract-\($0)") }
         let geometry = { (id: RendererAttachmentPlaceholderID) in
             RendererAttachmentGeometryMessage(
                 generation: 1, placeholderID: id,
                 cssRect: .init(x: 0, y: 0, width: 100, height: 100), visible: true, revision: 1)
         }
-        #expect(coordinator.ingest(geometry(first)))
-        #expect(coordinator.ingest(geometry(second)))
-        #expect(coordinator.activate(first) == .activate)
-        #expect(coordinator.activate(second) == .showInFullRenderer)
-        #expect(coordinator.state(for: first) == .active)
-        #expect(coordinator.state(for: second) == .card)
+        for placeholder in placeholders { #expect(coordinator.ingest(geometry(placeholder))) }
+        for placeholder in placeholders.prefix(4) { #expect(coordinator.activate(placeholder) == .activate) }
+        #expect(coordinator.activate(placeholders[4]) == .refused(.rowBudget))
+        #expect(coordinator.state(for: placeholders[4]) == .card)
+        #expect(coordinator.activationRefusal(for: placeholders[4]) == .rowBudget)
+    }
+
+    @Test("four attachments expand independently and the fifth is refused before work")
+    @MainActor
+    func fourAttachmentsExpandIndependently() throws {
+        let coordinator = RendererAttachmentCoordinator(generation: 1)
+        let placeholders = try (0...4).map { try RendererAttachmentPlaceholderID(validating: "budget-\($0)") }
+        for placeholder in placeholders {
+            #expect(coordinator.ingest(.init(
+                generation: 1,
+                placeholderID: placeholder,
+                cssRect: .init(x: 0, y: 0, width: 100, height: 100),
+                visible: true,
+                revision: 1)))
+        }
+        for placeholder in placeholders.prefix(4) {
+            #expect(coordinator.activate(placeholder) == .activate)
+            #expect(coordinator.state(for: placeholder) == .active)
+        }
+        #expect(coordinator.activate(placeholders[4]) == .refused(.rowBudget))
+        #expect(coordinator.state(for: placeholders[4]) == .card)
+        #expect(coordinator.activationRefusal(for: placeholders[4]) == .rowBudget)
+    }
+
+    @Test("resource pressure stays retryable after a permit is released")
+    @MainActor
+    func retrySucceedsAfterPermitRelease() throws {
+        let coordinator = RendererAttachmentCoordinator(generation: 1)
+        let placeholder = try RendererAttachmentPlaceholderID(validating: "retry-pressure")
+        #expect(coordinator.ingest(.init(
+            generation: 1,
+            placeholderID: placeholder,
+            cssRect: .init(x: 0, y: 0, width: 100, height: 100),
+            visible: true,
+            revision: 1)))
+        coordinator.refuse(placeholder, reason: .resourcePressure)
+        #expect(coordinator.state(for: placeholder) == .card)
+        #expect(coordinator.activationRefusal(for: placeholder) == .resourcePressure)
+        #expect(coordinator.activate(placeholder) == .activate)
+        #expect(coordinator.activationRefusal(for: placeholder) == nil)
+    }
+
+    @Test("terminal failure cannot be resurrected by a refusal")
+    @MainActor
+    func terminalFailureCannotBeResurrected() throws {
+        let coordinator = RendererAttachmentCoordinator(generation: 1)
+        let placeholder = try RendererAttachmentPlaceholderID(validating: "terminal-failure")
+        #expect(coordinator.ingest(.init(generation: 1, placeholderID: placeholder, cssRect: .init(x: 0, y: 0, width: 10, height: 10), visible: true, revision: 1)))
+        coordinator.fail(placeholder)
+        coordinator.refuse(placeholder, reason: .resourcePressure)
+        #expect(coordinator.state(for: placeholder) == .failed)
+        #expect(coordinator.activationRefusal(for: placeholder) == nil)
     }
 
     @Test("attachment FSM does not expose synchronous transient states")

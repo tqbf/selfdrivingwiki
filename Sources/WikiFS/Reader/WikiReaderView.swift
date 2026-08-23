@@ -7,42 +7,69 @@ import WikiFSCore
 // pattern: Mixed (unavoidable)
 
 internal struct RendererEmbedActivationContext: Hashable, Sendable {
+    enum Identity: Hashable, Sendable {
+        case block(MarkdownBlockID)
+        case source(RendererEmbeddedContent.Source)
+    }
+
     let pageID: PageID
     let pageVersionID: PageVersionID
-    let blockID: MarkdownBlockID
+    let identity: Identity
     let rendererReference: RendererReference
     let input: RendererBridgeInput
     let capability: RendererSessionCapability
     let generation: Int
+    /// Presentation metadata only. It does not participate in authorization,
+    /// equality, hashing, renderer input, or stable content identity.
+    let displayTitle: String?
+
+    /// Compatibility accessor for inline-artifact callers. Source identities are
+    /// deliberately not coerced into a fake block.
+    var blockID: MarkdownBlockID? {
+        if case .block(let blockID) = identity { return blockID }
+        return nil
+    }
+
+    init(pageID: PageID, pageVersionID: PageVersionID, blockID: MarkdownBlockID,
+         rendererReference: RendererReference, input: RendererBridgeInput,
+         capability: RendererSessionCapability, generation: Int,
+         displayTitle: String? = nil) {
+        self.init(pageID: pageID, pageVersionID: pageVersionID, identity: .block(blockID),
+                  rendererReference: rendererReference, input: input,
+                  capability: capability, generation: generation, displayTitle: displayTitle)
+    }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.pageID == rhs.pageID &&
-        lhs.pageVersionID == rhs.pageVersionID &&
-        lhs.blockID == rhs.blockID &&
-        lhs.rendererReference == rhs.rendererReference &&
-        lhs.input == rhs.input &&
-        lhs.capability == rhs.capability &&
-        lhs.generation == rhs.generation
+        lhs.pageID == rhs.pageID && lhs.pageVersionID == rhs.pageVersionID && lhs.identity == rhs.identity &&
+        lhs.rendererReference == rhs.rendererReference && lhs.input == rhs.input &&
+        lhs.capability == rhs.capability && lhs.generation == rhs.generation
     }
 
     func hash(into hasher: inout Hasher) {
-        hasher.combine(pageID)
-        hasher.combine(pageVersionID)
-        hasher.combine(blockID)
-        hasher.combine(rendererReference)
-        hasher.combine(capability)
-        hasher.combine(generation)
+        hasher.combine(pageID); hasher.combine(pageVersionID); hasher.combine(identity)
+        hasher.combine(rendererReference); hasher.combine(capability); hasher.combine(generation)
         switch input {
         case .source(let versionID):
-            hasher.combine(0)
-            hasher.combine(versionID)
+            hasher.combine(0); hasher.combine(versionID)
         case .markdown(let versionID):
-            hasher.combine(1)
-            hasher.combine(versionID)
+            hasher.combine(1); hasher.combine(versionID)
         case .inlineArtifact(let artifact):
-            hasher.combine(2)
-            hasher.combine(artifact)
+            hasher.combine(2); hasher.combine(artifact)
         }
+    }
+
+    init(pageID: PageID, pageVersionID: PageVersionID, identity: Identity,
+         rendererReference: RendererReference, input: RendererBridgeInput,
+         capability: RendererSessionCapability, generation: Int,
+         displayTitle: String? = nil) {
+        self.pageID = pageID
+        self.pageVersionID = pageVersionID
+        self.identity = identity
+        self.rendererReference = rendererReference
+        self.input = input
+        self.capability = capability
+        self.generation = generation
+        self.displayTitle = displayTitle
     }
 }
 
@@ -105,6 +132,21 @@ internal final class RendererEmbedActivationAdmission: @unchecked Sendable {
         }
         return context
     }
+
+    func sourceContext(
+        sourceID: SourceID,
+        digest: RendererSHA256Digest,
+        mimeType: RendererMIMEType,
+        input: RendererBridgeInput
+    ) -> RendererEmbedActivationContext? {
+        lock.lock()
+        defer { lock.unlock() }
+        return registeredContexts.first { context in
+            guard case .source(let source) = context.identity else { return false }
+            return source.sourceID == sourceID && source.digest == digest && source.mimeType == mimeType
+                && context.input == input
+        }
+    }
 }
 
 // MARK: - WikiReaderView
@@ -151,6 +193,9 @@ struct WikiReaderView: View {
     /// Renderer-owned inline attachment construction. The reader owns the
     /// admitted placeholder lifecycle but does not know renderer formats.
     var inlineAttachmentResolver: RendererInlineAttachmentResolver = RendererInlineAttachmentResolverFactory.defaultResolver
+    /// Validated installed descriptor snapshot supplied by the reader host.
+    /// It is data-only; constructing renderer sessions remains downstream.
+    var inlineImageRendererDescriptors: [RendererDescriptor] = []
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
     @State private var isLoading = true
 
@@ -177,6 +222,7 @@ struct WikiReaderView: View {
                           addBookmarkHandler: addBookmarkHandler,
                           onRendererActivation: onRendererActivation,
                           inlineAttachmentResolver: inlineAttachmentResolver,
+                          inlineImageRendererDescriptors: inlineImageRendererDescriptors,
                           findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
             if isLoading {
                 ProgressView()
@@ -220,51 +266,58 @@ struct WikiReaderView: View {
         } catch {
             return nil
         }
-        let blockPageID = PageID(rawValue: items["blockPage"] ?? "")
-        let blockPageVersionID = PageVersionID(rawValue: items["blockPageVersion"] ?? "")
-        guard case .inlineArtifact(let artifact) = input,
-              let blockDigest = items["block"],
-              let blockOrdinal = Int(items["blockOrdinal"] ?? ""),
-              let mimeType = items["mime"],
-              blockPageID == admission.pageID,
-              blockPageVersionID == admission.pageVersionID,
-              artifact.pageID == admission.pageID,
-              artifact.pageVersionID == admission.pageVersionID,
-              artifact.blockID.pageID == admission.pageID,
-              artifact.blockID.pageVersionID == admission.pageVersionID,
-              artifact.blockID.parserOrdinal == blockOrdinal,
-              artifact.blockID.digest.hex == blockDigest,
-              artifact.digest.hex == blockDigest,
-              artifact.mimeType.rawValue == mimeType
-        else { return nil }
-        do {
-            let revalidated = try RendererEmbeddedContent.InlineArtifact(
-                pageID: artifact.pageID,
-                pageVersionID: artifact.pageVersionID,
-                blockID: artifact.blockID,
-                fenceKind: artifact.fenceKind,
-                mimeType: artifact.mimeType,
-                bytes: artifact.bytes)
-            guard revalidated == artifact else { return nil }
-            let reference = RendererReference(
-                packageID: packageID,
-                version: version,
-                registrationID: registrationID)
-            let activationContext = RendererEmbedActivationContext(
-                pageID: admission.pageID,
-                pageVersionID: admission.pageVersionID,
-                blockID: revalidated.blockID,
-                rendererReference: reference,
-                input: .inlineArtifact(revalidated),
-                capability: admission.capability,
-                generation: admission.generation)
-            guard admission.authorizes(context: activationContext) else { return nil }
-            return (
-                reference: reference,
-                input: .inlineArtifact(revalidated)
-            )
-        } catch {
-            return nil
+        guard let mimeType = items["mime"] else { return nil }
+        switch input {
+        case .inlineArtifact(let artifact):
+            let blockPageID = PageID(rawValue: items["blockPage"] ?? "")
+            let blockPageVersionID = PageVersionID(rawValue: items["blockPageVersion"] ?? "")
+            guard let blockDigest = items["block"],
+                  let blockOrdinal = Int(items["blockOrdinal"] ?? ""),
+                  blockPageID == admission.pageID,
+                  blockPageVersionID == admission.pageVersionID,
+                  artifact.pageID == admission.pageID,
+                  artifact.pageVersionID == admission.pageVersionID,
+                  artifact.blockID.pageID == admission.pageID,
+                  artifact.blockID.pageVersionID == admission.pageVersionID,
+                  artifact.blockID.parserOrdinal == blockOrdinal,
+                  artifact.blockID.digest.hex == blockDigest,
+                  artifact.digest.hex == blockDigest,
+                  artifact.mimeType.rawValue == mimeType else { return nil }
+            let reference = RendererReference(packageID: packageID, version: version, registrationID: registrationID)
+            let context = RendererEmbedActivationContext(pageID: admission.pageID, pageVersionID: admission.pageVersionID,
+                                                         blockID: artifact.blockID, rendererReference: reference,
+                                                         input: input, capability: admission.capability, generation: admission.generation)
+            guard admission.authorizes(context: context) else { return nil }
+            return (reference: reference, input: .inlineArtifact(artifact))
+        case .source, .markdown:
+            let sourceID = SourceID(rawValue: items["sourceID"] ?? "")
+            guard let digestHex = items["sourceDigest"] else { return nil }
+            let digest: RendererSHA256Digest
+            do { digest = try RendererSHA256Digest(hex: digestHex) } catch { return nil }
+            guard let sourceMIME = RendererMIMEType(rawValue: mimeType),
+                  let context = admission.sourceContext(
+                      sourceID: sourceID, digest: digest, mimeType: sourceMIME, input: input),
+                  case .source(let admittedSource) = context.identity,
+                  admittedSource.bytes.count <= WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount,
+                  RendererSHA256.digest(admittedSource.bytes) == admittedSource.digest,
+                  admittedSource.mimeType.rawValue == mimeType
+            else { return nil }
+            switch input {
+            case .source(let versionID):
+                guard admittedSource.sourceVersionID == versionID,
+                      items["sourceVersion"] == versionID.rawValue,
+                      items["sourceMarkdownVersion"] == nil else { return nil }
+            case .markdown(let versionID):
+                guard admittedSource.sourceMarkdownVersionID == versionID,
+                      items["sourceMarkdownVersion"] == versionID.rawValue,
+                      items["sourceVersion"] == nil else { return nil }
+            case .inlineArtifact:
+                return nil
+            }
+            let reference = RendererReference(packageID: packageID, version: version, registrationID: registrationID)
+            guard context.rendererReference == reference,
+                  admission.authorizes(context: context) else { return nil }
+            return (reference: reference, input: input)
         }
     }
 
@@ -368,22 +421,28 @@ struct WikiReaderView: View {
     (function(){
       try {
         var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-        mermaid.initialize({ startOnLoad:false, securityLevel:'strict', theme: dark ? 'dark' : 'default' });
-        var codes = document.querySelectorAll('code.language-mermaid');
-        codes.forEach(function(code){
-          var pre = code.parentElement;
-          if(!pre || pre.tagName !== 'PRE') return;
-          var div = document.createElement('div');
-          div.className = 'mermaid';
-          div.textContent = code.textContent;
-          pre.parentNode.replaceChild(div, pre);
-        });
-        mermaid.run({ querySelector: '.mermaid' }).catch(function(e){
-          console.error('mermaid run failed', e);
-        });
-      } catch(e) {
-        console.error('mermaid init failed', e);
-      }
+        if (!window.__sdwMermaidInitialized) {
+          mermaid.initialize({ startOnLoad:false, securityLevel:'strict', theme: dark ? 'dark' : 'default' });
+          window.__sdwMermaidInitialized = true;
+        }
+        window.__sdwRenderMermaidRow = function(row) {
+          if (!row || row.getAttribute('data-renderer-kind') !== 'mermaid') return;
+          var expansion = row.querySelector('.sdw-mermaid-row__expansion');
+          var code = expansion && expansion.querySelector('code.language-mermaid');
+          var diagram = expansion && expansion.querySelector('.sdw-mermaid-row__diagram');
+          if (!expansion || !code || !diagram || diagram.getAttribute('data-mermaid-rendered') === 'true' || diagram.getAttribute('data-mermaid-rendering') === 'true') return;
+          diagram.setAttribute('data-mermaid-rendering', 'true');
+          diagram.textContent = code.textContent;
+          try {
+            mermaid.run({ nodes: [diagram] }).then(function(){
+              diagram.removeAttribute('data-mermaid-rendering');
+              diagram.setAttribute('data-mermaid-rendered', 'true');
+              code.parentElement.hidden = true;
+              if (window.__sdwRendererAttachmentReport) window.__sdwRendererAttachmentReport();
+            }).catch(function(e){ diagram.removeAttribute('data-mermaid-rendering'); diagram.textContent = ''; code.parentElement.hidden = false; console.error('mermaid row render failed', e); });
+          } catch(e) { diagram.removeAttribute('data-mermaid-rendering'); diagram.textContent = ''; code.parentElement.hidden = false; console.error('mermaid row render failed', e); }
+        };
+      } catch(e) { console.error('mermaid init failed', e); }
     })();
     """
 
@@ -531,38 +590,39 @@ struct WikiReaderView: View {
           .sdw-code-operator { color: var(--code-operator); }
           .sdw-code-punctuation { color: var(--code-punctuation); }
           .sdw-code-constant { color: var(--code-constant); }
-          /* Rich-fence renderer cards. `MarkdownHTMLRenderer.rendererCardHTML`
-             emits a `<section class="sdw-renderer-card">` for every approved
-             fence (mermaid stays on its own `.mermaid` path). The card is the
-             static, in-flow surface; its action either mounts a native inline
-             attachment over this rect or opens the full renderer. Styled to
-             match `details.sdw-transclusion` above — same border, fill, and
-             radius — so both embed surfaces read as one family. Without these
-             rules the card degrades to unstyled stacked text. */
+          /* Renderer rows stay in normal document flow. The expanded native
+             renderer projects onto the matching expansion rectangle. */
           section.sdw-renderer-card {
-            margin: 0.6em 0; padding: 0.7em 0.9em; border-radius: 8px;
-            background: var(--code-bg); border: 1px solid var(--border);
+            margin: 0.35em 0; padding: 0.2em 0; border-bottom: 1px solid var(--border);
+            background: transparent;
           }
-          .sdw-renderer-card__header {
-            font-weight: 600; font-size: 0.95em; color: var(--text);
+          .sdw-renderer-card__row { gap: 0.35em; min-height: 2em; cursor: pointer; }
+          .sdw-renderer-card__title {
+            color: var(--text); font-size: 0.95em; font-weight: 400; line-height: 1.3;
           }
+          .sdw-renderer-card__disclosure {
+            inline-size: 2em; block-size: 2em; padding: 0; border: 0;
+            border-radius: 5px; background: transparent; color: var(--muted);
+            font: inherit; cursor: pointer;
+          }
+          .sdw-renderer-card__disclosure[aria-expanded="true"] span { display:inline-block; transform:rotate(90deg); }
           .sdw-renderer-card__summary {
-            margin: 0.15em 0 0; font-size: 0.9em; color: var(--muted);
+            margin: 0.35em 0 0; font-size: 0.9em; color: var(--muted);
           }
-          .sdw-renderer-card__fallback {
-            margin: 0.1em 0 0; font-size: 0.8em; color: var(--muted);
+          .sdw-renderer-card__fallback, .sdw-renderer-card__status {
+            margin: 0.25em 0 0; font-size: 0.85em; color: var(--muted);
           }
-          /* The action is an `<a>` and the collapse control a `<button>`; both
-             are drawn as the same bordered control so the card reads as one
-             affordance either side of activation. */
-          .sdw-renderer-card__action, .sdw-renderer-card__collapse {
-            display: inline-block; margin: 0.7em 0.4em 0 0;
-            padding: 0.2em 0.7em; border: 1px solid var(--border);
-            border-radius: 6px; background: none; font: inherit;
-            font-size: 0.9em; text-decoration: none; cursor: pointer;
+          .sdw-renderer-card__expansion { margin-top: 0.4em; }
+          .sdw-renderer-card__action {
+            display: inline-block; margin: 0; padding: 0.3em 0.65em;
+            border: 1px solid var(--border); border-radius: 6px;
+            background: transparent; color: -webkit-link; font: inherit; font-size: 0.9em;
+            line-height: 1.25; text-decoration: none; cursor: pointer;
           }
-          .sdw-renderer-card__action { color: -webkit-link; }
-          .sdw-renderer-card__collapse { color: var(--muted); }
+          .sdw-renderer-card__disclosure:focus-visible,
+          .sdw-renderer-card__action:focus-visible {
+            outline: 2px solid -webkit-focus-ring-color; outline-offset: 2px;
+          }
           hr { border: none; border-top: 1px solid var(--border); margin: 1.5em 0; }
           table { border-collapse: collapse; margin: 0 0 1em; }
           th, td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; vertical-align: top; }
@@ -576,6 +636,12 @@ struct WikiReaderView: View {
           mark.sdwhl { background: rgba(255, 213, 79, 0.8); border-radius: 2px; }
           .mermaid { text-align:center; margin:0 0 1em; overflow:auto; }
           .mermaid svg { max-width:100%; height:auto; }
+          .sdw-mermaid-row__expansion { margin-top:0.6em; }
+          .sdw-mermaid-row__diagram { min-height:0; }
+          .sdw-mermaid-row__expansion[aria-hidden="true"] { display:none; }
+          @media (prefers-reduced-motion: reduce) {
+            .sdw-renderer-card__disclosure span { transition:none; }
+          }
         </style></head>
         <body><article>\(body)</article>\(mermaidScripts)</body></html>
         """
@@ -709,17 +775,16 @@ final class WikiReaderWebView: WKWebView {
         attachmentActionProxy.target = self
     }
 
-    private static let rendererAttachmentGeometryJS = """
+    nonisolated static let rendererAttachmentGeometryJS = """
     (function(){
       var known={}; function report(){ var g=window.__sdwRendererAttachmentGeneration; if(typeof g!=='number')return; var current={};
-        document.querySelectorAll('.sdw-renderer-card[id]').forEach(function(e,i){current[e.id]=true;var r=e.getBoundingClientRect();
+        document.querySelectorAll('.sdw-renderer-card[id]').forEach(function(e,i){current[e.id]=true;var expansion=e.querySelector('.sdw-renderer-card__expansion');var target=e.dataset.rendererExpanded==='true'&&expansion?expansion:e;var r=target.getBoundingClientRect();
           window.webkit.messageHandlers.rendererAttachmentGeometry.postMessage({generation:g,placeholderID:e.id,x:r.x,y:r.y,width:r.width,height:r.height,visible:r.bottom>0&&r.right>0&&r.top<innerHeight&&r.left<innerWidth,revision:(window.__sdwRendererAttachmentRevision||0)});});
         Object.keys(known).forEach(function(id){if(!current[id])window.webkit.messageHandlers.rendererAttachmentGeometry.postMessage({kind:'removed',generation:g,placeholderID:id});}); known=current; }
       window.__sdwRendererAttachmentReport=function(g){window.__sdwRendererAttachmentGeneration=g;window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();};
-      window.__sdwRendererAttachmentReserve=function(id,height){var e=document.getElementById(id); if(!e||!Number.isFinite(height))return; e.style.minHeight=height+'px'; window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1; report();};
-      window.__sdwRendererAttachmentPresentCollapse=function(id){var card=document.getElementById(id); if(!card||card.querySelector('.sdw-renderer-card__collapse'))return; var b=document.createElement('button');b.className='sdw-renderer-card__collapse';b.type='button';b.textContent='Collapse';b.setAttribute('aria-label','Collapse interactive renderer');card.appendChild(b);};
-      window.__sdwRendererAttachmentDismissCollapse=function(id){var card=document.getElementById(id); if(!card)return; var b=card.querySelector('.sdw-renderer-card__collapse'); if(b)b.remove();};
-      document.addEventListener('click',function(event){var control=event.target.closest('.sdw-renderer-card__action,.sdw-renderer-card__collapse');if(!control)return;var card=control.closest('.sdw-renderer-card[id]');if(!card)return;event.preventDefault();var collapse=control.classList.contains('sdw-renderer-card__collapse');window.webkit.messageHandlers.rendererAttachmentAction.postMessage({action:collapse?'collapse':'activate',placeholderID:card.id});});
+      window.__sdwRendererAttachmentReserve=function(id,height){var card=document.getElementById(id);var expansion=card&&card.querySelector('.sdw-renderer-card__expansion');if(!expansion||!Number.isFinite(height))return;expansion.style.minHeight=height+'px';window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();};
+      window.__sdwRendererAttachmentState=function(id,expanded,status){var card=document.getElementById(id);if(!card)return;card.dataset.rendererExpanded=expanded?'true':'false';var disclosure=card.querySelector('.sdw-renderer-card__disclosure');if(disclosure)disclosure.setAttribute('aria-expanded',expanded?'true':'false');var expansion=card.querySelector('.sdw-renderer-card__expansion');if(expansion){expansion.hidden=!expanded;expansion.setAttribute('aria-hidden',expanded?'false':'true');}var prior=card.querySelector('.sdw-renderer-card__status');if(prior)prior.remove();if(status){var node=document.createElement('p');node.className='sdw-renderer-card__status';node.setAttribute('role','status');node.textContent=status;expansion.appendChild(node);}window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();};
+      document.addEventListener('click',function(event){if(event.target.closest('[data-renderer-action="open-window"]'))return;var rowHeader=event.target.closest('.sdw-renderer-card__row');if(!rowHeader)return;var card=rowHeader.closest('.sdw-renderer-card[id]');if(!card)return;event.preventDefault();if(card.dataset.rendererKind==='mermaid'){var mermaid=card.querySelector('[data-mermaid-disclosure="true"]');var expanded=card.dataset.rendererExpanded==='true';card.dataset.rendererExpanded=expanded?'false':'true';if(mermaid)mermaid.setAttribute('aria-expanded',expanded?'false':'true');var region=card.querySelector('.sdw-mermaid-row__expansion');if(region){region.hidden=expanded;region.setAttribute('aria-hidden',expanded?'true':'false');}if(!expanded&&window.__sdwRenderMermaidRow)window.__sdwRenderMermaidRow(card);report();return;}window.webkit.messageHandlers.rendererAttachmentAction.postMessage({action:card.dataset.rendererExpanded==='true'?'collapse':'activate',placeholderID:card.id});});
       addEventListener('scroll',report,{passive:true}); addEventListener('resize',report); new MutationObserver(report).observe(document.documentElement,{childList:true,subtree:true,attributes:true});
     })();
     """
@@ -1277,6 +1342,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
     let addBookmarkHandler: (@MainActor @Sendable (BookmarkTargetPickerContext) -> Void)?
     let onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)?
     let inlineAttachmentResolver: RendererInlineAttachmentResolver
+    let inlineImageRendererDescriptors: [RendererDescriptor]
     let findText: String?
     let findVersion: Int
     let findOccurrence: Int
@@ -1293,6 +1359,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         webView.addBookmarkHandler = addBookmarkHandler
         webView.onRendererActivation = onRendererActivation
         context.coordinator.inlineAttachmentResolver = inlineAttachmentResolver
+        context.coordinator.inlineImageRendererDescriptors = inlineImageRendererDescriptors
         webView.navigationDelegate = context.coordinator
         webView.coordinator = context.coordinator
         context.coordinator.webView = webView
@@ -1308,7 +1375,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
 
     func updateNSView(_ container: WikiReaderContainerView, context: Context) {
         let webView = container.webView
-        webView.pageZoom = readerZoom
+        context.coordinator.applyReaderZoom(readerZoom, to: webView, container: container)
         webView.store = store
         webView.blobHandler.store = store
         webView.fileProvider = fileProvider
@@ -1317,6 +1384,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         webView.addBookmarkHandler = addBookmarkHandler
         webView.onRendererActivation = onRendererActivation
         context.coordinator.inlineAttachmentResolver = inlineAttachmentResolver
+        context.coordinator.inlineImageRendererDescriptors = inlineImageRendererDescriptors
         context.coordinator.store = store
         context.coordinator.currentSelection = currentSelection
         if context.coordinator.loadedMarkdown != markdown ||
@@ -1353,6 +1421,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         weak var attachmentContainer: WikiReaderContainerView?
         private var attachmentCoordinator: RendererAttachmentCoordinator?
         var inlineAttachmentResolver: RendererInlineAttachmentResolver = RendererInlineAttachmentResolverFactory.defaultResolver
+        var inlineImageRendererDescriptors: [RendererDescriptor] = []
         var store: WikiStoreModel?
         var currentSelection: WikiSelection?
         var loadedMarkdown: String?
@@ -1366,6 +1435,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         private var convertTask: Task<Void, Never>?
         private var loadStart: DispatchTime?
         private var loadGeneration = 0
+        private var appliedReaderZoom: CGFloat?
         private var isDismantled = false
         /// Timestamp captured right before `loadHTMLString`, to split
         /// `appear-to-painted` into the async hop (startLoad→loadHTMLString) vs.
@@ -1383,7 +1453,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
             loadGeneration += 1
             let generation = loadGeneration
             attachmentCoordinator?.closeAll()
-            attachmentContainer?.collapseAttachment()
+            attachmentContainer?.removeAllAttachments()
             attachmentCoordinator = RendererAttachmentCoordinator(generation: generation)
             loadedMarkdown = markdown
             loadedDocumentIdentity = documentIdentity
@@ -1438,9 +1508,14 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     capability: RendererSessionCapability(rawValue: UUID().uuidString),
                     generation: generation)
             }()
+            let imageEmbedProjection = Self.imageEmbedProjection(
+                siblingSourceMap: renderedSourceMap,
+                store: store?.internalStore,
+                installedDescriptors: inlineImageRendererDescriptors)
             let documentRenderOptions = MarkdownRenderOptions(
                 codeHighlighting: .enabled(HighlightedCodeBlockBudget()),
                 rendererEmbedProjection: context?.rendererEmbedProjection,
+                imageEmbedProjection: imageEmbedProjection,
                 documentIdentity: documentIdentity,
                 rendererActivationAdmission: rendererActivationAdmission)
             self.renderOptions = documentRenderOptions
@@ -1524,6 +1599,84 @@ internal struct WikiReaderRep: NSViewRepresentable {
             }
         }
 
+        private static func imageEmbedProjection(
+            siblingSourceMap: [String: SourceID]?,
+            store: WikiStore?,
+            installedDescriptors: [RendererDescriptor]
+        ) -> MarkdownImageEmbedProjection? {
+            guard let siblingSourceMap, siblingSourceMap.isEmpty == false, let store else { return nil }
+            let registry: RendererRegistrySnapshot
+            do {
+                registry = try RendererRegistrySnapshot(
+                    builtInDescriptors: BuiltInRendererDescriptors.all,
+                    enabledInstalledDescriptors: installedDescriptors)
+            } catch {
+                DebugLog.reader("Image renderer projection rejected an invalid descriptor snapshot.")
+                return nil
+            }
+            var sources = [String: RendererEmbeddedContent.Source]()
+            for (target, sourceID) in siblingSourceMap {
+                do {
+                    guard let version = try store.activeContentVersion(sourceID: sourceID),
+                          let source = try Self.pinnedImageSource(
+                              sourceID: sourceID,
+                              version: version,
+                              inputByteCount: { input in try store.rendererInputByteCount(input) },
+                              readBytes: { versionID in try store.sourceContent(versionID: versionID) })
+                    else { continue }
+                    sources[target] = source
+                } catch {
+                    DebugLog.reader("Image renderer projection could not pin a sibling source; keeping the ordinary image.")
+                }
+            }
+            guard sources.isEmpty == false else { return nil }
+            let inlineCapableReferences = Set(BuiltInRendererID.allCases.compactMap { id in
+                id == .jsonCanvas ? BuiltInRendererReference.reference(for: id) : nil
+            }).union(installedDescriptors.compactMap { descriptor in
+                if case .webPackage = descriptor.implementation { return descriptor.reference }
+                return nil
+            })
+            do {
+                return try MarkdownImageEmbedProjection(
+                    siblingSources: sources,
+                    registry: registry,
+                    inlineCapableReferences: inlineCapableReferences)
+            } catch {
+                DebugLog.reader("Image renderer projection could not validate sibling facts; keeping ordinary images.")
+                return nil
+            }
+        }
+
+        /// Verifies metadata for one exact source version before requesting its
+        /// payload. A missing or oversized metadata count intentionally keeps
+        /// the Markdown image ordinary without materializing blob bytes.
+        static func pinnedImageSource(
+            sourceID: SourceID,
+            version: SourceVersion,
+            inputByteCount: (RendererBridgeInput) throws -> Int?,
+            readBytes: (SourceVersionID) throws -> Data
+        ) throws -> RendererEmbeddedContent.Source? {
+            guard version.sourceID == sourceID,
+                  let mimeType = version.mimeType,
+                  let blobHash = version.blobHash,
+                  blobHash.isEmpty == false
+            else { return nil }
+            let input = RendererBridgeInput.source(versionID: version.id)
+            guard let byteCount = try inputByteCount(input),
+                  byteCount >= 0,
+                  byteCount <= WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount
+            else { return nil }
+            let bytes = try readBytes(version.id)
+            guard bytes.count == byteCount,
+                  bytes.count <= WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount
+            else { return nil }
+            return try RendererEmbeddedContent.Source(
+                sourceID: sourceID,
+                sourceVersionID: version.id,
+                mimeType: try RendererMIMEType(validating: mimeType),
+                bytes: bytes)
+        }
+
         func teardown() {
             isDismantled = true
             loadGeneration += 1
@@ -1536,6 +1689,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
             isLoadingBinding = nil
             renderOptions = nil
             attachmentCoordinator?.closeAll()
+            attachmentContainer?.removeAllAttachments()
             attachmentCoordinator = nil
             attachmentContainer = nil
             webView = nil
@@ -1677,7 +1831,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
             // A real reload begins a new document generation before didFinish;
             // no native child may survive while WebKit replaces its DOM.
             attachmentCoordinator?.closeAll()
-            attachmentContainer?.collapseAttachment()
+            attachmentContainer?.removeAllAttachments()
         }
 
         func handleAttachmentGeometry(_ message: RendererAttachmentGeometryMessage) {
@@ -1696,16 +1850,14 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 webView.evaluateJavaScript("window.__sdwRendererAttachmentReserve && window.__sdwRendererAttachmentReserve(\"\(identifier)\", \(reservedHeight));")
             }
             updateAttachmentViewport(for: message.placeholderID, in: webView, container: attachmentContainer)
-            automaticallyMountAttachmentIfPossible(
-                message.placeholderID,
-                isVisible: message.visible)
         }
 
         func handleAttachmentRemoval(_ placeholderID: RendererAttachmentPlaceholderID, generation: Int) {
             guard let attachmentCoordinator, attachmentCoordinator.generation == generation else { return }
             let removedMountedChild = attachmentContainer?.ownsMountedAttachment(named: placeholderID) == true
             attachmentCoordinator.close(placeholderID)
-            if removedMountedChild { attachmentContainer?.collapseAttachment() }
+            if removedMountedChild { attachmentContainer?.removeAttachment(named: placeholderID) }
+            setRowExpansion(false, for: placeholderID)
         }
 
         /// Activate the card's explicit control. The injected resolver owns the
@@ -1723,19 +1875,29 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 attachmentContainer.focusAttachment(named: placeholderID)
                 return .activate
             }
+            let admission = attachmentCoordinator.activate(placeholderID)
+            guard admission == .activate else {
+                if case let .refused(reason) = admission { surfaceRefusal(reason, for: placeholderID) }
+                return admission
+            }
             switch inlineAttachmentResolver(
                 context,
                 placeholderID,
                 inlineSessionFailureHandler(for: placeholderID, generation: context.generation)
             ) {
             case .failed:
+                attachmentCoordinator.collapse(placeholderID)
                 failAttachment(placeholderID)
                 return .rejected
             case .unsupported:
-                // Deliberately does NOT call `attachmentCoordinator.activate`:
-                // the full renderer is a sheet the coordinator never hears
-                // close, so a record left `.active` could never be re-activated.
-                return presentInFullRenderer(context)
+                // Expansion and Open in Window are separate user actions. Keep
+                // this row collapsed when no inline factory accepts its input.
+                attachmentCoordinator.collapse(placeholderID)
+                setRowExpansion(
+                    false,
+                    for: placeholderID,
+                    status: "This renderer is not available inline. Use Open in Window.")
+                return .rejected
             case .content(let content):
                 let result = mountInlineAttachment(
                     content,
@@ -1743,9 +1905,6 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     in: attachmentContainer,
                     takesFocus: true,
                     context: context)
-                if result == .showInFullRenderer {
-                    return presentInFullRenderer(context)
-                }
                 return result
             }
         }
@@ -1759,41 +1918,6 @@ internal struct WikiReaderRep: NSViewRepresentable {
             return .showInFullRenderer
         }
 
-        /// Mount the first eligible visible card without moving keyboard focus
-        /// away from the reader. Explicit activation uses the same resolver but
-        /// is allowed to move focus into the interactive child.
-        private func automaticallyMountAttachmentIfPossible(
-            _ placeholderID: RendererAttachmentPlaceholderID,
-            isVisible: Bool
-        ) {
-            guard isVisible,
-                  let attachmentCoordinator,
-                  attachmentCoordinator.state(for: placeholderID) == .card,
-                  let attachmentContainer,
-                  attachmentContainer.hasMountedAttachment == false,
-                  let context = webView?.rendererActivationAdmission?.attachmentContext(for: placeholderID)
-            else { return }
-            switch inlineAttachmentResolver(
-                context,
-                placeholderID,
-                inlineSessionFailureHandler(for: placeholderID, generation: context.generation)
-            ) {
-            case .unsupported:
-                // The user can still explicitly Open this renderer in its
-                // full-window presentation.
-                return
-            case .failed:
-                failAttachment(placeholderID)
-            case .content(let content):
-                _ = mountInlineAttachment(
-                    content,
-                    named: placeholderID,
-                    in: attachmentContainer,
-                    takesFocus: false,
-                    context: context)
-            }
-        }
-
         private func mountInlineAttachment(
             _ content: AnyView,
             named placeholderID: RendererAttachmentPlaceholderID,
@@ -1802,8 +1926,12 @@ internal struct WikiReaderRep: NSViewRepresentable {
             context: RendererEmbedActivationContext
         ) -> RendererAttachmentActivationResult {
             guard let attachmentCoordinator else { return .rejected }
-            let result = attachmentCoordinator.activate(placeholderID)
-            guard result == .activate else { return result }
+            guard attachmentCoordinator.state(for: placeholderID) == .active else { return .rejected }
+            // The latest geometry still describes the collapsed row. Expand the
+            // DOM region first and keep the native child hidden until WebKit
+            // reports that region's rectangle.
+            attachmentContainer.updateAttachmentViewport(.zero, for: placeholderID)
+            setRowExpansion(true, for: placeholderID)
             if let webView {
                 let reservedHeight = attachmentCoordinator.reserveHeight(
                     RendererAttachmentHostPolicy.preferredReservedHeight(for: context.rendererReference),
@@ -1811,19 +1939,14 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 let identifier = WikiReaderRep.jsString(placeholderID.rawValue)
                 webView.evaluateJavaScript(
                     "window.__sdwRendererAttachmentReserve && window.__sdwRendererAttachmentReserve(\"\(identifier)\", \(reservedHeight));")
-                updateAttachmentViewport(for: placeholderID, in: webView, container: attachmentContainer)
             }
             attachmentContainer.activateAttachment(
                 named: placeholderID,
+                title: context.displayTitle ?? context.rendererReference.registrationID.rawValue,
                 content: content,
                 takesFocus: takesFocus,
-                onOpen: { [weak self] in
-                    guard let self else { return }
-                    _ = self.presentInFullRenderer(context)
-                },
                 onExit: { [weak self] in self?.collapseAttachment(placeholderID) })
-            setCollapseControl(true, for: placeholderID)
-            return result
+            return .activate
         }
 
         private func inlineSessionFailureHandler(
@@ -1838,6 +1961,12 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 let state = attachmentCoordinator.state(for: placeholderID)
                 guard state != .unresolved, state != .closed else { return }
                 DebugLog.reader("inline renderer session failed for \(placeholderID.rawValue): \(failure.kind)")
+                if failure.kind == .concurrencyLimitReached {
+                    attachmentCoordinator.refuse(placeholderID, reason: .resourcePressure)
+                    self.attachmentContainer?.removeAttachment(named: placeholderID)
+                    self.surfaceRefusal(.resourcePressure, for: placeholderID)
+                    return
+                }
                 self.failAttachment(placeholderID)
             }
         }
@@ -1857,16 +1986,34 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 for: placeholderID)
         }
 
-        /// Add or remove the card's Collapse control. The document script no
-        /// longer appends it optimistically on click — only a mounted native
-        /// attachment has anything to collapse.
-        private func setCollapseControl(_ present: Bool, for placeholderID: RendererAttachmentPlaceholderID) {
+        func applyReaderZoom(
+            _ readerZoom: Double,
+            to webView: WikiReaderWebView,
+            container: WikiReaderContainerView
+        ) {
+            let zoom = CGFloat(readerZoom)
+            guard appliedReaderZoom != zoom else { return }
+            appliedReaderZoom = zoom
+            webView.pageZoom = zoom
+            for placeholderID in attachmentCoordinator?.placeholderIDs ?? [] {
+                updateAttachmentViewport(for: placeholderID, in: webView, container: container)
+            }
+            webView.evaluateJavaScript("window.__sdwRendererAttachmentReport && window.__sdwRendererAttachmentReport(\(loadGeneration));")
+        }
+
+        private func setRowExpansion(_ expanded: Bool, for placeholderID: RendererAttachmentPlaceholderID, status: String? = nil) {
             guard let webView else { return }
             let identifier = WikiReaderRep.jsString(placeholderID.rawValue)
-            let function = present
-                ? "window.__sdwRendererAttachmentPresentCollapse"
-                : "window.__sdwRendererAttachmentDismissCollapse"
-            webView.evaluateJavaScript("\(function) && \(function)(\"\(identifier)\");")
+            let message = status.map(WikiReaderRep.jsString) ?? ""
+            webView.evaluateJavaScript("window.__sdwRendererAttachmentState && window.__sdwRendererAttachmentState(\"\(identifier)\", \(expanded), \"\(message)\");")
+        }
+
+        private func surfaceRefusal(_ refusal: RendererAttachmentActivationRefusal, for placeholderID: RendererAttachmentPlaceholderID) {
+            let message = switch refusal {
+            case .rowBudget: "Four renderer rows are already expanded. Collapse one to expand this row."
+            case .resourcePressure: "Renderer resources are busy. Try expanding this row again."
+            }
+            setRowExpansion(false, for: placeholderID, status: message)
         }
 
         func attachmentState(for placeholderID: RendererAttachmentPlaceholderID) -> RendererAttachmentState {
@@ -1882,15 +2029,15 @@ internal struct WikiReaderRep: NSViewRepresentable {
                   attachmentContainer.ownsMountedAttachment(named: placeholderID)
             else { return }
             attachmentCoordinator.collapse(placeholderID)
-            attachmentContainer.collapseAttachment()
-            setCollapseControl(false, for: placeholderID)
+            attachmentContainer.removeAttachment(named: placeholderID)
+            setRowExpansion(false, for: placeholderID)
         }
 
         func failAttachment(_ placeholderID: RendererAttachmentPlaceholderID) {
             attachmentCoordinator?.fail(placeholderID)
-            setCollapseControl(false, for: placeholderID)
+            setRowExpansion(false, for: placeholderID)
             guard attachmentContainer?.ownsMountedAttachment(named: placeholderID) == true else { return }
-            attachmentContainer?.collapseAttachment()
+            attachmentContainer?.removeAttachment(named: placeholderID)
         }
 
         func webView(

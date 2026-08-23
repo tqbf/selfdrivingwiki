@@ -332,6 +332,19 @@ struct MarkdownHTMLRendererTests {
         #expect(html.contains("A--&gt;B"))   // escape(): > → &gt;
     }
 
+    @Test("a Mermaid fence title remains presentation metadata")
+    func titledMermaidFenceKeepsTitleOutOfClassAndSource() {
+        let source = "graph TD\nA-->B\n"
+        let title = "System architecture"
+        let html = MarkdownHTMLRenderer.render(
+            "```mermaid \"\(title)\"\n\(source)```",
+            options: .disabled)
+
+        #expect(html == "<pre><code class=\"language-mermaid\">graph TD\nA--&gt;B\n</code></pre>")
+        #expect(!html.contains("language-mermaid \(title)"))
+        #expect(!html.contains(title))
+    }
+
     @Test func richFenceCardsRenderStaticMarkupWhenProjectionAllowsThem() throws {
         let projection = RendererEmbedProjection(
             sourceEmbeds: [:],
@@ -350,11 +363,12 @@ struct MarkdownHTMLRendererTests {
             documentIdentity: document,
             rendererActivationAdmission: admission)
 
-        let bytes = Data("{\"nodes\":[],\"edges\":[]}".utf8)
+        let bytes = Data("{\"nodes\":[],\"edges\":[]}\n".utf8)
+        let fenceInfo = "jsoncanvas \"Roadmap <&>\""
         let expectedBlock = try! MarkdownFencedBlock(
             documentIdentity: document,
             parserOrdinal: 0,
-            rawInfoString: "jsoncanvas",
+            rawInfoString: fenceInfo,
             bytes: bytes)
         guard let blockID = expectedBlock.blockID else {
             Issue.record("expected a block ID for the document-backed JSON Canvas fence")
@@ -383,10 +397,26 @@ struct MarkdownHTMLRendererTests {
             capability: admission.capability,
             generation: admission.generation))
 
-        let jsonCanvas = MarkdownHTMLRenderer.render("```jsoncanvas\n{\"nodes\":[],\"edges\":[]}\n```", options: options)
+        let jsonCanvas = MarkdownHTMLRenderer.render("```\(fenceInfo)\n{\"nodes\":[],\"edges\":[]}\n```", options: options)
         #expect(jsonCanvas.contains("sdw-renderer-card"))
-        #expect(jsonCanvas.contains("JSON Canvas"))
+        #expect(jsonCanvas.contains("data-renderer-expanded=\"false\""))
+        #expect(jsonCanvas.contains("aria-label=\"JSON Canvas renderer: Roadmap &lt;&amp;&gt;\""))
+        #expect(jsonCanvas.contains("sdw-renderer-card__row"))
+        #expect(jsonCanvas.contains("sdw-renderer-card__disclosure"))
+        #expect(jsonCanvas.contains("type=\"button\""))
+        #expect(jsonCanvas.contains("aria-expanded=\"false\""))
+        let expectedExpansionID = "sdw-renderer-\(expectedBlock.digest.hex.prefix(16))-0-expansion"
+        #expect(jsonCanvas.contains("aria-controls=\"\(expectedExpansionID)\""))
+        #expect(jsonCanvas.contains("id=\"\(expectedExpansionID)\""))
+        #expect(jsonCanvas.contains("hidden aria-hidden=\"true\""))
+        #expect(jsonCanvas.contains("sdw-renderer-card__expansion"))
+        #expect(jsonCanvas.contains("sdw-renderer-card__title"))
+        #expect(jsonCanvas.contains("Roadmap &lt;&amp;&gt;"))
+        #expect(jsonCanvas.contains("aria-label=\"Expand JSON Canvas renderer: Roadmap &lt;&amp;&gt;\""))
+        #expect(jsonCanvas.contains(#"style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 auto""#))
         #expect(jsonCanvas.contains("renderer-action://open"))
+        #expect(jsonCanvas.contains("sdw-renderer-card__action"))
+        #expect(jsonCanvas.contains(">Open in Window</a>"))
         #expect(jsonCanvas.contains("package=org.selfdrivingwiki.builtin"))
         #expect(jsonCanvas.contains("registration=json-canvas"))
         #expect(jsonCanvas.contains("input="))
@@ -401,11 +431,26 @@ struct MarkdownHTMLRendererTests {
         let excalidraw = MarkdownHTMLRenderer.render("```excalidraw\n{\"type\":\"excalidraw\",\"version\":2,\"elements\":[]}\n```", options: options)
         #expect(excalidraw.contains("sdw-renderer-card"))
         #expect(excalidraw.contains("Excalidraw"))
-        #expect(excalidraw.contains("Interact"))
+        #expect(excalidraw.contains("sdw-renderer-card__title"))
+        #expect(excalidraw.contains("Open in Window"))
 
         let mermaid = MarkdownHTMLRenderer.render("```mermaid\ngraph TD\nA-->B\n```", options: options)
-        #expect(mermaid.contains(#"class="language-mermaid""#))
-        #expect(!mermaid.contains("sdw-renderer-card"))
+        #expect(mermaid.contains("data-renderer-kind=\"mermaid\""))
+        #expect(mermaid.contains("data-renderer-expanded=\"false\""))
+        #expect(mermaid.contains("aria-expanded=\"false\""))
+        #expect(mermaid.contains("data-mermaid-disclosure=\"true\""))
+        #expect(mermaid.contains("sdw-mermaid-row__expansion"))
+        #expect(mermaid.contains("A--&gt;B"))
+        #expect(mermaid.contains("Open in Window"))
+        #expect(!mermaid.contains("data-renderer-action=\"expand\""))
+        #expect(WikiReaderWebView.rendererAttachmentGeometryJS.contains("data-mermaid-disclosure"))
+        #expect(WikiReaderWebView.rendererAttachmentGeometryJS.contains("if(!expanded&&window.__sdwRenderMermaidRow)"))
+        #expect(WikiReaderView.mermaidBootstrapJS.contains("data-mermaid-rendering') === 'true'"))
+        #expect(WikiReaderView.mermaidBootstrapJS.contains("setAttribute('data-mermaid-rendering', 'true')"))
+        #expect(WikiReaderView.mermaidBootstrapJS.contains("removeAttribute('data-mermaid-rendering')"))
+        #expect(WikiReaderView.mermaidBootstrapJS.contains("code.parentElement.hidden = false"))
+        #expect(WikiReaderView.mermaidBootstrapJS.contains("diagram.textContent = ''"))
+        #expect(!WikiReaderView.mermaidBootstrapJS.contains("querySelectorAll('code.language-mermaid')"))
     }
 
     @Test("an Excalidraw card delegates drawing to the dynamic renderer")
@@ -439,7 +484,9 @@ struct MarkdownHTMLRendererTests {
         let card = MarkdownHTMLRenderer.render(drawing, options: options)
         #expect(card.contains("sdw-renderer-card"))
         #expect(card.contains("Excalidraw"))
-        #expect(card.contains("Interact"))
+        #expect(card.contains("sdw-renderer-card__title"))
+        #expect(card.contains("Open in Window"))
+        #expect(card.contains("sdw-renderer-card__title--truncated"))
         #expect(card.contains("renderer-action://open"))
         #expect(!card.contains("sdw-renderer-card__preview"))
         #expect(!card.contains("<svg "))
@@ -480,6 +527,39 @@ struct MarkdownHTMLRendererTests {
                 isMainFrame: true))
         #expect(route.reference == fixture.reference)
         #expect(route.input == fixture.input)
+    }
+
+    @Test("image renderer action routes preserve exact content and Markdown source versions", arguments: [false, true])
+    func imageRendererActionRoutesPreserveExactSourceVersion(useMarkdownVersion: Bool) throws {
+        let fixture = try makeImageRendererActivationFixture(useMarkdownVersion: useMarkdownVersion)
+        let route = try #require(
+            WikiReaderView.rendererActivationRoute(
+                for: fixture.url,
+                admission: fixture.admission,
+                isMainFrame: true))
+
+        #expect(route.reference == fixture.reference)
+        #expect(route.input == fixture.input)
+    }
+
+    @Test("image renderer action routes reject source identity substitutions")
+    func imageRendererActionRoutesRejectSourceIdentitySubstitutions() throws {
+        let fixture = try makeImageRendererActivationFixture(useMarkdownVersion: false)
+        for mutation in [
+            ("sourceID", "01HTESTSOURCE0000000000099"),
+            ("sourceVersion", "01HTESTSOURCEVERSION000099"),
+            ("sourceDigest", String(repeating: "f", count: 64)),
+            ("mime", "image/jpeg"),
+            ("registration", "other")
+        ] {
+            var components = try #require(URLComponents(url: fixture.url, resolvingAgainstBaseURL: false))
+            components.queryItems = (components.queryItems ?? []).map { item in
+                item.name == mutation.0 ? URLQueryItem(name: item.name, value: mutation.1) : item
+            }
+            let forgedURL = try #require(components.url)
+            #expect(WikiReaderView.rendererActivationRoute(
+                for: forgedURL, admission: fixture.admission, isMainFrame: true) == nil)
+        }
     }
 
     @Test("renderer action URLs preserve plus-bearing base64 through URLComponents round-trip")
@@ -584,8 +664,85 @@ struct MarkdownHTMLRendererTests {
         let html = MarkdownHTMLRenderer.render("```jsoncanvas\n{\"nodes\":[],\"edges\":[]}\n```", options: options)
 
         #expect(html.contains("sdw-renderer-card"))
+        #expect(html.contains("data-renderer-expanded=\"true\""))
+        #expect(html.contains("aria-label=\"JSON Canvas renderer\""))
+        #expect(html.contains("aria-expanded=\"true\""))
+        #expect(html.contains("aria-label=\"JSON Canvas renderer fallback shown\""))
         #expect(!html.contains("renderer-action://open"))
         #expect(!html.contains("data-renderer-input="))
+        #expect(!html.contains("data-renderer-action=\"expand\""))
+        #expect(html.contains(#"<p class="sdw-renderer-card__summary">JSON Canvas document fence</p>"#))
+        #expect(html.contains("disabled aria-disabled=\"true\""))
+        #expect(html.contains("aria-hidden=\"false\""))
+        #expect(html.contains("hidden aria-hidden=\"true\"") == false)
+        #expect(!html.contains("aria-label=\"Expand JSON Canvas renderer\""))
+    }
+
+    @Test("long renderer titles retain an accessible value while visually ellipsizing")
+    func longRendererTitlesRetainAccessibleValueWhileVisuallyEllipsizing() {
+        let projection = RendererEmbedProjection(
+            sourceEmbeds: [:],
+            richFenceAliases: [.jsoncanvas])
+        let document = MarkdownDocumentIdentity(
+            pageID: PageID(rawValue: "01HTESTPAGE000000000000001"),
+            pageVersionID: PageVersionID(rawValue: "01HTESTPV00000000000000001"))
+        let admission = RendererEmbedActivationAdmission(
+            pageID: document.pageID,
+            pageVersionID: document.pageVersionID,
+            capability: .init(rawValue: "capability"),
+            generation: 1)
+        let options = MarkdownRenderOptions(
+            codeHighlighting: .disabled,
+            rendererEmbedProjection: projection,
+            documentIdentity: document,
+            rendererActivationAdmission: admission)
+        let longTitle = String(repeating: "Long renderer title ", count: 12)
+        let html = MarkdownHTMLRenderer.render(
+            "```jsoncanvas \"\(longTitle)\"\n{\"nodes\":[],\"edges\":[]}\n```",
+            options: options)
+
+        #expect(html.contains("title=\"\(longTitle)\""))
+        #expect(html.contains(#"style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 auto""#))
+        #expect(html.contains(#"class="sdw-renderer-card__action""#))
+        #expect(html.contains(#"style="flex:0 0 auto""#))
+    }
+
+    @Test("ordinary Markdown images remain unchanged by renderer-card markup")
+    func ordinaryMarkdownImagesRemainOrdinaryImages() {
+        let html = MarkdownHTMLRenderer.render(
+            "![Diagram <&>](https://example.com/diagram.png)",
+            options: .disabled)
+
+        #expect(html == #"<p><img src="https://example.com/diagram.png" alt="Diagram &lt;&amp;&gt;"></p>"#)
+        #expect(html.contains("sdw-renderer-card") == false)
+    }
+
+    @Test("renderer row stylesheet stays compact, relative, focus-visible, and motion-aware")
+    func rendererRowStylesUseNativeReaderScaleAndFocus() {
+        let html = WikiReaderView.documentHTML("<p>Body</p>")
+
+        #expect(html.contains("background: transparent"))
+        #expect(html.contains(".sdw-renderer-card__row { gap: 0.35em; min-height: 2em; cursor: pointer; }"))
+        #expect(html.contains("font-size: 0.95em; font-weight: 400"))
+        #expect(html.contains(".sdw-renderer-card__disclosure:focus-visible"))
+        #expect(html.contains("outline: 2px solid -webkit-focus-ring-color"))
+        #expect(html.contains("@media (prefers-reduced-motion: reduce)"))
+    }
+
+    @Test("native renderer reservation and geometry use the expansion region below the row")
+    func nativeRendererLayoutTargetsExpansionRegion() {
+        let script = WikiReaderWebView.rendererAttachmentGeometryJS
+
+        #expect(script.contains("expansion.style.minHeight=height+'px'"))
+        #expect(script.contains("e.style.minHeight=height+'px'") == false)
+        #expect(script.contains("e.dataset.rendererExpanded==='true'&&expansion?expansion:e"))
+        #expect(script.contains("var r=e.getBoundingClientRect()") == false)
+        #expect(script.contains("window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();"))
+        #expect(script.contains("event.target.closest('.sdw-renderer-card__row')"))
+        #expect(script.contains("event.target.closest('[data-renderer-action=\"open-window\"]')"))
+        #expect(script.contains("action:card.dataset.rendererExpanded==='true'?'collapse':'activate'"))
+        #expect(script.contains("sdw-renderer-card__collapse") == false)
+        #expect(script.contains("__sdwRendererAttachmentPresentCollapse") == false)
     }
 
     @Test func documentHTMLEmbedsNoScriptWhenLibAbsent() {
@@ -739,6 +896,45 @@ private struct RendererActivationFixture {
 }
 
 private extension MarkdownHTMLRendererTests {
+    func makeImageRendererActivationFixture(useMarkdownVersion: Bool) throws -> RendererActivationFixture {
+        let pageID = PageID(rawValue: "01HTESTPAGE000000000000001")
+        let pageVersionID = PageVersionID(rawValue: "01HTESTPV00000000000000001")
+        let sourceID = SourceID(rawValue: "01HTESTSOURCE0000000000001")
+        let bytes = Data(#"{"nodes":[],"edges":[]}"#.utf8)
+        let descriptor = BuiltInRendererDescriptors.descriptor(for: .jsonCanvas)
+        let mimeType = try RendererMIMEType(validating: "application/json")
+        let source = try RendererEmbeddedContent.Source(
+            sourceID: sourceID,
+            sourceVersionID: useMarkdownVersion ? nil : SourceVersionID(rawValue: "01HTESTSOURCEVERSION000001"),
+            sourceMarkdownVersionID: useMarkdownVersion ? SourceMarkdownVersionID(rawValue: "01HTESTMARKDOWNVERSION0001") : nil,
+            mimeType: mimeType,
+            bytes: bytes)
+        let reference = descriptor.reference
+        let projection = try MarkdownImageEmbedProjection(
+            siblingSources: ["image.png": source],
+            registry: try RendererRegistrySnapshot(builtInDescriptors: [descriptor]),
+            inlineCapableReferences: [reference])
+        let admission = RendererEmbedActivationAdmission(
+            pageID: pageID,
+            pageVersionID: pageVersionID,
+            capability: .init(rawValue: "capability"),
+            generation: 7)
+        let options = MarkdownRenderOptions(
+            codeHighlighting: .disabled,
+            rendererEmbedProjection: nil,
+            imageEmbedProjection: projection,
+            documentIdentity: .init(pageID: pageID, pageVersionID: pageVersionID),
+            rendererActivationAdmission: admission)
+        let html = MarkdownHTMLRenderer.render("![System architecture](image.png)", options: options)
+        let url = try #require(rendererActionURL(in: html))
+        let input: RendererBridgeInput = if let versionID = source.sourceVersionID {
+            .source(versionID: versionID)
+        } else {
+            .markdown(versionID: try #require(source.sourceMarkdownVersionID))
+        }
+        return RendererActivationFixture(admission: admission, reference: reference, input: input, url: url)
+    }
+
     func makeRendererActivationFixture(bytes: Data = Data("{\"nodes\":[],\"edges\":[]}".utf8)) throws -> RendererActivationFixture {
         let pageID = PageID(rawValue: "01HTESTPAGE000000000000001")
         let pageVersionID = PageVersionID(rawValue: "01HTESTPV00000000000000001")

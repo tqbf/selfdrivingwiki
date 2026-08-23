@@ -66,6 +66,11 @@ struct MermaidValidatorTests {
         #expect(MermaidValidator.mermaidBlocks(in: md) == ["flowchart LR\n  A --> B"])
     }
 
+    @Test func extractsTitledMermaidFencesWithCRLF() {
+        let md = "~~~mermaid \"System architecture\"\r\nflowchart LR\r\n  A --> B\r\n~~~"
+        #expect(MermaidValidator.mermaidBlocks(in: md) == ["flowchart LR\n  A --> B"])
+    }
+
     @Test func multipleBlocksInOrder() {
         let md = "```mermaid\ngraph TD\nA-->B\n```\n\n```mermaid\nflowchart LR\nC-->D\n```"
         let blocks = MermaidValidator.mermaidBlocks(in: md)

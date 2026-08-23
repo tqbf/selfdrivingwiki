@@ -158,6 +158,14 @@ struct MarkdownLinterTests {
         #expect(findings.allSatisfy { $0.lineNumber != 5 })  // A-->B line
     }
 
+    @Test func titledMermaidFencePreservesContents() throws {
+        let l = try linter()
+        let markdown = "# Title\n\n~~~mermaid \"System architecture\"\nflowchart LR\n  A-->B\n~~~\n"
+        let outcome = l.fix(markdown: markdown)
+        #expect(outcome.fixed.contains("~~~mermaid \"System architecture\""))
+        #expect(outcome.fixed.contains("  A-->B"))
+    }
+
     // MARK: - describe
 
     @Test func describeFormatsFindings() throws {

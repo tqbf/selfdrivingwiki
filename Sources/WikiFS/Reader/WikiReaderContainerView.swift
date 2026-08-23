@@ -11,7 +11,10 @@ import SwiftUI
 final class WikiReaderContainerView: NSView {
     let webView: WikiReaderWebView
     private let attachmentOverlay = RendererAttachmentOverlayView()
-    private var attachmentChild: RendererAttachmentNativeChildView?
+    private var attachmentChildren: [RendererAttachmentPlaceholderID: RendererAttachmentNativeChildView] = [:]
+    private var visibleAttachmentRects: [RendererAttachmentPlaceholderID: CGRect] = [:]
+    private var attachmentOrder: [RendererAttachmentPlaceholderID] = []
+    private var focusedAttachmentID: RendererAttachmentPlaceholderID?
 
     init(webView: WikiReaderWebView) {
         self.webView = webView
@@ -30,7 +33,11 @@ final class WikiReaderContainerView: NSView {
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        if attachmentOverlay.attachmentClipRect.contains(point), let attachmentChild {
+        let visibleIDs = attachmentOrder.filter { placeholderID in
+            visibleAttachmentRects[placeholderID]?.contains(point) == true
+        }
+        if let placeholderID = preferredHitAttachment(in: visibleIDs),
+           let attachmentChild = attachmentChildren[placeholderID] {
             let overlayPoint = attachmentOverlay.convert(point, from: self)
             if let hitView = attachmentChild.hitTest(overlayPoint) {
                 return hitView
@@ -39,71 +46,117 @@ final class WikiReaderContainerView: NSView {
         return webView
     }
 
-    /// Updates the one mounted attachment only when the report belongs to it.
-    /// Before mounting, the latest candidate rect is retained so the child can
-    /// be positioned before it enters the view hierarchy.
+    /// Retains each placeholder's latest visible rect before it mounts, then
+    /// updates only the matching child.
     func updateAttachmentViewport(
         _ rect: CGRect,
-        for placeholderID: RendererAttachmentPlaceholderID? = nil
+        for placeholderID: RendererAttachmentPlaceholderID
     ) {
-        guard placeholderID == nil || attachmentChild == nil || attachmentChild?.placeholderID == placeholderID else {
-            return
-        }
-        attachmentOverlay.attachmentClipRect = rect.intersection(bounds)
-        attachmentChild?.frame = attachmentOverlay.attachmentClipRect
+        let clippedRect = rect.intersection(bounds)
+        visibleAttachmentRects[placeholderID] = clippedRect
+        attachmentChildren[placeholderID]?.frame = clippedRect
     }
 
     func activateAttachment(
         named placeholderID: RendererAttachmentPlaceholderID,
+        title: String = "Interactive",
         content: AnyView? = nil,
         takesFocus: Bool = true,
-        onOpen: (() -> Void)? = nil,
         onExit: (() -> Void)? = nil
     ) {
-        removeAttachmentChild()
+        if let child = attachmentChildren[placeholderID] {
+            if takesFocus { focusAttachment(named: placeholderID) }
+            child.frame = visibleAttachmentRects[placeholderID] ?? .zero
+            return
+        }
         let child = RendererAttachmentNativeChildView(
             placeholderID: placeholderID,
+            title: title,
             content: content,
-            onOpen: onOpen,
+            onFocus: { [weak self] in self?.markFocused(placeholderID) },
             onExit: { [weak self] in
                 if let onExit { onExit() }
-                else { self?.collapseAttachment() }
+                else { self?.removeAttachment(named: placeholderID) }
             })
         attachmentOverlay.addSubview(child)
-        attachmentChild = child
-        child.frame = attachmentOverlay.attachmentClipRect
+        attachmentChildren[placeholderID] = child
+        attachmentOrder.append(placeholderID)
+        child.frame = visibleAttachmentRects[placeholderID] ?? .zero
         if takesFocus {
-            window?.makeFirstResponder(child)
+            focusAttachment(named: placeholderID)
         }
     }
 
-    func collapseAttachment() {
-        removeAttachmentChild()
-        window?.makeFirstResponder(webView)
+    func removeAttachment(named placeholderID: RendererAttachmentPlaceholderID) {
+        guard let child = attachmentChildren.removeValue(forKey: placeholderID) else { return }
+        let restoresReaderFocus = childContainsFirstResponder(child)
+        child.removeFromSuperview()
+        visibleAttachmentRects.removeValue(forKey: placeholderID)
+        attachmentOrder.removeAll { $0 == placeholderID }
+        if focusedAttachmentID == placeholderID { focusedAttachmentID = nil }
+        if restoresReaderFocus { window?.makeFirstResponder(webView) }
     }
 
-    /// The mounted child is the sole native attachment shown by this container.
+    func removeAllAttachments() {
+        let restoresReaderFocus = attachmentChildren.values.contains(where: childContainsFirstResponder)
+        for child in attachmentChildren.values {
+            child.removeFromSuperview()
+        }
+        attachmentChildren.removeAll()
+        visibleAttachmentRects.removeAll()
+        attachmentOrder.removeAll()
+        focusedAttachmentID = nil
+        if restoresReaderFocus { window?.makeFirstResponder(webView) }
+    }
+
     func ownsMountedAttachment(named placeholderID: RendererAttachmentPlaceholderID) -> Bool {
-        attachmentChild?.placeholderID == placeholderID
+        attachmentChildren[placeholderID] != nil
     }
 
     func focusAttachment(named placeholderID: RendererAttachmentPlaceholderID) {
-        guard attachmentChild?.placeholderID == placeholderID,
-              let attachmentChild
-        else { return }
+        guard let attachmentChild = attachmentChildren[placeholderID] else { return }
+        markFocused(placeholderID)
         window?.makeFirstResponder(attachmentChild)
     }
 
-    var hasMountedAttachment: Bool { attachmentChild != nil }
+    var hasMountedAttachment: Bool { !attachmentChildren.isEmpty }
+    var mountedAttachmentCount: Int { attachmentChildren.count }
 
-    private func removeAttachmentChild() {
-        attachmentChild?.removeFromSuperview()
-        attachmentChild = nil
+    func attachmentChild(named placeholderID: RendererAttachmentPlaceholderID) -> NSView? {
+        attachmentChildren[placeholderID]
+    }
+
+    private func preferredHitAttachment(
+        in visibleIDs: [RendererAttachmentPlaceholderID]
+    ) -> RendererAttachmentPlaceholderID? {
+        guard visibleIDs.count > 1 else { return visibleIDs.first }
+        if let focusedAttachmentID, visibleIDs.contains(focusedAttachmentID) {
+            return focusedAttachmentID
+        }
+        return visibleIDs.last
+    }
+
+    private func markFocused(_ placeholderID: RendererAttachmentPlaceholderID) {
+        guard attachmentChildren[placeholderID] != nil else { return }
+        focusedAttachmentID = placeholderID
+        attachmentOrder.removeAll { $0 == placeholderID }
+        attachmentOrder.append(placeholderID)
+        if let child = attachmentChildren[placeholderID] {
+            attachmentOverlay.addSubview(child, positioned: .above, relativeTo: nil)
+        }
+    }
+
+    private func childContainsFirstResponder(_ child: RendererAttachmentNativeChildView) -> Bool {
+        guard var responder = window?.firstResponder as? NSView else { return false }
+        while true {
+            if responder === child { return true }
+            guard let superview = responder.superview else { return false }
+            responder = superview
+        }
     }
 
     func teardown() {
-        removeAttachmentChild()
-        attachmentOverlay.attachmentClipRect = .zero
+        removeAllAttachments()
         attachmentOverlay.removeFromSuperview()
         webView.removeFromSuperview()
     }
@@ -111,90 +164,34 @@ final class WikiReaderContainerView: NSView {
 
 @MainActor
 private final class RendererAttachmentOverlayView: NSView {
-    /// A zero rectangle is fully pass-through. Attachment children added in a
-    /// later renderer factory are constrained to this exact visible rectangle.
-    fileprivate var attachmentClipRect: CGRect = .zero {
-        didSet { needsDisplay = true }
-    }
-
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        guard attachmentClipRect.contains(point) else { return nil }
-        return super.hitTest(point)
-    }
 }
 
 @MainActor
 private final class RendererAttachmentNativeChildView: NSView {
     let placeholderID: RendererAttachmentPlaceholderID
-    private let onOpen: () -> Void
+    private let onFocus: () -> Void
     private let onExit: () -> Void
     private let hostedContent: NSHostingView<AnyView>?
-    private let toolbar: NSVisualEffectView
-    private let toolbarStack: NSStackView
 
     init(
         placeholderID: RendererAttachmentPlaceholderID,
+        title: String,
         content: AnyView?,
-        onOpen: (() -> Void)?,
+        onFocus: @escaping () -> Void,
         onExit: @escaping () -> Void
     ) {
         self.placeholderID = placeholderID
-        self.onOpen = onOpen ?? {}
+        self.onFocus = onFocus
         self.onExit = onExit
         hostedContent = content.map(NSHostingView.init(rootView:))
-        toolbar = NSVisualEffectView()
-        toolbarStack = NSStackView()
         super.init(frame: .zero)
         wantsLayer = true
         layer?.borderColor = NSColor.keyboardFocusIndicatorColor.cgColor
         updateKeyboardFocusIndicator()
         setAccessibilityElement(true)
         setAccessibilityRole(.group)
-        setAccessibilityLabel("Interactive renderer attachment")
+        setAccessibilityLabel("\(title) renderer")
         setAccessibilityIdentifier("renderer-attachment-\(placeholderID.rawValue)")
-
-        toolbar.material = .headerView
-        toolbar.blendingMode = .withinWindow
-        toolbar.state = .active
-        toolbar.setAccessibilityElement(true)
-        toolbar.setAccessibilityRole(.toolbar)
-        toolbar.setAccessibilityLabel("Interactive renderer controls")
-        toolbar.setAccessibilityIdentifier("renderer-attachment-toolbar-\(placeholderID.rawValue)")
-        addSubview(toolbar)
-
-        let title = NSTextField(labelWithString: "Interactive renderer")
-        title.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize, weight: .semibold)
-        title.textColor = .secondaryLabelColor
-        title.setAccessibilityElement(true)
-        title.setAccessibilityRole(.staticText)
-        title.setAccessibilityLabel("Interactive renderer")
-
-        let openButton = NSButton(title: "Open in Window", target: self, action: #selector(openInWindow))
-        openButton.bezelStyle = .texturedRounded
-        openButton.controlSize = .small
-        openButton.setAccessibilityLabel("Open in Window")
-        openButton.setAccessibilityHelp("Open this renderer in a separate window.")
-        openButton.setAccessibilityIdentifier("renderer-attachment-open-\(placeholderID.rawValue)")
-
-        let collapseButton = NSButton(title: "Collapse", target: self, action: #selector(collapse))
-        collapseButton.bezelStyle = .texturedRounded
-        collapseButton.controlSize = .small
-        collapseButton.setAccessibilityLabel("Collapse")
-        collapseButton.setAccessibilityHelp("Hide this inline renderer and show the document card.")
-        collapseButton.setAccessibilityIdentifier("renderer-attachment-collapse-\(placeholderID.rawValue)")
-
-        toolbarStack.orientation = .horizontal
-        toolbarStack.alignment = .centerY
-        toolbarStack.distribution = .fill
-        toolbarStack.spacing = 8
-        toolbarStack.addArrangedSubview(title)
-        let spacer = NSView()
-        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        toolbarStack.addArrangedSubview(spacer)
-        toolbarStack.addArrangedSubview(openButton)
-        toolbarStack.addArrangedSubview(collapseButton)
-        toolbar.addSubview(toolbarStack)
 
         if let hostedContent {
             addSubview(hostedContent)
@@ -208,6 +205,7 @@ private final class RendererAttachmentNativeChildView: NSView {
 
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
+        if accepted { onFocus() }
         updateKeyboardFocusIndicator()
         return accepted
     }
@@ -234,28 +232,14 @@ private final class RendererAttachmentNativeChildView: NSView {
 
     override func layout() {
         super.layout()
-        let toolbarHeight: CGFloat = 32
-        toolbar.frame = CGRect(x: 0, y: bounds.height - toolbarHeight, width: bounds.width, height: toolbarHeight)
-        toolbarStack.frame = toolbar.bounds.insetBy(dx: 8, dy: 4)
-        hostedContent?.frame = CGRect(x: 0, y: 0, width: bounds.width, height: max(0, bounds.height - toolbarHeight))
+        hostedContent?.frame = bounds
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         let localPoint = convert(point, from: superview)
         guard bounds.contains(localPoint) else { return nil }
-        if let toolbarHit = toolbar.hitTest(localPoint) {
-            return toolbarHit
-        }
         guard let hostedContent else { return self }
         return hostedContent.hitTest(localPoint) ?? self
-    }
-
-    @objc private func openInWindow() {
-        onOpen()
-    }
-
-    @objc private func collapse() {
-        onExit()
     }
 
     private func updateKeyboardFocusIndicator() {

@@ -92,6 +92,7 @@ struct RendererPackageDocumentationTests {
         let root = repositoryRoot()
         let index = try String(contentsOf: root.appending(path: "docs/user-guide/README.md"), encoding: .utf8)
         let guide = try String(contentsOf: root.appending(path: "docs/user-guide/renderer-packages.md"), encoding: .utf8)
+        let design = try String(contentsOf: root.appending(path: "plans/dynamic-inline-renderer-attachments.md"), encoding: .utf8)
         let plan = try String(contentsOf: root.appending(path: "PLAN.md"), encoding: .utf8)
 
         #expect(index.contains("[Renderer packages](renderer-packages.md)"))
@@ -102,6 +103,15 @@ struct RendererPackageDocumentationTests {
         #expect(guide.contains("It does not delete source data or source preferences."))
         #expect(!guide.contains("destination picker"))
         #expect(guide.contains("You do not enable a package for each wiki."))
+        #expect(guide.contains("```mermaid \"System architecture\""))
+        #expect(guide.contains("![System architecture](images/architecture.canvas)"))
+        #expect(guide.contains("48,384-byte limit"))
+        #expect(guide.contains("A fifth row stays collapsed"))
+        #expect(design.contains("SourceVersionID"))
+        #expect(design.contains("SourceMarkdownVersionID"))
+        #expect(design.contains("four native or installed renderer rows"))
+        #expect(plan.contains("plans/collapsible-renderer-embeds.md"))
+        #expect(plan.contains("48,384-byte bridge limit"))
     }
 
     private func minimalTemplateRoot() -> URL {

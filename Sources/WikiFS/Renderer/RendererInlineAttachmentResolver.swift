@@ -77,9 +77,22 @@ enum RendererInlineAttachmentResolverFactory {
             return .unsupported
         }
 
-        let inputReader = RendererAuthorizedInputReader(
-            store: store,
-            authorizedInput: context.input)
+        let inputReader: RendererAuthorizedInputReader
+        do {
+            if case .source(let source) = context.identity {
+                inputReader = try RendererAuthorizedInputReader(
+                    store: store,
+                    authorizedInput: context.input,
+                    admittedSource: source)
+            } else {
+                inputReader = RendererAuthorizedInputReader(
+                    store: store,
+                    authorizedInput: context.input)
+            }
+        } catch {
+            DebugLog.reader("inline installed renderer input admission failed for \(placeholderID.rawValue)")
+            return .failed
+        }
         guard let view = installedRendererFactory.makeView(
             for: descriptor,
             inputs: installedRendererFactoryInputs,
@@ -98,13 +111,39 @@ enum RendererInlineAttachmentResolverFactory {
         placeholderID: RendererAttachmentPlaceholderID,
         onJSONCanvasHostAction: @escaping (JSONCanvasHostAction) -> Void = { _ in }
     ) -> RendererInlineAttachmentResolution {
-        guard context.rendererReference == BuiltInRendererReference.reference(for: .jsonCanvas),
-              case .inlineArtifact(let artifact) = context.input
-        else { return .unsupported }
+        guard context.rendererReference == BuiltInRendererReference.reference(for: .jsonCanvas) else {
+            return .unsupported
+        }
         do {
-            let factory = NativeJSONCanvasAttachmentFactory.fencedOnly()
+            let factory: NativeJSONCanvasAttachmentFactory
+            let input: NativeJSONCanvasAttachmentInput
+            switch (context.identity, context.input) {
+            case (.block, .inlineArtifact(let artifact)):
+                factory = .fencedOnly()
+                input = .fenced(artifact)
+            case (.source(let source), .source(let versionID)) where source.sourceVersionID == versionID:
+                let pin = try NativeJSONCanvasAttachmentInput.SourcePin(validating: source)
+                factory = NativeJSONCanvasAttachmentFactory { requestedPin in
+                    guard requestedPin == pin else {
+                        throw NativeJSONCanvasAttachmentFailure.invalidSourceIdentity
+                    }
+                    return source.bytes
+                }
+                input = .source(pin)
+            case (.source(let source), .markdown(let versionID)) where source.sourceMarkdownVersionID == versionID:
+                let pin = try NativeJSONCanvasAttachmentInput.SourcePin(validating: source)
+                factory = NativeJSONCanvasAttachmentFactory { requestedPin in
+                    guard requestedPin == pin else {
+                        throw NativeJSONCanvasAttachmentFailure.invalidSourceIdentity
+                    }
+                    return source.bytes
+                }
+                input = .source(pin)
+            default:
+                return .unsupported
+            }
             return .content(try factory.makeView(
-                for: .fenced(artifact),
+                for: input,
                 onHostAction: onJSONCanvasHostAction))
         } catch {
             DebugLog.reader("native JSON Canvas attachment failed for \(placeholderID.rawValue): \(error)")
