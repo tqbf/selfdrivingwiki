@@ -6,6 +6,11 @@ import WikiFSCore
 
 /// Cached access to the trusted Mermaid runtime bundled with the app.
 enum MermaidRendererAssets {
+    nonisolated static let sharedCSS = """
+    .mermaid { text-align:center; margin:0 0 1em; overflow:auto; }
+    .mermaid svg { max-width:100%; height:auto; }
+    """
+
     nonisolated static let library = library(in: .main)
 
     nonisolated static func library(in bundle: Bundle) -> String? {
@@ -19,14 +24,36 @@ enum MermaidRendererAssets {
     }
 }
 
+enum MermaidRendererTheme: String, Sendable {
+    case light
+    case dark
+
+    init(colorScheme: ColorScheme) {
+        self = colorScheme == .dark ? .dark : .light
+    }
+
+    nonisolated var mermaidName: String {
+        switch self {
+        case .light: "default"
+        case .dark: "dark"
+        }
+    }
+}
+
 /// Renders one Mermaid diagram as renderer content, without inline-reader card chrome.
 struct MermaidRendererView: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     let source: String
     var library: String? = MermaidRendererAssets.library
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
 
     var body: some View {
-        MermaidRendererWebView(source: source, library: library, zoom: readerZoom)
+        MermaidRendererWebView(
+            source: source,
+            library: library,
+            theme: MermaidRendererTheme(colorScheme: colorScheme),
+            zoom: readerZoom)
             .zoomShortcuts($readerZoom)
             .zoomScroll($readerZoom)
     }
@@ -35,6 +62,7 @@ struct MermaidRendererView: View {
 struct MermaidRendererWebView: NSViewRepresentable {
     let source: String
     let library: String?
+    let theme: MermaidRendererTheme
     let zoom: Double
 
     func makeNSView(context: Context) -> WKWebView {
@@ -49,15 +77,15 @@ struct MermaidRendererWebView: NSViewRepresentable {
         webView.underPageBackgroundColor = .textBackgroundColor
         webView.navigationDelegate = context.coordinator
         webView.pageZoom = zoom
-        context.coordinator.load(source: source, library: library, into: webView)
+        context.coordinator.load(source: source, library: library, theme: theme, into: webView)
         return webView
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         webView.pageZoom = zoom
-        let contentIdentity = Coordinator.contentIdentity(source: source, library: library)
+        let contentIdentity = Coordinator.contentIdentity(source: source, library: library, theme: theme)
         guard context.coordinator.loadedContentIdentity != contentIdentity else { return }
-        context.coordinator.load(source: source, library: library, into: webView)
+        context.coordinator.load(source: source, library: library, theme: theme, into: webView)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -65,15 +93,27 @@ struct MermaidRendererWebView: NSViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate {
         var loadedContentIdentity: Int?
 
-        func load(source: String, library: String?, into webView: WKWebView) {
-            loadedContentIdentity = Self.contentIdentity(source: source, library: library)
-            webView.loadHTMLString(Self.documentHTML(source: source, library: library), baseURL: nil)
+        func load(
+            source: String,
+            library: String?,
+            theme: MermaidRendererTheme,
+            into webView: WKWebView
+        ) {
+            loadedContentIdentity = Self.contentIdentity(source: source, library: library, theme: theme)
+            webView.loadHTMLString(
+                Self.documentHTML(source: source, library: library, theme: theme),
+                baseURL: nil)
         }
 
-        nonisolated static func contentIdentity(source: String, library: String?) -> Int {
+        nonisolated static func contentIdentity(
+            source: String,
+            library: String?,
+            theme: MermaidRendererTheme
+        ) -> Int {
             var hasher = Hasher()
             hasher.combine(source)
             hasher.combine(library)
+            hasher.combine(theme.rawValue)
             return hasher.finalize()
         }
 
@@ -89,12 +129,15 @@ struct MermaidRendererWebView: NSViewRepresentable {
 
         nonisolated static func documentHTML(
             source: String,
-            library: String? = MermaidRendererAssets.library
+            library: String? = MermaidRendererAssets.library,
+            theme: MermaidRendererTheme
         ) -> String {
             let escapedSource = HTMLEntities.escapeHTML(source)
             guard let library else {
                 return fallbackHTML(source: escapedSource)
             }
+            let width = Int(PageEditorMetrics.readableContentWidth)
+            let mermaidTheme = theme.mermaidName
             return """
             <!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
             <meta name="color-scheme" content="light dark">
@@ -103,24 +146,24 @@ struct MermaidRendererWebView: NSViewRepresentable {
               html, body { width: 100%; min-height: 100%; margin: 0; }
               body {
                 display: flex; align-items: flex-start; justify-content: center;
-                box-sizing: border-box; padding: 24px;
+                box-sizing: border-box; padding: 24px 12px 72px;
                 color: CanvasText; background: Canvas;
                 font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+                font-size: 15px; line-height: 1.55;
               }
-              #diagram { max-width: 100%; }
-              #diagram svg { max-width: 100%; height: auto; }
-              #error { max-width: 720px; white-space: pre-wrap; color: #ff453a; }
+              #diagram { box-sizing: border-box; width: \(width)px; max-width: 100%; }
+              \(MermaidRendererAssets.sharedCSS)
+              #error { width: \(width)px; max-width: 100%; white-space: pre-wrap; color: #ff453a; }
             </style></head><body>
-            <div id="diagram" class="mermaid" aria-label="Mermaid diagram">\(escapedSource)</div>
+            <div id="diagram" class="mermaid" aria-label="Mermaid diagram" data-mermaid-theme="\(mermaidTheme)">\(escapedSource)</div>
             <pre id="error" role="alert" hidden></pre>
             <script>\(library)</script>
             <script>
             (function(){
               var diagram = document.getElementById('diagram');
               var error = document.getElementById('error');
-              var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
               try {
-                mermaid.initialize({ startOnLoad:false, securityLevel:'strict', theme:dark ? 'dark' : 'default' });
+                mermaid.initialize({ startOnLoad:false, securityLevel:'strict', theme:'\(mermaidTheme)' });
                 mermaid.run({ nodes:[diagram] }).catch(function(reason){
                   diagram.hidden = true;
                   error.hidden = false;

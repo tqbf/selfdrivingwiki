@@ -14,8 +14,10 @@ struct MermaidRendererHostedTests {
         return app
     }()
 
-    @Test("standalone Mermaid renderer paints an SVG with the packaged runtime")
-    func standaloneRendererPaintsSVG() async throws {
+    @Test(
+        "standalone Mermaid renderer paints the Testbed diagram at reader size and app theme",
+        arguments: [ColorScheme.light, .dark])
+    func standaloneRendererMatchesReaderPresentation(colorScheme: ColorScheme) async throws {
         _ = Self.app
         let appURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -26,12 +28,18 @@ struct MermaidRendererHostedTests {
         let library = try #require(MermaidRendererAssets.library(in: appBundle))
 
         let lease = await HostedAppKitTestGate.shared.acquire()
-        let view = MermaidRendererView(
-            source: "flowchart LR\nA[Start] --> B[Finish]",
-            library: library)
+        let source = """
+        flowchart LR
+            Sources["Raw sources<br/>(immutable)"] --> Wiki["The wiki<br/>(LLM-owned markdown)"]
+            Schema["The schema<br/>(CLAUDE.md / AGENTS.md)"] -.->|governs| Wiki
+            You["You"] -->|curate and ask| Sources
+            Wiki -->|you read| You
+        """
+        let view = MermaidRendererView(source: source, library: library)
+            .environment(\.colorScheme, colorScheme)
         let hosting = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: hosting)
-        window.setContentSize(NSSize(width: 800, height: 600))
+        window.setContentSize(NSSize(width: 900, height: 640))
         window.orderFront(nil)
         defer {
             window.orderOut(nil)
@@ -43,17 +51,27 @@ struct MermaidRendererHostedTests {
         for _ in 0..<100 {
             result = await evaluateJavaScriptWithTimeout(webView, """
             (function(){
-              if (document.querySelector('#diagram svg')) return 'svg';
+              var diagram = document.getElementById('diagram');
+              var svg = diagram && diagram.querySelector('svg');
+              if (svg) {
+                return 'svg:' + diagram.dataset.mermaidTheme + ':'
+                  + Math.round(diagram.getBoundingClientRect().width) + ':'
+                  + Math.round(svg.getBoundingClientRect().width);
+              }
               var error = document.getElementById('error');
               if (error && !error.hidden) return 'error:' + error.textContent;
               return 'waiting:' + document.readyState + ':' + typeof window.mermaid;
             })()
             """, timeout: .seconds(2)) ?? "no-result"
-            if result == "svg" || result.hasPrefix("error:") { break }
+            if result.hasPrefix("svg:") || result.hasPrefix("error:") { break }
             try await Task.sleep(for: .milliseconds(50))
         }
 
-        #expect(result == "svg", "standalone Mermaid runtime result: \(result)")
+        let expectedTheme = MermaidRendererTheme(colorScheme: colorScheme).mermaidName
+        let expectedWidth = Int(PageEditorMetrics.readableContentWidth)
+        #expect(
+            result == "svg:\(expectedTheme):\(expectedWidth):\(expectedWidth)",
+            "standalone Mermaid runtime result: \(result)")
     }
 
     private func waitForWebView(in window: NSWindow, timeout: Duration = .seconds(5)) async throws -> WKWebView {

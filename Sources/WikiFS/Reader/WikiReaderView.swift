@@ -622,8 +622,7 @@ struct WikiReaderView: View {
           iframe.wiki-embed-audio { width: 100%; height: 152px; border: none; border-radius: 8px; }
           audio.wiki-embed { width: 100%; }
           mark.sdwhl { background: rgba(255, 213, 79, 0.8); border-radius: 2px; }
-          .mermaid { text-align:center; margin:0 0 1em; overflow:auto; }
-          .mermaid svg { max-width:100%; height:auto; }
+          \(MermaidRendererAssets.sharedCSS)
           .sdw-mermaid-row__expansion { margin-top:0.6em; }
           .sdw-mermaid-row__diagram { min-height:0; }
           .sdw-mermaid-row__expansion[aria-hidden="true"] { display:none; }
