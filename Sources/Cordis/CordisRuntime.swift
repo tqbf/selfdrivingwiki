@@ -11,6 +11,7 @@ internal struct ContextRecord: Sendable {
     let parentID: ContextID?
     var childIDs: [ContextID] = []
     var componentIDs: [ComponentID] = []
+    var listenerIDs: [ListenerID] = []
     var providers: [AnyServiceKey: ProviderID] = [:]
     var lifecycle: ContextLifecycle = .live
     var disposalWaiters: [CheckedContinuation<[CleanupFailure], Never>] = []
@@ -47,11 +48,33 @@ internal struct StagedEffect: Sendable {
     let dispose: @Sendable (CleanupContext) async throws -> Void
 }
 
+internal struct StagedListener: Sendable {
+    let id: ListenerID
+    let key: AnyEventKey
+    let simple: AnySimpleListener?
+    let waterfall: AnyWaterfallListener?
+}
+
+internal enum ListenerOwner: Sendable {
+    case ambient
+    case component(ComponentID)
+}
+
+internal struct ListenerRecord: Sendable {
+    let id: ListenerID
+    let key: AnyEventKey
+    let contextID: ContextID
+    let owner: ListenerOwner
+    let simple: AnySimpleListener?
+    let waterfall: AnyWaterfallListener?
+}
+
 internal struct ActivationAttempt: Sendable {
     let generation: UInt64
     let dependencyProviders: [AnyServiceKey: ProviderID]
     var supplies: [StagedSupply] = []
     var effects: [StagedEffect] = []
+    var listeners: [StagedListener] = []
 }
 
 internal struct EffectRecord: Sendable {
@@ -68,6 +91,7 @@ internal struct ComponentRecord: Sendable {
     var stateHistory: [ComponentState.Kind] = [.pending]
     var dependencyProviders: [AnyServiceKey: ProviderID] = [:]
     var committedProviderIDs: [ProviderID] = []
+    var listenerIDs: [ListenerID] = []
     var effectIDs: [EffectID] = []
     var attempt: ActivationAttempt?
     var task: Task<Void, Never>?
@@ -87,6 +111,7 @@ internal actor CordisRuntime {
     private var components: [ComponentID: ComponentRecord] = [:]
     private var providers: [ProviderID: ProviderRecord] = [:]
     private var effects: [EffectID: EffectRecord] = [:]
+    private var listeners: [ListenerID: ListenerRecord] = [:]
     private var disposedProviderIDs: Set<ProviderID> = []
     private var disposedEffectIDs: Set<EffectID> = []
 
@@ -157,6 +182,10 @@ internal actor CordisRuntime {
         }
 
         contexts[contextID]?.providers.removeAll()
+        for listenerID in context.listenerIDs {
+            listeners.removeValue(forKey: listenerID)
+        }
+        contexts[contextID]?.listenerIDs.removeAll()
         contexts[contextID]?.lifecycle = .disposed
         contexts[contextID]?.cleanupFailures = failures
         let waiters = contexts[contextID]?.disposalWaiters ?? []
@@ -407,6 +436,13 @@ internal actor CordisRuntime {
         return component.state
     }
 
+    func contextID(ofComponent componentID: ComponentID) throws -> ContextID {
+        guard let component = components[componentID] else {
+            throw CordisError.disposedComponent(componentID)
+        }
+        return component.contextID
+    }
+
     func componentStateHistory(_ componentID: ComponentID) throws -> [ComponentState.Kind] {
         guard let component = components[componentID] else {
             throw CordisError.disposedComponent(componentID)
@@ -607,8 +643,21 @@ internal actor CordisRuntime {
                 dispose: effect.dispose)
             effectIDs.append(effect.id)
         }
+        var listenerIDs: [ListenerID] = []
+        for listener in attempt.listeners {
+            listeners[listener.id] = ListenerRecord(
+                id: listener.id,
+                key: listener.key,
+                contextID: component.contextID,
+                owner: .component(componentID),
+                simple: listener.simple,
+                waterfall: listener.waterfall)
+            listenerIDs.append(listener.id)
+            contexts[component.contextID]?.listenerIDs.append(listener.id)
+        }
         component.dependencyProviders = attempt.dependencyProviders
         component.committedProviderIDs = providerIDs
+        component.listenerIDs = listenerIDs
         component.effectIDs = effectIDs
         component.attempt = nil
         component.task = nil
@@ -645,6 +694,211 @@ internal actor CordisRuntime {
         settleComponent(componentID)
     }
 
+    // MARK: Listeners and event dispatch
+
+    func stageListener(
+        contextID: ContextID,
+        componentID: ComponentID,
+        generation: UInt64,
+        key: AnyEventKey,
+        simple: AnySimpleListener?,
+        waterfall: AnyWaterfallListener?
+    ) throws -> ListenerHandle {
+        guard var component = components[componentID],
+              component.contextID == contextID,
+              case .loading(let currentGeneration) = component.state,
+              currentGeneration == generation,
+              var attempt = component.attempt,
+              attempt.generation == generation else {
+            throw CordisError.inactiveActivation(componentID)
+        }
+        let listenerID = ListenerID()
+        attempt.listeners.append(StagedListener(
+            id: listenerID,
+            key: key,
+            simple: simple,
+            waterfall: waterfall))
+        component.attempt = attempt
+        components[componentID] = component
+        return ListenerHandle(id: listenerID, runtime: self)
+    }
+
+    func attachListener(
+        contextID: ContextID,
+        componentID: ComponentID,
+        key: AnyEventKey,
+        simple: AnySimpleListener?,
+        waterfall: AnyWaterfallListener?
+    ) throws -> ListenerHandle {
+        try requireLiveContext(contextID)
+        guard let component = components[componentID],
+              component.contextID == contextID,
+              component.state.kind == .active else {
+            throw CordisError.inactiveActivation(componentID)
+        }
+        let listenerID = ListenerID()
+        listeners[listenerID] = ListenerRecord(
+            id: listenerID,
+            key: key,
+            contextID: contextID,
+            owner: .component(componentID),
+            simple: simple,
+            waterfall: waterfall)
+        contexts[contextID]?.listenerIDs.append(listenerID)
+        components[componentID]?.listenerIDs.append(listenerID)
+        return ListenerHandle(id: listenerID, runtime: self)
+    }
+
+    func attachAmbientListener(
+        contextID: ContextID,
+        key: AnyEventKey,
+        simple: AnySimpleListener?,
+        waterfall: AnyWaterfallListener?
+    ) throws -> ListenerHandle {
+        try requireLiveContext(contextID)
+        let listenerID = ListenerID()
+        listeners[listenerID] = ListenerRecord(
+            id: listenerID,
+            key: key,
+            contextID: contextID,
+            owner: .ambient,
+            simple: simple,
+            waterfall: waterfall)
+        contexts[contextID]?.listenerIDs.append(listenerID)
+        return ListenerHandle(id: listenerID, runtime: self)
+    }
+
+    func removeListener(_ listenerID: ListenerID) throws {
+        guard let record = listeners.removeValue(forKey: listenerID) else {
+            throw CordisError.unknownListener(listenerID)
+        }
+        contexts[record.contextID]?.listenerIDs.removeAll { $0 == listenerID }
+        if case .component(let ownerID) = record.owner {
+            components[ownerID]?.listenerIDs.removeAll { $0 == listenerID }
+        }
+    }
+
+    func dispatch(
+        _ key: AnyEventKey,
+        payload: any Sendable,
+        contextID: ContextID
+    ) async throws -> (any Sendable)? {
+        try requireLiveContext(contextID)
+        guard ObjectIdentifier(type(of: payload)) == key.payloadTypeIdentity else {
+            throw CordisError.eventPayloadMismatch(EventDescriptor(key))
+        }
+        let matched = collectListeners(key, from: contextID)
+        switch key.modeKind {
+        case .emit:
+            for record in matched {
+                guard let simple = record.simple else {
+                    throw CordisError.eventListenerMismatch(EventDescriptor(key))
+                }
+                // Emit is best-effort notification: listener errors are part of
+                // the contract to ignore.
+                // swiftlint:disable:next silent_try_optional
+                try? await simple(payload)
+            }
+            return nil
+        case .serial:
+            for record in matched {
+                guard let simple = record.simple else {
+                    throw CordisError.eventListenerMismatch(EventDescriptor(key))
+                }
+                try await simple(payload)
+            }
+            return nil
+        case .parallel:
+            var firstError: CordisFailure?
+            await withTaskGroup(of: Result<Void, CordisFailure>.self) { group in
+                for record in matched {
+                    guard let simple = record.simple else {
+                        firstError = CordisFailure(
+                            String(describing: CordisError.eventListenerMismatch(EventDescriptor(key))))
+                        return
+                    }
+                    group.addTask {
+                        do {
+                            try await simple(payload)
+                            return .success(())
+                        } catch {
+                            return .failure(CordisFailure(error))
+                        }
+                    }
+                }
+                for await result in group {
+                    if case .failure(let failure) = result, firstError == nil {
+                        firstError = failure
+                    }
+                }
+            }
+            if let firstError {
+                throw firstError
+            }
+            return nil
+        case .bail:
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                for record in matched {
+                    guard let simple = record.simple else {
+                        throw CordisError.eventListenerMismatch(EventDescriptor(key))
+                    }
+                    group.addTask {
+                        try await simple(payload)
+                    }
+                }
+                // The first listener to settle decides the outcome; the rest
+                // are cancelled.
+                guard try await group.next() != nil else { return }
+                group.cancelAll()
+                // Drain remaining cancellations, ignoring cancellation errors.
+                // swiftlint:disable:next silent_try_optional
+                while let _ = try? await group.next() {}
+            }
+            return nil
+        case .waterfall:
+            let snapshots = try matched.map { record -> AnyWaterfallListener in
+                guard let waterfall = record.waterfall else {
+                    throw CordisError.eventListenerMismatch(EventDescriptor(key))
+                }
+                return waterfall
+            }
+            return try await Self.runWaterfallChain(snapshots, payload: payload)
+        }
+    }
+
+    /// Runs a waterfall chain: listener `i` receives `next`, which runs the
+    /// remaining chain from `i + 1`. A listener that omits `next()` returns
+    /// its own value and short-circuits everything downstream.
+    private static func runWaterfallChain(
+        _ chain: [AnyWaterfallListener],
+        payload: any Sendable
+    ) async throws -> any Sendable {
+        @Sendable func run(from index: Int, value: any Sendable) async throws -> any Sendable {
+            guard index < chain.count else { return value }
+            return try await chain[index](value) { incoming in
+                try await run(from: index + 1, value: incoming)
+            }
+        }
+        return try await run(from: 0, value: payload)
+    }
+
+    private func collectListeners(
+        _ key: AnyEventKey,
+        from contextID: ContextID
+    ) -> [ListenerRecord] {
+        var matched: [ListenerRecord] = []
+        var currentID: ContextID? = contextID
+        while let candidateID = currentID, let context = contexts[candidateID] {
+            for listenerID in context.listenerIDs {
+                if let record = listeners[listenerID], record.key == key {
+                    matched.append(record)
+                }
+            }
+            currentID = context.parentID
+        }
+        return matched
+    }
+
     // MARK: Effects and unloading
 
     func stageEffect(
@@ -665,6 +919,29 @@ internal actor CordisRuntime {
         attempt.effects.append(StagedEffect(id: effectID, dispose: dispose))
         component.attempt = attempt
         components[componentID] = component
+        return EffectHandle(id: effectID, runtime: self)
+    }
+
+    /// Registers a cleanup effect for an already-active component, committed
+    /// immediately (unlike `stageEffect`, which is activation-scoped).
+    func attachEffect(
+        contextID: ContextID,
+        componentID: ComponentID,
+        dispose: @escaping @Sendable (CleanupContext) async throws -> Void
+    ) throws -> EffectHandle {
+        try requireLiveContext(contextID)
+        guard let component = components[componentID],
+              component.contextID == contextID,
+              component.state.kind == .active else {
+            throw CordisError.inactiveActivation(componentID)
+        }
+        let effectID = EffectID()
+        effects[effectID] = EffectRecord(
+            id: effectID,
+            contextID: contextID,
+            componentID: componentID,
+            dispose: dispose)
+        components[componentID]?.effectIDs.append(effectID)
         return EffectHandle(id: effectID, runtime: self)
     }
 
@@ -763,6 +1040,13 @@ internal actor CordisRuntime {
 
         let ownedEffects = component.effectIDs.reversed().compactMap { effects.removeValue(forKey: $0) }
         component.effectIDs.removeAll()
+
+        for listenerID in component.listenerIDs.reversed() {
+            if let record = listeners.removeValue(forKey: listenerID) {
+                contexts[record.contextID]?.listenerIDs.removeAll { $0 == listenerID }
+            }
+        }
+        component.listenerIDs.removeAll()
         components[componentID] = component
         failures += await runEffects(Array(ownedEffects))
         for effect in ownedEffects { disposedEffectIDs.insert(effect.id) }

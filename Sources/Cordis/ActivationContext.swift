@@ -57,6 +57,85 @@ public struct ActivationContext: Sendable {
             generation: generation,
             dispose: dispose)
     }
+
+    // MARK: Event listeners
+
+    /// Registers a reversible listener staged with this activation attempt.
+    /// It is committed when activation succeeds and removed when the component
+    /// unloads (LIFO).
+    @discardableResult
+    public func on<P: Sendable>(
+        _ key: EventKey<P, EmitMode>,
+        listener: @escaping @Sendable (P) async throws -> Void
+    ) async throws -> ListenerHandle {
+        try await registerSimple(key, listener)
+    }
+
+    @discardableResult
+    public func on<P: Sendable>(
+        _ key: EventKey<P, SerialMode>,
+        listener: @escaping @Sendable (P) async throws -> Void
+    ) async throws -> ListenerHandle {
+        try await registerSimple(key, listener)
+    }
+
+    @discardableResult
+    public func on<P: Sendable>(
+        _ key: EventKey<P, ParallelMode>,
+        listener: @escaping @Sendable (P) async throws -> Void
+    ) async throws -> ListenerHandle {
+        try await registerSimple(key, listener)
+    }
+
+    @discardableResult
+    public func on<P: Sendable>(
+        _ key: EventKey<P, BailMode>,
+        listener: @escaping @Sendable (P) async throws -> Void
+    ) async throws -> ListenerHandle {
+        try await registerSimple(key, listener)
+    }
+
+    @discardableResult
+    public func on<P: Sendable>(
+        _ key: EventKey<P, WaterfallMode>,
+        listener: @escaping @Sendable (P, _ next: @Sendable () async throws -> P) async throws -> P
+    ) async throws -> ListenerHandle {
+        try await runtime.stageListener(
+            contextID: contextID,
+            componentID: componentID,
+            generation: generation,
+            key: key.erased,
+            simple: nil,
+            waterfall: { payload, next in
+                guard let typed = payload as? P else {
+                    throw CordisError.eventPayloadMismatch(EventDescriptor(key.erased))
+                }
+                return try await listener(typed) {
+                    guard let nextTyped = try await next(typed) as? P else {
+                        throw CordisError.eventPayloadMismatch(EventDescriptor(key.erased))
+                    }
+                    return nextTyped
+                }
+            })
+    }
+
+    private func registerSimple<P: Sendable>(
+        _ key: EventKey<P, some EventDispatchMode>,
+        _ listener: @escaping @Sendable (P) async throws -> Void
+    ) async throws -> ListenerHandle {
+        try await runtime.stageListener(
+            contextID: contextID,
+            componentID: componentID,
+            generation: generation,
+            key: key.erased,
+            simple: { payload in
+                guard let typed = payload as? P else {
+                    throw CordisError.eventPayloadMismatch(EventDescriptor(key.erased))
+                }
+                try await listener(typed)
+            },
+            waterfall: nil)
+    }
 }
 
 /// The lookup API available while one component's effects dispose.
