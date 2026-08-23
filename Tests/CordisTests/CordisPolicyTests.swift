@@ -94,6 +94,10 @@ struct CordisSourcePolicyTests {
             // execution waterfalls, and reversible tool registration.
             "Sources/WikiFSEngine/ToolServiceKeys.swift",
             "Sources/WikiFSEngine/ToolsPlugin.swift",
+            // Phase 4.5 prompt composition boundary: ordered section registry
+            // and base prompt resource contribution.
+            "Sources/WikiFSEngine/PromptServiceKeys.swift",
+            "Sources/WikiFSEngine/PromptPlugin.swift",
             "Sources/WikiCtlCore/CLITantivyLegResolver.swift",
             "Sources/WikiFS/Renderer/RendererRuntimeAssembly.swift",
         ])
