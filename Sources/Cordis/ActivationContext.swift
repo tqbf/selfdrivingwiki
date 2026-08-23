@@ -58,7 +58,14 @@ public struct ActivationContext: Sendable {
             dispose: dispose)
     }
 
-    // MARK: Event listeners
+    // MARK: Events
+
+    /// Best-effort notification dispatched from this activation's context.
+    /// Listener errors are ignored by the emit-mode contract.
+    public func emit<P: Sendable>(_ key: EventKey<P, EmitMode>, _ payload: P) async {
+        // swiftlint:disable:next silent_try_optional
+        _ = try? await runtime.dispatch(key.erased, payload: payload, contextID: contextID)
+    }
 
     /// Registers a reversible listener staged with this activation attempt.
     /// It is committed when activation succeeds and removed when the component

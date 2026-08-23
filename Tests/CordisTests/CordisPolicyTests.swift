@@ -78,6 +78,10 @@ struct CordisSourcePolicyTests {
             "Sources/WikiFSEngine/SearchRuntimeAssembly.swift",
             "Sources/WikiFSEngine/DaemonTransportRuntimeAssembly.swift",
             "Sources/WikiFSEngine/SearchRuntimeRegistry.swift",
+            // Phase 4.1 store-domain composition boundary: typed keys and the
+            // plugin that owns store construction plus reversible bus bridging.
+            "Sources/WikiFSEngine/StoreServiceKeys.swift",
+            "Sources/WikiFSEngine/StorePlugin.swift",
             "Sources/WikiCtlCore/CLITantivyLegResolver.swift",
             "Sources/WikiFS/Renderer/RendererRuntimeAssembly.swift",
         ])

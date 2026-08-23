@@ -496,7 +496,7 @@ let package = Package(
         // ACP wiring (pure), etc. These run on both macOS and Linux (#754).
         .testTarget(
             name: "WikiFSCoreTests",
-            dependencies: ["Cordis", "WikiFSCore", "WikiCtlCore", "ProviderConfigMutationHelper",
+            dependencies: ["Cordis", "CordisLoader", "WikiFSCore", "WikiCtlCore", "ProviderConfigMutationHelper",
                            // WikiFSEngine is macOS-only at build time because it
                            // depends on the `ACP` product (macOS-only). On Linux
                            // the test target still builds — the ACP-backed tests
