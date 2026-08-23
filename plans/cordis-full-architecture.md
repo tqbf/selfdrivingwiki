@@ -1,6 +1,12 @@
 # Cordis Full Architecture — Design Record
 
-Status: in progress (Phases 1–3 implemented; Phase 4 domain migration underway).
+Status: in progress. Phases 1–4 complete (all 11 domain plugin seams), Phase 5a
+complete (bundles/profiles as data, dump-config), Phase 5b Stage 1 complete
+(boundary checker); Phase 5b Stage 2 — deleting `WikiSession` and the
+`*RuntimeAssembly.swift` files and rewiring the app/daemon/CLI entry points —
+is deliberately deferred as a staged follow-up: see
+`plans/cordis-5b-status.md` for the exact caller inventory and the ordered
+migration sequence.
 
 ## Goal
 
@@ -74,17 +80,18 @@ re-projection happens in the UI plugin, not the kernel.
 
 | Key | Domain | Status |
 |---|---|---|
-| `ctx.store` | `any WikiStore` seam (GRDB backend) | in progress |
-| `ctx.readPool` | off-main reads | in progress |
-| `ctx.events` | store change signal as Cordis `EmitMode` event | in progress |
-| `ctx.chats` | session log persistence | planned |
-| `ctx.llm` | model adapter runtime | planned |
-| `ctx.tools` | tool registry + execution waterfalls | planned |
-| `ctx.systemPrompt` | prompt assembly | planned |
-| `ctx.agentLoop` / `ctx.agents` | queue worker, chat turn flow | planned |
-| `ctx.search` | Tantivy + embeddings providers | planned |
-| `ctx.renderers` | renderer packages | planned |
-| `ctx.transport` | daemon XPC/RPC | planned |
+| `ctx.store` | `any WikiStore` seam (GRDB backend) | done (`wiki.store`) |
+| `ctx.readPool` | off-main reads | done |
+| `ctx.events` | store change signal as Cordis `EmitMode` event | done |
+| `ctx.chats` | session log persistence | done (`wiki.sessions` + `wiki.chats-persistence`) |
+| `ctx.llm` | model adapter runtime | done (`wiki.llm-runtime` + `wiki.llm-acp-adapter`) |
+| `ctx.tools` | tool registry + execution waterfalls | done (`wiki.tools`) |
+| `ctx.systemPrompt` | prompt assembly | done (`wiki.system-prompt`) |
+| `ctx.agentLoop` / `ctx.agents` | queue worker, chat turn flow | seam done (`wiki.agent-loop`; dissolution of QueueEngine/ChatAgentRuntime deferred to 5b Stage 2) |
+| `ctx.search` | Tantivy + embeddings providers | done (`wiki.search` + adapters) |
+| `ctx.renderers` | renderer packages | done (`wiki.renderers` + adapter) |
+| `ctx.transport` | daemon XPC/RPC | done (`wiki.transport` + adapter) |
+| integrations | Zotero, podcasts, URL fetch | done (`wiki.integrations` + adapters) |
 
 ## Bundles and profiles (Phase 5 target)
 
