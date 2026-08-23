@@ -67,6 +67,20 @@ public struct ActivationContext: Sendable {
         _ = try? await runtime.dispatch(key.erased, payload: payload, contextID: contextID)
     }
 
+    /// Pass-through dispatch from this activation's context. Each listener may
+    /// transform the payload or short-circuit the remaining chain.
+    @discardableResult
+    public func waterfall<P: Sendable>(
+        _ key: EventKey<P, WaterfallMode>,
+        _ payload: P
+    ) async throws -> P {
+        let result = try await runtime.dispatch(key.erased, payload: payload, contextID: contextID)
+        guard let typed = result as? P else {
+            throw CordisError.eventPayloadMismatch(EventDescriptor(key.erased))
+        }
+        return typed
+    }
+
     /// Registers a reversible listener staged with this activation attempt.
     /// It is committed when activation succeeds and removed when the component
     /// unloads (LIFO).

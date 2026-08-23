@@ -90,6 +90,10 @@ struct CordisSourcePolicyTests {
             // registry and reversible ACP adapter registration.
             "Sources/WikiFSEngine/LlmServiceKeys.swift",
             "Sources/WikiFSEngine/LlmPlugin.swift",
+            // Phase 4.4 tool composition boundary: scoped registry, guarded
+            // execution waterfalls, and reversible tool registration.
+            "Sources/WikiFSEngine/ToolServiceKeys.swift",
+            "Sources/WikiFSEngine/ToolsPlugin.swift",
             "Sources/WikiCtlCore/CLITantivyLegResolver.swift",
             "Sources/WikiFS/Renderer/RendererRuntimeAssembly.swift",
         ])
