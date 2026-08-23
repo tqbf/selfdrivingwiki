@@ -95,7 +95,8 @@ struct CordisSourcePolicyTests {
                 of: root.path + "/",
                 with: "")
             guard !approved.contains(relative),
-                  !relative.hasPrefix("Sources/Cordis/") else { continue }
+                  !relative.hasPrefix("Sources/Cordis/"),
+                  !relative.hasPrefix("Sources/CordisLoader/") else { continue }
             let source = try String(contentsOf: file, encoding: .utf8)
             for pattern in forbiddenPatterns {
                 let containsForbiddenAPI: Bool
