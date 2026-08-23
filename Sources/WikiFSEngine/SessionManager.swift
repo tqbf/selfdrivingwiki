@@ -27,6 +27,10 @@ public final class SessionManager {
     /// Live sessions keyed by wiki ID. A wiki open in multiple windows
     /// shares ONE session (one store, one bus, one gate).
     public private(set) var sessions: [WikiID: WikiSession] = [:]
+    /// Number of live `RootScene` owners for each cached session. A renderer
+    /// window does not own a lease; it resolves through the session retained by
+    /// the wiki window that activated it.
+    @ObservationIgnored private var sessionLeaseCounts: [WikiID: Int] = [:]
 
     /// Per-wiki store-open failures (issue #881). When `session(for:)` throws
     /// (the on-disk DB couldn't be opened), the error message is recorded here
@@ -165,6 +169,7 @@ public final class SessionManager {
             // Refresh the descriptor in case the registry mutated (rename /
             // set home page) since this session was created.
             existing.updateDescriptor(descriptor)
+            sessionLeaseCounts[wikiID, default: 0] += 1
             return existing
         }
         let newSession: WikiSession
@@ -206,13 +211,26 @@ public final class SessionManager {
             newSession.pendingWikiLink = pending
         }
         sessions[wikiID] = newSession
+        sessionLeaseCounts[wikiID] = 1
         return newSession
     }
 
-    /// Remove a session from the cache (called when the last window for a
-    /// wiki closes). Flushes pending saves before removal so no buffered
-    /// edits are stranded.
+    /// Release one window's lease on a session. The session leaves the cache
+    /// only after its last `RootScene` closes, so another window showing the
+    /// same wiki can still resolve renderer and comparison windows through the
+    /// shared manager.
     public func releaseSession(for wikiID: WikiID) {
+        guard sessions[wikiID] != nil else { return }
+        let remainingLeases = max(0, sessionLeaseCounts[wikiID, default: 1] - 1)
+        guard remainingLeases == 0 else {
+            sessionLeaseCounts[wikiID] = remainingLeases
+            return
+        }
+        removeSession(for: wikiID)
+    }
+
+    private func removeSession(for wikiID: WikiID) {
+        sessionLeaseCounts.removeValue(forKey: wikiID)
         guard let session = sessions.removeValue(forKey: wikiID) else { return }
         session.store.flushPendingSaves()
         let token = UUID()
@@ -225,9 +243,10 @@ public final class SessionManager {
     }
 
     /// Release all live sessions, await owned teardown, then dispose the private
-    /// search root. Safe to call repeatedly during app termination.
+    /// search root. App termination force-removes sessions regardless of how
+    /// many window leases remain. Safe to call repeatedly.
     public func shutdownSearchRuntimes() async {
-        for wikiID in Array(sessions.keys) { releaseSession(for: wikiID) }
+        for wikiID in Array(sessions.keys) { removeSession(for: wikiID) }
         let releases = Array(searchReleaseTasks.values)
         for release in releases { await release.task.value }
         searchReleaseTasks.removeAll()
