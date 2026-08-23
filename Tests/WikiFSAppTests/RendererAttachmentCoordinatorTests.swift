@@ -436,9 +436,9 @@ struct RendererAttachmentCoordinatorTests {
         #expect(child.layer?.borderWidth == 0)
     }
 
-    @Test("hosted attachment header exposes accessible window and collapse actions")
+    @Test("hosted attachment exposes renderer content without duplicate native controls")
     @MainActor
-    func hostedAttachmentHeaderActions() throws {
+    func hostedAttachmentHasNoDuplicateNativeControls() throws {
         let webView = WikiReaderWebView()
         let container = WikiReaderContainerView(webView: webView)
         container.frame = .init(x: 0, y: 0, width: 400, height: 300)
@@ -447,86 +447,20 @@ struct RendererAttachmentCoordinatorTests {
         window.makeKeyAndOrderFront(nil)
         defer { container.teardown(); window.orderOut(nil) }
 
-        let placeholder = try RendererAttachmentPlaceholderID(validating: "header-actions-canvas")
+        let placeholder = try RendererAttachmentPlaceholderID(validating: "renderer-content-canvas")
         let authoredTitle = "System architecture with a long descriptive title"
-        var opened = false
-        var collapsed = false
+        let content = AnyView(Color.blue.accessibilityIdentifier("renderer-content"))
         container.updateAttachmentViewport(.init(x: 40, y: 80, width: 240, height: 160), for: placeholder)
-        container.activateAttachment(
-            named: placeholder,
-            title: authoredTitle,
-            onOpen: { opened = true },
-            onExit: { collapsed = true })
-
-        let child = try #require(container.subviews.flatMap(\.subviews).first {
-            $0.accessibilityIdentifier() == "renderer-attachment-header-actions-canvas"
-        })
-        let toolbar = try #require(child.subviews.first {
-            $0.accessibilityIdentifier() == "renderer-attachment-toolbar-header-actions-canvas"
-        })
-        let toolbarSubviews = toolbar.subviews.flatMap(\.subviews)
-        let titleLabel = try #require(toolbarSubviews.compactMap { $0 as? NSTextField }.first)
-        let buttons = toolbarSubviews.compactMap { $0 as? NSButton }
-        let openButton = try #require(buttons.first { $0.title == "Open in Window" })
-        let collapseButton = try #require(buttons.first { $0.title == "Collapse" })
-        #expect(child.accessibilityLabel() == "\(authoredTitle) renderer")
-        #expect(toolbar.accessibilityLabel() == "\(authoredTitle) renderer controls")
-        #expect(titleLabel.accessibilityLabel() == authoredTitle)
-        #expect(titleLabel.lineBreakMode == .byTruncatingTail)
-        #expect(openButton.accessibilityLabel() == "Open in Window")
-        #expect(collapseButton.accessibilityLabel() == "Collapse")
-
-        openButton.performClick(nil)
-        collapseButton.performClick(nil)
-        #expect(opened)
-        #expect(collapsed)
-    }
-
-    @Test("attachment header routes genuine pointer clicks to its controls")
-    @MainActor
-    func attachmentHeaderRoutesPointerClicks() throws {
-        let webView = WikiReaderWebView()
-        let container = WikiReaderContainerView(webView: webView)
-        container.frame = .init(x: 0, y: 0, width: 400, height: 300)
-        let window = NSWindow(contentRect: container.bounds, styleMask: [.titled], backing: .buffered, defer: false)
-        window.contentView = container
-        window.makeKeyAndOrderFront(nil)
-        defer { container.teardown(); window.orderOut(nil) }
-
-        let placeholder = try RendererAttachmentPlaceholderID(validating: "pointer-header-canvas")
-        var opened = false
-        var collapsed = false
-        container.updateAttachmentViewport(.init(x: 40, y: 80, width: 300, height: 180), for: placeholder)
-        container.activateAttachment(
-            named: placeholder,
-            onOpen: { opened = true },
-            onExit: { collapsed = true })
+        container.activateAttachment(named: placeholder, title: authoredTitle, content: content)
         container.layoutSubtreeIfNeeded()
 
         let child = try #require(container.subviews.flatMap(\.subviews).first {
-            $0.accessibilityIdentifier() == "renderer-attachment-pointer-header-canvas"
+            $0.accessibilityIdentifier() == "renderer-attachment-renderer-content-canvas"
         })
-        let toolbar = try #require(child.subviews.first {
-            $0.accessibilityIdentifier() == "renderer-attachment-toolbar-pointer-header-canvas"
-        })
-        let buttons = toolbar.subviews.flatMap(\.subviews).compactMap { $0 as? NSButton }
-        let openButton = try #require(buttons.first { $0.title == "Open in Window" })
-        let collapseButton = try #require(buttons.first { $0.title == "Collapse" })
-
-        let openPoint = openButton.convert(
-            NSPoint(x: openButton.bounds.midX, y: openButton.bounds.midY),
-            to: container)
-        let collapsePoint = collapseButton.convert(
-            NSPoint(x: collapseButton.bounds.midX, y: collapseButton.bounds.midY),
-            to: container)
-        #expect(container.hitTest(openPoint) === openButton)
-        #expect(container.hitTest(collapsePoint) === collapseButton)
-
-        Self.sendPointerClick(to: window, view: openButton)
-        Self.sendPointerClick(to: window, view: collapseButton)
-
-        #expect(opened)
-        #expect(collapsed)
+        #expect(child.accessibilityLabel() == "\(authoredTitle) renderer")
+        #expect(child.subviews.flatMap(\.subviews).contains { $0 is NSButton } == false)
+        let center = child.convert(NSPoint(x: child.bounds.midX, y: child.bounds.midY), to: container)
+        #expect(container.hitTest(center) !== webView)
     }
 
     @Test("hosted JSON Canvas attachment mounts the factory's native SwiftUI view")
@@ -624,7 +558,7 @@ struct RendererAttachmentCoordinatorTests {
 
     @Test("an admitted JSON Canvas fence mounts only after disclosure activation")
     @MainActor
-    func admittedJSONCanvasFenceAutoMountsWithoutActivation() throws {
+    func admittedJSONCanvasFenceMountsAfterDisclosureActivation() throws {
         let webView = WikiReaderWebView()
         let container = WikiReaderContainerView(webView: webView)
         container.frame = .init(x: 0, y: 0, width: 400, height: 300)
@@ -660,6 +594,12 @@ struct RendererAttachmentCoordinatorTests {
         #expect(Self.containsHostingView(in: child))
         #expect(child.frame == .zero)
         #expect(window.firstResponder === child)
+
+        coordinator.collapseAttachment(placeholder)
+
+        #expect(coordinator.attachmentState(for: placeholder) == .card)
+        #expect(container.ownsMountedAttachment(named: placeholder) == false)
+        #expect(window.firstResponder === webView)
     }
 
     @Test("reader attachment composition accepts package-style inline renderers through a generic resolver")
@@ -675,7 +615,8 @@ struct RendererAttachmentCoordinatorTests {
         #expect(source.contains("RendererInlineAttachmentResolver"))
         #expect(source.contains("BuiltInRendererReference.reference(for: .jsonCanvas)") == false)
         #expect(source.contains(#"__sdwRendererAttachmentReserve(\"\(identifier)\""#))
-        #expect(source.contains(#"\(function)(\"\(identifier)\")"#))
+        #expect(source.contains("setRowExpansion(true, for: placeholderID)"))
+        #expect(source.contains("setCollapseControl") == false)
 
         let pageDetail = try String(
             contentsOf: root.appendingPathComponent("Sources/WikiFS/Pages/PageDetailView.swift"),
@@ -763,17 +704,8 @@ struct RendererAttachmentCoordinatorTests {
             $0.accessibilityIdentifier() == "renderer-attachment-package-inline-renderer"
         })
         #expect(Self.containsHostingView(in: child))
-
-        let toolbar = try #require(child.subviews.first {
-            $0.accessibilityIdentifier() == "renderer-attachment-toolbar-package-inline-renderer"
-        })
-        let toolbarStack = try #require(toolbar.subviews.first)
-        let buttons: [NSButton] = toolbarStack.subviews.compactMap { $0 as? NSButton }
-        let openButton = try #require(buttons.first {
-            $0.accessibilityIdentifier() == "renderer-attachment-open-package-inline-renderer"
-        })
-        openButton.performClick(nil)
-        #expect(presented == 1)
+        #expect(child.subviews.flatMap(\.subviews).contains { $0 is NSButton } == false)
+        #expect(presented == 0)
     }
 
     @Test("a stale package failure cannot fail a remounted attachment in a newer reader generation")

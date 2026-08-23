@@ -722,6 +722,7 @@ struct MarkdownHTMLRendererTests {
         let html = WikiReaderView.documentHTML("<p>Body</p>")
 
         #expect(html.contains("background: transparent"))
+        #expect(html.contains(".sdw-renderer-card__row { gap: 0.35em; min-height: 2em; cursor: pointer; }"))
         #expect(html.contains("font-size: 0.95em; font-weight: 400"))
         #expect(html.contains(".sdw-renderer-card__disclosure:focus-visible"))
         #expect(html.contains("outline: 2px solid -webkit-focus-ring-color"))
@@ -737,6 +738,11 @@ struct MarkdownHTMLRendererTests {
         #expect(script.contains("e.dataset.rendererExpanded==='true'&&expansion?expansion:e"))
         #expect(script.contains("var r=e.getBoundingClientRect()") == false)
         #expect(script.contains("window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();"))
+        #expect(script.contains("event.target.closest('.sdw-renderer-card__row')"))
+        #expect(script.contains("event.target.closest('[data-renderer-action=\"open-window\"]')"))
+        #expect(script.contains("action:card.dataset.rendererExpanded==='true'?'collapse':'activate'"))
+        #expect(script.contains("sdw-renderer-card__collapse") == false)
+        #expect(script.contains("__sdwRendererAttachmentPresentCollapse") == false)
     }
 
     @Test func documentHTMLEmbedsNoScriptWhenLibAbsent() {

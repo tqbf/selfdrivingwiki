@@ -596,7 +596,7 @@ struct WikiReaderView: View {
             margin: 0.35em 0; padding: 0.2em 0; border-bottom: 1px solid var(--border);
             background: transparent;
           }
-          .sdw-renderer-card__row { gap: 0.35em; min-height: 2em; }
+          .sdw-renderer-card__row { gap: 0.35em; min-height: 2em; cursor: pointer; }
           .sdw-renderer-card__title {
             color: var(--text); font-size: 0.95em; font-weight: 400; line-height: 1.3;
           }
@@ -613,17 +613,14 @@ struct WikiReaderView: View {
             margin: 0.25em 0 0; font-size: 0.85em; color: var(--muted);
           }
           .sdw-renderer-card__expansion { margin-top: 0.4em; }
-          .sdw-renderer-card__action, .sdw-renderer-card__collapse {
+          .sdw-renderer-card__action {
             display: inline-block; margin: 0; padding: 0.3em 0.65em;
             border: 1px solid var(--border); border-radius: 6px;
-            background: transparent; font: inherit; font-size: 0.9em;
+            background: transparent; color: -webkit-link; font: inherit; font-size: 0.9em;
             line-height: 1.25; text-decoration: none; cursor: pointer;
           }
-          .sdw-renderer-card__action { color: -webkit-link; }
-          .sdw-renderer-card__collapse { color: var(--muted); }
           .sdw-renderer-card__disclosure:focus-visible,
-          .sdw-renderer-card__action:focus-visible,
-          .sdw-renderer-card__collapse:focus-visible {
+          .sdw-renderer-card__action:focus-visible {
             outline: 2px solid -webkit-focus-ring-color; outline-offset: 2px;
           }
           hr { border: none; border-top: 1px solid var(--border); margin: 1.5em 0; }
@@ -786,10 +783,8 @@ final class WikiReaderWebView: WKWebView {
         Object.keys(known).forEach(function(id){if(!current[id])window.webkit.messageHandlers.rendererAttachmentGeometry.postMessage({kind:'removed',generation:g,placeholderID:id});}); known=current; }
       window.__sdwRendererAttachmentReport=function(g){window.__sdwRendererAttachmentGeneration=g;window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();};
       window.__sdwRendererAttachmentReserve=function(id,height){var card=document.getElementById(id);var expansion=card&&card.querySelector('.sdw-renderer-card__expansion');if(!expansion||!Number.isFinite(height))return;expansion.style.minHeight=height+'px';window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();};
-      window.__sdwRendererAttachmentPresentCollapse=function(id){var card=document.getElementById(id); if(!card||card.querySelector('.sdw-renderer-card__collapse'))return; var b=document.createElement('button');b.className='sdw-renderer-card__collapse';b.type='button';b.textContent='Collapse';b.setAttribute('aria-label','Collapse interactive renderer');card.appendChild(b);};
-      window.__sdwRendererAttachmentDismissCollapse=function(id){var card=document.getElementById(id); if(!card)return; var b=card.querySelector('.sdw-renderer-card__collapse'); if(b)b.remove();};
       window.__sdwRendererAttachmentState=function(id,expanded,status){var card=document.getElementById(id);if(!card)return;card.dataset.rendererExpanded=expanded?'true':'false';var disclosure=card.querySelector('.sdw-renderer-card__disclosure');if(disclosure)disclosure.setAttribute('aria-expanded',expanded?'true':'false');var expansion=card.querySelector('.sdw-renderer-card__expansion');if(expansion){expansion.hidden=!expanded;expansion.setAttribute('aria-hidden',expanded?'false':'true');}var prior=card.querySelector('.sdw-renderer-card__status');if(prior)prior.remove();if(status){var node=document.createElement('p');node.className='sdw-renderer-card__status';node.setAttribute('role','status');node.textContent=status;expansion.appendChild(node);}window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();};
-      document.addEventListener('click',function(event){var mermaid=event.target.closest('[data-mermaid-disclosure="true"]');if(mermaid){var row=mermaid.closest('[data-renderer-kind="mermaid"]');if(!row)return;event.preventDefault();var expanded=row.dataset.rendererExpanded==='true';row.dataset.rendererExpanded=expanded?'false':'true';mermaid.setAttribute('aria-expanded',expanded?'false':'true');var region=row.querySelector('.sdw-mermaid-row__expansion');if(region){region.hidden=expanded;region.setAttribute('aria-hidden',expanded?'true':'false');}if(!expanded&&window.__sdwRenderMermaidRow)window.__sdwRenderMermaidRow(row);report();return;}var control=event.target.closest('[data-renderer-action="expand"],.sdw-renderer-card__collapse');if(!control)return;var card=control.closest('.sdw-renderer-card[id]');if(!card)return;event.preventDefault();var collapse=control.classList.contains('sdw-renderer-card__collapse');window.webkit.messageHandlers.rendererAttachmentAction.postMessage({action:collapse?'collapse':'activate',placeholderID:card.id});});
+      document.addEventListener('click',function(event){if(event.target.closest('[data-renderer-action="open-window"]'))return;var rowHeader=event.target.closest('.sdw-renderer-card__row');if(!rowHeader)return;var card=rowHeader.closest('.sdw-renderer-card[id]');if(!card)return;event.preventDefault();if(card.dataset.rendererKind==='mermaid'){var mermaid=card.querySelector('[data-mermaid-disclosure="true"]');var expanded=card.dataset.rendererExpanded==='true';card.dataset.rendererExpanded=expanded?'false':'true';if(mermaid)mermaid.setAttribute('aria-expanded',expanded?'false':'true');var region=card.querySelector('.sdw-mermaid-row__expansion');if(region){region.hidden=expanded;region.setAttribute('aria-hidden',expanded?'true':'false');}if(!expanded&&window.__sdwRenderMermaidRow)window.__sdwRenderMermaidRow(card);report();return;}window.webkit.messageHandlers.rendererAttachmentAction.postMessage({action:card.dataset.rendererExpanded==='true'?'collapse':'activate',placeholderID:card.id});});
       addEventListener('scroll',report,{passive:true}); addEventListener('resize',report); new MutationObserver(report).observe(document.documentElement,{childList:true,subtree:true,attributes:true});
     })();
     """
@@ -1950,12 +1945,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 title: context.displayTitle ?? context.rendererReference.registrationID.rawValue,
                 content: content,
                 takesFocus: takesFocus,
-                onOpen: { [weak self] in
-                    guard let self else { return }
-                    _ = self.presentInFullRenderer(context)
-                },
                 onExit: { [weak self] in self?.collapseAttachment(placeholderID) })
-            setCollapseControl(true, for: placeholderID)
             return .activate
         }
 
@@ -1974,7 +1964,6 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 if failure.kind == .concurrencyLimitReached {
                     attachmentCoordinator.refuse(placeholderID, reason: .resourcePressure)
                     self.attachmentContainer?.removeAttachment(named: placeholderID)
-                    self.setCollapseControl(false, for: placeholderID)
                     self.surfaceRefusal(.resourcePressure, for: placeholderID)
                     return
                 }
@@ -2012,18 +2001,6 @@ internal struct WikiReaderRep: NSViewRepresentable {
             webView.evaluateJavaScript("window.__sdwRendererAttachmentReport && window.__sdwRendererAttachmentReport(\(loadGeneration));")
         }
 
-        /// Add or remove the card's Collapse control. The document script no
-        /// longer appends it optimistically on click — only a mounted native
-        /// attachment has anything to collapse.
-        private func setCollapseControl(_ present: Bool, for placeholderID: RendererAttachmentPlaceholderID) {
-            guard let webView else { return }
-            let identifier = WikiReaderRep.jsString(placeholderID.rawValue)
-            let function = present
-                ? "window.__sdwRendererAttachmentPresentCollapse"
-                : "window.__sdwRendererAttachmentDismissCollapse"
-            webView.evaluateJavaScript("\(function) && \(function)(\"\(identifier)\");")
-        }
-
         private func setRowExpansion(_ expanded: Bool, for placeholderID: RendererAttachmentPlaceholderID, status: String? = nil) {
             guard let webView else { return }
             let identifier = WikiReaderRep.jsString(placeholderID.rawValue)
@@ -2036,7 +2013,6 @@ internal struct WikiReaderRep: NSViewRepresentable {
             case .rowBudget: "Four renderer rows are already expanded. Collapse one to expand this row."
             case .resourcePressure: "Renderer resources are busy. Try expanding this row again."
             }
-            setCollapseControl(false, for: placeholderID)
             setRowExpansion(false, for: placeholderID, status: message)
         }
 
@@ -2054,13 +2030,11 @@ internal struct WikiReaderRep: NSViewRepresentable {
             else { return }
             attachmentCoordinator.collapse(placeholderID)
             attachmentContainer.removeAttachment(named: placeholderID)
-            setCollapseControl(false, for: placeholderID)
             setRowExpansion(false, for: placeholderID)
         }
 
         func failAttachment(_ placeholderID: RendererAttachmentPlaceholderID) {
             attachmentCoordinator?.fail(placeholderID)
-            setCollapseControl(false, for: placeholderID)
             setRowExpansion(false, for: placeholderID)
             guard attachmentContainer?.ownsMountedAttachment(named: placeholderID) == true else { return }
             attachmentContainer?.removeAttachment(named: placeholderID)

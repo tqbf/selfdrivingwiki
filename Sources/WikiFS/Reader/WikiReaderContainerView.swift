@@ -62,7 +62,6 @@ final class WikiReaderContainerView: NSView {
         title: String = "Interactive",
         content: AnyView? = nil,
         takesFocus: Bool = true,
-        onOpen: (() -> Void)? = nil,
         onExit: (() -> Void)? = nil
     ) {
         if let child = attachmentChildren[placeholderID] {
@@ -74,7 +73,6 @@ final class WikiReaderContainerView: NSView {
             placeholderID: placeholderID,
             title: title,
             content: content,
-            onOpen: onOpen,
             onFocus: { [weak self] in self?.markFocused(placeholderID) },
             onExit: { [weak self] in
                 if let onExit { onExit() }
@@ -171,28 +169,21 @@ private final class RendererAttachmentOverlayView: NSView {
 @MainActor
 private final class RendererAttachmentNativeChildView: NSView {
     let placeholderID: RendererAttachmentPlaceholderID
-    private let onOpen: () -> Void
     private let onFocus: () -> Void
     private let onExit: () -> Void
     private let hostedContent: NSHostingView<AnyView>?
-    private let toolbar: NSVisualEffectView
-    private let toolbarStack: NSStackView
 
     init(
         placeholderID: RendererAttachmentPlaceholderID,
         title: String,
         content: AnyView?,
-        onOpen: (() -> Void)?,
         onFocus: @escaping () -> Void,
         onExit: @escaping () -> Void
     ) {
         self.placeholderID = placeholderID
-        self.onOpen = onOpen ?? {}
         self.onFocus = onFocus
         self.onExit = onExit
         hostedContent = content.map(NSHostingView.init(rootView:))
-        toolbar = NSVisualEffectView()
-        toolbarStack = NSStackView()
         super.init(frame: .zero)
         wantsLayer = true
         layer?.borderColor = NSColor.keyboardFocusIndicatorColor.cgColor
@@ -201,51 +192,6 @@ private final class RendererAttachmentNativeChildView: NSView {
         setAccessibilityRole(.group)
         setAccessibilityLabel("\(title) renderer")
         setAccessibilityIdentifier("renderer-attachment-\(placeholderID.rawValue)")
-
-        toolbar.material = .headerView
-        toolbar.blendingMode = .withinWindow
-        toolbar.state = .active
-        toolbar.setAccessibilityElement(true)
-        toolbar.setAccessibilityRole(.toolbar)
-        toolbar.setAccessibilityLabel("\(title) renderer controls")
-        toolbar.setAccessibilityIdentifier("renderer-attachment-toolbar-\(placeholderID.rawValue)")
-        addSubview(toolbar)
-
-        let titleLabel = NSTextField(labelWithString: title)
-        titleLabel.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
-        titleLabel.textColor = .secondaryLabelColor
-        titleLabel.lineBreakMode = .byTruncatingTail
-        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        titleLabel.setAccessibilityElement(true)
-        titleLabel.setAccessibilityRole(.staticText)
-        titleLabel.setAccessibilityLabel(title)
-
-        let openButton = NSButton(title: "Open in Window", target: self, action: #selector(openInWindow))
-        openButton.bezelStyle = .texturedRounded
-        openButton.controlSize = .small
-        openButton.setAccessibilityLabel("Open in Window")
-        openButton.setAccessibilityHelp("Open this renderer in a separate window.")
-        openButton.setAccessibilityIdentifier("renderer-attachment-open-\(placeholderID.rawValue)")
-
-        let collapseButton = NSButton(title: "Collapse", target: self, action: #selector(collapse))
-        collapseButton.bezelStyle = .texturedRounded
-        collapseButton.controlSize = .small
-        collapseButton.setAccessibilityLabel("Collapse")
-        collapseButton.setAccessibilityHelp("Hide this inline renderer and show the document card.")
-        collapseButton.setAccessibilityIdentifier("renderer-attachment-collapse-\(placeholderID.rawValue)")
-
-        toolbarStack.orientation = .horizontal
-        toolbarStack.alignment = .centerY
-        toolbarStack.distribution = .fill
-        toolbarStack.spacing = 8
-        toolbarStack.addArrangedSubview(titleLabel)
-        let spacer = NSView()
-        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        spacer.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        toolbarStack.addArrangedSubview(spacer)
-        toolbarStack.addArrangedSubview(openButton)
-        toolbarStack.addArrangedSubview(collapseButton)
-        toolbar.addSubview(toolbarStack)
 
         if let hostedContent {
             addSubview(hostedContent)
@@ -286,28 +232,14 @@ private final class RendererAttachmentNativeChildView: NSView {
 
     override func layout() {
         super.layout()
-        let toolbarHeight: CGFloat = 32
-        toolbar.frame = CGRect(x: 0, y: bounds.height - toolbarHeight, width: bounds.width, height: toolbarHeight)
-        toolbarStack.frame = toolbar.bounds.insetBy(dx: 8, dy: 4)
-        hostedContent?.frame = CGRect(x: 0, y: 0, width: bounds.width, height: max(0, bounds.height - toolbarHeight))
+        hostedContent?.frame = bounds
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         let localPoint = convert(point, from: superview)
         guard bounds.contains(localPoint) else { return nil }
-        if let toolbarHit = toolbar.hitTest(localPoint) {
-            return toolbarHit
-        }
         guard let hostedContent else { return self }
         return hostedContent.hitTest(localPoint) ?? self
-    }
-
-    @objc private func openInWindow() {
-        onOpen()
-    }
-
-    @objc private func collapse() {
-        onExit()
     }
 
     private func updateKeyboardFocusIndicator() {
