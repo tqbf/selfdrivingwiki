@@ -114,6 +114,24 @@ struct SessionManagerTests {
         #expect(manager.sessions.isEmpty)
     }
 
+    @Test func releasingOneOfTwoWikiWindowsKeepsSharedSessionAvailable() throws {
+        let dir = tempDirectory()
+        let registry = makeSeededRegistry(dir: dir)
+        let manager = makeSessionManager(dir: dir)
+        let descriptor = try #require(registry.wikis.first)
+
+        let firstWindowSession = try manager.session(for: descriptor.id, descriptor: descriptor)
+        let secondWindowSession = try manager.session(for: descriptor.id, descriptor: descriptor)
+        #expect(firstWindowSession === secondWindowSession)
+
+        manager.releaseSession(for: descriptor.id)
+
+        #expect(manager.sessions[descriptor.id] === firstWindowSession)
+
+        manager.releaseSession(for: descriptor.id)
+        #expect(manager.sessions[descriptor.id] == nil)
+    }
+
     @Test func testReleaseSessionFlushesPendingSaves() {
         let dir = tempDirectory()
         let registry = makeSeededRegistry(dir: dir)

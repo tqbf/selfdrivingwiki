@@ -717,6 +717,64 @@ struct MarkdownHTMLRendererTests {
         #expect(html.contains("sdw-renderer-card") == false)
     }
 
+    @Test("standalone Mermaid renderer contains no inline card chrome")
+    func standaloneMermaidRendererOmitsInlineCardChrome() {
+        let source = "flowchart LR\nA[Start <&>] --> B[Finish]"
+        let html = MermaidRendererWebView.Coordinator.documentHTML(
+            source: source,
+            library: "window.mermaid = window.mermaid || {};",
+            theme: .dark)
+
+        #expect(html.contains(#"id="diagram" class="mermaid""#))
+        #expect(html.contains(#"data-mermaid-theme="dark""#))
+        #expect(html.contains("theme:'dark'"))
+        #expect(html.contains(#"rendered.\n\n' + String(reason)"#))
+        #expect(html.contains("width: \(Int(PageEditorMetrics.readableContentWidth))px"))
+        #expect(html.contains(MermaidRendererAssets.sharedCSS))
+        #expect(html.contains(#"id="source" hidden"#) == false)
+        #expect(html.contains(#"id="error" role="alert" hidden"#))
+        #expect(html.contains("securityLevel:'strict'"))
+        #expect(html.contains("default-src 'none'"))
+        #expect(html.contains("flowchart LR"))
+        #expect(html.contains("Start &lt;&amp;&gt;"))
+        #expect(html.contains("sdw-renderer-card") == false)
+        #expect(html.contains("sdw-renderer-card__row") == false)
+        #expect(html.contains("data-mermaid-disclosure") == false)
+        #expect(html.contains("data-renderer-action") == false)
+        #expect(html.contains("Open in Window") == false)
+    }
+
+    @Test("standalone Mermaid renderer uses the explicit app theme")
+    func standaloneMermaidRendererUsesExplicitTheme() {
+        let source = "flowchart LR\nA --> B"
+        let library = "window.mermaid = window.mermaid || {};"
+        let lightHTML = MermaidRendererWebView.Coordinator.documentHTML(
+            source: source,
+            library: library,
+            theme: .light)
+        let darkHTML = MermaidRendererWebView.Coordinator.documentHTML(
+            source: source,
+            library: library,
+            theme: .dark)
+
+        #expect(lightHTML.contains(#"data-mermaid-theme="default""#))
+        #expect(lightHTML.contains("theme:'default'"))
+        #expect(darkHTML.contains(#"data-mermaid-theme="dark""#))
+        #expect(darkHTML.contains("theme:'dark'"))
+        #expect(lightHTML.contains("matchMedia") == false)
+        #expect(darkHTML.contains("matchMedia") == false)
+
+        let lightIdentity = MermaidRendererWebView.Coordinator.contentIdentity(
+            source: source,
+            library: library,
+            theme: .light)
+        let darkIdentity = MermaidRendererWebView.Coordinator.contentIdentity(
+            source: source,
+            library: library,
+            theme: .dark)
+        #expect(lightIdentity != darkIdentity)
+    }
+
     @Test("renderer row stylesheet stays compact, relative, focus-visible, and motion-aware")
     func rendererRowStylesUseNativeReaderScaleAndFocus() {
         let html = WikiReaderView.documentHTML("<p>Body</p>")
@@ -746,7 +804,7 @@ struct MarkdownHTMLRendererTests {
     }
 
     @Test func documentHTMLEmbedsNoScriptWhenLibAbsent() {
-        // Under `swift test` there's no .app bundle, so `mermaidLib` is nil →
+        // Under `swift test` there's no .app bundle, so the shared Mermaid library is nil →
         // documentHTML embeds NO <script>, and the mermaid block is preserved as
         // ordinary code. Pins graceful degradation (AC.4/AC.5).
         let h = WikiReaderView.documentHTML("<pre><code class=\"language-mermaid\">graph TD</code></pre>")

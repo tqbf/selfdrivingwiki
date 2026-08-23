@@ -399,18 +399,6 @@ struct WikiReaderView: View {
         }
     }
 
-    /// One-shot loader for the vendored Mermaid library. Reads the bundled
-    /// `mermaid.js` once and caches it; `nil` when unbundled (e.g. `swift test`,
-    /// `swift run` without `./build.sh`), so diagram pages degrade gracefully to
-    /// ordinary code blocks. `nonisolated` so it's safe off the main actor where
-    /// the convert task reads it.
-    nonisolated private static let mermaidLib: String? = {
-        guard let url = Bundle.main.url(forResource: "mermaid", withExtension: "js"),
-              let src = DebugLog.trying("load mermaid.js", operation: { try String(contentsOf: url, encoding: .utf8) }),
-              !src.isEmpty else { return nil }
-        return src
-    }()
-
     /// Bootstrap that initializes Mermaid (matching the system appearance via
     /// `prefers-color-scheme`), converts each
     /// `<pre><code class="language-mermaid">` into a `<div class="mermaid">`
@@ -468,7 +456,7 @@ struct WikiReaderView: View {
         var mermaidScripts = ""
         if (body.contains("class=\"language-mermaid\"")
                 || body.contains("class=\"mermaid\"")),
-           let lib = mermaidLib {
+           let lib = MermaidRendererAssets.library {
             mermaidScripts = "<script>\(lib)</script>\n<script>\(mermaidBootstrapJS)</script>"
         }
         return """
@@ -634,8 +622,7 @@ struct WikiReaderView: View {
           iframe.wiki-embed-audio { width: 100%; height: 152px; border: none; border-radius: 8px; }
           audio.wiki-embed { width: 100%; }
           mark.sdwhl { background: rgba(255, 213, 79, 0.8); border-radius: 2px; }
-          .mermaid { text-align:center; margin:0 0 1em; overflow:auto; }
-          .mermaid svg { max-width:100%; height:auto; }
+          \(MermaidRendererAssets.sharedCSS)
           .sdw-mermaid-row__expansion { margin-top:0.6em; }
           .sdw-mermaid-row__diagram { min-height:0; }
           .sdw-mermaid-row__expansion[aria-hidden="true"] { display:none; }
