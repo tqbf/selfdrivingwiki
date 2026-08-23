@@ -98,6 +98,10 @@ struct CordisSourcePolicyTests {
             // and base prompt resource contribution.
             "Sources/WikiFSEngine/PromptServiceKeys.swift",
             "Sources/WikiFSEngine/PromptPlugin.swift",
+            // Phase 4.6 agent-loop composition boundary: durable turn/step
+            // events plus pre-step and request waterfalls.
+            "Sources/WikiFSEngine/AgentLoopServiceKeys.swift",
+            "Sources/WikiFSEngine/AgentLoopPlugin.swift",
             "Sources/WikiCtlCore/CLITantivyLegResolver.swift",
             "Sources/WikiFS/Renderer/RendererRuntimeAssembly.swift",
         ])
