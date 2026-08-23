@@ -86,6 +86,10 @@ struct CordisSourcePolicyTests {
             // facade and the reversible chat-persistence projection.
             "Sources/WikiFSEngine/SessionServiceKeys.swift",
             "Sources/WikiFSEngine/SessionsPlugin.swift",
+            // Phase 4.3 model-adapter composition boundary: actor-backed route
+            // registry and reversible ACP adapter registration.
+            "Sources/WikiFSEngine/LlmServiceKeys.swift",
+            "Sources/WikiFSEngine/LlmPlugin.swift",
             "Sources/WikiCtlCore/CLITantivyLegResolver.swift",
             "Sources/WikiFS/Renderer/RendererRuntimeAssembly.swift",
         ])
