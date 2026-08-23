@@ -106,6 +106,10 @@ struct CordisSourcePolicyTests {
             // registry and reversible backend registrations.
             "Sources/WikiFSEngine/ExtractionServiceKeys.swift",
             "Sources/WikiFSEngine/ExtractionPlugins.swift",
+            // Phase 4.8 search composition boundary: typed provider registry
+            // plus lazy Tantivy and embeddings adapter registrations.
+            "Sources/WikiFSEngine/SearchServiceKeys.swift",
+            "Sources/WikiFSEngine/SearchPlugins.swift",
             "Sources/WikiCtlCore/CLITantivyLegResolver.swift",
             "Sources/WikiFS/Renderer/RendererRuntimeAssembly.swift",
         ])
