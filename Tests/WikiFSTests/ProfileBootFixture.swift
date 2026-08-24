@@ -33,6 +33,36 @@ enum ProfileBootFixture {
         try DaemonPluginCatalog.build(factories: DaemonPluginCatalogFactories(base: baseFactories))
     }
 
+    static func processCatalog(includeAppServices: Bool, recorder: ProfileProcessDisposalRecorder) throws -> PluginCatalog {
+        let queueFactory: ProcessPluginCatalogFactories.QueueFactory? = includeAppServices ? { @Sendable in
+            let engine = try makeProfileQueueEngine()
+            return ProcessRuntimeLease<any QueueEngineClient>(service: engine) {
+                _ = await engine.shutdownForHandoff()
+            }
+        } : nil
+        let transportFactory: ProcessPluginCatalogFactories.TransportFactory? = includeAppServices ? { @Sendable in
+            let services = fixtureTransportServices()
+            return ProcessRuntimeLease(service: services) { await services.stop() }
+        } : nil
+        let rendererFactory: ProcessPluginCatalogFactories.RendererFactory? = includeAppServices ? { @Sendable in
+            ProcessRuntimeLease<any Sendable>(service: ProfileRendererServices()) { await recorder.record() }
+        } : nil
+        return try ProcessPluginCatalog.build(factories: ProcessPluginCatalogFactories(
+            makeAgentProvider: {
+                ProcessRuntimeLease(service: UnavailableAgentProviderServices()) { await recorder.record() }
+            },
+            makeExtraction: {
+                ProcessRuntimeLease(service: UnavailableExtractionServices()) { await recorder.record() }
+            },
+            makeQueue: queueFactory,
+            makeTransport: transportFactory,
+            makeRenderer: rendererFactory))
+    }
+
+    static func processEntries(includeAppServices: Bool) -> [Entry] {
+        includeAppServices ? ProductionProfileEntries.appProcess() : ProductionProfileEntries.daemonProcess()
+    }
+
     static func cliCatalog() throws -> PluginCatalog {
         try CLIPluginCatalog.build()
     }
@@ -106,6 +136,11 @@ enum ProfileBootFixture {
     }
 }
 
+actor ProfileProcessDisposalRecorder {
+    private(set) var count = 0
+    func record() { count += 1 }
+}
+
 actor ProfileStoreEventRecorder {
     private(set) var events: [ResourceChangeEvent] = []
     private(set) var observedCommittedState = false
@@ -134,6 +169,31 @@ private struct ProfileHTMLExtractor: HtmlMarkdownExtractor {
 
 private struct ProfileRendererServices: Sendable {}
 private struct ProfileIntegrationEntryPoint: Sendable {}
+
+private func makeProfileQueueEngine() throws -> QueueEngine {
+    let store = try QueueStore(databaseURL: URL(fileURLWithPath: ":memory:"))
+    let factory = QueueExtractionWorkerFactory(
+        provider: ProfileQueueExtractionProvider(),
+        emitProgress: { _, _ in })
+    return QueueEngine(store: store, workerFactory: factory)
+}
+
+private struct ProfileQueueExtractionProvider: QueueExtractionProvider {
+    func resolveExtraction(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        backendOverride: ExtractionBackend?
+    ) async throws -> ExtractionResolution? { nil }
+
+    func persistExtraction(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        markdown: String,
+        backend: ExtractionBackend,
+        modelVersion: String?,
+        technique: String?
+    ) async throws {}
+}
 
 private func fixtureTransportServices() -> DaemonTransportServices {
     DaemonTransportServices(

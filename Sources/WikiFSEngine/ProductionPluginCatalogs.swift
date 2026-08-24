@@ -12,6 +12,53 @@ public enum ExtractionPluginFactory {
     public typealias LocalExtractor = @Sendable () async -> any MarkdownExtractor
 }
 
+/// One process-scoped service and the cleanup that owns its concrete runtime.
+public struct ProcessRuntimeLease<Service: Sendable>: Sendable {
+    public let service: Service
+    public let dispose: @Sendable () async throws -> Void
+
+    public init(service: Service, dispose: @escaping @Sendable () async throws -> Void) {
+        self.service = service
+        self.dispose = dispose
+    }
+}
+
+public enum ProcessServiceKeys {
+    public static let agentProvider = ServiceKey<any AgentProviderServices>(label: "process.agent-provider")
+    public static let extraction = ServiceKey<any ExtractionServices>(label: "process.extraction")
+    public static let queue = ServiceKey<any QueueEngineClient>(label: "process.queue")
+    public static let transport = ServiceKey<DaemonTransportServices>(label: "process.transport")
+    public static let renderer = ServiceKey<any Sendable>(label: "process.renderer")
+}
+
+public struct ProcessPluginCatalogFactories: Sendable {
+    public typealias AgentProviderFactory = @Sendable () async throws -> ProcessRuntimeLease<any AgentProviderServices>
+    public typealias ExtractionFactory = @Sendable () async throws -> ProcessRuntimeLease<any ExtractionServices>
+    public typealias QueueFactory = @Sendable () async throws -> ProcessRuntimeLease<any QueueEngineClient>
+    public typealias TransportFactory = @Sendable () async throws -> ProcessRuntimeLease<DaemonTransportServices>
+    public typealias RendererFactory = @Sendable () async throws -> ProcessRuntimeLease<any Sendable>
+
+    public let makeAgentProvider: AgentProviderFactory
+    public let makeExtraction: ExtractionFactory
+    public let makeQueue: QueueFactory?
+    public let makeTransport: TransportFactory?
+    public let makeRenderer: RendererFactory?
+
+    public init(
+        makeAgentProvider: @escaping AgentProviderFactory,
+        makeExtraction: @escaping ExtractionFactory,
+        makeQueue: QueueFactory? = nil,
+        makeTransport: TransportFactory? = nil,
+        makeRenderer: RendererFactory? = nil
+    ) {
+        self.makeAgentProvider = makeAgentProvider
+        self.makeExtraction = makeExtraction
+        self.makeQueue = makeQueue
+        self.makeTransport = makeTransport
+        self.makeRenderer = makeRenderer
+    }
+}
+
 public struct BasePluginCatalogFactories: Sendable {
     public let agentProviderServices: any AgentProviderServices
     public let makePDFExtractor: ExtractionPluginFactory.LocalExtractor
@@ -93,6 +140,23 @@ public struct AppServices: Sendable {
 /// Concrete per-wiki profile rows. The store row is a complete replacement for
 /// the machine-independent placeholder shipped in `wikifs-base`.
 public enum ProductionProfileEntries {
+    public static func appProcess() -> [Entry] {
+        [
+            Entry(id: EntryID("process-agent-provider"), plugin: ProcessRuntimePlugins.agentProviderID),
+            Entry(id: EntryID("process-extraction"), plugin: ProcessRuntimePlugins.extractionID),
+            Entry(id: EntryID("process-queue"), plugin: ProcessRuntimePlugins.queueID),
+            Entry(id: EntryID("process-transport"), plugin: ProcessRuntimePlugins.transportID),
+            Entry(id: EntryID("process-renderer"), plugin: ProcessRuntimePlugins.rendererID),
+        ]
+    }
+
+    public static func daemonProcess() -> [Entry] {
+        [
+            Entry(id: EntryID("process-agent-provider"), plugin: ProcessRuntimePlugins.agentProviderID),
+            Entry(id: EntryID("process-extraction"), plugin: ProcessRuntimePlugins.extractionID),
+        ]
+    }
+
     public static func app(databaseURL: URL, wikiID: WikiID) -> [Entry] {
         base(databaseURL: databaseURL, wikiID: wikiID) + [
             Entry(id: EntryID("renderer-services"), plugin: RendererServicesPlugin.id),
@@ -135,6 +199,53 @@ public enum ProductionProfileEntries {
             Entry(id: EntryID("transport"), plugin: TransportPlugin.id),
             Entry(id: EntryID("integrations"), plugin: IntegrationsPlugin.id),
         ]
+    }
+}
+
+public enum ProcessRuntimePlugins {
+    public static let agentProviderID = PluginID("process.agent-provider")
+    public static let extractionID = PluginID("process.extraction")
+    public static let queueID = PluginID("process.queue")
+    public static let transportID = PluginID("process.transport")
+    public static let rendererID = PluginID("process.renderer")
+
+    public static func definitions(_ factories: ProcessPluginCatalogFactories) -> [PluginDefinition] {
+        var definitions = [
+            definition(id: agentProviderID, key: ProcessServiceKeys.agentProvider, factory: factories.makeAgentProvider),
+            definition(id: extractionID, key: ProcessServiceKeys.extraction, factory: factories.makeExtraction),
+        ]
+        if let factory = factories.makeQueue {
+            definitions.append(definition(id: queueID, key: ProcessServiceKeys.queue, factory: factory))
+        }
+        if let factory = factories.makeTransport {
+            definitions.append(definition(id: transportID, key: ProcessServiceKeys.transport, factory: factory))
+        }
+        if let factory = factories.makeRenderer {
+            definitions.append(definition(id: rendererID, key: ProcessServiceKeys.renderer, factory: factory))
+        }
+        return definitions
+    }
+
+    private static func definition<Service: Sendable>(
+        id: PluginID,
+        key: ServiceKey<Service>,
+        factory: @escaping @Sendable () async throws -> ProcessRuntimeLease<Service>
+    ) -> PluginDefinition {
+        PluginDefinition(id: id, provisions: [ServiceDependency(key)]) {
+            try ComponentDefinition(
+                label: id.rawValue,
+                provisions: [ServiceDependency(key)]) { activation in
+                    let lease = try await factory()
+                    _ = try await activation.supply(key, value: lease.service)
+                    _ = try await activation.effect { _ in try await lease.dispose() }
+                }
+        }
+    }
+}
+
+public enum ProcessPluginCatalog {
+    public static func build(factories: ProcessPluginCatalogFactories) throws -> PluginCatalog {
+        try PluginCatalog(ProcessRuntimePlugins.definitions(factories))
     }
 }
 

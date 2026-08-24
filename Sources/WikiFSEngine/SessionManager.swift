@@ -24,6 +24,19 @@ import WikiFSCore
 @MainActor
 @Observable
 public final class SessionManager {
+    public enum SessionReadiness: Equatable, Sendable {
+        case idle
+        case loading
+        case ready
+        case failed(String)
+    }
+
+    public typealias AsyncSessionLoader = @MainActor @Sendable (WikiID, WikiDescriptor) async throws -> WikiSession
+
+    /// Observable readiness for the future per-wiki child-profile boot path.
+    public private(set) var readiness: [WikiID: SessionReadiness] = [:]
+    @ObservationIgnored private let asyncSessionLoader: AsyncSessionLoader?
+
     /// Live sessions keyed by wiki ID. A wiki open in multiple windows
     /// shares ONE session (one store, one bus, one gate).
     public private(set) var sessions: [WikiID: WikiSession] = [:]
@@ -137,7 +150,8 @@ public final class SessionManager {
         htmlBackendResolver: @escaping @MainActor () -> HtmlExtractionBackend? = { nil },
         podcastBackendResolver: @escaping @MainActor () -> PodcastTranscriptionBackend? = { nil },
         interactiveUsageRecorder: @escaping (@MainActor (SessionUsage) -> Void) = { _ in },
-        makeStore: @escaping @Sendable (URL) throws -> WikiStore = { try StoreBackend.current.makeStore(databaseURL: $0) }
+        makeStore: @escaping @Sendable (URL) throws -> WikiStore = { try StoreBackend.current.makeStore(databaseURL: $0) },
+        asyncSessionLoader: AsyncSessionLoader? = nil
     ) {
         self.containerDirectory = containerDirectory
         self.extractionCoordinator = extractionCoordinator
@@ -151,9 +165,44 @@ public final class SessionManager {
         self.podcastBackendResolver = podcastBackendResolver
         self.interactiveUsageRecorder = interactiveUsageRecorder
         self.makeStore = makeStore
+        self.asyncSessionLoader = asyncSessionLoader
     }
 
     // MARK: - Session lifecycle
+
+    public func readiness(for wikiID: WikiID) -> SessionReadiness {
+        readiness[wikiID] ?? .idle
+    }
+
+    /// Await the per-wiki session composition boundary.
+    ///
+    /// The injected loader is the target child-profile boot path. Until app and
+    /// daemon owners are rewired, the default preserves legacy synchronous
+    /// construction while exposing the same async readiness contract.
+    public func readySession(for wikiID: WikiID, descriptor: WikiDescriptor) async throws -> WikiSession {
+        if let existing = sessions[wikiID] {
+            existing.updateDescriptor(descriptor)
+            sessionLeaseCounts[wikiID, default: 0] += 1
+            readiness[wikiID] = .ready
+            return existing
+        }
+        readiness[wikiID] = .loading
+        do {
+            let session = if let asyncSessionLoader {
+                try await asyncSessionLoader(wikiID, descriptor)
+            } else {
+                try self.session(for: wikiID, descriptor: descriptor)
+            }
+            sessions[wikiID] = session
+            if sessionLeaseCounts[wikiID] == nil { sessionLeaseCounts[wikiID] = 1 }
+            openErrors.removeValue(forKey: wikiID)
+            readiness[wikiID] = .ready
+            return session
+        } catch {
+            readiness[wikiID] = .failed(String(describing: error))
+            throw error
+        }
+    }
 
     /// Get or create a session for `wikiID`. If a session already exists for
     /// this wiki (open in another window), returns the existing instance —

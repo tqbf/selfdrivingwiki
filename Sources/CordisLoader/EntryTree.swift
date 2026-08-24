@@ -193,23 +193,32 @@ public enum CordisBoot {
     public struct Options: Sendable {
         public var catalog: PluginCatalog
         public var layers: [PatchFile]
+        /// Optional process context whose services are inherited by this profile.
+        /// Per-wiki profiles use a child so process services keep process lifetime.
+        public var parent: CordisContext?
         /// Supplies ambient facts (home path, app group id, wiki id) on the
-        /// root context before entries mount.
+        /// profile context before entries mount.
         public var configure: (@Sendable (CordisContext) async throws -> Void)?
 
         public init(
             catalog: PluginCatalog,
             layers: [PatchFile],
+            parent: CordisContext? = nil,
             configure: (@Sendable (CordisContext) async throws -> Void)? = nil
         ) {
             self.catalog = catalog
             self.layers = layers
+            self.parent = parent
             self.configure = configure
         }
     }
 
     public static func boot(_ options: Options) async throws -> BootedProfile {
-        let context = CordisContext()
+        let context = if let parent = options.parent {
+            try await parent.child()
+        } else {
+            CordisContext()
+        }
         if let configure = options.configure {
             try await configure(context)
         }

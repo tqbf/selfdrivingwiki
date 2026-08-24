@@ -10,19 +10,25 @@ The default check verifies the current violation baseline. The `--strict` option
 
 ## Stage 2 status
 
-Stage 2 is not complete. No assembly or `WikiSession` file was deleted.
+Stage 2 remains in progress. No assembly or `WikiSession` file was deleted.
 
-Steps 1–8 are complete. The production catalogs now own executable-side factory injection.
+Steps 1–9 are complete. The production catalogs own executable-side factory injection and typed service resolution.
 
-Step 9 is complete. `AppServices` resolves typed services from a `BootedProfile` and keeps the Cordis context behind the facade.
+The process-lifetime gap is complete. Process profiles now own provider, extraction, queue, transport, and renderer runtime services.
 
-Step 12 is partly complete. The CLI Tantivy path now boots `CLIPluginCatalog`, resolves the Tantivy provider, and shuts down the profile.
+Per-wiki profiles now boot in a child Cordis context. The child resolves process services from its parent context.
 
-Steps 10–11 are not complete. `SessionManager` and `WikiSession` still use the legacy app composition path.
+The app and daemon profile tests boot this two-level graph. The tests also verify that child shutdown does not stop process services.
 
-The daemon part of step 12 is not complete. `WikiDaemon` still owns the provider and extraction assemblies.
+The async session-readiness gap is complete. `SessionManager.readySession(for:descriptor:)` exposes idle, loading, ready, and failed states.
 
-The current catalogs expose provider registries, not the final queue, extraction, transport, renderer, and agent operation facades. The app and daemon startup code still needs those facades and process owners before profile boot can replace the legacy lifetimes safely.
+The async accessor supports an injected child-profile loader. Its default path keeps the legacy synchronous session construction for this slice.
+
+Steps 10–11 remain incomplete because the app views still call the synchronous accessor. The next slice will install the child-profile loader and update those callers.
+
+The daemon part of step 12 remains incomplete. `WikiDaemon` still owns the provider and extraction assemblies.
+
+The CLI Tantivy path boots `CLIPluginCatalog`, resolves the Tantivy provider, and stops the profile.
 
 ## Remaining assemblies and callers
 

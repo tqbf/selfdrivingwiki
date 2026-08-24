@@ -14,6 +14,7 @@ import Testing
 @MainActor
 @Suite
 struct SessionManagerTests {
+    private struct AsyncReadinessFailure: Error {}
 
     private func tempDirectory() -> URL {
         let dir = FileManager.default.temporaryDirectory
@@ -46,6 +47,43 @@ struct SessionManagerTests {
     }
 
     // MARK: - session(for:descriptor:)
+
+    @Test func asyncReadinessUsesLegacyPathUntilChildProfileLoaderIsInstalled() async throws {
+        let dir = tempDirectory()
+        let registry = makeSeededRegistry(dir: dir)
+        let manager = makeSessionManager(dir: dir)
+        let descriptor = try #require(registry.wikis.first)
+
+        #expect(manager.readiness(for: descriptor.id) == .idle)
+        let session = try await manager.readySession(for: descriptor.id, descriptor: descriptor)
+
+        #expect(session === manager.sessions[descriptor.id])
+        #expect(manager.readiness(for: descriptor.id) == .ready)
+    }
+
+    @Test func asyncReadinessRecordsFailure() async throws {
+        let dir = tempDirectory()
+        let registry = makeSeededRegistry(dir: dir)
+        let coordinator = ExtractionCoordinator(
+            containerDirectory: dir,
+            localExtractorFactory: { StubExtractor() })
+        let manager = SessionManager(
+            containerDirectory: dir,
+            extractionCoordinator: coordinator,
+            queueEngine: try makeTestQueueEngine(),
+            extractionProvider: StubExtractionProvider(),
+            pdf2mdScriptPathResolver: { nil },
+            makeStore: { _ in throw AsyncReadinessFailure() })
+        let descriptor = try #require(registry.wikis.first)
+
+        await #expect(throws: AsyncReadinessFailure.self) {
+            _ = try await manager.readySession(for: descriptor.id, descriptor: descriptor)
+        }
+        guard case .failed = manager.readiness(for: descriptor.id) else {
+            Issue.record("expected failed session readiness")
+            return
+        }
+    }
 
     @Test func testSessionForCreatesSessionWithStore() {
         let dir = tempDirectory()
