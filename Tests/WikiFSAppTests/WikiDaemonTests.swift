@@ -215,65 +215,64 @@ struct WikiDaemonTests {
 
     // MARK: - Store lifecycle: openStore
 
-    @Test func openStoreReturnsTrueForExistingWiki() throws {
+    @Test func openStoreReturnsTrueForExistingWiki() async throws {
         let dir = tempDirectory()
         let daemon = makeDaemon(dir: dir)
         let data = try #require(daemon.createWiki(name: "Open Me"))
         let descriptor = try JSONDecoder().decode(WikiDescriptor.self, from: data)
 
-        let success = daemon.openStore(wikiID: descriptor.id)
+        let success = await daemon.openStore(wikiID: descriptor.id)
         #expect(success)
     }
 
-    @Test func openStoreReturnsFalseForUnknownWiki() {
+    @Test func openStoreReturnsFalseForUnknownWiki() async {
         let dir = tempDirectory()
         let daemon = makeDaemon(dir: dir)
-        let success = daemon.openStore(wikiID: WikiID(rawValue: "nonexistent"))
+        let success = await daemon.openStore(wikiID: WikiID(rawValue: "nonexistent"))
         #expect(!success)
     }
 
-    @Test func openStoreIsIdempotent() throws {
+    @Test func openStoreIsIdempotent() async throws {
         let dir = tempDirectory()
         let daemon = makeDaemon(dir: dir)
         let data = try #require(daemon.createWiki(name: "Test"))
         let descriptor = try JSONDecoder().decode(WikiDescriptor.self, from: data)
 
-        #expect(daemon.openStore(wikiID: descriptor.id))
-        #expect(daemon.openStore(wikiID: descriptor.id))  // Second open is a no-op
+        #expect(await daemon.openStore(wikiID: descriptor.id))
+        #expect(await daemon.openStore(wikiID: descriptor.id))
     }
 
     // MARK: - Store lifecycle: closeStore
 
-    @Test func closeStoreDoesNotCrash() throws {
+    @Test func closeStoreDoesNotCrash() async throws {
         let dir = tempDirectory()
         let daemon = makeDaemon(dir: dir)
         let data = try #require(daemon.createWiki(name: "Close Me"))
         let descriptor = try JSONDecoder().decode(WikiDescriptor.self, from: data)
 
-        _ = daemon.openStore(wikiID: descriptor.id)
-        daemon.closeStore(wikiID: descriptor.id)  // Should not crash
+        _ = await daemon.openStore(wikiID: descriptor.id)
+        daemon.closeStore(wikiID: descriptor.id)
 
-        // Reopening should work after close
-        #expect(daemon.openStore(wikiID: descriptor.id))
+        #expect(await daemon.openStore(wikiID: descriptor.id))
     }
 
     // MARK: - Store lifecycle: changeToken
 
-    @Test func changeTokenReturnsNonEmptyForOpenStore() throws {
+    @Test func changeTokenReturnsNonEmptyForOpenStore() async throws {
         let dir = tempDirectory()
         let daemon = makeDaemon(dir: dir)
         let data = try #require(daemon.createWiki(name: "Token Test"))
         let descriptor = try JSONDecoder().decode(WikiDescriptor.self, from: data)
 
-        _ = daemon.openStore(wikiID: descriptor.id)
-        let token = daemon.changeToken(wikiID: descriptor.id)
+        _ = await daemon.openStore(wikiID: descriptor.id)
+        let token = await daemon.changeToken(wikiID: descriptor.id)
         #expect(!token.isEmpty)
     }
 
-    @Test func changeTokenReturnsEmptyForUnknownWiki() {
+    @Test func changeTokenReturnsEmptyForUnknownWiki() async {
         let dir = tempDirectory()
         let daemon = makeDaemon(dir: dir)
-        let token = daemon.changeToken(wikiID: WikiID(rawValue: "nonexistent"))
+        let token = await daemon.changeToken(wikiID: WikiID(rawValue: "nonexistent"))
         #expect(token.isEmpty)
     }
 
@@ -282,7 +281,7 @@ struct WikiDaemonTests {
     /// Provider projection, #487). It must log and return a sentinel the caller
     /// can distinguish from a genuine token — and that never matches a cached
     /// anchor, so the enumerator re-syncs.
-    @Test func changeTokenReturnsSentinelOnStoreError() throws {
+    @Test func changeTokenReturnsSentinelOnStoreError() async throws {
         let dir = tempDirectory()
         let daemon = makeDaemon(dir: dir)
         let data = try #require(daemon.createWiki(name: "Corrupt Test"))
@@ -298,7 +297,7 @@ struct WikiDaemonTests {
         }
         try Data("not a sqlite database".utf8).write(to: dbURL)
 
-        let token = daemon.changeToken(wikiID: descriptor.id)
+        let token = await daemon.changeToken(wikiID: descriptor.id)
         #expect(token == WikiDaemon.errorTokenSentinel)
         // Sentinel is distinguishable from both a genuine token (colon-joined
         // integers) and from `""` (unknown wiki).
@@ -308,7 +307,7 @@ struct WikiDaemonTests {
 
     // MARK: - Multiple wikis
 
-    @Test func multipleWikisAreIndependent() throws {
+    @Test func multipleWikisAreIndependent() async throws {
         let dir = tempDirectory()
         let daemon = makeDaemon(dir: dir)
         let aData = try #require(daemon.createWiki(name: "Wiki A"))
@@ -317,21 +316,16 @@ struct WikiDaemonTests {
         let b = try JSONDecoder().decode(WikiDescriptor.self, from: bData)
 
         #expect(a.id != b.id)
+        #expect(await daemon.openStore(wikiID: a.id))
+        #expect(await daemon.openStore(wikiID: b.id))
 
-        // Both stores can be open simultaneously
-        #expect(daemon.openStore(wikiID: a.id))
-        #expect(daemon.openStore(wikiID: b.id))
-
-        // Change tokens are independent
-        let tokenA = daemon.changeToken(wikiID: a.id)
-        let tokenB = daemon.changeToken(wikiID: b.id)
-        // They could technically be equal on fresh wikis, but both should be non-empty
+        let tokenA = await daemon.changeToken(wikiID: a.id)
+        let tokenB = await daemon.changeToken(wikiID: b.id)
         #expect(!tokenA.isEmpty)
         #expect(!tokenB.isEmpty)
 
-        // Deleting A doesn't affect B
         _ = daemon.deleteWiki(id: a.id)
-        #expect(daemon.openStore(wikiID: b.id))
+        #expect(await daemon.openStore(wikiID: b.id))
     }
 }
 #endif // os(macOS)

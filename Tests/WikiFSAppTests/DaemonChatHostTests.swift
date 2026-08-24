@@ -77,10 +77,10 @@ struct DaemonChatHostTests {
 
     // MARK: - Store-level operations (the layer the chat host delegates to)
 
-    @Test func chatStoreCreatesRowAndSeedsFirstMessage() throws {
+    @Test func chatStoreCreatesRowAndSeedsFirstMessage() async throws {
         let dir = makeTempDir()
         let daemon = makeDaemon(dir: dir)
-        #expect(daemon.openStore(wikiID: WikiID(rawValue: "test-wiki")) || true)
+        #expect(await daemon.openStore(wikiID: WikiID(rawValue: "test-wiki")) || true)
 
         // Create a wiki + open the store
         _ = daemon.createWiki(name: "Test")
@@ -229,7 +229,7 @@ struct DaemonChatHostTests {
         let daemon = makeDaemon(dir: dir)
         let created = try #require(daemon.createWiki(name: "Test"))
         let wiki = try JSONDecoder().decode(WikiDescriptor.self, from: created)
-        let store = try #require(daemon.resolveStoreLazily(wikiID: wiki.id))
+        let store = try daemon.resolvePreparedStore(wikiID: wiki.id)
         let chat = try store.createChat(kind: .edit, title: "Checkpoint Disabled")
         let host = try await daemon.ensureChatHost()
 
@@ -246,7 +246,7 @@ struct DaemonChatHostTests {
         let daemon = makeDaemon(dir: dir)
         let created = try #require(daemon.createWiki(name: "Test"))
         let wiki = try JSONDecoder().decode(WikiDescriptor.self, from: created)
-        let store = try #require(daemon.resolveStoreLazily(wikiID: wiki.id))
+        let store = try daemon.resolvePreparedStore(wikiID: wiki.id)
         let chat = try store.createChat(kind: .edit, title: "Idle")
         let host = try await daemon.ensureChatHost()
 
@@ -332,7 +332,7 @@ struct DaemonChatHostTests {
         let daemon = makeDaemon(dir: dir)
         let created = try #require(daemon.createWiki(name: "ChatTest"))
         let wiki = try JSONDecoder().decode(WikiDescriptor.self, from: created)
-        let store = try #require(daemon.resolveStoreLazily(wikiID: wiki.id))
+        let store = try daemon.resolvePreparedStore(wikiID: wiki.id)
         let chat = try store.createChat(kind: .edit, title: "Persisted Chat")
         let exporter = WikiDaemonExporter(daemon: daemon)
 
@@ -445,7 +445,7 @@ struct DaemonChatHostTests {
         let daemon = makeDaemon(dir: dir)
         let created = try #require(daemon.createWiki(name: "ChatTest"))
         let wiki = try JSONDecoder().decode(WikiDescriptor.self, from: created)
-        let store = try #require(daemon.resolveStoreLazily(wikiID: wiki.id))
+        let store = try daemon.resolvePreparedStore(wikiID: wiki.id)
         let chat = try store.createChat(kind: .edit, title: "Persisted Chat")
         let claimID = ChatTurnClaimID(rawValue: "claim-read-recovery")
         let turn = try store.enqueuePersistedChatTurn(
@@ -614,7 +614,7 @@ struct DaemonChatHostTests {
         let daemon = makeDaemon(dir: dir)
         let created = try #require(daemon.createWiki(name: "Test"))
         let wiki = try JSONDecoder().decode(WikiDescriptor.self, from: created)
-        let store = try #require(daemon.resolveStoreLazily(wikiID: wiki.id))
+        let store = try daemon.resolvePreparedStore(wikiID: wiki.id)
         let chat = try store.createChat(kind: .edit, title: "Cold configuration")
         let host = try await daemon.ensureChatHost()
 

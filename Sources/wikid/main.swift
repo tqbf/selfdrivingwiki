@@ -108,13 +108,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         let sendableReply = SendableBoolReply(reply: reply)
         Task { [daemon] in
             let id = WikiID(rawValue: wikiID)
-            do {
-                try await daemon.prepareWiki(id)
-                sendableReply.reply(daemon.openStore(wikiID: id))
-            } catch {
-                DebugLog.store("wikid: profile boot failed while opening \(wikiID): \(error)")
-                sendableReply.reply(false)
-            }
+            sendableReply.reply(await daemon.openStore(wikiID: id))
         }
     }
 
@@ -130,13 +124,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         let sendableReply = SendableStringReply(reply: reply)
         Task { [daemon] in
             let id = WikiID(rawValue: wikiID)
-            do {
-                try await daemon.prepareWiki(id)
-                sendableReply.reply(daemon.changeToken(wikiID: id))
-            } catch {
-                DebugLog.store("wikid: profile boot failed while reading change token for \(wikiID): \(error)")
-                sendableReply.reply(WikiDaemon.errorTokenSentinel)
-            }
+            sendableReply.reply(await daemon.changeToken(wikiID: id))
         }
     }
 
@@ -661,7 +649,10 @@ container=\(containerDirectory.path)
 let profileOwner = try DaemonProcessProfileOwner.production(
     containerDirectory: containerDirectory,
     makeLocalExtractor: { await MainActor.run { LocalPdf2MarkdownExtractor() } })
-let daemon = WikiDaemon(containerDirectory: containerDirectory, profileOwner: profileOwner)
+let daemon = WikiDaemon(
+    containerDirectory: containerDirectory,
+    profileOwner: profileOwner,
+    makeStore: { try GRDBWikiStore(databaseURL: $0) })
 let processLifetime = DaemonProcessLifetimeCoordinator(
     shutdown: {
         await daemon.shutdown()
@@ -764,7 +755,9 @@ if let argPath = CommandLine.arguments.dropFirst().first(where: { !$0.hasPrefix(
     containerDirectory = defaultDir
 }
 
-let daemon = WikiDaemon(containerDirectory: containerDirectory)
+let daemon = WikiDaemon(
+    containerDirectory: containerDirectory,
+    makeStore: { try GRDBWikiStore(databaseURL: $0) })
 
 DebugLog.store("wikid: daemon started (Linux stdio transport), container=\(containerDirectory.path)")
 
@@ -831,14 +824,14 @@ while let line = readLine() {
         }
     case "openStore":
         let wikiID = WikiID(rawValue: params["wikiID"] as? String ?? "")
-        result = daemon.openStore(wikiID: wikiID)
+        result = await daemon.openStore(wikiID: wikiID)
     case "closeStore":
         let wikiID = WikiID(rawValue: params["wikiID"] as? String ?? "")
         daemon.closeStore(wikiID: wikiID)
         result = nil
     case "changeToken":
         let wikiID = WikiID(rawValue: params["wikiID"] as? String ?? "")
-        result = daemon.changeToken(wikiID: wikiID)
+        result = await daemon.changeToken(wikiID: wikiID)
     case "queueSnapshot":
         // Phase 0 scaffold: returns an empty JSON snapshot (no WikiFSEngine
         // on Linux — workload host is compiled out).
