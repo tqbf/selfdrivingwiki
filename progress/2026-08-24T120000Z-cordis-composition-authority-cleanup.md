@@ -1,8 +1,13 @@
+---
+timestamp: 2026-08-24T120000Z
+title: Cordis composition authority cleanup
+branch: feature/cordis-composition-authority
+status: complete
+---
+
 # Cordis Composition Authority Cleanup
 
-Date: 2026-08-24
-
-## Result
+## Progress
 
 Cordis now composes stable macOS production capabilities. Application and
 operation objects remain outside the service graph.
@@ -81,3 +86,11 @@ Cordis.
 
 Direct embedding calls in store and model code remain a documented legacy
 boundary for a separate design.
+
+## Verification
+
+Focused daemon, profile, read-service, process dependency, integration,
+renderer, compiler-boundary, and documentation tests pass.
+
+`make build` and `make check-cordis` pass. The final full gate matrix runs before
+pull-request creation.
