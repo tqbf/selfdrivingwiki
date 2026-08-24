@@ -578,6 +578,37 @@ private struct SendableStringReply: @unchecked Sendable {
     let reply: (String) -> Void
 }
 
+/// Tracks daemon boot settlement for the main-thread run-loop gate. Thread-safe:
+/// all mutable state is guarded by `lock`; written from the boot task, polled
+/// from the synchronous main frame.
+// swiftlint:disable:next unchecked_sendable
+final class DaemonBootstrap: @unchecked Sendable {
+    enum State: Sendable {
+        case booting
+        case ready
+        case failed
+    }
+
+    private let lock = NSLock()
+    private var innerState: State = .booting
+
+    var state: State {
+        lock.withLock { innerState }
+    }
+
+    var isSettled: Bool {
+        state != .booting
+    }
+
+    func markReady() {
+        lock.withLock { innerState = .ready }
+    }
+
+    func markFailed() {
+        lock.withLock { innerState = .failed }
+    }
+}
+
 // MARK: - Main
 
 // Resolve the App Group container path. The daemon reaches the SHARED group
@@ -631,7 +662,6 @@ let profileOwner = try DaemonProcessProfileOwner.production(
     containerDirectory: containerDirectory,
     makeLocalExtractor: { await MainActor.run { LocalPdf2MarkdownExtractor() } })
 let daemon = WikiDaemon(containerDirectory: containerDirectory, profileOwner: profileOwner)
-try await daemon.start()
 let processLifetime = DaemonProcessLifetimeCoordinator(
     shutdown: {
         await daemon.shutdown()
@@ -656,16 +686,47 @@ let delegate = WikiDaemonListenerDelegate(daemon: daemon)
 let listener = NSXPCListener.service()
 listener.delegate = delegate
 
-// Emit the startup log + start the #878 liveness heartbeat BEFORE resume() —
+// `resume()` must be called from the SYNCHRONOUS top-level main frame, never
+// from inside a Swift concurrency job. `xpc_main` calls `dispatch_main()`,
+// which is unsupported from a block executing on a queue — an async top-level
+// main runs exactly that way, and resuming from it traps with SIGTRAP inside
+// `NSXPCListener.resume()` (a launchd crash loop; see
+// plans/cordis-5b-status.md). So boot the daemon on a background task and pump
+// the main run loop until boot settles. Running the run loop also drains the
+// main dispatch queue, so @MainActor boot work (e.g. the local PDF extractor
+// factory) executes while we wait.
+let bootstrap = DaemonBootstrap()
+let bootTask = Task<Void, Never> {
+    do {
+        try await daemon.start()
+        daemon.startHeartbeat()
+        bootstrap.markReady()
+    } catch {
+        DebugLog.store("wikid: daemon boot failed: \(error)")
+        bootstrap.markFailed()
+    }
+}
+_ = bootTask
+
+let runLoop = RunLoop.current
+let bootDeadline = Date().addingTimeInterval(60)
+while !bootstrap.isSettled && runLoop.run(mode: .default, before: bootDeadline) {}
+switch bootstrap.state {
+case .ready:
+    break
+case .failed:
+    Darwin.exit(EXIT_FAILURE)
+case .booting:
+    DebugLog.store("wikid: daemon boot timed out after 60s; exiting")
+    Darwin.exit(EXIT_FAILURE)
+}
+
+// Emit the startup log AFTER boot succeeded and immediately BEFORE resume() —
 // `resume()` on a service listener never returns (it hands control to the
 // system's run loop), so anything after it is unreachable in production. The
 // "XPC service started" log line in particular is the first thing an operator
 // greps for to confirm the service launched.
 DebugLog.store("wikid: XPC service started, serving on \(WikiDaemonServiceName)")
-
-// #878: start the liveness heartbeat (logs every 60 s so an operator can
-// confirm the daemon is alive + see its current load in Console.app).
-daemon.startHeartbeat()
 
 listener.resume()
 

@@ -13,26 +13,21 @@ public enum DumpConfigCommand {
     }
 
     public static func run(
-        bundlesDirectory: URL,
+        kind: ProductionProfileKind = .cli,
+        scope: ProductionProfileScope = .process,
+        bundlesDirectory: URL? = nil,
         homeDirectory: URL?,
         overlay: String? = nil,
+        ambient: PatchFile = PatchFile(),
         fileManager: FileManager = .default
     ) throws -> Result {
         let homePatchURL = homeDirectory?.appendingPathComponent(ProfileBundle.patchFileName)
-        let homeData: Data?
-        var note: String?
-        if let homePatchURL, fileManager.isReadableFile(atPath: homePatchURL.path) {
-            homeData = try Data(contentsOf: homePatchURL)
-        } else {
-            homeData = nil
-            note = "# Note: no readable App Group cordis.patch.yml; showing bundle-level wikictl profile."
-        }
-        let profile = try ProfileBundle.resolve(
-            bundleNames: ["wikifs-base"],
-            profileName: "wikictl",
-            in: bundlesDirectory,
-            homePatchData: homeData,
-            overlay: overlay)
+        let hasHomePatch = homePatchURL.map { fileManager.isReadableFile(atPath: $0.path) } ?? false
+        let profile = try ProductionProfileResolver.resolve(
+            kind: kind, scope: scope, bundlesDirectory: bundlesDirectory,
+            homeDirectory: homeDirectory, overlay: overlay, ambient: ambient,
+            fileManager: fileManager)
+        let note = hasHomePatch ? nil : "# Note: no readable App Group cordis.patch.yml; showing the shipped profile."
         return Result(output: try profile.dump(), note: note)
     }
 }

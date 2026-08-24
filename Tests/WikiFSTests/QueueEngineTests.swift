@@ -1,4 +1,7 @@
 #if os(macOS)
+import struct Cordis.ComponentDefinition
+import struct Cordis.CordisContext
+import struct Cordis.ServiceDependency
 import Foundation
 import os
 import Synchronization
@@ -27,6 +30,98 @@ struct QueueEngineTests {
     /// A trivial payload for tests that don't care about payload specifics.
     private func makePayload() -> QueueItemPayload {
         QueueItemPayload(sourceIDs: [SourceID(rawValue: "TESTSRC001")])
+    }
+
+    // MARK: - Guarded tool dispatch
+
+    @Test("Cordis waterfalls rewrite and observe a real queue worker invocation")
+    func guardedToolDispatchRewritesAndObservesRealWorker() async throws {
+        let context = CordisContext()
+        let rewrittenSourceID = SourceID(rawValue: "REWRITTEN-SOURCE")
+        let observation = GuardedQueueDispatchObservation()
+
+        let tools = try ComponentDefinition(
+            label: "guarded-queue-tools",
+            provisions: [ServiceDependency(ToolServiceKeys.tools)]) { activation in
+            let registry = ToolRegistry()
+            _ = try await activation.on(ToolEventKeys.execute) { context, next in
+                var context = try await next()
+                guard context.result == nil else { return context }
+                guard let tool = await registry.resolve(context.name) else {
+                    throw ToolRuntimeError.unknownTool(context.name)
+                }
+                context.result = try await tool.execute(payload: context.payload)
+                return context
+            }
+            let runtime = ToolRuntime(registry: registry) { key, context in
+                try await activation.waterfall(key, context)
+            }
+            _ = try await activation.supply(ToolServiceKeys.tools, value: runtime)
+        }
+        let toolsHandle = try await context.register(tools)
+        _ = try await toolsHandle.awaitSettled()
+        let observer = try ComponentDefinition(
+            label: "queue-dispatch-observer",
+            dependencies: [ServiceDependency(ToolServiceKeys.tools)]) { activation in
+            _ = try await activation.on(ToolEventKeys.preExecute) { context, next in
+                var context = try await next()
+                let invocation = try JSONDecoder().decode(
+                    QueueWorkerInvocation.self,
+                    from: Data(context.payload.utf8))
+                var payload = invocation.item.payload
+                payload.sourceIDs = [rewrittenSourceID]
+                let item = QueueItem(
+                    id: invocation.item.id,
+                    queue: invocation.item.queue,
+                    wikiID: invocation.item.wikiID,
+                    payload: payload,
+                    state: invocation.item.state,
+                    orderingKey: invocation.item.orderingKey,
+                    providerID: invocation.item.providerID,
+                    attempt: invocation.item.attempt,
+                    error: invocation.item.error,
+                    createdAt: invocation.item.createdAt,
+                    startedAt: invocation.item.startedAt,
+                    finishedAt: invocation.item.finishedAt)
+                context.payload = String(
+                    decoding: try JSONEncoder().encode(QueueWorkerInvocation(item: item)),
+                    as: UTF8.self)
+                return context
+            }
+            _ = try await activation.on(ToolEventKeys.postExecute) { context, next in
+                let context = try await next()
+                if let result = context.result {
+                    let invocation = try JSONDecoder().decode(
+                        QueueWorkerInvocation.self,
+                        from: Data(result.utf8))
+                    observation.recordPostExecute(invocation.item.payload.sourceIDs)
+                }
+                return context
+            }
+        }
+        let observerHandle = try await context.register(observer)
+        _ = try await observerHandle.awaitSettled()
+        let runtime = try await context.require(ToolServiceKeys.tools)
+
+        let store = try QueueStore(databaseURL: tempDatabaseURL())
+        let factory = GuardedQueueWorkerFactory(observation: observation)
+        let engine = QueueEngine(
+            store: store,
+            workerFactory: factory,
+            workerExecutor: CordisQueueWorkerExecutor(runtime: runtime))
+        let itemID = try await engine.enqueue(QueueItemRequest(
+            queue: .extraction,
+            wikiID: WikiID(rawValue: "guarded-tool-wiki"),
+            payload: makePayload()))
+        await engine.start()
+
+        let completion = await engine.waitForCompletion(of: itemID)
+        if case .failure(let error) = completion { throw error }
+        #expect(observation.workerSourceIDs == [rewrittenSourceID])
+        #expect(observation.postExecuteSourceIDs == [rewrittenSourceID])
+        #expect(await runtime.registry.descriptors().isEmpty)
+        #expect(await engine.shutdownForHandoff() == .shutDown)
+        try await context.dispose()
     }
 
     // MARK: - Dispatch order (AC2.2)
@@ -941,6 +1036,46 @@ private final class FakeWorkerFactory: QueueWorkerFactory, @unchecked Sendable {
 
     func worker(for item: QueueItem) async throws -> any QueueWorker {
         FakeWorker { [self] item in try await workerFunc(item) }
+    }
+}
+
+private struct GuardedQueueWorkerFactory: QueueWorkerFactory {
+    let observation: GuardedQueueDispatchObservation
+
+    func providerID(for item: QueueItem) async -> ProviderID? {
+        ProviderID(rawValue: "guarded-tool-provider")
+    }
+
+    func worker(for item: QueueItem) async throws -> any QueueWorker {
+        GuardedQueueWorker(observation: observation)
+    }
+}
+
+private struct GuardedQueueWorker: QueueWorker {
+    let observation: GuardedQueueDispatchObservation
+
+    func execute(_ item: QueueItem) async throws {
+        observation.recordWorker(item.payload.sourceIDs)
+    }
+}
+
+private final class GuardedQueueDispatchObservation: Sendable {
+    private struct State: Sendable {
+        var workerSourceIDs: [SourceID] = []
+        var postExecuteSourceIDs: [SourceID] = []
+    }
+
+    private let state = Mutex(State())
+
+    var workerSourceIDs: [SourceID] { state.withLock { $0.workerSourceIDs } }
+    var postExecuteSourceIDs: [SourceID] { state.withLock { $0.postExecuteSourceIDs } }
+
+    func recordWorker(_ sourceIDs: [SourceID]) {
+        state.withLock { $0.workerSourceIDs = sourceIDs }
+    }
+
+    func recordPostExecute(_ sourceIDs: [SourceID]) {
+        state.withLock { $0.postExecuteSourceIDs = sourceIDs }
     }
 }
 

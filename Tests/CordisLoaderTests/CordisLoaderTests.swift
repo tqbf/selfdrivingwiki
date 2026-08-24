@@ -54,6 +54,7 @@ private struct LlmConfig: PluginConfig, Equatable {
 
 private let storeBackendKey = ServiceKey<String>(label: "store.backend")
 private let llmProviderKey = ServiceKey<String>(label: "llm.provider")
+private let updateStateKey = ServiceKey<String>(label: "update.state")
 
 @Suite("Cordis loader", .serialized, .timeLimit(.minutes(1)))
 struct CordisLoaderTests {
@@ -286,4 +287,176 @@ struct CordisLoaderTests {
         #expect(ids.isEmpty)
         try await booted.shutdown()
     }
+
+    @Test("boot failure disposes earlier row effects exactly once")
+    func bootFailureRollsBackEarlierRows() async throws {
+        let cleanup = LoaderCleanupCounter()
+        let catalog = try rollbackCatalog(cleanup: cleanup)
+        let layer = PatchFile(entries: [
+            Entry(id: EntryID("first"), plugin: PluginID("test.tracked")),
+            Entry(id: EntryID("second"), plugin: PluginID("test.failure")),
+        ])
+
+        await #expect(throws: CordisLoaderError.self) {
+            _ = try await CordisBoot.boot(.init(catalog: catalog, layers: [layer]))
+        }
+        #expect(await cleanup.value == 1)
+    }
+
+    @Test("update failure rolls back newly mounted row effects exactly once")
+    func updateFailureRollsBackEarlierRows() async throws {
+        let cleanup = LoaderCleanupCounter()
+        let catalog = try rollbackCatalog(cleanup: cleanup)
+        let context = CordisContext()
+        let tree = EntryTree(context: context, catalog: catalog)
+
+        await #expect(throws: CordisLoaderError.self) {
+            try await tree.update(to: [
+                Entry(id: EntryID("first"), plugin: PluginID("test.tracked")),
+                Entry(id: EntryID("second"), plugin: PluginID("test.failure")),
+            ])
+        }
+        #expect(await cleanup.value == 1)
+        #expect(await tree.mountedEntryIDs.isEmpty)
+        try await tree.dispose()
+        try await context.dispose()
+        #expect(await cleanup.value == 1)
+    }
+
+    @Test("failed changed-row replacement leaves honest state and permits retry")
+    func failedReplacementLeavesHonestState() async throws {
+        let cleanup = LoaderCleanupCounter()
+        let catalog = try updateFailureCatalog(cleanup: cleanup)
+        let context = CordisContext()
+        let tree = EntryTree(context: context, catalog: catalog)
+        let original = Entry(id: EntryID("a"), plugin: PluginID("test.value.original"))
+        let replacement = Entry(id: EntryID("a"), plugin: PluginID("test.failure"))
+
+        try await tree.update(to: [original])
+        #expect(try await context.require(updateStateKey) == "original")
+        await #expect(throws: CordisLoaderError.self) {
+            try await tree.update(to: [replacement])
+        }
+        #expect(await tree.mountedEntryIDs.isEmpty)
+        #expect(await tree.resolvedRows().isEmpty)
+        #expect(try await context.find(updateStateKey) == nil)
+
+        try await tree.update(to: [original])
+        #expect(await tree.mountedEntryIDs == [EntryID("a")])
+        #expect(await tree.resolvedRows() == [original])
+        #expect(try await context.require(updateStateKey) == "original")
+        try await tree.dispose()
+        try await context.dispose()
+        #expect(await cleanup.value == 2)
+    }
+
+    @Test("failed update after retirement and a new mount records only live rows")
+    func failedUpdateAfterRetirementLeavesOnlyLiveRows() async throws {
+        let cleanup = LoaderCleanupCounter()
+        let catalog = try updateFailureCatalog(cleanup: cleanup)
+        let context = CordisContext()
+        let tree = EntryTree(context: context, catalog: catalog)
+        let original = Entry(id: EntryID("a"), plugin: PluginID("test.value.original"))
+        let newRows = [
+            Entry(id: EntryID("b"), plugin: PluginID("test.value.replacement")),
+            Entry(id: EntryID("c"), plugin: PluginID("test.failure")),
+        ]
+
+        try await tree.update(to: [original])
+        await #expect(throws: CordisLoaderError.self) {
+            try await tree.update(to: newRows)
+        }
+        #expect(await tree.mountedEntryIDs.isEmpty)
+        #expect(await tree.resolvedRows().isEmpty)
+        #expect(try await context.find(updateStateKey) == nil)
+        #expect(await cleanup.value == 2)
+
+        try await tree.update(to: [original])
+        #expect(await tree.mountedEntryIDs == [EntryID("a")])
+        #expect(await tree.resolvedRows() == [original])
+        #expect(try await context.require(updateStateKey) == "original")
+        try await tree.dispose()
+        try await context.dispose()
+        #expect(await cleanup.value == 3)
+    }
+
+    @Test("entry disposal follows reverse mount order rather than lexical id order")
+    func disposalIsTrueLIFO() async throws {
+        let log = LoaderDisposalLog()
+        let catalog = try PluginCatalog(["z", "a", "m"].map { label in
+            PluginDefinition(id: PluginID("test.order.\(label)")) {
+                try ComponentDefinition(label: label) { activation in
+                    _ = try await activation.effect { _ in await log.append(label) }
+                }
+            }
+        })
+        let rows = ["z", "a", "m"].map { label in
+            Entry(id: EntryID(label), plugin: PluginID("test.order.\(label)"))
+        }
+        let booted = try await CordisBoot.boot(.init(
+            catalog: catalog,
+            layers: [PatchFile(entries: rows)]))
+
+        try await booted.shutdown()
+
+        #expect(await log.values == ["m", "a", "z"])
+    }
+
+    private func updateFailureCatalog(cleanup: LoaderCleanupCounter) throws -> PluginCatalog {
+        let valueKey = updateStateKey
+        return try PluginCatalog([
+            PluginDefinition(
+                id: PluginID("test.value.original"),
+                provisions: [ServiceDependency(valueKey)]) {
+                try ComponentDefinition(
+                    label: "original",
+                    provisions: [ServiceDependency(valueKey)]) { activation in
+                    _ = try await activation.supply(valueKey, value: "original")
+                    _ = try await activation.effect { _ in await cleanup.increment() }
+                }
+            },
+            PluginDefinition(
+                id: PluginID("test.value.replacement"),
+                provisions: [ServiceDependency(valueKey)]) {
+                try ComponentDefinition(
+                    label: "replacement",
+                    provisions: [ServiceDependency(valueKey)]) { activation in
+                    _ = try await activation.supply(valueKey, value: "replacement")
+                    _ = try await activation.effect { _ in await cleanup.increment() }
+                }
+            },
+            PluginDefinition(id: PluginID("test.failure")) {
+                try ComponentDefinition(label: "failure") { _ in
+                    throw LoaderExpectedError()
+                }
+            },
+        ])
+    }
+
+    private func rollbackCatalog(cleanup: LoaderCleanupCounter) throws -> PluginCatalog {
+        try PluginCatalog([
+            PluginDefinition(id: PluginID("test.tracked")) {
+                try ComponentDefinition(label: "tracked") { activation in
+                    _ = try await activation.effect { _ in await cleanup.increment() }
+                }
+            },
+            PluginDefinition(id: PluginID("test.failure")) {
+                try ComponentDefinition(label: "failure") { _ in
+                    throw LoaderExpectedError()
+                }
+            },
+        ])
+    }
 }
+
+private actor LoaderCleanupCounter {
+    private(set) var value = 0
+    func increment() { value += 1 }
+}
+
+private actor LoaderDisposalLog {
+    private(set) var values: [String] = []
+    func append(_ value: String) { values.append(value) }
+}
+
+private struct LoaderExpectedError: Error {}

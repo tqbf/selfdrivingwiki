@@ -1,3 +1,7 @@
-# Headless daemon profile. No UI entries exist in the base bundle; Phase 5b
-# will keep UI shell entries out of this profile.
-entries: []
+entries:
+  - id: process-agent-provider
+    plugin: process.agent-provider
+    config: { _scope: process }
+  - id: process-extraction
+    plugin: process.extraction
+    config: { _scope: process }

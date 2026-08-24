@@ -361,7 +361,7 @@ struct WikiAppWebViewTests {
             containerDirectory: dir,
             localExtractorFactory: { StubExtractor() })
         let session = try ProfileWikiSession(
-            wikiID: descriptor.id,
+            testFixtureWikiID: descriptor.id,
             descriptor: descriptor,
             containerDirectory: dir,
             extractionCoordinator: coordinator,
@@ -476,7 +476,7 @@ private func makePageDetailSession() throws -> ProfileWikiSession {
         containerDirectory: dir,
         localExtractorFactory: { StubExtractor() })
     return try ProfileWikiSession(
-        wikiID: descriptor.id,
+        testFixtureWikiID: descriptor.id,
         descriptor: descriptor,
         containerDirectory: dir,
         extractionCoordinator: coordinator,

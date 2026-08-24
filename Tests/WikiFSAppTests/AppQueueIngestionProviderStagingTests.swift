@@ -2,6 +2,7 @@
 import Foundation
 import Testing
 import WikiFSCore
+import WikiFSEngine
 import WikiFSTypes
 @testable import WikiFS
 
@@ -35,6 +36,48 @@ import WikiFSTypes
 ///   receives the transcript's source bytes via `sourceBytes`, not via this
 ///   reuse branch).
 @Suite struct AppQueueIngestionProviderStagingTests {
+
+    @MainActor
+    @Test("preflight refusal cannot complete a queue item")
+    func preflightRefusalThrowsActionableFailure() {
+        do {
+            try AppQueueIngestionProvider.validateLauncherOutcome(
+                exitStatus: nil,
+                preflightError: "Select a model before starting ingestion.",
+                runHadTurnFailure: false)
+            Issue.record("Expected preflight refusal")
+        } catch QueueIngestionError.spawnFailed(let message) {
+            #expect(message == "Select a model before starting ingestion.")
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
+    @MainActor
+    @Test("successful launcher outcome is accepted")
+    func successfulLauncherOutcomeIsAccepted() throws {
+        try AppQueueIngestionProvider.validateLauncherOutcome(
+            exitStatus: 0,
+            preflightError: nil,
+            runHadTurnFailure: false)
+    }
+
+    @MainActor
+    @Test("turn failure remains a queue failure")
+    func turnFailureThrows() {
+        do {
+            try AppQueueIngestionProvider.validateLauncherOutcome(
+                exitStatus: -1,
+                preflightError: nil,
+                runHadTurnFailure: true)
+            Issue.record("Expected turn failure")
+        } catch QueueIngestionError.spawnFailed(let message) {
+            #expect(message ==
+                "The agent turn exceeded the time ceiling or failed unexpectedly (exit status -1).")
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
 
     // MARK: - Fixtures
 

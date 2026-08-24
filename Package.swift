@@ -90,6 +90,7 @@ let package = Package(
                 .product(name: "Yams", package: "Yams"),
             ],
             path: "Sources/CordisLoader",
+            resources: [.copy("../../bundles")],
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(

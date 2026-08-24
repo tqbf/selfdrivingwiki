@@ -13,11 +13,19 @@ struct AppProfileBootTests {
     func processOwnerReadinessAndShutdown() async throws {
         let disposals = ProfileProcessDisposalRecorder()
         let gate = ProfileBootGate()
+        let committedRows = try ProfileBootFixture.processEntries(includeAppServices: true)
+        #expect(Set(committedRows.map(\.plugin)) == Set([
+            ProcessRuntimePlugins.agentProviderID,
+            ProcessRuntimePlugins.extractionID,
+            ProcessRuntimePlugins.queueID,
+            ProcessRuntimePlugins.transportID,
+            ProcessRuntimePlugins.rendererID,
+        ]))
         let owner = AppProcessProfileOwner {
             await gate.wait()
             return try await CordisBoot.boot(.init(
                 catalog: try ProfileBootFixture.processCatalog(includeAppServices: true, recorder: disposals),
-                layers: [PatchFile(entries: ProfileBootFixture.processEntries(includeAppServices: true))]))
+                layers: [PatchFile(entries: committedRows)]))
         }
 
         #expect(owner.readiness == .idle)
@@ -50,6 +58,32 @@ struct AppProfileBootTests {
             return
         }
         #expect(message.contains("expected"))
+    }
+
+    @Test("process owner shuts down a booted profile when service resolution fails")
+    @MainActor
+    func processOwnerCleansUpResolutionFailure() async throws {
+        let disposals = ProfileProcessDisposalRecorder()
+        let owner = AppProcessProfileOwner {
+            try await CordisBoot.boot(.init(
+                catalog: try ProfileBootFixture.processCatalog(
+                    includeAppServices: false,
+                    recorder: disposals),
+                layers: [PatchFile(entries: ProfileBootFixture.processEntries(includeAppServices: false))]))
+        }
+
+        owner.start()
+        await owner.awaitSettled()
+
+        guard case .failed = owner.readiness else {
+            Issue.record("expected missing app process services to fail resolution")
+            return
+        }
+        #expect(owner.profile == nil)
+        #expect(owner.services == nil)
+        #expect(await disposals.count == 2)
+        await owner.shutdown()
+        #expect(await disposals.count == 2)
     }
 
     @Test("per-wiki facade boots from child and process profile services")
@@ -129,7 +163,7 @@ struct AppProfileBootTests {
             id: ProfileBootFixture.listenerEntryID,
             plugin: ProfileBootFixture.listenerPluginID))
         let processDisposals = ProfileProcessDisposalRecorder()
-        let processEntries = ProfileBootFixture.processEntries(includeAppServices: true)
+        let processEntries = try ProfileBootFixture.processEntries(includeAppServices: true)
         let process = try await CordisBoot.boot(.init(
             catalog: try ProfileBootFixture.processCatalog(includeAppServices: true, recorder: processDisposals),
             layers: [PatchFile(entries: processEntries)]))
@@ -137,7 +171,7 @@ struct AppProfileBootTests {
             catalog: try ProfileBootFixture.appCatalog(recorder: recorder),
             layers: [PatchFile(entries: entries)],
             parent: process.context))
-        #expect(await booted.tree.mountedEntryIDs.count == entries.count)
+        #expect(await booted.tree.mountedEntryIDs.count == entries.filter { !$0.disabled }.count)
         try await ProfileBootFixture.assertRequiredServices(in: booted.context)
         _ = try #require(try await booted.context.find(ProcessServiceKeys.agentProvider))
         _ = try #require(try await booted.context.find(ProcessServiceKeys.extraction))
@@ -175,5 +209,43 @@ struct AppProfileBootTests {
         try await process.shutdown()
         #expect(await processDisposals.count == 3)
     }
+
+    @Test("editing copied app YAML changes the running renderer registry")
+    func copiedYAMLIsAuthoritative() async throws {
+        let bundles = try ProfileBootFixture.copiedProductionBundles(named: "yaml-authority")
+        let root = bundles.deletingLastPathComponent()
+        defer {
+            do { try FileManager.default.removeItem(at: root) }
+            catch { Issue.record("could not remove YAML authority fixture: \(error)") }
+        }
+        let selectedIDs = Set([EntryID("renderers"), EntryID("renderer-services")])
+        let catalog = try PluginCatalog([
+            RenderersPlugin.definition,
+            RendererServicesPlugin.definition(makeServices: { ProfileAuthorityRenderer() }),
+        ])
+        let baselineRows = try ProductionProfiles.resolve(
+            kind: .app, scope: .wiki, bundlesDirectory: bundles).entries
+            .filter { selectedIDs.contains($0.id) }
+        let baseline = try await CordisBoot.boot(.init(
+            catalog: catalog,
+            layers: [PatchFile(entries: baselineRows)]))
+        let baselineRegistry = try await baseline.context.require(RendererServiceKeys.renderers)
+        #expect(await baselineRegistry.providerIDs() == [RendererServicesPlugin.providerID])
+        try await baseline.shutdown()
+
+        try ProfileBootFixture.setDisabled(
+            true, entryID: EntryID("renderer-services"), profile: "wikifs-app", in: bundles)
+        let changedRows = try ProductionProfiles.resolve(
+            kind: .app, scope: .wiki, bundlesDirectory: bundles).entries
+            .filter { selectedIDs.contains($0.id) }
+        let changed = try await CordisBoot.boot(.init(
+            catalog: catalog,
+            layers: [PatchFile(entries: changedRows)]))
+        let changedRegistry = try await changed.context.require(RendererServiceKeys.renderers)
+        #expect(await changedRegistry.providerIDs().isEmpty)
+        try await changed.shutdown()
+    }
 }
+
+private struct ProfileAuthorityRenderer: Sendable {}
 #endif

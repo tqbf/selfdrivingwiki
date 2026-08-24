@@ -161,11 +161,11 @@ public final class AppProcessProfileOwner {
         self.boot = boot
     }
 
-    public convenience init(factories: ProcessPluginCatalogFactories) {
+    public convenience init(factories: ProcessPluginCatalogFactories, homeDirectory: URL? = nil) {
         self.init {
             try await CordisBoot.boot(.init(
                 catalog: try ProcessPluginCatalog.build(factories: factories),
-                layers: [PatchFile(entries: ProductionProfileEntries.appProcess())]))
+                layers: [PatchFile(entries: try ProductionProfiles.appProcess(homeDirectory: homeDirectory))]))
         }
     }
 
@@ -190,7 +190,15 @@ public final class AppProcessProfileOwner {
         startupTask = Task { [weak self, boot] in
             do {
                 let profile = try await boot()
-                let services = try await AppProcessServices.resolve(from: profile)
+                let services: AppProcessServices
+                do {
+                    services = try await AppProcessServices.resolve(from: profile)
+                } catch {
+                    do { try await profile.shutdown() } catch {
+                        DebugLog.store("App process profile cleanup after resolution failure failed: \(error)")
+                    }
+                    throw error
+                }
                 guard let self, !Task.isCancelled, !self.shutdownStarted else {
                     try await profile.shutdown()
                     return
@@ -237,11 +245,13 @@ public final class AppProcessProfileOwner {
 public struct DaemonProcessServices: Sendable {
     public let agentProvider: any AgentProviderServices
     public let extraction: any ExtractionServices
+    public let tools: ToolRuntime?
 
     public static func resolve(from profile: BootedProfile) async throws -> DaemonProcessServices {
         DaemonProcessServices(
             agentProvider: try await profile.context.require(ProcessServiceKeys.agentProvider),
-            extraction: try await profile.context.require(ProcessServiceKeys.extraction))
+            extraction: try await profile.context.require(ProcessServiceKeys.extraction),
+            tools: try await profile.context.find(ToolServiceKeys.tools))
     }
 }
 
@@ -253,10 +263,14 @@ public actor DaemonProcessProfileOwner {
 
     private let boot: Boot
     private let bootWiki: BootWiki
+    private struct WikiLifecycle: Sendable {
+        let task: Task<AppServices, Error>
+        var services: AppServices?
+    }
+
     private var startupTask: Task<(BootedProfile, DaemonProcessServices), Error>?
     private var process: (BootedProfile, DaemonProcessServices)?
-    private var wikiTasks: [WikiID: Task<AppServices, Error>] = [:]
-    private var wikiServices: [WikiID: AppServices] = [:]
+    private var wikis: [WikiID: WikiLifecycle] = [:]
     private var shutdownStarted = false
 
     public init(boot: @escaping Boot, bootWiki: @escaping BootWiki) {
@@ -313,13 +327,14 @@ public actor DaemonProcessProfileOwner {
             boot: {
                 try await CordisBoot.boot(.init(
                     catalog: processCatalog,
-                    layers: [PatchFile(entries: ProductionProfileEntries.daemonProcess())]))
+                    layers: [PatchFile(entries: try ProductionProfiles.daemonProcess(homeDirectory: containerDirectory))]))
             },
             bootWiki: { wikiID, processProfile in
                 let databaseURL = containerDirectory.appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false)
                 return try await CordisBoot.boot(.init(
                     catalog: childCatalog,
-                    layers: [PatchFile(entries: ProductionProfileEntries.daemon(databaseURL: databaseURL, wikiID: wikiID))],
+                    layers: [PatchFile(entries: try ProductionProfiles.daemon(
+                        databaseURL: databaseURL, wikiID: wikiID, homeDirectory: containerDirectory))],
                     parent: processProfile.context))
             })
     }
@@ -357,16 +372,16 @@ public actor DaemonProcessProfileOwner {
     }
 
     public func wiki(wikiID: WikiID) async throws -> AppServices {
-        if let services = wikiServices[wikiID] { return services }
+        if let services = wikis[wikiID]?.services { return services }
         let processProfile: BootedProfile
         if let process { processProfile = process.0 } else {
             _ = try await start()
             guard let process else { throw CancellationError() }
             processProfile = process.0
         }
-        if wikiTasks[wikiID] == nil {
+        if wikis[wikiID] == nil {
             let bootWiki = self.bootWiki
-            wikiTasks[wikiID] = Task {
+            let task = Task {
                 let profile = try await bootWiki(wikiID, processProfile)
                 do { return try await AppServices.resolve(from: profile) }
                 catch {
@@ -376,27 +391,31 @@ public actor DaemonProcessProfileOwner {
                     throw error
                 }
             }
+            wikis[wikiID] = WikiLifecycle(task: task, services: nil)
         }
-        guard let wikiTask = wikiTasks[wikiID] else { throw CancellationError() }
-        let services = try await wikiTask.value
-        guard !shutdownStarted else {
+        guard let task = wikis[wikiID]?.task else { throw CancellationError() }
+        let services = try await task.value
+        guard !shutdownStarted, wikis[wikiID]?.task == task else {
             try await services.shutdown()
             throw CancellationError()
         }
-        wikiServices[wikiID] = services
+        wikis[wikiID]?.services = services
         return services
     }
 
     public func removeWiki(_ wikiID: WikiID) async {
-        wikiTasks[wikiID]?.cancel()
-        if let task = wikiTasks.removeValue(forKey: wikiID) {
-            do { _ = try await task.value } catch is CancellationError {
-                // Removal intentionally cancels an unfinished child-profile boot.
-            } catch {
-                DebugLog.store("Daemon wiki profile task ended during removal: \(error)")
-            }
+        guard let lifecycle = wikis.removeValue(forKey: wikiID) else { return }
+        lifecycle.task.cancel()
+        let services: AppServices?
+        do { services = try await lifecycle.task.value }
+        catch is CancellationError {
+            // Removal intentionally cancels an unfinished child-profile boot.
+            services = lifecycle.services
+        } catch {
+            DebugLog.store("Daemon wiki profile task ended during removal: \(error)")
+            services = lifecycle.services
         }
-        if let services = wikiServices.removeValue(forKey: wikiID) {
+        if let services {
             do { try await services.shutdown() } catch {
                 DebugLog.store("Daemon wiki profile shutdown failed: \(error)")
             }
@@ -407,14 +426,23 @@ public actor DaemonProcessProfileOwner {
         guard !shutdownStarted else { return }
         shutdownStarted = true
         startupTask?.cancel()
-        for task in wikiTasks.values { task.cancel() }
-        for services in wikiServices.values {
-            do { try await services.shutdown() } catch {
-                DebugLog.store("Daemon wiki profile shutdown failed: \(error)")
+        let lifecycles = Array(wikis.values)
+        wikis.removeAll()
+        for lifecycle in lifecycles { lifecycle.task.cancel() }
+        for lifecycle in lifecycles {
+            let services: AppServices?
+            do { services = try await lifecycle.task.value }
+            catch is CancellationError { services = lifecycle.services }
+            catch {
+                DebugLog.store("Daemon wiki profile task ended during shutdown: \(error)")
+                services = lifecycle.services
+            }
+            if let services {
+                do { try await services.shutdown() } catch {
+                    DebugLog.store("Daemon wiki profile shutdown failed: \(error)")
+                }
             }
         }
-        wikiServices.removeAll()
-        wikiTasks.removeAll()
         if let profile = process?.0 {
             do { try await profile.shutdown() } catch {
                 DebugLog.store("Daemon process profile shutdown failed: \(error)")
@@ -479,28 +507,25 @@ extension ProfileWikiSession {
         let databaseURL = containerDirectory.appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false)
         let profile = try await CordisBoot.boot(.init(
             catalog: catalog,
-            layers: [PatchFile(entries: ProductionProfileEntries.app(databaseURL: databaseURL, wikiID: wikiID))],
+            layers: [PatchFile(entries: try ProductionProfiles.app(
+                databaseURL: databaseURL, wikiID: wikiID, homeDirectory: containerDirectory))],
             parent: processProfile.context))
         do {
             let childServices = try await AppServices.resolve(from: profile)
-            let resolvedStore = childServices.store
-            return try ProfileWikiSession(
+            let runtime = try await profile.context.require(PerWikiRuntimeServiceKeys.services)
+            runtime.agentLauncher.pdf2mdScriptPathResolver = pdf2mdScriptPathResolver
+            runtime.agentLauncher.onInteractiveUsage = interactiveUsageRecorder
+            return ProfileWikiSession(
                 wikiID: wikiID,
                 descriptor: descriptor,
-                containerDirectory: containerDirectory,
+                runtime: runtime,
                 extractionCoordinator: ExtractionCoordinator(services: processServices.extraction),
                 queueEngine: processServices.queue,
                 extractionProvider: extractionProvider,
-                searchRuntimeRegistry: searchRuntimeRegistry,
-                providerServices: processServices.agentProvider,
-                makeStore: { _ in resolvedStore },
-                pdf2mdScriptPathResolver: pdf2mdScriptPathResolver,
-                htmlMarkdownExtractorFactory: htmlMarkdownExtractorFactory,
-                htmlBackendResolver: htmlBackendResolver,
-                podcastBackendResolver: podcastBackendResolver,
-                interactiveUsageRecorder: interactiveUsageRecorder,
-                profile: childServices.profile,
-                readPool: childServices.readPool)
+                htmlMarkdownExtractor: htmlMarkdownExtractorFactory(),
+                htmlBackend: htmlBackendResolver(),
+                podcastBackend: podcastBackendResolver(),
+                profile: childServices.profile)
         } catch {
             do {
                 try await profile.shutdown()
@@ -513,68 +538,57 @@ extension ProfileWikiSession {
 
 }
 
-/// Concrete per-wiki profile rows. The store row is a complete replacement for
-/// the machine-independent placeholder shipped in `wikifs-base`.
-public enum ProductionProfileEntries {
-    public static func appProcess() -> [Entry] {
-        [
-            Entry(id: EntryID("process-agent-provider"), plugin: ProcessRuntimePlugins.agentProviderID),
-            Entry(id: EntryID("process-extraction"), plugin: ProcessRuntimePlugins.extractionID),
-            Entry(id: EntryID("process-queue"), plugin: ProcessRuntimePlugins.queueID),
-            Entry(id: EntryID("process-transport"), plugin: ProcessRuntimePlugins.transportID),
-            Entry(id: EntryID("process-renderer"), plugin: ProcessRuntimePlugins.rendererID),
-        ]
+/// Production composition loaded from the shipped YAML bundles. Catalogs still
+/// provide injected factories; only machine facts are generated in Swift.
+public enum ProductionProfiles {
+    public static func appProcess(homeDirectory: URL? = nil) throws -> [Entry] {
+        try resolve(kind: .app, scope: .process, homeDirectory: homeDirectory).entries
     }
 
-    public static func daemonProcess() -> [Entry] {
-        [
-            Entry(id: EntryID("process-agent-provider"), plugin: ProcessRuntimePlugins.agentProviderID),
-            Entry(id: EntryID("process-extraction"), plugin: ProcessRuntimePlugins.extractionID),
-        ]
+    public static func daemonProcess(homeDirectory: URL? = nil) throws -> [Entry] {
+        try resolve(kind: .daemon, scope: .process, homeDirectory: homeDirectory).entries
     }
 
-    public static func app(databaseURL: URL, wikiID: WikiID) -> [Entry] {
-        base(databaseURL: databaseURL, wikiID: wikiID) + [
-            Entry(id: EntryID("renderer-services"), plugin: RendererServicesPlugin.id),
-            Entry(id: EntryID("daemon-transport"), plugin: DaemonTransportPlugin.id),
-            Entry(id: EntryID("url-fetch"), plugin: URLFetchIntegrationPlugin.id),
-            Entry(id: EntryID("tantivy"), plugin: TantivySearchPlugin.id),
-            Entry(id: EntryID("embeddings"), plugin: EmbeddingsSearchPlugin.id),
-        ]
+    public static func app(databaseURL: URL, wikiID: WikiID, homeDirectory: URL? = nil) throws -> [Entry] {
+        try resolve(
+            kind: .app, scope: .wiki, homeDirectory: homeDirectory,
+            ambient: ambient(databaseURL: databaseURL, wikiID: wikiID)).entries
     }
 
-    public static func daemon(databaseURL: URL, wikiID: WikiID) -> [Entry] {
-        base(databaseURL: databaseURL, wikiID: wikiID) + [
-            Entry(id: EntryID("embeddings"), plugin: EmbeddingsSearchPlugin.id),
-        ]
+    public static func daemon(databaseURL: URL, wikiID: WikiID, homeDirectory: URL? = nil) throws -> [Entry] {
+        try resolve(
+            kind: .daemon, scope: .wiki, homeDirectory: homeDirectory,
+            ambient: ambient(databaseURL: databaseURL, wikiID: wikiID)).entries
     }
 
-    public static func cli() -> [Entry] {
-        [
-            Entry(id: EntryID("search"), plugin: SearchPlugin.id),
-            Entry(id: EntryID("tantivy"), plugin: TantivySearchPlugin.id),
-        ]
+    public static func cli(homeDirectory: URL? = nil, overlay: String? = nil) throws -> [Entry] {
+        try resolve(kind: .cli, scope: .process, homeDirectory: homeDirectory, overlay: overlay).entries
     }
 
-    private static func base(databaseURL: URL, wikiID: WikiID) -> [Entry] {
-        [
+    public static func resolve(
+        kind: ProductionProfileKind,
+        scope: ProductionProfileScope,
+        bundlesDirectory: URL? = nil,
+        homeDirectory: URL? = nil,
+        overlay: String? = nil,
+        ambient: PatchFile = PatchFile()
+    ) throws -> ResolvedProfile {
+        try ProductionProfileResolver.resolve(
+            kind: kind, scope: scope, bundlesDirectory: bundlesDirectory,
+            homeDirectory: homeDirectory, overlay: overlay, ambient: ambient)
+    }
+
+    public static func ambient(databaseURL: URL, wikiID: WikiID) -> PatchFile {
+        PatchFile(entries: [
             Entry(id: EntryID("store"), plugin: StorePlugin.id, config: [
                 "databasePath": .string(databaseURL.path),
                 "wikiID": .string(wikiID.rawValue),
             ]),
-            Entry(id: EntryID("sessions"), plugin: SessionsPlugin.id),
-            Entry(id: EntryID("chats-persistence"), plugin: ChatsPersistencePlugin.id),
-            Entry(id: EntryID("llm-runtime"), plugin: LlmRuntimePlugin.id),
-            Entry(id: EntryID("tools"), plugin: ToolsPlugin.id),
-            Entry(id: EntryID("system-prompt"), plugin: SystemPromptPlugin.id),
-            Entry(id: EntryID("agent-loop"), plugin: AgentLoopPlugin.id),
-            Entry(id: EntryID("extraction"), plugin: ExtractionPlugin.id),
-            Entry(id: EntryID("pdf2md"), plugin: Pdf2mdExtractionPlugin.id),
-            Entry(id: EntryID("search"), plugin: SearchPlugin.id),
-            Entry(id: EntryID("renderers"), plugin: RenderersPlugin.id),
-            Entry(id: EntryID("transport"), plugin: TransportPlugin.id),
-            Entry(id: EntryID("integrations"), plugin: IntegrationsPlugin.id),
-        ]
+            Entry(id: EntryID("runtime-services"), plugin: PerWikiRuntimePlugin.id, config: [
+                "wikiID": .string(wikiID.rawValue),
+                "containerDirectory": .string(databaseURL.deletingLastPathComponent().path),
+            ]),
+        ])
     }
 }
 
@@ -667,6 +681,7 @@ private func baseDefinitions(_ factories: BasePluginCatalogFactories) -> [Plugin
     [
         StorePlugin.definition,
         SessionsPlugin.definition,
+        PerWikiRuntimePlugin.definition,
         ChatsPersistencePlugin.definition,
         LlmRuntimePlugin.definition,
         ACPModelAdapterPlugin.definition(services: factories.agentProviderServices),

@@ -3,10 +3,23 @@ import Foundation
 import Yams
 
 public enum CordisLoaderError: Error, Equatable, Sendable {
+    case missingShippedBundles
     case missingPlugin(pluginID: PluginID, entryID: EntryID)
     case invalidEntry(entryID: EntryID, reason: String)
     case entryFailed(entryID: EntryID, label: String, failure: CordisFailure)
     case configDecodingFailed(entryID: EntryID, problem: String)
+}
+
+/// Preserves the operation failure that triggered rollback together with every
+/// cleanup failure encountered while restoring ownership boundaries.
+public struct CordisLoaderRollbackError: Error, Equatable, Sendable {
+    public let operation: CordisFailure
+    public let cleanup: [CordisFailure]
+
+    public init(operation: CordisFailure, cleanup: [CordisFailure]) {
+        self.operation = operation
+        self.cleanup = cleanup
+    }
 }
 
 extension ConfigValue {
@@ -34,6 +47,8 @@ public actor EntryTree {
     private let context: CordisContext
     private let catalog: PluginCatalog
     private var mounted: [EntryID: ComponentHandle] = [:]
+    /// Entry ids in successful mount order. The last id owns the newest handle.
+    private var mountOrder: [EntryID] = []
     private var rows: [Entry] = []
 
     public init(context: CordisContext, catalog: PluginCatalog) {
@@ -42,28 +57,47 @@ public actor EntryTree {
     }
 
     public func update(to newRows: [Entry]) async throws {
-        var nextMounted = mounted
-        let newRowIDs = Set(newRows.filter { !$0.disabled }.map(\.id))
+        let enabledRows = newRows.filter { !$0.disabled }
+        let enabledByID = Dictionary(uniqueKeysWithValues: enabledRows.map { ($0.id, $0) })
+        let retiringIDs = Set(mounted.keys.filter { entryID in
+            guard let replacement = enabledByID[entryID] else { return true }
+            return replacement != currentRow(entryID)
+        })
 
-        // Removals first (LIFO over the removed set), then adds and changes.
-        for (entryID, handle) in mounted where !newRowIDs.contains(entryID) {
+        // Commit each ownership transition as it happens. A handle is removed
+        // from bookkeeping before disposal, so even a throwing disposer cannot
+        // leave a possibly disposed handle recorded as active.
+        for entryID in mountOrder.reversed() where retiringIDs.contains(entryID) {
+            guard let handle = mounted.removeValue(forKey: entryID) else { continue }
+            mountOrder.removeAll { $0 == entryID }
+            rows.removeAll { $0.id == entryID }
             try await handle.dispose()
-            nextMounted.removeValue(forKey: entryID)
         }
 
-        for row in newRows where !row.disabled {
-            if nextMounted[row.id] != nil, row == currentRow(row.id) {
-                continue
+        var newlyMounted: [(EntryID, ComponentHandle)] = []
+        do {
+            for row in enabledRows where mounted[row.id] == nil {
+                let handle = try await mount(row)
+                mounted[row.id] = handle
+                mountOrder.append(row.id)
+                newlyMounted.append((row.id, handle))
             }
-            if let existing = nextMounted[row.id] {
-                try await existing.dispose()
-                nextMounted.removeValue(forKey: row.id)
+        } catch {
+            var cleanup: [CordisFailure] = []
+            for (entryID, handle) in newlyMounted.reversed() {
+                mounted.removeValue(forKey: entryID)
+                mountOrder.removeAll { $0 == entryID }
+                do {
+                    try await handle.dispose()
+                } catch {
+                    cleanup.append(CordisFailure(error))
+                }
             }
-            let handle = try await mount(row)
-            nextMounted[row.id] = handle
+            rows.removeAll { mounted[$0.id] == nil }
+            if cleanup.isEmpty { throw error }
+            throw CordisLoaderRollbackError(operation: CordisFailure(error), cleanup: cleanup)
         }
 
-        mounted = nextMounted
         rows = newRows
     }
 
@@ -163,11 +197,11 @@ public actor EntryTree {
     }
 
     public func dispose() async throws {
-        for (entryID, handle) in mounted.sorted(by: { $0.key.rawValue > $1.key.rawValue }) {
+        for entryID in mountOrder.reversed() {
+            guard let handle = mounted.removeValue(forKey: entryID) else { continue }
             try await handle.dispose()
-            _ = entryID
         }
-        mounted.removeAll()
+        mountOrder.removeAll()
         rows = []
     }
 
@@ -219,13 +253,30 @@ public enum CordisBoot {
         } else {
             CordisContext()
         }
-        if let configure = options.configure {
-            try await configure(context)
-        }
-        let resolved = PatchResolver.resolve(layers: options.layers)
         let tree = EntryTree(context: context, catalog: options.catalog)
-        try await tree.update(to: resolved)
-        return BootedProfile(context: context, tree: tree)
+        do {
+            if let configure = options.configure {
+                try await configure(context)
+            }
+            let resolved = PatchResolver.resolve(layers: options.layers)
+            try await tree.update(to: resolved)
+            return BootedProfile(context: context, tree: tree)
+        } catch {
+            let operation = CordisFailure(error)
+            var cleanup: [CordisFailure] = []
+            do {
+                try await tree.dispose()
+            } catch {
+                cleanup.append(CordisFailure(error))
+            }
+            do {
+                try await context.dispose()
+            } catch {
+                cleanup.append(CordisFailure(error))
+            }
+            if cleanup.isEmpty { throw error }
+            throw CordisLoaderRollbackError(operation: operation, cleanup: cleanup)
+        }
     }
 }
 

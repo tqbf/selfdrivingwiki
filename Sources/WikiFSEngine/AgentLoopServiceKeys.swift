@@ -6,11 +6,19 @@ public struct AgentTurnRequest: Equatable, Sendable {
     public let chatID: ChatID
     public let turnID: ChatTurnID
     public let userText: String
+    /// False when an existing durable transcript owner already persists this turn.
+    public let projectsToSessionLog: Bool
 
-    public init(chatID: ChatID, turnID: ChatTurnID, userText: String) {
+    public init(
+        chatID: ChatID,
+        turnID: ChatTurnID,
+        userText: String,
+        projectsToSessionLog: Bool = true
+    ) {
         self.chatID = chatID
         self.turnID = turnID
         self.userText = userText
+        self.projectsToSessionLog = projectsToSessionLog
     }
 }
 
@@ -51,22 +59,36 @@ public struct AgentStepCompleted: Equatable, Sendable {
     public let turnID: ChatTurnID
     public let stepIndex: Int
     public let events: [AgentEvent]
+    public let projectsToSessionLog: Bool
 
-    public init(chatID: ChatID, turnID: ChatTurnID, stepIndex: Int, events: [AgentEvent]) {
+    public init(
+        chatID: ChatID,
+        turnID: ChatTurnID,
+        stepIndex: Int,
+        events: [AgentEvent],
+        projectsToSessionLog: Bool = true
+    ) {
         self.chatID = chatID
         self.turnID = turnID
         self.stepIndex = stepIndex
         self.events = events
+        self.projectsToSessionLog = projectsToSessionLog
     }
 }
 
 public struct AgentTurnCompleted: Equatable, Sendable {
     public let chatID: ChatID
     public let turnID: ChatTurnID
+    public let projectsToSessionLog: Bool
 
-    public init(chatID: ChatID, turnID: ChatTurnID) {
+    public init(
+        chatID: ChatID,
+        turnID: ChatTurnID,
+        projectsToSessionLog: Bool = true
+    ) {
         self.chatID = chatID
         self.turnID = turnID
+        self.projectsToSessionLog = projectsToSessionLog
     }
 
     public var sessionEvents: [AgentEvent] { [.messageStop] }
@@ -103,26 +125,47 @@ public struct AgentLoopService: Sendable {
         self.runWaterfall = waterfall
     }
 
-    @discardableResult
-    public func enqueue(_ request: AgentTurnRequest) async throws -> [AgentEvent] {
+    /// Begins a turn and runs policy and request waterfalls without consuming a
+    /// backend stream. A non-nil `events` result short-circuits the backend.
+    public func prepare(_ request: AgentTurnRequest) async throws -> AgentStepRequest {
         await emitTurnStarted(AgentLoopEventKeys.turnStarted, AgentTurnStarted(request: request))
         var step = try await preStep(AgentStepRequest(turn: request))
         if step.events == nil {
             step = try await runWaterfall(AgentLoopEventKeys.request, step)
         }
-        guard let events = step.events else {
-            throw AgentLoopError.missingStepResult(request.turnID)
-        }
+        return step
+    }
+
+    /// Projects one completed step after its stream has been consumed. Callers
+    /// retain ownership of incremental event delivery and durable persistence.
+    public func stepCompleted(_ step: AgentStepRequest, events: [AgentEvent]) async {
         await emitStepCompleted(
             AgentLoopEventKeys.stepCompleted,
             AgentStepCompleted(
-                chatID: request.chatID,
-                turnID: request.turnID,
+                chatID: step.turn.chatID,
+                turnID: step.turn.turnID,
                 stepIndex: step.stepIndex,
-                events: events))
+                events: events,
+                projectsToSessionLog: step.turn.projectsToSessionLog))
+    }
+
+    public func turnCompleted(_ request: AgentTurnRequest) async {
         await emitTurnCompleted(
             AgentLoopEventKeys.turnCompleted,
-            AgentTurnCompleted(chatID: request.chatID, turnID: request.turnID))
+            AgentTurnCompleted(
+                chatID: request.chatID,
+                turnID: request.turnID,
+                projectsToSessionLog: request.projectsToSessionLog))
+    }
+
+    @discardableResult
+    public func enqueue(_ request: AgentTurnRequest) async throws -> [AgentEvent] {
+        let step = try await prepare(request)
+        guard let events = step.events else {
+            throw AgentLoopError.missingStepResult(request.turnID)
+        }
+        await stepCompleted(step, events: events)
+        await turnCompleted(request)
         return events
     }
 

@@ -1,3 +1,28 @@
-# The SwiftUI shell, File Provider projection, and settings UI remain app-wired
-# until Phase 5b introduces their plugin definitions.
-entries: []
+entries:
+  - id: process-agent-provider
+    plugin: process.agent-provider
+    config: { _scope: process }
+  - id: process-extraction
+    plugin: process.extraction
+    config: { _scope: process }
+  - id: process-queue
+    plugin: process.queue
+    config: { _scope: process }
+  - id: process-transport
+    plugin: process.transport
+    config: { _scope: process }
+  - id: process-renderer
+    plugin: process.renderer
+    config: { _scope: process }
+  - id: renderer-services
+    plugin: wiki.renderer.services
+    config: { _scope: wiki }
+  - id: daemon-transport
+    plugin: wiki.transport.daemon
+    config: { _scope: wiki }
+  - id: url-fetch
+    plugin: wiki.integration.url-fetch
+    config: { _scope: wiki }
+  - id: tantivy
+    plugin: wiki.search.tantivy
+    config: { _scope: wiki }

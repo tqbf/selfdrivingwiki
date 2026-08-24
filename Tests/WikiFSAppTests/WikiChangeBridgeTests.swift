@@ -39,7 +39,7 @@ struct WikiChangeBridgeTests {
         let queueEngine = try! makeTestQueueEngine()
         let provider = StubExtractionProvider()
         return try ProfileWikiSession(
-            wikiID: wikiID,
+            testFixtureWikiID: wikiID,
             descriptor: descriptor,
             containerDirectory: dir,
             extractionCoordinator: coordinator,

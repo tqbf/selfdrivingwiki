@@ -325,8 +325,6 @@ func readBody(from source: String) throws -> String {
 // client, not via wikictl).
 
 func runDumpConfig(overlay: String?) -> Int32 {
-    let bundlesDirectory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        .appendingPathComponent("bundles", isDirectory: true)
     let homeDirectory: URL?
     do {
         homeDirectory = try DatabaseLocation.appGroupContainerDirectory()
@@ -336,7 +334,6 @@ func runDumpConfig(overlay: String?) -> Int32 {
 
     do {
         let result = try DumpConfigCommand.run(
-            bundlesDirectory: bundlesDirectory,
             homeDirectory: homeDirectory,
             overlay: overlay)
         if let note = result.note {

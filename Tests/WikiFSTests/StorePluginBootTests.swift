@@ -16,6 +16,45 @@ struct StorePluginBootTests {
         }
     }
 
+    @Test("disposal cancels and awaits in-flight store event forwarding")
+    func disposalStopsInFlightForwarding() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("store-plugin-disposal-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer {
+            do { try FileManager.default.removeItem(at: directory) }
+            catch { Issue.record("could not remove store forwarding fixture: \(error)") }
+        }
+        let gate = StoreForwardingGate()
+        let databaseURL = directory.appendingPathComponent("wiki.sqlite", isDirectory: false)
+        let layer = PatchFile(entries: [Entry(
+            id: EntryID("store"),
+            plugin: StorePlugin.id,
+            config: [
+                "databasePath": .string(databaseURL.path),
+                "wikiID": .string("store-forwarding-disposal"),
+            ])])
+        let booted = try await CordisBoot.boot(.init(
+            catalog: try PluginCatalog([StorePlugin.makeDefinition { _ in await gate.wait() }]),
+            layers: [layer]))
+        let store = try #require(try await booted.context.find(StoreServiceKeys.store))
+        let recorder = EventRecorder()
+        _ = try await booted.context.on(StoreEventKeys.resourceChange) { event in
+            await recorder.append(event)
+        }
+
+        _ = try store.createPage(title: "Paused forwarding")
+        await gate.awaitArrival()
+        let disposal = Task { try await booted.tree.dispose() }
+        await gate.awaitCancellation()
+        #expect(!disposal.isCancelled)
+        await gate.open()
+        try await disposal.value
+
+        #expect(await recorder.events.isEmpty)
+        try await booted.context.dispose()
+    }
+
     @Test("boot supplies the store and bridges changes until listener disposal")
     func bootSuppliesStoreAndBridgesChangesUntilDisposal() async throws {
         let directory = FileManager.default.temporaryDirectory
@@ -70,6 +109,47 @@ struct StorePluginBootTests {
         #expect(await recorder.events.count == countAfterDisposal)
 
         try await booted.shutdown()
+    }
+}
+
+private actor StoreForwardingGate {
+    private var waiter: CheckedContinuation<Void, Never>?
+    private let arrivals: AsyncStream<Void>
+    private let arrivalContinuation: AsyncStream<Void>.Continuation
+    private let cancellations: AsyncStream<Void>
+    private let cancellationContinuation: AsyncStream<Void>.Continuation
+
+    init() {
+        let arrivalPair = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        arrivals = arrivalPair.stream
+        arrivalContinuation = arrivalPair.continuation
+        let cancellationPair = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        cancellations = cancellationPair.stream
+        cancellationContinuation = cancellationPair.continuation
+    }
+
+    func wait() async {
+        arrivalContinuation.yield(())
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in waiter = continuation }
+        } onCancel: {
+            cancellationContinuation.yield(())
+        }
+    }
+
+    func awaitArrival() async {
+        for await _ in arrivals { return }
+    }
+
+    func awaitCancellation() async {
+        for await _ in cancellations { return }
+    }
+
+    func open() {
+        waiter?.resume()
+        waiter = nil
+        arrivalContinuation.finish()
+        cancellationContinuation.finish()
     }
 }
 #endif

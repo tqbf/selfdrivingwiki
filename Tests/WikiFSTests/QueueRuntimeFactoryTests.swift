@@ -19,6 +19,25 @@ struct QueueRuntimeFactoryTests {
         #expect(try await handle.dispose() == .shutDown)
     }
 
+    @Test("assembled runtime dispatches ingestion through Cordis tools")
+    func assembledRuntimeDispatchesIngestionThroughCordisTools() async throws {
+        let directory = makeQueueRuntimeTempDirectory()
+        let handle = try await makeAssembly(
+            databaseURL: directory.appendingPathComponent("queue.sqlite"))
+            .assemble()
+
+        let itemID = try await handle.client.enqueue(QueueItemRequest(
+            queue: .ingestion,
+            wikiID: WikiID(rawValue: "runtime-dispatch-wiki"),
+            payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "runtime-dispatch-source")])))
+        let result = await handle.engine.waitForCompletion(of: itemID)
+        try result.get()
+        let item = try handle.store.getItem(itemID)
+
+        #expect(item?.state == .completed)
+        #expect(try await handle.dispose() == .shutDown)
+    }
+
     @Test("startup has no output callback gap")
     func startupHasNoOutputCallbackGap() async throws {
         let directory = makeQueueRuntimeTempDirectory()
@@ -122,6 +141,7 @@ struct QueueRuntimeFactoryTests {
         for service in requiredServices {
             #expect(source.contains("label: \"\(service)\""))
         }
+        #expect(source.contains("ToolServiceKeys.tools"))
         for boundary in forbiddenBoundaries {
             #expect(!source.contains(boundary))
         }

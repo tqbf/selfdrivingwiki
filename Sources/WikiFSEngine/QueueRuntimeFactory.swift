@@ -21,6 +21,7 @@ public struct QueueRuntimeFactory: Sendable {
         case extractionFactory
         case ingestionFactory
         case compositeFactory
+        case tools
         case engine
     }
 
@@ -212,6 +213,26 @@ public struct QueueRuntimeFactory: Sendable {
                     _ = try await activation.supply(Keys.compositeFactory, value: factory)
                 }
 
+        case .tools:
+            return try ComponentDefinition(
+                label: component.rawValue,
+                provisions: [ServiceDependency(ToolServiceKeys.tools)]) { activation in
+                    let registry = ToolRegistry()
+                    _ = try await activation.on(ToolEventKeys.execute) { context, next in
+                        var context = try await next()
+                        guard context.result == nil else { return context }
+                        guard let tool = await registry.resolve(context.name) else {
+                            throw ToolRuntimeError.unknownTool(context.name)
+                        }
+                        context.result = try await tool.execute(payload: context.payload)
+                        return context
+                    }
+                    let runtime = ToolRuntime(registry: registry) { key, context in
+                        try await activation.waterfall(key, context)
+                    }
+                    _ = try await activation.supply(ToolServiceKeys.tools, value: runtime)
+                }
+
         case .engine:
             return try ComponentDefinition(
                 label: component.rawValue,
@@ -219,14 +240,17 @@ public struct QueueRuntimeFactory: Sendable {
                     ServiceDependency(Keys.store),
                     ServiceDependency(Keys.outputChannel),
                     ServiceDependency(Keys.compositeFactory),
+                    ServiceDependency(ToolServiceKeys.tools),
                 ],
                 provisions: [ServiceDependency(Keys.engine)]) { activation in
                     let store = try await activation.require(Keys.store)
                     let channel = try await activation.require(Keys.outputChannel)
                     let factory = try await activation.require(Keys.compositeFactory)
+                    let tools = try await activation.require(ToolServiceKeys.tools)
                     let engine = QueueEngine(
                         store: store,
                         workerFactory: factory,
+                        workerExecutor: CordisQueueWorkerExecutor(runtime: tools),
                         outputChannel: channel)
                     _ = try await activation.supply(Keys.engine, value: engine)
                 }

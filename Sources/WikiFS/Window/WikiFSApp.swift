@@ -171,15 +171,15 @@ struct WikiFSApp: App {
         let r = WikiRegistryClient(containerDirectory: directory)
         r.bootstrap(activateNow: false)
         _registry = State(initialValue: r)
-        // The synchronous app initializer creates stable facades only. The
-        // asynchronous process profile is the sole owner of all five concrete
-        // runtimes and publishes those same facades through its plugin leases.
+        // The synchronous app initializer creates stable UI adapters and injects an
+        // app-target plugin catalog. Committed process-profile rows select the
+        // five concrete runtime factories; their leases are the sole owners.
         let sessionBox = SessionLookupBox()
         sessionLookupBox = sessionBox
         let fileProviderBox = FileProviderBox()
         let transportBridge = DaemonTransportAppBridge()
         daemonTransportBridge = transportBridge
-        let processComposition = AppProcessComposition(
+        let processComposition = AppProcessPluginCatalog(
             containerDirectory: directory,
             transportBridge: transportBridge,
             extractionProvider: { services in
@@ -315,17 +315,10 @@ struct WikiFSApp: App {
         sessionBox.setSessionLookup { [weak sm] wikiID in
             sm?.sessions[wikiID]
         }
-        // Settings-only launcher (D5): its own gate, independent of any
-        // session's gate. Used for "Test Connection" + backend config only.
-        let settingsGate = GenerationGate(laneLimits: [.ingest: 1, .interactive: 3])
-        _settingsLauncher = State(initialValue: {
-            let l = AgentLauncher(
-                generationGate: settingsGate,
-                extractionCoordinator: coordinator,
-                providerServices: providerServices)
-            l.pdf2mdScriptPathResolver = { PdfExtractionService.resolveScript()?.path }
-            return l
-        }())
+        // Settings-only launcher (D5): a main-actor UI adapter installed by the
+        // app-target catalog boundary, independent of every per-wiki gate.
+        _settingsLauncher = State(initialValue: processComposition.makeSettingsLauncher(
+            extractionCoordinator: coordinator))
 
         // Assert bun is bundled — ACP providers (claude-acp via bunx) are broken
         // without it. If this fires, run `./build.sh` (which now hard-fails when

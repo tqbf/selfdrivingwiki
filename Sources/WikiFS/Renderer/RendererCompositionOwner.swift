@@ -173,11 +173,13 @@ actor RendererCompositionOwner {
     }
 }
 
-/// App-target process composition. It creates stable facades synchronously for
-/// SwiftUI consumers, while the process profile owns every concrete runtime
-/// through its plugin leases.
+/// App-target injected catalog and stable UI adapter holder.
+///
+/// Concrete process runtimes are constructed only by the factory closures
+/// installed in `ProcessRuntimePlugins`. The committed process-profile rows
+/// select which closures activate; this holder does not start a parallel graph.
 @MainActor
-final class AppProcessComposition {
+final class AppProcessPluginCatalog {
     let profileOwner: AppProcessProfileOwner
     let providerServices: MutableAgentProviderServices
     let extractionServices: MutableExtractionServices
@@ -295,7 +297,7 @@ final class AppProcessComposition {
                     await owner.start()
                     await owner.awaitSettled()
                     if let failure = await owner.failureDescription() {
-                        throw AppProcessCompositionError.runtimeUnavailable("extraction: \(failure)")
+                        throw AppProcessPluginCatalogError.runtimeUnavailable("extraction: \(failure)")
                     }
                     return ProcessRuntimeLease(service: extractionServices) {
                         await owner.shutdown()
@@ -305,7 +307,7 @@ final class AppProcessComposition {
                     await MainActor.run { queueController.start() }
                     await queueController.awaitSettled()
                     if let failure = await MainActor.run(body: { queueController.startupError }) {
-                        throw AppProcessCompositionError.runtimeUnavailable("queue: \(failure)")
+                        throw AppProcessPluginCatalogError.runtimeUnavailable("queue: \(failure)")
                     }
                     return ProcessRuntimeLease(service: queueController.client) {
                         _ = await queueController.dispose()
@@ -321,16 +323,30 @@ final class AppProcessComposition {
                     await rendererOwner.start()
                     await rendererOwner.awaitSettled()
                     if let failure = await rendererOwner.failureDescription() {
-                        throw AppProcessCompositionError.runtimeUnavailable("renderer: \(failure)")
+                        throw AppProcessPluginCatalogError.runtimeUnavailable("renderer: \(failure)")
                     }
                     return ProcessRuntimeLease(service: rendererOwner.services) {
                         await rendererOwner.shutdown()
                     }
-                }))
+                }), homeDirectory: containerDirectory)
+    }
+
+    /// Constructs the Settings-only launcher as a UI adapter over resolved
+    /// process facades. It is intentionally outside Cordis because
+    /// `AgentLauncher` is main-actor UI state, but its construction remains in
+    /// the app-target injected catalog boundary rather than `WikiFSApp.init`.
+    func makeSettingsLauncher(extractionCoordinator: ExtractionCoordinator) -> AgentLauncher {
+        let gate = GenerationGate(laneLimits: [.ingest: 1, .interactive: 3])
+        let launcher = AgentLauncher(
+            generationGate: gate,
+            extractionCoordinator: extractionCoordinator,
+            providerServices: providerServices)
+        launcher.pdf2mdScriptPathResolver = { PdfExtractionService.resolveScript()?.path }
+        return launcher
     }
 }
 
-enum AppProcessCompositionError: Error {
+enum AppProcessPluginCatalogError: Error {
     case runtimeUnavailable(String)
 }
 #endif

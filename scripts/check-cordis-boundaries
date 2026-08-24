@@ -8,17 +8,78 @@ if [[ $# -gt 1 || (${1:-} != "" && ${1:-} != "--strict") ]]; then
   exit 2
 fi
 
-runtime_matches="$({ grep -RIl --include='*.swift' 'RuntimeAssembly' Sources || true; } | LC_ALL=C sort)"
-session_matches="$({ grep -RIlE --include='*.swift' '(^|[^[:alnum:]_])WikiSession\(' Sources || true; } | LC_ALL=C sort)"
+failed=0
+source_root="${CORDIS_BOUNDARY_SOURCE_ROOT:-Sources}"
 
-if [[ -n "$runtime_matches" ]]; then
-  echo "Cordis boundary violation: RuntimeAssembly remains in Sources/:" >&2
-  printf '%s\n' "$runtime_matches" >&2
+reject_matches() {
+  local label="$1"
+  local pattern="$2"
+  shift 2
+  local matches
+  matches="$({ grep -RIlE --include='*.swift' "$pattern" "$source_root" || true; } | while IFS= read -r path; do
+    [[ -z "$path" ]] && continue
+    local allowed=0
+    for prefix in "$@"; do
+      [[ "$path" == "$prefix" ]] && allowed=1 && break
+    done
+    if [[ $allowed -eq 0 ]]; then
+      printf '%s\n' "$path"
+    fi
+  done | LC_ALL=C sort)"
+  if [[ -n "$matches" ]]; then
+    echo "Cordis boundary violation: $label:" >&2
+    printf '%s\n' "$matches" >&2
+    return 1
+  fi
+  return 0
+}
+
+reject_matches "RuntimeAssembly remains in Sources/" 'RuntimeAssembly' || failed=1
+reject_matches "session facade is constructed outside its boot/factory boundary" \
+  '(^|[^[:alnum:]_])(WikiSession|ProfileWikiSession)\(' \
+  Sources/WikiFSEngine/ProductionPluginCatalogs.swift \
+  Sources/WikiFSEngine/SessionsPlugin.swift || failed=1
+reject_matches "GRDBWikiStore is constructed outside a store plugin/factory" \
+  '(^|[^[:alnum:]_])GRDBWikiStore\(' \
+  Sources/WikiFS/Reader/TransclusionEmbedder.swift \
+  Sources/WikiFSCore/Core/WikiRegistryClient.swift \
+  Sources/WikiFSCore/Store/GRDBWikiStore.swift \
+  Sources/WikiFSCore/Store/StoreBackend.swift \
+  Sources/WikiFSCore/Store/WikiReadPool.swift \
+  Sources/WikiFSEngine/ProfileWikiSession.swift \
+  Sources/WikiFSEngine/StorePlugin.swift \
+  Sources/WikiFSFileProvider/Projection.swift \
+  Sources/wikictl/main.swift \
+  Sources/wikid/WikiDaemon.swift || failed=1
+reject_matches "WikiStoreModel is constructed outside a plugin/factory" \
+  '(^|[^[:alnum:]_])WikiStoreModel\(' \
+  Sources/WikiFSCore/Core/WikiRegistryClient.swift \
+  Sources/WikiFSEngine/SessionsPlugin.swift || failed=1
+reject_matches "search composition is constructed outside a plugin/factory" \
+  '(^|[^[:alnum:]_])SearchCompositionOwner\(' \
+  Sources/WikiFSEngine/SessionsPlugin.swift || failed=1
+reject_matches "GenerationGate is constructed outside a plugin/factory or its own facade" \
+  '(^|[^[:alnum:]_])GenerationGate\(' \
+  Sources/WikiFS/Renderer/RendererCompositionOwner.swift \
+  Sources/WikiFSEngine/AgentLauncher.swift \
+  Sources/WikiFSEngine/DaemonChatHost.swift \
+  Sources/WikiFSEngine/GenerationGate.swift \
+  Sources/WikiFSEngine/LauncherChatAgentRuntime.swift \
+  Sources/WikiFSEngine/SessionsPlugin.swift \
+  Sources/wikid/DaemonQueueIngestionProvider.swift \
+  Sources/wikid/WikiDaemon.swift || failed=1
+reject_matches "AgentLauncher is constructed outside a plugin/factory or launcher facade" \
+  '(^|[^[:alnum:]_])AgentLauncher\(' \
+  Sources/WikiFS/Renderer/RendererCompositionOwner.swift \
+  Sources/WikiFSEngine/AgentLauncher.swift \
+  Sources/WikiFSEngine/DaemonChatHost.swift \
+  Sources/WikiFSEngine/LauncherChatAgentRuntime.swift \
+  Sources/WikiFSEngine/SessionsPlugin.swift \
+  Sources/wikid/DaemonQueueIngestionProvider.swift \
+  Sources/wikid/LauncherChatAgentRuntime.swift || failed=1
+
+if [[ $failed -ne 0 ]]; then
+  exit 1
 fi
-if [[ -n "$session_matches" ]]; then
-  echo "Cordis boundary violation: WikiSession is instantiated in Sources/:" >&2
-  printf '%s\n' "$session_matches" >&2
-fi
-[[ -z "$runtime_matches" && -z "$session_matches" ]]
 
 echo "Cordis boundaries verified."

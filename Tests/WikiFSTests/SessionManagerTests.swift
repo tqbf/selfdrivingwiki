@@ -43,12 +43,56 @@ struct SessionManagerTests {
             extractionCoordinator: coordinator,
             queueEngine: queueEngine,
             extractionProvider: provider,
-            pdf2mdScriptPathResolver: { nil })
+            pdf2mdScriptPathResolver: { nil },
+            testSessionFactory: { wikiID, descriptor in
+                let runtime = try PerWikiRuntimeServices.testFixture(
+                    wikiID: wikiID,
+                    containerDirectory: dir,
+                    extractionCoordinator: coordinator)
+                return ProfileWikiSession(
+                    wikiID: wikiID,
+                    descriptor: descriptor,
+                    runtime: runtime,
+                    extractionCoordinator: coordinator,
+                    queueEngine: queueEngine,
+                    extractionProvider: provider)
+            })
+    }
+
+    private func makeSessionManager(
+        dir: URL,
+        makeStore: @escaping (URL) throws -> any WikiStore
+    ) throws -> SessionManager {
+        let coordinator = ExtractionCoordinator(
+            containerDirectory: dir,
+            localExtractorFactory: { StubExtractor() })
+        let queueEngine = try makeTestQueueEngine()
+        let provider = StubExtractionProvider()
+        return SessionManager(
+            containerDirectory: dir,
+            extractionCoordinator: coordinator,
+            queueEngine: queueEngine,
+            extractionProvider: provider,
+            pdf2mdScriptPathResolver: { nil },
+            testSessionFactory: { wikiID, descriptor in
+                let runtime = try PerWikiRuntimeServices.testFixture(
+                    wikiID: wikiID,
+                    containerDirectory: dir,
+                    extractionCoordinator: coordinator,
+                    makeStore: makeStore)
+                return ProfileWikiSession(
+                    wikiID: wikiID,
+                    descriptor: descriptor,
+                    runtime: runtime,
+                    extractionCoordinator: coordinator,
+                    queueEngine: queueEngine,
+                    extractionProvider: provider)
+            })
     }
 
     // MARK: - session(for:descriptor:)
 
-    @Test func asyncReadinessUsesLegacyPathUntilChildProfileLoaderIsInstalled() async throws {
+    @Test func asyncReadinessUsesExplicitTestFixtureWhenInstalled() async throws {
         let dir = tempDirectory()
         let registry = makeSeededRegistry(dir: dir)
         let manager = makeSessionManager(dir: dir)
@@ -59,6 +103,52 @@ struct SessionManagerTests {
 
         #expect(session === manager.sessions[descriptor.id])
         #expect(manager.readiness(for: descriptor.id) == .ready)
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func concurrentReadySessionCallsShareOneFlight() async throws {
+        let dir = tempDirectory()
+        let registry = makeSeededRegistry(dir: dir)
+        let descriptor = try #require(registry.wikis.first)
+        let gate = SessionLoaderGate()
+        let calls = SessionLoaderCounter()
+        let session = try makeSessionManager(dir: dir).session(
+            for: descriptor.id,
+            descriptor: descriptor)
+        let coordinator = ExtractionCoordinator(
+            containerDirectory: dir,
+            localExtractorFactory: { StubExtractor() })
+        let manager = SessionManager(
+            containerDirectory: dir,
+            extractionCoordinator: coordinator,
+            queueEngine: try makeTestQueueEngine(),
+            extractionProvider: StubExtractionProvider(),
+            pdf2mdScriptPathResolver: { nil },
+            asyncSessionLoader: { _, _ in
+                await calls.increment()
+                await gate.wait()
+                return session
+            })
+
+        let first = Task { @MainActor in
+            try await manager.readySession(for: descriptor.id, descriptor: descriptor)
+        }
+        await gate.awaitArrival()
+        let second = Task { @MainActor in
+            try await manager.readySession(for: descriptor.id, descriptor: descriptor)
+        }
+        await Task.yield()
+        await gate.open()
+        let firstSession = try await first.value
+        let secondSession = try await second.value
+
+        #expect(firstSession === secondSession)
+        #expect(firstSession === session)
+        #expect(await calls.value == 1)
+        #expect(manager.sessions.count == 1)
+        manager.releaseSession(for: descriptor.id)
+        manager.releaseSession(for: descriptor.id)
+        await manager.shutdownSearchRuntimes()
     }
 
     @Test func asyncReadinessRecordsFailure() async throws {
@@ -73,7 +163,7 @@ struct SessionManagerTests {
             queueEngine: try makeTestQueueEngine(),
             extractionProvider: StubExtractionProvider(),
             pdf2mdScriptPathResolver: { nil },
-            makeStore: { _ in throw AsyncReadinessFailure() })
+            asyncSessionLoader: { _, _ in throw AsyncReadinessFailure() })
         let descriptor = try #require(registry.wikis.first)
 
         await #expect(throws: AsyncReadinessFailure.self) {
@@ -352,16 +442,9 @@ struct SessionManagerTests {
         struct StoreOpenFailure: Error {}
         // Inject a store factory that always throws — simulates a corrupt /
         // unopenable DB without filesystem tricks.
-        let coordinator = ExtractionCoordinator(
-            containerDirectory: dir,
-            localExtractorFactory: { StubExtractor() })
-        let manager = SessionManager(
-            containerDirectory: dir,
-            extractionCoordinator: coordinator,
-            queueEngine: try! makeTestQueueEngine(),
-            extractionProvider: StubExtractionProvider(),
-            pdf2mdScriptPathResolver: { nil },
-            makeStore: { _ in throw StoreOpenFailure() })
+        let manager = try! makeSessionManager(dir: dir) { _ in
+            throw StoreOpenFailure()
+        }
 
         #expect(throws: StoreOpenFailure.self) {
             _ = try manager.session(for: descriptor.id, descriptor: descriptor)
@@ -381,16 +464,9 @@ struct SessionManagerTests {
         let descriptor = registry.wikis.first!
 
         struct StoreOpenFailure: Error {}
-        let coordinator = ExtractionCoordinator(
-            containerDirectory: dir,
-            localExtractorFactory: { StubExtractor() })
-        let manager = SessionManager(
-            containerDirectory: dir,
-            extractionCoordinator: coordinator,
-            queueEngine: try! makeTestQueueEngine(),
-            extractionProvider: StubExtractionProvider(),
-            pdf2mdScriptPathResolver: { nil },
-            makeStore: { _ in throw StoreOpenFailure() })
+        let manager = try! makeSessionManager(dir: dir) { _ in
+            throw StoreOpenFailure()
+        }
 
         #expect(throws: StoreOpenFailure.self) {
             _ = try manager.session(for: descriptor.id, descriptor: descriptor)
@@ -423,19 +499,10 @@ struct SessionManagerTests {
             }
         }
         let toggle = FailingToggle()
-        let coordinator = ExtractionCoordinator(
-            containerDirectory: dir,
-            localExtractorFactory: { StubExtractor() })
-        let manager = SessionManager(
-            containerDirectory: dir,
-            extractionCoordinator: coordinator,
-            queueEngine: try! makeTestQueueEngine(),
-            extractionProvider: StubExtractionProvider(),
-            pdf2mdScriptPathResolver: { nil },
-            makeStore: { url in
-                if toggle.consume() { throw StoreOpenFailure() }
-                return try StoreBackend.current.makeStore(databaseURL: url)
-            })
+        let manager = try makeSessionManager(dir: dir) { url in
+            if toggle.consume() { throw StoreOpenFailure() }
+            return try StoreBackend.current.makeStore(databaseURL: url)
+        }
 
         // First attempt fails and records an error.
         #expect(throws: StoreOpenFailure.self) {
@@ -451,6 +518,44 @@ struct SessionManagerTests {
         #expect(manager.sessions[descriptor.id] != nil)
         #expect(session.wikiID == descriptor.id)
     }
+}
+
+private actor SessionLoaderGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private let arrivals: AsyncStream<Void>
+    private let arrivalContinuation: AsyncStream<Void>.Continuation
+
+    init() {
+        let pair = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        arrivals = pair.stream
+        arrivalContinuation = pair.continuation
+    }
+
+    func wait() async {
+        arrivalContinuation.yield(())
+        guard !isOpen else { return }
+        await withCheckedContinuation { continuation in
+            if isOpen { continuation.resume() } else { waiters.append(continuation) }
+        }
+    }
+
+    func awaitArrival() async {
+        for await _ in arrivals { return }
+    }
+
+    func open() {
+        isOpen = true
+        let pending = waiters
+        waiters.removeAll()
+        for waiter in pending { waiter.resume() }
+        arrivalContinuation.finish()
+    }
+}
+
+private actor SessionLoaderCounter {
+    private(set) var value = 0
+    func increment() { value += 1 }
 }
 
 /// A minimal stub `MarkdownExtractor` for tests — returns empty content.

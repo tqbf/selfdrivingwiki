@@ -145,7 +145,7 @@ struct PageDetailViewHostedTests {
             containerDirectory: dir,
             localExtractorFactory: { StubExtractor() })
         return try ProfileWikiSession(
-            wikiID: descriptor.id,
+            testFixtureWikiID: descriptor.id,
             descriptor: descriptor,
             containerDirectory: dir,
             extractionCoordinator: coordinator,

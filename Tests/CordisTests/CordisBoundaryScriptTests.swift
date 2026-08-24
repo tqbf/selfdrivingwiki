@@ -5,11 +5,70 @@ import Testing
 struct CordisBoundaryScriptTests {
     @Test("current source tree satisfies strict boundaries", arguments: [[], ["--strict"]])
     func currentTreeSatisfiesStrictBoundaries(arguments: [String]) async throws {
+        let result = try await runBoundaryCheck(arguments: arguments)
+        #expect(result.status == 0, "Boundary check failed: \(result.standardError)")
+    }
+
+    @Test("app initializer is not a privileged domain assembly root")
+    func appInitializerHasNoDirectDomainConstruction() throws {
+        let root = repositoryRoot()
+        let app = try String(
+            contentsOf: root.appendingPathComponent("Sources/WikiFS/Window/WikiFSApp.swift"),
+            encoding: .utf8)
+        let catalog = try String(
+            contentsOf: root.appendingPathComponent("Sources/WikiFS/Renderer/RendererCompositionOwner.swift"),
+            encoding: .utf8)
+
+        for constructor in [
+            "GenerationGate(", "AgentLauncher(", "AgentProviderRuntimeFactory(",
+            "ExtractionRuntimeFactory(", "QueueRuntimeFactory(",
+            "DaemonTransportRuntimeFactory(", "RendererRuntimeFactory(",
+        ] {
+            #expect(!app.contains(constructor), "WikiFSApp must not construct \(constructor)")
+        }
+        #expect(!app.contains("AppProcessComposition"))
+        #expect(catalog.contains("final class AppProcessPluginCatalog"))
+        #expect(catalog.contains("ProcessRuntimePlugins"))
+    }
+
+    @Test("rejects privileged construction outside allowlisted boundaries", arguments: [
+        "let value = ProfileWikiSession(",
+        "let value = GRDBWikiStore(",
+        "let value = WikiStoreModel(",
+        "let value = SearchCompositionOwner(",
+        "let value = GenerationGate(",
+        "let value = AgentLauncher(",
+    ])
+    func rejectsPrivilegedConstruction(source: String) async throws {
+        let root = repositoryRoot()
+        let fixtureRoot = root.appendingPathComponent("tmp/cordis-boundary-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: fixtureRoot, withIntermediateDirectories: true)
+        let fixture = fixtureRoot.appendingPathComponent("CordisBoundaryViolationFixture.swift")
+        try source.write(to: fixture, atomically: false, encoding: .utf8)
+        defer {
+            do { try FileManager.default.removeItem(at: fixtureRoot) }
+            catch { Issue.record("Could not remove boundary fixture: \(error)") }
+        }
+
+        let result = try await runBoundaryCheck(arguments: [], sourceRoot: fixtureRoot)
+        #expect(result.status != 0)
+        #expect(result.standardError.contains("CordisBoundaryViolationFixture.swift"))
+    }
+
+    private func runBoundaryCheck(
+        arguments: [String],
+        sourceRoot: URL? = nil
+    ) async throws -> (status: Int32, standardError: String) {
         let root = repositoryRoot()
         let process = Process()
         process.currentDirectoryURL = root
         process.executableURL = root.appendingPathComponent("scripts/check-cordis-boundaries")
         process.arguments = arguments
+        if let sourceRoot {
+            var environment = ProcessInfo.processInfo.environment
+            environment["CORDIS_BOUNDARY_SOURCE_ROOT"] = sourceRoot.path
+            process.environment = environment
+        }
         let standardError = Pipe()
         process.standardError = standardError
 
@@ -23,8 +82,7 @@ struct CordisBoundaryScriptTests {
         for await _ in terminations { break }
 
         let errorData = try standardError.fileHandleForReading.readToEnd() ?? Data()
-        let errorOutput = String(decoding: errorData, as: UTF8.self)
-        #expect(process.terminationStatus == 0, "Boundary check failed: \(errorOutput)")
+        return (process.terminationStatus, String(decoding: errorData, as: UTF8.self))
     }
 }
 

@@ -83,6 +83,69 @@ public protocol QueueWorker: Sendable {
     func execute(_ item: QueueItem) async throws
 }
 
+/// Codable boundary carried through the guarded tool pipeline for one queue dispatch.
+public struct QueueWorkerInvocation: Codable, Sendable {
+    public var item: QueueItem
+
+    public init(item: QueueItem) {
+        self.item = item
+    }
+}
+
+/// Dispatches a concrete queue worker through an execution boundary.
+public protocol QueueWorkerExecutor: Sendable {
+    func execute(worker: any QueueWorker, item: QueueItem) async throws
+}
+
+/// Explicit compatibility and test executor. Production roots inject
+/// ``CordisQueueWorkerExecutor`` instead.
+public struct DirectQueueWorkerExecutor: QueueWorkerExecutor {
+    public init() {}
+
+    public func execute(worker: any QueueWorker, item: QueueItem) async throws {
+        try await worker.execute(item)
+    }
+}
+
+/// Registers each concrete worker for exactly one invocation and routes it
+/// through the process tool runtime's guarded waterfalls.
+public struct CordisQueueWorkerExecutor: QueueWorkerExecutor {
+    private let runtime: ToolRuntime
+
+    public init(runtime: ToolRuntime) {
+        self.runtime = runtime
+    }
+
+    public func execute(worker: any QueueWorker, item: QueueItem) async throws {
+        let name = ToolName("queue-worker-\(item.id.rawValue)")
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        let registration = try await runtime.registry.register(RegisteredTool(
+            descriptor: ToolDescriptor(
+                name: name,
+                description: "Executes one queue worker invocation.",
+                inputSchema: #"{"type":"object","required":["item"]}"#),
+            execute: { payload in
+                let invocation = try decoder.decode(
+                    QueueWorkerInvocation.self,
+                    from: Data(payload.utf8))
+                try await worker.execute(invocation.item)
+                return payload
+            }))
+
+        do {
+            let payload = String(
+                decoding: try encoder.encode(QueueWorkerInvocation(item: item)),
+                as: UTF8.self)
+            _ = try await runtime.execute(name: name, payload: payload)
+            await registration.dispose()
+        } catch {
+            await registration.dispose()
+            throw error
+        }
+    }
+}
+
 // MARK: - QueueWorkerFactory
 
 /// Resolves a worker for an item during dispatch. Called in two phases:

@@ -16,12 +16,15 @@ public enum AgentLoopPlugin {
         ) { activation in
             let sessions = try await activation.require(SessionServiceKeys.sessions)
             _ = try await activation.on(AgentLoopEventKeys.turnStarted) { event in
+                guard event.request.projectsToSessionLog else { return }
                 await sessions.append(chatID: event.request.chatID, events: event.sessionEvents)
             }
             _ = try await activation.on(AgentLoopEventKeys.stepCompleted) { event in
+                guard event.projectsToSessionLog else { return }
                 await sessions.append(chatID: event.chatID, events: event.events)
             }
             _ = try await activation.on(AgentLoopEventKeys.turnCompleted) { event in
+                guard event.projectsToSessionLog else { return }
                 await sessions.append(chatID: event.chatID, events: event.sessionEvents)
             }
             let service = AgentLoopService(
