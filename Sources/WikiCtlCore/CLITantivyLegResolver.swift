@@ -3,6 +3,7 @@ import WikiFSCore
 
 #if os(macOS)
 import Cordis
+import CordisLoader
 import WikiFSEngine
 /// Bridges the wikictl CLI's three search commands (`page search`,
 /// `source search`, `chat search`) onto the SAME Tantivy BM25 leg the app's
@@ -34,6 +35,10 @@ import WikiFSEngine
 /// issue #628 — no C scalar). Request-scoped runtime startup rebuilds an empty
 /// derived index before querying, including for wikis not yet opened by the app.
 public enum CLITantivyLegResolver {
+    private enum ProfileSearchError: Error, Sendable {
+        case missingTantivyProvider
+    }
+
     struct SearchRequestKey: Hashable, Sendable {
         let wikiID: WikiID
         let containerPath: String
@@ -283,11 +288,20 @@ public enum CLITantivyLegResolver {
         kind: TantivyDocumentKind,
         limit: Int
     ) async -> [TantivyShadowSearchResult] {
-        let root = CordisContext()
+        var profile: BootedProfile?
         var handle: SearchRuntimeHandle?
         do {
-            let child = try await root.child()
-            let runtime = SearchRuntimeAssembly.runtimeFactory(
+            let booted = try await CordisBoot.boot(.init(
+                catalog: try CLIPluginCatalog.build(),
+                layers: [PatchFile(entries: ProductionProfileEntries.cli())]))
+            profile = booted
+            let providers = try await booted.context.require(SearchServiceKeys.providers)
+            guard let registration = await providers.resolve(TantivySearchPlugin.key),
+                  case .tantivy(let provider) = registration.adapter else {
+                throw ProfileSearchError.missingTantivyProvider
+            }
+            let child = try await booted.context.child()
+            let runtime = provider.runtime(
                 identity: SearchRuntimeIdentity(
                     wikiID: wikiID,
                     containerDirectory: containerDirectory),
@@ -299,18 +313,18 @@ public enum CLITantivyLegResolver {
                 query: query,
                 kinds: [kind],
                 limit: limit)
-            await dispose(handle: assembled, root: root, wikiID: wikiID)
+            await dispose(handle: assembled, profile: booted, wikiID: wikiID)
             return hits
         } catch {
             DebugLog.store("wikictl: Tantivy search unavailable for wiki \(wikiID.rawValue): \(error)")
-            await dispose(handle: handle, root: root, wikiID: wikiID)
+            await dispose(handle: handle, profile: profile, wikiID: wikiID)
             return []
         }
     }
 
     private static func dispose(
         handle: SearchRuntimeHandle?,
-        root: CordisContext,
+        profile: BootedProfile?,
         wikiID: WikiID
     ) async {
         if let handle {
@@ -320,10 +334,12 @@ public enum CLITantivyLegResolver {
                 DebugLog.store("wikictl: search child cleanup failed for wiki \(wikiID.rawValue): \(error)")
             }
         }
-        do {
-            try await root.dispose()
-        } catch {
-            DebugLog.store("wikictl: search root cleanup failed for wiki \(wikiID.rawValue): \(error)")
+        if let profile {
+            do {
+                try await profile.shutdown()
+            } catch {
+                DebugLog.store("wikictl: search profile cleanup failed for wiki \(wikiID.rawValue): \(error)")
+            }
         }
     }
 

@@ -391,6 +391,7 @@ struct IdentifierBoundaryTypecheckTests {
             buildProducts.debugDirectory.appendingPathComponent("TantivySwift.build/include"),
             root.appendingPathComponent("Sources/CSQLite"),
             root.appendingPathComponent(".build/checkouts/GRDB.swift/Sources/GRDBSQLite"),
+            root.appendingPathComponent(".build/checkouts/Yams/Sources/CYaml/include"),
             root.appendingPathComponent(".build/artifacts/tantivy.swift/TantivyRS/libtantivy-rs.xcframework/macos-arm64_x86_64/Headers"),
             root.appendingPathComponent(".build/artifacts/tantivy.swift/TantivyRS/libtantivy-rs.xcframework/linux-x86_64/Headers"),
         ]

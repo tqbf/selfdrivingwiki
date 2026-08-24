@@ -27,14 +27,15 @@ public final class SearchCompositionOwner {
         contentSource: any TantivyContentSource,
         changeStreamFactory: any SearchChangeStreamFactory,
         startupPrerequisite: Task<Void, Never>? = nil,
-        services: MutableSearchServices = MutableSearchServices()
+        services: MutableSearchServices = MutableSearchServices(),
+        makeRuntime: SearchRuntimeFactory.Factory = SearchRuntimeAssembly.runtimeFactory
     ) {
         self.registry = registry
         self.startupPrerequisite = startupPrerequisite
-        self.runtime = SearchRuntimeAssembly.runtimeFactory(
-            identity: identity,
-            contentSource: contentSource,
-            changeStreamFactory: changeStreamFactory)
+        self.runtime = makeRuntime(
+            identity,
+            contentSource,
+            changeStreamFactory)
         self.services = services
     }
 

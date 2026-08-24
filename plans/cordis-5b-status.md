@@ -12,7 +12,17 @@ The default check verifies the current violation baseline. The `--strict` option
 
 Stage 2 is not complete. No assembly or `WikiSession` file was deleted.
 
-A safe deletion requires executable-side plugin factories first. The current plugin definitions still use assembly-owned factory types.
+Steps 1–8 are complete. The production catalogs now own executable-side factory injection.
+
+Step 9 is complete. `AppServices` resolves typed services from a `BootedProfile` and keeps the Cordis context behind the facade.
+
+Step 12 is partly complete. The CLI Tantivy path now boots `CLIPluginCatalog`, resolves the Tantivy provider, and shuts down the profile.
+
+Steps 10–11 are not complete. `SessionManager` and `WikiSession` still use the legacy app composition path.
+
+The daemon part of step 12 is not complete. `WikiDaemon` still owns the provider and extraction assemblies.
+
+The current catalogs expose provider registries, not the final queue, extraction, transport, renderer, and agent operation facades. The app and daemon startup code still needs those facades and process owners before profile boot can replace the legacy lifetimes safely.
 
 ## Remaining assemblies and callers
 

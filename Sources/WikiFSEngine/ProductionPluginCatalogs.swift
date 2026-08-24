@@ -1,5 +1,7 @@
 #if os(macOS)
 import Cordis
+import CordisLoader
+import Foundation
 import WikiFSCore
 
 /// Assembly-independent factory signatures shared by extraction plugins and
@@ -62,6 +64,77 @@ public struct DaemonPluginCatalogFactories: Sendable {
 
     public init(base: BasePluginCatalogFactories) {
         self.base = base
+    }
+}
+
+/// Typed services resolved once from a booted profile. Consumers receive this
+/// facade rather than a Cordis context or a legacy runtime assembly.
+public struct AppServices: Sendable {
+    public let profile: BootedProfile
+    public let store: any WikiStore
+    public let readPool: WikiReadPool
+    public let extractionBackends: ExtractionBackendRegistry
+    public let searchProviders: SearchProviderRegistry
+
+    public static func resolve(from profile: BootedProfile) async throws -> AppServices {
+        AppServices(
+            profile: profile,
+            store: try await profile.context.require(StoreServiceKeys.store),
+            readPool: try await profile.context.require(StoreServiceKeys.readPool),
+            extractionBackends: try await profile.context.require(ExtractionServiceKeys.backends),
+            searchProviders: try await profile.context.require(SearchServiceKeys.providers))
+    }
+
+    public func shutdown() async throws {
+        try await profile.shutdown()
+    }
+}
+
+/// Concrete per-wiki profile rows. The store row is a complete replacement for
+/// the machine-independent placeholder shipped in `wikifs-base`.
+public enum ProductionProfileEntries {
+    public static func app(databaseURL: URL, wikiID: WikiID) -> [Entry] {
+        base(databaseURL: databaseURL, wikiID: wikiID) + [
+            Entry(id: EntryID("renderer-services"), plugin: RendererServicesPlugin.id),
+            Entry(id: EntryID("daemon-transport"), plugin: DaemonTransportPlugin.id),
+            Entry(id: EntryID("url-fetch"), plugin: URLFetchIntegrationPlugin.id),
+            Entry(id: EntryID("tantivy"), plugin: TantivySearchPlugin.id),
+            Entry(id: EntryID("embeddings"), plugin: EmbeddingsSearchPlugin.id),
+        ]
+    }
+
+    public static func daemon(databaseURL: URL, wikiID: WikiID) -> [Entry] {
+        base(databaseURL: databaseURL, wikiID: wikiID) + [
+            Entry(id: EntryID("embeddings"), plugin: EmbeddingsSearchPlugin.id),
+        ]
+    }
+
+    public static func cli() -> [Entry] {
+        [
+            Entry(id: EntryID("search"), plugin: SearchPlugin.id),
+            Entry(id: EntryID("tantivy"), plugin: TantivySearchPlugin.id),
+        ]
+    }
+
+    private static func base(databaseURL: URL, wikiID: WikiID) -> [Entry] {
+        [
+            Entry(id: EntryID("store"), plugin: StorePlugin.id, config: [
+                "databasePath": .string(databaseURL.path),
+                "wikiID": .string(wikiID.rawValue),
+            ]),
+            Entry(id: EntryID("sessions"), plugin: SessionsPlugin.id),
+            Entry(id: EntryID("chats-persistence"), plugin: ChatsPersistencePlugin.id),
+            Entry(id: EntryID("llm-runtime"), plugin: LlmRuntimePlugin.id),
+            Entry(id: EntryID("tools"), plugin: ToolsPlugin.id),
+            Entry(id: EntryID("system-prompt"), plugin: SystemPromptPlugin.id),
+            Entry(id: EntryID("agent-loop"), plugin: AgentLoopPlugin.id),
+            Entry(id: EntryID("extraction"), plugin: ExtractionPlugin.id),
+            Entry(id: EntryID("pdf2md"), plugin: Pdf2mdExtractionPlugin.id),
+            Entry(id: EntryID("search"), plugin: SearchPlugin.id),
+            Entry(id: EntryID("renderers"), plugin: RenderersPlugin.id),
+            Entry(id: EntryID("transport"), plugin: TransportPlugin.id),
+            Entry(id: EntryID("integrations"), plugin: IntegrationsPlugin.id),
+        ]
     }
 }
 

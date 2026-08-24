@@ -38,7 +38,7 @@ struct SearchCordisBoundaryPolicyTests {
         #expect(!sources.contains("TantivySearchService("))
         #expect(!sources.contains("TantivyIndexer("))
         #expect(!sources.contains("TantivyShadowSync"))
-        #expect(sources.contains("SearchRuntimeAssembly"))
+        #expect(!sources.contains("SearchRuntimeAssembly"))
     }
 
     @Test("search lifecycle has no detached tasks")
