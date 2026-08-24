@@ -3,6 +3,13 @@ import Testing
 
 @Suite("Cordis boundary script", .serialized, .timeLimit(.minutes(1)))
 struct CordisBoundaryScriptTests {
+    struct ProtectedConstruction: Sendable, CustomTestStringConvertible {
+        let path: String
+        let source: String
+
+        var testDescription: String { path }
+    }
+
     @Test("current source tree satisfies strict boundaries", arguments: [[], ["--strict"]])
     func currentTreeSatisfiesStrictBoundaries(arguments: [String]) async throws {
         let result = try await runBoundaryCheck(arguments: arguments)
@@ -53,6 +60,37 @@ struct CordisBoundaryScriptTests {
         let result = try await runBoundaryCheck(arguments: [], sourceRoot: fixtureRoot)
         #expect(result.status != 0)
         #expect(result.standardError.contains("CordisBoundaryViolationFixture.swift"))
+    }
+
+    @Test("migrated production paths cannot regain direct construction", arguments: [
+        ProtectedConstruction(
+            path: "Sources/wikid/WikiDaemon.swift",
+            source: "let store = GRDBWikiStore("),
+        ProtectedConstruction(
+            path: "Sources/wikictl/main.swift",
+            source: "let store = GRDBWikiStore("),
+        ProtectedConstruction(
+            path: "Sources/wikid/DaemonQueueIngestionProvider.swift",
+            source: "let launcher = AgentLauncher("),
+    ])
+    func migratedProductionPathsRemainProtected(fixture: ProtectedConstruction) async throws {
+        let root = repositoryRoot()
+        let fixtureRoot = root.appendingPathComponent(
+            "tmp/cordis-protected-path-\(UUID().uuidString)",
+            isDirectory: true)
+        let file = fixtureRoot.appendingPathComponent(fixture.path)
+        try FileManager.default.createDirectory(
+            at: file.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try fixture.source.write(to: file, atomically: false, encoding: .utf8)
+        defer {
+            do { try FileManager.default.removeItem(at: fixtureRoot) }
+            catch { Issue.record("Could not remove protected-path fixture: \(error)") }
+        }
+
+        let result = try await runBoundaryCheck(arguments: [], sourceRoot: fixtureRoot)
+        #expect(result.status != 0)
+        #expect(result.standardError.contains(fixture.path))
     }
 
     private func runBoundaryCheck(

@@ -39,6 +39,14 @@ reject_matches "session facade is constructed outside its boot/factory boundary"
   '(^|[^[:alnum:]_])(WikiSession|ProfileWikiSession)\(' \
   Sources/WikiFSEngine/ProductionPluginCatalogs.swift \
   Sources/WikiFSEngine/SessionsPlugin.swift || failed=1
+# TransclusionEmbedder documents its read-only projection store boundary.
+# WikiRegistryClient documents its injected pre-profile bootstrap factory.
+# GRDBWikiStore documents its own concrete initializer contract.
+# StoreBackend is the named concrete-backend construction boundary.
+# WikiReadPool owns read-only pooled connections.
+# ProfileWikiSession documents its synchronous test-fixture boundary.
+# Projection is a separate extension process with query-only stores.
+# wikid/main.swift retains the Linux stdio compatibility fixture factory.
 reject_matches "GRDBWikiStore is constructed outside a store plugin/factory" \
   '(^|[^[:alnum:]_])GRDBWikiStore\(' \
   Sources/WikiFS/Reader/TransclusionEmbedder.swift \
@@ -47,10 +55,7 @@ reject_matches "GRDBWikiStore is constructed outside a store plugin/factory" \
   Sources/WikiFSCore/Store/StoreBackend.swift \
   Sources/WikiFSCore/Store/WikiReadPool.swift \
   Sources/WikiFSEngine/ProfileWikiSession.swift \
-  Sources/WikiFSEngine/StorePlugin.swift \
   Sources/WikiFSFileProvider/Projection.swift \
-  Sources/wikictl/main.swift \
-  Sources/wikid/WikiDaemon.swift \
   Sources/wikid/main.swift || failed=1
 reject_matches "WikiStoreModel is constructed outside a plugin/factory" \
   '(^|[^[:alnum:]_])WikiStoreModel\(' \
@@ -59,25 +64,24 @@ reject_matches "WikiStoreModel is constructed outside a plugin/factory" \
 reject_matches "search composition is constructed outside a plugin/factory" \
   '(^|[^[:alnum:]_])SearchCompositionOwner\(' \
   Sources/WikiFSEngine/SessionsPlugin.swift || failed=1
+# RendererCompositionOwner is an intentional app UI-shell adapter.
+# AgentLauncher owns its default gate convenience initializer.
+# GenerationGate owns its concrete admission implementation.
+# SessionsPlugin provisions per-wiki launcher factories and test fixtures.
 reject_matches "GenerationGate is constructed outside a plugin/factory or its own facade" \
   '(^|[^[:alnum:]_])GenerationGate\(' \
   Sources/WikiFS/Renderer/RendererCompositionOwner.swift \
   Sources/WikiFSEngine/AgentLauncher.swift \
-  Sources/WikiFSEngine/DaemonChatHost.swift \
   Sources/WikiFSEngine/GenerationGate.swift \
-  Sources/WikiFSEngine/LauncherChatAgentRuntime.swift \
-  Sources/WikiFSEngine/SessionsPlugin.swift \
-  Sources/wikid/DaemonQueueIngestionProvider.swift \
-  Sources/wikid/WikiDaemon.swift || failed=1
+  Sources/WikiFSEngine/SessionsPlugin.swift || failed=1
+# RendererCompositionOwner is an intentional app UI-shell adapter.
+# AgentLauncher owns its concrete launcher implementation.
+# SessionsPlugin provisions per-wiki launcher factories and test fixtures.
 reject_matches "AgentLauncher is constructed outside a plugin/factory or launcher facade" \
   '(^|[^[:alnum:]_])AgentLauncher\(' \
   Sources/WikiFS/Renderer/RendererCompositionOwner.swift \
   Sources/WikiFSEngine/AgentLauncher.swift \
-  Sources/WikiFSEngine/DaemonChatHost.swift \
-  Sources/WikiFSEngine/LauncherChatAgentRuntime.swift \
-  Sources/WikiFSEngine/SessionsPlugin.swift \
-  Sources/wikid/DaemonQueueIngestionProvider.swift \
-  Sources/wikid/LauncherChatAgentRuntime.swift || failed=1
+  Sources/WikiFSEngine/SessionsPlugin.swift || failed=1
 
 if [[ $failed -ne 0 ]]; then
   exit 1
