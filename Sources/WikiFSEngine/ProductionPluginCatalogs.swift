@@ -2,6 +2,7 @@
 import Cordis
 import CordisLoader
 import Foundation
+import Observation
 import WikiFSCore
 
 /// Assembly-independent factory signatures shared by extraction plugins and
@@ -111,6 +112,121 @@ public struct DaemonPluginCatalogFactories: Sendable {
 
     public init(base: BasePluginCatalogFactories) {
         self.base = base
+    }
+}
+
+/// Typed process services resolved once from the app process profile.
+public struct AppProcessRendererService: Sendable {
+    public init() {}
+}
+
+public struct AppProcessServices: Sendable {
+    public let agentProvider: any AgentProviderServices
+    public let extraction: any ExtractionServices
+    public let queue: any QueueEngineClient
+    public let transport: DaemonTransportServices
+    public let renderer: any Sendable
+
+    public static func resolve(from profile: BootedProfile) async throws -> AppProcessServices {
+        AppProcessServices(
+            agentProvider: try await profile.context.require(ProcessServiceKeys.agentProvider),
+            extraction: try await profile.context.require(ProcessServiceKeys.extraction),
+            queue: try await profile.context.require(ProcessServiceKeys.queue),
+            transport: try await profile.context.require(ProcessServiceKeys.transport),
+            renderer: try await profile.context.require(ProcessServiceKeys.renderer))
+    }
+}
+
+/// Owns asynchronous app process-profile startup and shutdown.
+@MainActor
+@Observable
+public final class AppProcessProfileOwner {
+    public enum Readiness: Equatable, Sendable {
+        case idle
+        case loading
+        case ready
+        case failed(String)
+    }
+
+    public typealias Boot = @Sendable () async throws -> BootedProfile
+
+    public private(set) var readiness: Readiness = .idle
+    public private(set) var profile: BootedProfile?
+    public private(set) var services: AppProcessServices?
+    @ObservationIgnored private let boot: Boot
+    @ObservationIgnored private var startupTask: Task<Void, Never>?
+    @ObservationIgnored private var shutdownStarted = false
+
+    public init(boot: @escaping Boot) {
+        self.boot = boot
+    }
+
+    public convenience init(
+        agentProvider: any AgentProviderServices,
+        extraction: any ExtractionServices,
+        queue: any QueueEngineClient,
+        transport: DaemonTransportServices,
+        renderer: any Sendable
+    ) {
+        self.init {
+            let factories = ProcessPluginCatalogFactories(
+                makeAgentProvider: { ProcessRuntimeLease(service: agentProvider) {} },
+                makeExtraction: { ProcessRuntimeLease(service: extraction) {} },
+                makeQueue: { ProcessRuntimeLease(service: queue) {} },
+                makeTransport: { ProcessRuntimeLease(service: transport) {} },
+                makeRenderer: { ProcessRuntimeLease(service: renderer) {} })
+            return try await CordisBoot.boot(.init(
+                catalog: try ProcessPluginCatalog.build(factories: factories),
+                layers: [PatchFile(entries: ProductionProfileEntries.appProcess())]))
+        }
+    }
+
+    public func start() {
+        guard readiness == .idle, !shutdownStarted else { return }
+        readiness = .loading
+        startupTask = Task { [weak self, boot] in
+            do {
+                let profile = try await boot()
+                let services = try await AppProcessServices.resolve(from: profile)
+                guard let self, !Task.isCancelled, !self.shutdownStarted else {
+                    try await profile.shutdown()
+                    return
+                }
+                self.profile = profile
+                self.services = services
+                self.readiness = .ready
+            } catch is CancellationError {
+                // Shutdown owns cancellation and leaves the owner unavailable.
+            } catch {
+                guard let self, !self.shutdownStarted else { return }
+                self.readiness = .failed(String(describing: error))
+            }
+        }
+    }
+
+    public func awaitSettled() async {
+        await startupTask?.value
+    }
+
+    public func shutdown() async {
+        guard !shutdownStarted else {
+            await startupTask?.value
+            return
+        }
+        shutdownStarted = true
+        let task = startupTask
+        task?.cancel()
+        await task?.value
+        startupTask = nil
+        services = nil
+        if let profile {
+            do {
+                try await profile.shutdown()
+            } catch {
+                DebugLog.store("App process profile shutdown failed: \(error)")
+            }
+        }
+        profile = nil
     }
 }
 

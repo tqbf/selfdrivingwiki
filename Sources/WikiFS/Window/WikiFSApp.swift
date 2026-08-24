@@ -22,6 +22,8 @@ struct WikiFSApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     private let launchLocationWarning: LaunchLocationWarning?
     private let containerDirectory: URL
+    /// Boots the parallel Cordis process profile while legacy owners remain active.
+    @State private var processProfileOwner: AppProcessProfileOwner
     @State private var registry: WikiRegistryClient
     /// Multi-window: owns the `[wikiID: WikiSession]` cache. Each window's
     /// `RootScene` calls `sessionManager.session(for:descriptor:)` to resolve
@@ -344,6 +346,14 @@ struct WikiFSApp: App {
                 .assemble()
         }
         rendererCompositionOwner = rendererOwner
+        let processProfileOwner = AppProcessProfileOwner(
+            agentProvider: providerServices,
+            extraction: extractionServices,
+            queue: queueEngine,
+            transport: transportOwner.services,
+            renderer: AppProcessRendererService())
+        _processProfileOwner = State(initialValue: processProfileOwner)
+        processProfileOwner.start()
         let rendererHost = InstalledRendererHost(services: rendererOwner.services)
         _installedRendererHost = State(initialValue: rendererHost)
         Task { @MainActor in
@@ -576,13 +586,15 @@ struct WikiFSApp: App {
             localQueueRuntimeController,
             sessionManager,
             extractionCompositionOwner,
-            rendererCompositionOwner
+            rendererCompositionOwner,
+            processProfileOwner
         ] in
             await daemonTransportCoordinator.shutdown()
             _ = await localQueueRuntimeController.dispose()
             await sessionManager.shutdownSearchRuntimes()
             await extractionCompositionOwner.shutdown()
             await rendererCompositionOwner.shutdown()
+            await processProfileOwner.shutdown()
         }
         appDelegate.unregisterDaemon = {
             // The daemon is a bundled XPC service — the system manages its

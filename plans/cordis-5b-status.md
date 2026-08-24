@@ -12,6 +12,8 @@ The default check verifies the current violation baseline. The `--strict` option
 
 Stage 2 remains in progress. No assembly or `WikiSession` file was deleted.
 
+The app now starts an observable `AppProcessProfileOwner` alongside the legacy synchronous composition. The owner boots all five app process entries asynchronously, exposes idle/loading/ready/failed readiness plus the booted profile and typed process services, owns its startup task, and joins app termination shutdown. Fixture tests cover readiness, resolved services, failure, and idempotent disposal.
+
 Steps 1–9 are complete. The production catalogs own executable-side factory injection and typed service resolution.
 
 The process-lifetime gap is complete. Process profiles now own provider, extraction, queue, transport, and renderer runtime services.

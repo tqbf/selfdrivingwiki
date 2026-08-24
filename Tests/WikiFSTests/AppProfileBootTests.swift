@@ -7,6 +7,50 @@ import Testing
 
 @Suite("App profile boot", .serialized, .timeLimit(.minutes(1)))
 struct AppProfileBootTests {
+    @Test("process owner exposes readiness, services, and shutdown")
+    @MainActor
+    func processOwnerReadinessAndShutdown() async throws {
+        let disposals = ProfileProcessDisposalRecorder()
+        let gate = ProfileBootGate()
+        let owner = AppProcessProfileOwner {
+            await gate.wait()
+            return try await CordisBoot.boot(.init(
+                catalog: try ProfileBootFixture.processCatalog(includeAppServices: true, recorder: disposals),
+                layers: [PatchFile(entries: ProfileBootFixture.processEntries(includeAppServices: true))]))
+        }
+
+        #expect(owner.readiness == .idle)
+        owner.start()
+        #expect(owner.readiness == .loading)
+        await gate.open()
+        await owner.awaitSettled()
+        #expect(owner.readiness == .ready)
+        #expect(owner.profile != nil)
+        #expect(owner.services != nil)
+
+        await owner.shutdown()
+        #expect(owner.profile == nil)
+        #expect(owner.services == nil)
+        #expect(await disposals.count == 3)
+        await owner.shutdown()
+        #expect(await disposals.count == 3)
+    }
+
+    @Test("process owner reports boot failure")
+    @MainActor
+    func processOwnerReportsFailure() async {
+        let owner = AppProcessProfileOwner {
+            throw ProfileBootFailure.expected
+        }
+        owner.start()
+        await owner.awaitSettled()
+        guard case .failed(let message) = owner.readiness else {
+            Issue.record("expected failed readiness")
+            return
+        }
+        #expect(message.contains("expected"))
+    }
+
     @Test("production-shaped app profile activates services and owns store listener")
     func appProfileActivatesServicesAndOwnsStoreListener() async throws {
         let directory = try ProfileBootFixture.directory(named: "app-profile")

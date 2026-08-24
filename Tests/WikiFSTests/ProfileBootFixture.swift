@@ -136,6 +136,24 @@ enum ProfileBootFixture {
     }
 }
 
+enum ProfileBootFailure: Error {
+    case expected
+}
+
+actor ProfileBootGate {
+    private var isOpen = false
+
+    func wait() async {
+        while !isOpen {
+            await Task.yield()
+        }
+    }
+
+    func open() {
+        isOpen = true
+    }
+}
+
 actor ProfileProcessDisposalRecorder {
     private(set) var count = 0
     func record() { count += 1 }
