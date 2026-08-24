@@ -14,6 +14,8 @@ Stage 2 remains in progress. No assembly or `WikiSession` file was deleted.
 
 The app now starts an observable `AppProcessProfileOwner` alongside the legacy synchronous composition. The owner boots all five app process entries asynchronously, exposes idle/loading/ready/failed readiness plus the booted profile and typed process services, owns its startup task, and joins app termination shutdown. Fixture tests cover readiness, resolved services, failure, and idempotent disposal.
 
+`ProfileWikiSession` is the complete observable per-wiki facade for the next loader cutover. It boots an app child profile from the process profile, uses the child profile's store and read pool, uses inherited process extraction, queue, and provider services, and covers the full `WikiSession` surface: descriptor updates, store model, launcher, generation gate, search lifetime, vacuum state, and deferred wiki-link state. It temporarily delegates behavior to `WikiSession`, as this increment permits, so the boundary baseline now lists that approved compatibility construction site. Strict mode still rejects it. `SessionManager` and views are not rewired in this increment.
+
 Steps 1–9 are complete. The production catalogs own executable-side factory injection and typed service resolution.
 
 The process-lifetime gap is complete. Process profiles now own provider, extraction, queue, transport, and renderer runtime services.

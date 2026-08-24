@@ -67,6 +67,10 @@ enum ProfileBootFixture {
         try CLIPluginCatalog.build()
     }
 
+    static func extractionProvider() -> any QueueExtractionProvider {
+        ProfileQueueExtractionProvider()
+    }
+
     static func entries(databaseURL: URL, wikiID: String, includeAppProviders: Bool) -> [Entry] {
         var rows = [
             Entry(id: EntryID("store"), plugin: StorePlugin.id, config: [
