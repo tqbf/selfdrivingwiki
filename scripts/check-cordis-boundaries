@@ -60,7 +60,7 @@ reject_matches "search composition is constructed outside a plugin/factory" \
   Sources/WikiFSEngine/SessionsPlugin.swift || failed=1
 reject_matches "GenerationGate is constructed outside a plugin/factory or its own facade" \
   '(^|[^[:alnum:]_])GenerationGate\(' \
-  Sources/WikiFS/Window/WikiFSApp.swift \
+  Sources/WikiFS/Renderer/RendererCompositionOwner.swift \
   Sources/WikiFSEngine/AgentLauncher.swift \
   Sources/WikiFSEngine/DaemonChatHost.swift \
   Sources/WikiFSEngine/GenerationGate.swift \
@@ -70,7 +70,7 @@ reject_matches "GenerationGate is constructed outside a plugin/factory or its ow
   Sources/wikid/WikiDaemon.swift || failed=1
 reject_matches "AgentLauncher is constructed outside a plugin/factory or launcher facade" \
   '(^|[^[:alnum:]_])AgentLauncher\(' \
-  Sources/WikiFS/Window/WikiFSApp.swift \
+  Sources/WikiFS/Renderer/RendererCompositionOwner.swift \
   Sources/WikiFSEngine/AgentLauncher.swift \
   Sources/WikiFSEngine/DaemonChatHost.swift \
   Sources/WikiFSEngine/LauncherChatAgentRuntime.swift \
