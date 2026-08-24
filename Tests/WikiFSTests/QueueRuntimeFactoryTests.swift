@@ -5,7 +5,7 @@ import Testing
 @testable import WikiFSEngine
 
 @Suite("Cordis queue runtime assembly", .serialized, .timeLimit(.minutes(1)))
-struct QueueRuntimeAssemblyTests {
+struct QueueRuntimeFactoryTests {
     @Test("shuffled registration builds one ready runtime")
     func shuffledRegistrationBuildsOneRuntime() async throws {
         let directory = makeQueueRuntimeTempDirectory()
@@ -13,7 +13,7 @@ struct QueueRuntimeAssemblyTests {
             databaseURL: directory.appendingPathComponent("queue.sqlite"))
 
         let handle = try await assembly.assemble(
-            registrationOrder: QueueRuntimeAssembly.Component.allCases.shuffled())
+            registrationOrder: QueueRuntimeFactory.Component.allCases.shuffled())
 
         #expect(await handle.engine.lifecycle == .running)
         #expect(try await handle.dispose() == .shutDown)
@@ -54,7 +54,7 @@ struct QueueRuntimeAssemblyTests {
         let directory = makeQueueRuntimeTempDirectory()
         let storeBox = QueueRuntimeStoreBox()
         let expectedFailure = QueueRuntimeTestFailure.injected
-        let assembly = QueueRuntimeAssembly(
+        let assembly = QueueRuntimeFactory(
             databaseURL: directory.appendingPathComponent("queue.sqlite"),
             extractionProvider: QueueRuntimeExtractionProvider(),
             makeIngestionProvider: { store in
@@ -66,11 +66,11 @@ struct QueueRuntimeAssemblyTests {
             _ = try await assembly.assemble()
             Issue.record("Expected queue runtime assembly to fail")
         } catch {
-            guard case .activationFailed(let component, let failure) = error as? QueueRuntimeAssemblyError else {
+            guard case .activationFailed(let component, let failure) = error as? QueueRuntimeFactoryError else {
                 Issue.record("Expected a typed queue runtime activation failure, got \(error)")
                 return
             }
-            #expect(component == QueueRuntimeAssembly.Component.ingestionProvider.rawValue)
+            #expect(component == QueueRuntimeFactory.Component.ingestionProvider.rawValue)
             #expect(failure.message == String(describing: expectedFailure))
         }
 
@@ -99,7 +99,7 @@ struct QueueRuntimeAssemblyTests {
     func assemblyRegistersOnlyApprovedBoundaries() async throws {
         let source = try String(
             contentsOf: repositoryRoot()
-                .appendingPathComponent("Sources/WikiFSEngine/QueueRuntimeAssembly.swift"),
+                .appendingPathComponent("Sources/WikiFSEngine/QueueRuntimeFactory.swift"),
             encoding: .utf8)
         let requiredServices = [
             "queue.store",
@@ -127,8 +127,8 @@ struct QueueRuntimeAssemblyTests {
         }
     }
 
-    private func makeAssembly(databaseURL: URL) -> QueueRuntimeAssembly {
-        QueueRuntimeAssembly(
+    private func makeAssembly(databaseURL: URL) -> QueueRuntimeFactory {
+        QueueRuntimeFactory(
             databaseURL: databaseURL,
             extractionProvider: QueueRuntimeExtractionProvider(),
             makeIngestionProvider: { _ in QueueRuntimeIngestionProvider() })

@@ -103,7 +103,7 @@ final class WikiDaemon: @unchecked Sendable {
         let acpCredentialStore = KeychainACPCredentialStore()
         let extractionOwner = ExtractionCompositionOwner(
             assemble: extractionAssembly ?? {
-                try await ExtractionRuntimeAssembly(
+                try await ExtractionRuntimeFactory(
                     readConfiguration: { ExtractionConfig.load(from: containerDirectory) },
                     readCredential: { extractionCredentialStore.secret($0) },
                     resolveACP: { configuration in

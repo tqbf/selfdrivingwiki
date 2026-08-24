@@ -14,7 +14,7 @@ import Testing
 /// to `QueueEngineClient` or this test fails.
 ///
 /// Methods intentionally NOT in the protocol:
-/// - `start()` — awaited by `QueueRuntimeAssembly` before it publishes a client
+/// - `start()` — awaited by `QueueRuntimeFactory` before it publishes a client
 /// - `shutdownForHandoff()` — called only by the runtime owner
 /// - `clearTranscript(for:)` — not called from the app
 ///

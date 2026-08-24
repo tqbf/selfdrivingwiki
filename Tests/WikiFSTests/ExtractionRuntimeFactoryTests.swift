@@ -6,11 +6,11 @@ import Testing
 @testable import WikiFSEngine
 
 @Suite("Cordis extraction runtime assembly", .serialized, .timeLimit(.minutes(1)))
-struct ExtractionRuntimeAssemblyTests {
+struct ExtractionRuntimeFactoryTests {
     @Test("shuffled registration builds a ready runtime")
     func shuffledRegistrationBuildsReadyRuntime() async throws {
         let handle = try await makeAssembly().assemble(
-            registrationOrder: ExtractionRuntimeAssembly.Component.allCases.shuffled())
+            registrationOrder: ExtractionRuntimeFactory.Component.allCases.shuffled())
         let preparation = try await handle.services.prepare()
 
         #expect(preparation.backend == .localPdf2md)
@@ -20,7 +20,7 @@ struct ExtractionRuntimeAssemblyTests {
 
     @Test("missing registration fails with a typed component error")
     func missingRegistrationFailsTyped() async throws {
-        let incomplete = ExtractionRuntimeAssembly.Component.allCases.filter {
+        let incomplete = ExtractionRuntimeFactory.Component.allCases.filter {
             $0 != .credentialReader
         }
 
@@ -28,11 +28,11 @@ struct ExtractionRuntimeAssemblyTests {
             _ = try await makeAssembly().assemble(registrationOrder: incomplete)
             Issue.record("Expected extraction runtime assembly to fail")
         } catch {
-            guard case .activationFailed(let component, _) = error as? ExtractionRuntimeAssemblyError else {
+            guard case .activationFailed(let component, _) = error as? ExtractionRuntimeFactoryError else {
                 Issue.record("Expected a typed extraction activation failure, got \(error)")
                 return
             }
-            #expect(component == ExtractionRuntimeAssembly.Component.credentialReader.rawValue)
+            #expect(component == ExtractionRuntimeFactory.Component.credentialReader.rawValue)
         }
     }
 
@@ -99,7 +99,7 @@ struct ExtractionRuntimeAssemblyTests {
     func serviceLabelsAreComplete() throws {
         let source = try String(
             contentsOf: repositoryRoot()
-                .appendingPathComponent("Sources/WikiFSEngine/ExtractionRuntimeAssembly.swift"),
+                .appendingPathComponent("Sources/WikiFSEngine/ExtractionRuntimeFactory.swift"),
             encoding: .utf8)
         let labels = [
             "extraction.configuration-reader",
@@ -123,8 +123,8 @@ struct ExtractionRuntimeAssemblyTests {
     private func makeAssembly(
         state: ExtractionRuntimeTestState = ExtractionRuntimeTestState(
             configuration: ExtractionConfig())
-    ) -> ExtractionRuntimeAssembly {
-        ExtractionRuntimeAssembly(
+    ) -> ExtractionRuntimeFactory {
+        ExtractionRuntimeFactory(
             readConfiguration: { state.configuration },
             readCredential: { _ in "test-secret" },
             resolveACP: { _ in nil },

@@ -27,19 +27,7 @@ if $strict; then
   exit
 fi
 
-expected_runtime_matches='Sources/WikiCtlCore/CLIPluginCatalog.swift
-Sources/WikiFS/Renderer/RendererCompositionOwner.swift
-Sources/WikiFS/Renderer/RendererRuntimeAssembly.swift
-Sources/WikiFSEngine/AgentProviderRuntimeAssembly.swift
-Sources/WikiFSEngine/DaemonTransportRuntimeAssembly.swift
-Sources/WikiFSEngine/ExtractionRuntimeAssembly.swift
-Sources/WikiFSEngine/ProductionPluginCatalogs.swift
-Sources/WikiFSEngine/QueueRuntimeAssembly.swift
-Sources/WikiFSEngine/SearchCompositionOwner.swift
-Sources/WikiFSEngine/SearchPlugins.swift
-Sources/WikiFSEngine/SearchRuntimeAssembly.swift
-Sources/WikiFSEngine/SearchRuntimeRegistry.swift
-Sources/wikid/WikiDaemon.swift'
+expected_runtime_matches=''
 expected_session_matches=''
 
 if [[ "$runtime_matches" != "$expected_runtime_matches" ]]; then

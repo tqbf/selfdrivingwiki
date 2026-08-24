@@ -5,10 +5,10 @@ import WikiFSCore
 @testable import WikiFS
 
 @Suite("Renderer runtime assembly", .serialized, .timeLimit(.minutes(2)))
-struct RendererRuntimeAssemblyTests {
+struct RendererRuntimeFactoryTests {
     @Test("fixed renderer service labels remain stable")
     func serviceLabelsAreStable() {
-        #expect(RendererRuntimeAssembly.ServiceLabels.all == [
+        #expect(RendererRuntimeFactory.ServiceLabels.all == [
             "renderer.package-store-layout",
             "renderer.machine-index-store",
             "renderer.package-validator-factory",
@@ -24,7 +24,7 @@ struct RendererRuntimeAssemblyTests {
         let fixture = try Fixture(name: "shuffled")
         defer { fixture.cleanup() }
         let handle = try await fixture.assembly.assemble(
-            registrationOrder: RendererRuntimeAssembly.Component.allCases.reversed())
+            registrationOrder: RendererRuntimeFactory.Component.allCases.reversed())
         let preparation = try await handle.services.bootstrapBundledPackage()
 
         #expect(preparation.machineIndex.records.count == 1)
@@ -136,7 +136,7 @@ struct RendererRuntimeAssemblyTests {
         let rendererFiles = try FileManager.default.contentsOfDirectory(
             at: root.appending(path: "Sources/WikiFS/Renderer"),
             includingPropertiesForKeys: nil)
-        let approved = Set(["RendererRuntimeAssembly.swift"])
+        let approved = Set(["RendererRuntimeFactory.swift"])
         for file in rendererFiles where file.pathExtension == "swift" && !approved.contains(file.lastPathComponent) {
             let source = try String(contentsOf: file, encoding: .utf8)
             #expect(!source.contains("CordisContext"))
@@ -164,12 +164,12 @@ private actor PreparationRelay {
 
 private struct Fixture: Sendable {
     let root: URL
-    let assembly: RendererRuntimeAssembly
+    let assembly: RendererRuntimeFactory
 
     init(name: String) throws {
         root = URL.temporaryDirectory.appending(path: "renderer-runtime-\(name)-\(UUID().uuidString)")
         let layout = try RendererPackageStoreLayout(appGroupContainerRoot: root)
-        assembly = RendererRuntimeAssembly(
+        assembly = RendererRuntimeFactory(
             layout: layout,
             bundledPackageSource: { BundledRendererPackages.excalidrawResourceURL() },
             reviewedBundledIdentity: .init(

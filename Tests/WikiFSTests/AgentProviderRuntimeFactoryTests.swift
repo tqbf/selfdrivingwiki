@@ -4,11 +4,11 @@ import Testing
 @testable import WikiFSEngine
 
 @Suite("Cordis agent provider runtime assembly", .serialized, .timeLimit(.minutes(1)))
-struct AgentProviderRuntimeAssemblyTests {
+struct AgentProviderRuntimeFactoryTests {
     @Test("shuffled registration builds one opaque runtime")
     func shuffledRegistrationBuildsOpaqueRuntime() async throws {
         let handle = try await makeAssembly().assemble(
-            registrationOrder: AgentProviderRuntimeAssembly.Component.allCases.shuffled())
+            registrationOrder: AgentProviderRuntimeFactory.Component.allCases.shuffled())
 
         #expect(await handle.services.readiness())
         try await handle.dispose()
@@ -30,7 +30,7 @@ struct AgentProviderRuntimeAssemblyTests {
 
     @Test("missing registration fails with a typed component error")
     func missingRegistrationFailsTyped() async throws {
-        let incomplete = AgentProviderRuntimeAssembly.Component.allCases.filter {
+        let incomplete = AgentProviderRuntimeFactory.Component.allCases.filter {
             $0 != .credentialReader
         }
 
@@ -38,11 +38,11 @@ struct AgentProviderRuntimeAssemblyTests {
             _ = try await makeAssembly().assemble(registrationOrder: incomplete)
             Issue.record("Expected provider runtime assembly to fail")
         } catch {
-            guard case .activationFailed(let component, _) = error as? AgentProviderRuntimeAssemblyError else {
+            guard case .activationFailed(let component, _) = error as? AgentProviderRuntimeFactoryError else {
                 Issue.record("Expected a typed provider runtime activation failure, got \(error)")
                 return
             }
-            #expect(component == AgentProviderRuntimeAssembly.Component.credentialReader.rawValue)
+            #expect(component == AgentProviderRuntimeFactory.Component.credentialReader.rawValue)
         }
     }
 
@@ -63,7 +63,7 @@ struct AgentProviderRuntimeAssemblyTests {
                 description: nil)],
             currentModelID: ModelID(rawValue: "test-model"),
             thinkingCapability: nil)
-        let assembly = AgentProviderRuntimeAssembly(
+        let assembly = AgentProviderRuntimeFactory(
             readConfiguration: { AgentProvidersConfig(providers: []) },
             resolveCommand: { providers in
                 #expect(providers == [provider])
@@ -82,7 +82,7 @@ struct AgentProviderRuntimeAssemblyTests {
                 return expected
             })
         let handle = try await assembly.assemble(
-            registrationOrder: AgentProviderRuntimeAssembly.Component.allCases.shuffled())
+            registrationOrder: AgentProviderRuntimeFactory.Component.allCases.shuffled())
 
         let observation = try await handle.services.discoverCatalog(for: provider)
 
@@ -95,7 +95,7 @@ struct AgentProviderRuntimeAssemblyTests {
 
     @Test("catalog discovery rejects a missing resolved command")
     func catalogDiscoveryRejectsMissingCommand() async throws {
-        let handle = try await AgentProviderRuntimeAssembly(
+        let handle = try await AgentProviderRuntimeFactory(
             readConfiguration: { AgentProvidersConfig(providers: []) },
             resolveCommand: { _ in [:] },
             readCredential: { _ in nil },
@@ -130,7 +130,7 @@ struct AgentProviderRuntimeAssemblyTests {
     func assemblyContainsOnlyApprovedHeadlessBoundaries() throws {
         let source = try String(
             contentsOf: repositoryRoot()
-                .appendingPathComponent("Sources/WikiFSEngine/AgentProviderRuntimeAssembly.swift"),
+                .appendingPathComponent("Sources/WikiFSEngine/AgentProviderRuntimeFactory.swift"),
             encoding: .utf8)
         let requiredServices = [
             "agent-provider.configuration-reader",
@@ -159,8 +159,8 @@ struct AgentProviderRuntimeAssemblyTests {
         }
     }
 
-    private func makeAssembly() -> AgentProviderRuntimeAssembly {
-        AgentProviderRuntimeAssembly(
+    private func makeAssembly() -> AgentProviderRuntimeFactory {
+        AgentProviderRuntimeFactory(
             readConfiguration: {
                 AgentProvidersConfig(providers: [
                     AgentProvider(

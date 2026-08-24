@@ -96,7 +96,7 @@ public struct AppPluginCatalogFactories: Sendable {
         makeDefuddleExtractor: @escaping @Sendable () async -> any HtmlMarkdownExtractor,
         makeDaemonTransport: @escaping RegisteredTransportProvider.Factory,
         makeURLFetcher: @escaping RegisteredIntegrationCapability.Factory,
-        makeTantivyRuntime: @escaping SearchRuntimeFactory.Factory = SearchRuntimeAssembly.runtimeFactory
+        makeTantivyRuntime: @escaping SearchRuntimeFactory.Factory = SearchRuntimeCompositionFactory.runtimeFactory
     ) {
         self.base = base
         self.makeRendererServices = makeRendererServices
@@ -273,7 +273,7 @@ public actor DaemonProcessProfileOwner {
         let acpCredentialStore = KeychainACPCredentialStore()
         let processFactories = ProcessPluginCatalogFactories(
             makeAgentProvider: {
-                let handle = try await AgentProviderRuntimeAssembly(
+                let handle = try await AgentProviderRuntimeFactory(
                     readConfiguration: { AgentProvidersConfig.loadOrSeed(from: containerDirectory) },
                     resolveCommand: { providers in
                         let searchPath = await PathPreflight.loginShellPATH()
@@ -291,7 +291,7 @@ public actor DaemonProcessProfileOwner {
                 return ProcessRuntimeLease(service: providerServices) { try await handle.dispose() }
             },
             makeExtraction: {
-                let handle = try await ExtractionRuntimeAssembly(
+                let handle = try await ExtractionRuntimeFactory(
                     readConfiguration: { ExtractionConfig.load(from: containerDirectory) },
                     readCredential: { extractionCredentialStore.secret($0) },
                     resolveACP: { configuration in
@@ -654,7 +654,7 @@ public enum DaemonPluginCatalog {
 
 public enum CLIPluginCatalog {
     public static func build(
-        makeTantivyRuntime: @escaping SearchRuntimeFactory.Factory = SearchRuntimeAssembly.runtimeFactory
+        makeTantivyRuntime: @escaping SearchRuntimeFactory.Factory = SearchRuntimeCompositionFactory.runtimeFactory
     ) throws -> PluginCatalog {
         try PluginCatalog([
             SearchPlugin.definition,

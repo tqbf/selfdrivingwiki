@@ -28,7 +28,7 @@ public final class SearchCompositionOwner {
         changeStreamFactory: any SearchChangeStreamFactory,
         startupPrerequisite: Task<Void, Never>? = nil,
         services: MutableSearchServices = MutableSearchServices(),
-        makeRuntime: SearchRuntimeFactory.Factory = SearchRuntimeAssembly.runtimeFactory
+        makeRuntime: SearchRuntimeFactory.Factory = SearchRuntimeCompositionFactory.runtimeFactory
     ) {
         self.registry = registry
         self.startupPrerequisite = startupPrerequisite

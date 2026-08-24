@@ -14,7 +14,7 @@ struct ExtractionCompositionBoundaryTests {
         #expect(app.contains("let extractionServices = processComposition.extractionServices"))
         #expect(app.contains("ExtractionCoordinator(services: extractionServices)"))
         #expect(app.contains("extractionServices: extractionServices"))
-        #expect(!app.contains("ExtractionRuntimeAssembly("))
+        #expect(!app.contains("ExtractionRuntimeFactory("))
         #expect(!app.contains("ExtractionCoordinator(\n            containerDirectory:"))
     }
 

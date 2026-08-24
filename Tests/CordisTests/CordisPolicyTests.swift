@@ -72,14 +72,14 @@ struct CordisSourcePolicyTests {
         let root = repositoryRoot()
         let sources = root.appendingPathComponent("Sources", isDirectory: true)
         let approved = Set([
-            "Sources/WikiFSEngine/AgentProviderRuntimeAssembly.swift",
-            "Sources/WikiFSEngine/QueueRuntimeAssembly.swift",
-            "Sources/WikiFSEngine/ExtractionRuntimeAssembly.swift",
-            "Sources/WikiFSEngine/SearchRuntimeAssembly.swift",
+            "Sources/WikiFSEngine/AgentProviderRuntimeFactory.swift",
+            "Sources/WikiFSEngine/QueueRuntimeFactory.swift",
+            "Sources/WikiFSEngine/ExtractionRuntimeFactory.swift",
+            "Sources/WikiFSEngine/SearchRuntimeCompositionFactory.swift",
             "Sources/WikiFSEngine/SearchRuntimeFactory.swift",
             "Sources/WikiFSEngine/ProductionPluginCatalogs.swift",
             "Sources/WikiFSEngine/ProfileWikiSession.swift",
-            "Sources/WikiFSEngine/DaemonTransportRuntimeAssembly.swift",
+            "Sources/WikiFSEngine/DaemonTransportRuntimeFactory.swift",
             "Sources/WikiFSEngine/SearchRuntimeRegistry.swift",
             // Phase 4.1 store-domain composition boundary: typed keys and the
             // plugin that owns store construction plus reversible bus bridging.
@@ -128,7 +128,7 @@ struct CordisSourcePolicyTests {
             // Phase 5a diagnostic composition boundary: resolves loader data
             // without exposing a Cordis context to command implementations.
             "Sources/WikiCtlCore/DumpConfigCommand.swift",
-            "Sources/WikiFS/Renderer/RendererRuntimeAssembly.swift",
+            "Sources/WikiFS/Renderer/RendererRuntimeFactory.swift",
         ])
         let forbiddenPatterns = [
             "import Cordis", "CordisContext", "ActivationContext", "ServiceKey<",

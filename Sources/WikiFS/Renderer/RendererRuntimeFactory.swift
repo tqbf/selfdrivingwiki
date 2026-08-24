@@ -4,13 +4,13 @@ import Foundation
 import WikiFSCore
 import WikiFSTypes
 
-enum RendererRuntimeAssemblyError: Error, Equatable, Sendable {
+enum RendererRuntimeFactoryError: Error, Equatable, Sendable {
     case missingService(ServiceDescriptor)
     case activationFailed(component: String, failure: CordisFailure)
     case assemblyAndCleanupFailed(assembly: CordisFailure, cleanup: CordisFailure)
 }
 
-struct RendererRuntimeAssembly: Sendable {
+struct RendererRuntimeFactory: Sendable {
     enum Component: String, CaseIterable, Sendable {
         case packageStoreLayout
         case machineIndexStore
@@ -73,12 +73,12 @@ struct RendererRuntimeAssembly: Sendable {
             }
             for component in Component.allCases {
                 guard let handle = handles[component] else {
-                    throw RendererRuntimeAssemblyError.activationFailed(
+                    throw RendererRuntimeFactoryError.activationFailed(
                         component: component.rawValue,
                         failure: CordisFailure("component was not registered"))
                 }
                 if case .failed(_, let failure) = try await handle.awaitSettled() {
-                    throw RendererRuntimeAssemblyError.activationFailed(
+                    throw RendererRuntimeFactoryError.activationFailed(
                         component: component.rawValue,
                         failure: failure)
                 }
@@ -90,7 +90,7 @@ struct RendererRuntimeAssembly: Sendable {
             let assemblyFailure = CordisFailure(error)
             do { try await context.dispose() }
             catch {
-                throw RendererRuntimeAssemblyError.assemblyAndCleanupFailed(
+                throw RendererRuntimeFactoryError.assemblyAndCleanupFailed(
                     assembly: assemblyFailure,
                     cleanup: CordisFailure(error))
             }
@@ -103,7 +103,7 @@ struct RendererRuntimeAssembly: Sendable {
         from context: CordisContext
     ) async throws -> Value {
         guard let value = try await context.find(key) else {
-            throw RendererRuntimeAssemblyError.missingService(
+            throw RendererRuntimeFactoryError.missingService(
                 ServiceDependency(key).descriptor)
         }
         return value

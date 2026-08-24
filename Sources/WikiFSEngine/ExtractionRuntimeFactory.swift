@@ -3,13 +3,13 @@ import Cordis
 import Foundation
 import WikiFSCore
 
-public enum ExtractionRuntimeAssemblyError: Error, Equatable, Sendable {
+public enum ExtractionRuntimeFactoryError: Error, Equatable, Sendable {
     case missingService(ServiceDescriptor)
     case activationFailed(component: String, failure: CordisFailure)
     case assemblyAndCleanupFailed(assembly: CordisFailure, cleanup: CordisFailure)
 }
 
-public struct ExtractionRuntimeAssembly: Sendable {
+public struct ExtractionRuntimeFactory: Sendable {
     public typealias BackendResolver = ExtractionRuntime.BackendResolver
 
     internal enum Component: String, CaseIterable, Sendable {
@@ -77,12 +77,12 @@ public struct ExtractionRuntimeAssembly: Sendable {
             }
             for component in Component.allCases {
                 guard let handle = handles[component] else {
-                    throw ExtractionRuntimeAssemblyError.activationFailed(
+                    throw ExtractionRuntimeFactoryError.activationFailed(
                         component: component.rawValue,
                         failure: CordisFailure("component was not registered"))
                 }
                 if case .failed(_, let failure) = try await handle.awaitSettled() {
-                    throw ExtractionRuntimeAssemblyError.activationFailed(
+                    throw ExtractionRuntimeFactoryError.activationFailed(
                         component: component.rawValue,
                         failure: failure)
                 }
@@ -95,7 +95,7 @@ public struct ExtractionRuntimeAssembly: Sendable {
             do {
                 try await context.dispose()
             } catch let cleanupError {
-                throw ExtractionRuntimeAssemblyError.assemblyAndCleanupFailed(
+                throw ExtractionRuntimeFactoryError.assemblyAndCleanupFailed(
                     assembly: assemblyFailure,
                     cleanup: CordisFailure(cleanupError))
             }
@@ -108,7 +108,7 @@ public struct ExtractionRuntimeAssembly: Sendable {
         from context: CordisContext
     ) async throws -> Value {
         guard let value = try await context.find(key) else {
-            throw ExtractionRuntimeAssemblyError.missingService(
+            throw ExtractionRuntimeFactoryError.missingService(
                 ServiceDependency(key).descriptor)
         }
         return value

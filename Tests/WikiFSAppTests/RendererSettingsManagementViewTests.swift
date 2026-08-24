@@ -77,7 +77,7 @@ struct RendererSettingsManagementViewTests {
             catch { Issue.record("Renderer settings install fixture cleanup failed.") }
         }
         let layout = try RendererPackageStoreLayout(appGroupContainerRoot: root)
-        let handle = try await RendererRuntimeAssembly(
+        let handle = try await RendererRuntimeFactory(
             layout: layout,
             bundledPackageSource: { BundledRendererPackages.excalidrawResourceURL() },
             reviewedBundledIdentity: .init(

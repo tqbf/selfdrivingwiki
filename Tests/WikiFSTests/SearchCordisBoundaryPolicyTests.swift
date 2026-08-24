@@ -20,7 +20,7 @@ struct SearchCordisBoundaryPolicyTests {
 
     @Test("raw application state is not a search service")
     func rawApplicationStateIsNotAService() throws {
-        let assembly = try read("Sources/WikiFSEngine/SearchRuntimeAssembly.swift")
+        let assembly = try read("Sources/WikiFSEngine/SearchRuntimeCompositionFactory.swift")
         for forbidden in [
             "ServiceKey<WikiStore", "ServiceKey<WikiEventBus", "ServiceKey<SQLite",
             "ServiceKey<GRDB", "ServiceKey<WikiReadPool",
@@ -38,7 +38,7 @@ struct SearchCordisBoundaryPolicyTests {
         #expect(!sources.contains("TantivySearchService("))
         #expect(!sources.contains("TantivyIndexer("))
         #expect(!sources.contains("TantivyShadowSync"))
-        #expect(!sources.contains("SearchRuntimeAssembly"))
+        #expect(!sources.contains("SearchRuntimeCompositionFactory"))
     }
 
     @Test("search lifecycle has no detached tasks")

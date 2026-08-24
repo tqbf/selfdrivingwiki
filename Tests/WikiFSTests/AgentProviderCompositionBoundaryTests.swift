@@ -17,7 +17,7 @@ struct AgentProviderCompositionBoundaryTests {
         #expect(settings.contains("providerServices.discoverCatalog("))
         #expect(!settings.contains("ACPProviderModelProbe("))
         #expect(!app.contains("CordisContext"))
-        #expect(!app.contains("AgentProviderRuntimeAssembly("))
+        #expect(!app.contains("AgentProviderRuntimeFactory("))
     }
 
     @Test("daemon queue and chat receive one stable facade")
@@ -51,7 +51,7 @@ struct AgentProviderCompositionBoundaryTests {
     func onlyProviderAssemblyConstructsRuntime() throws {
         let root = repositoryRoot()
         let sourceRoot = root.appendingPathComponent("Sources")
-        let approvedPath = "WikiFSEngine/AgentProviderRuntimeAssembly.swift"
+        let approvedPath = "WikiFSEngine/AgentProviderRuntimeFactory.swift"
         let enumerator = try #require(
             FileManager.default.enumerator(
                 at: sourceRoot,
@@ -73,7 +73,7 @@ struct AgentProviderCompositionBoundaryTests {
     @Test("provider assembly excludes app and process owners")
     func providerAssemblyExcludesAppAndProcessOwners() throws {
         let source = try sourceText(
-            "Sources/WikiFSEngine/AgentProviderRuntimeAssembly.swift")
+            "Sources/WikiFSEngine/AgentProviderRuntimeFactory.swift")
         for forbidden in [
             "SwiftUI",
             "WikiStoreModel",

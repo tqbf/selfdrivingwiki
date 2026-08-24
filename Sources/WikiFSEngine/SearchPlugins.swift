@@ -26,7 +26,7 @@ public enum TantivySearchPlugin {
     public static let key = SearchProviderKey(kind: .lexical, providerID: "tantivy")
 
     public static func definition(
-        makeRuntime: @escaping SearchRuntimeFactory.Factory = SearchRuntimeAssembly.runtimeFactory
+        makeRuntime: @escaping SearchRuntimeFactory.Factory = SearchRuntimeCompositionFactory.runtimeFactory
     ) -> PluginDefinition {
         adapterDefinition(
             id: id,

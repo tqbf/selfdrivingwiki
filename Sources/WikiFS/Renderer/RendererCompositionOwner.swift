@@ -204,7 +204,7 @@ final class AppProcessComposition {
             operation: { try DatabaseLocation.queueDatabaseURL() })
             ?? containerDirectory.appendingPathComponent("queue.sqlite", isDirectory: false)
         let queueController = LocalQueueRuntimeController {
-            try await QueueRuntimeAssembly(
+            try await QueueRuntimeFactory(
                 databaseURL: queueDBURL,
                 extractionProvider: await MainActor.run { extractionProvider(extractionServices) },
                 makeIngestionProvider: { store in
@@ -213,7 +213,7 @@ final class AppProcessComposition {
                 .assemble()
         }
         let transportOwner = DaemonTransportCompositionOwner {
-            try await DaemonTransportRuntimeAssembly(
+            try await DaemonTransportRuntimeFactory(
                 connectionFactory: transportBridge.connectionFactory,
                 configuration: .init(
                     retryInterval: .seconds(30),
@@ -229,7 +229,7 @@ final class AppProcessComposition {
             preconditionFailure("Resolved app-group renderer layout was invalid: \(error)")
         }
         let rendererOwner = RendererCompositionOwner {
-            try await RendererRuntimeAssembly(
+            try await RendererRuntimeFactory(
                 layout: rendererLayout,
                 bundledPackageSource: { BundledRendererPackages.excalidrawResourceURL() },
                 reviewedBundledIdentity: .init(
@@ -247,7 +247,7 @@ final class AppProcessComposition {
 
         profileOwner = AppProcessProfileOwner(factories: ProcessPluginCatalogFactories(
                 makeAgentProvider: {
-                    let handle = try await AgentProviderRuntimeAssembly(
+                    let handle = try await AgentProviderRuntimeFactory(
                         readConfiguration: { AgentProvidersConfig.loadOrSeed(from: containerDirectory) },
                         resolveCommand: { providers in
                             let searchPath = await PathPreflight.loginShellPATH()
@@ -277,7 +277,7 @@ final class AppProcessComposition {
                 },
                 makeExtraction: {
                     let owner = ExtractionCompositionOwner(services: extractionServices) {
-                        try await ExtractionRuntimeAssembly(
+                        try await ExtractionRuntimeFactory(
                             readConfiguration: { ExtractionConfig.load(from: containerDirectory) },
                             readCredential: { extractionCredentialStore.secret($0) },
                             resolveACP: { configuration in

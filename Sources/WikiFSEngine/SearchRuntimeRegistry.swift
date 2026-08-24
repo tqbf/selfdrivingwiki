@@ -65,7 +65,7 @@ public actor SearchRuntimeRegistry {
         rootContext = CordisContext()
     }
 
-    public func assemble(_ assembly: SearchRuntimeAssembly) async throws -> SearchRuntimeLease {
+    public func assemble(_ assembly: SearchRuntimeCompositionFactory) async throws -> SearchRuntimeLease {
         try await assemble(SearchRuntimeFactory(
             identity: assembly.identity,
             changeStreamFactory: assembly.changeStreamFactory,

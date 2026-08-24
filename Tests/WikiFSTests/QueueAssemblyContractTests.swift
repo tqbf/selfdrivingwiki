@@ -77,8 +77,8 @@ struct QueueAssemblyContractTests {
             contentsOf: root.appendingPathComponent("Sources/wikid/WikiDaemon.swift"),
             encoding: .utf8)
 
-        #expect(!app.contains("QueueRuntimeAssembly("))
-        #expect(composition.contains("QueueRuntimeAssembly("))
+        #expect(!app.contains("QueueRuntimeFactory("))
+        #expect(composition.contains("QueueRuntimeFactory("))
         #expect(app.contains("let queueEngine = runtimeController.client"))
         #expect(!app.contains("QueueWorkerOutputChannel(store:"))
         #expect(daemon.contains("let outputChannel = QueueWorkerOutputChannel(store: queueStore)"))
