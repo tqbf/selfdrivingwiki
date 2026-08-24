@@ -175,9 +175,9 @@ actor RendererCompositionOwner {
 
 /// App-target injected catalog and stable UI adapter holder.
 ///
-/// Concrete process runtimes are constructed only by the factory closures
-/// installed in `ProcessRuntimePlugins`. The committed process-profile rows
-/// select which closures activate; this holder does not start a parallel graph.
+/// Cordis activation resolves typed headless inputs for agent and extraction
+/// runtimes. App-only queue, transport, and renderer owners cross the boundary
+/// through named Sendable assembly gateways. Profile rows select each runtime.
 @MainActor
 final class AppProcessPluginCatalog {
     let profileOwner: AppProcessProfileOwner
@@ -248,8 +248,9 @@ final class AppProcessPluginCatalog {
         self.rendererOwner = rendererOwner
 
         profileOwner = AppProcessProfileOwner(factories: ProcessPluginCatalogFactories(
-                makeAgentProvider: {
-                    let handle = try await AgentProviderRuntimeFactory(
+                compositionInputs: ProcessCompositionInputs(
+                    agentProvider: AgentProviderProcessInput(
+                        services: providerServices,
                         readConfiguration: { AgentProvidersConfig.loadOrSeed(from: containerDirectory) },
                         resolveCommand: { providers in
                             let searchPath = await PathPreflight.loginShellPATH()
@@ -270,65 +271,47 @@ final class AppProcessPluginCatalog {
                             }
                             let raw = UserDefaults.standard.string(forKey: key) ?? ""
                             return PermissionPolicy(rawValue: raw) ?? .bypass
-                        })
-                        .assemble()
-                    await providerServices.install(handle.services)
-                    return ProcessRuntimeLease(service: providerServices) {
-                        try await handle.dispose()
-                    }
-                },
-                makeExtraction: {
-                    let owner = ExtractionCompositionOwner(services: extractionServices) {
-                        try await ExtractionRuntimeFactory(
-                            readConfiguration: { ExtractionConfig.load(from: containerDirectory) },
-                            readCredential: { extractionCredentialStore.secret($0) },
-                            resolveACP: { configuration in
-                                ACPExtractionClient.resolveProvider(
-                                    containerDirectory: containerDirectory,
-                                    acpProviderId: configuration.acpProviderId,
-                                    acpCredentialStore: acpCredentialStore)
-                            },
-                            httpFetcher: URLSessionRequestFetcher(),
-                            makeLocalExtractor: {
-                                await MainActor.run { LocalPdf2MarkdownExtractor() }
-                            })
-                            .assemble()
-                    }
-                    await owner.start()
-                    await owner.awaitSettled()
-                    if let failure = await owner.failureDescription() {
-                        throw AppProcessPluginCatalogError.runtimeUnavailable("extraction: \(failure)")
-                    }
-                    return ProcessRuntimeLease(service: extractionServices) {
-                        await owner.shutdown()
-                    }
-                },
-                makeQueue: {
-                    await MainActor.run { queueController.start() }
-                    await queueController.awaitSettled()
-                    if let failure = await MainActor.run(body: { queueController.startupError }) {
-                        throw AppProcessPluginCatalogError.runtimeUnavailable("queue: \(failure)")
-                    }
-                    return ProcessRuntimeLease(service: queueController.client) {
-                        _ = await queueController.dispose()
-                    }
-                },
-                makeTransport: {
-                    await transportOwner.start()
-                    return ProcessRuntimeLease(service: transportOwner.services) {
-                        await transportOwner.shutdown()
-                    }
-                },
-                makeRenderer: {
-                    await rendererOwner.start()
-                    await rendererOwner.awaitSettled()
-                    if let failure = await rendererOwner.failureDescription() {
-                        throw AppProcessPluginCatalogError.runtimeUnavailable("renderer: \(failure)")
-                    }
-                    return ProcessRuntimeLease(service: rendererOwner.services) {
-                        await rendererOwner.shutdown()
-                    }
-                },
+                        }),
+                    extraction: ExtractionProcessInput(
+                        services: extractionServices,
+                        readConfiguration: { ExtractionConfig.load(from: containerDirectory) },
+                        readCredential: { extractionCredentialStore.secret($0) },
+                        resolveACP: { configuration in
+                            ACPExtractionClient.resolveProvider(
+                                containerDirectory: containerDirectory,
+                                acpProviderId: configuration.acpProviderId,
+                                acpCredentialStore: acpCredentialStore)
+                        },
+                        httpFetcher: URLSessionRequestFetcher(),
+                        makeLocalExtractor: {
+                            await MainActor.run { LocalPdf2MarkdownExtractor() }
+                        }),
+                    queueAssembly: {
+                        await MainActor.run { queueController.start() }
+                        await queueController.awaitSettled()
+                        if let failure = await MainActor.run(body: { queueController.startupError }) {
+                            throw AppProcessPluginCatalogError.runtimeUnavailable("queue: \(failure)")
+                        }
+                        return ProcessRuntimeLease(service: queueController.client) {
+                            _ = await queueController.dispose()
+                        }
+                    },
+                    transportAssembly: {
+                        await transportOwner.start()
+                        return ProcessRuntimeLease(service: transportOwner.services) {
+                            await transportOwner.shutdown()
+                        }
+                    },
+                    rendererAssembly: {
+                        await rendererOwner.start()
+                        await rendererOwner.awaitSettled()
+                        if let failure = await rendererOwner.failureDescription() {
+                            throw AppProcessPluginCatalogError.runtimeUnavailable("renderer: \(failure)")
+                        }
+                        return ProcessRuntimeLease(service: rendererOwner.services) {
+                            await rendererOwner.shutdown()
+                        }
+                    }),
                 makeEmbeddings: {
                     ProcessRuntimeLease(
                         service: EmbeddingsSearchProvider(

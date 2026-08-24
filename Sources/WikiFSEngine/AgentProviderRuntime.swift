@@ -126,14 +126,31 @@ public extension AgentProviderServices {
 }
 
 public actor MutableAgentProviderServices: AgentProviderPrivateServices {
+    public struct Installation: Hashable, Sendable {
+        fileprivate let id = UUID()
+
+        public init() {}
+    }
+
     private var installed: any AgentProviderServices
+    private var activeInstallation: Installation?
+    private var invalidatedInstallations: Set<Installation> = []
 
     public init(initial: any AgentProviderServices = UnavailableAgentProviderServices()) {
         installed = initial
     }
 
-    public func install(_ services: any AgentProviderServices) {
+    public func install(_ services: any AgentProviderServices, for installation: Installation) {
+        guard !invalidatedInstallations.contains(installation) else { return }
         installed = services
+        activeInstallation = installation
+    }
+
+    public func invalidate(_ installation: Installation) {
+        invalidatedInstallations.insert(installation)
+        guard activeInstallation == installation else { return }
+        installed = UnavailableAgentProviderServices()
+        activeInstallation = nil
     }
 
     public func prepareInteractive(

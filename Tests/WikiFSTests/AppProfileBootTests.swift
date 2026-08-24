@@ -15,6 +15,7 @@ struct AppProfileBootTests {
         let gate = ProfileBootGate()
         let committedRows = try ProfileBootFixture.processEntries(includeAppServices: true)
         #expect(Set(committedRows.map(\.plugin)) == Set([
+            ProcessRuntimePlugins.inputsID,
             ProcessRuntimePlugins.agentProviderID,
             ProcessRuntimePlugins.extractionID,
             ProcessRuntimePlugins.queueID,
@@ -41,9 +42,9 @@ struct AppProfileBootTests {
 
         await owner.shutdown()
         #expect(owner.services == nil)
-        #expect(await disposals.count == 5)
+        #expect(await disposals.count == 3)
         await owner.shutdown()
-        #expect(await disposals.count == 5)
+        #expect(await disposals.count == 3)
     }
 
     @Test("process owner reports boot failure")
@@ -81,9 +82,9 @@ struct AppProfileBootTests {
             return
         }
         #expect(owner.services == nil)
-        #expect(await disposals.count == 2)
+        #expect(await disposals.count == 0)
         await owner.shutdown()
-        #expect(await disposals.count == 2)
+        #expect(await disposals.count == 0)
     }
 
     @Test("per-wiki facade boots from child and process profile services")
@@ -141,7 +142,7 @@ struct AppProfileBootTests {
         await facade.shutdown()
         #expect(await disposals.count == 0)
         await owner.shutdown()
-        #expect(await disposals.count == 5)
+        #expect(await disposals.count == 3)
     }
 
     @Test("production-shaped app profile activates services and owns store listener")
@@ -211,7 +212,7 @@ struct AppProfileBootTests {
         try await booted.shutdown()
         #expect(await processDisposals.count == 0)
         try await process.shutdown()
-        #expect(await processDisposals.count == 5)
+        #expect(await processDisposals.count == 3)
     }
 
     @Test("editing copied app YAML changes the running renderer registry")
@@ -225,15 +226,14 @@ struct AppProfileBootTests {
         let selectedIDs = Set([EntryID("renderers"), EntryID("renderer-services")])
         let process = try await CordisBoot.boot(.init(
             catalog: try ProcessPluginCatalog.build(factories: ProcessPluginCatalogFactories(
-                makeAgentProvider: { ProcessRuntimeLease(service: UnavailableAgentProviderServices()) {} },
-                makeExtraction: { ProcessRuntimeLease(service: UnavailableExtractionServices()) {} },
-                makeRenderer: {
+                compositionInputs: ProfileBootFixture.fixtureProcessInputs(rendererAssembly: {
                     ProcessRuntimeLease<any RendererServices>(service: UnavailableRendererServices()) {}
-                },
+                }),
                 makeEmbeddings: {
                     ProcessRuntimeLease(service: .unavailable(identifier: "unavailable-fixture"), dispose: {})
                 })),
             layers: [PatchFile(entries: [
+                Entry(id: EntryID("inputs"), plugin: ProcessRuntimePlugins.inputsID),
                 Entry(id: EntryID("renderer"), plugin: ProcessRuntimePlugins.rendererID),
             ])]))
         let catalog = try PluginCatalog([

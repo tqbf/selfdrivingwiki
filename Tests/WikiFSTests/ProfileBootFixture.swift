@@ -53,18 +53,42 @@ enum ProfileBootFixture {
             additionalDefinitions: [launcherFactoryDefinition])
     }
 
+    static func fixtureProcessInputs(
+        queueAssembly: ProcessCompositionInputs.QueueAssembly? = nil,
+        transportAssembly: ProcessCompositionInputs.TransportAssembly? = nil,
+        rendererAssembly: ProcessCompositionInputs.RendererAssembly? = nil
+    ) -> ProcessCompositionInputs {
+        ProcessCompositionInputs(
+            agentProvider: AgentProviderProcessInput(
+                services: MutableAgentProviderServices(),
+                readConfiguration: { AgentProvidersConfig(providers: []) },
+                resolveCommand: { _ in [:] },
+                readCredential: { _ in nil },
+                resolvePermissionPolicy: { _ in .bypass }),
+            extraction: ExtractionProcessInput(
+                services: MutableExtractionServices(),
+                readConfiguration: { ExtractionConfig() },
+                readCredential: { _ in nil },
+                resolveACP: { _ in nil },
+                httpFetcher: FakeHTTPFetcher(responses: []),
+                makeLocalExtractor: { ProfilePDFExtractor() }),
+            queueAssembly: queueAssembly,
+            transportAssembly: transportAssembly,
+            rendererAssembly: rendererAssembly)
+    }
+
     static func processCatalog(includeAppServices: Bool, recorder: ProfileProcessDisposalRecorder) throws -> PluginCatalog {
-        let queueFactory: ProcessPluginCatalogFactories.QueueFactory? = includeAppServices ? { @Sendable in
+        let queueFactory: ProcessCompositionInputs.QueueAssembly? = includeAppServices ? { @Sendable in
             let engine = try makeProfileQueueEngine()
             return ProcessRuntimeLease<any QueueEngineClient>(service: engine) {
                 _ = await engine.shutdownForHandoff()
             }
         } : nil
-        let transportFactory: ProcessPluginCatalogFactories.TransportFactory? = includeAppServices ? { @Sendable in
+        let transportFactory: ProcessCompositionInputs.TransportAssembly? = includeAppServices ? { @Sendable in
             let services = fixtureTransportServices()
             return ProcessRuntimeLease(service: services) { await services.stop() }
         } : nil
-        let rendererFactory: ProcessPluginCatalogFactories.RendererFactory? = includeAppServices ? { @Sendable in
+        let rendererFactory: ProcessCompositionInputs.RendererAssembly? = includeAppServices ? { @Sendable in
             ProcessRuntimeLease<any RendererServices>(service: UnavailableRendererServices()) { await recorder.record() }
         } : nil
         let urlFetchProviderFactory: ProcessPluginCatalogFactories.URLFetchProviderFactory? = includeAppServices ? { @Sendable in
@@ -81,15 +105,10 @@ enum ProfileBootFixture {
                 }
         } : nil
         return try ProcessPluginCatalog.build(factories: ProcessPluginCatalogFactories(
-            makeAgentProvider: {
-                ProcessRuntimeLease(service: UnavailableAgentProviderServices()) { await recorder.record() }
-            },
-            makeExtraction: {
-                ProcessRuntimeLease(service: UnavailableExtractionServices()) { await recorder.record() }
-            },
-            makeQueue: queueFactory,
-            makeTransport: transportFactory,
-            makeRenderer: rendererFactory,
+            compositionInputs: fixtureProcessInputs(
+                queueAssembly: queueFactory,
+                transportAssembly: transportFactory,
+                rendererAssembly: rendererFactory),
             makeEmbeddings: {
                 ProcessRuntimeLease(service: .unavailable(identifier: "unavailable-fixture"), dispose: {})
             },

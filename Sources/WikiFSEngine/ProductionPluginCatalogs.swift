@@ -33,42 +33,110 @@ public enum ProcessServiceKeys {
     public static let embeddings = ServiceKey<EmbeddingsSearchProvider>(label: "process.embeddings")
     public static let urlFetchProvider = ServiceKey<URLFetchProvider>(label: "process.integration.url-fetch-provider")
     public static let zoteroClientProvider = ServiceKey<ZoteroClientProvider>(label: "process.integration.zotero-client-provider")
+    public static let compositionInputs = ServiceKey<ProcessCompositionInputs>(label: "process.inputs")
+}
+
+public struct AgentProviderProcessInput: Sendable {
+    public let services: MutableAgentProviderServices
+    public let readConfiguration: AgentProviderRuntime.ConfigurationReader
+    public let resolveCommand: AgentProviderRuntime.CommandResolver
+    public let readCredential: AgentProviderRuntime.CredentialReader
+    public let resolvePermissionPolicy: AgentProviderRuntime.PermissionPolicyResolver
+    public let makeBackend: AgentProviderRuntime.BackendFactory
+    public let probeCatalog: AgentProviderRuntime.CatalogProbe
+
+    public init(
+        services: MutableAgentProviderServices,
+        readConfiguration: @escaping AgentProviderRuntime.ConfigurationReader,
+        resolveCommand: @escaping AgentProviderRuntime.CommandResolver,
+        readCredential: @escaping AgentProviderRuntime.CredentialReader,
+        resolvePermissionPolicy: @escaping AgentProviderRuntime.PermissionPolicyResolver,
+        makeBackend: @escaping AgentProviderRuntime.BackendFactory = { policy, budget, ceiling in
+            AgentBackendFactory.makeBackend(policy: policy, budget: budget, turnCeilingTimeout: ceiling)
+        },
+        probeCatalog: @escaping AgentProviderRuntime.CatalogProbe = { provider, command, apiKey in
+            try await ACPProviderModelProbe(provider: provider, resolvedCommand: command, apiKey: apiKey)
+                .discoverObservation()
+        }
+    ) {
+        self.services = services
+        self.readConfiguration = readConfiguration
+        self.resolveCommand = resolveCommand
+        self.readCredential = readCredential
+        self.resolvePermissionPolicy = resolvePermissionPolicy
+        self.makeBackend = makeBackend
+        self.probeCatalog = probeCatalog
+    }
+}
+
+public struct ExtractionProcessInput: Sendable {
+    public let services: MutableExtractionServices
+    public let readConfiguration: ExtractionRuntime.ConfigurationReader
+    public let readCredential: ExtractionPluginFactory.CredentialReader
+    public let resolveACP: ExtractionPluginFactory.ACPResolver
+    public let httpFetcher: any HTTPRequestFetcher
+    public let makeLocalExtractor: ExtractionPluginFactory.LocalExtractor
+
+    public init(
+        services: MutableExtractionServices,
+        readConfiguration: @escaping ExtractionRuntime.ConfigurationReader,
+        readCredential: @escaping ExtractionPluginFactory.CredentialReader,
+        resolveACP: @escaping ExtractionPluginFactory.ACPResolver,
+        httpFetcher: any HTTPRequestFetcher,
+        makeLocalExtractor: @escaping ExtractionPluginFactory.LocalExtractor
+    ) {
+        self.services = services
+        self.readConfiguration = readConfiguration
+        self.readCredential = readCredential
+        self.resolveACP = resolveACP
+        self.httpFetcher = httpFetcher
+        self.makeLocalExtractor = makeLocalExtractor
+    }
+}
+
+public struct ProcessCompositionInputs: Sendable {
+    public typealias QueueAssembly = @Sendable () async throws -> ProcessRuntimeLease<any QueueEngineClient>
+    public typealias TransportAssembly = @Sendable () async throws -> ProcessRuntimeLease<DaemonTransportServices>
+    public typealias RendererAssembly = @Sendable () async throws -> ProcessRuntimeLease<any RendererServices>
+
+    public let agentProvider: AgentProviderProcessInput
+    public let extraction: ExtractionProcessInput
+    public let queueAssembly: QueueAssembly?
+    public let transportAssembly: TransportAssembly?
+    public let rendererAssembly: RendererAssembly?
+
+    public init(
+        agentProvider: AgentProviderProcessInput,
+        extraction: ExtractionProcessInput,
+        queueAssembly: QueueAssembly? = nil,
+        transportAssembly: TransportAssembly? = nil,
+        rendererAssembly: RendererAssembly? = nil
+    ) {
+        self.agentProvider = agentProvider
+        self.extraction = extraction
+        self.queueAssembly = queueAssembly
+        self.transportAssembly = transportAssembly
+        self.rendererAssembly = rendererAssembly
+    }
 }
 
 public struct ProcessPluginCatalogFactories: Sendable {
-    public typealias AgentProviderFactory = @Sendable () async throws -> ProcessRuntimeLease<any AgentProviderServices>
-    public typealias ExtractionFactory = @Sendable () async throws -> ProcessRuntimeLease<any ExtractionServices>
-    public typealias QueueFactory = @Sendable () async throws -> ProcessRuntimeLease<any QueueEngineClient>
-    public typealias TransportFactory = @Sendable () async throws -> ProcessRuntimeLease<DaemonTransportServices>
-    public typealias RendererFactory = @Sendable () async throws -> ProcessRuntimeLease<any RendererServices>
     public typealias EmbeddingsFactory = @Sendable () async throws -> ProcessRuntimeLease<EmbeddingsSearchProvider>
     public typealias URLFetchProviderFactory = @Sendable () async throws -> ProcessRuntimeLease<URLFetchProvider>
     public typealias ZoteroClientProviderFactory = @Sendable () async throws -> ProcessRuntimeLease<ZoteroClientProvider>
 
-    public let makeAgentProvider: AgentProviderFactory
-    public let makeExtraction: ExtractionFactory
-    public let makeQueue: QueueFactory?
-    public let makeTransport: TransportFactory?
-    public let makeRenderer: RendererFactory?
+    public let compositionInputs: ProcessCompositionInputs
     public let makeEmbeddings: EmbeddingsFactory
     public let makeURLFetchProvider: URLFetchProviderFactory?
     public let makeZoteroClientProvider: ZoteroClientProviderFactory?
 
     public init(
-        makeAgentProvider: @escaping AgentProviderFactory,
-        makeExtraction: @escaping ExtractionFactory,
-        makeQueue: QueueFactory? = nil,
-        makeTransport: TransportFactory? = nil,
-        makeRenderer: RendererFactory? = nil,
+        compositionInputs: ProcessCompositionInputs,
         makeEmbeddings: @escaping EmbeddingsFactory,
         makeURLFetchProvider: URLFetchProviderFactory? = nil,
         makeZoteroClientProvider: ZoteroClientProviderFactory? = nil
     ) {
-        self.makeAgentProvider = makeAgentProvider
-        self.makeExtraction = makeExtraction
-        self.makeQueue = makeQueue
-        self.makeTransport = makeTransport
-        self.makeRenderer = makeRenderer
+        self.compositionInputs = compositionInputs
         self.makeEmbeddings = makeEmbeddings
         self.makeURLFetchProvider = makeURLFetchProvider
         self.makeZoteroClientProvider = makeZoteroClientProvider
@@ -213,24 +281,6 @@ public final class AppProcessProfileOwner {
         }
     }
 
-    public convenience init(
-        agentProvider: any AgentProviderServices,
-        extraction: any ExtractionServices,
-        queue: any QueueEngineClient,
-        transport: DaemonTransportServices,
-        renderer: any RendererServices
-    ) {
-        self.init(factories: ProcessPluginCatalogFactories(
-            makeAgentProvider: { ProcessRuntimeLease(service: agentProvider) {} },
-            makeExtraction: { ProcessRuntimeLease(service: extraction) {} },
-            makeQueue: { ProcessRuntimeLease(service: queue) {} },
-            makeTransport: { ProcessRuntimeLease(service: transport) {} },
-            makeRenderer: { ProcessRuntimeLease(service: renderer) {} },
-            makeEmbeddings: {
-                ProcessRuntimeLease(service: .unavailable(identifier: "unavailable-fixture"), dispose: {})
-            }))
-    }
-
     public func start() {
         guard readiness == .idle, !shutdownStarted else { return }
         readiness = .loading
@@ -338,11 +388,13 @@ public actor DaemonProcessProfileOwner {
         makeLocalExtractor: @escaping ExtractionPluginFactory.LocalExtractor
     ) throws -> DaemonProcessProfileOwner {
         let providerServices = MutableAgentProviderServices()
+        let extractionServices = MutableExtractionServices()
         let extractionCredentialStore = KeychainExtractionCredentialStore()
         let acpCredentialStore = KeychainACPCredentialStore()
         let processFactories = ProcessPluginCatalogFactories(
-            makeAgentProvider: {
-                let handle = try await AgentProviderRuntimeFactory(
+            compositionInputs: ProcessCompositionInputs(
+                agentProvider: AgentProviderProcessInput(
+                    services: providerServices,
                     readConfiguration: { AgentProvidersConfig.loadOrSeed(from: containerDirectory) },
                     resolveCommand: { providers in
                         let searchPath = await PathPreflight.loginShellPATH()
@@ -354,13 +406,9 @@ public actor DaemonProcessProfileOwner {
                     readCredential: { providerID in
                         KeychainACPCredentialStore().apiKey(forProvider: providerID.rawValue)
                     },
-                    resolvePermissionPolicy: { _ in .bypass })
-                    .assemble()
-                await providerServices.install(handle.services)
-                return ProcessRuntimeLease(service: providerServices) { try await handle.dispose() }
-            },
-            makeExtraction: {
-                let handle = try await ExtractionRuntimeFactory(
+                    resolvePermissionPolicy: { _ in .bypass }),
+                extraction: ExtractionProcessInput(
+                    services: extractionServices,
                     readConfiguration: { ExtractionConfig.load(from: containerDirectory) },
                     readCredential: { extractionCredentialStore.secret($0) },
                     resolveACP: { configuration in
@@ -370,10 +418,7 @@ public actor DaemonProcessProfileOwner {
                             acpCredentialStore: acpCredentialStore)
                     },
                     httpFetcher: URLSessionRequestFetcher(),
-                    makeLocalExtractor: makeLocalExtractor)
-                    .assemble()
-                return ProcessRuntimeLease(service: handle.services) { try await handle.dispose() }
-            },
+                    makeLocalExtractor: makeLocalExtractor)),
             makeEmbeddings: {
                 ProcessRuntimeLease(
                     service: .unavailable(identifier: "unavailable-daemon"),
@@ -623,6 +668,7 @@ public enum ProductionProfiles {
 }
 
 public enum ProcessRuntimePlugins {
+    public static let inputsID = PluginID("process.inputs")
     public static let agentProviderID = PluginID("process.agent-provider")
     public static let extractionID = PluginID("process.extraction")
     public static let queueID = PluginID("process.queue")
@@ -634,27 +680,37 @@ public enum ProcessRuntimePlugins {
 
     public static func definitions(_ factories: ProcessPluginCatalogFactories) -> [PluginDefinition] {
         var definitions = [
-            definition(id: agentProviderID, key: ProcessServiceKeys.agentProvider, factory: factories.makeAgentProvider),
-            definition(id: extractionID, key: ProcessServiceKeys.extraction, factory: factories.makeExtraction),
-            definition(id: embeddingsID, key: ProcessServiceKeys.embeddings, factory: factories.makeEmbeddings),
+            inputsDefinition(factories.compositionInputs),
+            agentProviderDefinition,
+            extractionDefinition,
+            directDefinition(id: embeddingsID, key: ProcessServiceKeys.embeddings, factory: factories.makeEmbeddings),
         ]
-        if let factory = factories.makeQueue {
-            definitions.append(definition(id: queueID, key: ProcessServiceKeys.queue, factory: factory))
+        if factories.compositionInputs.queueAssembly != nil {
+            definitions.append(gatewayDefinition(
+                id: queueID,
+                key: ProcessServiceKeys.queue,
+                gateway: { $0.queueAssembly }))
         }
-        if let factory = factories.makeTransport {
-            definitions.append(definition(id: transportID, key: ProcessServiceKeys.transport, factory: factory))
+        if factories.compositionInputs.transportAssembly != nil {
+            definitions.append(gatewayDefinition(
+                id: transportID,
+                key: ProcessServiceKeys.transport,
+                gateway: { $0.transportAssembly }))
         }
-        if let factory = factories.makeRenderer {
-            definitions.append(definition(id: rendererID, key: ProcessServiceKeys.renderer, factory: factory))
+        if factories.compositionInputs.rendererAssembly != nil {
+            definitions.append(gatewayDefinition(
+                id: rendererID,
+                key: ProcessServiceKeys.renderer,
+                gateway: { $0.rendererAssembly }))
         }
         if let factory = factories.makeURLFetchProvider {
-            definitions.append(definition(
+            definitions.append(directDefinition(
                 id: urlFetchProviderID,
                 key: ProcessServiceKeys.urlFetchProvider,
                 factory: factory))
         }
         if let factory = factories.makeZoteroClientProvider {
-            definitions.append(definition(
+            definitions.append(directDefinition(
                 id: zoteroClientProviderID,
                 key: ProcessServiceKeys.zoteroClientProvider,
                 factory: factory))
@@ -662,7 +718,96 @@ public enum ProcessRuntimePlugins {
         return definitions
     }
 
-    private static func definition<Service: Sendable>(
+    private static func inputsDefinition(_ inputs: ProcessCompositionInputs) -> PluginDefinition {
+        PluginDefinition(id: inputsID, provisions: [ServiceDependency(ProcessServiceKeys.compositionInputs)]) {
+            try ComponentDefinition(
+                label: inputsID.rawValue,
+                provisions: [ServiceDependency(ProcessServiceKeys.compositionInputs)]) { activation in
+                    _ = try await activation.supply(ProcessServiceKeys.compositionInputs, value: inputs)
+                }
+        }
+    }
+
+    private static let agentProviderDefinition = PluginDefinition(
+        id: agentProviderID,
+        dependencies: [ServiceDependency(ProcessServiceKeys.compositionInputs)],
+        provisions: [ServiceDependency(ProcessServiceKeys.agentProvider)]
+    ) {
+        try ComponentDefinition(
+            label: agentProviderID.rawValue,
+            dependencies: [ServiceDependency(ProcessServiceKeys.compositionInputs)],
+            provisions: [ServiceDependency(ProcessServiceKeys.agentProvider)]) { activation in
+                let input = try await activation.require(ProcessServiceKeys.compositionInputs).agentProvider
+                let installation = MutableAgentProviderServices.Installation()
+                let handle = try await AgentProviderRuntimeFactory(
+                    readConfiguration: input.readConfiguration,
+                    resolveCommand: input.resolveCommand,
+                    readCredential: input.readCredential,
+                    resolvePermissionPolicy: input.resolvePermissionPolicy,
+                    makeBackend: input.makeBackend,
+                    probeCatalog: input.probeCatalog)
+                    .assemble()
+                await input.services.install(handle.services, for: installation)
+                _ = try await activation.effect { _ in
+                    await input.services.invalidate(installation)
+                    try await handle.dispose()
+                }
+                _ = try await activation.supply(ProcessServiceKeys.agentProvider, value: input.services)
+            }
+    }
+
+    private static let extractionDefinition = PluginDefinition(
+        id: extractionID,
+        dependencies: [ServiceDependency(ProcessServiceKeys.compositionInputs)],
+        provisions: [ServiceDependency(ProcessServiceKeys.extraction)]
+    ) {
+        try ComponentDefinition(
+            label: extractionID.rawValue,
+            dependencies: [ServiceDependency(ProcessServiceKeys.compositionInputs)],
+            provisions: [ServiceDependency(ProcessServiceKeys.extraction)]) { activation in
+                let input = try await activation.require(ProcessServiceKeys.compositionInputs).extraction
+                let installation = MutableExtractionServices.Installation()
+                let handle = try await ExtractionRuntimeFactory(
+                    readConfiguration: input.readConfiguration,
+                    readCredential: input.readCredential,
+                    resolveACP: input.resolveACP,
+                    httpFetcher: input.httpFetcher,
+                    makeLocalExtractor: input.makeLocalExtractor)
+                    .assemble()
+                await input.services.install(handle.services, for: installation)
+                _ = try await activation.effect { _ in
+                    await input.services.invalidate(installation)
+                    try await handle.dispose()
+                }
+                _ = try await activation.supply(ProcessServiceKeys.extraction, value: input.services)
+            }
+    }
+
+    private static func gatewayDefinition<Service: Sendable>(
+        id: PluginID,
+        key: ServiceKey<Service>,
+        gateway: @escaping @Sendable (ProcessCompositionInputs) -> (@Sendable () async throws -> ProcessRuntimeLease<Service>)?
+    ) -> PluginDefinition {
+        PluginDefinition(
+            id: id,
+            dependencies: [ServiceDependency(ProcessServiceKeys.compositionInputs)],
+            provisions: [ServiceDependency(key)]) {
+                try ComponentDefinition(
+                    label: id.rawValue,
+                    dependencies: [ServiceDependency(ProcessServiceKeys.compositionInputs)],
+                    provisions: [ServiceDependency(key)]) { activation in
+                        let inputs = try await activation.require(ProcessServiceKeys.compositionInputs)
+                        guard let assemble = gateway(inputs) else {
+                            throw CordisFailure("process assembly gateway is unavailable: \(id.rawValue)")
+                        }
+                        let lease = try await assemble()
+                        _ = try await activation.supply(key, value: lease.service)
+                        _ = try await activation.effect { _ in try await lease.dispose() }
+                    }
+            }
+    }
+
+    private static func directDefinition<Service: Sendable>(
         id: PluginID,
         key: ServiceKey<Service>,
         factory: @escaping @Sendable () async throws -> ProcessRuntimeLease<Service>

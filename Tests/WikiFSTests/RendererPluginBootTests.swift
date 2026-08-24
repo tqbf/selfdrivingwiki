@@ -11,13 +11,14 @@ struct RendererPluginBootTests {
         let services = UnavailableRendererServices()
         let process = try await CordisBoot.boot(.init(
             catalog: try ProcessPluginCatalog.build(factories: ProcessPluginCatalogFactories(
-                makeAgentProvider: { ProcessRuntimeLease(service: UnavailableAgentProviderServices()) {} },
-                makeExtraction: { ProcessRuntimeLease(service: UnavailableExtractionServices()) {} },
-                makeRenderer: { ProcessRuntimeLease<any RendererServices>(service: services) {} },
+                compositionInputs: ProfileBootFixture.fixtureProcessInputs(rendererAssembly: {
+                    ProcessRuntimeLease<any RendererServices>(service: services) {}
+                }),
                 makeEmbeddings: {
                     ProcessRuntimeLease(service: .unavailable(identifier: "unavailable-fixture"), dispose: {})
                 })),
             layers: [PatchFile(entries: [
+                Entry(id: EntryID("inputs"), plugin: ProcessRuntimePlugins.inputsID),
                 Entry(id: EntryID("renderer"), plugin: ProcessRuntimePlugins.rendererID),
             ])]))
         let entries = [

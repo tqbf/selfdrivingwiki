@@ -14,8 +14,7 @@ struct SearchPluginBootTests {
             isAvailable: { false })
         let process = try await CordisBoot.boot(.init(
             catalog: try ProcessPluginCatalog.build(factories: ProcessPluginCatalogFactories(
-                makeAgentProvider: { ProcessRuntimeLease(service: UnavailableAgentProviderServices()) {} },
-                makeExtraction: { ProcessRuntimeLease(service: UnavailableExtractionServices()) {} },
+                compositionInputs: ProfileBootFixture.fixtureProcessInputs(),
                 makeEmbeddings: { ProcessRuntimeLease(service: embeddings) {} })),
             layers: [PatchFile(entries: [
                 Entry(id: EntryID("embeddings"), plugin: ProcessRuntimePlugins.embeddingsID),

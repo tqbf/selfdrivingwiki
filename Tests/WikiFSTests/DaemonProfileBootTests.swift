@@ -44,7 +44,7 @@ struct DaemonProfileBootTests {
         try await booted.shutdown()
         #expect(await processDisposals.count == 0)
         try await process.shutdown()
-        #expect(await processDisposals.count == 2)
+        #expect(await processDisposals.count == 0)
     }
 
     @Test("daemon owner retains process and one child per wiki, then shuts down once")
@@ -86,7 +86,7 @@ struct DaemonProfileBootTests {
 
         await owner.shutdown()
         await owner.shutdown()
-        #expect(await processDisposals.count == 2)
+        #expect(await processDisposals.count == 0)
     }
 
     @Test("launcher factory label and plugin contract stay stable")
