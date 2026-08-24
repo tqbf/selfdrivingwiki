@@ -27,14 +27,18 @@ extension WikiDaemon {
             testFixtureMakeStore: { try GRDBWikiStore(databaseURL: $0) })
     }
 
-    static func profileBackedForTesting(containerDirectory: URL) async throws -> WikiDaemon {
+    static func profileBackedForTesting(
+        containerDirectory: URL,
+        registryPersistence: DaemonRegistryPersistence = DaemonRegistryPersistence()
+    ) async throws -> WikiDaemon {
         let owner = try DaemonProcessProfileOwner.production(
             containerDirectory: containerDirectory,
             makeLocalExtractor: { await MainActor.run { UnavailablePdf2MarkdownExtractor() } })
         let daemon = WikiDaemon(
             containerDirectory: containerDirectory,
             profileOwner: owner,
-            storeBootstrap: StoreBootstrap())
+            storeBootstrap: StoreBootstrap(),
+            registryPersistence: registryPersistence)
         try await daemon.start()
         return daemon
     }

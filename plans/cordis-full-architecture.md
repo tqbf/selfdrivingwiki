@@ -83,7 +83,7 @@ re-projection happens in the UI plugin, not the kernel.
 | Key | Domain | Status |
 |---|---|---|
 | `ctx.store` | method-atomic `any WikiStore` exception (GRDB backend) | done (`wiki.store`) |
-| `ctx.readService` | narrow asynchronous reads through private pooled connections | done (`wiki.read-service`) |
+| `ctx.readService` | narrow asynchronous reads through private pooled connections | done (`wiki.store.read-service`) |
 | `ctx.events` | store change signal as Cordis `EmitMode` event | done |
 | `ctx.chats` | session log persistence | done (`wiki.sessions` + `wiki.chats-persistence`) |
 | `ctx.llm` | model adapter runtime | done (`wiki.llm-runtime` + `wiki.llm-acp-adapter`) |

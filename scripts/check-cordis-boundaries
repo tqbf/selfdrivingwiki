@@ -50,7 +50,7 @@ reject_matches "Cordis service key contains an application or context type" \
 # StorePlugin resolves the named StoreBackend factory during activation.
 # CLITantivyLegResolver owns its optional legacy lexical fallback seam.
 reject_matches "makeStore remains outside a named bootstrap, backend, fallback, or test boundary" \
-  '(^|[^[:alnum:]_])makeStore([[:space:]]*[:=]|[[:space:]]*\()' \
+  '(^|[^[:alnum:]_])makeStore([^[:alnum:]_]|$)' \
   Sources/WikiCtlCore/CLITantivyLegResolver.swift \
   Sources/WikiFSCore/Core/WikiRegistryClient.swift \
   Sources/WikiFSCore/Store/StoreBackend.swift \

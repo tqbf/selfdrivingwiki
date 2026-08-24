@@ -92,6 +92,7 @@ actor DaemonWikiCreationCoordinator {
             registryPersisted = true
             try ensureAdmitted(descriptor.id, requestID: requestID, state: .preparingProfile)
             try await prepareProfile(descriptor.id)
+            try Task.checkCancellation()
             try ensureAdmitted(descriptor.id, requestID: requestID, state: .publishing)
             requests[descriptor.id]?.state = .succeeded
             finishRequest(descriptor.id)

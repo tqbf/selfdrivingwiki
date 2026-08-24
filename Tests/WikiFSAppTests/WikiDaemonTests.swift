@@ -196,6 +196,31 @@ struct WikiDaemonTests {
         #expect(!FileManager.default.fileExists(atPath: dbURL.path + "-shm"))
     }
 
+    @Test func productionDeleteSaveFailureRestoresInMemoryDescriptorAndArtifacts() async throws {
+        struct ExpectedFailure: Error {}
+        let dir = tempDirectory()
+        let saves = LockedSaveCounter()
+        let persistence = DaemonRegistryPersistence { registry, directory in
+            if saves.incrementAndGet() == 1 {
+                try registry.save(to: directory)
+            } else {
+                throw ExpectedFailure()
+            }
+        }
+        let daemon = try await WikiDaemon.profileBackedForTesting(
+            containerDirectory: dir,
+            registryPersistence: persistence)
+        let data = try #require(await daemon.createWiki(name: "Retained"))
+        let descriptor = try JSONDecoder().decode(WikiDescriptor.self, from: data)
+        let dbURL = dir.appendingPathComponent("\(descriptor.id.rawValue).sqlite")
+
+        #expect(!(await daemon.deleteWiki(id: descriptor.id)))
+        let resolvedData = try #require(daemon.resolveWiki(selector: descriptor.id.rawValue))
+        #expect(try JSONDecoder().decode(WikiDescriptor.self, from: resolvedData).id == descriptor.id)
+        #expect(FileManager.default.fileExists(atPath: dbURL.path))
+        await daemon.shutdown()
+    }
+
     // MARK: - Registry: renameWiki
 
     @Test func renameWikiChangesDisplayNameOnly() throws {
@@ -343,6 +368,18 @@ struct WikiDaemonTests {
 
         _ = daemon.testFixtureDeleteWiki(id: a.id)
         #expect(await daemon.openStore(wikiID: b.id))
+    }
+}
+
+private final class LockedSaveCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func incrementAndGet() -> Int {
+        lock.withLock {
+            count += 1
+            return count
+        }
     }
 }
 #endif // os(macOS)

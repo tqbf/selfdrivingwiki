@@ -191,7 +191,7 @@ public struct AppProcessServices: Sendable {
     public let transport: DaemonTransportServices
     public let renderer: any RendererServices
 
-    public static func resolve(from profile: BootedProfile) async throws -> AppProcessServices {
+    internal static func resolve(from profile: BootedProfile) async throws -> AppProcessServices {
         AppProcessServices(
             agentProvider: try await profile.context.require(ProcessServiceKeys.agentProvider),
             extraction: try await profile.context.require(ProcessServiceKeys.extraction),
@@ -352,7 +352,7 @@ public struct DaemonProcessServices: Sendable {
     public let extraction: any ExtractionServices
     public let tools: ToolRuntime?
 
-    public static func resolve(from profile: BootedProfile) async throws -> DaemonProcessServices {
+    internal static func resolve(from profile: BootedProfile) async throws -> DaemonProcessServices {
         DaemonProcessServices(
             agentProvider: try await profile.context.require(ProcessServiceKeys.agentProvider),
             extraction: try await profile.context.require(ProcessServiceKeys.extraction),

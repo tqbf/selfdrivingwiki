@@ -94,3 +94,9 @@ renderer, compiler-boundary, and documentation tests pass.
 
 `make build` and `make check-cordis` pass. The final full gate matrix runs before
 pull-request creation.
+
+An independent `openrouter/ox-alpha` review found no critical or high issues.
+Remediation adds an epoch guard for late daemon preparation, restores an
+in-memory registry descriptor after a failed delete save, checks cancellation
+before create publication, narrows raw-profile resolution APIs, and strengthens
+boundary and lifecycle tests.

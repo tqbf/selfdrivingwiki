@@ -68,6 +68,9 @@ struct CordisBoundaryScriptTests {
             path: "Sources/Feature/HiddenStoreFactory.swift",
             source: "let makeStore: () -> Void"),
         ProtectedConstruction(
+            path: "Sources/Feature/HiddenStoreReference.swift",
+            source: "func install(_ value: Any) {}\nfunc hidden(makeStore: Any) { install(makeStore) }"),
+        ProtectedConstruction(
             path: "Sources/Feature/LeakingFacade.swift",
             source: "public let profile: BootedProfile"),
     ])

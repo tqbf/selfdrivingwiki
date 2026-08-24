@@ -94,6 +94,7 @@ final class WikiDaemon: @unchecked Sendable {
     private var registry: WikiRegistry
     #if canImport(WikiFSEngine)
     private var preparedServices: [WikiID: AppServices] = [:]
+    private var preparationEpochs: [WikiID: UInt64] = [:]
     #endif
     private var openStores: [WikiID: GRDBWikiStore] = [:]
     private var shutdownTask: Task<Void, Never>?
@@ -234,9 +235,10 @@ final class WikiDaemon: @unchecked Sendable {
 
     @discardableResult
     func prepareAndResolveWikiServices(wikiID: WikiID) async throws -> AppServices {
-        if let services = queue.sync(execute: { preparedServices[wikiID] }) {
-            return services
+        let admission = queue.sync { () -> (AppServices?, UInt64) in
+            (preparedServices[wikiID], preparationEpochs[wikiID, default: 0])
         }
+        if let services = admission.0 { return services }
         guard let profileOwner else {
             throw DaemonStoreResolutionError.notPrepared(wikiID)
         }
@@ -244,10 +246,25 @@ final class WikiDaemon: @unchecked Sendable {
         guard let store = services.store as? GRDBWikiStore else {
             throw DaemonStoreResolutionError.unavailable(wikiID)
         }
-        return queue.sync {
-            if let existing = preparedServices[wikiID] {
-                return existing
+        return try publishPreparedServices(
+            services,
+            store: store,
+            wikiID: wikiID,
+            admissionEpoch: admission.1)
+    }
+
+    private func publishPreparedServices(
+        _ services: AppServices,
+        store: GRDBWikiStore,
+        wikiID: WikiID,
+        admissionEpoch: UInt64
+    ) throws -> AppServices {
+        try queue.sync {
+            guard preparationEpochs[wikiID, default: 0] == admissionEpoch,
+                  registry.descriptor(id: wikiID) != nil else {
+                throw DaemonStoreResolutionError.unavailable(wikiID)
             }
+            if let existing = preparedServices[wikiID] { return existing }
             wireEventBus(on: store, wikiID: wikiID)
             cacheStore(store, wikiID: wikiID)
             preparedServices[wikiID] = services
@@ -265,10 +282,13 @@ final class WikiDaemon: @unchecked Sendable {
 
     func removeWikiProfile(_ wikiID: WikiID) async {
         await chatHostCreationGate.waitForCreation(wikiID: wikiID)
-        let chatHost = queue.sync { chatHosts.removeValue(forKey: wikiID) }
+        let chatHost = queue.sync { () -> DaemonChatHost? in
+            preparationEpochs[wikiID, default: 0] &+= 1
+            return chatHosts.removeValue(forKey: wikiID)
+        }
         await chatHost?.shutdown()
         // The daemon cache must release the services before its owning child profile
-        // shuts down. A later prepare then resolves a fresh store and event bus.
+        // shuts down. The epoch prevents an admitted prepare from publishing late.
         queue.sync {
             preparedServices.removeValue(forKey: wikiID)
             openStores.removeValue(forKey: wikiID)
@@ -680,10 +700,16 @@ final class WikiDaemon: @unchecked Sendable {
         persistence: DaemonRegistryPersistence
     ) throws {
         try queue.sync {
+            let removed = registry.descriptor(id: wikiID)
             registry.remove(id: wikiID)
+            do {
+                try persistence.save(registry, containerDirectory)
+            } catch {
+                if let removed { registry.add(removed) }
+                throw error
+            }
             preparedServices.removeValue(forKey: wikiID)
             openStores.removeValue(forKey: wikiID)
-            try persistence.save(registry, containerDirectory)
         }
     }
     #endif
