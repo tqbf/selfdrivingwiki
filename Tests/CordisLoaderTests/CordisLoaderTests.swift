@@ -322,6 +322,28 @@ struct CordisLoaderTests {
         #expect(await cleanup.value == 1)
     }
 
+    @Test("entry disposal follows reverse mount order rather than lexical id order")
+    func disposalIsTrueLIFO() async throws {
+        let log = LoaderDisposalLog()
+        let catalog = try PluginCatalog(["z", "a", "m"].map { label in
+            PluginDefinition(id: PluginID("test.order.\(label)")) {
+                try ComponentDefinition(label: label) { activation in
+                    _ = try await activation.effect { _ in await log.append(label) }
+                }
+            }
+        })
+        let rows = ["z", "a", "m"].map { label in
+            Entry(id: EntryID(label), plugin: PluginID("test.order.\(label)"))
+        }
+        let booted = try await CordisBoot.boot(.init(
+            catalog: catalog,
+            layers: [PatchFile(entries: rows)]))
+
+        try await booted.shutdown()
+
+        #expect(await log.values == ["m", "a", "z"])
+    }
+
     private func rollbackCatalog(cleanup: LoaderCleanupCounter) throws -> PluginCatalog {
         try PluginCatalog([
             PluginDefinition(id: PluginID("test.tracked")) {
@@ -341,6 +363,11 @@ struct CordisLoaderTests {
 private actor LoaderCleanupCounter {
     private(set) var value = 0
     func increment() { value += 1 }
+}
+
+private actor LoaderDisposalLog {
+    private(set) var values: [String] = []
+    func append(_ value: String) { values.append(value) }
 }
 
 private struct LoaderExpectedError: Error {}

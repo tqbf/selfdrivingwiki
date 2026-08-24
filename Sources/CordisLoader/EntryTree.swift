@@ -46,6 +46,8 @@ public actor EntryTree {
     private let context: CordisContext
     private let catalog: PluginCatalog
     private var mounted: [EntryID: ComponentHandle] = [:]
+    /// Entry ids in successful mount order. The last id owns the newest handle.
+    private var mountOrder: [EntryID] = []
     private var rows: [Entry] = []
 
     public init(context: CordisContext, catalog: PluginCatalog) {
@@ -55,31 +57,32 @@ public actor EntryTree {
 
     public func update(to newRows: [Entry]) async throws {
         var nextMounted = mounted
-        let newRowIDs = Set(newRows.filter { !$0.disabled }.map(\.id))
+        var nextMountOrder = mountOrder
+        let enabledRows = newRows.filter { !$0.disabled }
+        let enabledByID = Dictionary(uniqueKeysWithValues: enabledRows.map { ($0.id, $0) })
+        let retiringIDs = Set(mounted.keys.filter { entryID in
+            guard let replacement = enabledByID[entryID] else { return true }
+            return replacement != currentRow(entryID)
+        })
 
-        // Removals first (LIFO over the removed set), then adds and changes.
-        for (entryID, handle) in mounted where !newRowIDs.contains(entryID) {
+        // Retire removals and changed rows in reverse ownership order.
+        for entryID in mountOrder.reversed() where retiringIDs.contains(entryID) {
+            guard let handle = nextMounted.removeValue(forKey: entryID) else { continue }
             try await handle.dispose()
-            nextMounted.removeValue(forKey: entryID)
+            nextMountOrder.removeAll { $0 == entryID }
         }
 
-        var newlyMounted: [ComponentHandle] = []
+        var newlyMounted: [(EntryID, ComponentHandle)] = []
         do {
-            for row in newRows where !row.disabled {
-                if nextMounted[row.id] != nil, row == currentRow(row.id) {
-                    continue
-                }
-                if let existing = nextMounted[row.id] {
-                    try await existing.dispose()
-                    nextMounted.removeValue(forKey: row.id)
-                }
+            for row in enabledRows where nextMounted[row.id] == nil {
                 let handle = try await mount(row)
                 nextMounted[row.id] = handle
-                newlyMounted.append(handle)
+                nextMountOrder.append(row.id)
+                newlyMounted.append((row.id, handle))
             }
         } catch {
             var cleanup: [CordisFailure] = []
-            for handle in newlyMounted.reversed() {
+            for (_, handle) in newlyMounted.reversed() {
                 do {
                     try await handle.dispose()
                 } catch {
@@ -91,6 +94,7 @@ public actor EntryTree {
         }
 
         mounted = nextMounted
+        mountOrder = nextMountOrder
         rows = newRows
     }
 
@@ -190,11 +194,11 @@ public actor EntryTree {
     }
 
     public func dispose() async throws {
-        for (entryID, handle) in mounted.sorted(by: { $0.key.rawValue > $1.key.rawValue }) {
+        for entryID in mountOrder.reversed() {
+            guard let handle = mounted.removeValue(forKey: entryID) else { continue }
             try await handle.dispose()
-            _ = entryID
         }
-        mounted.removeAll()
+        mountOrder.removeAll()
         rows = []
     }
 
