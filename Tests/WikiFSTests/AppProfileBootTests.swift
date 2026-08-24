@@ -52,6 +52,32 @@ struct AppProfileBootTests {
         #expect(message.contains("expected"))
     }
 
+    @Test("process owner shuts down a booted profile when service resolution fails")
+    @MainActor
+    func processOwnerCleansUpResolutionFailure() async throws {
+        let disposals = ProfileProcessDisposalRecorder()
+        let owner = AppProcessProfileOwner {
+            try await CordisBoot.boot(.init(
+                catalog: try ProfileBootFixture.processCatalog(
+                    includeAppServices: false,
+                    recorder: disposals),
+                layers: [PatchFile(entries: ProfileBootFixture.processEntries(includeAppServices: false))]))
+        }
+
+        owner.start()
+        await owner.awaitSettled()
+
+        guard case .failed = owner.readiness else {
+            Issue.record("expected missing app process services to fail resolution")
+            return
+        }
+        #expect(owner.profile == nil)
+        #expect(owner.services == nil)
+        #expect(await disposals.count == 2)
+        await owner.shutdown()
+        #expect(await disposals.count == 2)
+    }
+
     @Test("per-wiki facade boots from child and process profile services")
     @MainActor
     func profileProfileWikiSessionCoversSessionSurface() async throws {

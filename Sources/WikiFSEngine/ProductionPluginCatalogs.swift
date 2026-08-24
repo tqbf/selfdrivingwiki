@@ -190,7 +190,15 @@ public final class AppProcessProfileOwner {
         startupTask = Task { [weak self, boot] in
             do {
                 let profile = try await boot()
-                let services = try await AppProcessServices.resolve(from: profile)
+                let services: AppProcessServices
+                do {
+                    services = try await AppProcessServices.resolve(from: profile)
+                } catch {
+                    do { try await profile.shutdown() } catch {
+                        DebugLog.store("App process profile cleanup after resolution failure failed: \(error)")
+                    }
+                    throw error
+                }
                 guard let self, !Task.isCancelled, !self.shutdownStarted else {
                     try await profile.shutdown()
                     return
