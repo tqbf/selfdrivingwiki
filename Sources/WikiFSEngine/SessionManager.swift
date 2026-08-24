@@ -48,6 +48,11 @@ public final class SessionManager {
     /// window does not own a lease; it resolves through the session retained by
     /// the wiki window that activated it.
     @ObservationIgnored private var sessionLeaseCounts: [WikiID: Int] = [:]
+    private struct SessionFlight: Sendable {
+        let token: UUID
+        let task: Task<any WikiSessionProtocol, Error>
+    }
+    @ObservationIgnored private var sessionFlights: [WikiID: SessionFlight] = [:]
 
     /// Per-wiki store-open failures (issue #881). When `session(for:)` throws
     /// (the on-disk DB couldn't be opened), the error message is recorded here
@@ -191,19 +196,58 @@ public final class SessionManager {
             return existing
         }
         readiness[wikiID] = .loading
-        do {
-            let session = if let asyncSessionLoader {
-                try await asyncSessionLoader(wikiID, descriptor)
-            } else {
-                try self.session(for: wikiID, descriptor: descriptor)
+        guard let asyncSessionLoader else {
+            do {
+                let session = try self.session(for: wikiID, descriptor: descriptor)
+                readiness[wikiID] = .ready
+                return session
+            } catch {
+                readiness[wikiID] = .failed(String(describing: error))
+                throw error
             }
-            sessions[wikiID] = session
-            if sessionLeaseCounts[wikiID] == nil { sessionLeaseCounts[wikiID] = 1 }
+        }
+        let flight: SessionFlight
+        if let existing = sessionFlights[wikiID] {
+            flight = existing
+        } else {
+            let token = UUID()
+            let task = Task { @MainActor in
+                try await asyncSessionLoader(wikiID, descriptor)
+            }
+            flight = SessionFlight(token: token, task: task)
+            sessionFlights[wikiID] = flight
+        }
+        do {
+            let session = try await flight.task.value
+            guard sessionFlights[wikiID]?.token == flight.token else {
+                if let installed = sessions[wikiID], installed === session {
+                    installed.updateDescriptor(descriptor)
+                    sessionLeaseCounts[wikiID, default: 0] += 1
+                    return installed
+                }
+                await session.shutdown()
+                throw CancellationError()
+            }
+            sessionFlights.removeValue(forKey: wikiID)
+            if let installed = sessions[wikiID] {
+                guard installed === session else {
+                    await session.shutdown()
+                    installed.updateDescriptor(descriptor)
+                    sessionLeaseCounts[wikiID, default: 0] += 1
+                    return installed
+                }
+            } else {
+                sessions[wikiID] = session
+            }
+            sessionLeaseCounts[wikiID, default: 0] += 1
             openErrors.removeValue(forKey: wikiID)
             readiness[wikiID] = .ready
             return session
         } catch {
-            readiness[wikiID] = .failed(String(describing: error))
+            if sessionFlights[wikiID]?.token == flight.token {
+                sessionFlights.removeValue(forKey: wikiID)
+                readiness[wikiID] = .failed(String(describing: error))
+            }
             throw error
         }
     }

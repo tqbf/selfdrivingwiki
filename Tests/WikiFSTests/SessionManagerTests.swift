@@ -61,6 +61,52 @@ struct SessionManagerTests {
         #expect(manager.readiness(for: descriptor.id) == .ready)
     }
 
+    @Test(.timeLimit(.minutes(1)))
+    func concurrentReadySessionCallsShareOneFlight() async throws {
+        let dir = tempDirectory()
+        let registry = makeSeededRegistry(dir: dir)
+        let descriptor = try #require(registry.wikis.first)
+        let gate = SessionLoaderGate()
+        let calls = SessionLoaderCounter()
+        let session = try makeSessionManager(dir: dir).session(
+            for: descriptor.id,
+            descriptor: descriptor)
+        let coordinator = ExtractionCoordinator(
+            containerDirectory: dir,
+            localExtractorFactory: { StubExtractor() })
+        let manager = SessionManager(
+            containerDirectory: dir,
+            extractionCoordinator: coordinator,
+            queueEngine: try makeTestQueueEngine(),
+            extractionProvider: StubExtractionProvider(),
+            pdf2mdScriptPathResolver: { nil },
+            asyncSessionLoader: { _, _ in
+                await calls.increment()
+                await gate.wait()
+                return session
+            })
+
+        let first = Task { @MainActor in
+            try await manager.readySession(for: descriptor.id, descriptor: descriptor)
+        }
+        await gate.awaitArrival()
+        let second = Task { @MainActor in
+            try await manager.readySession(for: descriptor.id, descriptor: descriptor)
+        }
+        await Task.yield()
+        await gate.open()
+        let firstSession = try await first.value
+        let secondSession = try await second.value
+
+        #expect(firstSession === secondSession)
+        #expect(firstSession === session)
+        #expect(await calls.value == 1)
+        #expect(manager.sessions.count == 1)
+        manager.releaseSession(for: descriptor.id)
+        manager.releaseSession(for: descriptor.id)
+        await manager.shutdownSearchRuntimes()
+    }
+
     @Test func asyncReadinessRecordsFailure() async throws {
         let dir = tempDirectory()
         let registry = makeSeededRegistry(dir: dir)
@@ -451,6 +497,44 @@ struct SessionManagerTests {
         #expect(manager.sessions[descriptor.id] != nil)
         #expect(session.wikiID == descriptor.id)
     }
+}
+
+private actor SessionLoaderGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private let arrivals: AsyncStream<Void>
+    private let arrivalContinuation: AsyncStream<Void>.Continuation
+
+    init() {
+        let pair = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        arrivals = pair.stream
+        arrivalContinuation = pair.continuation
+    }
+
+    func wait() async {
+        arrivalContinuation.yield(())
+        guard !isOpen else { return }
+        await withCheckedContinuation { continuation in
+            if isOpen { continuation.resume() } else { waiters.append(continuation) }
+        }
+    }
+
+    func awaitArrival() async {
+        for await _ in arrivals { return }
+    }
+
+    func open() {
+        isOpen = true
+        let pending = waiters
+        waiters.removeAll()
+        for waiter in pending { waiter.resume() }
+        arrivalContinuation.finish()
+    }
+}
+
+private actor SessionLoaderCounter {
+    private(set) var value = 0
+    func increment() { value += 1 }
 }
 
 /// A minimal stub `MarkdownExtractor` for tests — returns empty content.
