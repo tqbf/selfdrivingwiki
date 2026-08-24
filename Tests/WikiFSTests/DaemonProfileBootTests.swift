@@ -31,7 +31,7 @@ struct DaemonProfileBootTests {
             layers: [PatchFile(entries: entries)],
             parent: process.context))
 
-        #expect(await booted.tree.mountedEntryIDs.count == entries.count)
+        #expect(await booted.tree.mountedEntryIDs.count == entries.filter { !$0.disabled }.count)
         try await ProfileBootFixture.assertRequiredServices(in: booted.context)
         _ = try #require(try await booted.context.find(ProcessServiceKeys.agentProvider))
         _ = try #require(try await booted.context.find(ProcessServiceKeys.extraction))

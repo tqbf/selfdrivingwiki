@@ -17,6 +17,25 @@ enum ProfileBootFixture {
         return url
     }
 
+    static func copiedProductionBundles(named name: String) throws -> URL {
+        let root = try directory(named: name)
+        let destination = root.appendingPathComponent("bundles", isDirectory: true)
+        try FileManager.default.copyItem(
+            at: ProductionProfileResolver.shippedBundlesDirectory(),
+            to: destination)
+        return destination
+    }
+
+    static func setDisabled(_ disabled: Bool, entryID: EntryID, profile: String, in bundles: URL) throws {
+        let url = bundles
+            .appendingPathComponent(profile, isDirectory: true)
+            .appendingPathComponent(ProfileBundle.patchFileName)
+        var patch = try PatchFileCodec.decode(data: Data(contentsOf: url))
+        let index = try #require(patch.entries.firstIndex { $0.id == entryID })
+        patch.entries[index].disabled = disabled
+        try Data(PatchFileCodec.encode(patch).utf8).write(to: url)
+    }
+
     static func appCatalog(recorder: ProfileStoreEventRecorder? = nil) throws -> PluginCatalog {
         let additionalDefinitions = recorder.map { [listenerDefinition(recorder: $0)] } ?? []
         return try AppPluginCatalog.build(

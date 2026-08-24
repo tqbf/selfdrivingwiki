@@ -5,15 +5,11 @@ finding. Owner decision: fix all findings, then re-review until clean.
 
 ## Critical
 
-1. **Production composition is still code, not data; bundles are not
-   authoritative.** App/daemon/CLI boot from hard-coded Swift entry arrays
-   (`ProductionPluginCatalogs.swift` `ProductionProfileEntries`,
-   `WikiFSApp.swift:236-290`, `CLITantivyLegResolver.swift:294-296`).
-   `ProfileBundle` YAML loading exists but production never calls it.
-   Fix: entry points resolve real bundle/profile/home/overlay layers through
-   `ProfileBundle` (machine facts like DB URL/wiki id as an overlay), pass
-   resolved rows to `CordisBoot`; add a test that edits only YAML and proves
-   the booted graph changes.
+1. **FIXED (`e36070bb`) — Production composition was code, not data.**
+   App, daemon, and CLI boots now load the shipped bundle and profile YAML.
+   Home and command patches use the same resolver. A final ambient patch adds
+   only machine facts. The catalogs now contain definitions and injected
+   factories, but they do not generate composition rows.
 2. **Tool and agent-loop event extension points are decorative.**
    `ToolServiceKeys`/`AgentLoopServiceKeys` define the waterfalls, but no
    production execution routes through them (`QueueEngine.swift:842-845`
@@ -56,9 +52,11 @@ finding. Owner decision: fix all findings, then re-review until clean.
 10. **FIXED (`ccf6db5b`) — Store-to-Cordis bridge forwarding tasks were unowned.**
     The store component now owns forwarding admission and tasks. Disposal
     unsubscribes, cancels accepted tasks, and awaits all in-flight forwarding.
-11. **Boot/config acceptance tests use synthetic rows, not committed YAML.**
-    Fix: tests that load `bundles/*/cordis.patch.yml`, boot the
-    production-shaped catalog, and pin app/daemon dump-config output.
+11. **FIXED (`b2d20839`) — Boot/config tests used synthetic rows.**
+    The tests now load committed YAML and apply a fixture home patch. App,
+    daemon, and CLI dump tests pin the resolved profiles. The authority test
+    edits one copied app YAML row and boots the selected production catalog
+    slice. The running renderer service registry changes with the YAML row.
 
 ## Positive observations (no action)
 
