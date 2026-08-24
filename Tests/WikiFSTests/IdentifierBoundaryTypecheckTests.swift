@@ -79,10 +79,21 @@ struct IdentifierBoundaryTypecheckTests {
                 .init(label: "readAccessCannotExposeStore", batchFixture: "negative-read-access-batch.swift", expectedDiagnostic: "'store' is inaccessible due to 'private' protection level"),
             ]
         ),
+        BatchFixture(
+            name: "negative-cordis-facades.swift",
+            cases: [
+                .init(label: "profileMemberIsUnavailable", batchFixture: "negative-cordis-facades.swift", expectedDiagnostic: "value of type 'AppServices' has no member 'profile'"),
+                .init(label: "contextMemberIsUnavailable", batchFixture: "negative-cordis-facades.swift", expectedDiagnostic: "value of type 'AppServices' has no member 'context'"),
+                .init(label: "requireIsUnavailable", batchFixture: "negative-cordis-facades.swift", expectedDiagnostic: "value of type 'ProfileLifetime' has no member 'require'"),
+                .init(label: "findIsUnavailable", batchFixture: "negative-cordis-facades.swift", expectedDiagnostic: "value of type 'ProfileLifetime' has no member 'find'"),
+                .init(label: "supplyIsUnavailable", batchFixture: "negative-cordis-facades.swift", expectedDiagnostic: "value of type 'ProfileLifetime' has no member 'supply'"),
+            ]
+        ),
     ]
 
     private static let positiveFixtures: [String] = [
         "positive.swift",
+        "positive-cordis-facades.swift",
     ]
 
     private static let expectedBoundaryLabels: Set<String> = [
@@ -98,6 +109,11 @@ struct IdentifierBoundaryTypecheckTests {
         "pageIDIsRejectedBySourceAPI",
         "pageIDIsRejectedBySourceVersionAPI",
         "permissionRequestIDIsRejectedByToolCallAPI",
+        "profileMemberIsUnavailable",
+        "contextMemberIsUnavailable",
+        "requireIsUnavailable",
+        "findIsUnavailable",
+        "supplyIsUnavailable",
         "readAccessCannotBeCaptured",
         "readAccessCannotEscape",
         "readAccessCannotExposeStore",
@@ -432,8 +448,9 @@ struct IdentifierBoundaryTypecheckTests {
         #expect(labels == Self.expectedBoundaryLabels)
     }
 
-    @Test func positiveFixturesCompile() async throws {
-        let result = try await runTypecheck(fixtureName: Self.positiveFixtures[0])
+    @Test(arguments: positiveFixtures)
+    func positiveFixturesCompile(fixtureName: String) async throws {
+        let result = try await runTypecheck(fixtureName: fixtureName)
         #expect(result.status == 0, "positive fixture failed to typecheck:\n\(result.output)")
     }
 

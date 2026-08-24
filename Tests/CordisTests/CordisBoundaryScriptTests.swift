@@ -22,9 +22,6 @@ struct CordisBoundaryScriptTests {
         let app = try String(
             contentsOf: root.appendingPathComponent("Sources/WikiFS/Window/WikiFSApp.swift"),
             encoding: .utf8)
-        let catalog = try String(
-            contentsOf: root.appendingPathComponent("Sources/WikiFS/Renderer/RendererCompositionOwner.swift"),
-            encoding: .utf8)
 
         for constructor in [
             "GenerationGate(", "AgentLauncher(", "AgentProviderRuntimeFactory(",
@@ -34,8 +31,6 @@ struct CordisBoundaryScriptTests {
             #expect(!app.contains(constructor), "WikiFSApp must not construct \(constructor)")
         }
         #expect(!app.contains("AppProcessComposition"))
-        #expect(catalog.contains("final class AppProcessPluginCatalog"))
-        #expect(catalog.contains("ProcessRuntimePlugins"))
     }
 
     @Test("rejects privileged construction outside allowlisted boundaries", arguments: [
@@ -60,6 +55,36 @@ struct CordisBoundaryScriptTests {
         let result = try await runBoundaryCheck(arguments: [], sourceRoot: fixtureRoot)
         #expect(result.status != 0)
         #expect(result.standardError.contains("CordisBoundaryViolationFixture.swift"))
+    }
+
+    @Test("rejects new service and facade boundary violations", arguments: [
+        ProtectedConstruction(
+            path: "Sources/Feature/UntypedService.swift",
+            source: "let key = ServiceKey<any Sendable>(label: \"bad\")"),
+        ProtectedConstruction(
+            path: "Sources/Feature/ModelService.swift",
+            source: "let key = ServiceKey<WikiStoreModel>(label: \"bad\")"),
+        ProtectedConstruction(
+            path: "Sources/Feature/HiddenStoreFactory.swift",
+            source: "let makeStore: () -> Void"),
+        ProtectedConstruction(
+            path: "Sources/Feature/LeakingFacade.swift",
+            source: "public let profile: BootedProfile"),
+    ])
+    func rejectsNewBoundaryViolation(fixture: ProtectedConstruction) async throws {
+        let result = try await runSyntheticBoundaryCheck(fixture)
+        #expect(result.status != 0)
+        #expect(result.standardError.contains(fixture.path))
+    }
+
+    @Test("rejects process plugins without declared input markers")
+    func rejectsHiddenProcessDependencies() async throws {
+        let fixture = ProtectedConstruction(
+            path: "WikiFSEngine/ProductionPluginCatalogs.swift",
+            source: "enum ProcessRuntimePlugins {}")
+        let result = try await runSyntheticBoundaryCheck(fixture)
+        #expect(result.status != 0)
+        #expect(result.standardError.contains("process plugins hide stable dependencies"))
     }
 
     @Test("migrated production paths cannot regain direct construction", arguments: [
@@ -93,28 +118,41 @@ struct CordisBoundaryScriptTests {
         #expect(result.standardError.contains(fixture.path))
     }
 
-    @Test("documented allowlisted path is accepted in fixture mode")
-    func documentedAllowlistedPathIsAcceptedInFixtureMode() async throws {
+    @Test("documented allowlisted paths are accepted", arguments: [
+        ProtectedConstruction(
+            path: "Sources/WikiFSCore/Store/StoreBackend.swift",
+            source: "let store = GRDBWikiStore("),
+        ProtectedConstruction(
+            path: "Sources/WikiFSEngine/StorePlugin.swift",
+            source: "let makeStore = backend.makeStore"),
+        ProtectedConstruction(
+            path: "Sources/WikiFSEngine/ProfileWikiSession.swift",
+            source: "let makeStore: () -> Void"),
+    ])
+    func documentedAllowlistedPathIsAcceptedInFixtureMode(
+        fixture: ProtectedConstruction
+    ) async throws {
+        let result = try await runSyntheticBoundaryCheck(fixture)
+        #expect(result.status == 0, "Boundary check failed: \(result.standardError)")
+    }
+
+    private func runSyntheticBoundaryCheck(
+        _ fixture: ProtectedConstruction
+    ) async throws -> (status: Int32, standardError: String) {
         let root = repositoryRoot()
         let fixtureRoot = root.appendingPathComponent(
-            "tmp/cordis-allowed-path-\(UUID().uuidString)",
+            "tmp/cordis-policy-\(UUID().uuidString)",
             isDirectory: true)
-        let file = fixtureRoot.appendingPathComponent(
-            "Sources/WikiFSCore/Store/StoreBackend.swift")
+        let file = fixtureRoot.appendingPathComponent(fixture.path)
         try FileManager.default.createDirectory(
             at: file.deletingLastPathComponent(),
             withIntermediateDirectories: true)
-        try "let store = GRDBWikiStore(".write(
-            to: file,
-            atomically: false,
-            encoding: .utf8)
+        try fixture.source.write(to: file, atomically: false, encoding: .utf8)
         defer {
             do { try FileManager.default.removeItem(at: fixtureRoot) }
-            catch { Issue.record("Could not remove allowlisted-path fixture: \(error)") }
+            catch { Issue.record("Could not remove policy fixture: \(error)") }
         }
-
-        let result = try await runBoundaryCheck(arguments: [], sourceRoot: fixtureRoot)
-        #expect(result.status == 0, "Boundary check failed: \(result.standardError)")
+        return try await runBoundaryCheck(arguments: [], sourceRoot: fixtureRoot)
     }
 
     private func runBoundaryCheck(

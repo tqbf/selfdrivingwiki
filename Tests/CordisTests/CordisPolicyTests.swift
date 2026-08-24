@@ -38,7 +38,7 @@ struct CordisSourcePolicyTests {
         #expect(!source.contains("import WikiFS"))
     }
 
-    @Test("Cordis remains outside UI, model, session, and daemon files")
+    @Test("UI, model, session, and daemon code cannot import Cordis contexts")
     func forbiddenProductionFilesDoNotImportCordis() throws {
         let root = repositoryRoot()
         let forbidden = [
@@ -119,8 +119,8 @@ struct CordisSourcePolicyTests {
             "Sources/WikiFSEngine/RendererPlugins.swift",
             "Sources/WikiFSEngine/TransportServiceKeys.swift",
             "Sources/WikiFSEngine/TransportPlugins.swift",
-            // Phase 4.11 integration composition boundary: one lazy capability
-            // registry with reversible Zotero, podcast, and URL-fetch adapters.
+            // Phase 4.11 integration composition boundary: one typed lazy
+            // registry with reversible Zotero and URL-fetch adapters.
             "Sources/WikiFSEngine/IntegrationServiceKeys.swift",
             "Sources/WikiFSEngine/IntegrationPlugins.swift",
             "Sources/WikiCtlCore/CLITantivyLegResolver.swift",
