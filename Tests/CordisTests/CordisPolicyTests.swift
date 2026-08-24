@@ -78,7 +78,52 @@ struct CordisSourcePolicyTests {
             "Sources/WikiFSEngine/SearchRuntimeAssembly.swift",
             "Sources/WikiFSEngine/DaemonTransportRuntimeAssembly.swift",
             "Sources/WikiFSEngine/SearchRuntimeRegistry.swift",
+            // Phase 4.1 store-domain composition boundary: typed keys and the
+            // plugin that owns store construction plus reversible bus bridging.
+            "Sources/WikiFSEngine/StoreServiceKeys.swift",
+            "Sources/WikiFSEngine/StorePlugin.swift",
+            // Phase 4.2 session-log composition boundary: append-only event
+            // facade and the reversible chat-persistence projection.
+            "Sources/WikiFSEngine/SessionServiceKeys.swift",
+            "Sources/WikiFSEngine/SessionsPlugin.swift",
+            // Phase 4.3 model-adapter composition boundary: actor-backed route
+            // registry and reversible ACP adapter registration.
+            "Sources/WikiFSEngine/LlmServiceKeys.swift",
+            "Sources/WikiFSEngine/LlmPlugin.swift",
+            // Phase 4.4 tool composition boundary: scoped registry, guarded
+            // execution waterfalls, and reversible tool registration.
+            "Sources/WikiFSEngine/ToolServiceKeys.swift",
+            "Sources/WikiFSEngine/ToolsPlugin.swift",
+            // Phase 4.5 prompt composition boundary: ordered section registry
+            // and base prompt resource contribution.
+            "Sources/WikiFSEngine/PromptServiceKeys.swift",
+            "Sources/WikiFSEngine/PromptPlugin.swift",
+            // Phase 4.6 agent-loop composition boundary: durable turn/step
+            // events plus pre-step and request waterfalls.
+            "Sources/WikiFSEngine/AgentLoopServiceKeys.swift",
+            "Sources/WikiFSEngine/AgentLoopPlugin.swift",
+            // Phase 4.7 extraction composition boundary: typed lazy adapter
+            // registry and reversible backend registrations.
+            "Sources/WikiFSEngine/ExtractionServiceKeys.swift",
+            "Sources/WikiFSEngine/ExtractionPlugins.swift",
+            // Phase 4.8 search composition boundary: typed provider registry
+            // plus lazy Tantivy and embeddings adapter registrations.
+            "Sources/WikiFSEngine/SearchServiceKeys.swift",
+            "Sources/WikiFSEngine/SearchPlugins.swift",
+            // Phases 4.9–4.10 renderer and transport composition boundaries:
+            // typed lazy registries with reversible adapter registrations.
+            "Sources/WikiFSEngine/RendererServiceKeys.swift",
+            "Sources/WikiFSEngine/RendererPlugins.swift",
+            "Sources/WikiFSEngine/TransportServiceKeys.swift",
+            "Sources/WikiFSEngine/TransportPlugins.swift",
+            // Phase 4.11 integration composition boundary: one lazy capability
+            // registry with reversible Zotero, podcast, and URL-fetch adapters.
+            "Sources/WikiFSEngine/IntegrationServiceKeys.swift",
+            "Sources/WikiFSEngine/IntegrationPlugins.swift",
             "Sources/WikiCtlCore/CLITantivyLegResolver.swift",
+            // Phase 5a diagnostic composition boundary: resolves loader data
+            // without exposing a Cordis context to command implementations.
+            "Sources/WikiCtlCore/DumpConfigCommand.swift",
             "Sources/WikiFS/Renderer/RendererRuntimeAssembly.swift",
         ])
         let forbiddenPatterns = [
@@ -95,7 +140,8 @@ struct CordisSourcePolicyTests {
                 of: root.path + "/",
                 with: "")
             guard !approved.contains(relative),
-                  !relative.hasPrefix("Sources/Cordis/") else { continue }
+                  !relative.hasPrefix("Sources/Cordis/"),
+                  !relative.hasPrefix("Sources/CordisLoader/") else { continue }
             let source = try String(contentsOf: file, encoding: .utf8)
             for pattern in forbiddenPatterns {
                 let containsForbiddenAPI: Bool

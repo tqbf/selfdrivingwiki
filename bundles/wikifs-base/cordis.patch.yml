@@ -1,0 +1,36 @@
+# Machine-specific values are placeholders. A profile or the App Group home
+# patch must replace the complete store row before boot.
+entries:
+  - id: store
+    plugin: wiki.store
+    config:
+      databasePath: "${WIKI_DATABASE_PATH}"
+      wikiID: "${WIKI_ID}"
+  - id: sessions
+    plugin: wiki.sessions
+  - id: chats-persistence
+    plugin: wiki.chats-persistence
+  - id: llm-runtime
+    plugin: wiki.llm-runtime
+  - id: tools
+    plugin: wiki.tools
+  - id: system-prompt
+    plugin: wiki.system-prompt
+  - id: agent-loop
+    plugin: wiki.agent-loop
+  - id: extraction
+    plugin: wiki.extraction
+  - id: search
+    plugin: wiki.search
+  - id: renderers
+    plugin: wiki.renderers
+  - id: transport
+    plugin: wiki.transport
+  - id: integrations
+    plugin: wiki.integrations
+
+# Factory-backed adapters are intentionally omitted until Phase 5b wires their
+# process-specific factories into the catalog: ACP LLM; pdf2md, ACP, Anthropic,
+# Gemini, Docling, Defuddle, YouTube, RSS, and Apple Podcast extraction;
+# Tantivy and embeddings search; renderer services; daemon transport; Zotero,
+# podcast, and URL-fetch integrations.

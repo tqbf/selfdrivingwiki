@@ -1,0 +1,3 @@
+# The SwiftUI shell, File Provider projection, and settings UI remain app-wired
+# until Phase 5b introduces their plugin definitions.
+entries: []

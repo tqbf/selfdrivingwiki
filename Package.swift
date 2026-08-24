@@ -61,6 +61,9 @@ let package = Package(
         // is acceptable because MLX already requires Apple Silicon. See
         // plans/tantivy-search-sidecar.md.
         .package(url: "https://github.com/wsargent/tantivy.swift.git", from: "0.3.5"),
+        // Yams — YAML decoding for CordisLoader patch files
+        // (bundles/profiles/home/--patch layers). See plans/cordis-full-architecture.md.
+        .package(url: "https://github.com/jpsim/Yams", from: "5.0.0"),
     ],
     targets: [
         // Foundation-only typed component runtime. Cordis owns actor-isolated
@@ -75,6 +78,24 @@ let package = Package(
             name: "CordisTests",
             dependencies: ["Cordis"],
             path: "Tests/CordisTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        // Declarative boot composition: entries, layered patches (bundle →
+        // profile → home → --patch), and the profile boot driver. See
+        // plans/cordis-full-architecture.md.
+        .target(
+            name: "CordisLoader",
+            dependencies: [
+                "Cordis",
+                .product(name: "Yams", package: "Yams"),
+            ],
+            path: "Sources/CordisLoader",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "CordisLoaderTests",
+            dependencies: ["Cordis", "CordisLoader"],
+            path: "Tests/CordisLoaderTests",
             swiftSettings: strictSwiftSettings
         ),
         .executableTarget(
@@ -359,6 +380,7 @@ let package = Package(
             name: "WikiCtlCore",
             dependencies: [
                 "WikiFSCore",
+                "CordisLoader",
                 // The XPC contract — the typed client (WikiDaemonConnection +
                 // DaemonWorkloadClient) speaks WikiDaemonProtocol + throws
                 // WikiDaemonError. Empty on Linux; harmless there.
@@ -475,7 +497,7 @@ let package = Package(
         // ACP wiring (pure), etc. These run on both macOS and Linux (#754).
         .testTarget(
             name: "WikiFSCoreTests",
-            dependencies: ["Cordis", "WikiFSCore", "WikiCtlCore", "ProviderConfigMutationHelper",
+            dependencies: ["Cordis", "CordisLoader", "WikiFSCore", "WikiCtlCore", "ProviderConfigMutationHelper",
                            // WikiFSEngine is macOS-only at build time because it
                            // depends on the `ACP` product (macOS-only). On Linux
                            // the test target still builds — the ACP-backed tests

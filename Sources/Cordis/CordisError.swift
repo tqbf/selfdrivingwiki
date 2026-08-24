@@ -86,4 +86,10 @@ public enum CordisError: Error, Equatable, Sendable {
     case invalidTransition(componentID: ComponentID, from: ComponentState.Kind, to: ComponentState.Kind)
     case cleanup(CleanupAggregateError)
     case typeMismatch(ServiceDescriptor)
+    case eventPayloadMismatch(EventDescriptor)
+    case eventListenerMismatch(EventDescriptor)
+    case eventModeMismatch(EventDescriptor)
+    case unknownListener(ListenerID)
+    case duplicatePlugin(PluginID)
+    case invalidConfig(pluginID: PluginID, entryID: String?, issues: [ConfigIssue])
 }

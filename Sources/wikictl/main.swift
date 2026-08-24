@@ -62,6 +62,10 @@ func run() async -> Int32 {
         return 0
     }
 
+    if case .dumpConfig(let overlay) = invocation.command {
+        return runDumpConfig(overlay: overlay)
+    }
+
     // `wiki` subcommands — registry operations via direct App Group container
     // access (the app-bound XPC daemon is unreachable from the CLI). These
     // don't need a wiki selector.
@@ -227,7 +231,7 @@ func execute(
     case .workspace(let action):
         let r = try WorkspaceCommand.run(action, in: store)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
-    case .version:
+    case .version, .dumpConfig:
         // Handled before wiki resolution in `run()` — unreachable here.
         return SourceCommand.Result(payload: .text(""), didCommit: false)
     case .wikiList, .wikiCreate, .wikiDelete, .wikiRename:
@@ -319,6 +323,32 @@ func readBody(from source: String) throws -> String {
 // behavior — `createWiki` posted no registry notification either — and is fine
 // for the CLI's scripting/headless role (the app creates wikis via its own
 // client, not via wikictl).
+
+func runDumpConfig(overlay: String?) -> Int32 {
+    let bundlesDirectory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        .appendingPathComponent("bundles", isDirectory: true)
+    let homeDirectory: URL?
+    do {
+        homeDirectory = try DatabaseLocation.appGroupContainerDirectory()
+    } catch {
+        homeDirectory = nil
+    }
+
+    do {
+        let result = try DumpConfigCommand.run(
+            bundlesDirectory: bundlesDirectory,
+            homeDirectory: homeDirectory,
+            overlay: overlay)
+        if let note = result.note {
+            print(note)
+        }
+        print(result.output, terminator: result.output.hasSuffix("\n") ? "" : "\n")
+        return 0
+    } catch {
+        FileHandle.standardError.write(Data("wikictl: unable to dump config: \(error)\n".utf8))
+        return 1
+    }
+}
 
 func runWikiList() async -> Int32 {
     do {

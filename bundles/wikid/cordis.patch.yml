@@ -1,0 +1,3 @@
+# Headless daemon profile. No UI entries exist in the base bundle; Phase 5b
+# will keep UI shell entries out of this profile.
+entries: []

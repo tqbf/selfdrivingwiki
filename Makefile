@@ -129,7 +129,7 @@ NOTARY_PROFILE ?= wikifs-notary
 PROVISION_PROFILE ?=
 NOTES_FILE       ?=
 
-.PHONY: all deps build check check-release test test-watchdog test-fast test-fast-release test-linux test-linux-focus release run reload clean install uninstall register help prune-provider-registrations \
+.PHONY: all deps build check check-cordis check-release test test-watchdog test-fast test-fast-release test-linux test-linux-focus release run reload clean install uninstall register help prune-provider-registrations \
         signing-preflight signing-status signing-repair signing-repair-dry-run \
         check-version notary-setup sign zip-notary notarize staple zip-release \
         checksum verify-release dist github-release print-version icon prompts \
@@ -142,6 +142,7 @@ help:
 	@echo "  make / build      Build $(CONFIG) into ./$(APP)  (default)"
 	@echo "                    (also builds ./build/wikictl + embeds it in the app bundle)"
 	@echo "  check             Compile only (swift build) — no bundle/sign; CI/agent gate"
+	@echo "  check-cordis      Verify the current Cordis composition boundary baseline"
 	@echo "  check-release     Compile only in release mode (swift build -c release)"
 	@echo "  test              Run the SwiftPM test suite"
 	@echo "  test-watchdog     Same as test, but with a wall-clock timeout + hang/slow-test report"
@@ -273,6 +274,9 @@ release: deps bun-check $(APP_ICON) prompts version keychain
 check: deps prompts version keychain
 	swift build -c $(CONFIG)
 	@echo "✓ compiles ($(CONFIG))"
+
+check-cordis:
+	@./scripts/check-cordis-boundaries
 
 # Compile-only gate in RELEASE mode — no .app, no signing. Faster runtime
 # than `check` at the cost of slower compile; use for performance testing or
