@@ -103,26 +103,43 @@ public struct AgentLoopService: Sendable {
         self.runWaterfall = waterfall
     }
 
-    @discardableResult
-    public func enqueue(_ request: AgentTurnRequest) async throws -> [AgentEvent] {
+    /// Begins a turn and runs policy and request waterfalls without consuming a
+    /// backend stream. A non-nil `events` result short-circuits the backend.
+    public func prepare(_ request: AgentTurnRequest) async throws -> AgentStepRequest {
         await emitTurnStarted(AgentLoopEventKeys.turnStarted, AgentTurnStarted(request: request))
         var step = try await preStep(AgentStepRequest(turn: request))
         if step.events == nil {
             step = try await runWaterfall(AgentLoopEventKeys.request, step)
         }
-        guard let events = step.events else {
-            throw AgentLoopError.missingStepResult(request.turnID)
-        }
+        return step
+    }
+
+    /// Projects one completed step after its stream has been consumed. Callers
+    /// retain ownership of incremental event delivery and durable persistence.
+    public func stepCompleted(_ step: AgentStepRequest, events: [AgentEvent]) async {
         await emitStepCompleted(
             AgentLoopEventKeys.stepCompleted,
             AgentStepCompleted(
-                chatID: request.chatID,
-                turnID: request.turnID,
+                chatID: step.turn.chatID,
+                turnID: step.turn.turnID,
                 stepIndex: step.stepIndex,
                 events: events))
+    }
+
+    public func turnCompleted(_ request: AgentTurnRequest) async {
         await emitTurnCompleted(
             AgentLoopEventKeys.turnCompleted,
             AgentTurnCompleted(chatID: request.chatID, turnID: request.turnID))
+    }
+
+    @discardableResult
+    public func enqueue(_ request: AgentTurnRequest) async throws -> [AgentEvent] {
+        let step = try await prepare(request)
+        guard let events = step.events else {
+            throw AgentLoopError.missingStepResult(request.turnID)
+        }
+        await stepCompleted(step, events: events)
+        await turnCompleted(request)
         return events
     }
 
