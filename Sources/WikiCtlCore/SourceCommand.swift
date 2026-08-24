@@ -14,7 +14,7 @@ import WikiFSCore
 public enum SourceCommand {
 
     /// What a command produced. Reads never commit; `didCommit` is always false.
-    public struct Result: Equatable {
+    public struct Result: Equatable, Sendable {
         public var payload: Payload
         public var didCommit: Bool
         public var stderrOutput: String?
@@ -25,7 +25,7 @@ public enum SourceCommand {
             self.stderrOutput = stderrOutput
         }
 
-        public enum Payload: Equatable {
+        public enum Payload: Equatable, Sendable {
             case text(String)
             case bytes(Data)
         }

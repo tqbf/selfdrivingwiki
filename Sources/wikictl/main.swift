@@ -93,47 +93,12 @@ func run() async -> Int32 {
         return await runDaemonChatStop(wikiSelector: invocation.wikiSelector, chatID: chatID)
     }
 
-    // Phase 7: WIKI_WORKSPACE env var. When set by an isolated ingest run,
-    // it auto-applies --workspace to page get/upsert and index set commands
-    // that don't already pass --workspace explicitly. This lets the agent
-    // subprocess use plain `wikictl` commands without knowing the workspace ID.
-    let command = ArgumentParser.applyEnv(invocation.command, env: ProcessInfo.processInfo.environment)
-
     do {
-        // Resolve the wiki directly against the registry in the App Group
-        // container. wikictl no longer consults the daemon: wikid is now an
-        // app-bound XPC service (Contents/XPCServices/wikid.xpc), unreachable
-        // from this standalone CLI — a daemon attempt could only time out and
-        // fall back, adding XPC latency to every page write. See
-        // plans/xpc-service-migration.md.
-        let resolver = try WikiResolver.appGroupContainer()
-        let descriptor = resolver.descriptor(forSelector: invocation.wikiSelector)
-        guard let descriptor else {
-            throw PageCommand.Failure.message(
-                "no wiki matching \(invocation.wikiSelector.debugDescription) in the registry")
-        }
-        let store = try GRDBWikiStore(databaseURL: resolver.databaseURL(for: descriptor))
-
-        let result = try await execute(
-            command,
-            in: store,
-            wikiID: descriptor.id,
-            containerDirectory: resolver.containerDirectory)
-
-        if let stderrOutput = result.stderrOutput, !stderrOutput.isEmpty {
-            FileHandle.standardError.write(Data(stderrOutput.utf8))
-        }
-        switch result.payload {
-        case .text(let output):
-            if !output.isEmpty { print(output) }
-        case .bytes(let data):
-            FileHandle.standardOutput.write(data)
-        }
-        // Post the change notification ONLY after a committing write, so a read
-        // never wakes the app's change bridge.
-        if result.didCommit {
-            DarwinNotifier.postChange(forWikiID: descriptor.id.rawValue)
-        }
+        let output = try await makeRunner().runOrdinary(
+            command: invocation.command,
+            wikiSelector: invocation.wikiSelector,
+            environment: ProcessInfo.processInfo.environment)
+        write(output)
         return 0
     } catch let failure as PageCommand.Failure {
         FileHandle.standardError.write(Data("wikictl: \(failure)\n".utf8))
@@ -306,6 +271,28 @@ func readBody(from source: String) throws -> String {
     try readBodyFile(from: source)
 }
 
+private func makeRunner() -> WikiCtlRunner {
+    WikiCtlRunner { command, store, wikiID, containerDirectory in
+        try await execute(
+            command,
+            in: store,
+            wikiID: wikiID,
+            containerDirectory: containerDirectory)
+    }
+}
+
+private func write(_ output: WikiCtlRunner.Output) {
+    if !output.stderr.isEmpty {
+        FileHandle.standardError.write(output.stderr)
+    }
+    if !output.stdout.isEmpty {
+        FileHandle.standardOutput.write(output.stdout)
+    }
+    if let wikiID = output.changedWikiID {
+        DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
+    }
+}
+
 // MARK: - wiki subcommands (direct registry access)
 //
 // These operate directly on `wikis.json` + the per-wiki `<ulid>.sqlite` in the
@@ -325,21 +312,8 @@ func readBody(from source: String) throws -> String {
 // client, not via wikictl).
 
 func runDumpConfig(overlay: String?) -> Int32 {
-    let homeDirectory: URL?
     do {
-        homeDirectory = try DatabaseLocation.appGroupContainerDirectory()
-    } catch {
-        homeDirectory = nil
-    }
-
-    do {
-        let result = try DumpConfigCommand.run(
-            homeDirectory: homeDirectory,
-            overlay: overlay)
-        if let note = result.note {
-            print(note)
-        }
-        print(result.output, terminator: result.output.hasSuffix("\n") ? "" : "\n")
+        write(try makeRunner().runDumpConfig(overlay: overlay))
         return 0
     } catch {
         FileHandle.standardError.write(Data("wikictl: unable to dump config: \(error)\n".utf8))
@@ -363,29 +337,7 @@ func runWikiList() async -> Int32 {
 
 func runWikiCreate(name: String) async -> Int32 {
     do {
-        let resolver = try WikiResolver.appGroupContainer()
-        let container = resolver.containerDirectory
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let displayName = trimmed.isEmpty ? "Untitled Wiki" : trimmed
-        var descriptor = WikiDescriptor.make(displayName: displayName)
-
-        // Open + seed the DB (the GRDBWikiStore init runs the bootstrap ladder —
-        // pages, system prompt, search tables), then seed a Home page if empty.
-        // Mirrors WikiDaemon.createWiki.
-        let store = try GRDBWikiStore(databaseURL: resolver.databaseURL(for: descriptor))
-        let pages = (DebugLog.trying("list pages", operation: { try store.listPages(sortBy: .newestFirst) })) ?? []
-        if pages.isEmpty,
-           // #797: an explicit (synthesized) user action — stamp `user`, not the
-           // shared `legacy-import` author that `createdBy: nil` maps to.
-           let homePage = DebugLog.trying("create Home page", operation: { try store.createPage(title: "Home", createdBy: PageAuthor.user.rawValue) }) {
-            descriptor.homePageID = homePage.id
-        }
-
-        var registry = WikiRegistry.load(from: container)
-        registry.add(descriptor)
-        try registry.save(to: container)
-
-        print("\(descriptor.id)\t\(descriptor.displayName)")
+        write(try makeRunner().runWikiCreate(name: name))
         return 0
     } catch {
         FileHandle.standardError.write(Data("wikictl: \(error)\n".utf8))

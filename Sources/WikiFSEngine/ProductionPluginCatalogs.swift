@@ -567,6 +567,25 @@ public enum ProductionProfiles {
         try resolve(kind: .cli, scope: .process, homeDirectory: homeDirectory, overlay: overlay).entries
     }
 
+    public static func cli(
+        databaseURL: URL,
+        wikiID: WikiID,
+        homeDirectory: URL,
+        overlay: String? = nil
+    ) throws -> [Entry] {
+        try resolve(
+            kind: .cli,
+            scope: .process,
+            homeDirectory: homeDirectory,
+            overlay: overlay,
+            ambient: PatchFile(entries: [
+                Entry(id: EntryID("store"), plugin: StorePlugin.id, config: [
+                    "databasePath": .string(databaseURL.path),
+                    "wikiID": .string(wikiID.rawValue),
+                ]),
+            ])).entries
+    }
+
     public static func resolve(
         kind: ProductionProfileKind,
         scope: ProductionProfileScope,
@@ -669,13 +688,20 @@ public enum DaemonPluginCatalog {
 }
 
 public enum CLIPluginCatalog {
+    public static func definitions(
+        makeTantivyRuntime: @escaping SearchRuntimeFactory.Factory = SearchRuntimeCompositionFactory.runtimeFactory
+    ) -> [PluginDefinition] {
+        [
+            StorePlugin.definition,
+            SearchPlugin.definition,
+            TantivySearchPlugin.definition(makeRuntime: makeTantivyRuntime),
+        ]
+    }
+
     public static func build(
         makeTantivyRuntime: @escaping SearchRuntimeFactory.Factory = SearchRuntimeCompositionFactory.runtimeFactory
     ) throws -> PluginCatalog {
-        try PluginCatalog([
-            SearchPlugin.definition,
-            TantivySearchPlugin.definition(makeRuntime: makeTantivyRuntime),
-        ])
+        try PluginCatalog(definitions(makeTantivyRuntime: makeTantivyRuntime))
     }
 }
 
