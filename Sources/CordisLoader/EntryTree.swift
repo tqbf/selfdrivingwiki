@@ -57,8 +57,6 @@ public actor EntryTree {
     }
 
     public func update(to newRows: [Entry]) async throws {
-        var nextMounted = mounted
-        var nextMountOrder = mountOrder
         let enabledRows = newRows.filter { !$0.disabled }
         let enabledByID = Dictionary(uniqueKeysWithValues: enabledRows.map { ($0.id, $0) })
         let retiringIDs = Set(mounted.keys.filter { entryID in
@@ -66,36 +64,40 @@ public actor EntryTree {
             return replacement != currentRow(entryID)
         })
 
-        // Retire removals and changed rows in reverse ownership order.
+        // Commit each ownership transition as it happens. A handle is removed
+        // from bookkeeping before disposal, so even a throwing disposer cannot
+        // leave a possibly disposed handle recorded as active.
         for entryID in mountOrder.reversed() where retiringIDs.contains(entryID) {
-            guard let handle = nextMounted.removeValue(forKey: entryID) else { continue }
+            guard let handle = mounted.removeValue(forKey: entryID) else { continue }
+            mountOrder.removeAll { $0 == entryID }
+            rows.removeAll { $0.id == entryID }
             try await handle.dispose()
-            nextMountOrder.removeAll { $0 == entryID }
         }
 
         var newlyMounted: [(EntryID, ComponentHandle)] = []
         do {
-            for row in enabledRows where nextMounted[row.id] == nil {
+            for row in enabledRows where mounted[row.id] == nil {
                 let handle = try await mount(row)
-                nextMounted[row.id] = handle
-                nextMountOrder.append(row.id)
+                mounted[row.id] = handle
+                mountOrder.append(row.id)
                 newlyMounted.append((row.id, handle))
             }
         } catch {
             var cleanup: [CordisFailure] = []
-            for (_, handle) in newlyMounted.reversed() {
+            for (entryID, handle) in newlyMounted.reversed() {
+                mounted.removeValue(forKey: entryID)
+                mountOrder.removeAll { $0 == entryID }
                 do {
                     try await handle.dispose()
                 } catch {
                     cleanup.append(CordisFailure(error))
                 }
             }
+            rows.removeAll { mounted[$0.id] == nil }
             if cleanup.isEmpty { throw error }
             throw CordisLoaderRollbackError(operation: CordisFailure(error), cleanup: cleanup)
         }
 
-        mounted = nextMounted
-        mountOrder = nextMountOrder
         rows = newRows
     }
 
