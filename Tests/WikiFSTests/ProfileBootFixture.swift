@@ -156,17 +156,36 @@ enum ProfileBootFixture {
     private static var launcherFactoryDefinition: PluginDefinition {
         PluginDefinition(
             id: launcherFactoryPluginID,
-            provisions: [ServiceDependency(LauncherServiceKeys.factory)]) {
+            dependencies: [ServiceDependency(StoreServiceKeys.store)],
+            provisions: [
+                ServiceDependency(LauncherServiceKeys.factory),
+                ServiceDependency(PerWikiRuntimeServiceKeys.searchFactory),
+            ]) {
             try ComponentDefinition(
                 label: launcherFactoryPluginID.rawValue,
-                provisions: [ServiceDependency(LauncherServiceKeys.factory)]) { activation in
+                dependencies: [ServiceDependency(StoreServiceKeys.store)],
+                provisions: [
+                    ServiceDependency(LauncherServiceKeys.factory),
+                    ServiceDependency(PerWikiRuntimeServiceKeys.searchFactory),
+                ]) { activation in
+                let store = try await activation.require(StoreServiceKeys.store)
+                let eventBus = try #require(store.eventBus)
                 let factory = LauncherFactory { _ in
                     let gate = GenerationGate(laneLimits: LauncherAdmissionPolicy.laneLimits)
                     return LauncherPair(
                         gate: gate,
                         launcher: AgentLauncher(generationGate: gate))
                 }
+                let searchFactory = await MainActor.run {
+                    PerWikiSearchFactory(
+                        identity: SearchRuntimeIdentity(
+                            wikiID: eventBus.wikiID,
+                            containerDirectory: FileManager.default.temporaryDirectory),
+                        contentSource: StoreBackedTantivyContentSource(store: store),
+                        changeStreamFactory: BusSearchChangeStreamFactory(bus: eventBus))
+                }
                 _ = try await activation.supply(LauncherServiceKeys.factory, value: factory)
+                _ = try await activation.supply(PerWikiRuntimeServiceKeys.searchFactory, value: searchFactory)
             }
         }
     }

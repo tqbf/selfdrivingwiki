@@ -1,4 +1,5 @@
 import Cordis
+import CordisLoader
 import Foundation
 import WikiFSCore
 
@@ -35,52 +36,30 @@ public enum LauncherServiceKeys {
     public static let factory = ServiceKey<LauncherFactory>(label: "wiki.launcher-factory")
 }
 
-/// Every stored reference is created and accessed on `MainActor`; the unchecked
-/// conformance only permits Cordis to carry the opaque bundle between actors.
-@MainActor
-// swiftlint:disable:next unchecked_sendable
-public struct PerWikiRuntimeServices: @unchecked Sendable {
-    public let model: WikiStoreModel
-    public let searchOwner: SearchCompositionOwner
-    public let generationGate: GenerationGate
-    public let agentLauncher: AgentLauncher
+/// Sendable inputs for constructing one main-actor search owner outside Cordis.
+/// The service value contains no UI model, runtime owner, or Cordis context.
+public struct PerWikiSearchFactory: Sendable {
+    public let identity: SearchRuntimeIdentity
+    public let contentSource: any TantivyContentSource
+    public let changeStreamFactory: any SearchChangeStreamFactory
 
-    public var searchServices: any SearchServices { searchOwner.services }
-}
+    public init(
+        identity: SearchRuntimeIdentity,
+        contentSource: any TantivyContentSource,
+        changeStreamFactory: any SearchChangeStreamFactory
+    ) {
+        self.identity = identity
+        self.contentSource = contentSource
+        self.changeStreamFactory = changeStreamFactory
+    }
 
-@MainActor
-extension PerWikiRuntimeServices {
-    public static func testFixture(
-        wikiID: WikiID,
-        containerDirectory: URL,
-        extractionCoordinator: ExtractionCoordinator,
-        providerServices: any AgentProviderServices = UnavailableAgentProviderServices(),
-        makeStore: (URL) throws -> any WikiStore = { try StoreBackend.current.makeStore(databaseURL: $0) }
-    ) throws -> PerWikiRuntimeServices {
-        let databaseURL = containerDirectory.appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false)
-        var store = try makeStore(databaseURL)
-        let bus = store.eventBus ?? WikiEventBus(wikiID: wikiID)
-        store.eventBus = bus
-        let model = WikiStoreModel(store: store)
-        if FileManager.default.fileExists(atPath: databaseURL.path) {
-            model.readPool = WikiReadPool(databaseURL: databaseURL)
-        }
-        let searchOwner = SearchCompositionOwner(
-            registry: SearchRuntimeRegistry(),
-            identity: SearchRuntimeIdentity(wikiID: wikiID, containerDirectory: containerDirectory),
-            contentSource: StoreBackedTantivyContentSource(store: store),
-            changeStreamFactory: BusSearchChangeStreamFactory(bus: bus))
-        model.searchServices = searchOwner.services
-        searchOwner.start()
-        let gate = GenerationGate(laneLimits: LauncherAdmissionPolicy.laneLimits)
-        return PerWikiRuntimeServices(
-            model: model,
-            searchOwner: searchOwner,
-            generationGate: gate,
-            agentLauncher: AgentLauncher(
-                generationGate: gate,
-                extractionCoordinator: extractionCoordinator,
-                providerServices: providerServices))
+    @MainActor
+    public func makeOwner(registry: SearchRuntimeRegistry) -> SearchCompositionOwner {
+        SearchCompositionOwner(
+            registry: registry,
+            identity: identity,
+            contentSource: contentSource,
+            changeStreamFactory: changeStreamFactory)
     }
 }
 
@@ -102,18 +81,35 @@ extension ProfileWikiSession {
         podcastBackendResolver: @escaping @MainActor () -> PodcastTranscriptionBackend? = { nil },
         interactiveUsageRecorder: @escaping @MainActor (SessionUsage) -> Void = { _ in }
     ) throws {
-        let runtime = try PerWikiRuntimeServices.testFixture(
-            wikiID: wikiID,
-            containerDirectory: containerDirectory,
+        let databaseURL = containerDirectory.appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false)
+        var rawStore = try makeStore(databaseURL)
+        let bus = rawStore.eventBus ?? WikiEventBus(wikiID: wikiID)
+        rawStore.eventBus = bus
+        let model = WikiStoreModel(store: rawStore)
+        if FileManager.default.fileExists(atPath: databaseURL.path) {
+            model.readPool = WikiReadPool(databaseURL: databaseURL)
+        }
+        let searchOwner = SearchCompositionOwner(
+            registry: SearchRuntimeRegistry(),
+            identity: SearchRuntimeIdentity(wikiID: wikiID, containerDirectory: containerDirectory),
+            contentSource: StoreBackedTantivyContentSource(store: rawStore),
+            changeStreamFactory: BusSearchChangeStreamFactory(bus: bus))
+        model.searchServices = searchOwner.services
+        searchOwner.start()
+        let gate = GenerationGate(laneLimits: LauncherAdmissionPolicy.laneLimits)
+        let launcher = AgentLauncher(
+            generationGate: gate,
             extractionCoordinator: extractionCoordinator,
-            providerServices: providerServices,
-            makeStore: makeStore)
-        runtime.agentLauncher.pdf2mdScriptPathResolver = pdf2mdScriptPathResolver
-        runtime.agentLauncher.onInteractiveUsage = interactiveUsageRecorder
+            providerServices: providerServices)
+        launcher.pdf2mdScriptPathResolver = pdf2mdScriptPathResolver
+        launcher.onInteractiveUsage = interactiveUsageRecorder
         self.init(
-            wikiID: wikiID,
+            testFixtureWikiID: wikiID,
             descriptor: descriptor,
-            runtime: runtime,
+            store: model,
+            searchCompositionOwner: searchOwner,
+            generationGate: gate,
+            agentLauncher: launcher,
             extractionCoordinator: extractionCoordinator,
             queueEngine: queueEngine,
             extractionProvider: extractionProvider,
@@ -123,8 +119,56 @@ extension ProfileWikiSession {
     }
 }
 
+@MainActor
+extension AppProcessProfileOwner {
+    /// Boots one child profile and constructs its main-actor session objects
+    /// outside Cordis from resolved typed capabilities.
+    public func bootWikiSession(
+        wikiID: WikiID,
+        descriptor: WikiDescriptor,
+        containerDirectory: URL,
+        catalog: PluginCatalog,
+        extractionProvider: any QueueExtractionProvider,
+        searchRuntimeRegistry: SearchRuntimeRegistry = SearchRuntimeRegistry(),
+        pdf2mdScriptPathResolver: @escaping () -> String? = { nil },
+        htmlMarkdownExtractorFactory: @escaping @MainActor () -> (any HtmlMarkdownExtractor)? = { nil },
+        htmlBackendResolver: @escaping @MainActor () -> HtmlExtractionBackend? = { nil },
+        podcastBackendResolver: @escaping @MainActor () -> PodcastTranscriptionBackend? = { nil },
+        interactiveUsageRecorder: @escaping (@MainActor (SessionUsage) -> Void) = { _ in }
+    ) async throws -> ProfileWikiSession {
+        let (lifetime, processServices) = try await readyComposition()
+        let databaseURL = containerDirectory.appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false)
+        let childServices = try await lifetime.bootChild(
+            catalog: catalog,
+            layers: [PatchFile(entries: try ProductionProfiles.app(
+                databaseURL: databaseURL, wikiID: wikiID, homeDirectory: containerDirectory))])
+        let model = WikiStoreModel(store: childServices.store)
+        model.readPool = childServices.readPool
+        let searchOwner = childServices.searchFactory.makeOwner(registry: searchRuntimeRegistry)
+        model.searchServices = searchOwner.services
+        searchOwner.start()
+        let pair = childServices.launcherFactory(wikiID: wikiID)
+        pair.launcher.pdf2mdScriptPathResolver = pdf2mdScriptPathResolver
+        pair.launcher.onInteractiveUsage = interactiveUsageRecorder
+        return ProfileWikiSession(
+            wikiID: wikiID,
+            descriptor: descriptor,
+            store: model,
+            searchCompositionOwner: searchOwner,
+            generationGate: pair.gate,
+            agentLauncher: pair.launcher,
+            extractionCoordinator: ExtractionCoordinator(services: processServices.extraction),
+            queueEngine: processServices.queue,
+            extractionProvider: extractionProvider,
+            htmlMarkdownExtractor: htmlMarkdownExtractorFactory(),
+            htmlBackend: htmlBackendResolver(),
+            podcastBackend: podcastBackendResolver(),
+            profileLifetime: childServices.lifetime)
+    }
+}
+
 public enum PerWikiRuntimeServiceKeys {
-    public static let services = ServiceKey<PerWikiRuntimeServices>(label: "wiki.runtime-services")
+    public static let searchFactory = ServiceKey<PerWikiSearchFactory>(label: "wiki.search-factory")
 }
 
 public struct PerWikiRuntimeConfig: PluginConfig, Equatable {
@@ -164,7 +208,7 @@ public enum PerWikiRuntimePlugin {
                 ServiceDependency(AgentLoopServiceKeys.agentLoop),
             ],
             provisions: [
-                ServiceDependency(PerWikiRuntimeServiceKeys.services),
+                ServiceDependency(PerWikiRuntimeServiceKeys.searchFactory),
                 ServiceDependency(LauncherServiceKeys.factory),
             ],
             config: PerWikiRuntimeConfig.self
@@ -179,12 +223,12 @@ public enum PerWikiRuntimePlugin {
                     ServiceDependency(AgentLoopServiceKeys.agentLoop),
                 ],
                 provisions: [
-                    ServiceDependency(PerWikiRuntimeServiceKeys.services),
+                    ServiceDependency(PerWikiRuntimeServiceKeys.searchFactory),
                     ServiceDependency(LauncherServiceKeys.factory),
                 ]
             ) { activation in
                 let store = try await activation.require(StoreServiceKeys.store)
-                let readPool = try await activation.require(StoreServiceKeys.readPool)
+                _ = try await activation.require(StoreServiceKeys.readPool)
                 let providerServices = try await activation.require(ProcessServiceKeys.agentProvider)
                 let extractionServices = try await activation.require(ProcessServiceKeys.extraction)
                 let agentLoopService = try await activation.require(AgentLoopServiceKeys.agentLoop)
@@ -203,25 +247,14 @@ public enum PerWikiRuntimePlugin {
                     launcher.pdf2mdScriptPathResolver = { PdfExtractionService.resolveScript()?.path }
                     return LauncherPair(gate: gate, launcher: launcher)
                 }
-                let services = await MainActor.run {
-                    let model = WikiStoreModel(store: store)
-                    model.readPool = readPool
-                    let searchOwner = SearchCompositionOwner(
-                        registry: SearchRuntimeRegistry(),
-                        identity: SearchRuntimeIdentity(wikiID: wikiID, containerDirectory: containerDirectory),
-                        contentSource: StoreBackedTantivyContentSource(store: store),
-                        changeStreamFactory: BusSearchChangeStreamFactory(bus: eventBus))
-                    model.searchServices = searchOwner.services
-                    searchOwner.start()
-                    let pair = launcherFactory(wikiID: wikiID)
-                    return PerWikiRuntimeServices(
-                        model: model,
-                        searchOwner: searchOwner,
-                        generationGate: pair.gate,
-                        agentLauncher: pair.launcher)
+                let changeStreamFactory = await MainActor.run {
+                    BusSearchChangeStreamFactory(bus: eventBus)
                 }
-                _ = try await activation.effect { _ in await services.searchOwner.shutdown() }
-                _ = try await activation.supply(PerWikiRuntimeServiceKeys.services, value: services)
+                let searchFactory = PerWikiSearchFactory(
+                    identity: SearchRuntimeIdentity(wikiID: wikiID, containerDirectory: containerDirectory),
+                    contentSource: StoreBackedTantivyContentSource(store: store),
+                    changeStreamFactory: changeStreamFactory)
+                _ = try await activation.supply(PerWikiRuntimeServiceKeys.searchFactory, value: searchFactory)
                 _ = try await activation.supply(LauncherServiceKeys.factory, value: launcherFactory)
             }
         }

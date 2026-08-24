@@ -137,6 +137,54 @@ public struct AppProcessServices: Sendable {
     }
 }
 
+public enum ProfileLifetimeError: Error, Equatable, Sendable {
+    case shutdownStarted
+}
+
+/// Opaque, idempotent ownership of one booted Cordis profile.
+/// Normal application code can shut the profile down but cannot access its context.
+public actor ProfileLifetime {
+    private var profile: BootedProfile?
+    private var shutdownStarted = false
+
+    internal init(profile: BootedProfile) {
+        self.profile = profile
+    }
+
+    internal func bootChild(
+        catalog: PluginCatalog,
+        layers: [PatchFile]
+    ) async throws -> AppServices {
+        guard !shutdownStarted, let profile else {
+            throw ProfileLifetimeError.shutdownStarted
+        }
+        let child = try await CordisBoot.boot(.init(
+            catalog: catalog,
+            layers: layers,
+            parent: profile.context))
+        guard !shutdownStarted else {
+            try await child.shutdown()
+            throw ProfileLifetimeError.shutdownStarted
+        }
+        do {
+            return try await AppServices.resolve(from: child)
+        } catch {
+            do { try await child.shutdown() } catch let cleanupError {
+                DebugLog.store("Child profile cleanup after resolution failure failed: \(cleanupError)")
+            }
+            throw error
+        }
+    }
+
+    public func shutdown() async throws {
+        guard !shutdownStarted else { return }
+        shutdownStarted = true
+        let ownedProfile = profile
+        profile = nil
+        try await ownedProfile?.shutdown()
+    }
+}
+
 /// Owns asynchronous app process-profile startup and shutdown.
 @MainActor
 @Observable
@@ -151,8 +199,8 @@ public final class AppProcessProfileOwner {
     public typealias Boot = @Sendable () async throws -> BootedProfile
 
     public private(set) var readiness: Readiness = .idle
-    public private(set) var profile: BootedProfile?
     public private(set) var services: AppProcessServices?
+    @ObservationIgnored private var lifetime: ProfileLifetime?
     @ObservationIgnored private let boot: Boot
     @ObservationIgnored private var startupTask: Task<Void, Never>?
     @ObservationIgnored private var shutdownStarted = false
@@ -203,7 +251,7 @@ public final class AppProcessProfileOwner {
                     try await profile.shutdown()
                     return
                 }
-                self.profile = profile
+                self.lifetime = ProfileLifetime(profile: profile)
                 self.services = services
                 self.readiness = .ready
             } catch is CancellationError {
@@ -219,6 +267,14 @@ public final class AppProcessProfileOwner {
         await startupTask?.value
     }
 
+    internal func readyComposition() async throws -> (ProfileLifetime, AppProcessServices) {
+        await awaitSettled()
+        guard let lifetime, let services else {
+            throw SessionLoadingError.processProfileUnavailable("app process profile is not ready: \(readiness)")
+        }
+        return (lifetime, services)
+    }
+
     public func shutdown() async {
         guard !shutdownStarted else {
             await startupTask?.value
@@ -230,14 +286,14 @@ public final class AppProcessProfileOwner {
         await task?.value
         startupTask = nil
         services = nil
-        if let profile {
+        if let lifetime {
             do {
-                try await profile.shutdown()
+                try await lifetime.shutdown()
             } catch {
                 DebugLog.store("App process profile shutdown failed: \(error)")
             }
         }
-        profile = nil
+        lifetime = nil
     }
 }
 
@@ -465,79 +521,28 @@ public actor DaemonProcessProfileOwner {
 /// Typed services resolved once from a booted profile. Consumers receive this
 /// facade rather than a Cordis context or a legacy runtime assembly.
 public struct AppServices: Sendable {
-    public let profile: BootedProfile
+    public let lifetime: ProfileLifetime
     public let store: any WikiStore
     public let readPool: WikiReadPool
     public let extractionBackends: ExtractionBackendRegistry
     public let searchProviders: SearchProviderRegistry
     public let launcherFactory: LauncherFactory
+    public let searchFactory: PerWikiSearchFactory
 
-    public static func resolve(from profile: BootedProfile) async throws -> AppServices {
+    internal static func resolve(from profile: BootedProfile) async throws -> AppServices {
         AppServices(
-            profile: profile,
+            lifetime: ProfileLifetime(profile: profile),
             store: try await profile.context.require(StoreServiceKeys.store),
             readPool: try await profile.context.require(StoreServiceKeys.readPool),
             extractionBackends: try await profile.context.require(ExtractionServiceKeys.backends),
             searchProviders: try await profile.context.require(SearchServiceKeys.providers),
-            launcherFactory: try await profile.context.require(LauncherServiceKeys.factory))
+            launcherFactory: try await profile.context.require(LauncherServiceKeys.factory),
+            searchFactory: try await profile.context.require(PerWikiRuntimeServiceKeys.searchFactory))
     }
 
     public func shutdown() async throws {
-        try await profile.shutdown()
+        try await lifetime.shutdown()
     }
-}
-
-/// Boots the observable per-wiki application facade from one child profile and
-/// its inherited process services.
-@MainActor
-extension ProfileWikiSession {
-    public static func boot(
-        wikiID: WikiID,
-        descriptor: WikiDescriptor,
-        containerDirectory: URL,
-        catalog: PluginCatalog,
-        processProfile: BootedProfile,
-        processServices: AppProcessServices,
-        extractionProvider: any QueueExtractionProvider,
-        searchRuntimeRegistry: SearchRuntimeRegistry = SearchRuntimeRegistry(),
-        pdf2mdScriptPathResolver: @escaping () -> String? = { nil },
-        htmlMarkdownExtractorFactory: @escaping @MainActor () -> (any HtmlMarkdownExtractor)? = { nil },
-        htmlBackendResolver: @escaping @MainActor () -> HtmlExtractionBackend? = { nil },
-        podcastBackendResolver: @escaping @MainActor () -> PodcastTranscriptionBackend? = { nil },
-        interactiveUsageRecorder: @escaping (@MainActor (SessionUsage) -> Void) = { _ in }
-    ) async throws -> ProfileWikiSession {
-        let databaseURL = containerDirectory.appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false)
-        let profile = try await CordisBoot.boot(.init(
-            catalog: catalog,
-            layers: [PatchFile(entries: try ProductionProfiles.app(
-                databaseURL: databaseURL, wikiID: wikiID, homeDirectory: containerDirectory))],
-            parent: processProfile.context))
-        do {
-            let childServices = try await AppServices.resolve(from: profile)
-            let runtime = try await profile.context.require(PerWikiRuntimeServiceKeys.services)
-            runtime.agentLauncher.pdf2mdScriptPathResolver = pdf2mdScriptPathResolver
-            runtime.agentLauncher.onInteractiveUsage = interactiveUsageRecorder
-            return ProfileWikiSession(
-                wikiID: wikiID,
-                descriptor: descriptor,
-                runtime: runtime,
-                extractionCoordinator: ExtractionCoordinator(services: processServices.extraction),
-                queueEngine: processServices.queue,
-                extractionProvider: extractionProvider,
-                htmlMarkdownExtractor: htmlMarkdownExtractorFactory(),
-                htmlBackend: htmlBackendResolver(),
-                podcastBackend: podcastBackendResolver(),
-                profile: childServices.profile)
-        } catch {
-            do {
-                try await profile.shutdown()
-            } catch {
-                DebugLog.store("Per-wiki profile cleanup after facade failure failed: \(error)")
-            }
-            throw error
-        }
-    }
-
 }
 
 /// Production composition loaded from the shipped YAML bundles. Catalogs still

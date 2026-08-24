@@ -55,9 +55,9 @@ public protocol WikiSessionProtocol: AnyObject, Observable, Sendable {
 @MainActor
 @Observable
 public final class ProfileWikiSession: WikiSessionProtocol {
-    /// The booted child profile owned by production sessions. Synchronous test
-    /// fixtures inject already-booted services and therefore leave this nil.
-    @ObservationIgnored private let profile: BootedProfile?
+    /// Opaque child-profile ownership for production sessions. Explicit fixture
+    /// sessions omit this lifetime and own only their test-created services.
+    @ObservationIgnored private let profileLifetime: ProfileLifetime?
     /// The wiki's stable ULID. Guaranteed non-nil (a session only exists while
     /// a wiki is open). Views read `session.wikiID` instead of the old
     /// `activeWikiID ?? ""`.
@@ -172,25 +172,28 @@ public final class ProfileWikiSession: WikiSessionProtocol {
     public init(
         wikiID: WikiID,
         descriptor: WikiDescriptor,
-        runtime: PerWikiRuntimeServices,
+        store: WikiStoreModel,
+        searchCompositionOwner: SearchCompositionOwner,
+        generationGate: GenerationGate,
+        agentLauncher: AgentLauncher,
         extractionCoordinator: ExtractionCoordinator,
         queueEngine: any QueueEngineClient,
         extractionProvider: any QueueExtractionProvider,
         htmlMarkdownExtractor: (any HtmlMarkdownExtractor)? = nil,
         htmlBackend: HtmlExtractionBackend? = nil,
         podcastBackend: PodcastTranscriptionBackend? = nil,
-        profile: BootedProfile? = nil
+        profileLifetime: ProfileLifetime
     ) {
-        self.profile = profile
+        self.profileLifetime = profileLifetime
         self.wikiID = wikiID
         self.extractionCoordinator = extractionCoordinator
         self.queueEngine = queueEngine
         self.extractionProvider = extractionProvider
-        self.store = runtime.model
-        self.searchCompositionOwner = runtime.searchOwner
-        self.searchServices = runtime.searchServices
-        self.generationGate = runtime.generationGate
-        self.agentLauncher = runtime.agentLauncher
+        self.store = store
+        self.searchCompositionOwner = searchCompositionOwner
+        self.searchServices = searchCompositionOwner.services
+        self.generationGate = generationGate
+        self.agentLauncher = agentLauncher
 
         var sessionDescriptor = descriptor
         if store.summaries.isEmpty, let homeID = store.newPage(title: "Home"), sessionDescriptor.homePageID == nil {
@@ -200,6 +203,42 @@ public final class ProfileWikiSession: WikiSessionProtocol {
 
         // UI adaptation only: the child profile has already constructed all
         // per-wiki domain services before this observable facade is initialized.
+        store.htmlMarkdownExtractor = htmlMarkdownExtractor
+        store.htmlBackend = htmlBackend
+        store.podcastBackend = podcastBackend
+    }
+
+    /// Explicit fixture initializer for tests that do not boot a Cordis profile.
+    public init(
+        testFixtureWikiID wikiID: WikiID,
+        descriptor: WikiDescriptor,
+        store: WikiStoreModel,
+        searchCompositionOwner: SearchCompositionOwner,
+        generationGate: GenerationGate,
+        agentLauncher: AgentLauncher,
+        extractionCoordinator: ExtractionCoordinator,
+        queueEngine: any QueueEngineClient,
+        extractionProvider: any QueueExtractionProvider,
+        htmlMarkdownExtractor: (any HtmlMarkdownExtractor)? = nil,
+        htmlBackend: HtmlExtractionBackend? = nil,
+        podcastBackend: PodcastTranscriptionBackend? = nil
+    ) {
+        self.profileLifetime = nil
+        self.wikiID = wikiID
+        self.extractionCoordinator = extractionCoordinator
+        self.queueEngine = queueEngine
+        self.extractionProvider = extractionProvider
+        self.store = store
+        self.searchCompositionOwner = searchCompositionOwner
+        self.searchServices = searchCompositionOwner.services
+        self.generationGate = generationGate
+        self.agentLauncher = agentLauncher
+
+        var sessionDescriptor = descriptor
+        if store.summaries.isEmpty, let homeID = store.newPage(title: "Home"), sessionDescriptor.homePageID == nil {
+            sessionDescriptor.homePageID = homeID
+        }
+        self.descriptor = sessionDescriptor
         store.htmlMarkdownExtractor = htmlMarkdownExtractor
         store.htmlBackend = htmlBackend
         store.podcastBackend = podcastBackend
@@ -292,9 +331,9 @@ public final class ProfileWikiSession: WikiSessionProtocol {
 
     public func shutdown() async {
         await shutdownSearchRuntime()
-        guard let profile else { return }
+        guard let profileLifetime else { return }
         do {
-            try await profile.shutdown()
+            try await profileLifetime.shutdown()
         } catch {
             DebugLog.store("Per-wiki profile shutdown failed: \(error)")
         }

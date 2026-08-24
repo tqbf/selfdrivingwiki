@@ -34,11 +34,9 @@ struct AppProfileBootTests {
         await gate.open()
         await owner.awaitSettled()
         #expect(owner.readiness == .ready)
-        #expect(owner.profile != nil)
         #expect(owner.services != nil)
 
         await owner.shutdown()
-        #expect(owner.profile == nil)
         #expect(owner.services == nil)
         #expect(await disposals.count == 3)
         await owner.shutdown()
@@ -79,7 +77,6 @@ struct AppProfileBootTests {
             Issue.record("expected missing app process services to fail resolution")
             return
         }
-        #expect(owner.profile == nil)
         #expect(owner.services == nil)
         #expect(await disposals.count == 2)
         await owner.shutdown()
@@ -98,10 +95,12 @@ struct AppProfileBootTests {
             }
         }
         let disposals = ProfileProcessDisposalRecorder()
-        let process = try await CordisBoot.boot(.init(
-            catalog: try ProfileBootFixture.processCatalog(includeAppServices: true, recorder: disposals),
-            layers: [PatchFile(entries: ProfileBootFixture.processEntries(includeAppServices: true))]))
-        let processServices = try await AppProcessServices.resolve(from: process)
+        let owner = AppProcessProfileOwner {
+            try await CordisBoot.boot(.init(
+                catalog: try ProfileBootFixture.processCatalog(includeAppServices: true, recorder: disposals),
+                layers: [PatchFile(entries: ProfileBootFixture.processEntries(includeAppServices: true))]))
+        }
+        owner.start()
         let wikiID = WikiID(rawValue: "profile-wiki-session")
         let timestamp = Date(timeIntervalSince1970: 1_700_000_000)
         let descriptor = WikiDescriptor(
@@ -109,13 +108,11 @@ struct AppProfileBootTests {
             displayName: "Profile Wiki",
             createdAt: timestamp,
             lastUsedAt: timestamp)
-        let facade = try await ProfileWikiSession.boot(
+        let facade = try await owner.bootWikiSession(
             wikiID: wikiID,
             descriptor: descriptor,
             containerDirectory: directory,
             catalog: try ProfileBootFixture.appCatalog(),
-            processProfile: process,
-            processServices: processServices,
             extractionProvider: ProfileBootFixture.extractionProvider())
 
         #expect(facade.wikiID == wikiID)
@@ -140,7 +137,7 @@ struct AppProfileBootTests {
 
         await facade.shutdown()
         #expect(await disposals.count == 0)
-        try await process.shutdown()
+        await owner.shutdown()
         #expect(await disposals.count == 3)
     }
 

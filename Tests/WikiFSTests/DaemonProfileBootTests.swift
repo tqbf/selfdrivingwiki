@@ -93,7 +93,7 @@ struct DaemonProfileBootTests {
     func launcherFactoryProvisionsAndDependenciesAreDeclared() {
         #expect(LauncherServiceKeys.factory.label == "wiki.launcher-factory")
         #expect(Set(PerWikiRuntimePlugin.definition.provisions.map(\.descriptor.label)) == [
-            "wiki.runtime-services",
+            "wiki.search-factory",
             "wiki.launcher-factory",
         ])
         #expect(Set(PerWikiRuntimePlugin.definition.dependencies.map(\.descriptor.label)) == [

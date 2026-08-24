@@ -266,18 +266,11 @@ struct WikiFSApp: App {
                 guard let processProfileOwner else {
                     throw SessionLoadingError.processProfileUnavailable("app process profile owner was released")
                 }
-                await processProfileOwner.awaitSettled()
-                guard let processProfile = processProfileOwner.profile,
-                      let processServices = processProfileOwner.services else {
-                    throw SessionLoadingError.processProfileUnavailable("app process profile is not ready: \(processProfileOwner.readiness)")
-                }
-                return try await ProfileWikiSession.boot(
+                return try await processProfileOwner.bootWikiSession(
                     wikiID: wikiID,
                     descriptor: descriptor,
                     containerDirectory: directory,
                     catalog: appCatalog,
-                    processProfile: processProfile,
-                    processServices: processServices,
                     extractionProvider: extractionProvider,
                     searchRuntimeRegistry: searchRuntimeRegistry,
                     pdf2mdScriptPathResolver: { PdfExtractionService.resolveScript()?.path },
