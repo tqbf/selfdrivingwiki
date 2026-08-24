@@ -90,6 +90,39 @@ The CLI Tantivy path boots `CLIPluginCatalog`, resolves the Tantivy provider, an
 15. Make the boundary script strict by default and remove its baseline.
 16. Run `make build`, `make test`, and `scripts/check-cordis-boundaries --strict`.
 
+## Final-slice investigation
+
+The final-slice branch is `feature/cordis-5b-delete-privileged-core` at `8c7bf5fc`.
+The worktree was clean before the investigation.
+
+The current `AppServices` type is not a replacement for `WikiSession`.
+It resolves the raw store, read pool, extraction backend registry, and search provider registry.
+`WikiSession` also owns the observable store model, descriptor state, launcher, generation gate, and search lifetime.
+It also owns vacuum state and deferred wiki-link state for the app views.
+
+`WikiFSApp.init` creates all process owners synchronously.
+`CordisBoot.boot` is asynchronous.
+The app therefore needs an asynchronous process-profile readiness owner before it can resolve process services safely.
+
+All six runtime assembly types still have production callers and assembly-specific tests.
+The catalog defaults also reference `SearchRuntimeAssembly.runtimeFactory`.
+Deleting these files first would leave the tree incomplete.
+
+No production conversion or deletion was made during this investigation.
+The next safe sequence is:
+
+1. Add a retained asynchronous process-profile owner for the app.
+2. Add a per-wiki observable facade that owns the current `WikiSession` application state.
+3. Build that facade only from child-profile services and process-profile services.
+4. Change `SessionManager` and app views to use the facade.
+5. Change the daemon and CLI owners to use profiles.
+6. Move standalone factory implementations out of all runtime assembly files.
+7. Replace assembly-specific tests with plugin and profile tests.
+8. Delete `WikiSession.swift` and all runtime assembly files.
+9. Make the boundary script strict by default.
+10. Run all required gates after each commit.
+
 ## Verification at this checkpoint
 
 `make build` and `make test` passed after Stage 1. The full suite ran 3,563 tests in 357 suites.
+The final-slice investigation changed documentation only. Gate results for this documentation checkpoint follow in the commit history.
