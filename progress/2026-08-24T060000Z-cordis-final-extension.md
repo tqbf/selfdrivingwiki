@@ -33,13 +33,14 @@ Implementation commits:
   explicit wiki chat routing.
 - `38ad1e62`: CLI profile resolution, store bootstrap, and runner tests.
 - `1d56bb35`: tightened source boundaries and synthetic violation tests.
+- `a717d781`: independent-review lifecycle and boundary remediation.
 
 Design record: `plans/cordis-final-extension.md`.
 
 ## Verification
 
 - `make build` passed.
-- `make test` passed with 3,586 tests in 360 suites.
+- `make test` passed with 3,588 tests in 360 suites.
 - `make check-cordis` passed.
 - The final opt-in Cordis selection passed with 66 tests in six suites after review remediation.
 - `CLITantivyLegResolverTests` passed with 11 tests.
