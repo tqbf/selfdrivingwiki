@@ -15,7 +15,7 @@ import WikiFSTypes
 /// `runHtmlExtraction` path.
 ///
 /// The seam is `internal static` so tests don't need to stand up the full
-/// staging path (which requires a real `WikiSession` + `AgentLauncher` +
+/// staging path (which requires a real `ProfileWikiSession` + `AgentLauncher` +
 /// `FileProviderFacade`). The actual staging call site in `runIngestion`
 /// delegates to this seam.
 ///

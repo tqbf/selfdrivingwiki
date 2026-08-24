@@ -4,7 +4,7 @@ import Testing
 @Suite("Agent provider composition boundary")
 struct AgentProviderCompositionBoundaryTests {
     @Test("app queue and wiki sessions receive one stable facade")
-    func appQueueAndWikiSessionsReceiveSameFacade() throws {
+    func appQueueAndProfileWikiSessionsReceiveSameFacade() throws {
         let app = try sourceText("Sources/WikiFS/Window/WikiFSApp.swift")
         let composition = try sourceText("Sources/WikiFS/Renderer/RendererCompositionOwner.swift")
         let settings = try sourceText("Sources/WikiFS/Settings/AgentsSettingsView.swift")

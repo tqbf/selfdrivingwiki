@@ -225,9 +225,9 @@ public final class SessionManager {
             sessionLeaseCounts[wikiID, default: 0] += 1
             return existing
         }
-        let newSession: WikiSession
+        let newSession: ProfileWikiSession
         do {
-            newSession = try WikiSession(
+            newSession = try ProfileWikiSession(
                 wikiID: wikiID,
                 descriptor: descriptor,
                 containerDirectory: containerDirectory,

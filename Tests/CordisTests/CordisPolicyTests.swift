@@ -78,6 +78,7 @@ struct CordisSourcePolicyTests {
             "Sources/WikiFSEngine/SearchRuntimeAssembly.swift",
             "Sources/WikiFSEngine/SearchRuntimeFactory.swift",
             "Sources/WikiFSEngine/ProductionPluginCatalogs.swift",
+            "Sources/WikiFSEngine/ProfileWikiSession.swift",
             "Sources/WikiFSEngine/DaemonTransportRuntimeAssembly.swift",
             "Sources/WikiFSEngine/SearchRuntimeRegistry.swift",
             // Phase 4.1 store-domain composition boundary: typed keys and the

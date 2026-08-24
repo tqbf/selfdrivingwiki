@@ -112,7 +112,7 @@ struct ExtractionRuntimeAssemblyTests {
             "extraction.services",
         ]
         let forbidden = [
-            "SwiftUI", "AppKit", "WebKit", "WikiStoreModel", "WikiSession",
+            "SwiftUI", "AppKit", "WebKit", "WikiStoreModel", "ProfileWikiSession",
             "SessionManager", "QueueStore", "NSXPCConnection",
         ]
 

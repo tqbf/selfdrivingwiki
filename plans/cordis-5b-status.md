@@ -10,11 +10,11 @@ The default check verifies the current violation baseline. The `--strict` option
 
 ## Stage 2 status
 
-Stage 2 remains in progress. No assembly or `WikiSession` file was deleted.
+Stage 2 removed the privileged `WikiSession` implementation. Runtime assembly deletion remains in progress.
 
 The app now starts an observable `AppProcessProfileOwner` alongside the legacy synchronous composition. The owner boots all five app process entries asynchronously, exposes idle/loading/ready/failed readiness plus the booted profile and typed process services, owns its startup task, and joins app termination shutdown. Fixture tests cover readiness, resolved services, failure, and idempotent disposal.
 
-`ProfileWikiSession` is the complete observable per-wiki facade for the next loader cutover. It boots an app child profile from the process profile, uses the child profile's store and read pool, uses inherited process extraction, queue, and provider services, and covers the full `WikiSession` surface: descriptor updates, store model, launcher, generation gate, search lifetime, vacuum state, and deferred wiki-link state. It temporarily delegates behavior to `WikiSession`, as this increment permits, so the boundary baseline now lists that approved compatibility construction site. Strict mode still rejects it. `SessionManager` and views are not rewired in this increment.
+`ProfileWikiSession` is the sole per-wiki session implementation. It uses the child profile store, event bus, and read pool. It uses the process profile extraction, queue, and provider services. It owns descriptor updates, the store model, the launcher, the generation gate, search lifetime, vacuum state, and deferred wiki-link state. `SessionManager` constructs this type for synchronous test fixtures. A deprecated `WikiSession` type alias keeps test source compatibility, but no production code constructs that name.
 
 Steps 1–9 are complete. The production catalogs own executable-side factory injection and typed service resolution.
 
@@ -34,10 +34,7 @@ Steps 10–11 are complete. `SessionManager` stores the `WikiSessionProtocol` ab
 
 The app process profile is the parent of each per-wiki child profile. Session shutdown disposes the child profile before process-profile shutdown.
 
-Two compatibility paths remain for the final deletion slice:
-
-- `SessionManager.session(for:descriptor:)` still constructs `WikiSession` for tests and unsafe synchronous callers. Production `RootScene` does not use this path.
-- `ProfileWikiSession` still delegates application behavior to `WikiSession` until the final deletion slice moves that behavior into the facade.
+The per-wiki session compatibility paths are removed. The synchronous fixture path and the asynchronous profile path now construct `ProfileWikiSession`.
 
 The daemon part of step 12 is complete. `DaemonProcessProfileOwner` owns process-profile startup, per-wiki child profiles, and idempotent shutdown.
 

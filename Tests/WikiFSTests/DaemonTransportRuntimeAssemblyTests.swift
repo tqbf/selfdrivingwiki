@@ -225,7 +225,7 @@ struct DaemonTransportRuntimeAssemblyTests {
         ] { #expect(assemblySource.contains(label)) }
         for forbidden in [
             "SwiftUI", "DaemonHealthMonitor", "QueueEngineHotSwap", "LocalQueueRuntimeController",
-            "QueueStore", "WikiStore", "WikiStoreModel", "WikiSession", "SessionManager",
+            "QueueStore", "WikiStore", "WikiStoreModel", "ProfileWikiSession", "SessionManager",
             "ChatDaemonCoordinator", "WikiDaemonProtocol", "WikiDaemonEventSink",
             "WikiDaemonConnection", "NSXPCConnection",
         ] { #expect(!assemblySource.contains(forbidden)) }

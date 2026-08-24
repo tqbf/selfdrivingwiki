@@ -12,7 +12,7 @@ elif [[ $# -ne 0 ]]; then
 fi
 
 runtime_matches="$({ grep -RIl --include='*.swift' 'RuntimeAssembly' Sources || true; } | LC_ALL=C sort)"
-session_matches="$({ grep -RIl --include='*.swift' 'WikiSession(' Sources || true; } | LC_ALL=C sort)"
+session_matches="$({ grep -RIlE --include='*.swift' '(^|[^[:alnum:]_])WikiSession\(' Sources || true; } | LC_ALL=C sort)"
 
 if $strict; then
   if [[ -n "$runtime_matches" ]]; then
@@ -40,8 +40,7 @@ Sources/WikiFSEngine/SearchPlugins.swift
 Sources/WikiFSEngine/SearchRuntimeAssembly.swift
 Sources/WikiFSEngine/SearchRuntimeRegistry.swift
 Sources/wikid/WikiDaemon.swift'
-expected_session_matches='Sources/WikiFSEngine/ProductionPluginCatalogs.swift
-Sources/WikiFSEngine/SessionManager.swift'
+expected_session_matches=''
 
 if [[ "$runtime_matches" != "$expected_runtime_matches" ]]; then
   echo "Cordis boundary baseline changed: RuntimeAssembly references differ." >&2

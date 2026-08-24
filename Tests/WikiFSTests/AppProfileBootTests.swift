@@ -54,7 +54,7 @@ struct AppProfileBootTests {
 
     @Test("per-wiki facade boots from child and process profile services")
     @MainActor
-    func profileWikiSessionCoversSessionSurface() async throws {
+    func profileProfileWikiSessionCoversSessionSurface() async throws {
         let directory = try ProfileBootFixture.directory(named: "profile-wiki-session")
         defer {
             do {

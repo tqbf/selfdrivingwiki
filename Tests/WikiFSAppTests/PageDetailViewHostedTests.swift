@@ -134,9 +134,9 @@ struct PageDetailViewHostedTests {
         #expect(foundWebView, "Navigation-opened page should render the READER (WKWebView present).")
     }
 
-    // MARK: - Minimal WikiSession for mount (session is only read in button
+    // MARK: - Minimal ProfileWikiSession for mount (session is only read in button
     // closures that don't fire during .onAppear; a minimal instance is enough)
-    private func makeMinimalSession() throws -> WikiSession {
+    private func makeMinimalSession() throws -> ProfileWikiSession {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("page-detail-session-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -144,7 +144,7 @@ struct PageDetailViewHostedTests {
         let coordinator = ExtractionCoordinator(
             containerDirectory: dir,
             localExtractorFactory: { StubExtractor() })
-        return try WikiSession(
+        return try ProfileWikiSession(
             wikiID: descriptor.id,
             descriptor: descriptor,
             containerDirectory: dir,
@@ -154,7 +154,7 @@ struct PageDetailViewHostedTests {
     }
 }
 
-/// Minimal stubs mirroring `WikiSessionTests` (private there, so duplicated
+/// Minimal stubs mirroring `ProfileWikiSessionTests` (private there, so duplicated
 /// here). PageDetailView never exercises extraction during `.onAppear`.
 @MainActor
 private final class StubExtractor: MarkdownExtractor {

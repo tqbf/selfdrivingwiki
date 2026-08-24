@@ -16,7 +16,7 @@ struct DaemonTransportBoundaryPolicyTests {
         let forbidden = [
             "WikiDaemonConnection", "NSXPCConnection", "WikiDaemonProtocol",
             "WikiDaemonEventSink", "DaemonWorkloadClient", "XPCQueueEngineProxy",
-            "QueueStore", "WikiStore", "WikiStoreModel", "WikiSession", "SessionManager",
+            "QueueStore", "WikiStore", "WikiStoreModel", "ProfileWikiSession", "SessionManager",
             "SwiftUI", "AppKit",
         ]
         for path in paths {

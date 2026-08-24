@@ -4,7 +4,7 @@ import Testing
 @testable import WikiFSCore
 @testable import WikiFSEngine
 
-/// `SessionManager` tests: verifies the `[wikiID: WikiSession]` cache semantics
+/// `SessionManager` tests: verifies the `[wikiID: ProfileWikiSession]` cache semantics
 /// — create-or-get deduplication, release-removes-from-cache, flush-all, and
 /// per-session gate isolation (structural — distinct `GenerationGate`
 /// instances across different wiki IDs).

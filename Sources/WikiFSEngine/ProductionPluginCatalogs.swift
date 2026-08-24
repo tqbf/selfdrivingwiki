@@ -457,39 +457,10 @@ public struct AppServices: Sendable {
     }
 }
 
-/// Observable per-wiki application facade built from one child profile and its
-/// inherited process services. It mirrors `WikiSession` until callers migrate.
+/// Boots the observable per-wiki application facade from one child profile and
+/// its inherited process services.
 @MainActor
-@Observable
-public final class ProfileWikiSession: WikiSessionProtocol {
-    public let profile: BootedProfile
-    @ObservationIgnored private let session: WikiSession
-
-    public var wikiID: WikiID { session.wikiID }
-    public var descriptor: WikiDescriptor { session.descriptor }
-    public var store: WikiStoreModel { session.store }
-    public var agentLauncher: AgentLauncher { session.agentLauncher }
-    public var extractionCoordinator: ExtractionCoordinator { session.extractionCoordinator }
-    public var queueEngine: any QueueEngineClient { session.queueEngine }
-    public var extractionProvider: any QueueExtractionProvider { session.extractionProvider }
-    public var generationGate: GenerationGate { session.generationGate }
-    public var searchServices: any SearchServices { session.searchServices }
-
-    public var pendingBlobVacuum: BlobVacuumReport? {
-        get { session.pendingBlobVacuum }
-        set { session.pendingBlobVacuum = newValue }
-    }
-
-    public var pendingVacuumAll: VacuumReport? {
-        get { session.pendingVacuumAll }
-        set { session.pendingVacuumAll = newValue }
-    }
-
-    public var pendingWikiLink: (url: URL, openInNewTab: Bool)? {
-        get { session.pendingWikiLink }
-        set { session.pendingWikiLink = newValue }
-    }
-
+extension ProfileWikiSession {
     public static func boot(
         wikiID: WikiID,
         descriptor: WikiDescriptor,
@@ -512,19 +483,24 @@ public final class ProfileWikiSession: WikiSessionProtocol {
             parent: processProfile.context))
         do {
             let childServices = try await AppServices.resolve(from: profile)
+            let resolvedStore = childServices.store
             return try ProfileWikiSession(
                 wikiID: wikiID,
                 descriptor: descriptor,
                 containerDirectory: containerDirectory,
-                childServices: childServices,
-                processServices: processServices,
+                extractionCoordinator: ExtractionCoordinator(services: processServices.extraction),
+                queueEngine: processServices.queue,
                 extractionProvider: extractionProvider,
                 searchRuntimeRegistry: searchRuntimeRegistry,
+                providerServices: processServices.agentProvider,
+                makeStore: { _ in resolvedStore },
                 pdf2mdScriptPathResolver: pdf2mdScriptPathResolver,
                 htmlMarkdownExtractorFactory: htmlMarkdownExtractorFactory,
                 htmlBackendResolver: htmlBackendResolver,
                 podcastBackendResolver: podcastBackendResolver,
-                interactiveUsageRecorder: interactiveUsageRecorder)
+                interactiveUsageRecorder: interactiveUsageRecorder,
+                profile: childServices.profile,
+                readPool: childServices.readPool)
         } catch {
             do {
                 try await profile.shutdown()
@@ -535,64 +511,6 @@ public final class ProfileWikiSession: WikiSessionProtocol {
         }
     }
 
-    private init(
-        wikiID: WikiID,
-        descriptor: WikiDescriptor,
-        containerDirectory: URL,
-        childServices: AppServices,
-        processServices: AppProcessServices,
-        extractionProvider: any QueueExtractionProvider,
-        searchRuntimeRegistry: SearchRuntimeRegistry,
-        pdf2mdScriptPathResolver: @escaping () -> String?,
-        htmlMarkdownExtractorFactory: @escaping @MainActor () -> (any HtmlMarkdownExtractor)?,
-        htmlBackendResolver: @escaping @MainActor () -> HtmlExtractionBackend?,
-        podcastBackendResolver: @escaping @MainActor () -> PodcastTranscriptionBackend?,
-        interactiveUsageRecorder: @escaping (@MainActor (SessionUsage) -> Void)
-    ) throws {
-        profile = childServices.profile
-        let coordinator = ExtractionCoordinator(services: processServices.extraction)
-        let resolvedStore = childServices.store
-        session = try WikiSession(
-            wikiID: wikiID,
-            descriptor: descriptor,
-            containerDirectory: containerDirectory,
-            extractionCoordinator: coordinator,
-            queueEngine: processServices.queue,
-            extractionProvider: extractionProvider,
-            searchRuntimeRegistry: searchRuntimeRegistry,
-            providerServices: processServices.agentProvider,
-            makeStore: { _ in resolvedStore },
-            pdf2mdScriptPathResolver: pdf2mdScriptPathResolver,
-            htmlMarkdownExtractorFactory: htmlMarkdownExtractorFactory,
-            htmlBackendResolver: htmlBackendResolver,
-            podcastBackendResolver: podcastBackendResolver,
-            interactiveUsageRecorder: interactiveUsageRecorder)
-        session.store.readPool = childServices.readPool
-    }
-
-    public func updateDescriptor(_ descriptor: WikiDescriptor) { session.updateDescriptor(descriptor) }
-    public func previewBlobVacuum() { session.previewBlobVacuum() }
-    public func applyBlobVacuum() { session.applyBlobVacuum() }
-    public func previewVacuumAll() { session.previewVacuumAll() }
-    public func applyVacuumAll() { session.applyVacuumAll() }
-    public func upgradeSearchIndex() async { await session.upgradeSearchIndex() }
-
-    public func searchTantivy(
-        query: String,
-        kinds: [TantivyDocumentKind] = [],
-        limit: Int = 20
-    ) async -> [TantivyShadowSearchResult]? {
-        await session.searchTantivy(query: query, kinds: kinds, limit: limit)
-    }
-
-    public func shutdown() async {
-        await session.shutdownSearchRuntime()
-        do {
-            try await profile.shutdown()
-        } catch {
-            DebugLog.store("Per-wiki profile shutdown failed: \(error)")
-        }
-    }
 }
 
 /// Concrete per-wiki profile rows. The store row is a complete replacement for

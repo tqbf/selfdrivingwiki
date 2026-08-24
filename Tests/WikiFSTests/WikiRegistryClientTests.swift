@@ -9,7 +9,7 @@ import Testing
 /// hermetically against a temp dir with no App Group access.
 ///
 /// The per-wiki *session* lifecycle (store opening, launchers, vacuum) is
-/// covered by `WikiSessionTests`. The registry client itself never opens a
+/// covered by `ProfileWikiSessionTests`. The registry client itself never opens a
 /// store except for seeding/import validation.
 @MainActor
 struct WikiRegistryClientTests {

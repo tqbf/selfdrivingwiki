@@ -6,7 +6,7 @@ struct SearchCordisBoundaryPolicyTests {
     @Test("consumers receive facade only")
     func consumersReceiveFacadeOnly() throws {
         for path in [
-            "Sources/WikiFSEngine/WikiSession.swift",
+            "Sources/WikiFSEngine/ProfileWikiSession.swift",
             "Sources/WikiFSEngine/SessionManager.swift",
             "Sources/WikiFSCore/Store/WikiStoreModel.swift",
             "Sources/WikiFS/Window/RootScene.swift",
@@ -32,7 +32,7 @@ struct SearchCordisBoundaryPolicyTests {
     @Test("production uses shared assembly and no legacy construction")
     func legacyConstructionDoesNotReturn() throws {
         let sources = try [
-            "Sources/WikiFSEngine/WikiSession.swift",
+            "Sources/WikiFSEngine/ProfileWikiSession.swift",
             "Sources/WikiCtlCore/CLITantivyLegResolver.swift",
         ].map(read).joined(separator: "\n")
         #expect(!sources.contains("TantivySearchService("))
