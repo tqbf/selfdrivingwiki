@@ -326,7 +326,7 @@ final class AppProcessComposition {
                     return ProcessRuntimeLease(service: rendererOwner.services) {
                         await rendererOwner.shutdown()
                     }
-                }))
+                }), homeDirectory: containerDirectory)
     }
 }
 

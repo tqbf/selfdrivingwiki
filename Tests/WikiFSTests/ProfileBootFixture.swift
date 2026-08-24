@@ -59,8 +59,8 @@ enum ProfileBootFixture {
             makeRenderer: rendererFactory))
     }
 
-    static func processEntries(includeAppServices: Bool) -> [Entry] {
-        includeAppServices ? ProductionProfileEntries.appProcess() : ProductionProfileEntries.daemonProcess()
+    static func processEntries(includeAppServices: Bool) throws -> [Entry] {
+        try includeAppServices ? ProductionProfiles.appProcess() : ProductionProfiles.daemonProcess()
     }
 
     static func cliCatalog() throws -> PluginCatalog {

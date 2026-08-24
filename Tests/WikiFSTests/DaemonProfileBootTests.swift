@@ -22,7 +22,7 @@ struct DaemonProfileBootTests {
             wikiID: "daemon-profile-test",
             includeAppProviders: false)
         let processDisposals = ProfileProcessDisposalRecorder()
-        let processEntries = ProfileBootFixture.processEntries(includeAppServices: false)
+        let processEntries = try ProfileBootFixture.processEntries(includeAppServices: false)
         let process = try await CordisBoot.boot(.init(
             catalog: try ProfileBootFixture.processCatalog(includeAppServices: false, recorder: processDisposals),
             layers: [PatchFile(entries: processEntries)]))

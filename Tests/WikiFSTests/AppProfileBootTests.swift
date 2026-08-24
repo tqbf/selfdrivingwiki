@@ -155,7 +155,7 @@ struct AppProfileBootTests {
             id: ProfileBootFixture.listenerEntryID,
             plugin: ProfileBootFixture.listenerPluginID))
         let processDisposals = ProfileProcessDisposalRecorder()
-        let processEntries = ProfileBootFixture.processEntries(includeAppServices: true)
+        let processEntries = try ProfileBootFixture.processEntries(includeAppServices: true)
         let process = try await CordisBoot.boot(.init(
             catalog: try ProfileBootFixture.processCatalog(includeAppServices: true, recorder: processDisposals),
             layers: [PatchFile(entries: processEntries)]))

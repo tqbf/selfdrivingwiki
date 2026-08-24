@@ -293,7 +293,7 @@ public enum CLITantivyLegResolver {
         do {
             let booted = try await CordisBoot.boot(.init(
                 catalog: try CLIPluginCatalog.build(),
-                layers: [PatchFile(entries: ProductionProfileEntries.cli())]))
+                layers: [PatchFile(entries: try ProductionProfiles.cli(homeDirectory: containerDirectory))]))
             profile = booted
             let providers = try await booted.context.require(SearchServiceKeys.providers)
             guard let registration = await providers.resolve(TantivySearchPlugin.key),

@@ -3,6 +3,7 @@ import Foundation
 import Yams
 
 public enum CordisLoaderError: Error, Equatable, Sendable {
+    case missingShippedBundles
     case missingPlugin(pluginID: PluginID, entryID: EntryID)
     case invalidEntry(entryID: EntryID, reason: String)
     case entryFailed(entryID: EntryID, label: String, failure: CordisFailure)

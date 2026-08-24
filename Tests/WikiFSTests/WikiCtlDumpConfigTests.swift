@@ -2,7 +2,7 @@ import Foundation
 import Testing
 import WikiCtlCore
 
-@Suite("wikictl dump config")
+@Suite("wikictl dump config", .serialized, .timeLimit(.minutes(1)))
 struct WikiCtlDumpConfigTests {
     @Test("bundle-level dump succeeds without a user profile and applies overlay")
     func bundleFallback() throws {
@@ -19,9 +19,9 @@ struct WikiCtlDumpConfigTests {
             try FileManager.default.createDirectory(
                 at: root.appendingPathComponent(name), withIntermediateDirectories: true)
         }
-        try Data("entries:\n  - id: store\n    plugin: wiki.store\n".utf8).write(
-            to: root.appendingPathComponent("wikifs-base/cordis.patch.yml"))
         try Data("entries: []\n".utf8).write(
+            to: root.appendingPathComponent("wikifs-base/cordis.patch.yml"))
+        try Data("entries:\n  - id: store\n    plugin: wiki.store\n    config: { _scope: process }\n".utf8).write(
             to: root.appendingPathComponent("wikictl/cordis.patch.yml"))
 
         let result = try DumpConfigCommand.run(
