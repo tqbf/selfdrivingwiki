@@ -5,17 +5,19 @@ import Testing
 struct AgentProviderCompositionBoundaryTests {
     @Test("app queue and wiki sessions receive one stable facade")
     func appQueueAndWikiSessionsReceiveSameFacade() throws {
-        let source = try sourceText("Sources/WikiFS/Window/WikiFSApp.swift")
+        let app = try sourceText("Sources/WikiFS/Window/WikiFSApp.swift")
+        let composition = try sourceText("Sources/WikiFS/Renderer/RendererCompositionOwner.swift")
         let settings = try sourceText("Sources/WikiFS/Settings/AgentsSettingsView.swift")
 
-        #expect(source.contains("let providerServices = MutableAgentProviderServices()"))
-        #expect(source.contains("providerServices: providerServices"))
-        #expect(source.contains("await providerServices.install(handle.services)"))
-        #expect(source.contains("agentProviderRuntimeHandle = handle"))
-        #expect(source.contains("providerServices: agentProviderServices"))
+        #expect(composition.contains("let providerServices = MutableAgentProviderServices()"))
+        #expect(composition.contains("await providerServices.install(handle.services)"))
+        #expect(app.contains("let providerServices = processComposition.providerServices"))
+        #expect(app.contains("providerServices: providerServices"))
+        #expect(app.contains("providerServices: agentProviderServices"))
         #expect(settings.contains("providerServices.discoverCatalog("))
         #expect(!settings.contains("ACPProviderModelProbe("))
-        #expect(!source.contains("CordisContext"))
+        #expect(!app.contains("CordisContext"))
+        #expect(!app.contains("AgentProviderRuntimeAssembly("))
     }
 
     @Test("daemon queue and chat receive one stable facade")

@@ -6,13 +6,16 @@ import Testing
 struct ExtractionCompositionBoundaryTests {
     @Test("app creates one facade before queue and session composition")
     func appUsesOneExtractionFacade() throws {
-        let source = try productionSource("Sources/WikiFS/Window/WikiFSApp.swift")
+        let app = try productionSource("Sources/WikiFS/Window/WikiFSApp.swift")
+        let composition = try productionSource("Sources/WikiFS/Renderer/RendererCompositionOwner.swift")
 
-        #expect(source.occurrences(of: "let extractionOwner = ExtractionCompositionOwner") == 1)
-        #expect(source.contains("let extractionServices = extractionOwner.services"))
-        #expect(source.contains("ExtractionCoordinator(services: extractionServices)"))
-        #expect(source.contains("extractionServices: extractionServices"))
-        #expect(!source.contains("ExtractionCoordinator(\n            containerDirectory:"))
+        #expect(composition.occurrences(of: "let extractionServices = MutableExtractionServices()") == 1)
+        #expect(composition.occurrences(of: "ExtractionCompositionOwner(services: extractionServices)") == 1)
+        #expect(app.contains("let extractionServices = processComposition.extractionServices"))
+        #expect(app.contains("ExtractionCoordinator(services: extractionServices)"))
+        #expect(app.contains("extractionServices: extractionServices"))
+        #expect(!app.contains("ExtractionRuntimeAssembly("))
+        #expect(!app.contains("ExtractionCoordinator(\n            containerDirectory:"))
     }
 
     @Test("daemon creates one facade for queue, ingestion, and chat")
@@ -49,11 +52,14 @@ struct ExtractionCompositionBoundaryTests {
     @Test("shutdown order stops queue before extraction disposal")
     func shutdownOrderIsExplicit() throws {
         let app = try productionSource("Sources/WikiFS/Window/WikiFSApp.swift")
+        let composition = try productionSource("Sources/WikiFS/Renderer/RendererCompositionOwner.swift")
         let daemon = try productionSource("Sources/wikid/WikiDaemon.swift")
 
-        let appQueue = try #require(app.range(of: "await localQueueRuntimeController.dispose()"))
-        let appExtraction = try #require(app.range(of: "await extractionCompositionOwner.shutdown()"))
-        #expect(appQueue.lowerBound < appExtraction.lowerBound)
+        #expect(app.contains("await processProfileOwner.shutdown()"))
+        #expect(!app.contains("localQueueRuntimeController.dispose()"))
+        #expect(!app.contains("extractionCompositionOwner.shutdown()"))
+        #expect(composition.contains("_ = await queueController.dispose()"))
+        #expect(composition.contains("await owner.shutdown()"))
 
         let daemonQueue = try #require(daemon.range(of: "daemonQueueHost.relinquish"))
         let daemonProfile = try #require(daemon.range(of: "profileOwner.shutdown()"))

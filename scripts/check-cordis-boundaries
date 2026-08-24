@@ -28,8 +28,8 @@ if $strict; then
 fi
 
 expected_runtime_matches='Sources/WikiCtlCore/CLIPluginCatalog.swift
+Sources/WikiFS/Renderer/RendererCompositionOwner.swift
 Sources/WikiFS/Renderer/RendererRuntimeAssembly.swift
-Sources/WikiFS/Window/WikiFSApp.swift
 Sources/WikiFSEngine/AgentProviderRuntimeAssembly.swift
 Sources/WikiFSEngine/DaemonTransportRuntimeAssembly.swift
 Sources/WikiFSEngine/ExtractionRuntimeAssembly.swift

@@ -161,6 +161,14 @@ public final class AppProcessProfileOwner {
         self.boot = boot
     }
 
+    public convenience init(factories: ProcessPluginCatalogFactories) {
+        self.init {
+            try await CordisBoot.boot(.init(
+                catalog: try ProcessPluginCatalog.build(factories: factories),
+                layers: [PatchFile(entries: ProductionProfileEntries.appProcess())]))
+        }
+    }
+
     public convenience init(
         agentProvider: any AgentProviderServices,
         extraction: any ExtractionServices,
@@ -168,17 +176,12 @@ public final class AppProcessProfileOwner {
         transport: DaemonTransportServices,
         renderer: any Sendable
     ) {
-        self.init {
-            let factories = ProcessPluginCatalogFactories(
-                makeAgentProvider: { ProcessRuntimeLease(service: agentProvider) {} },
-                makeExtraction: { ProcessRuntimeLease(service: extraction) {} },
-                makeQueue: { ProcessRuntimeLease(service: queue) {} },
-                makeTransport: { ProcessRuntimeLease(service: transport) {} },
-                makeRenderer: { ProcessRuntimeLease(service: renderer) {} })
-            return try await CordisBoot.boot(.init(
-                catalog: try ProcessPluginCatalog.build(factories: factories),
-                layers: [PatchFile(entries: ProductionProfileEntries.appProcess())]))
-        }
+        self.init(factories: ProcessPluginCatalogFactories(
+            makeAgentProvider: { ProcessRuntimeLease(service: agentProvider) {} },
+            makeExtraction: { ProcessRuntimeLease(service: extraction) {} },
+            makeQueue: { ProcessRuntimeLease(service: queue) {} },
+            makeTransport: { ProcessRuntimeLease(service: transport) {} },
+            makeRenderer: { ProcessRuntimeLease(service: renderer) {} }))
     }
 
     public func start() {
