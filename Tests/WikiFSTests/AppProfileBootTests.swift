@@ -15,11 +15,15 @@ struct AppProfileBootTests {
         let gate = ProfileBootGate()
         let committedRows = try ProfileBootFixture.processEntries(includeAppServices: true)
         #expect(Set(committedRows.map(\.plugin)) == Set([
+            ProcessRuntimePlugins.inputsID,
             ProcessRuntimePlugins.agentProviderID,
             ProcessRuntimePlugins.extractionID,
             ProcessRuntimePlugins.queueID,
             ProcessRuntimePlugins.transportID,
             ProcessRuntimePlugins.rendererID,
+            ProcessRuntimePlugins.embeddingsID,
+            ProcessRuntimePlugins.urlFetchProviderID,
+            ProcessRuntimePlugins.zoteroClientProviderID,
         ]))
         let owner = AppProcessProfileOwner {
             await gate.wait()
@@ -34,11 +38,9 @@ struct AppProfileBootTests {
         await gate.open()
         await owner.awaitSettled()
         #expect(owner.readiness == .ready)
-        #expect(owner.profile != nil)
         #expect(owner.services != nil)
 
         await owner.shutdown()
-        #expect(owner.profile == nil)
         #expect(owner.services == nil)
         #expect(await disposals.count == 3)
         await owner.shutdown()
@@ -79,11 +81,10 @@ struct AppProfileBootTests {
             Issue.record("expected missing app process services to fail resolution")
             return
         }
-        #expect(owner.profile == nil)
         #expect(owner.services == nil)
-        #expect(await disposals.count == 2)
+        #expect(await disposals.count == 0)
         await owner.shutdown()
-        #expect(await disposals.count == 2)
+        #expect(await disposals.count == 0)
     }
 
     @Test("per-wiki facade boots from child and process profile services")
@@ -98,10 +99,12 @@ struct AppProfileBootTests {
             }
         }
         let disposals = ProfileProcessDisposalRecorder()
-        let process = try await CordisBoot.boot(.init(
-            catalog: try ProfileBootFixture.processCatalog(includeAppServices: true, recorder: disposals),
-            layers: [PatchFile(entries: ProfileBootFixture.processEntries(includeAppServices: true))]))
-        let processServices = try await AppProcessServices.resolve(from: process)
+        let owner = AppProcessProfileOwner {
+            try await CordisBoot.boot(.init(
+                catalog: try ProfileBootFixture.processCatalog(includeAppServices: true, recorder: disposals),
+                layers: [PatchFile(entries: ProfileBootFixture.processEntries(includeAppServices: true))]))
+        }
+        owner.start()
         let wikiID = WikiID(rawValue: "profile-wiki-session")
         let timestamp = Date(timeIntervalSince1970: 1_700_000_000)
         let descriptor = WikiDescriptor(
@@ -109,18 +112,16 @@ struct AppProfileBootTests {
             displayName: "Profile Wiki",
             createdAt: timestamp,
             lastUsedAt: timestamp)
-        let facade = try await ProfileWikiSession.boot(
+        let facade = try await owner.bootWikiSession(
             wikiID: wikiID,
             descriptor: descriptor,
             containerDirectory: directory,
             catalog: try ProfileBootFixture.appCatalog(),
-            processProfile: process,
-            processServices: processServices,
             extractionProvider: ProfileBootFixture.extractionProvider())
 
         #expect(facade.wikiID == wikiID)
         #expect(facade.descriptor.displayName == "Profile Wiki")
-        #expect(facade.store.readPool != nil)
+        #expect(facade.store.readService != nil)
         #expect(facade.descriptor.homePageID != nil)
         let renamed = WikiDescriptor(
             id: wikiID,
@@ -140,7 +141,7 @@ struct AppProfileBootTests {
 
         await facade.shutdown()
         #expect(await disposals.count == 0)
-        try await process.shutdown()
+        await owner.shutdown()
         #expect(await disposals.count == 3)
     }
 
@@ -178,6 +179,10 @@ struct AppProfileBootTests {
         _ = try #require(try await booted.context.find(ProcessServiceKeys.queue))
         _ = try #require(try await booted.context.find(ProcessServiceKeys.transport))
         _ = try #require(try await booted.context.find(ProcessServiceKeys.renderer))
+        _ = try #require(try await booted.context.find(ProcessServiceKeys.urlFetchProvider))
+        _ = try #require(try await booted.context.find(ProcessServiceKeys.zoteroClientProvider))
+        #expect(ProcessServiceKeys.urlFetchProvider.label == "process.integration.url-fetch-provider")
+        #expect(ProcessServiceKeys.zoteroClientProvider.label == "process.integration.zotero-client-provider")
         let store = try #require(try await booted.context.find(StoreServiceKeys.store))
         let page = try store.createPage(title: "Committed app profile page")
 
@@ -219,16 +224,29 @@ struct AppProfileBootTests {
             catch { Issue.record("could not remove YAML authority fixture: \(error)") }
         }
         let selectedIDs = Set([EntryID("renderers"), EntryID("renderer-services")])
+        let process = try await CordisBoot.boot(.init(
+            catalog: try ProcessPluginCatalog.build(factories: ProcessPluginCatalogFactories(
+                compositionInputs: ProfileBootFixture.fixtureProcessInputs(rendererAssembly: {
+                    ProcessRuntimeLease<any RendererServices>(service: UnavailableRendererServices()) {}
+                }),
+                makeEmbeddings: {
+                    ProcessRuntimeLease(service: .unavailable(identifier: "unavailable-fixture"), dispose: {})
+                })),
+            layers: [PatchFile(entries: [
+                Entry(id: EntryID("inputs"), plugin: ProcessRuntimePlugins.inputsID),
+                Entry(id: EntryID("renderer"), plugin: ProcessRuntimePlugins.rendererID),
+            ])]))
         let catalog = try PluginCatalog([
             RenderersPlugin.definition,
-            RendererServicesPlugin.definition(makeServices: { ProfileAuthorityRenderer() }),
+            RendererServicesPlugin.definition,
         ])
         let baselineRows = try ProductionProfiles.resolve(
             kind: .app, scope: .wiki, bundlesDirectory: bundles).entries
             .filter { selectedIDs.contains($0.id) }
         let baseline = try await CordisBoot.boot(.init(
             catalog: catalog,
-            layers: [PatchFile(entries: baselineRows)]))
+            layers: [PatchFile(entries: baselineRows)],
+            parent: process.context))
         let baselineRegistry = try await baseline.context.require(RendererServiceKeys.renderers)
         #expect(await baselineRegistry.providerIDs() == [RendererServicesPlugin.providerID])
         try await baseline.shutdown()
@@ -240,12 +258,12 @@ struct AppProfileBootTests {
             .filter { selectedIDs.contains($0.id) }
         let changed = try await CordisBoot.boot(.init(
             catalog: catalog,
-            layers: [PatchFile(entries: changedRows)]))
+            layers: [PatchFile(entries: changedRows)],
+            parent: process.context))
         let changedRegistry = try await changed.context.require(RendererServiceKeys.renderers)
         #expect(await changedRegistry.providerIDs().isEmpty)
         try await changed.shutdown()
+        try await process.shutdown()
     }
 }
-
-private struct ProfileAuthorityRenderer: Sendable {}
 #endif

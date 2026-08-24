@@ -41,6 +41,31 @@ reject_matches() {
 }
 
 reject_matches "RuntimeAssembly remains in Sources/" 'RuntimeAssembly' || failed=1
+reject_matches "untyped Cordis service key" 'ServiceKey<[^>]*any[[:space:]]+Sendable' || failed=1
+reject_matches "Cordis service key contains an application or context type" \
+  'ServiceKey<[^>]*(WikiStoreModel|SearchCompositionOwner|AgentLauncher|GenerationGate|PerWikiRuntimeServices|BootedProfile|CordisContext)' || failed=1
+# StoreBackend and WikiRegistryClient are named pre-profile construction boundaries.
+# SessionManager and ProfileWikiSession retain explicit test-fixture factories.
+# SessionsPlugin provisions the session-owned model factory.
+# StorePlugin resolves the named StoreBackend factory during activation.
+# CLITantivyLegResolver owns its optional legacy lexical fallback seam.
+reject_matches "makeStore remains outside a named bootstrap, backend, fallback, or test boundary" \
+  '(^|[^[:alnum:]_])makeStore([^[:alnum:]_]|$)' \
+  Sources/WikiCtlCore/CLITantivyLegResolver.swift \
+  Sources/WikiFSCore/Core/WikiRegistryClient.swift \
+  Sources/WikiFSCore/Store/StoreBackend.swift \
+  Sources/WikiFSEngine/ProfileWikiSession.swift \
+  Sources/WikiFSEngine/SessionManager.swift \
+  Sources/WikiFSEngine/SessionsPlugin.swift \
+  Sources/WikiFSEngine/StorePlugin.swift || failed=1
+reject_matches "public production facade exposes BootedProfile or CordisContext" \
+  'public[[:space:]]+(let|var|typealias|func|init)[^\n]*(BootedProfile|CordisContext)' \
+  Sources/Cordis/CordisContext.swift \
+  Sources/CordisLoader/EntryTree.swift \
+  Sources/WikiCtlCore/CLITantivyLegResolver.swift \
+  Sources/WikiFSEngine/ProductionPluginCatalogs.swift \
+  Sources/WikiFSEngine/SearchRuntimeCompositionFactory.swift \
+  Sources/WikiFSEngine/SearchRuntimeFactory.swift || failed=1
 reject_matches "session facade is constructed outside its boot/factory boundary" \
   '(^|[^[:alnum:]_])(WikiSession|ProfileWikiSession)\(' \
   Sources/WikiFSEngine/ProductionPluginCatalogs.swift \
@@ -49,7 +74,7 @@ reject_matches "session facade is constructed outside its boot/factory boundary"
 # WikiRegistryClient documents its injected pre-profile bootstrap factory.
 # GRDBWikiStore documents its own concrete initializer contract.
 # StoreBackend is the named concrete-backend construction boundary.
-# WikiReadPool owns read-only pooled connections.
+# WikiReadService owns its private read-only pooled connections.
 # ProfileWikiSession documents its synchronous test-fixture boundary.
 # Projection is a separate extension process with query-only stores.
 # wikid/main.swift retains the Linux stdio compatibility fixture factory.
@@ -59,7 +84,7 @@ reject_matches "GRDBWikiStore is constructed outside a store plugin/factory" \
   Sources/WikiFSCore/Core/WikiRegistryClient.swift \
   Sources/WikiFSCore/Store/GRDBWikiStore.swift \
   Sources/WikiFSCore/Store/StoreBackend.swift \
-  Sources/WikiFSCore/Store/WikiReadPool.swift \
+  Sources/WikiFSCore/Store/WikiReadService.swift \
   Sources/WikiFSEngine/ProfileWikiSession.swift \
   Sources/WikiFSFileProvider/Projection.swift \
   Sources/wikid/main.swift || failed=1
@@ -88,6 +113,21 @@ reject_matches "AgentLauncher is constructed outside a plugin/factory or launche
   Sources/WikiFS/Renderer/RendererCompositionOwner.swift \
   Sources/WikiFSEngine/AgentLauncher.swift \
   Sources/WikiFSEngine/SessionsPlugin.swift || failed=1
+
+process_catalog="$source_root/WikiFSEngine/ProductionPluginCatalogs.swift"
+if [[ -f "$process_catalog" ]]; then
+  required_process_markers=(
+    'ServiceKey<ProcessCompositionInputs>'
+    'dependencies: [ServiceDependency(ProcessServiceKeys.compositionInputs)]'
+    'activation.require(ProcessServiceKeys.compositionInputs)'
+  )
+  for marker in "${required_process_markers[@]}"; do
+    if ! grep -Fq "$marker" "$process_catalog"; then
+      echo "Cordis boundary violation: process plugins hide stable dependencies: $marker" >&2
+      failed=1
+    fi
+  done
+fi
 
 if [[ $failed -ne 0 ]]; then
   exit 1

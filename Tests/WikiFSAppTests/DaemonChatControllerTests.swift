@@ -316,6 +316,10 @@ struct DaemonChatControllerTests {
         await harness.runtime.emit(.transportClosed(status: 9))
 
         try await harness.waitUntilPersistedTurnState(submission.turnID, equals: .completed)
+        try await harness.waitUntilRuntimeSnapshot(
+            controller,
+            predicate: { $0.lifecycle == .closed },
+            failureMessage: "expected transport close to settle the runtime lifecycle")
         let turns = try harness.store.listPersistedChatTurns(chatID: harness.chat.id)
         let snapshot = await controller.typedSnapshot()
         let replay = await controller.replay(after: .initial)

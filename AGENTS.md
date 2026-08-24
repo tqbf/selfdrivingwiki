@@ -254,7 +254,8 @@ agents, NOT Polytoken):
 * **SQLite concurrency (graph-model Phase 0): the store is method-atomic —
   every `SQLiteWikiStore` entry point holds an internal recursive lock; writes
   still flow through the `@MainActor` model; off-main reads go through
-  `WikiReadPool`.** Multi-step writes compose via `withTransaction` (savepoint
+  `WikiReadService`, which privately owns its read-only pool.** Multi-step writes
+  compose via `withTransaction` (savepoint
   nesting — never raw `BEGIN`), and no statement handle or column pointer may
   cross a method boundary. Every stepped `SQLiteStatement` must be covered by
   `defer { stmt.reset() }` — a statement left at `SQLITE_ROW` pins the

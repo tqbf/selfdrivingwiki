@@ -15,11 +15,11 @@ enum MetadataHydrationKey: Hashable {
 }
 
 enum MetadataHydrationReadPath: Equatable, Sendable {
-    case readPool
+    case readService
     case inMemoryStoreFallback
 
-    static func resolve(readPoolAvailable: Bool) -> MetadataHydrationReadPath {
-        readPoolAvailable ? .readPool : .inMemoryStoreFallback
+    static func resolve(readServiceAvailable: Bool) -> MetadataHydrationReadPath {
+        readServiceAvailable ? .readService : .inMemoryStoreFallback
     }
 }
 

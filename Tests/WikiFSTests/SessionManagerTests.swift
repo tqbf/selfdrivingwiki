@@ -45,14 +45,10 @@ struct SessionManagerTests {
             extractionProvider: provider,
             pdf2mdScriptPathResolver: { nil },
             testSessionFactory: { wikiID, descriptor in
-                let runtime = try PerWikiRuntimeServices.testFixture(
-                    wikiID: wikiID,
-                    containerDirectory: dir,
-                    extractionCoordinator: coordinator)
-                return ProfileWikiSession(
-                    wikiID: wikiID,
+                try ProfileWikiSession(
+                    testFixtureWikiID: wikiID,
                     descriptor: descriptor,
-                    runtime: runtime,
+                    containerDirectory: dir,
                     extractionCoordinator: coordinator,
                     queueEngine: queueEngine,
                     extractionProvider: provider)
@@ -75,18 +71,14 @@ struct SessionManagerTests {
             extractionProvider: provider,
             pdf2mdScriptPathResolver: { nil },
             testSessionFactory: { wikiID, descriptor in
-                let runtime = try PerWikiRuntimeServices.testFixture(
-                    wikiID: wikiID,
+                try ProfileWikiSession(
+                    testFixtureWikiID: wikiID,
+                    descriptor: descriptor,
                     containerDirectory: dir,
                     extractionCoordinator: coordinator,
-                    makeStore: makeStore)
-                return ProfileWikiSession(
-                    wikiID: wikiID,
-                    descriptor: descriptor,
-                    runtime: runtime,
-                    extractionCoordinator: coordinator,
                     queueEngine: queueEngine,
-                    extractionProvider: provider)
+                    extractionProvider: provider,
+                    makeStore: makeStore)
             })
     }
 

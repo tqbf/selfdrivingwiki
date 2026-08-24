@@ -4,8 +4,8 @@ import Testing
 
 /// Phase 0 of `plans/graph-model-and-versioning.md`: the store is
 /// method-atomic (internal recursive lock), transactions nest via savepoints,
-/// `renameSource` is atomic, and `WikiReadPool` provides off-main read-only
-/// snapshot connections. These tests pin each of those properties.
+/// `renameSource` is atomic, and `WikiReadService` provides off-main read-only
+/// snapshot access. These tests pin each of those properties.
 @Suite("Store concurrency & transactions (graph-model Phase 0)")
 struct StoreConcurrencyTests {
 
@@ -141,82 +141,74 @@ struct StoreConcurrencyTests {
         #expect(try store.sourceLinkingPages(to: source.id).count == 3)
     }
 
-    // MARK: - WikiReadPool
+    // MARK: - WikiReadService
 
-    @Test func poolReadSeesWriterCommits() throws {
+    @Test func readServiceSeesWriterCommits() async throws {
         let (store, url) = try makeStore()
-        let pool = WikiReadPool(databaseURL: url)
+        let service = WikiReadService(databaseURL: url)
 
-        _ = try store.createPage(title: "Visible")
-        let titles = try pool.read { reader in
-            try reader.listPages(sortBy: .titleAZ).map(\.title)
-        }
-        #expect(titles == ["Visible"])
+        _ = try store.addSource(filename: "visible.txt", data: Data("one".utf8))
+        let names = try await service.asyncRead { try $0.listSources().map(\.filename) }
+        #expect(names == ["visible.txt"])
 
-        // A later write is visible on a REUSED pooled connection (fresh read
-        // transaction per query — no stale long-lived snapshot).
-        _ = try store.createPage(title: "Also visible")
-        let titles2 = try pool.read { reader in
-            try reader.listPages(sortBy: .titleAZ).map(\.title)
-        }
-        #expect(titles2 == ["Also visible", "Visible"])
+        _ = try store.addSource(filename: "also-visible.txt", data: Data("two".utf8))
+        let namesAfterWrite = try await service.asyncRead { try $0.listSources().map(\.filename).sorted() }
+        #expect(namesAfterWrite == ["also-visible.txt", "visible.txt"])
     }
 
-    @Test func poolConnectionsAreReadOnly() throws {
+    @Test func readServiceReusesIdleConnections() async throws {
         let (store, url) = try makeStore()
-        _ = try store.createPage(title: "Seed")
-        let pool = WikiReadPool(databaseURL: url)
-        #expect(throws: (any Error).self) {
-            try pool.read { reader in
-                _ = try reader.createPage(title: "Forbidden")
-            }
+        _ = try store.addSource(filename: "seed.txt", data: Data("seed".utf8))
+        let service = WikiReadService(databaseURL: url, maxIdle: 2)
+        #expect(await service.idleConnectionCountForTesting() == 0)
+        _ = try await service.asyncRead { try $0.listSources().count }
+        #expect(await service.idleConnectionCountForTesting() == 1)
+        _ = try await service.asyncRead { try $0.listSources().count }
+        #expect(await service.idleConnectionCountForTesting() == 1)
+    }
+
+    @Test func readServiceRejectsReadsAfterShutdown() async throws {
+        let (_, url) = try makeStore()
+        let service = WikiReadService(databaseURL: url)
+        await service.shutdown()
+        await service.shutdown()
+
+        #expect(await service.lifecycleStateForTesting() == .stopped)
+        await #expect(throws: WikiReadServiceError.unavailable) {
+            try await service.asyncRead { try $0.listSources().count }
         }
-        // The write never landed.
-        #expect(try store.listPages(sortBy: .titleAZ).count == 1)
     }
 
-    @Test func poolReusesIdleConnections() throws {
+    /// Concurrent service reads while the writer changes the WAL head.
+    @Test func concurrentReadServiceReadsWithLiveWriter() async throws {
         let (store, url) = try makeStore()
-        _ = try store.createPage(title: "Seed")
-        let pool = WikiReadPool(databaseURL: url, maxIdle: 2)
-        #expect(pool.idleCountForTesting == 0)
-        _ = try pool.read { try $0.changeToken() }
-        #expect(pool.idleCountForTesting == 1)
-        _ = try pool.read { try $0.changeToken() }
-        #expect(pool.idleCountForTesting == 1)   // reused, not grown
-    }
-
-    @Test func poolAsyncReadRunsOffCaller() async throws {
-        let (store, url) = try makeStore()
-        _ = try store.createPage(title: "Async")
-        let pool = WikiReadPool(databaseURL: url)
-        let count = try await pool.asyncRead { reader in
-            try reader.listPages(sortBy: .titleAZ).count
+        for i in 0..<10 {
+            _ = try store.addSource(filename: "P\(i).txt", data: Data("P\(i)".utf8))
         }
-        #expect(count == 1)
-    }
-
-    /// Concurrent pool reads while the writer churns — the cross-connection
-    /// analogue of the hammer test above (WAL: N readers + 1 writer).
-    @Test func concurrentPoolReadsWithLiveWriter() async throws {
-        let (store, url) = try makeStore()
-        for i in 0..<10 { _ = try store.createPage(title: "P\(i)") }
-        let pool = WikiReadPool(databaseURL: url)
+        let service = WikiReadService(databaseURL: url)
 
         await withTaskGroup(of: Void.self) { group in
             for _ in 0..<6 {
                 group.addTask {
                     for _ in 0..<50 {
-                        _ = try? pool.read { try $0.listPages(sortBy: .lastUpdated).count }
+                        do {
+                            _ = try await service.asyncRead { try $0.listSources().count }
+                        } catch {
+                            Issue.record(error)
+                        }
                     }
                 }
             }
             group.addTask {
                 for i in 0..<50 {
-                    _ = try? store.createPage(title: "W\(i)")
+                    do {
+                        _ = try store.addSource(filename: "W\(i).txt", data: Data("W\(i)".utf8))
+                    } catch {
+                        Issue.record(error)
+                    }
                 }
             }
         }
-        #expect(try store.listPages(sortBy: .titleAZ).count == 60)
+        #expect(try store.listSources().count == 60)
     }
 }

@@ -42,10 +42,8 @@ enum ProfileBootFixture {
         return try AppPluginCatalog.build(
             factories: AppPluginCatalogFactories(
                 base: baseFactories,
-                makeRendererServices: { ProfileRendererServices() },
                 makeDefuddleExtractor: { ProfileHTMLExtractor() },
-                makeDaemonTransport: { fixtureTransportServices() },
-                makeURLFetcher: { ProfileIntegrationEntryPoint() }),
+                makeDaemonTransport: { fixtureTransportServices() }),
             additionalDefinitions: additionalDefinitions)
     }
 
@@ -55,30 +53,67 @@ enum ProfileBootFixture {
             additionalDefinitions: [launcherFactoryDefinition])
     }
 
+    static func fixtureProcessInputs(
+        queueAssembly: ProcessCompositionInputs.QueueAssembly? = nil,
+        transportAssembly: ProcessCompositionInputs.TransportAssembly? = nil,
+        rendererAssembly: ProcessCompositionInputs.RendererAssembly? = nil
+    ) -> ProcessCompositionInputs {
+        ProcessCompositionInputs(
+            agentProvider: AgentProviderProcessInput(
+                services: MutableAgentProviderServices(),
+                readConfiguration: { AgentProvidersConfig(providers: []) },
+                resolveCommand: { _ in [:] },
+                readCredential: { _ in nil },
+                resolvePermissionPolicy: { _ in .bypass }),
+            extraction: ExtractionProcessInput(
+                services: MutableExtractionServices(),
+                readConfiguration: { ExtractionConfig() },
+                readCredential: { _ in nil },
+                resolveACP: { _ in nil },
+                httpFetcher: FakeHTTPFetcher(responses: []),
+                makeLocalExtractor: { ProfilePDFExtractor() }),
+            queueAssembly: queueAssembly,
+            transportAssembly: transportAssembly,
+            rendererAssembly: rendererAssembly)
+    }
+
     static func processCatalog(includeAppServices: Bool, recorder: ProfileProcessDisposalRecorder) throws -> PluginCatalog {
-        let queueFactory: ProcessPluginCatalogFactories.QueueFactory? = includeAppServices ? { @Sendable in
+        let queueFactory: ProcessCompositionInputs.QueueAssembly? = includeAppServices ? { @Sendable in
             let engine = try makeProfileQueueEngine()
             return ProcessRuntimeLease<any QueueEngineClient>(service: engine) {
                 _ = await engine.shutdownForHandoff()
             }
         } : nil
-        let transportFactory: ProcessPluginCatalogFactories.TransportFactory? = includeAppServices ? { @Sendable in
+        let transportFactory: ProcessCompositionInputs.TransportAssembly? = includeAppServices ? { @Sendable in
             let services = fixtureTransportServices()
             return ProcessRuntimeLease(service: services) { await services.stop() }
         } : nil
-        let rendererFactory: ProcessPluginCatalogFactories.RendererFactory? = includeAppServices ? { @Sendable in
-            ProcessRuntimeLease<any Sendable>(service: ProfileRendererServices()) { await recorder.record() }
+        let rendererFactory: ProcessCompositionInputs.RendererAssembly? = includeAppServices ? { @Sendable in
+            ProcessRuntimeLease<any RendererServices>(service: UnavailableRendererServices()) { await recorder.record() }
+        } : nil
+        let urlFetchProviderFactory: ProcessPluginCatalogFactories.URLFetchProviderFactory? = includeAppServices ? { @Sendable in
+            ProcessRuntimeLease(service: URLFetchProvider(makeFetcher: { URLSessionFetcher() })) {
+                await recorder.record()
+            }
+        } : nil
+        let zoteroClientProviderFactory: ProcessPluginCatalogFactories.ZoteroClientProviderFactory? = includeAppServices ? { @Sendable in
+            ProcessRuntimeLease(service: ZoteroClientProvider(
+                readConfiguration: { ZoteroConfig() },
+                readCredential: { nil },
+                makeFetcher: { URLSessionZoteroFetcher() })) {
+                    await recorder.record()
+                }
         } : nil
         return try ProcessPluginCatalog.build(factories: ProcessPluginCatalogFactories(
-            makeAgentProvider: {
-                ProcessRuntimeLease(service: UnavailableAgentProviderServices()) { await recorder.record() }
+            compositionInputs: fixtureProcessInputs(
+                queueAssembly: queueFactory,
+                transportAssembly: transportFactory,
+                rendererAssembly: rendererFactory),
+            makeEmbeddings: {
+                ProcessRuntimeLease(service: .unavailable(identifier: "unavailable-fixture"), dispose: {})
             },
-            makeExtraction: {
-                ProcessRuntimeLease(service: UnavailableExtractionServices()) { await recorder.record() }
-            },
-            makeQueue: queueFactory,
-            makeTransport: transportFactory,
-            makeRenderer: rendererFactory))
+            makeURLFetchProvider: urlFetchProviderFactory,
+            makeZoteroClientProvider: zoteroClientProviderFactory))
     }
 
     static func processEntries(includeAppServices: Bool) throws -> [Entry] {
@@ -147,26 +182,42 @@ enum ProfileBootFixture {
     private static var baseFactories: BasePluginCatalogFactories {
         BasePluginCatalogFactories(
             agentProviderServices: UnavailableAgentProviderServices(),
-            makePDFExtractor: { ProfilePDFExtractor() },
-            configureEmbeddings: {},
-            selectedEmbeddingIdentifier: { "fixture-embedding" },
-            embeddingsAvailable: { false })
+            makePDFExtractor: { ProfilePDFExtractor() })
     }
 
     private static var launcherFactoryDefinition: PluginDefinition {
         PluginDefinition(
             id: launcherFactoryPluginID,
-            provisions: [ServiceDependency(LauncherServiceKeys.factory)]) {
+            dependencies: [ServiceDependency(StoreServiceKeys.store)],
+            provisions: [
+                ServiceDependency(LauncherServiceKeys.factory),
+                ServiceDependency(PerWikiRuntimeServiceKeys.searchFactory),
+            ]) {
             try ComponentDefinition(
                 label: launcherFactoryPluginID.rawValue,
-                provisions: [ServiceDependency(LauncherServiceKeys.factory)]) { activation in
+                dependencies: [ServiceDependency(StoreServiceKeys.store)],
+                provisions: [
+                    ServiceDependency(LauncherServiceKeys.factory),
+                    ServiceDependency(PerWikiRuntimeServiceKeys.searchFactory),
+                ]) { activation in
+                let store = try await activation.require(StoreServiceKeys.store)
+                let eventBus = try #require(store.eventBus)
                 let factory = LauncherFactory { _ in
                     let gate = GenerationGate(laneLimits: LauncherAdmissionPolicy.laneLimits)
                     return LauncherPair(
                         gate: gate,
                         launcher: AgentLauncher(generationGate: gate))
                 }
+                let searchFactory = await MainActor.run {
+                    PerWikiSearchFactory(
+                        identity: SearchRuntimeIdentity(
+                            wikiID: eventBus.wikiID,
+                            containerDirectory: FileManager.default.temporaryDirectory),
+                        contentSource: StoreBackedTantivyContentSource(store: store),
+                        changeStreamFactory: BusSearchChangeStreamFactory(bus: eventBus))
+                }
                 _ = try await activation.supply(LauncherServiceKeys.factory, value: factory)
+                _ = try await activation.supply(PerWikiRuntimeServiceKeys.searchFactory, value: searchFactory)
             }
         }
     }
@@ -239,7 +290,6 @@ private struct ProfileHTMLExtractor: HtmlMarkdownExtractor {
     }
 }
 
-private struct ProfileRendererServices: Sendable {}
 private struct ProfileIntegrationEntryPoint: Sendable {}
 
 private func makeProfileQueueEngine() throws -> QueueEngine {

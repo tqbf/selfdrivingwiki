@@ -1,7 +1,13 @@
 entries:
+  - id: process-inputs
+    plugin: process.inputs
+    config: { _scope: process }
   - id: process-agent-provider
     plugin: process.agent-provider
     config: { _scope: process }
   - id: process-extraction
     plugin: process.extraction
+    config: { _scope: process }
+  - id: process-embeddings
+    plugin: process.embeddings
     config: { _scope: process }

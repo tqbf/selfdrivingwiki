@@ -80,7 +80,7 @@ struct DaemonChatHostTests {
         name: String = "Test"
     ) async throws -> (daemon: WikiDaemon, wiki: WikiDescriptor) {
         let daemon = try await WikiDaemon.profileBackedForTesting(containerDirectory: dir)
-        let created = try #require(daemon.createWiki(name: name))
+        let created = try #require(await daemon.createWiki(name: name))
         let wiki = try JSONDecoder().decode(WikiDescriptor.self, from: created)
         try await daemon.prepareWiki(wiki.id)
         return (daemon, wiki)
@@ -113,7 +113,7 @@ struct DaemonChatHostTests {
     @Test func chatStorePersistsAcpSessionId() throws {
         let dir = makeTempDir()
         let daemon = makeDaemon(dir: dir)
-        _ = daemon.createWiki(name: "Test")
+        _ = daemon.testFixtureCreateWiki(name: "Test")
 
         let store = try GRDBWikiStore(
             databaseURL: dir.appendingPathComponent("test-wiki.sqlite"))
@@ -133,7 +133,7 @@ struct DaemonChatHostTests {
     @Test func chatStoreStreamingCheckpoint() throws {
         let dir = makeTempDir()
         let daemon = makeDaemon(dir: dir)
-        _ = daemon.createWiki(name: "Test")
+        _ = daemon.testFixtureCreateWiki(name: "Test")
 
         let store = try GRDBWikiStore(
             databaseURL: dir.appendingPathComponent("test-wiki.sqlite"))
@@ -164,7 +164,7 @@ struct DaemonChatHostTests {
     @Test func chatStoreFinalizesStaleDrafts() throws {
         let dir = makeTempDir()
         let daemon = makeDaemon(dir: dir)
-        _ = daemon.createWiki(name: "Test")
+        _ = daemon.testFixtureCreateWiki(name: "Test")
 
         let store = try GRDBWikiStore(
             databaseURL: dir.appendingPathComponent("test-wiki.sqlite"))
@@ -186,7 +186,7 @@ struct DaemonChatHostTests {
     @Test func chatStoreSystemPromptUsesDefaultBody() throws {
         let dir = makeTempDir()
         let daemon = makeDaemon(dir: dir)
-        _ = daemon.createWiki(name: "Test")
+        _ = daemon.testFixtureCreateWiki(name: "Test")
 
         let store = try GRDBWikiStore(
             databaseURL: dir.appendingPathComponent("test-wiki.sqlite"))
@@ -203,7 +203,7 @@ struct DaemonChatHostTests {
     @Test func chatStoreSummarizesMessages() throws {
         let dir = makeTempDir()
         let daemon = makeDaemon(dir: dir)
-        _ = daemon.createWiki(name: "Test")
+        _ = daemon.testFixtureCreateWiki(name: "Test")
 
         let store = try GRDBWikiStore(
             databaseURL: dir.appendingPathComponent("test-wiki.sqlite"))
@@ -267,7 +267,7 @@ struct DaemonChatHostTests {
     @Test func daemonWikiStateBuildsStateMarkdown() throws {
         let dir = makeTempDir()
         let daemon = makeDaemon(dir: dir)
-        _ = daemon.createWiki(name: "Test")
+        _ = daemon.testFixtureCreateWiki(name: "Test")
 
         let store = try GRDBWikiStore(
             databaseURL: dir.appendingPathComponent("test-wiki.sqlite"))
@@ -308,7 +308,7 @@ struct DaemonChatHostTests {
         let proxy = connection.remoteObjectProxyWithErrorHandler { _ in } as! WikiDaemonProtocol
 
         // Create a wiki first (so the store resolver finds it)
-        _ = daemon.createWiki(name: "ChatTest")
+        _ = daemon.testFixtureCreateWiki(name: "ChatTest")
 
         // Start a chat — will fail at preflight (no claude binary in tests)
         // but the XPC plumbing + error handling is what we're verifying.

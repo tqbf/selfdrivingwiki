@@ -9,8 +9,9 @@ import Foundation
 /// same backend.
 ///
 /// `GRDBWikiStore` is the sole production backend — the hand-rolled
-/// `SQLiteWikiStore` / `SQLiteStatement` / `WikiReadPool` raw-SQLite plumbing
-/// has been removed. The 88-method `WikiStore` protocol is unchanged; the
+/// `SQLiteWikiStore` and `SQLiteStatement` raw-SQLite plumbing has been removed.
+/// `WikiReadService` owns the remaining private read-only connection pool.
+/// The 88-method `WikiStore` protocol is unchanged; the
 /// change-token contributors, `WikiEventBus`, and the `mutate()` emission seam
 /// all live on `GRDBWikiStore` now.
 public struct StoreBootstrapResult: Sendable, Equatable {

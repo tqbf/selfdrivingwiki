@@ -29,80 +29,148 @@ public enum ProcessServiceKeys {
     public static let extraction = ServiceKey<any ExtractionServices>(label: "process.extraction")
     public static let queue = ServiceKey<any QueueEngineClient>(label: "process.queue")
     public static let transport = ServiceKey<DaemonTransportServices>(label: "process.transport")
-    public static let renderer = ServiceKey<any Sendable>(label: "process.renderer")
+    public static let renderer = ServiceKey<any RendererServices>(label: "process.renderer")
+    public static let embeddings = ServiceKey<EmbeddingsSearchProvider>(label: "process.embeddings")
+    public static let urlFetchProvider = ServiceKey<URLFetchProvider>(label: "process.integration.url-fetch-provider")
+    public static let zoteroClientProvider = ServiceKey<ZoteroClientProvider>(label: "process.integration.zotero-client-provider")
+    public static let compositionInputs = ServiceKey<ProcessCompositionInputs>(label: "process.inputs")
+}
+
+public struct AgentProviderProcessInput: Sendable {
+    public let services: MutableAgentProviderServices
+    public let readConfiguration: AgentProviderRuntime.ConfigurationReader
+    public let resolveCommand: AgentProviderRuntime.CommandResolver
+    public let readCredential: AgentProviderRuntime.CredentialReader
+    public let resolvePermissionPolicy: AgentProviderRuntime.PermissionPolicyResolver
+    public let makeBackend: AgentProviderRuntime.BackendFactory
+    public let probeCatalog: AgentProviderRuntime.CatalogProbe
+
+    public init(
+        services: MutableAgentProviderServices,
+        readConfiguration: @escaping AgentProviderRuntime.ConfigurationReader,
+        resolveCommand: @escaping AgentProviderRuntime.CommandResolver,
+        readCredential: @escaping AgentProviderRuntime.CredentialReader,
+        resolvePermissionPolicy: @escaping AgentProviderRuntime.PermissionPolicyResolver,
+        makeBackend: @escaping AgentProviderRuntime.BackendFactory = { policy, budget, ceiling in
+            AgentBackendFactory.makeBackend(policy: policy, budget: budget, turnCeilingTimeout: ceiling)
+        },
+        probeCatalog: @escaping AgentProviderRuntime.CatalogProbe = { provider, command, apiKey in
+            try await ACPProviderModelProbe(provider: provider, resolvedCommand: command, apiKey: apiKey)
+                .discoverObservation()
+        }
+    ) {
+        self.services = services
+        self.readConfiguration = readConfiguration
+        self.resolveCommand = resolveCommand
+        self.readCredential = readCredential
+        self.resolvePermissionPolicy = resolvePermissionPolicy
+        self.makeBackend = makeBackend
+        self.probeCatalog = probeCatalog
+    }
+}
+
+public struct ExtractionProcessInput: Sendable {
+    public let services: MutableExtractionServices
+    public let readConfiguration: ExtractionRuntime.ConfigurationReader
+    public let readCredential: ExtractionPluginFactory.CredentialReader
+    public let resolveACP: ExtractionPluginFactory.ACPResolver
+    public let httpFetcher: any HTTPRequestFetcher
+    public let makeLocalExtractor: ExtractionPluginFactory.LocalExtractor
+
+    public init(
+        services: MutableExtractionServices,
+        readConfiguration: @escaping ExtractionRuntime.ConfigurationReader,
+        readCredential: @escaping ExtractionPluginFactory.CredentialReader,
+        resolveACP: @escaping ExtractionPluginFactory.ACPResolver,
+        httpFetcher: any HTTPRequestFetcher,
+        makeLocalExtractor: @escaping ExtractionPluginFactory.LocalExtractor
+    ) {
+        self.services = services
+        self.readConfiguration = readConfiguration
+        self.readCredential = readCredential
+        self.resolveACP = resolveACP
+        self.httpFetcher = httpFetcher
+        self.makeLocalExtractor = makeLocalExtractor
+    }
+}
+
+public struct ProcessCompositionInputs: Sendable {
+    public typealias QueueAssembly = @Sendable () async throws -> ProcessRuntimeLease<any QueueEngineClient>
+    public typealias TransportAssembly = @Sendable () async throws -> ProcessRuntimeLease<DaemonTransportServices>
+    public typealias RendererAssembly = @Sendable () async throws -> ProcessRuntimeLease<any RendererServices>
+
+    public let agentProvider: AgentProviderProcessInput
+    public let extraction: ExtractionProcessInput
+    public let queueAssembly: QueueAssembly?
+    public let transportAssembly: TransportAssembly?
+    public let rendererAssembly: RendererAssembly?
+
+    public init(
+        agentProvider: AgentProviderProcessInput,
+        extraction: ExtractionProcessInput,
+        queueAssembly: QueueAssembly? = nil,
+        transportAssembly: TransportAssembly? = nil,
+        rendererAssembly: RendererAssembly? = nil
+    ) {
+        self.agentProvider = agentProvider
+        self.extraction = extraction
+        self.queueAssembly = queueAssembly
+        self.transportAssembly = transportAssembly
+        self.rendererAssembly = rendererAssembly
+    }
 }
 
 public struct ProcessPluginCatalogFactories: Sendable {
-    public typealias AgentProviderFactory = @Sendable () async throws -> ProcessRuntimeLease<any AgentProviderServices>
-    public typealias ExtractionFactory = @Sendable () async throws -> ProcessRuntimeLease<any ExtractionServices>
-    public typealias QueueFactory = @Sendable () async throws -> ProcessRuntimeLease<any QueueEngineClient>
-    public typealias TransportFactory = @Sendable () async throws -> ProcessRuntimeLease<DaemonTransportServices>
-    public typealias RendererFactory = @Sendable () async throws -> ProcessRuntimeLease<any Sendable>
+    public typealias EmbeddingsFactory = @Sendable () async throws -> ProcessRuntimeLease<EmbeddingsSearchProvider>
+    public typealias URLFetchProviderFactory = @Sendable () async throws -> ProcessRuntimeLease<URLFetchProvider>
+    public typealias ZoteroClientProviderFactory = @Sendable () async throws -> ProcessRuntimeLease<ZoteroClientProvider>
 
-    public let makeAgentProvider: AgentProviderFactory
-    public let makeExtraction: ExtractionFactory
-    public let makeQueue: QueueFactory?
-    public let makeTransport: TransportFactory?
-    public let makeRenderer: RendererFactory?
+    public let compositionInputs: ProcessCompositionInputs
+    public let makeEmbeddings: EmbeddingsFactory
+    public let makeURLFetchProvider: URLFetchProviderFactory?
+    public let makeZoteroClientProvider: ZoteroClientProviderFactory?
 
     public init(
-        makeAgentProvider: @escaping AgentProviderFactory,
-        makeExtraction: @escaping ExtractionFactory,
-        makeQueue: QueueFactory? = nil,
-        makeTransport: TransportFactory? = nil,
-        makeRenderer: RendererFactory? = nil
+        compositionInputs: ProcessCompositionInputs,
+        makeEmbeddings: @escaping EmbeddingsFactory,
+        makeURLFetchProvider: URLFetchProviderFactory? = nil,
+        makeZoteroClientProvider: ZoteroClientProviderFactory? = nil
     ) {
-        self.makeAgentProvider = makeAgentProvider
-        self.makeExtraction = makeExtraction
-        self.makeQueue = makeQueue
-        self.makeTransport = makeTransport
-        self.makeRenderer = makeRenderer
+        self.compositionInputs = compositionInputs
+        self.makeEmbeddings = makeEmbeddings
+        self.makeURLFetchProvider = makeURLFetchProvider
+        self.makeZoteroClientProvider = makeZoteroClientProvider
     }
 }
 
 public struct BasePluginCatalogFactories: Sendable {
     public let agentProviderServices: any AgentProviderServices
     public let makePDFExtractor: ExtractionPluginFactory.LocalExtractor
-    public let configureEmbeddings: EmbeddingsSearchProvider.Configure
-    public let selectedEmbeddingIdentifier: EmbeddingsSearchProvider.SelectedIdentifier
-    public let embeddingsAvailable: EmbeddingsSearchProvider.Availability
 
     public init(
         agentProviderServices: any AgentProviderServices,
-        makePDFExtractor: @escaping ExtractionPluginFactory.LocalExtractor,
-        configureEmbeddings: @escaping EmbeddingsSearchProvider.Configure = { await EmbeddingService.configure() },
-        selectedEmbeddingIdentifier: @escaping EmbeddingsSearchProvider.SelectedIdentifier = { EmbeddingService.selectedEmbedderIdentifier() },
-        embeddingsAvailable: @escaping EmbeddingsSearchProvider.Availability = { EmbeddingService.isAvailable }
+        makePDFExtractor: @escaping ExtractionPluginFactory.LocalExtractor
     ) {
         self.agentProviderServices = agentProviderServices
         self.makePDFExtractor = makePDFExtractor
-        self.configureEmbeddings = configureEmbeddings
-        self.selectedEmbeddingIdentifier = selectedEmbeddingIdentifier
-        self.embeddingsAvailable = embeddingsAvailable
     }
 }
 
 public struct AppPluginCatalogFactories: Sendable {
     public let base: BasePluginCatalogFactories
-    public let makeRendererServices: RegisteredRendererProvider.Factory
     public let makeDefuddleExtractor: @Sendable () async -> any HtmlMarkdownExtractor
     public let makeDaemonTransport: RegisteredTransportProvider.Factory
-    public let makeURLFetcher: RegisteredIntegrationCapability.Factory
     public let makeTantivyRuntime: SearchRuntimeFactory.Factory
 
     public init(
         base: BasePluginCatalogFactories,
-        makeRendererServices: @escaping RegisteredRendererProvider.Factory,
         makeDefuddleExtractor: @escaping @Sendable () async -> any HtmlMarkdownExtractor,
         makeDaemonTransport: @escaping RegisteredTransportProvider.Factory,
-        makeURLFetcher: @escaping RegisteredIntegrationCapability.Factory,
         makeTantivyRuntime: @escaping SearchRuntimeFactory.Factory = SearchRuntimeCompositionFactory.runtimeFactory
     ) {
         self.base = base
-        self.makeRendererServices = makeRendererServices
         self.makeDefuddleExtractor = makeDefuddleExtractor
         self.makeDaemonTransport = makeDaemonTransport
-        self.makeURLFetcher = makeURLFetcher
         self.makeTantivyRuntime = makeTantivyRuntime
     }
 }
@@ -116,24 +184,68 @@ public struct DaemonPluginCatalogFactories: Sendable {
 }
 
 /// Typed process services resolved once from the app process profile.
-public struct AppProcessRendererService: Sendable {
-    public init() {}
-}
-
 public struct AppProcessServices: Sendable {
     public let agentProvider: any AgentProviderServices
     public let extraction: any ExtractionServices
     public let queue: any QueueEngineClient
     public let transport: DaemonTransportServices
-    public let renderer: any Sendable
+    public let renderer: any RendererServices
 
-    public static func resolve(from profile: BootedProfile) async throws -> AppProcessServices {
+    internal static func resolve(from profile: BootedProfile) async throws -> AppProcessServices {
         AppProcessServices(
             agentProvider: try await profile.context.require(ProcessServiceKeys.agentProvider),
             extraction: try await profile.context.require(ProcessServiceKeys.extraction),
             queue: try await profile.context.require(ProcessServiceKeys.queue),
             transport: try await profile.context.require(ProcessServiceKeys.transport),
             renderer: try await profile.context.require(ProcessServiceKeys.renderer))
+    }
+}
+
+public enum ProfileLifetimeError: Error, Equatable, Sendable {
+    case shutdownStarted
+}
+
+/// Opaque, idempotent ownership of one booted Cordis profile.
+/// Normal application code can shut the profile down but cannot access its context.
+public actor ProfileLifetime {
+    private var profile: BootedProfile?
+    private var shutdownStarted = false
+
+    internal init(profile: BootedProfile) {
+        self.profile = profile
+    }
+
+    internal func bootChild(
+        catalog: PluginCatalog,
+        layers: [PatchFile]
+    ) async throws -> AppServices {
+        guard !shutdownStarted, let profile else {
+            throw ProfileLifetimeError.shutdownStarted
+        }
+        let child = try await CordisBoot.boot(.init(
+            catalog: catalog,
+            layers: layers,
+            parent: profile.context))
+        guard !shutdownStarted else {
+            try await child.shutdown()
+            throw ProfileLifetimeError.shutdownStarted
+        }
+        do {
+            return try await AppServices.resolve(from: child)
+        } catch {
+            do { try await child.shutdown() } catch let cleanupError {
+                DebugLog.store("Child profile cleanup after resolution failure failed: \(cleanupError)")
+            }
+            throw error
+        }
+    }
+
+    public func shutdown() async throws {
+        guard !shutdownStarted else { return }
+        shutdownStarted = true
+        let ownedProfile = profile
+        profile = nil
+        try await ownedProfile?.shutdown()
     }
 }
 
@@ -151,8 +263,8 @@ public final class AppProcessProfileOwner {
     public typealias Boot = @Sendable () async throws -> BootedProfile
 
     public private(set) var readiness: Readiness = .idle
-    public private(set) var profile: BootedProfile?
     public private(set) var services: AppProcessServices?
+    @ObservationIgnored private var lifetime: ProfileLifetime?
     @ObservationIgnored private let boot: Boot
     @ObservationIgnored private var startupTask: Task<Void, Never>?
     @ObservationIgnored private var shutdownStarted = false
@@ -167,21 +279,6 @@ public final class AppProcessProfileOwner {
                 catalog: try ProcessPluginCatalog.build(factories: factories),
                 layers: [PatchFile(entries: try ProductionProfiles.appProcess(homeDirectory: homeDirectory))]))
         }
-    }
-
-    public convenience init(
-        agentProvider: any AgentProviderServices,
-        extraction: any ExtractionServices,
-        queue: any QueueEngineClient,
-        transport: DaemonTransportServices,
-        renderer: any Sendable
-    ) {
-        self.init(factories: ProcessPluginCatalogFactories(
-            makeAgentProvider: { ProcessRuntimeLease(service: agentProvider) {} },
-            makeExtraction: { ProcessRuntimeLease(service: extraction) {} },
-            makeQueue: { ProcessRuntimeLease(service: queue) {} },
-            makeTransport: { ProcessRuntimeLease(service: transport) {} },
-            makeRenderer: { ProcessRuntimeLease(service: renderer) {} }))
     }
 
     public func start() {
@@ -203,7 +300,7 @@ public final class AppProcessProfileOwner {
                     try await profile.shutdown()
                     return
                 }
-                self.profile = profile
+                self.lifetime = ProfileLifetime(profile: profile)
                 self.services = services
                 self.readiness = .ready
             } catch is CancellationError {
@@ -219,6 +316,14 @@ public final class AppProcessProfileOwner {
         await startupTask?.value
     }
 
+    internal func readyComposition() async throws -> (ProfileLifetime, AppProcessServices) {
+        await awaitSettled()
+        guard let lifetime, let services else {
+            throw SessionLoadingError.processProfileUnavailable("app process profile is not ready: \(readiness)")
+        }
+        return (lifetime, services)
+    }
+
     public func shutdown() async {
         guard !shutdownStarted else {
             await startupTask?.value
@@ -230,14 +335,14 @@ public final class AppProcessProfileOwner {
         await task?.value
         startupTask = nil
         services = nil
-        if let profile {
+        if let lifetime {
             do {
-                try await profile.shutdown()
+                try await lifetime.shutdown()
             } catch {
                 DebugLog.store("App process profile shutdown failed: \(error)")
             }
         }
-        profile = nil
+        lifetime = nil
     }
 }
 
@@ -247,7 +352,7 @@ public struct DaemonProcessServices: Sendable {
     public let extraction: any ExtractionServices
     public let tools: ToolRuntime?
 
-    public static func resolve(from profile: BootedProfile) async throws -> DaemonProcessServices {
+    internal static func resolve(from profile: BootedProfile) async throws -> DaemonProcessServices {
         DaemonProcessServices(
             agentProvider: try await profile.context.require(ProcessServiceKeys.agentProvider),
             extraction: try await profile.context.require(ProcessServiceKeys.extraction),
@@ -283,11 +388,13 @@ public actor DaemonProcessProfileOwner {
         makeLocalExtractor: @escaping ExtractionPluginFactory.LocalExtractor
     ) throws -> DaemonProcessProfileOwner {
         let providerServices = MutableAgentProviderServices()
+        let extractionServices = MutableExtractionServices()
         let extractionCredentialStore = KeychainExtractionCredentialStore()
         let acpCredentialStore = KeychainACPCredentialStore()
         let processFactories = ProcessPluginCatalogFactories(
-            makeAgentProvider: {
-                let handle = try await AgentProviderRuntimeFactory(
+            compositionInputs: ProcessCompositionInputs(
+                agentProvider: AgentProviderProcessInput(
+                    services: providerServices,
                     readConfiguration: { AgentProvidersConfig.loadOrSeed(from: containerDirectory) },
                     resolveCommand: { providers in
                         let searchPath = await PathPreflight.loginShellPATH()
@@ -299,13 +406,9 @@ public actor DaemonProcessProfileOwner {
                     readCredential: { providerID in
                         KeychainACPCredentialStore().apiKey(forProvider: providerID.rawValue)
                     },
-                    resolvePermissionPolicy: { _ in .bypass })
-                    .assemble()
-                await providerServices.install(handle.services)
-                return ProcessRuntimeLease(service: providerServices) { try await handle.dispose() }
-            },
-            makeExtraction: {
-                let handle = try await ExtractionRuntimeFactory(
+                    resolvePermissionPolicy: { _ in .bypass }),
+                extraction: ExtractionProcessInput(
+                    services: extractionServices,
                     readConfiguration: { ExtractionConfig.load(from: containerDirectory) },
                     readCredential: { extractionCredentialStore.secret($0) },
                     resolveACP: { configuration in
@@ -315,9 +418,11 @@ public actor DaemonProcessProfileOwner {
                             acpCredentialStore: acpCredentialStore)
                     },
                     httpFetcher: URLSessionRequestFetcher(),
-                    makeLocalExtractor: makeLocalExtractor)
-                    .assemble()
-                return ProcessRuntimeLease(service: handle.services) { try await handle.dispose() }
+                    makeLocalExtractor: makeLocalExtractor)),
+            makeEmbeddings: {
+                ProcessRuntimeLease(
+                    service: .unavailable(identifier: "unavailable-daemon"),
+                    dispose: {})
             })
         let processCatalog = try ProcessPluginCatalog.build(factories: processFactories)
         let childCatalog = try DaemonPluginCatalog.build(factories: .init(base: .init(
@@ -465,79 +570,28 @@ public actor DaemonProcessProfileOwner {
 /// Typed services resolved once from a booted profile. Consumers receive this
 /// facade rather than a Cordis context or a legacy runtime assembly.
 public struct AppServices: Sendable {
-    public let profile: BootedProfile
+    public let lifetime: ProfileLifetime
     public let store: any WikiStore
-    public let readPool: WikiReadPool
+    public let readService: WikiReadService
     public let extractionBackends: ExtractionBackendRegistry
     public let searchProviders: SearchProviderRegistry
     public let launcherFactory: LauncherFactory
+    public let searchFactory: PerWikiSearchFactory
 
-    public static func resolve(from profile: BootedProfile) async throws -> AppServices {
+    internal static func resolve(from profile: BootedProfile) async throws -> AppServices {
         AppServices(
-            profile: profile,
+            lifetime: ProfileLifetime(profile: profile),
             store: try await profile.context.require(StoreServiceKeys.store),
-            readPool: try await profile.context.require(StoreServiceKeys.readPool),
+            readService: try await profile.context.require(StoreServiceKeys.readService),
             extractionBackends: try await profile.context.require(ExtractionServiceKeys.backends),
             searchProviders: try await profile.context.require(SearchServiceKeys.providers),
-            launcherFactory: try await profile.context.require(LauncherServiceKeys.factory))
+            launcherFactory: try await profile.context.require(LauncherServiceKeys.factory),
+            searchFactory: try await profile.context.require(PerWikiRuntimeServiceKeys.searchFactory))
     }
 
     public func shutdown() async throws {
-        try await profile.shutdown()
+        try await lifetime.shutdown()
     }
-}
-
-/// Boots the observable per-wiki application facade from one child profile and
-/// its inherited process services.
-@MainActor
-extension ProfileWikiSession {
-    public static func boot(
-        wikiID: WikiID,
-        descriptor: WikiDescriptor,
-        containerDirectory: URL,
-        catalog: PluginCatalog,
-        processProfile: BootedProfile,
-        processServices: AppProcessServices,
-        extractionProvider: any QueueExtractionProvider,
-        searchRuntimeRegistry: SearchRuntimeRegistry = SearchRuntimeRegistry(),
-        pdf2mdScriptPathResolver: @escaping () -> String? = { nil },
-        htmlMarkdownExtractorFactory: @escaping @MainActor () -> (any HtmlMarkdownExtractor)? = { nil },
-        htmlBackendResolver: @escaping @MainActor () -> HtmlExtractionBackend? = { nil },
-        podcastBackendResolver: @escaping @MainActor () -> PodcastTranscriptionBackend? = { nil },
-        interactiveUsageRecorder: @escaping (@MainActor (SessionUsage) -> Void) = { _ in }
-    ) async throws -> ProfileWikiSession {
-        let databaseURL = containerDirectory.appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false)
-        let profile = try await CordisBoot.boot(.init(
-            catalog: catalog,
-            layers: [PatchFile(entries: try ProductionProfiles.app(
-                databaseURL: databaseURL, wikiID: wikiID, homeDirectory: containerDirectory))],
-            parent: processProfile.context))
-        do {
-            let childServices = try await AppServices.resolve(from: profile)
-            let runtime = try await profile.context.require(PerWikiRuntimeServiceKeys.services)
-            runtime.agentLauncher.pdf2mdScriptPathResolver = pdf2mdScriptPathResolver
-            runtime.agentLauncher.onInteractiveUsage = interactiveUsageRecorder
-            return ProfileWikiSession(
-                wikiID: wikiID,
-                descriptor: descriptor,
-                runtime: runtime,
-                extractionCoordinator: ExtractionCoordinator(services: processServices.extraction),
-                queueEngine: processServices.queue,
-                extractionProvider: extractionProvider,
-                htmlMarkdownExtractor: htmlMarkdownExtractorFactory(),
-                htmlBackend: htmlBackendResolver(),
-                podcastBackend: podcastBackendResolver(),
-                profile: childServices.profile)
-        } catch {
-            do {
-                try await profile.shutdown()
-            } catch {
-                DebugLog.store("Per-wiki profile cleanup after facade failure failed: \(error)")
-            }
-            throw error
-        }
-    }
-
 }
 
 /// Production composition loaded from the shipped YAML bundles. Catalogs still
@@ -614,30 +668,146 @@ public enum ProductionProfiles {
 }
 
 public enum ProcessRuntimePlugins {
+    public static let inputsID = PluginID("process.inputs")
     public static let agentProviderID = PluginID("process.agent-provider")
     public static let extractionID = PluginID("process.extraction")
     public static let queueID = PluginID("process.queue")
     public static let transportID = PluginID("process.transport")
     public static let rendererID = PluginID("process.renderer")
+    public static let embeddingsID = PluginID("process.embeddings")
+    public static let urlFetchProviderID = PluginID("process.integration.url-fetch-provider")
+    public static let zoteroClientProviderID = PluginID("process.integration.zotero-client-provider")
 
     public static func definitions(_ factories: ProcessPluginCatalogFactories) -> [PluginDefinition] {
         var definitions = [
-            definition(id: agentProviderID, key: ProcessServiceKeys.agentProvider, factory: factories.makeAgentProvider),
-            definition(id: extractionID, key: ProcessServiceKeys.extraction, factory: factories.makeExtraction),
+            inputsDefinition(factories.compositionInputs),
+            agentProviderDefinition,
+            extractionDefinition,
+            directDefinition(id: embeddingsID, key: ProcessServiceKeys.embeddings, factory: factories.makeEmbeddings),
         ]
-        if let factory = factories.makeQueue {
-            definitions.append(definition(id: queueID, key: ProcessServiceKeys.queue, factory: factory))
+        if factories.compositionInputs.queueAssembly != nil {
+            definitions.append(gatewayDefinition(
+                id: queueID,
+                key: ProcessServiceKeys.queue,
+                gateway: { $0.queueAssembly }))
         }
-        if let factory = factories.makeTransport {
-            definitions.append(definition(id: transportID, key: ProcessServiceKeys.transport, factory: factory))
+        if factories.compositionInputs.transportAssembly != nil {
+            definitions.append(gatewayDefinition(
+                id: transportID,
+                key: ProcessServiceKeys.transport,
+                gateway: { $0.transportAssembly }))
         }
-        if let factory = factories.makeRenderer {
-            definitions.append(definition(id: rendererID, key: ProcessServiceKeys.renderer, factory: factory))
+        if factories.compositionInputs.rendererAssembly != nil {
+            definitions.append(gatewayDefinition(
+                id: rendererID,
+                key: ProcessServiceKeys.renderer,
+                gateway: { $0.rendererAssembly }))
+        }
+        if let factory = factories.makeURLFetchProvider {
+            definitions.append(directDefinition(
+                id: urlFetchProviderID,
+                key: ProcessServiceKeys.urlFetchProvider,
+                factory: factory))
+        }
+        if let factory = factories.makeZoteroClientProvider {
+            definitions.append(directDefinition(
+                id: zoteroClientProviderID,
+                key: ProcessServiceKeys.zoteroClientProvider,
+                factory: factory))
         }
         return definitions
     }
 
-    private static func definition<Service: Sendable>(
+    private static func inputsDefinition(_ inputs: ProcessCompositionInputs) -> PluginDefinition {
+        PluginDefinition(id: inputsID, provisions: [ServiceDependency(ProcessServiceKeys.compositionInputs)]) {
+            try ComponentDefinition(
+                label: inputsID.rawValue,
+                provisions: [ServiceDependency(ProcessServiceKeys.compositionInputs)]) { activation in
+                    _ = try await activation.supply(ProcessServiceKeys.compositionInputs, value: inputs)
+                }
+        }
+    }
+
+    private static let agentProviderDefinition = PluginDefinition(
+        id: agentProviderID,
+        dependencies: [ServiceDependency(ProcessServiceKeys.compositionInputs)],
+        provisions: [ServiceDependency(ProcessServiceKeys.agentProvider)]
+    ) {
+        try ComponentDefinition(
+            label: agentProviderID.rawValue,
+            dependencies: [ServiceDependency(ProcessServiceKeys.compositionInputs)],
+            provisions: [ServiceDependency(ProcessServiceKeys.agentProvider)]) { activation in
+                let input = try await activation.require(ProcessServiceKeys.compositionInputs).agentProvider
+                let installation = MutableAgentProviderServices.Installation()
+                let handle = try await AgentProviderRuntimeFactory(
+                    readConfiguration: input.readConfiguration,
+                    resolveCommand: input.resolveCommand,
+                    readCredential: input.readCredential,
+                    resolvePermissionPolicy: input.resolvePermissionPolicy,
+                    makeBackend: input.makeBackend,
+                    probeCatalog: input.probeCatalog)
+                    .assemble()
+                await input.services.install(handle.services, for: installation)
+                _ = try await activation.effect { _ in
+                    await input.services.invalidate(installation)
+                    try await handle.dispose()
+                }
+                _ = try await activation.supply(ProcessServiceKeys.agentProvider, value: input.services)
+            }
+    }
+
+    private static let extractionDefinition = PluginDefinition(
+        id: extractionID,
+        dependencies: [ServiceDependency(ProcessServiceKeys.compositionInputs)],
+        provisions: [ServiceDependency(ProcessServiceKeys.extraction)]
+    ) {
+        try ComponentDefinition(
+            label: extractionID.rawValue,
+            dependencies: [ServiceDependency(ProcessServiceKeys.compositionInputs)],
+            provisions: [ServiceDependency(ProcessServiceKeys.extraction)]) { activation in
+                let input = try await activation.require(ProcessServiceKeys.compositionInputs).extraction
+                let installation = MutableExtractionServices.Installation()
+                let handle = try await ExtractionRuntimeFactory(
+                    readConfiguration: input.readConfiguration,
+                    readCredential: input.readCredential,
+                    resolveACP: input.resolveACP,
+                    httpFetcher: input.httpFetcher,
+                    makeLocalExtractor: input.makeLocalExtractor)
+                    .assemble()
+                await input.services.install(handle.services, for: installation)
+                _ = try await activation.effect { _ in
+                    await input.services.invalidate(installation)
+                    try await handle.dispose()
+                }
+                _ = try await activation.supply(ProcessServiceKeys.extraction, value: input.services)
+            }
+    }
+
+    private static func gatewayDefinition<Service: Sendable>(
+        id: PluginID,
+        key: ServiceKey<Service>,
+        gateway: @escaping @Sendable (ProcessCompositionInputs) -> (@Sendable () async throws -> ProcessRuntimeLease<Service>)?
+    ) -> PluginDefinition {
+        PluginDefinition(
+            id: id,
+            dependencies: [ServiceDependency(ProcessServiceKeys.compositionInputs)],
+            provisions: [ServiceDependency(key)]) {
+                try ComponentDefinition(
+                    label: id.rawValue,
+                    dependencies: [ServiceDependency(ProcessServiceKeys.compositionInputs)],
+                    provisions: [ServiceDependency(key)]) { activation in
+                        let inputs = try await activation.require(ProcessServiceKeys.compositionInputs)
+                        guard let assemble = gateway(inputs) else {
+                            throw CordisFailure("process assembly gateway is unavailable: \(id.rawValue)")
+                        }
+                        let lease = try await assemble()
+                        _ = try await activation.supply(key, value: lease.service)
+                        _ = try await activation.effect { _ in try await lease.dispose() }
+                    }
+            }
+    }
+
+    private static func directDefinition<Service: Sendable>(
         id: PluginID,
         key: ServiceKey<Service>,
         factory: @escaping @Sendable () async throws -> ProcessRuntimeLease<Service>
@@ -668,9 +838,9 @@ public enum AppPluginCatalog {
         var definitions = baseDefinitions(factories.base)
         definitions.append(contentsOf: [
             DefuddleExtractionPlugin.definition(makeExtractor: factories.makeDefuddleExtractor),
-            RendererServicesPlugin.definition(makeServices: factories.makeRendererServices),
+            RendererServicesPlugin.definition,
             DaemonTransportPlugin.definition(makeServices: factories.makeDaemonTransport),
-            URLFetchIntegrationPlugin.definition(makeFetcher: factories.makeURLFetcher),
+            URLFetchIntegrationPlugin.definition,
         ])
         definitions.append(TantivySearchPlugin.definition(makeRuntime: factories.makeTantivyRuntime))
         definitions.append(contentsOf: additionalDefinitions)
@@ -720,10 +890,7 @@ private func baseDefinitions(_ factories: BasePluginCatalogFactories) -> [Plugin
         ExtractionPlugin.definition,
         Pdf2mdExtractionPlugin.definition(makeExtractor: factories.makePDFExtractor),
         SearchPlugin.definition,
-        EmbeddingsSearchPlugin.definition(
-            configure: factories.configureEmbeddings,
-            selectedIdentifier: factories.selectedEmbeddingIdentifier,
-            isAvailable: factories.embeddingsAvailable),
+        EmbeddingsSearchPlugin.definition,
         RenderersPlugin.definition,
         TransportPlugin.definition,
         IntegrationsPlugin.definition,

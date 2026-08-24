@@ -298,18 +298,14 @@ public final class WikiStoreModel {
     private let store: WikiStore
 
     /// The underlying concrete `WikiStore` (concretely `GRDBWikiStore` in
-    /// production). Exposed so the reader can hand it to off-main read helpers
-    /// (`TransclusionEmbedder.renderEmbedBody`) for the no-`readPool` fallback
-    /// (in-memory tests; rare in production — `WikiSession.init` always sets
-    /// `readPool` for file-backed wikis). Cast to `GRDBWikiStore` at the call
-    /// site; that is the only concrete conformer today.
+    /// production). Exposed only for the explicit in-memory reader fallback.
+    /// Production file-backed sessions use `WikiReadService` and never pass the
+    /// concrete store through an off-main closure.
     public var internalStore: WikiStore { store }
-    /// Read-only snapshot connections for OFF-MAIN reads (debounced search).
-    /// Injected by `WikiSession.init` for file-backed wikis; `nil` for
-    /// in-memory stores (a separate connection to `:memory:` would see a
-    /// different, empty database) and in tests — callers fall back to the
-    /// main-actor store. See `WikiReadPool` for the safety argument.
-    @ObservationIgnored public var readPool: WikiReadPool?
+    /// Narrow off-main read capability for search, metadata, and transclusion.
+    /// File-backed sessions inject this service. In-memory stores use the main
+    /// store because a second connection cannot access the same database.
+    @ObservationIgnored public var readService: WikiReadService?
 
     /// Stable Tantivy BM25 facade. It starts unavailable and is installed only
     /// after the per-wiki runtime finishes rebuild and buffered-event catch-up.
@@ -3102,7 +3098,7 @@ public final class WikiStoreModel {
     /// The origin provenance of a page's HEAD — the agent + activity that last
     /// created/edited it (page provenance, #page-provenance). `nil` when the
     /// read fails (unknown id, no version rows). Drives the "Provenance" row
-    /// in `PageDetailView`. Off-main-safe when the read pool is configured
+    /// in `PageDetailView`. Off-main-safe when the read service is configured
     /// (the call routes through `WikiStore.pageOrigin`'s `dbWriter.read`); on
     /// the main actor for the simple in-memory case. Threads via the public
     /// `WikiStore` protocol so the model's `store: WikiStore` indirection
@@ -4126,8 +4122,8 @@ public final class WikiStoreModel {
                 query: query, kind: .page, limit: 20, catalog: self.summaries,
                 id: PageID.init(rawValue:))
             let results: [WikiPageSummary]
-            if let pool = self.readPool {
-                let fetched = await DebugLog.trying("searchSimilarPages", operation: { try await pool.asyncRead { reader in
+            if let readService = self.readService {
+                let fetched = await DebugLog.trying("searchSimilarPages", operation: { try await readService.asyncRead { reader in
                     try reader.searchSimilar(query: query, limit: 20, bm25Leg: bm25Leg)
                 } })
                 results = fetched ?? []
@@ -4157,8 +4153,8 @@ public final class WikiStoreModel {
                 query: query, kind: .source, limit: 20, catalog: self.sources,
                 id: SourceID.init(rawValue:))
             let results: [SourceSummary]
-            if let pool = self.readPool {
-                let fetched = await DebugLog.trying("searchSimilarSources", operation: { try await pool.asyncRead { reader in
+            if let readService = self.readService {
+                let fetched = await DebugLog.trying("searchSimilarSources", operation: { try await readService.asyncRead { reader in
                     try reader.searchSimilarSources(query: query, limit: 20, bm25Leg: bm25Leg)
                 } })
                 results = fetched ?? []
@@ -4189,7 +4185,7 @@ public final class WikiStoreModel {
                 id: ChatID.init(rawValue:))
             // Use the main store (same connection as chatMessages load) so the
             // search results and the body load see the same WAL snapshot —
-            // eliminates cross-connection staleness where the read pool could
+            // eliminates cross-connection staleness where the read service could
             // return a chat_id that's been renamed/reordered since the last
             // checkpoint (issue #383).
             let results = (DebugLog.trying("searchSimilarChats", operation: { try self.store.searchSimilarChats(query: query, limit: 20, bm25Leg: bm25Leg) })) ?? []

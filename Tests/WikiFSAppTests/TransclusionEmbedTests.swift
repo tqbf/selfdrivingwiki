@@ -268,8 +268,7 @@ struct TransclusionEmbedTests {
         try store.updatePage(id: page.id, title: "Inner", body: "Hello **world**.")
         let context = contextFor(store: store, pages: [(page.id.rawValue, "Inner")])
 
-        let html = try TransclusionEmbedder.renderEmbedBody(
-            store: store, target: .page(page.id), context: context, options: .disabled)
+        let html = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .page(page.id), context: context, options: .disabled)
         #expect(html.contains("Hello"))
         #expect(html.contains("<strong>world</strong>"))
         #expect(!TransclusionEmbedder.isEmpty(html))
@@ -305,8 +304,7 @@ struct TransclusionEmbedTests {
                 capability: .init(rawValue: "capability"),
                 generation: 1))
 
-        let html = try TransclusionEmbedder.renderEmbedBody(
-            store: store, target: .page(embedded.id), context: context, options: options)
+        let html = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .page(embedded.id), context: context, options: options)
 
         #expect(html.contains("sdw-renderer-card"))
         #expect(html.contains("JSON Canvas"))
@@ -344,10 +342,8 @@ struct TransclusionEmbedTests {
                 capability: .init(rawValue: "capability"),
                 generation: 1))
 
-        let firstHTML = try TransclusionEmbedder.renderEmbedBody(
-            store: store, target: .page(firstPage.id), context: context, options: options)
-        let secondHTML = try TransclusionEmbedder.renderEmbedBody(
-            store: store, target: .page(secondPage.id), context: context, options: options)
+        let firstHTML = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .page(firstPage.id), context: context, options: options)
+        let secondHTML = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .page(secondPage.id), context: context, options: options)
 
         #expect(firstHTML == secondHTML)
         #expect(firstHTML.contains("sdw-renderer-card"))
@@ -370,11 +366,7 @@ struct TransclusionEmbedTests {
             Array(repeating: fence, count: CodeHighlightingPolicy.maximumHighlightedBlockCount - 1)
                 .joined(separator: "\n\n"),
             options: options)
-        let embeddedHTML = try TransclusionEmbedder.renderEmbedBody(
-            store: store,
-            target: .page(embedded.id),
-            context: context,
-            options: options)
+        let embeddedHTML = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .page(embedded.id), context: context, options: options)
         let marker = "<span class=\"sdw-code-keyword\">let</span>"
 
         #expect(root.components(separatedBy: marker).count - 1 == CodeHighlightingPolicy.maximumHighlightedBlockCount - 1)
@@ -395,8 +387,7 @@ struct TransclusionEmbedTests {
             store: store,
             pages: [(inner.id.rawValue, "Inner"), (outer.id.rawValue, "Outer")])
 
-        let html = try TransclusionEmbedder.renderEmbedBody(
-            store: store, target: .page(outer.id), context: context, options: .disabled)
+        let html = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .page(outer.id), context: context, options: .disabled)
         #expect(html.contains("sdw-transclusion"))
         #expect(html.contains("data-sdw-embed-kind=\"page\""))
         // Collapsed-by-default: NO `open` attribute on the nested details.
@@ -411,8 +402,7 @@ struct TransclusionEmbedTests {
         // getPage throws → propagates as an error; the helper does NOT swallow
         // it (house rule). The Coordinator catches and renders "Failed to load".
         #expect(throws: Error.self) {
-            _ = try TransclusionEmbedder.renderEmbedBody(
-                store: store, target: .page(ghostID), context: context, options: .disabled)
+            _ = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .page(ghostID), context: context, options: .disabled)
         }
     }
 
@@ -424,8 +414,7 @@ struct TransclusionEmbedTests {
             sourceID: src.id, content: "# Extracted\n\nThe body.", origin: .extraction, note: nil)
         let context = contextFor(store: store, pages: [], sources: [(src.id.rawValue, "doc.pdf")])
 
-        let html = try TransclusionEmbedder.renderEmbedBody(
-            store: store, target: .source(src.id), context: context, options: .disabled)
+        let html = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .source(src.id), context: context, options: .disabled)
         #expect(html.contains("Extracted"))
         #expect(html.contains("The body."))
     }
@@ -457,8 +446,7 @@ struct TransclusionEmbedTests {
             blobScheme: WikiLinkMarkdown.blobScheme
         )
 
-        let html = try TransclusionEmbedder.renderEmbedBody(
-            store: store, target: .page(page.id), context: context, options: .disabled)
+        let html = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .page(page.id), context: context, options: .disabled)
         #expect(html.contains("pin=\(v2.id.rawValue)"))
     }
 
@@ -469,8 +457,7 @@ struct TransclusionEmbedTests {
         // No extraction row → helper falls back to raw UTF-8 bytes.
         let context = contextFor(store: store, pages: [], sources: [(src.id.rawValue, "notes.txt")])
 
-        let html = try TransclusionEmbedder.renderEmbedBody(
-            store: store, target: .source(src.id), context: context, options: .disabled)
+        let html = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .source(src.id), context: context, options: .disabled)
         #expect(html.contains("Plain text body."))
     }
 
@@ -483,11 +470,10 @@ struct TransclusionEmbedTests {
         let src = try store.addSource(filename: "doc.pdf", data: pdf, mimeType: "application/pdf")
         let context = contextFor(store: store, pages: [], sources: [(src.id.rawValue, "doc.pdf")])
 
-        let body = try TransclusionEmbedder.sourceEmbedBody(store: store, id: src.id)
+        let body = try TransclusionEmbedder.sourceEmbedBody(testFixtureStore: store, id: src.id)
         #expect(body == nil)
 
-        let html = try TransclusionEmbedder.renderEmbedBody(
-            store: store, target: .source(src.id), context: context, options: .disabled)
+        let html = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .source(src.id), context: context, options: .disabled)
         #expect(TransclusionEmbedder.isEmpty(html))
     }
 

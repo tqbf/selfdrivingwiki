@@ -2,6 +2,7 @@
 import Foundation
 import Testing
 import WikiFSCore
+import WikiFSEngine
 @testable import WikiFS
 
 @Suite(.serialized, .timeLimit(.minutes(1)))

@@ -2,13 +2,13 @@ import Foundation
 import Testing
 @testable import WikiFSCore
 
-/// The metadata reads added in Phase 1 must retain the same read-pool
-/// visibility contract as existing page/source projections.
-struct MetadataReadPoolTests {
-    @Test func readerSeesCommittedChatUsage() throws {
-        let url = try MetadataSQLiteFixtureSupport.fileURL(prefix: "metadata-read-pool-chat")
+/// Metadata projections must observe committed values through the same narrow
+/// read capability that production detail views use.
+struct MetadataReadServiceTests {
+    @Test func readerSeesCommittedChatUsage() async throws {
+        let url = try MetadataSQLiteFixtureSupport.fileURL(prefix: "metadata-read-service-chat")
         let writer = try GRDBWikiStore(databaseURL: url)
-        let pool = WikiReadPool(databaseURL: url)
+        let service = WikiReadService(databaseURL: url)
         let chat = try writer.createChat(kind: .edit, title: "Usage")
         _ = try writer.enqueuePersistedChatTurn(
             chatID: chat.id,
@@ -27,15 +27,12 @@ struct MetadataReadPoolTests {
             usage: .init(inputTokens: 9)
         )
 
-        let usage = try #require(try pool.read {
-            try $0.chatTurnUsage(chatID: chat.id, turnID: claimed.submission.turnID)
-        })
+        let usage = try await service.asyncRead { try $0.chatUsageSummary(chatID: chat.id) }
         #expect(usage.inputTokens == 9)
-        #expect(usage.providerID == ProviderID(rawValue: "provider"))
     }
 
-    @Test func readerSeesCommittedPageSources() throws {
-        let url = try MetadataSQLiteFixtureSupport.fileURL(prefix: "metadata-read-pool-page")
+    @Test func readerSeesCommittedPageSources() async throws {
+        let url = try MetadataSQLiteFixtureSupport.fileURL(prefix: "metadata-read-service-page")
         let writer = try GRDBWikiStore(databaseURL: url)
         let page = try writer.createPage(title: "Page")
         let version = try #require(try writer.pageHeadVersionID(pageID: page.id))
@@ -46,32 +43,31 @@ struct MetadataReadPoolTests {
             at: url
         )
 
-        let pool = WikiReadPool(databaseURL: url)
-        #expect(try pool.read { try $0.pageVersionSources(versionID: version) } == [
-            .init(pageVersionID: version, sourceID: source.id, role: .supporting),
-        ])
+        let service = WikiReadService(databaseURL: url)
+        let sources = try await service.asyncRead { try $0.pageHeadSources(pageID: page.id) }
+        #expect(sources == [.init(pageVersionID: version, sourceID: source.id, role: .supporting)])
     }
 
-    @Test func readerSeesCommittedExtractionProvenance() throws {
-        let url = try MetadataSQLiteFixtureSupport.fileURL(prefix: "metadata-read-pool-extraction")
+    @Test func readerSeesCommittedExtractionProvenance() async throws {
+        let url = try MetadataSQLiteFixtureSupport.fileURL(prefix: "metadata-read-service-extraction")
         let writer = try GRDBWikiStore(databaseURL: url)
         let source = try writer.addSource(filename: "source.pdf", data: Data("pdf".utf8))
-        let markdownID = try writer.appendDerivedMarkdown(
+        _ = try writer.appendDerivedMarkdown(
             sourceID: source.id, content: "# markdown", origin: .extraction,
             producer: .tool(.pdf2md), providerID: nil, modelID: nil, toolVersion: nil,
-            sourceVersionID: nil, note: nil).id
+            sourceVersionID: nil, note: nil)
 
-        let pool = WikiReadPool(databaseURL: url)
-        let provenance = try #require(try pool.read {
-            try $0.extractionProvenance(markdownVersionID: markdownID)
+        let service = WikiReadService(databaseURL: url)
+        let provenance = try #require(try await service.asyncRead {
+            try $0.activeExtractionProvenance(sourceID: source.id)
         })
         #expect(provenance.producer == .tool(.pdf2md))
     }
 
-    @Test func readerNeverSeesRolledBackMetadata() throws {
-        let url = try MetadataSQLiteFixtureSupport.fileURL(prefix: "metadata-read-pool-rollback")
+    @Test func readerNeverSeesRolledBackMetadata() async throws {
+        let url = try MetadataSQLiteFixtureSupport.fileURL(prefix: "metadata-read-service-rollback")
         let writer = try GRDBWikiStore(databaseURL: url)
-        let pool = WikiReadPool(databaseURL: url)
+        let service = WikiReadService(databaseURL: url)
         let chat = try writer.createChat(kind: .edit, title: "Rollback")
         _ = try writer.enqueuePersistedChatTurn(
             chatID: chat.id,
@@ -93,9 +89,7 @@ struct MetadataReadPoolTests {
             #expect(error == .staleChatTurnClaim)
         }
 
-        let usage = try #require(try pool.read {
-            try $0.chatTurnUsage(chatID: chat.id, turnID: claimed.submission.turnID)
-        })
-        #expect(usage.inputTokens == nil)
+        let usage = try await service.asyncRead { try $0.chatUsageSummary(chatID: chat.id) }
+        #expect(usage.inputTokens == 0)
     }
 }

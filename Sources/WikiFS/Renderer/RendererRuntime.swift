@@ -1,6 +1,7 @@
 #if os(macOS)
 import Foundation
 import WikiFSCore
+import WikiFSEngine
 import WikiFSTypes
 
 private actor RendererMutationGate {

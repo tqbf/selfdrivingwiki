@@ -83,16 +83,18 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     }
 
     func createWiki(name: String, reply: @escaping (Data?) -> Void) {
-        reply(daemon.createWiki(name: name))
+        let replyOnce = ReplyOnceBox(reply: reply)
+        Task { [daemon] in
+            let task = await daemon.startCreateWikiTask(name: name)
+            replyOnce.reply(await task.value)
+        }
     }
 
     func deleteWiki(id: String, reply: @escaping (Bool) -> Void) {
         let sendableReply = SendableBoolReply(reply: reply)
         Task { [daemon] in
             let wikiID = WikiID(rawValue: id)
-            let deleted = daemon.deleteWiki(id: wikiID)
-            if deleted { await daemon.removeWikiProfile(wikiID) }
-            sendableReply.reply(deleted)
+            sendableReply.reply(await daemon.deleteWiki(id: wikiID))
         }
     }
 
@@ -536,6 +538,27 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     #endif
 }
 
+/// Lock-backed one-shot wrapper for nullable XPC replies. Cancellation and
+/// normal completion may race, but the wire callback must run exactly once.
+/// `lock` protects the only mutable field and the callback is consumed atomically.
+// swiftlint:disable:next unchecked_sendable
+private final class ReplyOnceBox<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var callback: ((Value) -> Void)?
+
+    init(reply: @escaping (Value) -> Void) {
+        callback = reply
+    }
+
+    func reply(_ value: Value) {
+        let callback = lock.withLock { () -> ((Value) -> Void)? in
+            defer { self.callback = nil }
+            return self.callback
+        }
+        callback?(value)
+    }
+}
+
 /// Wraps an XPC `@escaping (Data) -> Void` reply in a `@unchecked Sendable`
 /// box. XPC reply closures are designed to be called once from any thread —
 /// this satisfies Swift 6 strict-concurrency without changing semantics.
@@ -652,7 +675,7 @@ let profileOwner = try DaemonProcessProfileOwner.production(
 let daemon = WikiDaemon(
     containerDirectory: containerDirectory,
     profileOwner: profileOwner,
-    makeStore: { try GRDBWikiStore(databaseURL: $0) })
+    storeBootstrap: StoreBootstrap())
 let processLifetime = DaemonProcessLifetimeCoordinator(
     shutdown: {
         await daemon.shutdown()
@@ -757,7 +780,7 @@ if let argPath = CommandLine.arguments.dropFirst().first(where: { !$0.hasPrefix(
 
 let daemon = WikiDaemon(
     containerDirectory: containerDirectory,
-    makeStore: { try GRDBWikiStore(databaseURL: $0) })
+    testFixtureMakeStore: { try GRDBWikiStore(databaseURL: $0) })
 
 DebugLog.store("wikid: daemon started (Linux stdio transport), container=\(containerDirectory.path)")
 
@@ -803,14 +826,14 @@ while let line = readLine() {
         result = String(data: daemon.listWikis(), encoding: .utf8) ?? "[]"
     case "createWiki":
         let name = params["name"] as? String ?? ""
-        if let data = daemon.createWiki(name: name) {
+        if let data = daemon.testFixtureCreateWiki(name: name) {
             result = String(data: data, encoding: .utf8)
         } else {
             error = "createWiki failed"
         }
     case "deleteWiki":
         let idStr = params["id"] as? String ?? ""
-        result = daemon.deleteWiki(id: WikiID(rawValue: idStr))
+        result = daemon.testFixtureDeleteWiki(id: WikiID(rawValue: idStr))
     case "renameWiki":
         let idStr = params["id"] as? String ?? ""
         let name = params["name"] as? String ?? ""

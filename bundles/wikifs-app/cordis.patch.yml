@@ -1,4 +1,7 @@
 entries:
+  - id: process-inputs
+    plugin: process.inputs
+    config: { _scope: process }
   - id: process-agent-provider
     plugin: process.agent-provider
     config: { _scope: process }
@@ -13,6 +16,15 @@ entries:
     config: { _scope: process }
   - id: process-renderer
     plugin: process.renderer
+    config: { _scope: process }
+  - id: process-embeddings
+    plugin: process.embeddings
+    config: { _scope: process }
+  - id: process-url-fetch-provider
+    plugin: process.integration.url-fetch-provider
+    config: { _scope: process }
+  - id: process-zotero-client-provider
+    plugin: process.integration.zotero-client-provider
     config: { _scope: process }
   - id: renderer-services
     plugin: wiki.renderer.services

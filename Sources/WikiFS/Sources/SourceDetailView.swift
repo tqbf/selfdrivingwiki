@@ -1108,9 +1108,9 @@ struct SourceDetailView: View {
 
     private func hydrateMetadata(sourceID: SourceID) async {
         await MetadataHydrator.hydrate(subject: .source(sourceID), operation: {
-            if MetadataHydrationReadPath.resolve(readPoolAvailable: store.readPool != nil) == .readPool,
-               let readPool = store.readPool {
-                return try await readPool.asyncRead { database in
+            if MetadataHydrationReadPath.resolve(readServiceAvailable: store.readService != nil) == .readService,
+               let readService = store.readService {
+                return try await readService.asyncRead { database in
                     try Self.sourceMetadataModel(sourceID: sourceID, store: database)
                 }
             } else {
@@ -1120,6 +1120,21 @@ struct SourceDetailView: View {
             metadataState = state
             updateRightSidebarRegistration()
         })
+    }
+
+    nonisolated private static func sourceMetadataModel(
+        sourceID: SourceID,
+        store: borrowing WikiReadAccess
+    ) throws -> MetadataPanelModel {
+        guard let source = try store.listSources().first(where: { $0.id == sourceID }) else {
+            throw MetadataProjectionError.missingSource(sourceID)
+        }
+        let history = try store.processedMarkdownHistory(sourceID: sourceID)
+        return SourceMetadataProjection.make(input: .init(
+            source: source,
+            markdown: try store.processedMarkdownHead(sourceID: sourceID),
+            extraction: try store.activeExtractionProvenance(sourceID: sourceID),
+            alternativeCount: history.count))
     }
 
     nonisolated private static func sourceMetadataModel(sourceID: SourceID, store: WikiStore) throws -> MetadataPanelModel {

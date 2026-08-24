@@ -29,12 +29,20 @@ struct CordisBootIntegrationTests {
                 "wikiID": .string("config-swap-test"),
             ])
 
+        let processDisposals = ProfileProcessDisposalRecorder()
+        let process = try await CordisBoot.boot(.init(
+            catalog: try ProfileBootFixture.processCatalog(
+                includeAppServices: false,
+                recorder: processDisposals),
+            layers: [PatchFile(entries: ProfileBootFixture.processEntries(includeAppServices: false))]))
         let first = try await CordisBoot.boot(.init(
             catalog: try ProfileBootFixture.daemonCatalog(),
-            layers: [PatchFile(entries: firstEntries)]))
+            layers: [PatchFile(entries: firstEntries)],
+            parent: process.context))
         let second = try await CordisBoot.boot(.init(
             catalog: try ProfileBootFixture.daemonCatalog(),
-            layers: [PatchFile(entries: secondEntries)]))
+            layers: [PatchFile(entries: secondEntries)],
+            parent: process.context))
         let firstStore = try #require(try await first.context.find(StoreServiceKeys.store))
         let secondStore = try #require(try await second.context.find(StoreServiceKeys.store))
 
@@ -45,6 +53,7 @@ struct CordisBootIntegrationTests {
 
         try await second.shutdown()
         try await first.shutdown()
+        try await process.shutdown()
     }
 }
 #endif

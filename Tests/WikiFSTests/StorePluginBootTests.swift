@@ -38,6 +38,10 @@ struct StorePluginBootTests {
             catalog: try PluginCatalog([StorePlugin.makeDefinition { _ in await gate.wait() }]),
             layers: [layer]))
         let store = try #require(try await booted.context.find(StoreServiceKeys.store))
+        let readService = try #require(try await booted.context.find(StoreServiceKeys.readService))
+        let resolvedAgain = try #require(try await booted.context.find(StoreServiceKeys.readService))
+        #expect(readService === resolvedAgain)
+        _ = try await readService.asyncRead { try $0.listSources().count }
         let recorder = EventRecorder()
         _ = try await booted.context.on(StoreEventKeys.resourceChange) { event in
             await recorder.append(event)
@@ -52,6 +56,9 @@ struct StorePluginBootTests {
         try await disposal.value
 
         #expect(await recorder.events.isEmpty)
+        await #expect(throws: WikiReadServiceError.unavailable) {
+            try await readService.asyncRead { try $0.listSources().count }
+        }
         try await booted.context.dispose()
     }
 

@@ -2,6 +2,7 @@
 import Foundation
 import Observation
 import WikiFSCore
+import WikiFSEngine
 import WikiFSTypes
 
 // pattern: Imperative Shell

@@ -118,6 +118,39 @@ struct CordisDocumentationContractTests {
         #expect(transportProgress.contains("DaemonTransportRuntimeAssembly"))
         #expect(transportProgress.contains("DaemonTransportAppCoordinator"))
     }
+
+    @Test("composition authority records use the canonical boundary")
+    func compositionAuthorityRecordsAreCurrent() throws {
+        let root = repositoryRoot()
+        let cleanupPath = "plans/cordis-composition-authority-cleanup.md"
+        let cleanup = try String(
+            contentsOf: root.appendingPathComponent(cleanupPath),
+            encoding: .utf8)
+        let architecture = try String(
+            contentsOf: root.appendingPathComponent("plans/cordis-full-architecture.md"),
+            encoding: .utf8)
+        let finalExtension = try String(
+            contentsOf: root.appendingPathComponent("plans/cordis-final-extension.md"),
+            encoding: .utf8)
+        let historical = try String(
+            contentsOf: root.appendingPathComponent("plans/cordis-5b-status.md"),
+            encoding: .utf8)
+        let index = try String(
+            contentsOf: root.appendingPathComponent("PLAN.md"),
+            encoding: .utf8)
+
+        #expect(index.contains("[`\(cleanupPath)`](\(cleanupPath))"))
+        #expect(historical.contains("Historical and superseded"))
+        #expect(finalExtension.contains(cleanupPath))
+        #expect(finalExtension.contains("DaemonWikiCreationCoordinator"))
+        #expect(architecture.contains("Cordis composes stable headless capabilities"))
+        #expect(architecture.contains("UI models and controllers remain outside Cordis"))
+        #expect(cleanup.contains("`any WikiStore`"))
+        #expect(cleanup.contains("fixed `wiki.store`"))
+        #expect(cleanup.contains("`wiki.store.read-service` label"))
+        #expect(cleanup.contains("Keep active operation state and application ownership outside"))
+        #expect(cleanup.contains("Direct embedding calls inside `GRDBWikiStore`"))
+    }
 }
 
 private func repositoryRoot() -> URL {

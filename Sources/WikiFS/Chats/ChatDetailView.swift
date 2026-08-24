@@ -439,9 +439,9 @@ struct ChatDetailView: View {
         metadataState = .loading(subject: .chat(chatID))
         do {
             let durable: ChatMetadataInput
-            if MetadataHydrationReadPath.resolve(readPoolAvailable: store.readPool != nil) == .readPool,
-               let readPool = store.readPool {
-                durable = try await readPool.asyncRead { database in
+            if MetadataHydrationReadPath.resolve(readServiceAvailable: store.readService != nil) == .readService,
+               let readService = store.readService {
+                durable = try await readService.asyncRead { database in
                     try Self.chatMetadataInput(chatID: chatID, store: database)
                 }
             } else {
@@ -472,6 +472,13 @@ struct ChatDetailView: View {
             usageSummary: durable.usageSummary,
             live: liveMetadataSnapshot)))
         updateRightSidebarRegistration()
+    }
+
+    nonisolated private static func chatMetadataInput(
+        chatID: ChatID,
+        store: borrowing WikiReadAccess
+    ) throws -> ChatMetadataInput {
+        .init(chat: try store.getChat(id: chatID), usageSummary: try store.chatUsageSummary(chatID: chatID))
     }
 
     nonisolated private static func chatMetadataInput(chatID: ChatID, store: WikiStore) throws -> ChatMetadataInput {
