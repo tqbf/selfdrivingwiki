@@ -74,7 +74,7 @@ public struct TantivyContentSnapshot: Sendable, Equatable {
 /// isolation (plans/tantivy-search-sidecar.md §8.1).
 ///
 /// All methods are `async throws` so a conforming store adapter can read
-/// off-main (the store's `WikiReadPool`) without blocking the indexer actor.
+/// off-main through `WikiReadService` without blocking the indexer actor.
 public protocol TantivyContentSource: Sendable {
     /// Snapshot of a single resource, or `nil` if the resource no longer
     /// exists (already deleted upstream — the indexer treats `nil` as a

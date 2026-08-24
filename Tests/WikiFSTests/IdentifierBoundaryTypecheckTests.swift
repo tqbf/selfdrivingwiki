@@ -70,6 +70,15 @@ struct IdentifierBoundaryTypecheckTests {
                 .init(label: "stringIsRejectedByLauncherChatAPI", batchFixture: "negative-launcher-batch.swift", expectedDiagnostic: "cannot convert value of type 'String' to expected argument type 'ChatID'"),
             ]
         ),
+        BatchFixture(
+            name: "negative-read-access-batch.swift",
+            cases: [
+                .init(label: "readAccessCannotEscape", batchFixture: "negative-read-access-batch.swift", expectedDiagnostic: "requires that 'WikiReadAccess' conform to 'Copyable'"),
+                .init(label: "readAccessCannotBeCaptured", batchFixture: "negative-read-access-batch.swift", expectedDiagnostic: "implicit conversion to 'WikiReadAccess?' is consuming"),
+                .init(label: "readAccessCannotWrite", batchFixture: "negative-read-access-batch.swift", expectedDiagnostic: "value of type 'WikiReadAccess' has no member 'createPage'"),
+                .init(label: "readAccessCannotExposeStore", batchFixture: "negative-read-access-batch.swift", expectedDiagnostic: "'store' is inaccessible due to 'private' protection level"),
+            ]
+        ),
     ]
 
     private static let positiveFixtures: [String] = [
@@ -89,6 +98,10 @@ struct IdentifierBoundaryTypecheckTests {
         "pageIDIsRejectedBySourceAPI",
         "pageIDIsRejectedBySourceVersionAPI",
         "permissionRequestIDIsRejectedByToolCallAPI",
+        "readAccessCannotBeCaptured",
+        "readAccessCannotEscape",
+        "readAccessCannotExposeStore",
+        "readAccessCannotWrite",
         "sourceIDIsRejectedByChatAPI",
         "sourceIDIsRejectedByPageAPI",
         "sourceIDIsRejectedByProcessedMarkdownVersionAPI",

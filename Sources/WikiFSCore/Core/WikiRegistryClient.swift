@@ -343,7 +343,7 @@ public final class WikiRegistryClient {
     /// `SQLITE_OK` — so the pragma must be stepped as a query and the busy
     /// column checked, or a blocked checkpoint silently exports a `.sqlite`
     /// missing the newest commits (no `-wal` sidecar is copied). Phase 0's
-    /// `WikiReadPool` made an in-flight in-process reader possible for the
+    /// `WikiReadService` made an in-flight in-process reader possible for the
     /// first time (a debounced search read racing an export); the 5s busy
     /// wait comfortably outlasts any pooled search statement, and if the
     /// checkpoint is STILL blocked we fail the export loudly rather than

@@ -8,7 +8,7 @@ import WikiFSTypes
 /// (`plans/page-embed-v2.md` §4). The linkify layer in `WikiLinkMarkdown`
 /// emits a collapsed `<details>` whose body is empty; when the user opens it,
 /// the `WikiReaderView` Coordinator hops OFF the main actor into
-/// `WikiReadPool.asyncRead`, calls `renderEmbedBody`, and injects the result
+/// `WikiReadService.asyncRead`, calls `renderEmbedBody`, and injects the result
 /// via the safe `sdwInjectEmbed` JS function (HTML passed as a parameter).
 ///
 /// These helpers run the SAME pre-pass + HTML visit the top-level reader uses
@@ -50,7 +50,7 @@ enum TransclusionEmbedder {
     /// detects the sentinel and renders the muted placeholder
     /// (`sdw-embed-empty` / `sdw-embed-cycle`) instead of injecting.
     static func renderEmbedBody(
-        store: GRDBWikiStore,
+        access: borrowing WikiReadAccess,
         target: TargetID,
         context: WikiRenderContext,
         options: MarkdownRenderOptions
@@ -59,11 +59,11 @@ enum TransclusionEmbedder {
         let contentKind: ReaderMarkdown.ContentKind
         switch target {
         case .page(let id):
-            let page = try store.getPage(id: id)
+            let page = try access.getPage(id: id)
             raw = PageMarkdownFormat.stripped(body: page.bodyMarkdown, title: page.title)
             contentKind = .document
         case .source(let id):
-            raw = try sourceEmbedBody(store: store, id: id)
+            raw = try sourceEmbedBody(access: access, id: id)
             contentKind = .source
         }
         guard let raw, !raw.isEmpty else { return emptySentinel }
@@ -90,26 +90,76 @@ enum TransclusionEmbedder {
     /// Mirrors `WikiStoreModel.processedMarkdownHead(for:)`'s native-text
     /// fallback but **never writes** (no v1 seeding from verbatim bytes — that
     /// is a write and belongs on the main actor, not the read path).
-    static func sourceEmbedBody(store: GRDBWikiStore, id: SourceID) throws -> String? {
-        // 1. Preferred: extracted markdown HEAD (already in the DB).
-        if let head = try store.processedMarkdownHead(sourceID: id) {
+    static func sourceEmbedBody(access: borrowing WikiReadAccess, id: SourceID) throws -> String? {
+        if let head = try access.processedMarkdownHead(sourceID: id) {
             return head.content
         }
-        // 2. Native-text source: raw UTF-8 bytes are readable text. Do NOT
-        //    decode raw bytes for HTML/PDF/binary — Plan v2 §4.2. Surface
-        //    failures via `DebugLog` (house rule, #475) — a silent `try?` here
-        //    would hide a store read failure.
-        let src = try store.getSource(id: id)
-        guard MimeType.isText(src.mimeType) else { return nil }
+        let source = try access.getSource(id: id)
+        guard MimeType.isText(source.mimeType) else { return nil }
         let data: Data
         do {
-            data = try store.sourceContent(id: id)
+            data = try access.sourceContent(id: id)
         } catch {
             DebugLog.reader("sourceEmbedBody sourceContent failed id=\(id.rawValue): \(error)")
             return nil
         }
-        guard let text = String(data: data, encoding: .utf8) else { return nil }
-        return text
+        return String(data: data, encoding: .utf8)
+    }
+
+    /// Explicit in-memory fixture fallback. Production reads use
+    /// `WikiReadAccess` through `WikiReadService`.
+    static func sourceEmbedBody(testFixtureStore store: GRDBWikiStore, id: SourceID) throws -> String? {
+        if let head = try store.processedMarkdownHead(sourceID: id) {
+            return head.content
+        }
+        let source = try store.getSource(id: id)
+        guard MimeType.isText(source.mimeType) else { return nil }
+        do {
+            return String(data: try store.sourceContent(id: id), encoding: .utf8)
+        } catch {
+            DebugLog.reader("sourceEmbedBody sourceContent failed id=\(id.rawValue): \(error)")
+            return nil
+        }
+    }
+
+    static func renderEmbedBody(
+        testFixtureStore store: GRDBWikiStore,
+        target: TargetID,
+        context: WikiRenderContext,
+        options: MarkdownRenderOptions
+    ) throws -> String {
+        let raw: String?
+        let contentKind: ReaderMarkdown.ContentKind
+        switch target {
+        case .page(let id):
+            let page = try store.getPage(id: id)
+            raw = PageMarkdownFormat.stripped(body: page.bodyMarkdown, title: page.title)
+            contentKind = .document
+        case .source(let id):
+            if let head = try store.processedMarkdownHead(sourceID: id) {
+                raw = head.content
+            } else {
+                let source = try store.getSource(id: id)
+                raw = MimeType.isText(source.mimeType)
+                    ? String(data: try store.sourceContent(id: id), encoding: .utf8)
+                    : nil
+            }
+            contentKind = .source
+        }
+        guard let raw, !raw.isEmpty else { return emptySentinel }
+        let prepared = ReaderMarkdown.prepared(
+            raw,
+            contentKind: contentKind,
+            isResolved: context.isResolved,
+            embedInfo: context.embedInfo,
+            displayName: context.displayName,
+            pinnedExtractionID: context.pinnedExtractionID)
+        let nestedOptions = MarkdownRenderOptions(
+            codeHighlighting: options.codeHighlighting,
+            rendererEmbedProjection: options.rendererEmbedProjection,
+            documentIdentity: nil,
+            rendererActivationAdmission: nil)
+        return MarkdownHTMLRenderer.render(prepared, options: nestedOptions)
     }
 
     /// Sentinel returned by `renderEmbedBody` when there is no body to render

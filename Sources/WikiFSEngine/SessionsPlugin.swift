@@ -87,7 +87,7 @@ extension ProfileWikiSession {
         rawStore.eventBus = bus
         let model = WikiStoreModel(store: rawStore)
         if FileManager.default.fileExists(atPath: databaseURL.path) {
-            model.readPool = WikiReadPool(databaseURL: databaseURL)
+            model.readService = WikiReadService(databaseURL: databaseURL)
         }
         let searchOwner = SearchCompositionOwner(
             registry: SearchRuntimeRegistry(),
@@ -143,7 +143,7 @@ extension AppProcessProfileOwner {
             layers: [PatchFile(entries: try ProductionProfiles.app(
                 databaseURL: databaseURL, wikiID: wikiID, homeDirectory: containerDirectory))])
         let model = WikiStoreModel(store: childServices.store)
-        model.readPool = childServices.readPool
+        model.readService = childServices.readService
         let searchOwner = childServices.searchFactory.makeOwner(registry: searchRuntimeRegistry)
         model.searchServices = searchOwner.services
         searchOwner.start()
@@ -202,7 +202,7 @@ public enum PerWikiRuntimePlugin {
             id: id,
             dependencies: [
                 ServiceDependency(StoreServiceKeys.store),
-                ServiceDependency(StoreServiceKeys.readPool),
+                ServiceDependency(StoreServiceKeys.readService),
                 ServiceDependency(ProcessServiceKeys.agentProvider),
                 ServiceDependency(ProcessServiceKeys.extraction),
                 ServiceDependency(AgentLoopServiceKeys.agentLoop),
@@ -217,7 +217,7 @@ public enum PerWikiRuntimePlugin {
                 label: "wiki.runtime-services",
                 dependencies: [
                     ServiceDependency(StoreServiceKeys.store),
-                    ServiceDependency(StoreServiceKeys.readPool),
+                    ServiceDependency(StoreServiceKeys.readService),
                     ServiceDependency(ProcessServiceKeys.agentProvider),
                     ServiceDependency(ProcessServiceKeys.extraction),
                     ServiceDependency(AgentLoopServiceKeys.agentLoop),
@@ -228,7 +228,7 @@ public enum PerWikiRuntimePlugin {
                 ]
             ) { activation in
                 let store = try await activation.require(StoreServiceKeys.store)
-                _ = try await activation.require(StoreServiceKeys.readPool)
+                _ = try await activation.require(StoreServiceKeys.readService)
                 let providerServices = try await activation.require(ProcessServiceKeys.agentProvider)
                 let extractionServices = try await activation.require(ProcessServiceKeys.extraction)
                 let agentLoopService = try await activation.require(AgentLoopServiceKeys.agentLoop)

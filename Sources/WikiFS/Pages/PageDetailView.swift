@@ -424,9 +424,9 @@ struct PageDetailView: View {
 
     private func hydrateMetadata(pageID: PageID) async {
         await MetadataHydrator.hydrate(subject: .page(pageID), operation: {
-            if MetadataHydrationReadPath.resolve(readPoolAvailable: store.readPool != nil) == .readPool,
-               let readPool = store.readPool {
-                return try await readPool.asyncRead { database in
+            if MetadataHydrationReadPath.resolve(readServiceAvailable: store.readService != nil) == .readService,
+               let readService = store.readService {
+                return try await readService.asyncRead { database in
                     try Self.pageMetadataModel(pageID: pageID, store: database)
                 }
             } else {
@@ -436,6 +436,27 @@ struct PageDetailView: View {
             metadataState = state
             updateRightSidebarRegistration()
         })
+    }
+
+    nonisolated private static func pageMetadataModel(
+        pageID: PageID,
+        store: borrowing WikiReadAccess
+    ) throws -> MetadataPanelModel {
+        let page = try store.getPage(id: pageID)
+        let sourceSummaries = try store.listSources()
+        let sources = try store.pageHeadSources(pageID: pageID).map { relation in
+            guard let source = sourceSummaries.first(where: { $0.id == relation.sourceID }) else {
+                throw MetadataProjectionError.missingSource(relation.sourceID)
+            }
+            return MetadataPageSource(sourceID: source.id, displayName: source.effectiveName, role: relation.role)
+        }
+        let history = try store.pageVersionHistory(pageID: pageID)
+        let headID = try store.pageHeadVersionID(pageID: pageID)
+        return PageMetadataProjection.make(input: .init(
+            page: page,
+            currentVersion: history.first { $0.id == headID },
+            origin: try store.pageOrigin(pageID: pageID),
+            sources: sources))
     }
 
     nonisolated private static func pageMetadataModel(pageID: PageID, store: WikiStore) throws -> MetadataPanelModel {

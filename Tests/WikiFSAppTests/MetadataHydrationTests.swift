@@ -49,11 +49,11 @@ struct MetadataHydrationTests {
     }
 
     @Test func inMemoryHydrationUsesStoreFallback() {
-        #expect(MetadataHydrationReadPath.resolve(readPoolAvailable: false) == .inMemoryStoreFallback)
+        #expect(MetadataHydrationReadPath.resolve(readServiceAvailable: false) == .inMemoryStoreFallback)
     }
 
-    @Test func fileHydrationUsesReadPool() {
-        #expect(MetadataHydrationReadPath.resolve(readPoolAvailable: true) == .readPool)
+    @Test func fileHydrationUsesReadService() {
+        #expect(MetadataHydrationReadPath.resolve(readServiceAvailable: true) == .readService)
     }
 
     private func model(subject: MetadataSubject) -> MetadataPanelModel {

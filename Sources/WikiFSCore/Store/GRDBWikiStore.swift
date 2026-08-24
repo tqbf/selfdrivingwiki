@@ -6221,9 +6221,9 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// - no agent → `agentName` falls back to `"unknown"`, `agentKind` to `"software"`
     ///   (the kind of the shared `legacy-import` agent that pre-v39 rows point at).
     ///
-    /// Read-only: routes through `dbWriter.read` so this is safe off-main via
-    /// `WikiReadPool` (a pooled store is `GRDBWikiStore(readOnlyURL:)`, no
-    /// migrations). READ-ONLY → emits no `ResourceChangeEvent`.
+    /// Read-only: routes through `dbWriter.read` for `WikiReadService` use.
+    /// Its private stores use `GRDBWikiStore(readOnlyURL:)` without migrations.
+    /// READ-ONLY → emits no `ResourceChangeEvent`.
     public func pageOrigin(pageID: PageID) throws -> PageOrigin? {
         try dbWriter.read { db in
             // The `runTitle` column (#745): for `chat:<id>` agents, LEFT JOIN the
@@ -6359,8 +6359,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// `appendPageVersion`); a decode failure degrades to an empty string
     /// rather than throwing (mirrors `revertPage`'s `?? ""` fallback).
     ///
-    /// READ-ONLY: routes through `dbWriter.read`, so this is safe off-main via
-    /// `WikiReadPool` and emits no `ResourceChangeEvent`. Used by the Versions
+    /// READ-ONLY: routes through `dbWriter.read` for `WikiReadService` use and
+    /// emits no `ResourceChangeEvent`. Used by the Versions
     /// window to view/diff a historical version without restoring it.
     public func pageVersionBody(versionID: PageVersionID) throws -> String? {
         try dbWriter.read { db in

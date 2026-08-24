@@ -49,7 +49,7 @@ reject_matches "session facade is constructed outside its boot/factory boundary"
 # WikiRegistryClient documents its injected pre-profile bootstrap factory.
 # GRDBWikiStore documents its own concrete initializer contract.
 # StoreBackend is the named concrete-backend construction boundary.
-# WikiReadPool owns read-only pooled connections.
+# WikiReadService owns its private read-only pooled connections.
 # ProfileWikiSession documents its synchronous test-fixture boundary.
 # Projection is a separate extension process with query-only stores.
 # wikid/main.swift retains the Linux stdio compatibility fixture factory.
@@ -59,7 +59,7 @@ reject_matches "GRDBWikiStore is constructed outside a store plugin/factory" \
   Sources/WikiFSCore/Core/WikiRegistryClient.swift \
   Sources/WikiFSCore/Store/GRDBWikiStore.swift \
   Sources/WikiFSCore/Store/StoreBackend.swift \
-  Sources/WikiFSCore/Store/WikiReadPool.swift \
+  Sources/WikiFSCore/Store/WikiReadService.swift \
   Sources/WikiFSEngine/ProfileWikiSession.swift \
   Sources/WikiFSFileProvider/Projection.swift \
   Sources/wikid/main.swift || failed=1

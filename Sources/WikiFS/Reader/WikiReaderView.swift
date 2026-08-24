@@ -2228,15 +2228,15 @@ internal struct WikiReaderRep: NSViewRepresentable {
             let loadStart = DispatchTime.now()
             do {
                 let raw: String
-                if let pool = store.readPool {
-                    raw = try await pool.asyncRead { roStore in
+                if let readService = store.readService {
+                    raw = try await readService.asyncRead { access in
                         try TransclusionEmbedder.renderEmbedBody(
-                            store: roStore, target: target, context: context, options: renderOptions)
+                            access: access, target: target, context: context, options: renderOptions)
                     }
                 } else if let grdb = store.internalStore as? GRDBWikiStore {
                     // Main-actor fallback (in-memory tests; rare in prod).
                     raw = try TransclusionEmbedder.renderEmbedBody(
-                        store: grdb, target: target, context: context, options: renderOptions)
+                        testFixtureStore: grdb, target: target, context: context, options: renderOptions)
                 } else {
                     raw = TransclusionEmbedder.emptySentinel
                 }

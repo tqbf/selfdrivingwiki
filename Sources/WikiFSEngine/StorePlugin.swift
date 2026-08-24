@@ -81,7 +81,7 @@ public enum StorePlugin {
         label: "Wiki store",
         provisions: [
             ServiceDependency(StoreServiceKeys.store),
-            ServiceDependency(StoreServiceKeys.readPool),
+            ServiceDependency(StoreServiceKeys.readService),
         ],
         config: StoreConfig.self
     ) { config in
@@ -89,14 +89,14 @@ public enum StorePlugin {
             label: "wiki.store",
             provisions: [
                 ServiceDependency(StoreServiceKeys.store),
-                ServiceDependency(StoreServiceKeys.readPool),
+                ServiceDependency(StoreServiceKeys.readService),
             ]
         ) { activation in
             let databaseURL = URL(fileURLWithPath: config.databasePath, isDirectory: false)
             var store: any WikiStore = try StoreBackend.current.makeStore(databaseURL: databaseURL)
             let bus = WikiEventBus(wikiID: WikiID(rawValue: config.wikiID))
             store.eventBus = bus
-            let readPool = WikiReadPool(databaseURL: databaseURL)
+            let readService = WikiReadService(databaseURL: databaseURL)
             let forwarder = StoreEventForwarder(
                 activation: activation,
                 beforeEmit: beforeForward)
@@ -105,9 +105,10 @@ public enum StorePlugin {
             }
             _ = try await activation.effect { _ in
                 await forwarder.shutdown { bus.unsubscribe(token) }
+                await readService.shutdown()
             }
             _ = try await activation.supply(StoreServiceKeys.store, value: store)
-            _ = try await activation.supply(StoreServiceKeys.readPool, value: readPool)
+            _ = try await activation.supply(StoreServiceKeys.readService, value: readService)
         }
     }
     }

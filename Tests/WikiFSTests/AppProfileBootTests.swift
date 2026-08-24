@@ -117,7 +117,7 @@ struct AppProfileBootTests {
 
         #expect(facade.wikiID == wikiID)
         #expect(facade.descriptor.displayName == "Profile Wiki")
-        #expect(facade.store.readPool != nil)
+        #expect(facade.store.readService != nil)
         #expect(facade.descriptor.homePageID != nil)
         let renamed = WikiDescriptor(
             id: wikiID,

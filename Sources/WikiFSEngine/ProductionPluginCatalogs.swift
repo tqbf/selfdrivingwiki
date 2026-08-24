@@ -523,7 +523,7 @@ public actor DaemonProcessProfileOwner {
 public struct AppServices: Sendable {
     public let lifetime: ProfileLifetime
     public let store: any WikiStore
-    public let readPool: WikiReadPool
+    public let readService: WikiReadService
     public let extractionBackends: ExtractionBackendRegistry
     public let searchProviders: SearchProviderRegistry
     public let launcherFactory: LauncherFactory
@@ -533,7 +533,7 @@ public struct AppServices: Sendable {
         AppServices(
             lifetime: ProfileLifetime(profile: profile),
             store: try await profile.context.require(StoreServiceKeys.store),
-            readPool: try await profile.context.require(StoreServiceKeys.readPool),
+            readService: try await profile.context.require(StoreServiceKeys.readService),
             extractionBackends: try await profile.context.require(ExtractionServiceKeys.backends),
             searchProviders: try await profile.context.require(SearchServiceKeys.providers),
             launcherFactory: try await profile.context.require(LauncherServiceKeys.factory),
