@@ -286,4 +286,61 @@ struct CordisLoaderTests {
         #expect(ids.isEmpty)
         try await booted.shutdown()
     }
+
+    @Test("boot failure disposes earlier row effects exactly once")
+    func bootFailureRollsBackEarlierRows() async throws {
+        let cleanup = LoaderCleanupCounter()
+        let catalog = try rollbackCatalog(cleanup: cleanup)
+        let layer = PatchFile(entries: [
+            Entry(id: EntryID("first"), plugin: PluginID("test.tracked")),
+            Entry(id: EntryID("second"), plugin: PluginID("test.failure")),
+        ])
+
+        await #expect(throws: CordisLoaderError.self) {
+            _ = try await CordisBoot.boot(.init(catalog: catalog, layers: [layer]))
+        }
+        #expect(await cleanup.value == 1)
+    }
+
+    @Test("update failure rolls back newly mounted row effects exactly once")
+    func updateFailureRollsBackEarlierRows() async throws {
+        let cleanup = LoaderCleanupCounter()
+        let catalog = try rollbackCatalog(cleanup: cleanup)
+        let context = CordisContext()
+        let tree = EntryTree(context: context, catalog: catalog)
+
+        await #expect(throws: CordisLoaderError.self) {
+            try await tree.update(to: [
+                Entry(id: EntryID("first"), plugin: PluginID("test.tracked")),
+                Entry(id: EntryID("second"), plugin: PluginID("test.failure")),
+            ])
+        }
+        #expect(await cleanup.value == 1)
+        #expect(await tree.mountedEntryIDs.isEmpty)
+        try await tree.dispose()
+        try await context.dispose()
+        #expect(await cleanup.value == 1)
+    }
+
+    private func rollbackCatalog(cleanup: LoaderCleanupCounter) throws -> PluginCatalog {
+        try PluginCatalog([
+            PluginDefinition(id: PluginID("test.tracked")) {
+                try ComponentDefinition(label: "tracked") { activation in
+                    _ = try await activation.effect { _ in await cleanup.increment() }
+                }
+            },
+            PluginDefinition(id: PluginID("test.failure")) {
+                try ComponentDefinition(label: "failure") { _ in
+                    throw LoaderExpectedError()
+                }
+            },
+        ])
+    }
 }
+
+private actor LoaderCleanupCounter {
+    private(set) var value = 0
+    func increment() { value += 1 }
+}
+
+private struct LoaderExpectedError: Error {}

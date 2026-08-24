@@ -9,6 +9,18 @@ public enum CordisLoaderError: Error, Equatable, Sendable {
     case configDecodingFailed(entryID: EntryID, problem: String)
 }
 
+/// Preserves the operation failure that triggered rollback together with every
+/// cleanup failure encountered while restoring ownership boundaries.
+public struct CordisLoaderRollbackError: Error, Equatable, Sendable {
+    public let operation: CordisFailure
+    public let cleanup: [CordisFailure]
+
+    public init(operation: CordisFailure, cleanup: [CordisFailure]) {
+        self.operation = operation
+        self.cleanup = cleanup
+    }
+}
+
 extension ConfigValue {
     /// JSON object view for plugin schema decoding.
     public func plain() -> Any {
@@ -51,16 +63,31 @@ public actor EntryTree {
             nextMounted.removeValue(forKey: entryID)
         }
 
-        for row in newRows where !row.disabled {
-            if nextMounted[row.id] != nil, row == currentRow(row.id) {
-                continue
+        var newlyMounted: [ComponentHandle] = []
+        do {
+            for row in newRows where !row.disabled {
+                if nextMounted[row.id] != nil, row == currentRow(row.id) {
+                    continue
+                }
+                if let existing = nextMounted[row.id] {
+                    try await existing.dispose()
+                    nextMounted.removeValue(forKey: row.id)
+                }
+                let handle = try await mount(row)
+                nextMounted[row.id] = handle
+                newlyMounted.append(handle)
             }
-            if let existing = nextMounted[row.id] {
-                try await existing.dispose()
-                nextMounted.removeValue(forKey: row.id)
+        } catch {
+            var cleanup: [CordisFailure] = []
+            for handle in newlyMounted.reversed() {
+                do {
+                    try await handle.dispose()
+                } catch {
+                    cleanup.append(CordisFailure(error))
+                }
             }
-            let handle = try await mount(row)
-            nextMounted[row.id] = handle
+            if cleanup.isEmpty { throw error }
+            throw CordisLoaderRollbackError(operation: CordisFailure(error), cleanup: cleanup)
         }
 
         mounted = nextMounted
@@ -219,13 +246,30 @@ public enum CordisBoot {
         } else {
             CordisContext()
         }
-        if let configure = options.configure {
-            try await configure(context)
-        }
-        let resolved = PatchResolver.resolve(layers: options.layers)
         let tree = EntryTree(context: context, catalog: options.catalog)
-        try await tree.update(to: resolved)
-        return BootedProfile(context: context, tree: tree)
+        do {
+            if let configure = options.configure {
+                try await configure(context)
+            }
+            let resolved = PatchResolver.resolve(layers: options.layers)
+            try await tree.update(to: resolved)
+            return BootedProfile(context: context, tree: tree)
+        } catch {
+            let operation = CordisFailure(error)
+            var cleanup: [CordisFailure] = []
+            do {
+                try await tree.dispose()
+            } catch {
+                cleanup.append(CordisFailure(error))
+            }
+            do {
+                try await context.dispose()
+            } catch {
+                cleanup.append(CordisFailure(error))
+            }
+            if cleanup.isEmpty { throw error }
+            throw CordisLoaderRollbackError(operation: operation, cleanup: cleanup)
+        }
     }
 }
 
