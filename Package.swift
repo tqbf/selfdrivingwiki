@@ -330,6 +330,7 @@ let package = Package(
             name: "WikiFSEngine",
             dependencies: [
                 "Cordis",
+                "CordisLoader",
                 "WikiFSCore",
                 // ACP client runtime (ACPBackend — plans/acp-backend-and-permissions.md).
                 // The `ACP` product is macOS-only: it uses ACPProcessManager and os.log.

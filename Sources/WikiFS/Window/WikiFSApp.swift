@@ -22,6 +22,8 @@ struct WikiFSApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     private let launchLocationWarning: LaunchLocationWarning?
     private let containerDirectory: URL
+    /// Owns the app process profile and its five process-scoped runtime leases.
+    @State private var processProfileOwner: AppProcessProfileOwner
     @State private var registry: WikiRegistryClient
     /// Multi-window: owns the `[wikiID: WikiSession]` cache. Each window's
     /// `RootScene` calls `sessionManager.session(for:descriptor:)` to resolve
@@ -29,10 +31,8 @@ struct WikiFSApp: App {
     @State private var sessionManager: SessionManager
     @State private var fileProvider = FileProviderFacade()
     @State private var installedRendererHost: InstalledRendererHost
-    /// Retains the app-scoped runtime's Cordis context for the lifetime of the
-    /// app. Agent launchers receive its services facade, not this handle.
-    @State private var agentProviderRuntimeHandle: AgentProviderRuntimeHandle?
-    @State private var agentProviderServices = MutableAgentProviderServices()
+    /// Stable provider facade resolved by the app process profile.
+    @State private var agentProviderServices: MutableAgentProviderServices
     /// One app-scoped launcher for Settings-only use ("Test Connection" + backend
     /// config). Has its own `GenerationGate`, independent of any session's gate
     /// — a Settings connection test doesn't block an active wiki's ingest.
@@ -41,12 +41,6 @@ struct WikiFSApp: App {
     /// Serve). Threaded like `settingsLauncher` — one instance, owned by the app,
     /// shared as a ref into each `WikiSession` (it carries no per-wiki state).
     @State private var extractionCoordinator: ExtractionCoordinator
-    /// Owns the app-scoped extraction context and its asynchronous startup.
-    private let extractionCompositionOwner: ExtractionCompositionOwner
-    /// Owns the app-scoped renderer context, bootstrap, publication, and shutdown.
-    private let rendererCompositionOwner: RendererCompositionOwner
-    /// Owns daemon transport assembly, admission, retry work, and disposal.
-    private let daemonTransportCompositionOwner: DaemonTransportCompositionOwner
     /// Keeps concrete XPC connections outside the Engine Cordis assembly.
     private let daemonTransportBridge: DaemonTransportAppBridge
     /// Adapts typed transport events into queue/chat ownership policy.
@@ -167,32 +161,6 @@ struct WikiFSApp: App {
         // plans/keychain-sharing.md.
         KeychainSecretStore.migrateLegacyItemsToDataProtection()
         containerDirectory = directory
-        let providerServices = MutableAgentProviderServices()
-        _agentProviderServices = State(initialValue: providerServices)
-        let providerAssembly = AgentProviderRuntimeAssembly(
-            readConfiguration: {
-                AgentProvidersConfig.loadOrSeed(from: directory)
-            },
-            resolveCommand: { providers in
-                let loginShellPath = await PathPreflight.loginShellPATH()
-                return Dictionary(uniqueKeysWithValues: providers.compactMap { provider in
-                    AgentLauncher.resolveCommand(for: provider, searchPath: loginShellPath)
-                        .map { (provider.id, $0) }
-                })
-            },
-            readCredential: { providerID in
-                KeychainACPCredentialStore().apiKey(forProvider: providerID.rawValue)
-            },
-            resolvePermissionPolicy: { operation in
-                let key: String
-                switch operation {
-                case .chat: key = AgentLauncher.PermissionModeKey.chat
-                case .ingest: key = AgentLauncher.PermissionModeKey.ingest
-                case .lint: key = AgentLauncher.PermissionModeKey.lint
-                }
-                let raw = UserDefaults.standard.string(forKey: key) ?? ""
-                return PermissionPolicy(rawValue: raw) ?? .bypass
-            })
         // Populate wikis BEFORE handing the registry to @State so SwiftUI's
         // first render sees a non-empty list.  activateNow: false means
         // activeWikiID stays nil for that render — NSTableView's initial
@@ -203,83 +171,45 @@ struct WikiFSApp: App {
         let r = WikiRegistryClient(containerDirectory: directory)
         r.bootstrap(activateNow: false)
         _registry = State(initialValue: r)
-        let extractionCredentialStore = KeychainExtractionCredentialStore()
-        let acpCredentialStore = KeychainACPCredentialStore()
-        let extractionOwner = ExtractionCompositionOwner {
-            try await ExtractionRuntimeAssembly(
-                readConfiguration: { ExtractionConfig.load(from: directory) },
-                readCredential: { extractionCredentialStore.secret($0) },
-                resolveACP: { configuration in
-                    ACPExtractionClient.resolveProvider(
-                        containerDirectory: directory,
-                        acpProviderId: configuration.acpProviderId,
-                        acpCredentialStore: acpCredentialStore)
-                },
-                httpFetcher: URLSessionRequestFetcher(),
-                makeLocalExtractor: {
-                    await MainActor.run { LocalPdf2MarkdownExtractor() }
-                })
-                .assemble()
-        }
-        extractionCompositionOwner = extractionOwner
-        let extractionServices = extractionOwner.services
-        let coordinator = ExtractionCoordinator(services: extractionServices)
-        _extractionCoordinator = State(initialValue: coordinator)
-        Task { await extractionOwner.start() }
-
-        // Queue engine: start with a LOCAL engine as the initial fallback
-        // (#878 BLOCKER 2). The daemon connection is deferred to a Task so
-        // init() never blocks the main thread. If the daemon is available, the
-        // `QueueEngineHotSwap` router swaps to the XPC proxy; if the daemon
-        // dies later, the `DaemonHealthMonitor` swaps back to a local engine.
-        //
-        // The daemon (when healthy) owns the ENTIRE queue. The app is a pure
-        // XPC client — all 13 QueueEngineClient methods proxy to the daemon.
-        // One DB, one engine, one owner.
+        // The synchronous app initializer creates stable facades only. The
+        // asynchronous process profile is the sole owner of all five concrete
+        // runtimes and publishes those same facades through its plugin leases.
         let sessionBox = SessionLookupBox()
         sessionLookupBox = sessionBox
+        let fileProviderBox = FileProviderBox()
+        let transportBridge = DaemonTransportAppBridge()
+        daemonTransportBridge = transportBridge
+        let processComposition = AppProcessComposition(
+            containerDirectory: directory,
+            transportBridge: transportBridge,
+            extractionProvider: { services in
+                AppQueueExtractionProvider(
+                    extractionServices: services,
+                    sessionBox: sessionBox)
+            },
+            makeIngestionProvider: { store, providerServices in
+                AppQueueIngestionProvider(
+                    sessionBox: sessionBox,
+                    fileProviderBox: fileProviderBox,
+                    wikictlDirectory: HelpersLocation.wikictlDirectory,
+                    queueStore: store,
+                    providerServices: providerServices)
+            })
+        let providerServices = processComposition.providerServices
+        _agentProviderServices = State(initialValue: providerServices)
+        let extractionServices = processComposition.extractionServices
+        let coordinator = ExtractionCoordinator(services: extractionServices)
+        _extractionCoordinator = State(initialValue: coordinator)
         let extractionProvider = AppQueueExtractionProvider(
             extractionServices: extractionServices,
             sessionBox: sessionBox)
-        let fileProviderBox = FileProviderBox()
+        let runtimeController = processComposition.queueController
+        let transportOwner = processComposition.transportOwner
+        let rendererOwner = processComposition.rendererOwner
+        let processProfileOwner = processComposition.profileOwner
+        _processProfileOwner = State(initialValue: processProfileOwner)
+        processProfileOwner.start()
 
-        let activityTracker = QueueActivityTracker()
-
-        let queueDBURL = DebugLog.trying(
-            "resolve queue database URL",
-            operation: { try DatabaseLocation.queueDatabaseURL() })
-            ?? directory.appendingPathComponent("queue.sqlite", isDirectory: false)
-        let runtimeController = LocalQueueRuntimeController {
-            try await QueueRuntimeAssembly(
-                databaseURL: queueDBURL,
-                extractionProvider: extractionProvider,
-                makeIngestionProvider: { store in
-                    await MainActor.run {
-                        AppQueueIngestionProvider(
-                            sessionBox: sessionBox,
-                            fileProviderBox: fileProviderBox,
-                            wikictlDirectory: HelpersLocation.wikictlDirectory,
-                            queueStore: store,
-                            providerServices: providerServices)
-                    }
-                })
-                .assemble()
-        }
-        runtimeController.start()
-
-        let transportBridge = DaemonTransportAppBridge()
-        daemonTransportBridge = transportBridge
-        let transportOwner = DaemonTransportCompositionOwner {
-            try await DaemonTransportRuntimeAssembly(
-                connectionFactory: transportBridge.connectionFactory,
-                configuration: .init(
-                    retryInterval: .seconds(30),
-                    healthCheckInterval: .seconds(30),
-                    healthCheckTimeout: 5,
-                    acceptanceDeadline: .seconds(30)))
-                .assemble()
-        }
-        daemonTransportCompositionOwner = transportOwner
         let transportMonitor = DaemonHealthMonitor(services: transportOwner.services)
         _healthMonitor = State(initialValue: transportMonitor)
         daemonTransportCoordinator = DaemonTransportAppCoordinator(
@@ -290,19 +220,12 @@ struct WikiFSApp: App {
             observeEvent: { [weak transportMonitor] event in
                 transportMonitor?.consume(event)
             })
-        Task { await transportOwner.start() }
 
-        // All consumers retain one stable facade. The controller owns its local
-        // runtime handle and changes only the facade's admitted inner client.
-        let router = runtimeController.client
-        activityTracker.attach(engine: router)
-        Task { await activityTracker.rehydrate(from: router) }
-        // #871 self-heal: poll the snapshot so a finished item still clears
-        // the spinner if the event stream breaks. The router forwards to the
-        // current engine, so this works across swaps.
-        activityTracker.startSnapshotWatchdog(engine: router)
-
-        let queueEngine = router
+        let activityTracker = QueueActivityTracker()
+        let queueEngine = runtimeController.client
+        activityTracker.attach(engine: queueEngine)
+        Task { await activityTracker.rehydrate(from: queueEngine) }
+        activityTracker.startSnapshotWatchdog(engine: queueEngine)
 
         _queueEngine = State(initialValue: queueEngine)
         _localQueueRuntimeController = State(initialValue: runtimeController)
@@ -311,6 +234,20 @@ struct WikiFSApp: App {
         _activityTracker = State(initialValue: activityTracker)
 
         let searchRuntimeRegistry = SearchRuntimeRegistry()
+        let appCatalog = {
+            do {
+                return try AppPluginCatalog.build(factories: AppPluginCatalogFactories(
+                    base: BasePluginCatalogFactories(
+                        agentProviderServices: providerServices,
+                        makePDFExtractor: { await MainActor.run { LocalPdf2MarkdownExtractor() } }),
+                    makeRendererServices: { rendererOwner.services },
+                    makeDefuddleExtractor: { await MainActor.run { LocalDefuddleExtractor() } },
+                    makeDaemonTransport: { transportOwner.services },
+                    makeURLFetcher: { URLSessionRequestFetcher() }))
+            } catch {
+                preconditionFailure("App profile catalog construction failed: \(error)")
+            }
+        }()
         let sm = SessionManager(
             containerDirectory: directory,
             extractionCoordinator: coordinator,
@@ -324,31 +261,39 @@ struct WikiFSApp: App {
             podcastBackendResolver: { ExtractionConfig.load(from: directory).podcastBackend },
             interactiveUsageRecorder: { [weak activityTracker] usage in
                 activityTracker?.recordInteractiveUsage(usage)
+            },
+            asyncSessionLoader: { [weak processProfileOwner, weak activityTracker] wikiID, descriptor in
+                guard let processProfileOwner else {
+                    throw SessionLoadingError.processProfileUnavailable("app process profile owner was released")
+                }
+                await processProfileOwner.awaitSettled()
+                guard let processProfile = processProfileOwner.profile,
+                      let processServices = processProfileOwner.services else {
+                    throw SessionLoadingError.processProfileUnavailable("app process profile is not ready: \(processProfileOwner.readiness)")
+                }
+                return try await ProfileWikiSession.boot(
+                    wikiID: wikiID,
+                    descriptor: descriptor,
+                    containerDirectory: directory,
+                    catalog: appCatalog,
+                    processProfile: processProfile,
+                    processServices: processServices,
+                    extractionProvider: extractionProvider,
+                    searchRuntimeRegistry: searchRuntimeRegistry,
+                    pdf2mdScriptPathResolver: { PdfExtractionService.resolveScript()?.path },
+                    htmlMarkdownExtractorFactory: { LocalDefuddleExtractor() },
+                    htmlBackendResolver: { ExtractionConfig.load(from: directory).htmlBackend },
+                    podcastBackendResolver: { ExtractionConfig.load(from: directory).podcastBackend },
+                    interactiveUsageRecorder: { usage in
+                        activityTracker?.recordInteractiveUsage(usage)
+                    })
             }
         )
         _sessionManager = State(initialValue: sm)
-        let rendererLayout: RendererPackageStoreLayout
-        do {
-            rendererLayout = try RendererPackageStoreLayout(appGroupContainerRoot: directory)
-        } catch {
-            preconditionFailure("Resolved app-group renderer layout was invalid: \(error)")
-        }
-        let rendererOwner = RendererCompositionOwner {
-            try await RendererRuntimeAssembly(
-                layout: rendererLayout,
-                bundledPackageSource: { BundledRendererPackages.excalidrawResourceURL() },
-                reviewedBundledIdentity: .init(
-                    packageID: BundledRendererPackages.excalidrawPackageID,
-                    version: BundledRendererPackages.excalidrawVersion,
-                    registrationID: BundledRendererPackages.excalidrawRegistrationID))
-                .assemble()
-        }
-        rendererCompositionOwner = rendererOwner
         let rendererHost = InstalledRendererHost(services: rendererOwner.services)
         _installedRendererHost = State(initialValue: rendererHost)
         Task { @MainActor in
-            await rendererOwner.start()
-            await rendererOwner.awaitSettled()
+            await processProfileOwner.awaitSettled()
             if let publication = await rendererOwner.consumeStartupPreparation() {
                 publication.publish(to: rendererHost)
             }
@@ -412,16 +357,6 @@ struct WikiFSApp: App {
         // so the `.task` copies that remain are harmless redundant fallbacks,
         // not the primary path. Add new one-time launch work HERE, not to an
         // individual window's `.task`.
-        Task { @MainActor [self, providerAssembly, providerServices] in
-            do {
-                let handle = try await providerAssembly.assemble()
-                await providerServices.install(handle.services)
-                agentProviderRuntimeHandle = handle
-            } catch {
-                DebugLog.agent("WikiFSApp: agent provider runtime assembly failed. Agent features are unavailable: \(error)")
-            }
-        }
-
         appDelegate.bootstrap = { [self] in
             startStatusItem()
             applyAppKitAppearance()
@@ -573,16 +508,12 @@ struct WikiFSApp: App {
         }
         appDelegate.shutdownForTermination = { [
             daemonTransportCoordinator,
-            localQueueRuntimeController,
             sessionManager,
-            extractionCompositionOwner,
-            rendererCompositionOwner
+            processProfileOwner
         ] in
             await daemonTransportCoordinator.shutdown()
-            _ = await localQueueRuntimeController.dispose()
             await sessionManager.shutdownSearchRuntimes()
-            await extractionCompositionOwner.shutdown()
-            await rendererCompositionOwner.shutdown()
+            await processProfileOwner.shutdown()
         }
         appDelegate.unregisterDaemon = {
             // The daemon is a bundled XPC service — the system manages its
@@ -604,9 +535,6 @@ struct WikiFSApp: App {
 
     @MainActor
     private func connectToDaemon() {
-        // Start composition if needed. The owner ignores duplicate calls and
-        // retries assembly while startup remains in progress.
-        Task { await daemonTransportCompositionOwner.start() }
         daemonTransportCoordinator.installChatReplacement { coordinator in
             replaceChatDaemonCoordinator(coordinator)
         }

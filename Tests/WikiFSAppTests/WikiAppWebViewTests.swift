@@ -360,7 +360,7 @@ struct WikiAppWebViewTests {
         let coordinator = ExtractionCoordinator(
             containerDirectory: dir,
             localExtractorFactory: { StubExtractor() })
-        let session = try WikiSession(
+        let session = try ProfileWikiSession(
             wikiID: descriptor.id,
             descriptor: descriptor,
             containerDirectory: dir,
@@ -467,7 +467,7 @@ private func makePageDetailModel() throws -> WikiStoreModel {
 }
 
 @MainActor
-private func makePageDetailSession() throws -> WikiSession {
+private func makePageDetailSession() throws -> ProfileWikiSession {
     let dir = FileManager.default.temporaryDirectory
         .appendingPathComponent("page-detail-session-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -475,7 +475,7 @@ private func makePageDetailSession() throws -> WikiSession {
     let coordinator = ExtractionCoordinator(
         containerDirectory: dir,
         localExtractorFactory: { StubExtractor() })
-    return try WikiSession(
+    return try ProfileWikiSession(
         wikiID: descriptor.id,
         descriptor: descriptor,
         containerDirectory: dir,

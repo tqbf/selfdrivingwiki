@@ -17,7 +17,7 @@ public final class SearchCompositionOwner {
 
     private let registry: SearchRuntimeRegistry
     private let startupPrerequisite: Task<Void, Never>?
-    private let assembly: SearchRuntimeAssembly
+    private let runtime: SearchRuntimeFactory
     private var state: State = .idle
     private var startupError: (any Error)?
 
@@ -27,14 +27,15 @@ public final class SearchCompositionOwner {
         contentSource: any TantivyContentSource,
         changeStreamFactory: any SearchChangeStreamFactory,
         startupPrerequisite: Task<Void, Never>? = nil,
-        services: MutableSearchServices = MutableSearchServices()
+        services: MutableSearchServices = MutableSearchServices(),
+        makeRuntime: SearchRuntimeFactory.Factory = SearchRuntimeCompositionFactory.runtimeFactory
     ) {
         self.registry = registry
         self.startupPrerequisite = startupPrerequisite
-        self.assembly = SearchRuntimeAssembly(
-            identity: identity,
-            contentSource: contentSource,
-            changeStreamFactory: changeStreamFactory)
+        self.runtime = makeRuntime(
+            identity,
+            contentSource,
+            changeStreamFactory)
         self.services = services
     }
 
@@ -61,12 +62,12 @@ public final class SearchCompositionOwner {
         switch state {
         case .idle:
             state = .stopped
-            assembly.changeStreamFactory.finish()
+            runtime.changeStreamFactory.finish()
         case .starting(let task, let installation):
             state = .stopped
             await services.invalidate(installation)
             task.cancel()
-            assembly.changeStreamFactory.finish()
+            runtime.changeStreamFactory.finish()
             await task.value
         case .installed(let lease, let installation):
             state = .stopped
@@ -81,7 +82,7 @@ public final class SearchCompositionOwner {
         do {
             if let startupPrerequisite { await startupPrerequisite.value }
             guard isAdmitted(installation), !Task.isCancelled else { return }
-            let lease = try await registry.assemble(assembly)
+            let lease = try await registry.assemble(runtime)
             guard isAdmitted(installation), !Task.isCancelled else {
                 await lease.dispose()
                 return
@@ -95,13 +96,13 @@ public final class SearchCompositionOwner {
             state = .installed(lease, installation)
             startupError = nil
         } catch is CancellationError {
-            assembly.changeStreamFactory.finish()
+            runtime.changeStreamFactory.finish()
         } catch {
             guard isAdmitted(installation) else { return }
             startupError = error
             state = .idle
-            assembly.changeStreamFactory.finish()
-            DebugLog.store("SearchCompositionOwner: runtime assembly failed: \(error)")
+            runtime.changeStreamFactory.finish()
+            DebugLog.store("SearchCompositionOwner: runtime composition failed: \(error)")
         }
     }
 

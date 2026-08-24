@@ -70,11 +70,16 @@ struct QueueAssemblyContractTests {
         let app = try String(
             contentsOf: root.appendingPathComponent("Sources/WikiFS/Window/WikiFSApp.swift"),
             encoding: .utf8)
+        let composition = try String(
+            contentsOf: root.appendingPathComponent("Sources/WikiFS/Renderer/RendererCompositionOwner.swift"),
+            encoding: .utf8)
         let daemon = try String(
             contentsOf: root.appendingPathComponent("Sources/wikid/WikiDaemon.swift"),
             encoding: .utf8)
 
-        #expect(app.contains("QueueRuntimeAssembly("))
+        #expect(!app.contains("QueueRuntimeFactory("))
+        #expect(composition.contains("QueueRuntimeFactory("))
+        #expect(app.contains("let queueEngine = runtimeController.client"))
         #expect(!app.contains("QueueWorkerOutputChannel(store:"))
         #expect(daemon.contains("let outputChannel = QueueWorkerOutputChannel(store: queueStore)"))
         #expect(daemon.contains("outputChannel: outputChannel"))

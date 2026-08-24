@@ -3,6 +3,10 @@ import Foundation
 import Observation
 import WikiFSCore
 
+public enum SessionLoadingError: Error, Equatable, Sendable {
+    case processProfileUnavailable(String)
+}
+
 /// Owns the live `WikiSession` cache for multi-window SwiftUI
 /// (`plans/multi-window-ui.md` Phase 2b). Each window's `RootScene` calls
 /// ``session(for:descriptor:)`` to resolve (or create) the session for its
@@ -24,9 +28,22 @@ import WikiFSCore
 @MainActor
 @Observable
 public final class SessionManager {
+    public enum SessionReadiness: Equatable, Sendable {
+        case idle
+        case loading
+        case ready
+        case failed(String)
+    }
+
+    public typealias AsyncSessionLoader = @MainActor @Sendable (WikiID, WikiDescriptor) async throws -> any WikiSessionProtocol
+
+    /// Observable readiness for the future per-wiki child-profile boot path.
+    public private(set) var readiness: [WikiID: SessionReadiness] = [:]
+    @ObservationIgnored private let asyncSessionLoader: AsyncSessionLoader?
+
     /// Live sessions keyed by wiki ID. A wiki open in multiple windows
     /// shares ONE session (one store, one bus, one gate).
-    public private(set) var sessions: [WikiID: WikiSession] = [:]
+    public private(set) var sessions: [WikiID: any WikiSessionProtocol] = [:]
     /// Number of live `RootScene` owners for each cached session. A renderer
     /// window does not own a lease; it resolves through the session retained by
     /// the wiki window that activated it.
@@ -137,7 +154,8 @@ public final class SessionManager {
         htmlBackendResolver: @escaping @MainActor () -> HtmlExtractionBackend? = { nil },
         podcastBackendResolver: @escaping @MainActor () -> PodcastTranscriptionBackend? = { nil },
         interactiveUsageRecorder: @escaping (@MainActor (SessionUsage) -> Void) = { _ in },
-        makeStore: @escaping @Sendable (URL) throws -> WikiStore = { try StoreBackend.current.makeStore(databaseURL: $0) }
+        makeStore: @escaping @Sendable (URL) throws -> WikiStore = { try StoreBackend.current.makeStore(databaseURL: $0) },
+        asyncSessionLoader: AsyncSessionLoader? = nil
     ) {
         self.containerDirectory = containerDirectory
         self.extractionCoordinator = extractionCoordinator
@@ -151,9 +169,44 @@ public final class SessionManager {
         self.podcastBackendResolver = podcastBackendResolver
         self.interactiveUsageRecorder = interactiveUsageRecorder
         self.makeStore = makeStore
+        self.asyncSessionLoader = asyncSessionLoader
     }
 
     // MARK: - Session lifecycle
+
+    public func readiness(for wikiID: WikiID) -> SessionReadiness {
+        readiness[wikiID] ?? .idle
+    }
+
+    /// Await the per-wiki session composition boundary.
+    ///
+    /// The injected loader is the target child-profile boot path. Until app and
+    /// daemon owners are rewired, the default preserves legacy synchronous
+    /// construction while exposing the same async readiness contract.
+    public func readySession(for wikiID: WikiID, descriptor: WikiDescriptor) async throws -> any WikiSessionProtocol {
+        if let existing = sessions[wikiID] {
+            existing.updateDescriptor(descriptor)
+            sessionLeaseCounts[wikiID, default: 0] += 1
+            readiness[wikiID] = .ready
+            return existing
+        }
+        readiness[wikiID] = .loading
+        do {
+            let session = if let asyncSessionLoader {
+                try await asyncSessionLoader(wikiID, descriptor)
+            } else {
+                try self.session(for: wikiID, descriptor: descriptor)
+            }
+            sessions[wikiID] = session
+            if sessionLeaseCounts[wikiID] == nil { sessionLeaseCounts[wikiID] = 1 }
+            openErrors.removeValue(forKey: wikiID)
+            readiness[wikiID] = .ready
+            return session
+        } catch {
+            readiness[wikiID] = .failed(String(describing: error))
+            throw error
+        }
+    }
 
     /// Get or create a session for `wikiID`. If a session already exists for
     /// this wiki (open in another window), returns the existing instance —
@@ -164,7 +217,7 @@ public final class SessionManager {
     ///   message) and rethrown. There is no in-memory fallback (#881) — a
     ///   failed open leaves `sessions[wikiID]` unset, and the caller renders
     ///   an error view instead of an empty wiki.
-    public func session(for wikiID: WikiID, descriptor: WikiDescriptor) throws -> WikiSession {
+    public func session(for wikiID: WikiID, descriptor: WikiDescriptor) throws -> any WikiSessionProtocol {
         if let existing = sessions[wikiID] {
             // Refresh the descriptor in case the registry mutated (rename /
             // set home page) since this session was created.
@@ -172,9 +225,9 @@ public final class SessionManager {
             sessionLeaseCounts[wikiID, default: 0] += 1
             return existing
         }
-        let newSession: WikiSession
+        let newSession: ProfileWikiSession
         do {
-            newSession = try WikiSession(
+            newSession = try ProfileWikiSession(
                 wikiID: wikiID,
                 descriptor: descriptor,
                 containerDirectory: containerDirectory,
@@ -235,7 +288,7 @@ public final class SessionManager {
         session.store.flushPendingSaves()
         let token = UUID()
         let task = Task { @MainActor [weak self] in
-            await session.shutdownSearchRuntime()
+            await session.shutdown()
             guard self?.searchReleaseTasks[wikiID]?.token == token else { return }
             self?.searchReleaseTasks[wikiID] = nil
         }
@@ -272,7 +325,7 @@ public final class SessionManager {
     public var activeWikiIDs: Set<WikiID> { Set(sessions.keys) }
 
     /// All live sessions (for bridge flush routing).
-    public var allSessions: [WikiSession] { Array(sessions.values) }
+    public var allSessions: [any WikiSessionProtocol] { Array(sessions.values) }
 
     /// Fan out one authoritative machine-renderer reload to every live wiki
     /// projection. Closed/inactive wikis own no session and therefore reload
@@ -286,7 +339,7 @@ public final class SessionManager {
     /// The frontmost session, if any. Resolved from ``frontmostWikiID`` —
     /// `VacuumCommands` uses this to target the correct wiki for menu-bar
     /// Vacuum/Lint/Activity Log actions.
-    public var frontmostSession: WikiSession? {
+    public var frontmostSession: (any WikiSessionProtocol)? {
         guard let id = frontmostWikiID else { return nil }
         return sessions[id]
     }

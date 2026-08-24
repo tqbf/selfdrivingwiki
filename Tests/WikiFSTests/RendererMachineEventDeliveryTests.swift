@@ -186,7 +186,7 @@ struct RendererEventWakeTests {
 @Suite(.serialized, .timeLimit(.minutes(1)))
 @MainActor
 struct RendererMachineEventFanOutTests {
-    @Test func machineEventRefreshesTwoLiveWikiSessions() async throws {
+    @Test func machineEventRefreshesTwoLiveProfileWikiSessions() async throws {
         let fixture = try await DeliveryFixture("fanout")
         try await fixture.journal.append(fixture.record(sequence: 1))
         let first = WikiStoreModel(store: try StoreBackend.current.makeStore(databaseURL: fixture.root.appendingPathComponent("first.sqlite")))

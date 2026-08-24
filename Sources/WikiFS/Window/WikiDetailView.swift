@@ -11,7 +11,7 @@ struct WikiDetailView: View {
     @Bindable var store: WikiStoreModel
     @Bindable var launcher: AgentLauncher       // ingest/lint launcher (chat is daemon-hosted after Phase C4)
     /// The per-active-wiki session (store + descriptor).
-    var session: WikiSession
+    var session: any WikiSessionProtocol
     let fileProvider: FileProviderFacade
     let extractionCoordinator: ExtractionCoordinator
     @Environment(QueueActivityTracker.self) private var tracker
@@ -31,7 +31,7 @@ struct WikiDetailView: View {
     init(
         store: WikiStoreModel,
         launcher: AgentLauncher,
-        session: WikiSession,
+        session: any WikiSessionProtocol,
         fileProvider: FileProviderFacade,
         extractionCoordinator: ExtractionCoordinator,
         queueEngine: any QueueEngineClient,

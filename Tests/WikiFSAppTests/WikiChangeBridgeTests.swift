@@ -32,13 +32,13 @@ struct WikiChangeBridgeTests {
     /// Helper: create a session for a wiki + return it.
     private func makeSession(
         wikiID: WikiID, descriptor: WikiDescriptor, dir: URL
-    ) throws -> WikiSession {
+    ) throws -> ProfileWikiSession {
         let coordinator = ExtractionCoordinator(
             containerDirectory: dir,
             localExtractorFactory: { StubExtractor() })
         let queueEngine = try! makeTestQueueEngine()
         let provider = StubExtractionProvider()
-        return try WikiSession(
+        return try ProfileWikiSession(
             wikiID: wikiID,
             descriptor: descriptor,
             containerDirectory: dir,

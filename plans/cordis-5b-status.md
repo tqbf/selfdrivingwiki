@@ -4,15 +4,57 @@
 
 Stage 1 added `scripts/check-cordis-boundaries` and `make check-cordis`.
 
-The default check verifies the current violation baseline. The `--strict` option rejects all `RuntimeAssembly` references and all `WikiSession` construction sites.
+Stage 2 is complete. `ProfileWikiSession` is the sole per-wiki session implementation. Standalone factories own the six process-plugin runtime graphs.
 
-`CordisBoundaryScriptTests` runs the default check from Swift Testing.
+The source tree contains no `RuntimeAssembly` type or file. The app, daemon, and CLI start from profiles.
 
-## Stage 2 status
+The boundary check is strict by default. The `--strict` option is an alias for compatibility. Both modes reject all `RuntimeAssembly` references and all `WikiSession` construction sites.
 
-Stage 2 is not complete. No assembly or `WikiSession` file was deleted.
+`CordisBoundaryScriptTests` checks the default mode and the `--strict` alias from Swift Testing.
 
-A safe deletion requires executable-side plugin factories first. The current plugin definitions still use assembly-owned factory types.
+## Stage 2 completion summary
+
+Commit 1 moved the six runtime graphs into standalone factories and converted their tests. Commit 2 removed the transitional boundary baseline and completed the Stage 2 policy updates.
+
+The required `make build`, `make test`, and `make check-cordis` gates pass. A recursive source grep returns no `RuntimeAssembly` matches.
+
+## Historical Stage 2 status
+
+The following sections record the state before the final deletion slice.
+
+The app now starts an observable `AppProcessProfileOwner` alongside the legacy synchronous composition. The owner boots all five app process entries asynchronously, exposes idle/loading/ready/failed readiness plus the booted profile and typed process services, owns its startup task, and joins app termination shutdown. Fixture tests cover readiness, resolved services, failure, and idempotent disposal.
+
+`ProfileWikiSession` is the sole per-wiki session implementation. It uses the child profile store, event bus, and read pool. It uses the process profile extraction, queue, and provider services. It owns descriptor updates, the store model, the launcher, the generation gate, search lifetime, vacuum state, and deferred wiki-link state. `SessionManager` constructs this type for synchronous test fixtures. A deprecated `WikiSession` type alias keeps test source compatibility, but no production code constructs that name.
+
+Steps 1–9 are complete. The production catalogs own executable-side factory injection and typed service resolution.
+
+The process-lifetime gap is complete. Process profiles now own provider, extraction, queue, transport, and renderer runtime services.
+
+Per-wiki profiles now boot in a child Cordis context. The child resolves process services from its parent context.
+
+The app and daemon profile tests boot this two-level graph. The tests also verify that child shutdown does not stop process services.
+
+The async session-readiness gap is complete. `SessionManager.readySession(for:descriptor:)` exposes idle, loading, ready, and failed states.
+
+The async accessor supports an injected child-profile loader. Its default path keeps the legacy synchronous session construction for this slice.
+
+Steps 10–11 are complete. `SessionManager` stores the `WikiSessionProtocol` abstraction and the production loader returns `ProfileWikiSession`.
+
+`RootScene` now awaits `readySession(for:descriptor:)`. App views and bridges use the session abstraction.
+
+The app process profile is the parent of each per-wiki child profile. Session shutdown disposes the child profile before process-profile shutdown.
+
+The per-wiki session compatibility paths are removed. The synchronous fixture path and the asynchronous profile path now construct `ProfileWikiSession`.
+
+The daemon part of step 12 is complete. `DaemonProcessProfileOwner` owns process-profile startup, per-wiki child profiles, and idempotent shutdown.
+
+`wikid` awaits the process profile before it resumes the XPC listener. Store RPC replies use asynchronous tasks to await child-profile readiness. Queue enqueue and chat start, submit, and continue requests also await the child profile.
+
+The daemon resolves provider and extraction services from the process profile. Each child profile supplies the per-wiki store, read pool, and event bus. A successful XPC wiki deletion also stops and removes the child profile.
+
+One daemon compatibility path remains. The synchronous `WikiDaemon` initializer still starts the legacy extraction owner for direct unit tests. Production `main.swift` does not use this initializer. The process-profile production factory still uses the provider and extraction assembly implementations as temporary plugin leases.
+
+The CLI Tantivy path boots `CLIPluginCatalog`, resolves the Tantivy provider, and stops the profile.
 
 ## Remaining assemblies and callers
 
@@ -74,6 +116,39 @@ A safe deletion requires executable-side plugin factories first. The current plu
 15. Make the boundary script strict by default and remove its baseline.
 16. Run `make build`, `make test`, and `scripts/check-cordis-boundaries --strict`.
 
+## Final-slice investigation
+
+The final-slice branch is `feature/cordis-5b-delete-privileged-core` at `8c7bf5fc`.
+The worktree was clean before the investigation.
+
+The current `AppServices` type is not a replacement for `WikiSession`.
+It resolves the raw store, read pool, extraction backend registry, and search provider registry.
+`WikiSession` also owns the observable store model, descriptor state, launcher, generation gate, and search lifetime.
+It also owns vacuum state and deferred wiki-link state for the app views.
+
+`WikiFSApp.init` creates all process owners synchronously.
+`CordisBoot.boot` is asynchronous.
+The app therefore needs an asynchronous process-profile readiness owner before it can resolve process services safely.
+
+All six runtime assembly types still have production callers and assembly-specific tests.
+The catalog defaults also reference `SearchRuntimeAssembly.runtimeFactory`.
+Deleting these files first would leave the tree incomplete.
+
+No production conversion or deletion was made during this investigation.
+The next safe sequence is:
+
+1. Add a retained asynchronous process-profile owner for the app.
+2. Add a per-wiki observable facade that owns the current `WikiSession` application state.
+3. Build that facade only from child-profile services and process-profile services.
+4. Change `SessionManager` and app views to use the facade.
+5. Change the daemon and CLI owners to use profiles.
+6. Move standalone factory implementations out of all runtime assembly files.
+7. Replace assembly-specific tests with plugin and profile tests.
+8. Delete `WikiSession.swift` and all runtime assembly files.
+9. Make the boundary script strict by default.
+10. Run all required gates after each commit.
+
 ## Verification at this checkpoint
 
 `make build` and `make test` passed after Stage 1. The full suite ran 3,563 tests in 357 suites.
+The final-slice investigation changed documentation only. Gate results for this documentation checkpoint follow in the commit history.

@@ -166,7 +166,7 @@ struct InstalledRendererHostTests {
     private func makeRuntime(
         layout: RendererPackageStoreLayout
     ) async throws -> RendererRuntimeHandle {
-        try await RendererRuntimeAssembly(
+        try await RendererRuntimeFactory(
             layout: layout,
             bundledPackageSource: { BundledRendererPackages.excalidrawResourceURL() },
             reviewedBundledIdentity: .init(

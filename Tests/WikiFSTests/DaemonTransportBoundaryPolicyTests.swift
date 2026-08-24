@@ -11,12 +11,12 @@ struct DaemonTransportBoundaryPolicyTests {
         let paths = [
             "Sources/WikiFSEngine/DaemonTransportRuntime.swift",
             "Sources/WikiFSEngine/DaemonTransportCompositionOwner.swift",
-            "Sources/WikiFSEngine/DaemonTransportRuntimeAssembly.swift",
+            "Sources/WikiFSEngine/DaemonTransportRuntimeFactory.swift",
         ]
         let forbidden = [
             "WikiDaemonConnection", "NSXPCConnection", "WikiDaemonProtocol",
             "WikiDaemonEventSink", "DaemonWorkloadClient", "XPCQueueEngineProxy",
-            "QueueStore", "WikiStore", "WikiStoreModel", "WikiSession", "SessionManager",
+            "QueueStore", "WikiStore", "WikiStoreModel", "ProfileWikiSession", "SessionManager",
             "SwiftUI", "AppKit",
         ]
         for path in paths {

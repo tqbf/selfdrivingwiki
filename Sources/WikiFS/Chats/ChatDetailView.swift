@@ -15,7 +15,7 @@ struct ChatDetailView: View {
     @Bindable var store: WikiStoreModel
     var remoteSession: RemoteChatSession
     var coordinator: ChatDaemonCoordinator
-    var session: WikiSession
+    var session: any WikiSessionProtocol
     let fileProvider: FileProviderFacade
     @Environment(WindowRightInspectorController.self) private var rightInspector
 

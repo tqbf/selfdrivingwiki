@@ -2,6 +2,7 @@
 import CordisLoader
 import Foundation
 import Testing
+import WikiFSCore
 @testable import WikiFSEngine
 
 @Suite("Daemon profile boot", .serialized, .timeLimit(.minutes(1)))
@@ -20,18 +21,72 @@ struct DaemonProfileBootTests {
             databaseURL: directory.appendingPathComponent("wiki.sqlite"),
             wikiID: "daemon-profile-test",
             includeAppProviders: false)
+        let processDisposals = ProfileProcessDisposalRecorder()
+        let processEntries = ProfileBootFixture.processEntries(includeAppServices: false)
+        let process = try await CordisBoot.boot(.init(
+            catalog: try ProfileBootFixture.processCatalog(includeAppServices: false, recorder: processDisposals),
+            layers: [PatchFile(entries: processEntries)]))
         let booted = try await CordisBoot.boot(.init(
-            catalog: try ProfileBootFixture.catalog(),
-            layers: [PatchFile(entries: entries)]))
+            catalog: try ProfileBootFixture.daemonCatalog(),
+            layers: [PatchFile(entries: entries)],
+            parent: process.context))
 
         #expect(await booted.tree.mountedEntryIDs.count == entries.count)
         try await ProfileBootFixture.assertRequiredServices(in: booted.context)
+        _ = try #require(try await booted.context.find(ProcessServiceKeys.agentProvider))
+        _ = try #require(try await booted.context.find(ProcessServiceKeys.extraction))
         let renderers = try #require(try await booted.context.find(RendererServiceKeys.renderers))
         let transport = try #require(try await booted.context.find(TransportServiceKeys.transport))
         #expect(await renderers.providerIDs().isEmpty)
         #expect(await transport.providerIDs().isEmpty)
+        _ = try ProfileBootFixture.cliCatalog()
 
         try await booted.shutdown()
+        #expect(await processDisposals.count == 0)
+        try await process.shutdown()
+        #expect(await processDisposals.count == 2)
+    }
+
+    @Test("daemon owner retains process and one child per wiki, then shuts down once")
+    func daemonOwnerCachesProfilesAndDisposesIdempotently() async throws {
+        let directory = try ProfileBootFixture.directory(named: "daemon-owner")
+        defer {
+            do { try FileManager.default.removeItem(at: directory) }
+            catch { Issue.record("could not remove daemon owner fixture: \(error)") }
+        }
+        let wikiID = WikiID(rawValue: "daemon-owner-wiki")
+        let processDisposals = ProfileProcessDisposalRecorder()
+        let processCatalog = try ProfileBootFixture.processCatalog(
+            includeAppServices: false,
+            recorder: processDisposals)
+        let daemonCatalog = try ProfileBootFixture.daemonCatalog()
+        let owner = DaemonProcessProfileOwner(
+            boot: {
+                try await CordisBoot.boot(.init(
+                    catalog: processCatalog,
+                    layers: [PatchFile(entries: ProfileBootFixture.processEntries(includeAppServices: false))]))
+            },
+            bootWiki: { requestedWikiID, process in
+                let entries = ProfileBootFixture.entries(
+                    databaseURL: directory.appendingPathComponent("\(requestedWikiID.rawValue).sqlite"),
+                    wikiID: requestedWikiID.rawValue,
+                    includeAppProviders: false)
+                return try await CordisBoot.boot(.init(
+                    catalog: daemonCatalog,
+                    layers: [PatchFile(entries: entries)],
+                    parent: process.context))
+            })
+
+        let firstProcess = try await owner.start()
+        let secondProcess = try await owner.services()
+        #expect(ObjectIdentifier(firstProcess.agentProvider as AnyObject) == ObjectIdentifier(secondProcess.agentProvider as AnyObject))
+        let firstWiki = try await owner.wiki(wikiID: wikiID)
+        let secondWiki = try await owner.wiki(wikiID: wikiID)
+        #expect(ObjectIdentifier(firstWiki.store as AnyObject) == ObjectIdentifier(secondWiki.store as AnyObject))
+
+        await owner.shutdown()
+        await owner.shutdown()
+        #expect(await processDisposals.count == 2)
     }
 }
 #endif

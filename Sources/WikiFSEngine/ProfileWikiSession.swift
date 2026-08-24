@@ -1,4 +1,5 @@
 #if os(macOS)
+import CordisLoader
 import Foundation
 import Observation
 import WikiFSCore
@@ -27,8 +28,36 @@ import WikiFSCore
 ///
 /// See `plans/dissolve-wikimanager.md` for the full dissolution rationale.
 @MainActor
+public protocol WikiSessionProtocol: AnyObject, Observable, Sendable {
+    var wikiID: WikiID { get }
+    var descriptor: WikiDescriptor { get }
+    var store: WikiStoreModel { get }
+    var agentLauncher: AgentLauncher { get }
+    var extractionCoordinator: ExtractionCoordinator { get }
+    var queueEngine: any QueueEngineClient { get }
+    var extractionProvider: any QueueExtractionProvider { get }
+    var generationGate: GenerationGate { get }
+    var searchServices: any SearchServices { get }
+    var pendingBlobVacuum: BlobVacuumReport? { get set }
+    var pendingVacuumAll: VacuumReport? { get set }
+    var pendingWikiLink: (url: URL, openInNewTab: Bool)? { get set }
+
+    func updateDescriptor(_ descriptor: WikiDescriptor)
+    func previewBlobVacuum()
+    func applyBlobVacuum()
+    func previewVacuumAll()
+    func applyVacuumAll()
+    func upgradeSearchIndex() async
+    func searchTantivy(query: String, kinds: [TantivyDocumentKind], limit: Int) async -> [TantivyShadowSearchResult]?
+    func shutdown() async
+}
+
+@MainActor
 @Observable
-public final class WikiSession {
+public final class ProfileWikiSession: WikiSessionProtocol {
+    /// The booted child profile owned by production sessions. Synchronous test
+    /// fixtures inject already-booted services and therefore leave this nil.
+    @ObservationIgnored private let profile: BootedProfile?
     /// The wiki's stable ULID. Guaranteed non-nil (a session only exists while
     /// a wiki is open). Views read `session.wikiID` instead of the old
     /// `activeWikiID ?? ""`.
@@ -155,8 +184,11 @@ public final class WikiSession {
         htmlMarkdownExtractorFactory: @escaping @MainActor () -> (any HtmlMarkdownExtractor)? = { nil },
         htmlBackendResolver: @escaping @MainActor () -> HtmlExtractionBackend? = { nil },
         podcastBackendResolver: @escaping @MainActor () -> PodcastTranscriptionBackend? = { nil },
-        interactiveUsageRecorder: @escaping (@MainActor (SessionUsage) -> Void) = { _ in }
+        interactiveUsageRecorder: @escaping (@MainActor (SessionUsage) -> Void) = { _ in },
+        profile: BootedProfile? = nil,
+        readPool: WikiReadPool? = nil
     ) throws {
+        self.profile = profile
         self.wikiID = wikiID
         self.extractionCoordinator = extractionCoordinator
         self.queueEngine = queueEngine
@@ -180,7 +212,7 @@ public final class WikiSession {
         // model's `.external`→reload subscription (in its init) sees it. The
         // File Provider signaler and the change bridge subscribe to the
         // same bus from the app layer. See `plans/event-bus.md`.
-        let searchBus = WikiEventBus(wikiID: wikiID)
+        let searchBus = store.eventBus ?? WikiEventBus(wikiID: wikiID)
         store.eventBus = searchBus
         let contentSource = StoreBackedTantivyContentSource(store: store)
         model = WikiStoreModel(store: store)
@@ -196,7 +228,9 @@ public final class WikiSession {
         // Off-main snapshot reads (debounced search) go through a read-only
         // pool over the same file. Only for real file-backed DBs — a second
         // connection to an in-memory DB would see a different, empty database.
-        if FileManager.default.fileExists(atPath: url.path) {
+        if let readPool {
+            model.readPool = readPool
+        } else if FileManager.default.fileExists(atPath: url.path) {
             model.readPool = WikiReadPool(databaseURL: url)
         }
         self.store = model
@@ -346,5 +380,16 @@ public final class WikiSession {
     public func shutdownSearchRuntime() async {
         await searchCompositionOwner.shutdown()
     }
+
+    public func shutdown() async {
+        await shutdownSearchRuntime()
+        guard let profile else { return }
+        do {
+            try await profile.shutdown()
+        } catch {
+            DebugLog.store("Per-wiki profile shutdown failed: \(error)")
+        }
+    }
 }
+
 #endif

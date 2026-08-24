@@ -7,15 +7,15 @@ import Testing
 import WikiFSSearch
 
 @Suite("Cordis search runtime", .serialized, .timeLimit(.minutes(1)))
-struct SearchRuntimeAssemblyTests {
+struct SearchRuntimeCompositionFactoryTests {
     @Test("service labels are stable")
     func serviceLabelsAreStable() {
-        #expect(SearchRuntimeAssembly.ServiceLabels.identity == "search.identity")
-        #expect(SearchRuntimeAssembly.ServiceLabels.contentSource == "search.content-source")
-        #expect(SearchRuntimeAssembly.ServiceLabels.changeStreamFactory == "search.change-stream-factory")
-        #expect(SearchRuntimeAssembly.ServiceLabels.indexer == "search.indexer")
-        #expect(SearchRuntimeAssembly.ServiceLabels.runtime == "search.runtime")
-        #expect(SearchRuntimeAssembly.ServiceLabels.services == "search.services")
+        #expect(SearchRuntimeCompositionFactory.ServiceLabels.identity == "search.identity")
+        #expect(SearchRuntimeCompositionFactory.ServiceLabels.contentSource == "search.content-source")
+        #expect(SearchRuntimeCompositionFactory.ServiceLabels.changeStreamFactory == "search.change-stream-factory")
+        #expect(SearchRuntimeCompositionFactory.ServiceLabels.indexer == "search.indexer")
+        #expect(SearchRuntimeCompositionFactory.ServiceLabels.runtime == "search.runtime")
+        #expect(SearchRuntimeCompositionFactory.ServiceLabels.services == "search.services")
     }
 
     @Test("shuffled registration builds, rebuilds, and queries")
@@ -28,7 +28,7 @@ struct SearchRuntimeAssemblyTests {
         let child = try await root.child()
         let handle = try await fixture.assembly.assemble(
             in: child,
-            registrationOrder: SearchRuntimeAssembly.Component.allCases.shuffled())
+            registrationOrder: SearchRuntimeCompositionFactory.Component.allCases.shuffled())
 
         let results = try await handle.services.search(query: "private child", kinds: [.page], limit: 5)
         #expect(results.map(\.ulid) == ["page-1"])
@@ -116,14 +116,14 @@ struct SearchRuntimeAssemblyTests {
     @Test("invalid identity fails inside assembly")
     func invalidIdentityFailsInsideAssembly() async throws {
         let fixture = try Fixture()
-        let invalid = SearchRuntimeAssembly(
+        let invalid = SearchRuntimeCompositionFactory(
             identity: SearchRuntimeIdentity(wikiID: WikiID(rawValue: ""), containerDirectory: fixture.directory),
             contentSource: fixture.source,
             changeStreamFactory: FinishedSearchChangeStreamFactory())
         let root = CordisContext()
         let child = try await root.child()
 
-        await #expect(throws: SearchRuntimeAssemblyError.self) {
+        await #expect(throws: SearchRuntimeCompositionFactoryError.self) {
             try await invalid.assemble(in: child)
         }
         try await root.dispose()
@@ -144,7 +144,7 @@ struct SearchRuntimeAssemblyTests {
                 change: .updated,
                 seq: 10),
         ])
-        let assembly = SearchRuntimeAssembly(
+        let assembly = SearchRuntimeCompositionFactory(
             identity: fixture.assembly.identity,
             contentSource: fixture.source,
             changeStreamFactory: factory)
@@ -266,8 +266,8 @@ private struct Fixture {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     }
 
-    var assembly: SearchRuntimeAssembly {
-        SearchRuntimeAssembly(
+    var assembly: SearchRuntimeCompositionFactory {
+        SearchRuntimeCompositionFactory(
             identity: SearchRuntimeIdentity(wikiID: wikiID, containerDirectory: directory),
             contentSource: source,
             changeStreamFactory: FinishedSearchChangeStreamFactory())

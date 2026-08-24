@@ -2,13 +2,13 @@ import Cordis
 import Foundation
 import WikiFSCore
 
-public enum AgentProviderRuntimeAssemblyError: Error, Equatable, Sendable {
+public enum AgentProviderRuntimeFactoryError: Error, Equatable, Sendable {
     case missingService(ServiceDescriptor)
     case activationFailed(component: String, failure: CordisFailure)
     case assemblyAndCleanupFailed(assembly: CordisFailure, cleanup: CordisFailure)
 }
 
-public struct AgentProviderRuntimeAssembly: Sendable {
+public struct AgentProviderRuntimeFactory: Sendable {
     internal enum Component: String, CaseIterable, Sendable {
         case configurationReader
         case commandResolver
@@ -75,12 +75,12 @@ public struct AgentProviderRuntimeAssembly: Sendable {
             }
             for component in Component.allCases {
                 guard let handle = handles[component] else {
-                    throw AgentProviderRuntimeAssemblyError.activationFailed(
+                    throw AgentProviderRuntimeFactoryError.activationFailed(
                         component: component.rawValue,
                         failure: CordisFailure("component was not registered"))
                 }
                 if case .failed(_, let failure) = try await handle.awaitSettled() {
-                    throw AgentProviderRuntimeAssemblyError.activationFailed(component: component.rawValue, failure: failure)
+                    throw AgentProviderRuntimeFactoryError.activationFailed(component: component.rawValue, failure: failure)
                 }
             }
             return AgentProviderRuntimeHandle(
@@ -91,7 +91,7 @@ public struct AgentProviderRuntimeAssembly: Sendable {
             do {
                 try await context.dispose()
             } catch let cleanupError {
-                throw AgentProviderRuntimeAssemblyError.assemblyAndCleanupFailed(
+                throw AgentProviderRuntimeFactoryError.assemblyAndCleanupFailed(
                     assembly: assemblyFailure,
                     cleanup: CordisFailure(cleanupError))
             }
@@ -101,7 +101,7 @@ public struct AgentProviderRuntimeAssembly: Sendable {
 
     private func require<Value: Sendable>(_ key: ServiceKey<Value>, from context: CordisContext) async throws -> Value {
         guard let value = try await context.find(key) else {
-            throw AgentProviderRuntimeAssemblyError.missingService(ServiceDependency(key).descriptor)
+            throw AgentProviderRuntimeFactoryError.missingService(ServiceDependency(key).descriptor)
         }
         return value
     }

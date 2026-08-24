@@ -486,7 +486,7 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     /// falling back to ANY live session — a status-item menu is reachable
     /// while no wiki window is key, and a silent `return` there reads as a
     /// dead menu item.
-    private var targetSession: WikiSession? {
+    private var targetSession: (any WikiSessionProtocol)? {
         sessionManager?.frontmostSession ?? sessionManager?.allSessions.first
     }
 

@@ -2,7 +2,7 @@ import Cordis
 import Foundation
 import WikiFSCore
 
-public enum QueueRuntimeAssemblyError: Error, Equatable, Sendable {
+public enum QueueRuntimeFactoryError: Error, Equatable, Sendable {
     case missingService(ServiceDescriptor)
     case activationFailed(component: String, failure: CordisFailure)
     case assemblyAndCleanupFailed(
@@ -10,7 +10,7 @@ public enum QueueRuntimeAssemblyError: Error, Equatable, Sendable {
         cleanup: CordisFailure)
 }
 
-public struct QueueRuntimeAssembly: Sendable {
+public struct QueueRuntimeFactory: Sendable {
     public typealias IngestionProviderFactory = @Sendable (QueueStore) async throws -> any QueueIngestionProvider
 
     internal enum Component: String, CaseIterable, Sendable {
@@ -73,13 +73,13 @@ public struct QueueRuntimeAssembly: Sendable {
 
             for component in Component.allCases {
                 guard let handle = handles[component] else {
-                    throw QueueRuntimeAssemblyError.activationFailed(
+                    throw QueueRuntimeFactoryError.activationFailed(
                         component: component.rawValue,
                         failure: CordisFailure("component was not registered"))
                 }
                 let state = try await handle.awaitSettled()
                 if case .failed(_, let failure) = state {
-                    throw QueueRuntimeAssemblyError.activationFailed(
+                    throw QueueRuntimeFactoryError.activationFailed(
                         component: component.rawValue,
                         failure: failure)
                 }
@@ -97,7 +97,7 @@ public struct QueueRuntimeAssembly: Sendable {
             do {
                 try await context.dispose()
             } catch let cleanupError {
-                throw QueueRuntimeAssemblyError.assemblyAndCleanupFailed(
+                throw QueueRuntimeFactoryError.assemblyAndCleanupFailed(
                     assembly: assemblyFailure,
                     cleanup: CordisFailure(cleanupError))
             }
@@ -110,7 +110,7 @@ public struct QueueRuntimeAssembly: Sendable {
         from context: CordisContext
     ) async throws -> Value {
         guard let value = try await context.find(key) else {
-            throw QueueRuntimeAssemblyError.missingService(
+            throw QueueRuntimeFactoryError.missingService(
                 ServiceDependency(key).descriptor)
         }
         return value

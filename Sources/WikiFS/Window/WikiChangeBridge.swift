@@ -33,7 +33,7 @@ final class WikiChangeBridge {
     /// returns all matching sessions so `flush(wikiID:)` can poke each one's
     /// bus. The app sets this to `{ wikiID in sessionManager.allSessions.filter
     /// { $0.wikiID == wikiID } }`.
-    var sessionLookup: @MainActor @Sendable (WikiID) -> [WikiSession] = { _ in [] }
+    var sessionLookup: @MainActor @Sendable (WikiID) -> [any WikiSessionProtocol] = { _ in [] }
     private var coalescer: ChangeCoalescer?
 
     /// The wiki ids we currently observe, so `refreshObservations()` is

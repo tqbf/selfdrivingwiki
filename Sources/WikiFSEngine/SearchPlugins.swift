@@ -26,19 +26,14 @@ public enum TantivySearchPlugin {
     public static let key = SearchProviderKey(kind: .lexical, providerID: "tantivy")
 
     public static func definition(
-        makeAssembly: @escaping TantivySearchProvider.Factory = { identity, source, streamFactory in
-            SearchRuntimeAssembly(
-                identity: identity,
-                contentSource: source,
-                changeStreamFactory: streamFactory)
-        }
+        makeRuntime: @escaping SearchRuntimeFactory.Factory = SearchRuntimeCompositionFactory.runtimeFactory
     ) -> PluginDefinition {
         adapterDefinition(
             id: id,
             label: "Tantivy lexical search",
             provider: RegisteredSearchProvider(
                 key: key,
-                adapter: .tantivy(TantivySearchProvider(makeAssembly: makeAssembly))))
+                adapter: .tantivy(TantivySearchProvider(makeRuntime: makeRuntime))))
     }
 }
 #endif

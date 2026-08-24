@@ -4,29 +4,29 @@ import Testing
 @testable import WikiFSEngine
 
 @Suite("Cordis daemon transport runtime", .serialized, .timeLimit(.minutes(1)))
-struct DaemonTransportRuntimeAssemblyTests {
+struct DaemonTransportRuntimeFactoryTests {
     @Test("shuffled registration builds ready transport services")
     func shuffledRegistrationBuildsReadyTransportServices() async throws {
         let factory = FakeTransportFactory()
         let handle = try await assembly(factory).assemble(
-            registrationOrder: DaemonTransportRuntimeAssembly.Component.allCases.shuffled())
+            registrationOrder: DaemonTransportRuntimeFactory.Component.allCases.shuffled())
         #expect(await handle.services.availability() == .idle)
         try await handle.dispose()
     }
 
     @Test("missing registration fails with typed component error")
     func missingRegistrationFailsWithTypedComponentError() async throws {
-        let order = DaemonTransportRuntimeAssembly.Component.allCases.filter { $0 != .configuration }
+        let order = DaemonTransportRuntimeFactory.Component.allCases.filter { $0 != .configuration }
         let factory = FakeTransportFactory()
         do {
             _ = try await assembly(factory).assemble(registrationOrder: order)
             Issue.record("Expected assembly failure")
         } catch {
-            guard case .activationFailed(let component, _) = error as? DaemonTransportRuntimeAssemblyError else {
+            guard case .activationFailed(let component, _) = error as? DaemonTransportRuntimeFactoryError else {
                 Issue.record("Expected typed component failure, got \(error)")
                 return
             }
-            #expect(component == DaemonTransportRuntimeAssembly.Component.configuration.rawValue)
+            #expect(component == DaemonTransportRuntimeFactory.Component.configuration.rawValue)
         }
     }
 
@@ -146,7 +146,7 @@ struct DaemonTransportRuntimeAssemblyTests {
     @Test("acceptance deadline expires candidate and retries")
     func acceptanceDeadlineExpiresCandidateAndRetries() async throws {
         let factory = FakeTransportFactory()
-        let handle = try await DaemonTransportRuntimeAssembly(
+        let handle = try await DaemonTransportRuntimeFactory(
             connectionFactory: factory.factory,
             configuration: .init(
                 retryInterval: .seconds(3_600),
@@ -174,7 +174,7 @@ struct DaemonTransportRuntimeAssemblyTests {
     func shutdownRejectsLateProbeOrCandidateResult() async throws {
         let gate = ProbeGate()
         let factory = GatedTransportFactory(gate: gate)
-        let handle = try await DaemonTransportRuntimeAssembly(
+        let handle = try await DaemonTransportRuntimeFactory(
             connectionFactory: factory.factory,
             configuration: .init(
                 retryInterval: .seconds(3_600),
@@ -215,7 +215,7 @@ struct DaemonTransportRuntimeAssemblyTests {
     func transportAssemblyStaysOutsideUIQueuePersistenceAndWireBoundaries() throws {
         let root = repositoryRoot()
         let assemblySource = try String(
-            contentsOf: root.appendingPathComponent("Sources/WikiFSEngine/DaemonTransportRuntimeAssembly.swift"),
+            contentsOf: root.appendingPathComponent("Sources/WikiFSEngine/DaemonTransportRuntimeFactory.swift"),
             encoding: .utf8)
         for label in [
             "daemon-transport.connection-factory",
@@ -225,14 +225,14 @@ struct DaemonTransportRuntimeAssemblyTests {
         ] { #expect(assemblySource.contains(label)) }
         for forbidden in [
             "SwiftUI", "DaemonHealthMonitor", "QueueEngineHotSwap", "LocalQueueRuntimeController",
-            "QueueStore", "WikiStore", "WikiStoreModel", "WikiSession", "SessionManager",
+            "QueueStore", "WikiStore", "WikiStoreModel", "ProfileWikiSession", "SessionManager",
             "ChatDaemonCoordinator", "WikiDaemonProtocol", "WikiDaemonEventSink",
             "WikiDaemonConnection", "NSXPCConnection",
         ] { #expect(!assemblySource.contains(forbidden)) }
     }
 
-    private func assembly(_ factory: FakeTransportFactory) -> DaemonTransportRuntimeAssembly {
-        DaemonTransportRuntimeAssembly(
+    private func assembly(_ factory: FakeTransportFactory) -> DaemonTransportRuntimeFactory {
+        DaemonTransportRuntimeFactory(
             connectionFactory: factory.factory,
             configuration: .init(
                 retryInterval: .zero,

@@ -3,16 +3,13 @@ import Cordis
 import Foundation
 import WikiFSCore
 
-public enum ExtractionRuntimeAssemblyError: Error, Equatable, Sendable {
+public enum ExtractionRuntimeFactoryError: Error, Equatable, Sendable {
     case missingService(ServiceDescriptor)
     case activationFailed(component: String, failure: CordisFailure)
     case assemblyAndCleanupFailed(assembly: CordisFailure, cleanup: CordisFailure)
 }
 
-public struct ExtractionRuntimeAssembly: Sendable {
-    public typealias CredentialReader = @Sendable (ExtractionSecret) -> String?
-    public typealias ACPResolver = @Sendable (ExtractionConfig) -> (any MarkdownExtractor)?
-    public typealias LocalExtractorFactory = @Sendable () async -> any MarkdownExtractor
+public struct ExtractionRuntimeFactory: Sendable {
     public typealias BackendResolver = ExtractionRuntime.BackendResolver
 
     internal enum Component: String, CaseIterable, Sendable {
@@ -29,13 +26,13 @@ public struct ExtractionRuntimeAssembly: Sendable {
     private enum Keys {
         static let configurationReader = ServiceKey<ExtractionRuntime.ConfigurationReader>(
             label: "extraction.configuration-reader")
-        static let credentialReader = ServiceKey<CredentialReader>(
+        static let credentialReader = ServiceKey<ExtractionPluginFactory.CredentialReader>(
             label: "extraction.credential-reader")
-        static let acpResolver = ServiceKey<ACPResolver>(
+        static let acpResolver = ServiceKey<ExtractionPluginFactory.ACPResolver>(
             label: "extraction.acp-resolver")
         static let httpFetcher = ServiceKey<any HTTPRequestFetcher>(
             label: "extraction.http-fetcher")
-        static let localExtractorFactory = ServiceKey<LocalExtractorFactory>(
+        static let localExtractorFactory = ServiceKey<ExtractionPluginFactory.LocalExtractor>(
             label: "extraction.local-extractor-factory")
         static let backendResolver = ServiceKey<BackendResolver>(
             label: "extraction.backend-resolver")
@@ -46,17 +43,17 @@ public struct ExtractionRuntimeAssembly: Sendable {
     }
 
     public let readConfiguration: ExtractionRuntime.ConfigurationReader
-    public let readCredential: CredentialReader
-    public let resolveACP: ACPResolver
+    public let readCredential: ExtractionPluginFactory.CredentialReader
+    public let resolveACP: ExtractionPluginFactory.ACPResolver
     public let httpFetcher: any HTTPRequestFetcher
-    public let makeLocalExtractor: LocalExtractorFactory
+    public let makeLocalExtractor: ExtractionPluginFactory.LocalExtractor
 
     public init(
         readConfiguration: @escaping ExtractionRuntime.ConfigurationReader,
-        readCredential: @escaping CredentialReader,
-        resolveACP: @escaping ACPResolver,
+        readCredential: @escaping ExtractionPluginFactory.CredentialReader,
+        resolveACP: @escaping ExtractionPluginFactory.ACPResolver,
         httpFetcher: any HTTPRequestFetcher,
-        makeLocalExtractor: @escaping LocalExtractorFactory
+        makeLocalExtractor: @escaping ExtractionPluginFactory.LocalExtractor
     ) {
         self.readConfiguration = readConfiguration
         self.readCredential = readCredential
@@ -80,12 +77,12 @@ public struct ExtractionRuntimeAssembly: Sendable {
             }
             for component in Component.allCases {
                 guard let handle = handles[component] else {
-                    throw ExtractionRuntimeAssemblyError.activationFailed(
+                    throw ExtractionRuntimeFactoryError.activationFailed(
                         component: component.rawValue,
                         failure: CordisFailure("component was not registered"))
                 }
                 if case .failed(_, let failure) = try await handle.awaitSettled() {
-                    throw ExtractionRuntimeAssemblyError.activationFailed(
+                    throw ExtractionRuntimeFactoryError.activationFailed(
                         component: component.rawValue,
                         failure: failure)
                 }
@@ -98,7 +95,7 @@ public struct ExtractionRuntimeAssembly: Sendable {
             do {
                 try await context.dispose()
             } catch let cleanupError {
-                throw ExtractionRuntimeAssemblyError.assemblyAndCleanupFailed(
+                throw ExtractionRuntimeFactoryError.assemblyAndCleanupFailed(
                     assembly: assemblyFailure,
                     cleanup: CordisFailure(cleanupError))
             }
@@ -111,7 +108,7 @@ public struct ExtractionRuntimeAssembly: Sendable {
         from context: CordisContext
     ) async throws -> Value {
         guard let value = try await context.find(key) else {
-            throw ExtractionRuntimeAssemblyError.missingService(
+            throw ExtractionRuntimeFactoryError.missingService(
                 ServiceDependency(key).descriptor)
         }
         return value

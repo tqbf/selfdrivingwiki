@@ -36,7 +36,7 @@ struct RootScene: View {
     let fileProvider: FileProviderFacade
     let installedRendererHost: InstalledRendererHost
 
-    @State private var session: WikiSession?
+    @State private var session: (any WikiSessionProtocol)?
     @State private var isSceneActive = false
     @Environment(\.scenePhase) private var scenePhase
 
@@ -190,7 +190,7 @@ struct RootScene: View {
     /// Extracted from `body` to avoid type-checker timeouts (the `.alert`
     /// modifier has complex `Binding` + two trailing closures).
     @ViewBuilder
-    private func sessionView(_ session: WikiSession) -> some View {
+    private func sessionView(_ session: any WikiSessionProtocol) -> some View {
         RootView(
             session: session,
             registry: registry,
@@ -247,9 +247,9 @@ struct RootScene: View {
             // `session(for:)` throws when the on-disk store can't be opened
             // (issue #881). SessionManager records the error so the error
             // branch above renders; `session` stays nil.
-            let resolved: WikiSession
+            let resolved: any WikiSessionProtocol
             do {
-                resolved = try sessionManager.session(for: wikiID, descriptor: descriptor)
+                resolved = try await sessionManager.readySession(for: wikiID, descriptor: descriptor)
             } catch {
                 return
             }

@@ -2,13 +2,13 @@
 import Cordis
 import Foundation
 
-public enum DaemonTransportRuntimeAssemblyError: Error, Equatable, Sendable {
+public enum DaemonTransportRuntimeFactoryError: Error, Equatable, Sendable {
     case missingService(ServiceDescriptor)
     case activationFailed(component: String, failure: CordisFailure)
     case assemblyAndCleanupFailed(assembly: CordisFailure, cleanup: CordisFailure)
 }
 
-public struct DaemonTransportRuntimeAssembly: Sendable {
+public struct DaemonTransportRuntimeFactory: Sendable {
     public enum ServiceLabels {
         public static let connectionFactory = "daemon-transport.connection-factory"
         public static let configuration = "daemon-transport.configuration"
@@ -60,12 +60,12 @@ public struct DaemonTransportRuntimeAssembly: Sendable {
             }
             for component in Component.allCases {
                 guard let handle = handles[component] else {
-                    throw DaemonTransportRuntimeAssemblyError.activationFailed(
+                    throw DaemonTransportRuntimeFactoryError.activationFailed(
                         component: component.rawValue,
                         failure: CordisFailure("component was not registered"))
                 }
                 if case .failed(_, let failure) = try await handle.awaitSettled() {
-                    throw DaemonTransportRuntimeAssemblyError.activationFailed(
+                    throw DaemonTransportRuntimeFactoryError.activationFailed(
                         component: component.rawValue,
                         failure: failure)
                 }
@@ -78,7 +78,7 @@ public struct DaemonTransportRuntimeAssembly: Sendable {
             do {
                 try await context.dispose()
             } catch let cleanupError {
-                throw DaemonTransportRuntimeAssemblyError.assemblyAndCleanupFailed(
+                throw DaemonTransportRuntimeFactoryError.assemblyAndCleanupFailed(
                     assembly: assemblyFailure,
                     cleanup: CordisFailure(cleanupError))
             }
@@ -91,7 +91,7 @@ public struct DaemonTransportRuntimeAssembly: Sendable {
         from context: CordisContext
     ) async throws -> Value {
         guard let value = try await context.find(key) else {
-            throw DaemonTransportRuntimeAssemblyError.missingService(
+            throw DaemonTransportRuntimeFactoryError.missingService(
                 ServiceDependency(key).descriptor)
         }
         return value

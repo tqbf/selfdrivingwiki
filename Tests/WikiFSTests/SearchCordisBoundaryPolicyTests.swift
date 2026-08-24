@@ -6,7 +6,7 @@ struct SearchCordisBoundaryPolicyTests {
     @Test("consumers receive facade only")
     func consumersReceiveFacadeOnly() throws {
         for path in [
-            "Sources/WikiFSEngine/WikiSession.swift",
+            "Sources/WikiFSEngine/ProfileWikiSession.swift",
             "Sources/WikiFSEngine/SessionManager.swift",
             "Sources/WikiFSCore/Store/WikiStoreModel.swift",
             "Sources/WikiFS/Window/RootScene.swift",
@@ -20,7 +20,7 @@ struct SearchCordisBoundaryPolicyTests {
 
     @Test("raw application state is not a search service")
     func rawApplicationStateIsNotAService() throws {
-        let assembly = try read("Sources/WikiFSEngine/SearchRuntimeAssembly.swift")
+        let assembly = try read("Sources/WikiFSEngine/SearchRuntimeCompositionFactory.swift")
         for forbidden in [
             "ServiceKey<WikiStore", "ServiceKey<WikiEventBus", "ServiceKey<SQLite",
             "ServiceKey<GRDB", "ServiceKey<WikiReadPool",
@@ -32,13 +32,13 @@ struct SearchCordisBoundaryPolicyTests {
     @Test("production uses shared assembly and no legacy construction")
     func legacyConstructionDoesNotReturn() throws {
         let sources = try [
-            "Sources/WikiFSEngine/WikiSession.swift",
+            "Sources/WikiFSEngine/ProfileWikiSession.swift",
             "Sources/WikiCtlCore/CLITantivyLegResolver.swift",
         ].map(read).joined(separator: "\n")
         #expect(!sources.contains("TantivySearchService("))
         #expect(!sources.contains("TantivyIndexer("))
         #expect(!sources.contains("TantivyShadowSync"))
-        #expect(sources.contains("SearchRuntimeAssembly"))
+        #expect(!sources.contains("SearchRuntimeCompositionFactory"))
     }
 
     @Test("search lifecycle has no detached tasks")

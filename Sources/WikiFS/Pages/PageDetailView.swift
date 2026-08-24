@@ -12,7 +12,7 @@ struct PageDetailView: View {
     @Bindable var store: WikiStoreModel
     @Bindable var launcher: AgentLauncher
     /// The per-active-wiki session (store + launchers + descriptor).
-    var session: WikiSession
+    var session: any WikiSessionProtocol
     let fileProvider: FileProviderFacade
     /// Optional typed renderer admission sink. When absent, rich cards stay
     /// static and do not expose activation metadata.
@@ -63,7 +63,7 @@ struct PageDetailView: View {
     init(
         store: WikiStoreModel,
         launcher: AgentLauncher,
-        session: WikiSession,
+        session: any WikiSessionProtocol,
         fileProvider: FileProviderFacade,
         installedRendererFactory: InstalledRendererFactory = .unavailable,
         installedRendererFactoryInputs: InstalledRendererFactory.Inputs = .unavailable,

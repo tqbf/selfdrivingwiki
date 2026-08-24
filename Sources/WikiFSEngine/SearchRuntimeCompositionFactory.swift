@@ -4,13 +4,13 @@ import Foundation
 import WikiFSCore
 import WikiFSSearch
 
-public enum SearchRuntimeAssemblyError: Error, Equatable, Sendable {
+public enum SearchRuntimeCompositionFactoryError: Error, Equatable, Sendable {
     case missingService(ServiceDescriptor)
     case activationFailed(component: String, failure: CordisFailure)
     case assemblyAndCleanupFailed(assembly: CordisFailure, cleanup: CordisFailure)
 }
 
-public struct SearchRuntimeAssembly: Sendable {
+public struct SearchRuntimeCompositionFactory: Sendable {
     public enum ServiceLabels {
         public static let identity = "search.identity"
         public static let contentSource = "search.content-source"
@@ -47,6 +47,21 @@ public struct SearchRuntimeAssembly: Sendable {
         self.changeStreamFactory = changeStreamFactory
     }
 
+    public static func runtimeFactory(
+        identity: SearchRuntimeIdentity,
+        contentSource: any TantivyContentSource,
+        changeStreamFactory: any SearchChangeStreamFactory
+    ) -> SearchRuntimeFactory {
+        let assembly = Self(
+            identity: identity,
+            contentSource: contentSource,
+            changeStreamFactory: changeStreamFactory)
+        return SearchRuntimeFactory(
+            identity: identity,
+            changeStreamFactory: changeStreamFactory,
+            assemble: { context in try await assembly.assemble(in: context) })
+    }
+
     public func assemble(in childContext: CordisContext) async throws -> SearchRuntimeHandle {
         try await assemble(in: childContext, registrationOrder: Component.allCases)
     }
@@ -62,12 +77,12 @@ public struct SearchRuntimeAssembly: Sendable {
             }
             for component in Component.allCases {
                 guard let handle = handles[component] else {
-                    throw SearchRuntimeAssemblyError.activationFailed(
+                    throw SearchRuntimeCompositionFactoryError.activationFailed(
                         component: component.rawValue,
                         failure: CordisFailure("component was not registered"))
                 }
                 if case .failed(_, let failure) = try await handle.awaitSettled() {
-                    throw SearchRuntimeAssemblyError.activationFailed(
+                    throw SearchRuntimeCompositionFactoryError.activationFailed(
                         component: component.rawValue,
                         failure: failure)
                 }
@@ -81,7 +96,7 @@ public struct SearchRuntimeAssembly: Sendable {
             do {
                 try await childContext.dispose()
             } catch let cleanupError {
-                throw SearchRuntimeAssemblyError.assemblyAndCleanupFailed(
+                throw SearchRuntimeCompositionFactoryError.assemblyAndCleanupFailed(
                     assembly: assemblyFailure,
                     cleanup: CordisFailure(cleanupError))
             }
@@ -94,7 +109,7 @@ public struct SearchRuntimeAssembly: Sendable {
         from context: CordisContext
     ) async throws -> Value {
         guard let value = try await context.find(key) else {
-            throw SearchRuntimeAssemblyError.missingService(ServiceDependency(key).descriptor)
+            throw SearchRuntimeCompositionFactoryError.missingService(ServiceDependency(key).descriptor)
         }
         return value
     }

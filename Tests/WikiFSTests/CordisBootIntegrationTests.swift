@@ -30,10 +30,10 @@ struct CordisBootIntegrationTests {
             ])
 
         let first = try await CordisBoot.boot(.init(
-            catalog: try ProfileBootFixture.catalog(),
+            catalog: try ProfileBootFixture.daemonCatalog(),
             layers: [PatchFile(entries: firstEntries)]))
         let second = try await CordisBoot.boot(.init(
-            catalog: try ProfileBootFixture.catalog(),
+            catalog: try ProfileBootFixture.daemonCatalog(),
             layers: [PatchFile(entries: secondEntries)]))
         let firstStore = try #require(try await first.context.find(StoreServiceKeys.store))
         let secondStore = try #require(try await second.context.find(StoreServiceKeys.store))

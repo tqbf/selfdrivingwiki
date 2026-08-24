@@ -4,18 +4,20 @@ import Testing
 @Suite("Agent provider composition boundary")
 struct AgentProviderCompositionBoundaryTests {
     @Test("app queue and wiki sessions receive one stable facade")
-    func appQueueAndWikiSessionsReceiveSameFacade() throws {
-        let source = try sourceText("Sources/WikiFS/Window/WikiFSApp.swift")
+    func appQueueAndProfileWikiSessionsReceiveSameFacade() throws {
+        let app = try sourceText("Sources/WikiFS/Window/WikiFSApp.swift")
+        let composition = try sourceText("Sources/WikiFS/Renderer/RendererCompositionOwner.swift")
         let settings = try sourceText("Sources/WikiFS/Settings/AgentsSettingsView.swift")
 
-        #expect(source.contains("let providerServices = MutableAgentProviderServices()"))
-        #expect(source.contains("providerServices: providerServices"))
-        #expect(source.contains("await providerServices.install(handle.services)"))
-        #expect(source.contains("agentProviderRuntimeHandle = handle"))
-        #expect(source.contains("providerServices: agentProviderServices"))
+        #expect(composition.contains("let providerServices = MutableAgentProviderServices()"))
+        #expect(composition.contains("await providerServices.install(handle.services)"))
+        #expect(app.contains("let providerServices = processComposition.providerServices"))
+        #expect(app.contains("providerServices: providerServices"))
+        #expect(app.contains("providerServices: agentProviderServices"))
         #expect(settings.contains("providerServices.discoverCatalog("))
         #expect(!settings.contains("ACPProviderModelProbe("))
-        #expect(!source.contains("CordisContext"))
+        #expect(!app.contains("CordisContext"))
+        #expect(!app.contains("AgentProviderRuntimeFactory("))
     }
 
     @Test("daemon queue and chat receive one stable facade")
@@ -25,9 +27,9 @@ struct AgentProviderCompositionBoundaryTests {
         let chat = try sourceText("Sources/wikid/DaemonChatHost.swift")
         let runtime = try sourceText("Sources/wikid/LauncherChatAgentRuntime.swift")
 
-        #expect(daemon.contains("MutableAgentProviderServices()"))
-        #expect(daemon.contains("await providerServices.install(handle.services)"))
-        #expect(daemon.contains("providerServices: agentProviderServices"))
+        #expect(daemon.contains("let runtime = try await runtimeServices()"))
+        #expect(daemon.contains("providerServices: runtime.provider"))
+        #expect(daemon.contains("profileOwner?.services()"))
         #expect(queue.contains("providerServices: providerServices"))
         #expect(chat.contains("providerServices: providerServices"))
         #expect(runtime.contains("providerServices: providerServices"))
@@ -49,7 +51,7 @@ struct AgentProviderCompositionBoundaryTests {
     func onlyProviderAssemblyConstructsRuntime() throws {
         let root = repositoryRoot()
         let sourceRoot = root.appendingPathComponent("Sources")
-        let approvedPath = "WikiFSEngine/AgentProviderRuntimeAssembly.swift"
+        let approvedPath = "WikiFSEngine/AgentProviderRuntimeFactory.swift"
         let enumerator = try #require(
             FileManager.default.enumerator(
                 at: sourceRoot,
@@ -71,7 +73,7 @@ struct AgentProviderCompositionBoundaryTests {
     @Test("provider assembly excludes app and process owners")
     func providerAssemblyExcludesAppAndProcessOwners() throws {
         let source = try sourceText(
-            "Sources/WikiFSEngine/AgentProviderRuntimeAssembly.swift")
+            "Sources/WikiFSEngine/AgentProviderRuntimeFactory.swift")
         for forbidden in [
             "SwiftUI",
             "WikiStoreModel",

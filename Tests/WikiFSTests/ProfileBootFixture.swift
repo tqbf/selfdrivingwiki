@@ -17,12 +17,58 @@ enum ProfileBootFixture {
         return url
     }
 
-    static func catalog(recorder: ProfileStoreEventRecorder? = nil) throws -> PluginCatalog {
-        var definitions = fixtureDefinitions
-        if let recorder {
-            definitions.append(listenerDefinition(recorder: recorder))
-        }
-        return try PluginCatalog(definitions)
+    static func appCatalog(recorder: ProfileStoreEventRecorder? = nil) throws -> PluginCatalog {
+        let additionalDefinitions = recorder.map { [listenerDefinition(recorder: $0)] } ?? []
+        return try AppPluginCatalog.build(
+            factories: AppPluginCatalogFactories(
+                base: baseFactories,
+                makeRendererServices: { ProfileRendererServices() },
+                makeDefuddleExtractor: { ProfileHTMLExtractor() },
+                makeDaemonTransport: { fixtureTransportServices() },
+                makeURLFetcher: { ProfileIntegrationEntryPoint() }),
+            additionalDefinitions: additionalDefinitions)
+    }
+
+    static func daemonCatalog() throws -> PluginCatalog {
+        try DaemonPluginCatalog.build(factories: DaemonPluginCatalogFactories(base: baseFactories))
+    }
+
+    static func processCatalog(includeAppServices: Bool, recorder: ProfileProcessDisposalRecorder) throws -> PluginCatalog {
+        let queueFactory: ProcessPluginCatalogFactories.QueueFactory? = includeAppServices ? { @Sendable in
+            let engine = try makeProfileQueueEngine()
+            return ProcessRuntimeLease<any QueueEngineClient>(service: engine) {
+                _ = await engine.shutdownForHandoff()
+            }
+        } : nil
+        let transportFactory: ProcessPluginCatalogFactories.TransportFactory? = includeAppServices ? { @Sendable in
+            let services = fixtureTransportServices()
+            return ProcessRuntimeLease(service: services) { await services.stop() }
+        } : nil
+        let rendererFactory: ProcessPluginCatalogFactories.RendererFactory? = includeAppServices ? { @Sendable in
+            ProcessRuntimeLease<any Sendable>(service: ProfileRendererServices()) { await recorder.record() }
+        } : nil
+        return try ProcessPluginCatalog.build(factories: ProcessPluginCatalogFactories(
+            makeAgentProvider: {
+                ProcessRuntimeLease(service: UnavailableAgentProviderServices()) { await recorder.record() }
+            },
+            makeExtraction: {
+                ProcessRuntimeLease(service: UnavailableExtractionServices()) { await recorder.record() }
+            },
+            makeQueue: queueFactory,
+            makeTransport: transportFactory,
+            makeRenderer: rendererFactory))
+    }
+
+    static func processEntries(includeAppServices: Bool) -> [Entry] {
+        includeAppServices ? ProductionProfileEntries.appProcess() : ProductionProfileEntries.daemonProcess()
+    }
+
+    static func cliCatalog() throws -> PluginCatalog {
+        try CLIPluginCatalog.build()
+    }
+
+    static func extractionProvider() -> any QueueExtractionProvider {
+        ProfileQueueExtractionProvider()
     }
 
     static func entries(databaseURL: URL, wikiID: String, includeAppProviders: Bool) -> [Entry] {
@@ -66,31 +112,13 @@ enum ProfileBootFixture {
         _ = try #require(try await context.find(IntegrationServiceKeys.capabilities))
     }
 
-    private static var fixtureDefinitions: [PluginDefinition] {
-        [
-            StorePlugin.definition,
-            SessionsPlugin.definition,
-            ChatsPersistencePlugin.definition,
-            LlmRuntimePlugin.definition,
-            ACPModelAdapterPlugin.definition(services: UnavailableAgentProviderServices()),
-            ToolsPlugin.definition,
-            NoOpToolPlugin.definition,
-            SystemPromptPlugin.definition,
-            AgentLoopPlugin.definition,
-            ExtractionPlugin.definition,
-            Pdf2mdExtractionPlugin.definition { ProfilePDFExtractor() },
-            SearchPlugin.definition,
-            EmbeddingsSearchPlugin.definition(
-                configure: {},
-                selectedIdentifier: { "fixture-embedding" },
-                isAvailable: { false }),
-            RenderersPlugin.definition,
-            RendererServicesPlugin.definition { ProfileRendererServices() },
-            TransportPlugin.definition,
-            DaemonTransportPlugin.definition { fixtureTransportServices() },
-            IntegrationsPlugin.definition,
-            URLFetchIntegrationPlugin.definition { ProfileIntegrationEntryPoint() },
-        ]
+    private static var baseFactories: BasePluginCatalogFactories {
+        BasePluginCatalogFactories(
+            agentProviderServices: UnavailableAgentProviderServices(),
+            makePDFExtractor: { ProfilePDFExtractor() },
+            configureEmbeddings: {},
+            selectedEmbeddingIdentifier: { "fixture-embedding" },
+            embeddingsAvailable: { false })
     }
 
     private static func listenerDefinition(recorder: ProfileStoreEventRecorder) -> PluginDefinition {
@@ -110,6 +138,29 @@ enum ProfileBootFixture {
             }
         }
     }
+}
+
+enum ProfileBootFailure: Error {
+    case expected
+}
+
+actor ProfileBootGate {
+    private var isOpen = false
+
+    func wait() async {
+        while !isOpen {
+            await Task.yield()
+        }
+    }
+
+    func open() {
+        isOpen = true
+    }
+}
+
+actor ProfileProcessDisposalRecorder {
+    private(set) var count = 0
+    func record() { count += 1 }
 }
 
 actor ProfileStoreEventRecorder {
@@ -132,8 +183,39 @@ private struct ProfilePDFExtractor: MarkdownExtractor {
     ) async throws -> String { "fixture" }
 }
 
+private struct ProfileHTMLExtractor: HtmlMarkdownExtractor {
+    func extract(html: String) async -> HtmlExtractionResult? {
+        HtmlExtractionResult(markdown: "fixture", title: nil)
+    }
+}
+
 private struct ProfileRendererServices: Sendable {}
 private struct ProfileIntegrationEntryPoint: Sendable {}
+
+private func makeProfileQueueEngine() throws -> QueueEngine {
+    let store = try QueueStore(databaseURL: URL(fileURLWithPath: ":memory:"))
+    let factory = QueueExtractionWorkerFactory(
+        provider: ProfileQueueExtractionProvider(),
+        emitProgress: { _, _ in })
+    return QueueEngine(store: store, workerFactory: factory)
+}
+
+private struct ProfileQueueExtractionProvider: QueueExtractionProvider {
+    func resolveExtraction(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        backendOverride: ExtractionBackend?
+    ) async throws -> ExtractionResolution? { nil }
+
+    func persistExtraction(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        markdown: String,
+        backend: ExtractionBackend,
+        modelVersion: String?,
+        technique: String?
+    ) async throws {}
+}
 
 private func fixtureTransportServices() -> DaemonTransportServices {
     DaemonTransportServices(
