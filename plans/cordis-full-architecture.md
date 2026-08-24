@@ -1,19 +1,21 @@
 # Cordis Full Architecture — Design Record
 
-Status: complete through the final extension. `WikiSession` and all
-`*RuntimeAssembly.swift` files are deleted. The app, daemon, and CLI boot from
-profiles. Daemon store and launcher paths resolve from per-wiki child profiles.
-Ordinary CLI commands resolve stores from request-scoped CLI profiles.
-`scripts/check-cordis-boundaries` rejects all migrated construction paths.
-Migration records: `plans/cordis-5b-status.md` and
-`plans/cordis-final-extension.md`.
+Status: complete through the composition authority cleanup. The app, daemon,
+and CLI boot from profiles. Child profiles supply stable per-wiki capabilities.
+Opaque lifetime owners keep Cordis contexts out of normal application code.
+`scripts/check-cordis-boundaries` rejects context leaks, untyped services, and
+hidden production store factories. Current boundary details are in
+`plans/cordis-composition-authority-cleanup.md`.
 
 ## Goal
 
-Every product capability is a Cordis plugin, composed at boot from profiles
-and bundles (layered config), with no privileged core to patch. The only code
-outside plugins is the boot/loader kernel. Full plan: see the session plan and
-`PLAN.md`.
+Cordis composes stable headless capabilities with typed contracts, declared
+dependencies, and profile lifetimes. It does not own all application objects.
+
+UI models and controllers remain outside Cordis. Active operation state,
+framework connections, and pre-profile bootstrap also remain outside Cordis.
+Application code receives typed facades and opaque shutdown handles. It does
+not receive a `CordisContext`.
 
 ## Kernel layers
 
@@ -80,8 +82,8 @@ re-projection happens in the UI plugin, not the kernel.
 
 | Key | Domain | Status |
 |---|---|---|
-| `ctx.store` | `any WikiStore` seam (GRDB backend) | done (`wiki.store`) |
-| `ctx.readPool` | off-main reads | done |
+| `ctx.store` | method-atomic `any WikiStore` exception (GRDB backend) | done (`wiki.store`) |
+| `ctx.readService` | narrow asynchronous reads through private pooled connections | done (`wiki.read-service`) |
 | `ctx.events` | store change signal as Cordis `EmitMode` event | done |
 | `ctx.chats` | session log persistence | done (`wiki.sessions` + `wiki.chats-persistence`) |
 | `ctx.llm` | model adapter runtime | done (`wiki.llm-runtime` + `wiki.llm-acp-adapter`) |
@@ -92,7 +94,7 @@ re-projection happens in the UI plugin, not the kernel.
 | `ctx.search` | Tantivy + embeddings providers | done (`wiki.search` + adapters) |
 | `ctx.renderers` | renderer packages | done (`wiki.renderers` + adapter) |
 | `ctx.transport` | daemon XPC/RPC | done (`wiki.transport` + adapter) |
-| integrations | Zotero, podcasts, URL fetch | done (`wiki.integrations` + adapters) |
+| integrations | Zotero and URL fetch | done (`wiki.integrations` + typed credential and fetch capabilities) |
 
 ## Bundles and profiles (Phase 5 target)
 

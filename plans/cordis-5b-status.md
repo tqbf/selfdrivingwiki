@@ -1,5 +1,9 @@
 # Cordis Phase 5b Status
 
+> **Historical and superseded.** This record describes an intermediate
+> migration state. Use `plans/cordis-composition-authority-cleanup.md` for the
+> current composition boundary and capability contracts.
+
 ## Completed
 
 Stage 1 added `scripts/check-cordis-boundaries` and `make check-cordis`.

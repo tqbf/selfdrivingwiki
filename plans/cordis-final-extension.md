@@ -1,6 +1,7 @@
 # Cordis Final Extension
 
-Status: implemented on `feature/cordis-full-coverage`.
+Status: implemented and amended by
+`plans/cordis-composition-authority-cleanup.md`.
 
 ## Purpose
 
@@ -8,13 +9,23 @@ This extension removes the last production service construction paths outside Co
 
 Cordis remains a composition boundary, not a global service locator. Normal application code receives typed services or a narrow runner. It does not receive a `CordisContext`.
 
-## Daemon store contract
+## Daemon creation and store contract
 
-`WikiDaemon.prepareAndResolveWikiServices(wikiID:)` awaits the per-wiki child profile before synchronous store work starts. It stores the resolved `AppServices` in a lock-protected prepared-services cache.
+Production wiki creation uses `StoreBootstrap`. Bootstrap creates and seeds the
+database artifacts without returning a live store connection.
 
-Synchronous daemon code can only use the prepared cache. A cache miss returns the typed `daemon-store-not-prepared` error. The daemon does not await while it holds its synchronous lock.
+`DaemonWikiCreationCoordinator` owns create admission and rollback. It reserves
+the wiki ID, bootstraps the database, saves the registry, and boots the child
+profile. It publishes the resolved child-profile services only after all steps
+succeed.
 
-The daemon no longer opens a `GRDBWikiStore` directly. Test initializers require an injected store factory. Test helpers own their fixture defaults.
+A failed or canceled create removes unpublished services and the registry
+entry. It also deletes the database, WAL, and shared-memory files. Cleanup
+errors remain visible without replacing the primary creation error.
+
+The daemon uses the exact store that the child profile supplies. Production
+code has no injected `makeStore` path. Explicit test and Linux fixture APIs own
+the remaining synchronous compatibility behavior.
 
 ## Launcher factory contract
 
@@ -64,7 +75,7 @@ These tests replace positive source-text assertions. The boundary script retains
 The following construction sites remain outside a profile:
 
 - `StoreBackend` selects the concrete store implementation.
-- `WikiReadPool` creates read-only pooled database connections.
+- `WikiReadService` privately owns read-only pooled database connections.
 - File Provider `Projection` creates query-only stores in a separate extension process.
 - `WikiRegistryClient` uses an injected store factory before a wiki profile exists.
 - `ProfileWikiSession` and `SessionsPlugin` retain synchronous test-fixture factories.
@@ -84,4 +95,6 @@ The implementation requires these gates:
 - `make check-cordis`
 - `WIKIFS_APP_TESTS=1 swift test`
 
-Focused tests also cover prepared-store identity, launcher-factory identity and routing, CLI lifecycle, bootstrap seeding, registration order, and synthetic boundary violations.
+Focused tests also cover daemon bootstrap rollback, exact child-profile store
+identity, launcher routing, CLI lifecycle, registration order, and synthetic
+boundary violations.
