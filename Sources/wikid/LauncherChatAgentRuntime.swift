@@ -75,8 +75,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
     private let chatID: ChatID
     private let wikiID: WikiID
     private let store: GRDBWikiStore
-    private let extractionCoordinator: ExtractionCoordinator
-    private let generationGate: GenerationGate
+    private let launcher: AgentLauncher
     private let pushEvent: @Sendable (QueueEventEnvelope) -> Void
     private let onSessionID: @Sendable (AcpSessionID?) async -> Void
     private let onStateUpdate: @Sendable (ChatStateUpdate) async -> Void
@@ -96,8 +95,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         chatID: ChatID,
         wikiID: WikiID,
         store: GRDBWikiStore,
-        extractionCoordinator: ExtractionCoordinator,
-        generationGate: GenerationGate,
+        launcher: AgentLauncher,
         pushEvent: @escaping @Sendable (QueueEventEnvelope) -> Void,
         onSessionID: @escaping @Sendable (AcpSessionID?) async -> Void,
         onStateUpdate: @escaping @Sendable (ChatStateUpdate) async -> Void,
@@ -110,8 +108,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         self.chatID = chatID
         self.wikiID = wikiID
         self.store = store
-        self.extractionCoordinator = extractionCoordinator
-        self.generationGate = generationGate
+        self.launcher = launcher
         self.pushEvent = pushEvent
         self.onSessionID = onSessionID
         self.onStateUpdate = onStateUpdate
@@ -159,15 +156,7 @@ actor LauncherChatAgentRuntime: ChatAgentRuntime {
         }
         let request = preparation.request
 
-        let launcher = await MainActor.run {
-            let launcher = AgentLauncher(
-                generationGate: generationGate,
-                extractionCoordinator: extractionCoordinator,
-                providerServices: providerServices)
-            launcherConfigurator(launcher)
-            launcher.pdf2mdScriptPathResolver = { PdfExtractionService.resolveScript()?.path }
-            return launcher
-        }
+        await MainActor.run { launcherConfigurator(launcher) }
         let (stream, continuation) = AsyncStream.makeStream(of: ChatAgentRuntimeEventEnvelope.self)
         // AgentLauncher invokes its callback in provider order. Yield those
         // events synchronously into one lossless stream so exactly one task

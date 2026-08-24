@@ -15,8 +15,8 @@ import WikiFSEngine
 /// (which is `@MainActor`).
 final class DaemonQueueIngestionProvider: QueueIngestionProvider {
     private let containerDirectory: URL
-    private let extractionCoordinator: ExtractionCoordinator
     private let storeResolver: @Sendable (WikiID) -> GRDBWikiStore?
+    private let launcherFactoryResolver: @Sendable (WikiID) async throws -> LauncherFactory
     private let queueStore: QueueStore
     private let resolveSelectedProvider: @Sendable () -> AgentProvider
     private let resolveProviderConfig: @Sendable () -> AgentProvidersConfig
@@ -24,16 +24,16 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
 
     init(
         containerDirectory: URL,
-        extractionCoordinator: ExtractionCoordinator,
         storeResolver: @escaping @Sendable (WikiID) -> GRDBWikiStore?,
+        launcherFactoryResolver: @escaping @Sendable (WikiID) async throws -> LauncherFactory,
         queueStore: QueueStore,
         resolveSelectedProvider: @escaping @Sendable () -> AgentProvider,
         resolveProviderConfig: @escaping @Sendable () -> AgentProvidersConfig,
         providerServices: any AgentProviderServices
     ) {
         self.containerDirectory = containerDirectory
-        self.extractionCoordinator = extractionCoordinator
         self.storeResolver = storeResolver
+        self.launcherFactoryResolver = launcherFactoryResolver
         self.queueStore = queueStore
         self.resolveSelectedProvider = resolveSelectedProvider
         self.resolveProviderConfig = resolveProviderConfig
@@ -89,7 +89,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
 
         DebugLog.ingest("DaemonQueueIngestionProvider.runIngestion: begin count=\(sourceIDs.count)")
 
-        let launcher = await makeLauncher()
+        let launcher = try await makeLauncher(wikiID: wikiID)
 
         let stateMarkdown = daemonStateMarkdown(from: store)
 
@@ -169,7 +169,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         guard let store = storeResolver(wikiID) else {
             throw QueueIngestionError.spawnFailed("No store for wikiID=\(wikiID.rawValue)")
         }
-        let launcher = await makeLauncher()
+        let launcher = try await makeLauncher(wikiID: wikiID)
 
         DebugLog.ingest("DaemonQueueIngestionProvider.runLint: begin wikiID=\(wikiID.rawValue)")
 
@@ -205,7 +205,7 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         guard let store = storeResolver(wikiID) else {
             throw QueueIngestionError.spawnFailed("No store for wikiID=\(wikiID.rawValue)")
         }
-        let launcher = await makeLauncher()
+        let launcher = try await makeLauncher(wikiID: wikiID)
 
         DebugLog.ingest("DaemonQueueIngestionProvider.runLintPages: begin wikiID=\(wikiID.rawValue) pages=\(pageIDs.count)")
 
@@ -239,15 +239,9 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
 
     // MARK: - Private
 
-    private func makeLauncher() async -> AgentLauncher {
-        await MainActor.run {
-            let launcher = AgentLauncher(
-                generationGate: GenerationGate(laneLimits: [.ingest: 1, .interactive: 3]),
-                extractionCoordinator: extractionCoordinator,
-                providerServices: providerServices)
-            launcher.pdf2mdScriptPathResolver = { PdfExtractionService.resolveScript()?.path }
-            return launcher
-        }
+    private func makeLauncher(wikiID: WikiID) async throws -> AgentLauncher {
+        let factory = try await launcherFactoryResolver(wikiID)
+        return await MainActor.run { factory(wikiID: wikiID).launcher }
     }
 
     private struct LauncherResults {

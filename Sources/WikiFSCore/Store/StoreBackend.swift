@@ -13,6 +13,38 @@ import Foundation
 /// has been removed. The 88-method `WikiStore` protocol is unchanged; the
 /// change-token contributors, `WikiEventBus`, and the `mutate()` emission seam
 /// all live on `GRDBWikiStore` now.
+public struct StoreBootstrapResult: Sendable, Equatable {
+    public let homePageID: PageID?
+
+    public init(homePageID: PageID?) {
+        self.homePageID = homePageID
+    }
+}
+
+public struct StoreBootstrap: Sendable {
+    public typealias StoreFactory = @Sendable (URL) throws -> any WikiStore
+
+    private let makeStore: StoreFactory
+
+    public init(
+        makeStore: @escaping StoreFactory = { try StoreBackend.current.makeStore(databaseURL: $0) }
+    ) {
+        self.makeStore = makeStore
+    }
+
+    public func createAndSeed(databaseURL: URL) throws -> StoreBootstrapResult {
+        let store = try makeStore(databaseURL)
+        let pages = try store.listPages(sortBy: .newestFirst)
+        guard pages.isEmpty else {
+            return StoreBootstrapResult(homePageID: nil)
+        }
+        let home = try store.createPage(
+            title: "Home",
+            createdBy: PageAuthor.user.rawValue)
+        return StoreBootstrapResult(homePageID: home.id)
+    }
+}
+
 public enum StoreBackend: Sendable {
     /// The backend selected for this process. Always `.grdb`.
     public static var current: StoreBackend { .grdb }

@@ -108,13 +108,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         let sendableReply = SendableBoolReply(reply: reply)
         Task { [daemon] in
             let id = WikiID(rawValue: wikiID)
-            do {
-                try await daemon.prepareWiki(id)
-                sendableReply.reply(daemon.openStore(wikiID: id))
-            } catch {
-                DebugLog.store("wikid: profile boot failed while opening \(wikiID): \(error)")
-                sendableReply.reply(false)
-            }
+            sendableReply.reply(await daemon.openStore(wikiID: id))
         }
     }
 
@@ -130,13 +124,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         let sendableReply = SendableStringReply(reply: reply)
         Task { [daemon] in
             let id = WikiID(rawValue: wikiID)
-            do {
-                try await daemon.prepareWiki(id)
-                sendableReply.reply(daemon.changeToken(wikiID: id))
-            } catch {
-                DebugLog.store("wikid: profile boot failed while reading change token for \(wikiID): \(error)")
-                sendableReply.reply(WikiDaemon.errorTokenSentinel)
-            }
+            sendableReply.reply(await daemon.changeToken(wikiID: id))
         }
     }
 
@@ -411,18 +399,18 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         }
     }
 
-    func stopChat(chatID: String, reply: @escaping () -> Void) {
+    func stopChat(request: Data, reply: @escaping () -> Void) {
         let sendableReply = SendableVoidReply(reply: reply)
         Task { [daemon] in
-            await daemon.stopChat(chatID: ChatID(rawValue: chatID))
+            await daemon.stopChatData(request: request)
             sendableReply.reply()
         }
     }
 
-    func chatSessionState(chatID: String, reply: @escaping (Data) -> Void) {
+    func chatSessionState(request: Data, reply: @escaping (Data) -> Void) {
         let sendableReply = SendableDataReply(reply: reply)
         Task { [daemon] in
-            let data = await daemon.chatSessionStateData(chatID: ChatID(rawValue: chatID))
+            let data = await daemon.chatSessionStateData(request: request)
             sendableReply.reply(data)
         }
     }
@@ -536,8 +524,8 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         let envelope: [String: String?] = ["error": "chat unavailable on Linux"]
         reply((DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data())
     }
-    func stopChat(chatID: String, reply: @escaping () -> Void) { reply() }
-    func chatSessionState(chatID: String, reply: @escaping (Data) -> Void) { reply(Data()) }
+    func stopChat(request: Data, reply: @escaping () -> Void) { reply() }
+    func chatSessionState(request: Data, reply: @escaping (Data) -> Void) { reply(Data()) }
     func chatDiagnosticSnapshot(request: Data, reply: @escaping (Data) -> Void) { reply(Data()) }
     func resetChatDiagnostics(request: Data, reply: @escaping (Data) -> Void) { reply(Data()) }
     func resolveChatPermission(request: Data, reply: @escaping () -> Void) { reply() }
@@ -661,7 +649,10 @@ container=\(containerDirectory.path)
 let profileOwner = try DaemonProcessProfileOwner.production(
     containerDirectory: containerDirectory,
     makeLocalExtractor: { await MainActor.run { LocalPdf2MarkdownExtractor() } })
-let daemon = WikiDaemon(containerDirectory: containerDirectory, profileOwner: profileOwner)
+let daemon = WikiDaemon(
+    containerDirectory: containerDirectory,
+    profileOwner: profileOwner,
+    makeStore: { try GRDBWikiStore(databaseURL: $0) })
 let processLifetime = DaemonProcessLifetimeCoordinator(
     shutdown: {
         await daemon.shutdown()
@@ -764,7 +755,9 @@ if let argPath = CommandLine.arguments.dropFirst().first(where: { !$0.hasPrefix(
     containerDirectory = defaultDir
 }
 
-let daemon = WikiDaemon(containerDirectory: containerDirectory)
+let daemon = WikiDaemon(
+    containerDirectory: containerDirectory,
+    makeStore: { try GRDBWikiStore(databaseURL: $0) })
 
 DebugLog.store("wikid: daemon started (Linux stdio transport), container=\(containerDirectory.path)")
 
@@ -831,14 +824,14 @@ while let line = readLine() {
         }
     case "openStore":
         let wikiID = WikiID(rawValue: params["wikiID"] as? String ?? "")
-        result = daemon.openStore(wikiID: wikiID)
+        result = await daemon.openStore(wikiID: wikiID)
     case "closeStore":
         let wikiID = WikiID(rawValue: params["wikiID"] as? String ?? "")
         daemon.closeStore(wikiID: wikiID)
         result = nil
     case "changeToken":
         let wikiID = WikiID(rawValue: params["wikiID"] as? String ?? "")
-        result = daemon.changeToken(wikiID: wikiID)
+        result = await daemon.changeToken(wikiID: wikiID)
     case "queueSnapshot":
         // Phase 0 scaffold: returns an empty JSON snapshot (no WikiFSEngine
         // on Linux — workload host is compiled out).

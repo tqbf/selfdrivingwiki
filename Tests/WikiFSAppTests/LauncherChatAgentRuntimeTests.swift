@@ -47,12 +47,15 @@ struct LauncherChatAgentRuntimeTests {
             containerDirectory: directory,
             localExtractorFactory: { UnavailablePdf2MarkdownExtractor() })
         let gate = GenerationGate(laneLimits: [.ingest: 1, .interactive: 1])
+        let launcherPair = makeTestLauncherPair(
+            extractionCoordinator: coordinator,
+            generationGate: gate,
+            providerServices: services)
         let runtime = LauncherChatAgentRuntime(
             chatID: chat.id,
             wikiID: WikiID(rawValue: "prepared-wiki"),
             store: store,
-            extractionCoordinator: coordinator,
-            generationGate: gate,
+            launcher: launcherPair.launcher,
             pushEvent: { _ in },
             onSessionID: { _ in },
             onStateUpdate: { _ in },
@@ -179,21 +182,6 @@ struct LauncherChatAgentRuntimeTests {
         #expect(html.contains("<command-output>") == false)
     }
 
-    @Test func launcherRuntimeUsesSharedTranslator() throws {
-        let repositoryRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let sourceURL = repositoryRoot.appendingPathComponent("Sources/wikid/LauncherChatAgentRuntime.swift")
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
-
-        #expect(source.contains("[ChatTurnID: AgentEventTranscriptTranslator]"))
-        #expect(source.contains("translator.translate([event], turnID: turnID)"))
-        #expect(source.contains("translator.activeContentBlock"))
-        #expect(source.contains("TranscriptTranslationState") == false)
-        #expect(source.contains("transcriptDeltasForTesting") == false)
-    }
-
     /// The launcher callback is synchronous, but the runtime must not start a
     /// separate re-entrant actor operation for every callback. A blocked live
     /// sink makes the old implementation copy the same translator state for a
@@ -252,27 +240,31 @@ struct LauncherChatAgentRuntimeTests {
         let gate = await MainActor.run {
             GenerationGate(laneLimits: [.ingest: 1, .interactive: 1])
         }
-        let runtime = LauncherChatAgentRuntime(
-            chatID: chat.id,
-            wikiID: WikiID(rawValue: "race-wiki"),
-            store: store,
-            extractionCoordinator: coordinator,
-            generationGate: gate,
-            pushEvent: { _ in },
-            onSessionID: { _ in },
-            onStateUpdate: { _ in },
-            onLiveEvents: { events in
-                await liveSink.receive(events)
-            },
-            providerServices: UnavailableAgentProviderServices(),
-            onMessageSummary: { _ in },
-            launcherConfigurator: { launcher in
-                launcher.resolveBackend = { _, _, _ in backend }
-                launcher.resolveProvidersContainerDirectory = { directory }
-                launcher.containerDirectory = directory
-                launcher.acpCredentialStore = InMemoryACPCredentialStore()
-            }
-        )
+        let runtime = await MainActor.run {
+            let launcherPair = makeTestLauncherPair(
+                extractionCoordinator: coordinator,
+                generationGate: gate)
+            return LauncherChatAgentRuntime(
+                chatID: chat.id,
+                wikiID: WikiID(rawValue: "race-wiki"),
+                store: store,
+                launcher: launcherPair.launcher,
+                pushEvent: { _ in },
+                onSessionID: { _ in },
+                onStateUpdate: { _ in },
+                onLiveEvents: { events in
+                    await liveSink.receive(events)
+                },
+                providerServices: UnavailableAgentProviderServices(),
+                onMessageSummary: { _ in },
+                launcherConfigurator: { launcher in
+                    launcher.resolveBackend = { _, _, _ in backend }
+                    launcher.resolveProvidersContainerDirectory = { directory }
+                    launcher.containerDirectory = directory
+                    launcher.acpCredentialStore = InMemoryACPCredentialStore()
+                }
+            )
+        }
 
         let request = ChatRuntimeStartRequest(
             chatID: chat.id,

@@ -18,12 +18,12 @@ final class DaemonChatHost: @unchecked Sendable {
     // MARK: - Dependencies
 
     private let containerDirectory: URL
-    private let extractionCoordinator: ExtractionCoordinator
     private let storeResolver: @Sendable (WikiID) -> GRDBWikiStore?
     private let pushEvent: @Sendable (QueueEventEnvelope) -> Void
     private let diagnosticTrace: DaemonChatDiagnostics
     private let providerServices: any AgentProviderServices
 
+    private let launcher: AgentLauncher
     private let sharedGate: GenerationGate
     private let registry = ControllerRegistry()
     private let idleEvictionDelay: Duration
@@ -33,10 +33,10 @@ final class DaemonChatHost: @unchecked Sendable {
 
     // MARK: - Init
 
+    @MainActor
     init(
         containerDirectory: URL,
-        extractionCoordinator: ExtractionCoordinator,
-        generationGate: GenerationGate,
+        launcherPair: LauncherPair,
         storeResolver: @escaping @Sendable (WikiID) -> GRDBWikiStore?,
         pushEvent: @escaping @Sendable (QueueEventEnvelope) -> Void,
         diagnosticTrace: DaemonChatDiagnostics = DaemonChatDiagnostics(),
@@ -44,8 +44,8 @@ final class DaemonChatHost: @unchecked Sendable {
         idleEvictionDelay: Duration = DaemonChatHost.defaultIdleEvictionDelay
     ) {
         self.containerDirectory = containerDirectory
-        self.extractionCoordinator = extractionCoordinator
-        self.sharedGate = generationGate
+        self.launcher = launcherPair.launcher
+        self.sharedGate = launcherPair.gate
         self.storeResolver = storeResolver
         self.pushEvent = pushEvent
         self.diagnosticTrace = diagnosticTrace
@@ -278,8 +278,7 @@ final class DaemonChatHost: @unchecked Sendable {
             chatID: chatID,
             wikiID: wikiID,
             store: store,
-            extractionCoordinator: extractionCoordinator,
-            generationGate: sharedGate,
+            launcher: launcher,
             pushEvent: pushEvent,
             onSessionID: { [weak self] sessionID in
                 guard let self else { return }

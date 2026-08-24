@@ -5,6 +5,202 @@ import WikiFSCore
 import Cordis
 import CordisLoader
 import WikiFSEngine
+
+public enum CLIStoreProfileError: Error {
+    case incompatibleStore
+    case operationAndCleanup(operation: any Error, cleanup: any Error)
+}
+
+public struct CLIStoreProfile: Sendable {
+    public struct Request: Sendable {
+        public let databaseURL: URL
+        public let wikiID: WikiID
+        public let containerDirectory: URL
+
+        public init(databaseURL: URL, wikiID: WikiID, containerDirectory: URL) {
+            self.databaseURL = databaseURL
+            self.wikiID = wikiID
+            self.containerDirectory = containerDirectory
+        }
+    }
+
+    public typealias Boot = @Sendable (Request) async throws -> BootedProfile
+
+    private let boot: Boot
+
+    public init() {
+        self.boot = CLIStoreProfile.productionBoot
+    }
+
+    public init(boot: @escaping Boot) {
+        self.boot = boot
+    }
+
+    public func withStore<Result>(
+        request: Request,
+        operation: (GRDBWikiStore) async throws -> Result
+    ) async throws -> Result {
+        let profile = try await boot(request)
+        let operationResult: Swift.Result<Result, any Error>
+        do {
+            let service = try await profile.context.require(StoreServiceKeys.store)
+            guard let store = service as? GRDBWikiStore else {
+                throw CLIStoreProfileError.incompatibleStore
+            }
+            operationResult = .success(try await operation(store))
+        } catch {
+            operationResult = .failure(error)
+        }
+
+        do {
+            try await profile.shutdown()
+        } catch {
+            switch operationResult {
+            case .success:
+                throw error
+            case .failure(let operationError):
+                throw CLIStoreProfileError.operationAndCleanup(
+                    operation: operationError,
+                    cleanup: error)
+            }
+        }
+
+        return try operationResult.get()
+    }
+
+    public static func withStore<Result>(
+        databaseURL: URL,
+        wikiID: WikiID,
+        containerDirectory: URL,
+        operation: (GRDBWikiStore) async throws -> Result
+    ) async throws -> Result {
+        try await CLIStoreProfile().withStore(
+            request: Request(
+                databaseURL: databaseURL,
+                wikiID: wikiID,
+                containerDirectory: containerDirectory),
+            operation: operation)
+    }
+
+    private static func productionBoot(_ request: Request) async throws -> BootedProfile {
+        try await CordisBoot.boot(.init(
+            catalog: try CLIPluginCatalog.build(),
+            layers: [PatchFile(entries: try ProductionProfiles.cli(
+                databaseURL: request.databaseURL,
+                wikiID: request.wikiID,
+                homeDirectory: request.containerDirectory))]))
+    }
+
+}
+
+public struct WikiCtlRunner {
+    public struct Output: Sendable, Equatable {
+        public let stdout: Data
+        public let stderr: Data
+        public let changedWikiID: WikiID?
+
+        public init(stdout: Data = Data(), stderr: Data = Data(), changedWikiID: WikiID? = nil) {
+            self.stdout = stdout
+            self.stderr = stderr
+            self.changedWikiID = changedWikiID
+        }
+    }
+
+    public typealias CommandExecutor = (
+        ArgumentParser.Command,
+        GRDBWikiStore,
+        WikiID,
+        URL
+    ) async throws -> SourceCommand.Result
+
+    private let resolveContainer: () throws -> WikiResolver
+    private let storeProfile: CLIStoreProfile
+    private let bootstrap: StoreBootstrap
+    private let execute: CommandExecutor
+
+    public init(
+        resolveContainer: @escaping () throws -> WikiResolver = WikiResolver.appGroupContainer,
+        storeProfile: CLIStoreProfile = CLIStoreProfile(),
+        bootstrap: StoreBootstrap = StoreBootstrap(),
+        execute: @escaping CommandExecutor
+    ) {
+        self.resolveContainer = resolveContainer
+        self.storeProfile = storeProfile
+        self.bootstrap = bootstrap
+        self.execute = execute
+    }
+
+    public func runOrdinary(
+        command: ArgumentParser.Command,
+        wikiSelector: String,
+        environment: [String: String]
+    ) async throws -> Output {
+        let resolvedCommand = ArgumentParser.applyEnv(command, env: environment)
+        let resolver = try resolveContainer()
+        guard let descriptor = resolver.descriptor(forSelector: wikiSelector) else {
+            throw PageCommand.Failure.message(
+                "no wiki matching \(wikiSelector.debugDescription) in the registry")
+        }
+        let result = try await storeProfile.withStore(request: CLIStoreProfile.Request(
+            databaseURL: resolver.databaseURL(for: descriptor),
+            wikiID: descriptor.id,
+            containerDirectory: resolver.containerDirectory
+        )) { store in
+            try await execute(
+                resolvedCommand,
+                store,
+                descriptor.id,
+                resolver.containerDirectory)
+        }
+
+        let stdout: Data
+        switch result.payload {
+        case .text(let text):
+            stdout = text.isEmpty ? Data() : Data("\(text)\n".utf8)
+        case .bytes(let bytes):
+            stdout = bytes
+        }
+        return Output(
+            stdout: stdout,
+            stderr: Data((result.stderrOutput ?? "").utf8),
+            changedWikiID: result.didCommit ? descriptor.id : nil)
+    }
+
+    public func runDumpConfig(overlay: String?) throws -> Output {
+        let homeDirectory: URL?
+        do {
+            homeDirectory = try resolveContainer().containerDirectory
+        } catch {
+            // Dumping the shipped configuration does not require an App Group container.
+            homeDirectory = nil
+        }
+        let result = try DumpConfigCommand.run(
+            homeDirectory: homeDirectory,
+            overlay: overlay)
+        var text = result.note.map { "\($0)\n" } ?? ""
+        text += result.output
+        if !text.hasSuffix("\n") {
+            text += "\n"
+        }
+        return Output(stdout: Data(text.utf8))
+    }
+
+    public func runWikiCreate(name: String) throws -> Output {
+        let resolver = try resolveContainer()
+        let container = resolver.containerDirectory
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let displayName = trimmed.isEmpty ? "Untitled Wiki" : trimmed
+        var descriptor = WikiDescriptor.make(displayName: displayName)
+        descriptor.homePageID = try bootstrap.createAndSeed(
+            databaseURL: resolver.databaseURL(for: descriptor)).homePageID
+
+        var registry = WikiRegistry.load(from: container)
+        registry.add(descriptor)
+        try registry.save(to: container)
+        return Output(stdout: Data("\(descriptor.id)\t\(descriptor.displayName)\n".utf8))
+    }
+}
+
 /// Bridges the wikictl CLI's three search commands (`page search`,
 /// `source search`, `chat search`) onto the SAME Tantivy BM25 leg the app's
 /// sidebar / omnibox use (#637).
@@ -371,6 +567,26 @@ public enum CLITantivyLegResolver {
 }
 
 #else
+public enum CLIStoreProfileError: Error {
+    case incompatibleStore
+    case operationAndCleanup(operation: any Error, cleanup: any Error)
+}
+
+public enum CLIStoreProfile {
+    public static func withStore<Result>(
+        databaseURL: URL,
+        wikiID: WikiID,
+        containerDirectory: URL,
+        operation: (GRDBWikiStore) async throws -> Result
+    ) async throws -> Result {
+        let service = try StoreBackend.current.makeStore(databaseURL: databaseURL)
+        guard let store = service as? GRDBWikiStore else {
+            throw CLIStoreProfileError.incompatibleStore
+        }
+        return try await operation(store)
+    }
+}
+
 /// Linux stub: Tantivy is unavailable. All resolvers return nil (no BM25 leg).
 public enum CLITantivyLegResolver {
     public static func resolvePageLeg(

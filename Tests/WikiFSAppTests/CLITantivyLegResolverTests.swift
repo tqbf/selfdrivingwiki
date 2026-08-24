@@ -1,8 +1,11 @@
 #if os(macOS)
+import Cordis
+import CordisLoader
 import Foundation
 import Testing
 @testable import WikiCtlCore
 @testable import WikiFSCore
+@testable import WikiFSEngine
 
 /// #637: integration tests for `CLITantivyLegResolver`, the bridge that routes
 /// `wikictl page/source/chat search` through the same on-disk Tantivy BM25 leg
@@ -21,6 +24,36 @@ import Testing
 ///
 @Suite
 struct CLITantivyLegResolverTests {
+    enum ExpectedCommandFailure: Error {
+        case expected
+    }
+
+    enum ExpectedCleanupFailure: Error {
+        case expected
+    }
+
+    actor CLIProfileRecorder {
+        private var resolvedStoreID: ObjectIdentifier?
+        private var operationStoreID: ObjectIdentifier?
+        private var disposalCount = 0
+
+        func recordResolved(store: GRDBWikiStore) {
+            resolvedStoreID = ObjectIdentifier(store)
+        }
+
+        func recordOperation(store: GRDBWikiStore) {
+            operationStoreID = ObjectIdentifier(store)
+        }
+
+        func recordDisposal() {
+            disposalCount += 1
+        }
+
+        func snapshot() -> (resolvedStoreID: ObjectIdentifier?, operationStoreID: ObjectIdentifier?, disposalCount: Int) {
+            (resolvedStoreID, operationStoreID, disposalCount)
+        }
+    }
+
     actor SearchRequestRecorder {
         private var keys: [CLITantivyLegResolver.SearchRequestKey] = []
 
@@ -50,6 +83,14 @@ struct CLITantivyLegResolverTests {
     private func tempStore(in container: URL, wikiID: WikiID) throws -> GRDBWikiStore {
         let dbURL = container.appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false)
         return try GRDBWikiStore(databaseURL: dbURL)
+    }
+
+    private func removeTempContainer(_ container: URL, fileManager: FileManager) {
+        do {
+            try fileManager.removeItem(at: container)
+        } catch {
+            Issue.record("could not remove CLI test container: \(error)")
+        }
     }
 
     // MARK: - resolvePageLeg
@@ -419,6 +460,173 @@ struct CLITantivyLegResolverTests {
         #expect(outcome(named: "source-rust-1")?.ids == [rustSource.id.rawValue])
         #expect(outcome(named: "source-ownership-1")?.ids == [ownershipSource.id.rawValue])
         #expect(outcome(named: "chat-terraforming-1")?.ids == [terraformChat.id.rawValue])
+    }
+
+    // MARK: - CLI store profile and bootstrap
+
+    @Test(arguments: [false, true])
+    func cliStoreProfileUsesResolvedStoreAndDisposes(commandFails: Bool) async throws {
+        let (container, fm) = try makeTempContainer()
+        defer { removeTempContainer(container, fileManager: fm) }
+        let wikiID = WikiID(rawValue: "01TESTCLI01")
+        let recorder = CLIProfileRecorder()
+        let observerID = PluginID("test.cli-store-observer")
+        let observer = PluginDefinition(
+            id: observerID,
+            dependencies: [ServiceDependency(StoreServiceKeys.store)]) {
+            try ComponentDefinition(
+                label: observerID.rawValue,
+                dependencies: [ServiceDependency(StoreServiceKeys.store)]) { activation in
+                let service = try await activation.require(StoreServiceKeys.store)
+                guard let store = service as? GRDBWikiStore else {
+                    throw CLIStoreProfileError.incompatibleStore
+                }
+                await recorder.recordResolved(store: store)
+                _ = try await activation.effect { _ in
+                    await recorder.recordDisposal()
+                }
+            }
+        }
+        let profile = CLIStoreProfile { request in
+            var entries = try ProductionProfiles.cli(
+                databaseURL: request.databaseURL,
+                wikiID: request.wikiID,
+                homeDirectory: request.containerDirectory)
+            entries.append(Entry(id: EntryID("store-observer"), plugin: observerID))
+            let definitions = CLIPluginCatalog.definitions() + [observer]
+            return try await CordisBoot.boot(.init(
+                catalog: try PluginCatalog(definitions),
+                layers: [PatchFile(entries: entries)]))
+        }
+        let descriptor = WikiDescriptor(
+            id: wikiID,
+            displayName: "CLI Test",
+            createdAt: Date(timeIntervalSince1970: 0),
+            lastUsedAt: Date(timeIntervalSince1970: 0))
+        var registry = WikiRegistry()
+        registry.add(descriptor)
+        try registry.save(to: container)
+        let runner = WikiCtlRunner(
+            resolveContainer: { WikiResolver(containerDirectory: container) },
+            storeProfile: profile
+        ) { _, store, _, _ in
+            await recorder.recordOperation(store: store)
+            if commandFails {
+                throw ExpectedCommandFailure.expected
+            }
+            return SourceCommand.Result(payload: .text("runner-output"), didCommit: false)
+        }
+
+        do {
+            let output = try await runner.runOrdinary(
+                command: .page(.list(json: false)),
+                wikiSelector: wikiID.rawValue,
+                environment: [:])
+            #expect(commandFails == false)
+            #expect(String(decoding: output.stdout, as: UTF8.self) == "runner-output\n")
+        } catch is ExpectedCommandFailure {
+            #expect(commandFails)
+        }
+
+        let snapshot = await recorder.snapshot()
+        #expect(snapshot.resolvedStoreID == snapshot.operationStoreID)
+        #expect(snapshot.disposalCount == 1)
+    }
+
+    @Test func cliStoreProfilePreservesOperationAndCleanupFailures() async throws {
+        let (container, fm) = try makeTempContainer()
+        defer { removeTempContainer(container, fileManager: fm) }
+        let wikiID = WikiID(rawValue: "01TESTCLI02")
+        var registry = WikiRegistry()
+        registry.add(WikiDescriptor(
+            id: wikiID,
+            displayName: "CLI Failure Test",
+            createdAt: Date(timeIntervalSince1970: 0),
+            lastUsedAt: Date(timeIntervalSince1970: 0)))
+        try registry.save(to: container)
+
+        let cleanupID = PluginID("test.cli-cleanup-failure")
+        let cleanupDefinition = PluginDefinition(id: cleanupID) {
+            try ComponentDefinition(label: cleanupID.rawValue) { activation in
+                _ = try await activation.effect { _ in
+                    throw ExpectedCleanupFailure.expected
+                }
+            }
+        }
+        let profile = CLIStoreProfile { request in
+            var entries = try ProductionProfiles.cli(
+                databaseURL: request.databaseURL,
+                wikiID: request.wikiID,
+                homeDirectory: request.containerDirectory)
+            entries.append(Entry(id: EntryID("cleanup-failure"), plugin: cleanupID))
+            return try await CordisBoot.boot(.init(
+                catalog: try PluginCatalog(CLIPluginCatalog.definitions() + [cleanupDefinition]),
+                layers: [PatchFile(entries: entries)]))
+        }
+        let runner = WikiCtlRunner(
+            resolveContainer: { WikiResolver(containerDirectory: container) },
+            storeProfile: profile
+        ) { _, _, _, _ in
+            throw ExpectedCommandFailure.expected
+        }
+
+        do {
+            _ = try await runner.runOrdinary(
+                command: .page(.list(json: false)),
+                wikiSelector: wikiID.rawValue,
+                environment: [:])
+            Issue.record("expected combined operation and cleanup failure")
+        } catch CLIStoreProfileError.operationAndCleanup(let operation, let cleanup) {
+            #expect(operation is ExpectedCommandFailure)
+            guard case .cleanup(let aggregate) = cleanup as? CordisError else {
+                Issue.record("expected Cordis cleanup error, got \(cleanup)")
+                return
+            }
+            #expect(aggregate.failures.count == 1)
+            #expect(aggregate.failures.first?.error.message == "expected")
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
+    @Test func wikiCreateSeedsDatabaseThroughBootstrapBoundary() throws {
+        let (container, fm) = try makeTempContainer()
+        defer { removeTempContainer(container, fileManager: fm) }
+        let runner = WikiCtlRunner(
+            resolveContainer: { WikiResolver(containerDirectory: container) }
+        ) { _, _, _, _ in
+            Issue.record("wiki create must not run an ordinary command")
+            return SourceCommand.Result(payload: .text(""), didCommit: false)
+        }
+
+        let output = try runner.runWikiCreate(name: "Runner Wiki")
+        let descriptor = try #require(WikiRegistry.load(from: container).wikis.first)
+        let store = try GRDBWikiStore(databaseURL: container.appendingPathComponent(descriptor.dbFileName))
+        let pages = try store.listPages(sortBy: .newestFirst)
+
+        #expect(String(decoding: output.stdout, as: UTF8.self) == "\(descriptor.id)\tRunner Wiki\n")
+        #expect(descriptor.homePageID == pages.first?.id)
+        #expect(pages.map(\.title) == ["Home"])
+    }
+
+    @Test func dumpConfigOutputMatchesCommandFormatting() throws {
+        let (container, fm) = try makeTempContainer()
+        defer { removeTempContainer(container, fileManager: fm) }
+        let runner = WikiCtlRunner(
+            resolveContainer: { WikiResolver(containerDirectory: container) }
+        ) { _, _, _, _ in
+            Issue.record("dump config must not run an ordinary command")
+            return SourceCommand.Result(payload: .text(""), didCommit: false)
+        }
+
+        let direct = try DumpConfigCommand.run(homeDirectory: container, overlay: nil)
+        let output = try runner.runDumpConfig(overlay: nil)
+        var expected = direct.note.map { "\($0)\n" } ?? ""
+        expected += direct.output
+        if !expected.hasSuffix("\n") { expected += "\n" }
+
+        #expect(String(decoding: output.stdout, as: UTF8.self) == expected)
+        #expect(output.stderr.isEmpty)
     }
 
     // MARK: - No-BM25-leg behavior when no Tantivy service can be built

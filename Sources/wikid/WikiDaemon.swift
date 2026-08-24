@@ -5,11 +5,70 @@ import WikiFSCore
 import WikiFSEngine
 #endif
 
-/// The daemon's in-process state. Holds the live wiki registry + open stores.
+#if canImport(WikiFSEngine)
+private actor ChatHostCreationGate {
+    private var waiters: [WikiID: [CheckedContinuation<Void, any Error>]] = [:]
+    private var isShuttingDown = false
+
+    func acquire(wikiID: WikiID) async throws -> Bool {
+        guard !isShuttingDown else { throw CancellationError() }
+        guard waiters[wikiID] != nil else {
+            waiters[wikiID] = []
+            return true
+        }
+        try await withCheckedThrowingContinuation { continuation in
+            waiters[wikiID, default: []].append(continuation)
+        }
+        return false
+    }
+
+    func finish(wikiID: WikiID, result: Swift.Result<Void, any Error>) {
+        let pending = waiters.removeValue(forKey: wikiID) ?? []
+        for continuation in pending {
+            continuation.resume(with: result)
+        }
+    }
+
+    func waitForCreation(wikiID: WikiID) async {
+        guard waiters[wikiID] != nil else { return }
+        do {
+            try await withCheckedThrowingContinuation { continuation in
+                waiters[wikiID, default: []].append(continuation)
+            }
+        } catch {
+            // The creator reports the error to its request. Removal only waits for settlement.
+        }
+    }
+
+    func closeAndWait() async {
+        isShuttingDown = true
+        let wikiIDs = Array(waiters.keys)
+        for wikiID in wikiIDs {
+            await waitForCreation(wikiID: wikiID)
+        }
+    }
+}
+#endif
+
+enum DaemonStoreResolutionError: Error, Equatable, LocalizedError {
+    case notPrepared(WikiID)
+    case unavailable(WikiID)
+
+    var errorDescription: String? {
+        switch self {
+        case .notPrepared(let wikiID):
+            return "daemon-store-not-prepared: \(wikiID.rawValue)"
+        case .unavailable(let wikiID):
+            return "daemon-store-unavailable: \(wikiID.rawValue)"
+        }
+    }
+}
+
+/// The daemon's in-process state. Holds the live wiki registry + prepared stores.
 ///
 /// `GRDBWikiStore` is `@unchecked Sendable` (method-atomic with an internal
 /// recursive lock), so it is safe to hold here and serve from XPC handlers.
-/// All mutations are serialized on the daemon's dispatch queue for thread safety.
+/// All cache mutations are serialized on the daemon's dispatch queue.
 ///
 /// See `plans/multi-wiki-daemon.md` §4.2.
 final class WikiDaemon: @unchecked Sendable {
@@ -25,12 +84,16 @@ final class WikiDaemon: @unchecked Sendable {
     private let profileOwner: DaemonProcessProfileOwner?
     private let legacyAgentProviderServices: MutableAgentProviderServices?
     private let legacyExtractionCompositionOwner: ExtractionCompositionOwner?
+    private let chatHostCreationGate = ChatHostCreationGate()
     #endif
 
     // MARK: - State (accessed on `queue`)
 
     private let queue = DispatchQueue(label: "com.selfdrivingwiki.wikid")
     private var registry: WikiRegistry
+    #if canImport(WikiFSEngine)
+    private var preparedServices: [WikiID: AppServices] = [:]
+    #endif
     private var openStores: [WikiID: GRDBWikiStore] = [:]
     private var shutdownTask: Task<Void, Never>?
 
@@ -86,10 +149,10 @@ final class WikiDaemon: @unchecked Sendable {
 
     // MARK: - Init
 
-    /// Inject `containerDirectory` + `makeStore` for testability.
+    /// Inject `containerDirectory` + `makeStore` for the test and Linux compatibility boundary.
     init(
         containerDirectory: URL,
-        makeStore: @escaping (URL) throws -> WikiStore = { try GRDBWikiStore(databaseURL: $0) },
+        makeStore: @escaping (URL) throws -> WikiStore,
         extractionAssembly: ExtractionCompositionOwner.AssemblyFactory? = nil
     ) {
         self.containerDirectory = containerDirectory
@@ -125,7 +188,7 @@ final class WikiDaemon: @unchecked Sendable {
     init(
         containerDirectory: URL,
         profileOwner: DaemonProcessProfileOwner,
-        makeStore: @escaping (URL) throws -> WikiStore = { try GRDBWikiStore(databaseURL: $0) }
+        makeStore: @escaping (URL) throws -> WikiStore
     ) {
         self.containerDirectory = containerDirectory
         self.makeStore = makeStore
@@ -139,22 +202,47 @@ final class WikiDaemon: @unchecked Sendable {
         if let profileOwner { _ = try await profileOwner.start() }
     }
 
-    func prepareWiki(_ wikiID: WikiID) async throws {
-        guard let profileOwner else { return }
+    @discardableResult
+    func prepareAndResolveWikiServices(wikiID: WikiID) async throws -> AppServices {
+        if let services = queue.sync(execute: { preparedServices[wikiID] }) {
+            return services
+        }
+        guard let profileOwner else {
+            throw DaemonStoreResolutionError.notPrepared(wikiID)
+        }
         let services = try await profileOwner.wiki(wikiID: wikiID)
         guard let store = services.store as? GRDBWikiStore else {
-            throw QueueRPCError(code: .unavailable, message: "Daemon profile did not provide a GRDB store")
+            throw DaemonStoreResolutionError.unavailable(wikiID)
         }
-        queue.sync {
+        return queue.sync {
+            if let existing = preparedServices[wikiID] {
+                return existing
+            }
             wireEventBus(on: store, wikiID: wikiID)
             cacheStore(store, wikiID: wikiID)
+            preparedServices[wikiID] = services
+            return services
+        }
+    }
+
+    func prepareWiki(_ wikiID: WikiID) async throws {
+        if profileOwner != nil {
+            _ = try await prepareAndResolveWikiServices(wikiID: wikiID)
+        } else {
+            try prepareInjectedStore(wikiID: wikiID)
         }
     }
 
     func removeWikiProfile(_ wikiID: WikiID) async {
-        // The daemon cache must release the store before its owning child profile
+        await chatHostCreationGate.waitForCreation(wikiID: wikiID)
+        let chatHost = queue.sync { chatHosts.removeValue(forKey: wikiID) }
+        await chatHost?.shutdown()
+        // The daemon cache must release the services before its owning child profile
         // shuts down. A later prepare then resolves a fresh store and event bus.
-        queue.sync { _ = openStores.removeValue(forKey: wikiID) }
+        queue.sync {
+            preparedServices.removeValue(forKey: wikiID)
+            openStores.removeValue(forKey: wikiID)
+        }
         await profileOwner?.removeWiki(wikiID)
     }
 
@@ -191,7 +279,13 @@ final class WikiDaemon: @unchecked Sendable {
                 } catch {
                     DebugLog.store("wikid: queue shutdown did not settle cleanly: \(error)")
                 }
-                if let chatHost = self.queue.sync(execute: { self._chatHost }) {
+                await self.chatHostCreationGate.closeAndWait()
+                let chatHosts = self.queue.sync { () -> [DaemonChatHost] in
+                    let hosts = Array(self.chatHosts.values)
+                    self.chatHosts.removeAll()
+                    return hosts
+                }
+                for chatHost in chatHosts {
                     await chatHost.shutdown()
                 }
                 if let profileOwner = self.profileOwner {
@@ -393,60 +487,66 @@ final class WikiDaemon: @unchecked Sendable {
 
     // MARK: - Store lifecycle
 
-    func openStore(wikiID: WikiID) -> Bool {
-        queue.sync { () -> Bool in
-            // Already open — no-op
-            if openStores[wikiID] != nil { return true }
-
-            guard registry.descriptor(id: wikiID) != nil else { return false }
-            let dbURL = databaseURL(forWikiID: wikiID)
-            do {
-                // Read-write open (runs bootstrap ladder on first open)
-                let store = try GRDBWikiStore(databaseURL: dbURL)
-                wireEventBus(on: store, wikiID: wikiID)
-                cacheStore(store, wikiID: wikiID)
-                return true
-            } catch {
-                DebugLog.store("wikid: openStore failed for \(wikiID.rawValue): \(error)")
-                return false
-            }
+    func openStore(wikiID: WikiID) async -> Bool {
+        guard queue.sync(execute: { registry.descriptor(id: wikiID) != nil }) else {
+            return false
+        }
+        do {
+            try await prepareWiki(wikiID)
+            _ = try resolvePreparedStore(wikiID: wikiID)
+            return true
+        } catch {
+            DebugLog.store("wikid: openStore failed for \(wikiID.rawValue): \(error)")
+            return false
         }
     }
 
     func closeStore(wikiID: WikiID) {
         queue.sync {
-            // Best-effort: remove from the held-open dict. The store is deinit'd by ARC.
-            // If another client had a session, it will re-open on next use.
-            _ = openStores.removeValue(forKey: wikiID)
+            // Production profile-backed services remain prepared for the child
+            // profile lifetime. Compatibility stores are explicitly released.
+            #if canImport(WikiFSEngine)
+            if preparedServices[wikiID] == nil {
+                openStores.removeValue(forKey: wikiID)
+            }
+            #else
+            openStores.removeValue(forKey: wikiID)
+            #endif
         }
     }
 
-    /// Lazily resolve (and cache) the `GRDBWikiStore` for `wikiID`.
-    ///
-    /// Backs the queue-engine and chat-host `storeResolver` closures so a
-    /// workload for a wiki the daemon hasn't explicitly opened still resolves:
-    /// if the store isn't already cached in `openStores` but the wiki is
-    /// registered, open it read-write (running the bootstrap ladder on first
-    /// open) and cache it. Returns `nil` for an unregistered wikiID or if the
-    /// open throws. Same lazy-open pattern as `openStore(wikiID:)`, but returns
-    /// the store instead of a `Bool` (#867).
-    func resolveStoreLazily(wikiID: WikiID) -> GRDBWikiStore? {
-        queue.sync { () -> GRDBWikiStore? in
-            if let store = openStores[wikiID] {
-                return store
+    /// Resolve a store only after its wiki services have been prepared.
+    /// Synchronous queue/chat closures use this cache-only seam and never open
+    /// SQLite or await a profile while holding the daemon queue.
+    func resolvePreparedStore(wikiID: WikiID) throws -> GRDBWikiStore {
+        try queue.sync {
+            guard let store = openStores[wikiID] else {
+                throw DaemonStoreResolutionError.notPrepared(wikiID)
             }
-            guard registry.descriptor(id: wikiID) != nil else { return nil }
-            let dbURL = databaseURL(forWikiID: wikiID)
-            do {
-                let store = try GRDBWikiStore(databaseURL: dbURL)
-                wireEventBus(on: store, wikiID: wikiID)
-                cacheStore(store, wikiID: wikiID)
-                DebugLog.store("wikid: store lazily opened for \(wikiID.rawValue)")
-                return store
-            } catch {
-                DebugLog.store("wikid: lazy openStore failed for \(wikiID.rawValue): \(error)")
-                return nil
+            return store
+        }
+    }
+
+    private func preparedStoreIfAvailable(wikiID: WikiID) -> GRDBWikiStore? {
+        do {
+            return try resolvePreparedStore(wikiID: wikiID)
+        } catch {
+            DebugLog.store("wikid: prepared store unavailable for \(wikiID.rawValue): \(error)")
+            return nil
+        }
+    }
+
+    private func prepareInjectedStore(wikiID: WikiID) throws {
+        try queue.sync {
+            if openStores[wikiID] != nil { return }
+            guard registry.descriptor(id: wikiID) != nil else {
+                throw DaemonStoreResolutionError.unavailable(wikiID)
             }
+            guard let store = try makeStore(databaseURL(forWikiID: wikiID)) as? GRDBWikiStore else {
+                throw DaemonStoreResolutionError.unavailable(wikiID)
+            }
+            wireEventBus(on: store, wikiID: wikiID)
+            cacheStore(store, wikiID: wikiID)
         }
     }
 
@@ -459,37 +559,17 @@ final class WikiDaemon: @unchecked Sendable {
     /// Contrast with `""`, which means the wikiID is unknown (not registered).
     static let errorTokenSentinel = "<<changeToken-read-error>>"
 
-    func changeToken(wikiID: WikiID) -> String {
-        queue.sync { () -> String in
-            // If the store is open, read the token directly.
-            // Never swallow a thrown error as `""` (which would be reported to
-            // the File Provider as "no changes" → stale projections, #487).
-            if let store = openStores[wikiID] {
-                do {
-                    return try store.changeToken().rawString
-                } catch {
-                    DebugLog.store("wikid: changeToken() failed for \(wikiID.rawValue) (open store): \(error)")
-                    return Self.errorTokenSentinel
-                }
-            }
-            // Store not held open — open it transiently to read the token.
-            // Unknown wiki → "" (genuine "not registered"); any thrown error
-            // during open/read → sentinel (logs + forces caller re-sync).
-            guard registry.descriptor(id: wikiID) != nil else { return "" }
-            let dbURL = databaseURL(forWikiID: wikiID)
-            let store: GRDBWikiStore
-            do {
-                store = try GRDBWikiStore(databaseURL: dbURL)
-            } catch {
-                DebugLog.store("wikid: changeToken() failed to open transient store for \(wikiID.rawValue): \(error)")
-                return Self.errorTokenSentinel
-            }
-            do {
-                return try store.changeToken().rawString
-            } catch {
-                DebugLog.store("wikid: changeToken() failed for \(wikiID.rawValue) (transient store): \(error)")
-                return Self.errorTokenSentinel
-            }
+    func changeToken(wikiID: WikiID) async -> String {
+        guard queue.sync(execute: { registry.descriptor(id: wikiID) != nil }) else {
+            return ""
+        }
+        do {
+            try await prepareWiki(wikiID)
+            let store = try resolvePreparedStore(wikiID: wikiID)
+            return try store.changeToken().rawString
+        } catch {
+            DebugLog.store("wikid: changeToken() failed for \(wikiID.rawValue): \(error)")
+            return Self.errorTokenSentinel
         }
     }
 
@@ -612,12 +692,9 @@ final class WikiDaemon: @unchecked Sendable {
     private func buildQueueResources() async throws -> DaemonQueueResources {
         let runtime = try await runtimeServices()
         let extractionServices = runtime.extraction
-        let coordinator = await MainActor.run {
-            ExtractionCoordinator(services: extractionServices)
-        }
 
         let storeResolver: @Sendable (WikiID) -> GRDBWikiStore? = { [weak self] wikiID in
-            self?.resolveStoreLazily(wikiID: wikiID)
+            self?.preparedStoreIfAvailable(wikiID: wikiID)
         }
         let queueStore = try QueueStore(databaseURL: queueDatabaseURL)
         let extractionProvider = DaemonQueueExtractionProvider(
@@ -626,8 +703,13 @@ final class WikiDaemon: @unchecked Sendable {
         let dir = containerDirectory
         let ingestionProvider = DaemonQueueIngestionProvider(
             containerDirectory: dir,
-            extractionCoordinator: coordinator,
             storeResolver: storeResolver,
+            launcherFactoryResolver: { [weak self] wikiID in
+                guard let self else {
+                    throw DaemonStoreResolutionError.unavailable(wikiID)
+                }
+                return try await self.prepareAndResolveWikiServices(wikiID: wikiID).launcherFactory
+            },
             queueStore: queueStore,
             resolveSelectedProvider: {
                 AgentProvidersConfig.loadOrSeed(from: dir).selectedProvider()
@@ -697,49 +779,87 @@ final class WikiDaemon: @unchecked Sendable {
     // MARK: - Chat host (Phase C)
 
     #if canImport(WikiFSEngine)
-    /// Lazily-constructed chat host owning the live `[chatID → ChatSession]`
-    /// registry. `nil` until `ensureChatHost()` is called.
-    private var _chatHost: DaemonChatHost?
+    /// One chat host per prepared wiki. Each host owns one launcher pair for its
+    /// session lifetime; no host can route work into another wiki's store.
+    private var chatHosts: [WikiID: DaemonChatHost] = [:]
 
-    /// Construct (or return the existing) `DaemonChatHost`. The host is wired
-    /// with the same `storeResolver` + container the queue engine uses, so chat
-    /// persistence lands on the same `GRDBWikiStore` instances.
-    func ensureChatHost() async throws -> DaemonChatHost {
-        if let host = queue.sync(execute: { _chatHost }) {
+    func distinctLauncherPairIdentitiesForTesting(
+        wikiID: WikiID
+    ) async throws -> (
+        firstGate: ObjectIdentifier,
+        firstLauncher: ObjectIdentifier,
+        secondGate: ObjectIdentifier,
+        secondLauncher: ObjectIdentifier
+    ) {
+        let services = try await prepareAndResolveWikiServices(wikiID: wikiID)
+        return await MainActor.run {
+            let first = services.launcherFactory(wikiID: wikiID)
+            let second = services.launcherFactory(wikiID: wikiID)
+            return (
+                ObjectIdentifier(first.gate),
+                ObjectIdentifier(first.launcher),
+                ObjectIdentifier(second.gate),
+                ObjectIdentifier(second.launcher)
+            )
+        }
+    }
+
+    func ensureChatHost(wikiID: WikiID) async throws -> DaemonChatHost {
+        if let host = queue.sync(execute: { chatHosts[wikiID] }) {
             return host
         }
-
-        let runtime = try await runtimeServices()
-        let extractionServices = runtime.extraction
-        let coordinator = await MainActor.run {
-            ExtractionCoordinator(services: extractionServices)
-        }
-        let generationGate = await MainActor.run {
-            GenerationGate(laneLimits: [.ingest: 1, .interactive: 3])
-        }
-
-        let storeResolver: @Sendable (WikiID) -> GRDBWikiStore? = { [weak self] wikiID in
-            self?.resolveStoreLazily(wikiID: wikiID)
-        }
-
-        let dir = containerDirectory
-        let host = DaemonChatHost(
-            containerDirectory: dir,
-            extractionCoordinator: coordinator,
-            generationGate: generationGate,
-            storeResolver: storeResolver,
-            pushEvent: { [weak self] envelope in
-                self?.pushChatEnvelope(envelope)
-            },
-            diagnosticTrace: daemonChatDiagnostics,
-            providerServices: runtime.provider)
-
-        return queue.sync {
-            if let existing = _chatHost {
-                return existing
+        if try await chatHostCreationGate.acquire(wikiID: wikiID) {
+            do {
+                try await createChatHost(wikiID: wikiID)
+                await chatHostCreationGate.finish(wikiID: wikiID, result: .success(()))
+            } catch {
+                await chatHostCreationGate.finish(wikiID: wikiID, result: .failure(error))
+                throw error
             }
-            _chatHost = host
-            return host
+        }
+        guard let host = queue.sync(execute: { chatHosts[wikiID] }) else {
+            throw DaemonStoreResolutionError.unavailable(wikiID)
+        }
+        return host
+    }
+
+    private func createChatHost(wikiID: WikiID) async throws {
+        if queue.sync(execute: { chatHosts[wikiID] != nil }) {
+            return
+        }
+
+        let services = try await prepareAndResolveWikiServices(wikiID: wikiID)
+        let runtime = try await runtimeServices()
+        let launcherPair = await MainActor.run {
+            services.launcherFactory(wikiID: wikiID)
+        }
+        let storeResolver: @Sendable (WikiID) -> GRDBWikiStore? = { [weak self] requestedWikiID in
+            guard requestedWikiID == wikiID else { return nil }
+            return self?.preparedStoreIfAvailable(wikiID: requestedWikiID)
+        }
+
+        let host = await MainActor.run {
+            DaemonChatHost(
+                containerDirectory: containerDirectory,
+                launcherPair: launcherPair,
+                storeResolver: storeResolver,
+                pushEvent: { [weak self] envelope in
+                    self?.pushChatEnvelope(envelope)
+                },
+                diagnosticTrace: daemonChatDiagnostics,
+                providerServices: runtime.provider)
+        }
+        try Task.checkCancellation()
+
+        let inserted = queue.sync { () -> Bool in
+            if chatHosts[wikiID] != nil {
+                return false
+            }
+            chatHosts[wikiID] = host
+            return true
+        }
+        if !inserted {
+            await host.shutdown()
         }
     }
     #endif
@@ -751,7 +871,7 @@ final class WikiDaemon: @unchecked Sendable {
         do {
             let req = try JSONDecoder().decode(ChatStartRequest.self, from: request)
             try await prepareWiki(req.wikiID)
-            let host = try await ensureChatHost()
+            let host = try await ensureChatHost(wikiID: req.wikiID)
             let chatID = try await host.startChat(
                 wikiID: req.wikiID, firstMessage: req.firstMessage,
                 providerId: req.providerId,
@@ -774,7 +894,7 @@ final class WikiDaemon: @unchecked Sendable {
         do {
             let req = try JSONDecoder().decode(ChatSubmitRequest.self, from: request)
             try await prepareWiki(req.wikiID)
-            let host = try await ensureChatHost()
+            let host = try await ensureChatHost(wikiID: req.wikiID)
             let chatID = try await host.submitTurn(req)
             let reply = ChatSubmitReply(chatID: chatID, error: nil)
             return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
@@ -793,7 +913,7 @@ final class WikiDaemon: @unchecked Sendable {
         do {
             let req = try JSONDecoder().decode(ChatContinueRequest.self, from: request)
             try await prepareWiki(req.wikiID)
-            let host = try await ensureChatHost()
+            let host = try await ensureChatHost(wikiID: req.wikiID)
             try await host.continueChat(wikiID: req.wikiID, chatID: req.chatID, message: req.message)
             let reply = ChatErrorReply(error: nil)
             return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
@@ -810,14 +930,9 @@ final class WikiDaemon: @unchecked Sendable {
     func sendChatMessageData(request: Data) async -> Data {
         #if canImport(WikiFSEngine)
         do {
-            let host = try await ensureChatHost()
-            guard let dict = try JSONSerialization.jsonObject(with: request) as? [String: Any],
-                  let chatID = dict["chatID"] as? String,
-                  let message = dict["message"] as? String else {
-                let reply = ChatErrorReply(error: "invalid request")
-                return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
-            }
-            try await host.sendChatMessage(chatID: ChatID(rawValue: chatID), message: message)
+            let req = try JSONDecoder().decode(ChatMessageRequest.self, from: request)
+            let host = try await ensureChatHost(wikiID: req.wikiID)
+            try await host.sendChatMessage(chatID: req.chatID, message: req.message)
             let reply = ChatErrorReply(error: nil)
             return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
         } catch {
@@ -829,27 +944,33 @@ final class WikiDaemon: @unchecked Sendable {
         #endif
     }
 
-    /// Stop a chat.
-    func stopChat(chatID: ChatID) async {
+    /// Stop a chat in its explicitly named wiki.
+    func stopChatData(request: Data) async {
         #if canImport(WikiFSEngine)
-        if let host = await DebugLog.trying("ensureChatHost", operation: { try await ensureChatHost() }) {
-            await host.stopChat(chatID: chatID)
+        guard let req = DebugLog.trying("decode ChatStopRequest", operation: {
+            try JSONDecoder().decode(ChatStopRequest.self, from: request)
+        }) else { return }
+        if let host = await DebugLog.trying("ensureChatHost", operation: {
+            try await ensureChatHost(wikiID: req.wikiID)
+        }) {
+            await host.stopChat(chatID: req.chatID)
         }
         #endif
     }
 
     /// Get the authoritative chat sync snapshot. Returns JSON
     /// `ChatSyncSnapshotEnvelope` data.
-    func chatSessionStateData(chatID: ChatID) async -> Data {
+    func chatSessionStateData(request: Data) async -> Data {
         #if canImport(WikiFSEngine)
         do {
-            let host = try await ensureChatHost()
-            let state = try await host.chatSessionState(chatID: chatID)
+            let req = try JSONDecoder().decode(ChatSessionStateRequest.self, from: request)
+            let host = try await ensureChatHost(wikiID: req.wikiID)
+            let state = try await host.chatSessionState(chatID: req.chatID)
             return (DebugLog.trying("encode chat sync snapshot envelope", operation: {
                 try ChatSyncSnapshotEnvelope(snapshot: state).encodedData()
             })) ?? Data()
         } catch {
-            DebugLog.agent("WikiDaemon.chatSessionStateData failed for \(chatID.rawValue): \(error)")
+            DebugLog.agent("WikiDaemon.chatSessionStateData failed: \(error)")
             return Data()
         }
         #else
@@ -904,9 +1025,10 @@ final class WikiDaemon: @unchecked Sendable {
     /// Resolve a chat permission.
     func resolveChatPermissionData(request: Data) async {
         #if canImport(WikiFSEngine)
-        if let host = await DebugLog.trying("ensureChatHost", operation: { try await ensureChatHost() }),
-           let req = DebugLog.trying("JSONDecoder.decode", operation: {
+        if let req = DebugLog.trying("JSONDecoder.decode", operation: {
             try JSONDecoder().decode(ChatPermissionResolveRequest.self, from: request)
+        }), let host = await DebugLog.trying("ensureChatHost", operation: {
+            try await ensureChatHost(wikiID: req.wikiID)
         }) {
             await host.resolvePermission(
                 chatID: req.chatID, optionId: req.optionId, approve: req.approve)
@@ -918,8 +1040,8 @@ final class WikiDaemon: @unchecked Sendable {
     func setChatConfigOptionData(request: Data) async -> Data {
         #if canImport(WikiFSEngine)
         do {
-            let host = try await ensureChatHost()
             let req = try JSONDecoder().decode(ChatConfigOptionRequest.self, from: request)
+            let host = try await ensureChatHost(wikiID: req.wikiID)
             try await host.setChatConfigOption(
                 chatID: req.chatID, option: req.option, value: req.value)
             let reply = ChatErrorReply(error: nil)

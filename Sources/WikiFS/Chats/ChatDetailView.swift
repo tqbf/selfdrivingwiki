@@ -142,7 +142,7 @@ struct ChatDetailView: View {
                         limit: RemoteChatSession.committedHistoryPageSize
                     )
                 }
-                await coordinator.rehydrate(chatID: chatID)
+                await coordinator.rehydrate(wikiID: session.wikiID, chatID: chatID)
             } else {
                 persistedTranscriptItems = []
                 if let question = store.pendingChatQuestion {
@@ -344,7 +344,8 @@ struct ChatDetailView: View {
         case .resolvePermission(let resolution):
             guard let chatID else { return }
             Task {
-                await coordinator.resolvePermission(chatID: chatID, intent: resolution)
+                await coordinator.resolvePermission(
+                    wikiID: session.wikiID, chatID: chatID, intent: resolution)
             }
         }
     }
@@ -594,7 +595,7 @@ struct ChatDetailView: View {
 
     private func stopActiveResponse() {
         guard let chatID else { return }
-        Task { await coordinator.stop(chatID: chatID) }
+        Task { await coordinator.stop(wikiID: session.wikiID, chatID: chatID) }
     }
 
     private func sendMessage() {

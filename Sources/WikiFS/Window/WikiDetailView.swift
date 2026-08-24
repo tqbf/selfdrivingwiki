@@ -265,7 +265,7 @@ struct WikiDetailView: View {
             ChatDetailView(
                 chatID: chatID,
                 store: store,
-                remoteSession: chatDaemon.session(for: chatID),
+                remoteSession: chatDaemon.session(wikiID: session.wikiID, for: chatID),
                 coordinator: chatDaemon,
                 session: session,
                 fileProvider: fileProvider

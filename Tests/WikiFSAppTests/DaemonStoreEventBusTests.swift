@@ -49,24 +49,23 @@ struct DaemonStoreEventBusTests {
 
     // MARK: - Bus is attached at every store-creation seam
 
-    @Test func openStoreAttachesEventBus() throws {
+    @Test func openStoreAttachesEventBus() async throws {
         let daemon = WikiDaemon(containerDirectory: makeTempDir())
         let wikiID = try makeWiki(daemon)
 
-        #expect(daemon.openStore(wikiID: wikiID))
-        // `resolveStoreLazily` serves the now-cached store; the bus must be set.
-        let store = try #require(daemon.resolveStoreLazily(wikiID: wikiID))
+        #expect(await daemon.openStore(wikiID: wikiID))
+        let store = try daemon.resolvePreparedStore(wikiID: wikiID)
         #expect(store.eventBus != nil)
         #expect(store.eventBus?.wikiID == wikiID)
     }
 
-    @Test func resolveStoreLazilyAttachesEventBus() throws {
+    @Test func prepareWikiAttachesEventBus() async throws {
         let daemon = WikiDaemon(containerDirectory: makeTempDir())
         let wikiID = try makeWiki(daemon)
-        // Drop the cache so the resolver hits the lazy-open path.
         daemon.closeStore(wikiID: wikiID)
 
-        let store = try #require(daemon.resolveStoreLazily(wikiID: wikiID))
+        try await daemon.prepareWiki(wikiID)
+        let store = try daemon.resolvePreparedStore(wikiID: wikiID)
         #expect(store.eventBus != nil)
         #expect(store.eventBus?.wikiID == wikiID)
     }
@@ -76,7 +75,7 @@ struct DaemonStoreEventBusTests {
         let wikiID = try makeWiki(daemon)
 
         // createWiki opens + caches the store; resolve returns that same store.
-        let store = try #require(daemon.resolveStoreLazily(wikiID: wikiID))
+        let store = try daemon.resolvePreparedStore(wikiID: wikiID)
         #expect(store.eventBus != nil)
     }
 
@@ -86,8 +85,9 @@ struct DaemonStoreEventBusTests {
         let daemon = WikiDaemon(containerDirectory: makeTempDir())
         let wikiID = try makeWiki(daemon)
         daemon.closeStore(wikiID: wikiID)
+        try await daemon.prepareWiki(wikiID)
 
-        let store = try #require(daemon.resolveStoreLazily(wikiID: wikiID))
+        let store = try daemon.resolvePreparedStore(wikiID: wikiID)
         let bus = try #require(store.eventBus)
         let collector = Collector()
         bus.subscribe(nil) { collector.append($0) }
@@ -109,8 +109,9 @@ struct DaemonStoreEventBusTests {
         let daemon = WikiDaemon(containerDirectory: makeTempDir())
         let wikiID = try makeWiki(daemon)
         daemon.closeStore(wikiID: wikiID)
+        try await daemon.prepareWiki(wikiID)
 
-        let store = try #require(daemon.resolveStoreLazily(wikiID: wikiID))
+        let store = try daemon.resolvePreparedStore(wikiID: wikiID)
         let bus = try #require(store.eventBus)
         let a = Collector()
         let b = Collector()

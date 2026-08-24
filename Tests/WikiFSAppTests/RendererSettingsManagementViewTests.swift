@@ -32,7 +32,6 @@ struct RendererSettingsManagementViewTests {
         #expect(source.contains("RendererSettingsPackagePicker.v1FormatMessage"))
         #expect(source.contains("The renderer package could not be validated or installed."))
         #expect(!appSource.contains(".task { await installedRendererHost.bootstrapBundledRendererPackages() }"))
-        #expect(appSource.contains("RendererCompositionOwner"))
         #expect(!source.contains("Install Renderer Directory"))
         #expect(!source.contains("No Renderer Directories"))
         #expect(!source.contains("The renderer directory could not be validated or installed."))

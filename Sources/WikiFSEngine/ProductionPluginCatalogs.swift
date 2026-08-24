@@ -470,6 +470,7 @@ public struct AppServices: Sendable {
     public let readPool: WikiReadPool
     public let extractionBackends: ExtractionBackendRegistry
     public let searchProviders: SearchProviderRegistry
+    public let launcherFactory: LauncherFactory
 
     public static func resolve(from profile: BootedProfile) async throws -> AppServices {
         AppServices(
@@ -477,7 +478,8 @@ public struct AppServices: Sendable {
             store: try await profile.context.require(StoreServiceKeys.store),
             readPool: try await profile.context.require(StoreServiceKeys.readPool),
             extractionBackends: try await profile.context.require(ExtractionServiceKeys.backends),
-            searchProviders: try await profile.context.require(SearchServiceKeys.providers))
+            searchProviders: try await profile.context.require(SearchServiceKeys.providers),
+            launcherFactory: try await profile.context.require(LauncherServiceKeys.factory))
     }
 
     public func shutdown() async throws {
@@ -563,6 +565,25 @@ public enum ProductionProfiles {
 
     public static func cli(homeDirectory: URL? = nil, overlay: String? = nil) throws -> [Entry] {
         try resolve(kind: .cli, scope: .process, homeDirectory: homeDirectory, overlay: overlay).entries
+    }
+
+    public static func cli(
+        databaseURL: URL,
+        wikiID: WikiID,
+        homeDirectory: URL,
+        overlay: String? = nil
+    ) throws -> [Entry] {
+        try resolve(
+            kind: .cli,
+            scope: .process,
+            homeDirectory: homeDirectory,
+            overlay: overlay,
+            ambient: PatchFile(entries: [
+                Entry(id: EntryID("store"), plugin: StorePlugin.id, config: [
+                    "databasePath": .string(databaseURL.path),
+                    "wikiID": .string(wikiID.rawValue),
+                ]),
+            ])).entries
     }
 
     public static func resolve(
@@ -667,13 +688,20 @@ public enum DaemonPluginCatalog {
 }
 
 public enum CLIPluginCatalog {
+    public static func definitions(
+        makeTantivyRuntime: @escaping SearchRuntimeFactory.Factory = SearchRuntimeCompositionFactory.runtimeFactory
+    ) -> [PluginDefinition] {
+        [
+            StorePlugin.definition,
+            SearchPlugin.definition,
+            TantivySearchPlugin.definition(makeRuntime: makeTantivyRuntime),
+        ]
+    }
+
     public static func build(
         makeTantivyRuntime: @escaping SearchRuntimeFactory.Factory = SearchRuntimeCompositionFactory.runtimeFactory
     ) throws -> PluginCatalog {
-        try PluginCatalog([
-            SearchPlugin.definition,
-            TantivySearchPlugin.definition(makeRuntime: makeTantivyRuntime),
-        ])
+        try PluginCatalog(definitions(makeTantivyRuntime: makeTantivyRuntime))
     }
 }
 
