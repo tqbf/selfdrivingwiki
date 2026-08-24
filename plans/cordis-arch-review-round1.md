@@ -10,13 +10,17 @@ finding. Owner decision: fix all findings, then re-review until clean.
    Home and command patches use the same resolver. A final ambient patch adds
    only machine facts. The catalogs now contain definitions and injected
    factories, but they do not generate composition rows.
-2. **Tool and agent-loop event extension points are decorative.**
-   `ToolServiceKeys`/`AgentLoopServiceKeys` define the waterfalls, but no
-   production execution routes through them (`QueueEngine.swift:842-845`
-   calls workers directly; agent execution stays in `AgentLauncher`).
-   Fix: route the real agent request/turn driver through `AgentLoopService`
-   and every real tool call through `ToolRuntime.execute`; end-to-end tests
-   where a waterfall listener rewrites/short-circuits a real invocation.
+2. **TOOLS FIXED (`0e817bd9`), AGENT LOOP OPEN — Tool and agent-loop event extension points were decorative.**
+   Queue workers now run through `ToolRuntime.execute` in both production
+   roots. Each dispatch registers a typed, item-specific worker tool and removes
+   it after success, failure, or cancellation. An end-to-end `QueueEngine` test
+   rewrites the Codable invocation before execution and observes the result after
+   execution. The direct executor remains available only for tests and explicit
+   compatibility paths.
+
+   Agent execution still stays in `AgentLauncher`. Route the real agent request
+   and turn driver through `AgentLoopService`, then add a real invocation test
+   that rewrites or stops the request.
 
 ## Major
 
