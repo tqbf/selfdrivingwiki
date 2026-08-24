@@ -104,8 +104,8 @@ The reviewed code passed these commands:
 
 The final test suite ran 3,615 tests in 370 suites.
 
-## Remaining delivery gates
+## Delivery
 
-The branch still needs a Conventional Commit, push, and pull request.
+Commit `8b8c67c3` created the initial delivery. The branch is pushed, and pull request #1146 is open.
 
-Do not merge or enable auto-merge.
+The pull request does not enable auto-merge. The operator owns the merge decision.
