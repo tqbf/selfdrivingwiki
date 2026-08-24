@@ -39,6 +39,7 @@ Design record: `plans/cordis-final-extension.md`.
 - `make build` passed.
 - `make test` passed with 3,586 tests in 360 suites.
 - `make check-cordis` passed.
+- The final opt-in Cordis selection passed with 59 tests in five suites.
 - `CLITantivyLegResolverTests` passed with 11 tests.
 - `CordisBoundaryScriptTests` passed with 12 parameterized cases.
 - The focused daemon store, launcher, chat, workload, and profile suites passed
@@ -46,4 +47,6 @@ Design record: `plans/cordis-final-extension.md`.
 - `GRDBWikiStore(` has no match in `Sources/wikid/WikiDaemon.swift` or
   `Sources/wikictl/main.swift`.
 
-The final opt-in app suite and independent review run before the pull request.
+The complete opt-in app suite still has unrelated parallel-state failures. They
+occur in MIME inference, a renderer source audit, chat sequence timing, and XPC
+event-sink registration timing. The matching focused Cordis suites pass.
