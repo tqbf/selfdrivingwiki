@@ -3,10 +3,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-strict=false
-if [[ "${1:-}" == "--strict" ]]; then
-  strict=true
-elif [[ $# -ne 0 ]]; then
+if [[ $# -gt 1 || (${1:-} != "" && ${1:-} != "--strict") ]]; then
   echo "usage: scripts/check-cordis-boundaries [--strict]" >&2
   exit 2
 fi
@@ -14,31 +11,14 @@ fi
 runtime_matches="$({ grep -RIl --include='*.swift' 'RuntimeAssembly' Sources || true; } | LC_ALL=C sort)"
 session_matches="$({ grep -RIlE --include='*.swift' '(^|[^[:alnum:]_])WikiSession\(' Sources || true; } | LC_ALL=C sort)"
 
-if $strict; then
-  if [[ -n "$runtime_matches" ]]; then
-    echo "Cordis boundary violation: RuntimeAssembly remains in Sources/:" >&2
-    printf '%s\n' "$runtime_matches" >&2
-  fi
-  if [[ -n "$session_matches" ]]; then
-    echo "Cordis boundary violation: WikiSession is instantiated in Sources/:" >&2
-    printf '%s\n' "$session_matches" >&2
-  fi
-  [[ -z "$runtime_matches" && -z "$session_matches" ]]
-  exit
+if [[ -n "$runtime_matches" ]]; then
+  echo "Cordis boundary violation: RuntimeAssembly remains in Sources/:" >&2
+  printf '%s\n' "$runtime_matches" >&2
 fi
-
-expected_runtime_matches=''
-expected_session_matches=''
-
-if [[ "$runtime_matches" != "$expected_runtime_matches" ]]; then
-  echo "Cordis boundary baseline changed: RuntimeAssembly references differ." >&2
-  diff -u <(printf '%s\n' "$expected_runtime_matches") <(printf '%s\n' "$runtime_matches") >&2 || true
-  exit 1
+if [[ -n "$session_matches" ]]; then
+  echo "Cordis boundary violation: WikiSession is instantiated in Sources/:" >&2
+  printf '%s\n' "$session_matches" >&2
 fi
-if [[ "$session_matches" != "$expected_session_matches" ]]; then
-  echo "Cordis boundary baseline changed: WikiSession construction sites differ." >&2
-  diff -u <(printf '%s\n' "$expected_session_matches") <(printf '%s\n' "$session_matches") >&2 || true
-  exit 1
-fi
+[[ -z "$runtime_matches" && -z "$session_matches" ]]
 
-echo "Cordis boundary baseline verified (run with --strict for the Phase 5b end state)."
+echo "Cordis boundaries verified."

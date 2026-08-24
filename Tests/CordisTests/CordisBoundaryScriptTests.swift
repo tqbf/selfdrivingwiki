@@ -3,12 +3,13 @@ import Testing
 
 @Suite("Cordis boundary script", .serialized, .timeLimit(.minutes(1)))
 struct CordisBoundaryScriptTests {
-    @Test("current source tree satisfies the boundary baseline")
-    func currentTreeSatisfiesBoundaryBaseline() async throws {
+    @Test("current source tree satisfies strict boundaries", arguments: [[], ["--strict"]])
+    func currentTreeSatisfiesStrictBoundaries(arguments: [String]) async throws {
         let root = repositoryRoot()
         let process = Process()
         process.currentDirectoryURL = root
         process.executableURL = root.appendingPathComponent("scripts/check-cordis-boundaries")
+        process.arguments = arguments
         let standardError = Pipe()
         process.standardError = standardError
 

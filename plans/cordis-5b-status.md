@@ -4,13 +4,23 @@
 
 Stage 1 added `scripts/check-cordis-boundaries` and `make check-cordis`.
 
-The default check verifies the current violation baseline. The `--strict` option rejects all `RuntimeAssembly` references and all `WikiSession` construction sites.
+Stage 2 is complete. `ProfileWikiSession` is the sole per-wiki session implementation. Standalone factories own the six process-plugin runtime graphs.
 
-`CordisBoundaryScriptTests` runs the default check from Swift Testing.
+The source tree contains no `RuntimeAssembly` type or file. The app, daemon, and CLI start from profiles.
 
-## Stage 2 status
+The boundary check is strict by default. The `--strict` option is an alias for compatibility. Both modes reject all `RuntimeAssembly` references and all `WikiSession` construction sites.
 
-Stage 2 removed the privileged `WikiSession` implementation. Runtime assembly deletion remains in progress.
+`CordisBoundaryScriptTests` checks the default mode and the `--strict` alias from Swift Testing.
+
+## Stage 2 completion summary
+
+Commit 1 moved the six runtime graphs into standalone factories and converted their tests. Commit 2 removed the transitional boundary baseline and completed the Stage 2 policy updates.
+
+The required `make build`, `make test`, and `make check-cordis` gates pass. A recursive source grep returns no `RuntimeAssembly` matches.
+
+## Historical Stage 2 status
+
+The following sections record the state before the final deletion slice.
 
 The app now starts an observable `AppProcessProfileOwner` alongside the legacy synchronous composition. The owner boots all five app process entries asynchronously, exposes idle/loading/ready/failed readiness plus the booted profile and typed process services, owns its startup task, and joins app termination shutdown. Fixture tests cover readiness, resolved services, failure, and idempotent disposal.
 
