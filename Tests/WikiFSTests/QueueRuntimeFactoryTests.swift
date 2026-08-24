@@ -122,6 +122,7 @@ struct QueueRuntimeFactoryTests {
         for service in requiredServices {
             #expect(source.contains("label: \"\(service)\""))
         }
+        #expect(source.contains("ToolServiceKeys.tools"))
         for boundary in forbiddenBoundaries {
             #expect(!source.contains(boundary))
         }

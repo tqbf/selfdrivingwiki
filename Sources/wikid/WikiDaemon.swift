@@ -164,16 +164,17 @@ final class WikiDaemon: @unchecked Sendable {
 
     private func runtimeServices() async throws -> (
         provider: any AgentProviderServices,
-        extraction: any ExtractionServices
+        extraction: any ExtractionServices,
+        tools: ToolRuntime?
     ) {
         if let services = try await processServices() {
-            return (services.agentProvider, services.extraction)
+            return (services.agentProvider, services.extraction, services.tools)
         }
         guard let provider = legacyAgentProviderServices,
               let extraction = legacyExtractionCompositionOwner?.services else {
             throw QueueRPCError(code: .unavailable, message: "Daemon runtime services are unavailable")
         }
-        return (provider, extraction)
+        return (provider, extraction, nil)
     }
     #endif
 
@@ -666,10 +667,20 @@ final class WikiDaemon: @unchecked Sendable {
             .extraction: extractionFactory,
             .ingestion: ingestionFactory,
         ])
-        let engine = QueueEngine(
-            store: queueStore,
-            workerFactory: workerFactory,
-            outputChannel: outputChannel)
+        let engine: QueueEngine
+        if let tools = runtime.tools {
+            engine = QueueEngine(
+                store: queueStore,
+                workerFactory: workerFactory,
+                workerExecutor: CordisQueueWorkerExecutor(runtime: tools),
+                outputChannel: outputChannel)
+        } else {
+            // The synchronous daemon initializer is test/compatibility-only.
+            engine = QueueEngine(
+                store: queueStore,
+                workerFactory: workerFactory,
+                outputChannel: outputChannel)
+        }
         let forwardingStream = outputChannel.events(onSubscribed: {})
         let forwardingTask = Task { [weak self] in
             for await event in forwardingStream {

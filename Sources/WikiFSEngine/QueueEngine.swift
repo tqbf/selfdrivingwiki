@@ -36,6 +36,7 @@ public actor QueueEngine {
     private let store: QueueStore
     private let config: QueueEngineConfig
     private let workerFactory: any QueueWorkerFactory
+    private let workerExecutor: any QueueWorkerExecutor
     private let shutdownPolicy: QueueEngineShutdownPolicy
     private let deadlineSource: any QueueEngineDeadlineSource
 
@@ -93,6 +94,7 @@ public actor QueueEngine {
         store: QueueStore,
         config: QueueEngineConfig = QueueEngineConfig(),
         workerFactory: any QueueWorkerFactory,
+        workerExecutor: any QueueWorkerExecutor = DirectQueueWorkerExecutor(),
         outputChannel: QueueWorkerOutputChannel? = nil,
         shutdownPolicy: QueueEngineShutdownPolicy = QueueEngineShutdownPolicy(),
         deadlineSource: any QueueEngineDeadlineSource = ContinuousQueueEngineDeadlineSource()
@@ -100,6 +102,7 @@ public actor QueueEngine {
         self.store = store
         self.config = config
         self.workerFactory = workerFactory
+        self.workerExecutor = workerExecutor
         self.outputChannel = outputChannel ?? QueueWorkerOutputChannel(store: store)
         self.shutdownPolicy = shutdownPolicy
         self.deadlineSource = deadlineSource
@@ -841,7 +844,7 @@ public actor QueueEngine {
         // inside the worker's `await` points.
         let result: Result<Void, Error>
         do {
-            try await worker.execute(item)
+            try await workerExecutor.execute(worker: worker, item: item)
             result = .success(())
         } catch is CancellationError {
             result = .failure(CancellationError())

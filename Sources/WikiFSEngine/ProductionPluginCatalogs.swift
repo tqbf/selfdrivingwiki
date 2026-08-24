@@ -245,11 +245,13 @@ public final class AppProcessProfileOwner {
 public struct DaemonProcessServices: Sendable {
     public let agentProvider: any AgentProviderServices
     public let extraction: any ExtractionServices
+    public let tools: ToolRuntime?
 
     public static func resolve(from profile: BootedProfile) async throws -> DaemonProcessServices {
         DaemonProcessServices(
             agentProvider: try await profile.context.require(ProcessServiceKeys.agentProvider),
-            extraction: try await profile.context.require(ProcessServiceKeys.extraction))
+            extraction: try await profile.context.require(ProcessServiceKeys.extraction),
+            tools: try await profile.context.find(ToolServiceKeys.tools))
     }
 }
 
