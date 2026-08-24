@@ -147,6 +147,31 @@ import WikiFSCore
         #expect(decision == .applyViaModelConfigOption(selectedValue: "haiku"))
     }
 
+    @Test func configOptionModel_effortVariantAppliesAdvertisedBase() {
+        let decision = ACPModelSelectionResolver.resolveConfigOptionModel(
+            selectedModelId: "gpt-5.6-luna[high]",
+            configOptions: [modelConfigOption(
+                current: "gpt-5.6-codex",
+                values: ["gpt-5.6-codex", "gpt-5.6-luna"])])
+        #expect(decision == .applyViaModelConfigOption(selectedValue: "gpt-5.6-luna"))
+    }
+
+    @Test func configOptionModel_exactEffortVariantTakesPrecedence() {
+        let decision = ACPModelSelectionResolver.resolveConfigOptionModel(
+            selectedModelId: "gpt-5.6-luna[high]",
+            configOptions: [modelConfigOption(
+                current: "gpt-5.6-luna[medium]",
+                values: ["gpt-5.6-luna", "gpt-5.6-luna[high]", "gpt-5.6-luna[medium]"])])
+        #expect(decision == .applyViaModelConfigOption(selectedValue: "gpt-5.6-luna[high]"))
+    }
+
+    @Test func configOptionModel_alreadyCurrentBaseSkipsEffortVariant() {
+        let decision = ACPModelSelectionResolver.resolveConfigOptionModel(
+            selectedModelId: "gpt-5.6-luna[high]",
+            configOptions: [modelConfigOption(current: "gpt-5.6-luna", values: ["gpt-5.6-luna"])])
+        #expect(decision == .useAgentDefault)
+    }
+
     @Test func configOptionModel_alreadyCurrentSkips() {
         // Selection matches the agent's current model → no-op round-trip.
         let decision = ACPModelSelectionResolver.resolveConfigOptionModel(

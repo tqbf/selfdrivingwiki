@@ -66,16 +66,39 @@ public extension ACPModelSelectionResolver {
             return .useAgentDefault
         }
         // Validate the selection against the agent's advertised option values —
-        // same defensive posture as the setModel stale-selection guard.
+        // same defensive posture as the setModel stale-selection guard. Picker
+        // model families append a thinking-effort annotation (for example,
+        // "gpt-5.6-luna[high]") even when the agent advertises only the base
+        // model. Prefer an exact advertised value, then try that base model.
         let advertisedValues = Self.configOptionValues(from: select.options)
-        guard advertisedValues.contains(selectedModelId) else {
+        let resolvedModelId: String
+        if advertisedValues.contains(selectedModelId) {
+            resolvedModelId = selectedModelId
+        } else if let baseModelId = Self.baseModelId(fromEffortVariant: selectedModelId),
+                  advertisedValues.contains(baseModelId) {
+            resolvedModelId = baseModelId
+        } else {
             return .useAgentDefault   // stale/unrecognized → don't 404 the agent
         }
         // Already the agent's current model → no-op round-trip.
-        if select.currentValue.value == selectedModelId {
+        if select.currentValue.value == resolvedModelId {
             return .useAgentDefault
         }
-        return .applyViaModelConfigOption(selectedValue: selectedModelId)
+        return .applyViaModelConfigOption(selectedValue: resolvedModelId)
+    }
+
+    /// Removes a well-formed trailing picker effort annotation from a model id.
+    /// The non-empty base and suffix checks keep arbitrary bracketed model ids
+    /// from being normalized accidentally.
+    static func baseModelId(fromEffortVariant modelId: String) -> String? {
+        guard modelId.last == "]",
+              let openingBracket = modelId.lastIndex(of: "["),
+              openingBracket != modelId.startIndex,
+              modelId.index(after: openingBracket) != modelId.index(before: modelId.endIndex)
+        else {
+            return nil
+        }
+        return String(modelId[..<openingBracket])
     }
 
     /// Flatten the SDK's `ungrouped`/`grouped` select options into the raw

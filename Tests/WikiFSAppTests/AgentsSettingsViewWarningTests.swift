@@ -14,6 +14,17 @@ import WikiFSCore
 @Suite("AgentsSettingsView modelWarning")
 struct AgentsSettingsViewWarningTests {
 
+    @Test func codexModelPickerUsesTypedSelectionTags() {
+        let modelID = ModelID(rawValue: "gpt-5.6-luna[high]")
+        let modelTag: AgentsSettingsView.ModelPickerSelection =
+            AgentsSettingsView.modelPickerTag(for: modelID)
+        let defaultTag: AgentsSettingsView.ModelPickerSelection =
+            AgentsSettingsView.modelPickerTag(for: nil)
+
+        #expect(modelTag == modelID)
+        #expect(defaultTag == nil)
+    }
+
     // MARK: - Returns nil when no warning is needed
 
     @Test func returnsNilWhenProviderDisabled() {
