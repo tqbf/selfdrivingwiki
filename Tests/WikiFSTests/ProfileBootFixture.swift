@@ -9,6 +9,7 @@ import WikiFSCore
 enum ProfileBootFixture {
     static let listenerPluginID = PluginID("test.profile.store-listener")
     static let listenerEntryID = EntryID("store-listener")
+    static let launcherFactoryPluginID = PluginID("test.profile.launcher-factory")
 
     static func directory(named name: String) throws -> URL {
         let url = FileManager.default.temporaryDirectory
@@ -49,7 +50,9 @@ enum ProfileBootFixture {
     }
 
     static func daemonCatalog() throws -> PluginCatalog {
-        try DaemonPluginCatalog.build(factories: DaemonPluginCatalogFactories(base: baseFactories))
+        try DaemonPluginCatalog.build(
+            factories: DaemonPluginCatalogFactories(base: baseFactories),
+            additionalDefinitions: [launcherFactoryDefinition])
     }
 
     static func processCatalog(includeAppServices: Bool, recorder: ProfileProcessDisposalRecorder) throws -> PluginCatalog {
@@ -90,7 +93,12 @@ enum ProfileBootFixture {
         ProfileQueueExtractionProvider()
     }
 
-    static func entries(databaseURL: URL, wikiID: String, includeAppProviders: Bool) -> [Entry] {
+    static func entries(
+        databaseURL: URL,
+        wikiID: String,
+        includeAppProviders: Bool,
+        includeLauncherFactory: Bool = false
+    ) -> [Entry] {
         var rows = [
             Entry(id: EntryID("store"), plugin: StorePlugin.id, config: [
                 "databasePath": .string(databaseURL.path),
@@ -110,6 +118,11 @@ enum ProfileBootFixture {
             Entry(id: EntryID("no-op-tool"), plugin: NoOpToolPlugin.id),
             Entry(id: EntryID("embeddings"), plugin: EmbeddingsSearchPlugin.id),
         ]
+        if includeLauncherFactory {
+            rows.append(Entry(
+                id: EntryID("launcher-factory"),
+                plugin: launcherFactoryPluginID))
+        }
         if includeAppProviders {
             rows.append(contentsOf: [
                 Entry(id: EntryID("renderer-services"), plugin: RendererServicesPlugin.id),
@@ -138,6 +151,24 @@ enum ProfileBootFixture {
             configureEmbeddings: {},
             selectedEmbeddingIdentifier: { "fixture-embedding" },
             embeddingsAvailable: { false })
+    }
+
+    private static var launcherFactoryDefinition: PluginDefinition {
+        PluginDefinition(
+            id: launcherFactoryPluginID,
+            provisions: [ServiceDependency(LauncherServiceKeys.factory)]) {
+            try ComponentDefinition(
+                label: launcherFactoryPluginID.rawValue,
+                provisions: [ServiceDependency(LauncherServiceKeys.factory)]) { activation in
+                let factory = LauncherFactory { _ in
+                    let gate = GenerationGate(laneLimits: LauncherAdmissionPolicy.laneLimits)
+                    return LauncherPair(
+                        gate: gate,
+                        launcher: AgentLauncher(generationGate: gate))
+                }
+                _ = try await activation.supply(LauncherServiceKeys.factory, value: factory)
+            }
+        }
     }
 
     private static func listenerDefinition(recorder: ProfileStoreEventRecorder) -> PluginDefinition {

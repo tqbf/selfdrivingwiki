@@ -75,17 +75,23 @@ struct DaemonChatHostTests {
         WikiDaemon(containerDirectory: dir)
     }
 
+    private func makeProfileDaemon(
+        dir: URL,
+        name: String = "Test"
+    ) async throws -> (daemon: WikiDaemon, wiki: WikiDescriptor) {
+        let daemon = try await WikiDaemon.profileBackedForTesting(containerDirectory: dir)
+        let created = try #require(daemon.createWiki(name: name))
+        let wiki = try JSONDecoder().decode(WikiDescriptor.self, from: created)
+        try await daemon.prepareWiki(wiki.id)
+        return (daemon, wiki)
+    }
+
     // MARK: - Store-level operations (the layer the chat host delegates to)
 
     @Test func chatStoreCreatesRowAndSeedsFirstMessage() async throws {
         let dir = makeTempDir()
-        let daemon = makeDaemon(dir: dir)
-        #expect(await daemon.openStore(wikiID: WikiID(rawValue: "test-wiki")) || true)
 
-        // Create a wiki + open the store
-        _ = daemon.createWiki(name: "Test")
-
-        // The store resolver path the chat host uses
+        // This store-level test verifies persistence independently of daemon routing.
         let store = try GRDBWikiStore(
             databaseURL: dir.appendingPathComponent("test-wiki.sqlite"))
 
@@ -226,12 +232,10 @@ struct DaemonChatHostTests {
 
     @Test func daemonControllerPathDisablesLegacyStreamingCheckpointSink() async throws {
         let dir = makeTempDir()
-        let daemon = makeDaemon(dir: dir)
-        let created = try #require(daemon.createWiki(name: "Test"))
-        let wiki = try JSONDecoder().decode(WikiDescriptor.self, from: created)
+        let (daemon, wiki) = try await makeProfileDaemon(dir: dir)
         let store = try daemon.resolvePreparedStore(wikiID: wiki.id)
         let chat = try store.createChat(kind: .edit, title: "Checkpoint Disabled")
-        let host = try await daemon.ensureChatHost()
+        let host = try await daemon.ensureChatHost(wikiID: wiki.id)
 
         let usesCheckpoint = try await host.controllerUsesStreamingCheckpointForTesting(
             chatID: chat.id,
@@ -243,12 +247,10 @@ struct DaemonChatHostTests {
 
     @Test func idleControllerEvictionRemovesOnlyAQuiescentController() async throws {
         let dir = makeTempDir()
-        let daemon = makeDaemon(dir: dir)
-        let created = try #require(daemon.createWiki(name: "Test"))
-        let wiki = try JSONDecoder().decode(WikiDescriptor.self, from: created)
+        let (daemon, wiki) = try await makeProfileDaemon(dir: dir)
         let store = try daemon.resolvePreparedStore(wikiID: wiki.id)
         let chat = try store.createChat(kind: .edit, title: "Idle")
-        let host = try await daemon.ensureChatHost()
+        let host = try await daemon.ensureChatHost(wikiID: wiki.id)
 
         _ = try await host.controllerUsesStreamingCheckpointForTesting(
             chatID: chat.id,
@@ -329,9 +331,7 @@ struct DaemonChatHostTests {
 
     @Test func xpcChatSessionStateRoundTripsVersionedSnapshot() async throws {
         let dir = makeTempDir()
-        let daemon = makeDaemon(dir: dir)
-        let created = try #require(daemon.createWiki(name: "ChatTest"))
-        let wiki = try JSONDecoder().decode(WikiDescriptor.self, from: created)
+        let (daemon, wiki) = try await makeProfileDaemon(dir: dir, name: "ChatTest")
         let store = try daemon.resolvePreparedStore(wikiID: wiki.id)
         let chat = try store.createChat(kind: .edit, title: "Persisted Chat")
         let exporter = WikiDaemonExporter(daemon: daemon)
@@ -351,8 +351,10 @@ struct DaemonChatHostTests {
 
         let proxy = connection.remoteObjectProxyWithErrorHandler { _ in } as! WikiDaemonProtocol
 
+        let stateRequest = ChatSessionStateRequest(wikiID: wiki.id, chatID: chat.id)
+        let stateRequestData = try JSONEncoder().encode(stateRequest)
         let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
-            proxy.chatSessionState(chatID: chat.id.rawValue) { data in
+            proxy.chatSessionState(request: stateRequestData) { data in
                 cont.resume(returning: data)
             }
         }
@@ -431,8 +433,12 @@ struct DaemonChatHostTests {
 
         let proxy = connection.remoteObjectProxyWithErrorHandler { _ in } as! WikiDaemonProtocol
 
+        let stateRequest = ChatSessionStateRequest(
+            wikiID: WikiID(rawValue: "missing-wiki"),
+            chatID: ChatID(rawValue: "nonexistent"))
+        let stateRequestData = try JSONEncoder().encode(stateRequest)
         let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
-            proxy.chatSessionState(chatID: "nonexistent") { data in
+            proxy.chatSessionState(request: stateRequestData) { data in
                 cont.resume(returning: data)
             }
         }
@@ -442,9 +448,7 @@ struct DaemonChatHostTests {
 
     @Test func persistedOnlyChatSessionStateReadPerformsOneBoundedRecoveryWriteThenStabilizes() async throws {
         let dir = makeTempDir()
-        let daemon = makeDaemon(dir: dir)
-        let created = try #require(daemon.createWiki(name: "ChatTest"))
-        let wiki = try JSONDecoder().decode(WikiDescriptor.self, from: created)
+        let (daemon, wiki) = try await makeProfileDaemon(dir: dir, name: "ChatTest")
         let store = try daemon.resolvePreparedStore(wikiID: wiki.id)
         let chat = try store.createChat(kind: .edit, title: "Persisted Chat")
         let claimID = ChatTurnClaimID(rawValue: "claim-read-recovery")
@@ -471,7 +475,7 @@ struct DaemonChatHostTests {
             submittedAt: Date(timeIntervalSince1970: 12)
         )
 
-        let host = try await daemon.ensureChatHost()
+        let host = try await daemon.ensureChatHost(wikiID: wiki.id)
         let first = try await host.chatSessionState(chatID: chat.id)
         let second = try await host.chatSessionState(chatID: chat.id)
         let third = try await host.chatSessionState(chatID: chat.id)
@@ -511,30 +515,42 @@ struct DaemonChatHostTests {
 
         let proxy = connection.remoteObjectProxyWithErrorHandler { _ in } as! WikiDaemonProtocol
 
-        // Stop a non-existent chat — should not crash
+        // Stop a non-existent chat. The daemon must not crash.
+        let request = ChatStopRequest(
+            wikiID: WikiID(rawValue: "missing-wiki"),
+            chatID: ChatID(rawValue: "nonexistent"))
+        let requestData = try JSONEncoder().encode(request)
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            proxy.stopChat(chatID: "nonexistent") { cont.resume() }
+            proxy.stopChat(request: requestData) { cont.resume() }
         }
     }
 
     // MARK: - RC3: Shared generation gate
 
+    @Test func profileLauncherFactoryReturnsDistinctOperationObjects() async throws {
+        let dir = makeTempDir()
+        let (daemon, wiki) = try await makeProfileDaemon(dir: dir)
+
+        let identities = try await daemon.distinctLauncherPairIdentitiesForTesting(
+            wikiID: wiki.id)
+
+        #expect(identities.firstGate != identities.secondGate)
+        #expect(identities.firstLauncher != identities.secondLauncher)
+    }
+
     @Test func daemonChatHostUsesSharedGenerationGate() async throws {
         let dir = makeTempDir()
-        let daemon = makeDaemon(dir: dir)
-        _ = daemon.createWiki(name: "Test")
+        let (daemon, wiki) = try await makeProfileDaemon(dir: dir)
+        let host = try await daemon.ensureChatHost(wikiID: wiki.id)
+        let firstGate = await host.testSharedGenerationGate
 
-        let host = try await daemon.ensureChatHost()
-        let firstGate = try #require(await host.testSharedGenerationGate)
-
-        let store = try GRDBWikiStore(
-            databaseURL: dir.appendingPathComponent("test-wiki.sqlite"))
+        let store = try daemon.resolvePreparedStore(wikiID: wiki.id)
         let firstChat = try store.createChat(kind: .edit, title: "First Gate Chat")
         let secondChat = try store.createChat(kind: .edit, title: "Second Gate Chat")
 
         await #expect(throws: DaemonChatError.self) {
             try await host.submitTurn(ChatSubmitRequest(
-                wikiID: WikiID(rawValue: "test-wiki"),
+                wikiID: wiki.id,
                 chatID: firstChat.id,
                 submission: ChatTurnSubmission(
                     commandID: ChatCommandID(rawValue: ULID.generate()),
@@ -545,11 +561,11 @@ struct DaemonChatHostTests {
                 )
             ))
         }
-        let secondGateAfterFirstController = try #require(await host.testSharedGenerationGate)
+        let secondGateAfterFirstController = await host.testSharedGenerationGate
 
         await #expect(throws: DaemonChatError.self) {
             try await host.submitTurn(ChatSubmitRequest(
-                wikiID: WikiID(rawValue: "test-wiki"),
+                wikiID: wiki.id,
                 chatID: secondChat.id,
                 submission: ChatTurnSubmission(
                     commandID: ChatCommandID(rawValue: ULID.generate()),
@@ -560,7 +576,7 @@ struct DaemonChatHostTests {
                 )
             ))
         }
-        let thirdGateAfterSecondController = try #require(await host.testSharedGenerationGate)
+        let thirdGateAfterSecondController = await host.testSharedGenerationGate
 
         #expect(firstGate === secondGateAfterFirstController)
         #expect(firstGate === thirdGateAfterSecondController)
@@ -568,14 +584,12 @@ struct DaemonChatHostTests {
 
     @Test func newChatPreflightFailureRollsBackCreatedRowAndPropagatesError() async throws {
         let dir = makeTempDir()
-        let daemon = makeDaemon(dir: dir)
-        _ = daemon.createWiki(name: "Test")
-        let host = try await daemon.ensureChatHost()
-        let store = try GRDBWikiStore(
-            databaseURL: dir.appendingPathComponent("test-wiki.sqlite"))
+        let (daemon, wiki) = try await makeProfileDaemon(dir: dir)
+        let host = try await daemon.ensureChatHost(wikiID: wiki.id)
+        let store = try daemon.resolvePreparedStore(wikiID: wiki.id)
 
         await #expect(throws: DaemonChatError.self) {
-            try await host.startChat(wikiID: WikiID(rawValue: "test-wiki"), firstMessage: "new chat preflight")
+            try await host.startChat(wikiID: wiki.id, firstMessage: "new chat preflight")
         }
 
         #expect(try store.listChats().isEmpty)
@@ -584,16 +598,14 @@ struct DaemonChatHostTests {
 
     @Test func existingChatPreflightFailurePreservesRowAndPropagatesError() async throws {
         let dir = makeTempDir()
-        let daemon = makeDaemon(dir: dir)
-        _ = daemon.createWiki(name: "Test")
-        let host = try await daemon.ensureChatHost()
-        let store = try GRDBWikiStore(
-            databaseURL: dir.appendingPathComponent("test-wiki.sqlite"))
+        let (daemon, wiki) = try await makeProfileDaemon(dir: dir)
+        let host = try await daemon.ensureChatHost(wikiID: wiki.id)
+        let store = try daemon.resolvePreparedStore(wikiID: wiki.id)
         let existing = try store.createChat(kind: .edit, title: "Existing chat")
 
         await #expect(throws: DaemonChatError.self) {
             try await host.submitTurn(ChatSubmitRequest(
-                wikiID: WikiID(rawValue: "test-wiki"),
+                wikiID: wiki.id,
                 chatID: existing.id,
                 submission: ChatTurnSubmission(
                     commandID: ChatCommandID(rawValue: ULID.generate()),
@@ -611,12 +623,10 @@ struct DaemonChatHostTests {
 
     @Test func coldAndWarmConfigurationControllersKeepOneIdleEvictionTimer() async throws {
         let dir = makeTempDir()
-        let daemon = makeDaemon(dir: dir)
-        let created = try #require(daemon.createWiki(name: "Test"))
-        let wiki = try JSONDecoder().decode(WikiDescriptor.self, from: created)
+        let (daemon, wiki) = try await makeProfileDaemon(dir: dir)
         let store = try daemon.resolvePreparedStore(wikiID: wiki.id)
         let chat = try store.createChat(kind: .edit, title: "Cold configuration")
-        let host = try await daemon.ensureChatHost()
+        let host = try await daemon.ensureChatHost(wikiID: wiki.id)
 
         try await host.setChatConfigOption(
             chatID: chat.id,
@@ -664,17 +674,23 @@ struct DaemonChatHostTests {
         let gate = await MainActor.run {
             GenerationGate(laneLimits: [.ingest: 1, .interactive: 1])
         }
-        let host = DaemonChatHost(
-            containerDirectory: dir,
-            extractionCoordinator: coordinator,
-            generationGate: gate,
-            storeResolver: { requestedWikiID in
-                requestedWikiID == wikiID ? store : nil
-            },
-            pushEvent: { _ in },
-            providerServices: UnavailableAgentProviderServices(),
-            idleEvictionDelay: .zero
-        )
+        let launcherPair = await MainActor.run {
+            makeTestLauncherPair(
+                extractionCoordinator: coordinator,
+                generationGate: gate)
+        }
+        let host = await MainActor.run {
+            DaemonChatHost(
+                containerDirectory: dir,
+                launcherPair: launcherPair,
+                storeResolver: { requestedWikiID in
+                    requestedWikiID == wikiID ? store : nil
+                },
+                pushEvent: { _ in },
+                providerServices: UnavailableAgentProviderServices(),
+                idleEvictionDelay: .zero
+            )
+        }
 
         try await host.setChatConfigOption(
             chatID: chat.id,
@@ -795,7 +811,10 @@ struct DaemonChatHostTests {
 
         // setChatConfigOption on a non-existent chat → error reply, no crash.
         let request = ChatConfigOptionRequest(
-            chatID: ChatID(rawValue: "nonexistent"), option: "thought_level", value: "high")
+            wikiID: WikiID(rawValue: "missing-wiki"),
+            chatID: ChatID(rawValue: "nonexistent"),
+            option: "thought_level",
+            value: "high")
         let requestData = try JSONEncoder().encode(request)
 
         let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
@@ -805,20 +824,55 @@ struct DaemonChatHostTests {
         }
 
         // The reply should be valid JSON with an error (no session) — not a crash.
-        let replyDict = try JSONSerialization.jsonObject(with: replyData) as? [String: Any]
-        #expect(replyDict != nil)
-        // No live session → "No live chat session for nonexistent"
-        let error = replyDict?["error"] as? String
-        #expect(error != nil && !error!.isEmpty)
+        let replyDict = try #require(
+            JSONSerialization.jsonObject(with: replyData) as? [String: Any])
+        let error = try #require(replyDict["error"] as? String)
+        #expect(error.isEmpty == false)
+    }
+
+    @Test func wikiScopedChatRequestDTOsRoundTripWikiID() throws {
+        let wikiID = WikiID(rawValue: "wiki-scoped-dto")
+        let chatID = ChatID(rawValue: "chat-scoped-dto")
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+
+        let message = try decoder.decode(
+            ChatMessageRequest.self,
+            from: encoder.encode(ChatMessageRequest(
+                wikiID: wikiID, chatID: chatID, message: "hello")))
+        let stop = try decoder.decode(
+            ChatStopRequest.self,
+            from: encoder.encode(ChatStopRequest(wikiID: wikiID, chatID: chatID)))
+        let state = try decoder.decode(
+            ChatSessionStateRequest.self,
+            from: encoder.encode(ChatSessionStateRequest(wikiID: wikiID, chatID: chatID)))
+        let permission = try decoder.decode(
+            ChatPermissionResolveRequest.self,
+            from: encoder.encode(ChatPermissionResolveRequest(
+                wikiID: wikiID, chatID: chatID, optionId: "allow", approve: true)))
+        let config = try decoder.decode(
+            ChatConfigOptionRequest.self,
+            from: encoder.encode(ChatConfigOptionRequest(
+                wikiID: wikiID, chatID: chatID, option: "thought_level", value: "high")))
+
+        #expect(message.wikiID == wikiID)
+        #expect(stop.wikiID == wikiID)
+        #expect(state.wikiID == wikiID)
+        #expect(permission.wikiID == wikiID)
+        #expect(config.wikiID == wikiID)
     }
 
     @Test func chatConfigOptionRequestEncodingDecoding() throws {
         // Verify the request type round-trips cleanly.
         let request = ChatConfigOptionRequest(
-            chatID: ChatID(rawValue: "chat-xyz"), option: "thought_level", value: "medium")
+            wikiID: WikiID(rawValue: "wiki-xyz"),
+            chatID: ChatID(rawValue: "chat-xyz"),
+            option: "thought_level",
+            value: "medium")
         let data = try JSONEncoder().encode(request)
         let decoded = try JSONDecoder().decode(ChatConfigOptionRequest.self, from: data)
 
+        #expect(decoded.wikiID == WikiID(rawValue: "wiki-xyz"))
         #expect(decoded.chatID == ChatID(rawValue: "chat-xyz"))
         #expect(decoded.option == "thought_level")
         #expect(decoded.value == "medium")

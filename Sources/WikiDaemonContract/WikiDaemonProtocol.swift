@@ -128,12 +128,14 @@ import Foundation
     /// `request` is JSON `{"chatID": "...", "message": "..."}`; reply `{"error": null}`.
     func sendChatMessage(request: Data, reply: @escaping (Data) -> Void)
 
-    /// Cancel/stop the active turn (or end the session).
-    func stopChat(chatID: String, reply: @escaping () -> Void)
+    /// Cancel/stop the active turn (or end the session). The encoded request
+    /// carries both wiki and chat identity.
+    func stopChat(request: Data, reply: @escaping () -> Void)
 
-    /// Rehydrate a chat's authoritative sync state after (re)connect. Reply is
+    /// Rehydrate a chat's authoritative sync state after (re)connect. The
+    /// encoded request carries both wiki and chat identity. Reply is
     /// JSON-encoded `ChatSyncSnapshotEnvelope` data.
-    func chatSessionState(chatID: String, reply: @escaping (Data) -> Void)
+    func chatSessionState(request: Data, reply: @escaping (Data) -> Void)
 
     /// Returns a versioned, redacted diagnostic snapshot. Both request and
     /// reply are JSON `Data`; protocol versions are validated by the daemon.

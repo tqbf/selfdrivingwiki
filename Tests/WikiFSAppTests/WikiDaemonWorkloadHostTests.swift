@@ -31,6 +31,22 @@ struct WikiDaemonWorkloadHostTests {
         return dir
     }
 
+    private func makePreparedDaemon(
+        directory: URL,
+        wikiID: WikiID
+    ) async throws -> WikiDaemon {
+        var registry = WikiRegistry()
+        registry.add(WikiDescriptor(
+            id: wikiID,
+            displayName: wikiID.rawValue,
+            createdAt: Date(timeIntervalSince1970: 1),
+            lastUsedAt: Date(timeIntervalSince1970: 1)))
+        try registry.save(to: directory)
+        let daemon = WikiDaemon(containerDirectory: directory)
+        try await daemon.prepareWiki(wikiID)
+        return daemon
+    }
+
     private func decodeQueuePayload<Payload: Codable & Sendable>(
         _ type: Payload.Type,
         from data: Data
@@ -343,7 +359,8 @@ struct WikiDaemonWorkloadHostTests {
     /// connection, assert the daemon's engine still has the item.
     @Test func testExtractionSurvivesClientDisconnect() async throws {
         let dir = makeTempDir()
-        let daemon = WikiDaemon(containerDirectory: dir)
+        let wikiID = WikiID(rawValue: "test-wiki")
+        let daemon = try await makePreparedDaemon(directory: dir, wikiID: wikiID)
         let exporter = WikiDaemonExporter(daemon: daemon)
 
         let listener = NSXPCListener.anonymous()
@@ -368,7 +385,7 @@ struct WikiDaemonWorkloadHostTests {
         let proxy = connection.remoteObjectProxyWithErrorHandler { _ in } as! WikiDaemonProtocol
 
         let request = QueueItemRequest(
-            queue: .extraction, wikiID: WikiID(rawValue: "test-wiki"),
+            queue: .extraction, wikiID: wikiID,
             payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "src1")]))
         let requestData = try JSONEncoder().encode(request)
 
@@ -401,7 +418,8 @@ struct WikiDaemonWorkloadHostTests {
     /// reconnect with a new connection, assert queueSnapshot shows the item.
     @Test func testSnapshotRehydratesAfterReconnect() async throws {
         let dir = makeTempDir()
-        let daemon = WikiDaemon(containerDirectory: dir)
+        let wikiID = WikiID(rawValue: "reconnect-wiki")
+        let daemon = try await makePreparedDaemon(directory: dir, wikiID: wikiID)
         let exporter = WikiDaemonExporter(daemon: daemon)
 
         let listener = NSXPCListener.anonymous()
@@ -427,7 +445,7 @@ struct WikiDaemonWorkloadHostTests {
             let proxy = connection.remoteObjectProxyWithErrorHandler { _ in } as! WikiDaemonProtocol
 
             let request = QueueItemRequest(
-                queue: .extraction, wikiID: WikiID(rawValue: "reconnect-wiki"),
+                queue: .extraction, wikiID: wikiID,
                 payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "src1")]))
             let requestData = try JSONEncoder().encode(request)
 
@@ -464,7 +482,7 @@ struct WikiDaemonWorkloadHostTests {
         let snapshotPayload = try decodeQueuePayload(QueueDataPayload.self, from: snapshotData)
         let snapshot = try JSONDecoder().decode(QueueSnapshot.self, from: snapshotPayload.data)
         // The item enqueued via the first connection is still visible.
-        #expect(snapshot.activeItems.contains { $0.wikiID == WikiID(rawValue: "reconnect-wiki") })
+        #expect(snapshot.activeItems.contains { $0.wikiID == wikiID })
 
         listener.invalidate()
     }
@@ -472,7 +490,8 @@ struct WikiDaemonWorkloadHostTests {
     /// RC4: XPC enqueue round-trip — verifies the error envelope shape.
     @Test func testXPCEnqueueRoundTrip() async throws {
         let dir = makeTempDir()
-        let daemon = WikiDaemon(containerDirectory: dir)
+        let wikiID = WikiID(rawValue: "roundtrip-wiki")
+        let daemon = try await makePreparedDaemon(directory: dir, wikiID: wikiID)
         let exporter = WikiDaemonExporter(daemon: daemon)
 
         let listener = NSXPCListener.anonymous()
@@ -492,7 +511,7 @@ struct WikiDaemonWorkloadHostTests {
 
         // Enqueue with a valid request.
         let request = QueueItemRequest(
-            queue: .extraction, wikiID: WikiID(rawValue: "roundtrip-wiki"),
+            queue: .extraction, wikiID: wikiID,
             payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "src1")]))
         let requestData = try JSONEncoder().encode(request)
 
@@ -526,7 +545,8 @@ struct WikiDaemonWorkloadHostTests {
     /// for an already-completed item (enqueue → direct complete → wait).
     @Test func testXPCWaitForCompletionForCompletedItem() async throws {
         let dir = makeTempDir()
-        let daemon = WikiDaemon(containerDirectory: dir)
+        let wikiID = WikiID(rawValue: "wait-wiki")
+        let daemon = try await makePreparedDaemon(directory: dir, wikiID: wikiID)
         let exporter = WikiDaemonExporter(daemon: daemon)
 
         let listener = NSXPCListener.anonymous()
@@ -546,7 +566,7 @@ struct WikiDaemonWorkloadHostTests {
 
         // Enqueue an item, then mark it completed directly via the engine.
         let request = QueueItemRequest(
-            queue: .extraction, wikiID: WikiID(rawValue: "wait-wiki"),
+            queue: .extraction, wikiID: wikiID,
             payload: QueueItemPayload(sourceIDs: [SourceID(rawValue: "src1")]))
         let requestData = try JSONEncoder().encode(request)
 

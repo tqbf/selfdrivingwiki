@@ -470,6 +470,7 @@ public struct AppServices: Sendable {
     public let readPool: WikiReadPool
     public let extractionBackends: ExtractionBackendRegistry
     public let searchProviders: SearchProviderRegistry
+    public let launcherFactory: LauncherFactory
 
     public static func resolve(from profile: BootedProfile) async throws -> AppServices {
         AppServices(
@@ -477,7 +478,8 @@ public struct AppServices: Sendable {
             store: try await profile.context.require(StoreServiceKeys.store),
             readPool: try await profile.context.require(StoreServiceKeys.readPool),
             extractionBackends: try await profile.context.require(ExtractionServiceKeys.backends),
-            searchProviders: try await profile.context.require(SearchServiceKeys.providers))
+            searchProviders: try await profile.context.require(SearchServiceKeys.providers),
+            launcherFactory: try await profile.context.require(LauncherServiceKeys.factory))
     }
 
     public func shutdown() async throws {

@@ -7,12 +7,14 @@ import Testing
 
 @MainActor
 struct ChatDaemonCoordinatorTests {
+    private let fixtureWikiID = WikiID(rawValue: "coordinator-test-wiki")
+
     @Test func sessionRegistryUsesStableInstances() {
         let coordinator = makeCoordinator()
 
-        let first = coordinator.session(for: ChatID(rawValue: "chat-1"))
-        let second = coordinator.session(for: ChatID(rawValue: "chat-1"))
-        let draft = coordinator.session(for: nil)
+        let first = coordinator.session(wikiID: fixtureWikiID, for: ChatID(rawValue: "chat-1"))
+        let second = coordinator.session(wikiID: fixtureWikiID, for: ChatID(rawValue: "chat-1"))
+        let draft = coordinator.session(wikiID: fixtureWikiID, for: nil)
 
         #expect(first === second)
         #expect(draft.chatID == .draft)
@@ -20,19 +22,19 @@ struct ChatDaemonCoordinatorTests {
 
     @Test func resetDraftReplacesDraftSession() {
         let coordinator = makeCoordinator()
-        let first = coordinator.session(for: nil)
+        let first = coordinator.session(wikiID: fixtureWikiID, for: nil)
 
         coordinator.resetDraft()
 
-        #expect(coordinator.session(for: nil) !== first)
+        #expect(coordinator.session(wikiID: fixtureWikiID, for: nil) !== first)
     }
 
     @Test func ingestForTestingDeliversSyncUpdateToOpenSession() async {
         let stub = StubChatDaemonCommands()
         stub.sessionState = makeSnapshot(sequence: 0)
         let coordinator = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        let session = coordinator.session(for: ChatID(rawValue: "chat-1"))
-        await coordinator.rehydrate(chatID: ChatID(rawValue: "chat-1"))
+        let session = coordinator.session(wikiID: fixtureWikiID, for: ChatID(rawValue: "chat-1"))
+        await coordinator.rehydrate(wikiID: fixtureWikiID, chatID: ChatID(rawValue: "chat-1"))
 
         coordinator.ingestForTesting(
             QueueEventEnvelope.chatSyncUpdate(
@@ -101,19 +103,25 @@ struct ChatDaemonCoordinatorTests {
             )
         )
         await coordinator.resolvePermission(
+            wikiID: fixtureWikiID,
             chatID: ChatID(rawValue: "chat-1"),
             intent: .approve(optionID: PermissionOptionID(rawValue: "allow"))
         )
         await coordinator.setThinkingEffort(
+            wikiID: fixtureWikiID,
             chatID: ChatID(rawValue: "chat-1"),
             optionID: ChatConfigurationOptionID(rawValue: "reasoning_mode"),
             valueID: ChatConfigurationValueID(rawValue: "high"))
-        await coordinator.stop(chatID: ChatID(rawValue: "chat-1"))
+        await coordinator.stop(wikiID: fixtureWikiID, chatID: ChatID(rawValue: "chat-1"))
 
         #expect(submitID == ChatID(rawValue: "submit-id"))
         #expect(stub.submitTurnCalls.count == 1)
+        #expect(stub.submitTurnCalls.first?.wikiID == WikiID(rawValue: "wiki-1"))
+        #expect(stub.resolveCalls.first?.wikiID == fixtureWikiID)
         #expect(stub.resolveCalls.first?.optionId == "allow")
+        #expect(stub.configOptionCalls.first?.wikiID == fixtureWikiID)
         #expect(stub.configOptionCalls.first?.value == "high")
+        #expect(stub.stopWikiIDs == [fixtureWikiID])
         #expect(stub.stopCalls == [ChatID(rawValue: "chat-1")])
     }
 
@@ -319,9 +327,9 @@ struct ChatDaemonCoordinatorTests {
         )
         let coordinator = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
 
-        await coordinator.rehydrate(chatID: ChatID(rawValue: "chat-1"))
+        await coordinator.rehydrate(wikiID: fixtureWikiID, chatID: ChatID(rawValue: "chat-1"))
 
-        let session = coordinator.session(for: ChatID(rawValue: "chat-1"))
+        let session = coordinator.session(wikiID: fixtureWikiID, for: ChatID(rawValue: "chat-1"))
         #expect(session.displayTranscript.rows.count == 1)
         #expect(session.runState.isAnswering)
         #expect(coordinator.isChatGenerating(ChatID(rawValue: "chat-1")))
@@ -331,13 +339,13 @@ struct ChatDaemonCoordinatorTests {
         let stub = StubChatDaemonCommands()
         stub.sessionState = makeSnapshot(sequence: 1, activeTurn: makeActiveTurn(state: .responding))
         let coordinator = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        await coordinator.rehydrate(chatID: ChatID(rawValue: "chat-1"))
+        await coordinator.rehydrate(wikiID: fixtureWikiID, chatID: ChatID(rawValue: "chat-1"))
         #expect(coordinator.isChatGenerating(ChatID(rawValue: "chat-1")))
 
         stub.shouldThrow = true
-        await coordinator.rehydrate(chatID: ChatID(rawValue: "chat-1"))
+        await coordinator.rehydrate(wikiID: fixtureWikiID, chatID: ChatID(rawValue: "chat-1"))
 
-        let session = coordinator.session(for: ChatID(rawValue: "chat-1"))
+        let session = coordinator.session(wikiID: fixtureWikiID, for: ChatID(rawValue: "chat-1"))
         #expect(session.runState == .idle)
         #expect(!coordinator.isChatGenerating(ChatID(rawValue: "chat-1")))
     }
@@ -346,9 +354,9 @@ struct ChatDaemonCoordinatorTests {
         let stub = StubChatDaemonCommands()
         stub.sessionState = makeSnapshot(sequence: 1)
         let coordinator = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        await coordinator.rehydrate(chatID: ChatID(rawValue: "chat-1"))
+        await coordinator.rehydrate(wikiID: fixtureWikiID, chatID: ChatID(rawValue: "chat-1"))
 
-        let session = coordinator.session(for: ChatID(rawValue: "chat-1"))
+        let session = coordinator.session(wikiID: fixtureWikiID, for: ChatID(rawValue: "chat-1"))
         stub.sessionState = makeSnapshot(
             sequence: 4,
             runMetadata: ChatRunMetadata(preflightError: "resynced")
@@ -373,7 +381,7 @@ struct ChatDaemonCoordinatorTests {
             activeTurn: nil
         )
         let coordinator = ChatDaemonCoordinator(client: stub, eventSink: DaemonQueueEventSink())
-        await coordinator.rehydrate(chatID: ChatID(rawValue: "chat-1"))
+        await coordinator.rehydrate(wikiID: fixtureWikiID, chatID: ChatID(rawValue: "chat-1"))
         stub.sessionStateRequests.removeAll()
 
         coordinator.ingestForTesting(
@@ -388,14 +396,14 @@ struct ChatDaemonCoordinatorTests {
             )
         )
 
-        let session = coordinator.session(for: ChatID(rawValue: "chat-1"))
+        let session = coordinator.session(wikiID: fixtureWikiID, for: ChatID(rawValue: "chat-1"))
         await expectEventually(session.runState.isAnswering)
         #expect(stub.sessionStateRequests.isEmpty)
     }
 
     @Test func draftSessionDoesNotWireConfigCallback() {
         let coordinator = makeCoordinator()
-        #expect(coordinator.session(for: nil).onSetChatConfigOption == nil)
+        #expect(coordinator.session(wikiID: fixtureWikiID, for: nil).onSetChatConfigOption == nil)
     }
 
     @Test func providerSignalReloadsDraftOpenAndRestoredSessions() async throws {
@@ -406,9 +414,9 @@ struct ChatDaemonCoordinatorTests {
             client: StubChatDaemonCommands(),
             eventSink: DaemonQueueEventSink(),
             providersConfigurationDirectory: directory)
-        let draft = coordinator.session(for: nil)
-        let open = coordinator.session(for: ChatID(rawValue: "open"))
-        let restored = coordinator.session(for: ChatID(rawValue: "restored"))
+        let draft = coordinator.session(wikiID: fixtureWikiID, for: nil)
+        let open = coordinator.session(wikiID: fixtureWikiID, for: ChatID(rawValue: "open"))
+        let restored = coordinator.session(wikiID: fixtureWikiID, for: ChatID(rawValue: "restored"))
 
         let committed = try await AgentProvidersConfigStore(
             directory: directory,
@@ -434,7 +442,7 @@ struct ChatDaemonCoordinatorTests {
             client: StubChatDaemonCommands(),
             eventSink: DaemonQueueEventSink(),
             providersConfigurationDirectory: directory)
-        let session = coordinator.session(for: ChatID(rawValue: "idle"))
+        let session = coordinator.session(wikiID: fixtureWikiID, for: ChatID(rawValue: "idle"))
         let oldGeneration = session.providerConfiguration.generation
 
         let committed = try await AgentProvidersConfigStore(
@@ -559,8 +567,10 @@ struct ChatDaemonCoordinatorTests {
 final class StubChatDaemonCommands: ChatDaemonCommands, @unchecked Sendable {
     var submitTurnCalls: [ChatSubmitRequest] = []
     var stopCalls: [ChatID] = []
+    var stopWikiIDs: [WikiID] = []
     var resolveCalls: [ChatPermissionResolveRequest] = []
     var sessionStateRequests: [ChatID] = []
+    var sessionStateWikiIDs: [WikiID] = []
     var configOptionCalls: [ChatConfigOptionRequest] = []
     var diagnosticSnapshotRequests: [ChatDiagnosticSnapshotRequest] = []
     var diagnosticResetRequests: [ChatDiagnosticResetRequest] = []
@@ -577,12 +587,14 @@ final class StubChatDaemonCommands: ChatDaemonCommands, @unchecked Sendable {
         return nextSubmitChatID
     }
 
-    func stopChat(_ chatID: ChatID) async throws {
+    func stopChat(wikiID: WikiID, chatID: ChatID) async throws {
+        stopWikiIDs.append(wikiID)
         stopCalls.append(chatID)
         if shouldThrow { throw StubError.throwing }
     }
 
-    func chatSessionState(_ chatID: ChatID) async throws -> ChatSyncSnapshot {
+    func chatSessionState(wikiID: WikiID, chatID: ChatID) async throws -> ChatSyncSnapshot {
+        sessionStateWikiIDs.append(wikiID)
         sessionStateRequests.append(chatID)
         if shouldThrow { throw StubError.throwing }
         return sessionState ?? ChatSyncSnapshot(

@@ -398,10 +398,9 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     }
 
     /// Send a follow-up turn to an active chat session.
-    public func sendChatMessage(chatID: ChatID, message: String) async throws {
-        let requestData = try JSONEncoder().encode([
-            "chatID": chatID.rawValue, "message": message
-        ])
+    public func sendChatMessage(wikiID: WikiID, chatID: ChatID, message: String) async throws {
+        let requestData = try JSONEncoder().encode(
+            ChatMessageRequest(wikiID: wikiID, chatID: chatID, message: message))
         try await withTimeout {
             let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
                 self.proxy.sendChatMessage(request: requestData) { data in
@@ -416,19 +415,21 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
     }
 
     /// Stop/cancel the active chat turn.
-    public func stopChat(_ chatID: ChatID) async throws {
+    public func stopChat(wikiID: WikiID, chatID: ChatID) async throws {
+        let requestData = try JSONEncoder().encode(ChatStopRequest(wikiID: wikiID, chatID: chatID))
         try await withTimeout {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-                self.proxy.stopChat(chatID: chatID.rawValue) { cont.resume() }
+                self.proxy.stopChat(request: requestData) { cont.resume() }
             }
         }
     }
 
     /// Rehydrate a chat's live state after (re)connect.
-    public func chatSessionState(_ chatID: ChatID) async throws -> ChatSyncSnapshot {
-        try await withTimeout {
+    public func chatSessionState(wikiID: WikiID, chatID: ChatID) async throws -> ChatSyncSnapshot {
+        let requestData = try JSONEncoder().encode(ChatSessionStateRequest(wikiID: wikiID, chatID: chatID))
+        return try await withTimeout {
             let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
-                self.proxy.chatSessionState(chatID: chatID.rawValue) { data in
+                self.proxy.chatSessionState(request: requestData) { data in
                     cont.resume(returning: data)
                 }
             }

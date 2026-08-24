@@ -3,48 +3,19 @@ import Testing
 
 @Suite("Agent provider composition boundary")
 struct AgentProviderCompositionBoundaryTests {
-    @Test("app queue and wiki sessions receive one stable facade")
-    func appQueueAndProfileWikiSessionsReceiveSameFacade() throws {
-        let app = try sourceText("Sources/WikiFS/Window/WikiFSApp.swift")
-        let composition = try sourceText("Sources/WikiFS/Renderer/RendererCompositionOwner.swift")
-        let settings = try sourceText("Sources/WikiFS/Settings/AgentsSettingsView.swift")
-
-        #expect(composition.contains("let providerServices = MutableAgentProviderServices()"))
-        #expect(composition.contains("await providerServices.install(handle.services)"))
-        #expect(app.contains("let providerServices = processComposition.providerServices"))
-        #expect(app.contains("providerServices: providerServices"))
-        #expect(app.contains("providerServices: agentProviderServices"))
-        #expect(settings.contains("providerServices.discoverCatalog("))
-        #expect(!settings.contains("ACPProviderModelProbe("))
-        #expect(!app.contains("CordisContext"))
-        #expect(!app.contains("AgentProviderRuntimeFactory("))
-    }
-
-    @Test("daemon queue and chat receive one stable facade")
-    func daemonQueueAndChatReceiveSameFacade() throws {
-        let daemon = try sourceText("Sources/wikid/WikiDaemon.swift")
-        let queue = try sourceText("Sources/wikid/DaemonQueueIngestionProvider.swift")
-        let chat = try sourceText("Sources/wikid/DaemonChatHost.swift")
-        let runtime = try sourceText("Sources/wikid/LauncherChatAgentRuntime.swift")
-
-        #expect(daemon.contains("let runtime = try await runtimeServices()"))
-        #expect(daemon.contains("providerServices: runtime.provider"))
-        #expect(daemon.contains("profileOwner?.services()"))
-        #expect(queue.contains("providerServices: providerServices"))
-        #expect(chat.contains("providerServices: providerServices"))
-        #expect(runtime.contains("providerServices: providerServices"))
-        #expect(!daemon.contains("CordisContext"))
-    }
-
-    @Test("daemon chat cold start does not load provider configuration directly")
-    func daemonChatColdStartUsesPreparedRuntimeContract() throws {
-        let controller = try sourceText("Sources/wikid/DaemonChatController.swift")
-        let runtime = try sourceText("Sources/wikid/LauncherChatAgentRuntime.swift")
-
-        #expect(!controller.contains("AgentProvidersConfig.load"))
-        #expect(controller.contains("runtime.prepareStart("))
-        #expect(runtime.contains("providerServices.prepareInteractive("))
-        #expect(runtime.contains("preparedInteractiveOperation:"))
+    @Test("provider consumers do not assemble runtimes or receive Cordis contexts")
+    func providerConsumersDoNotOwnAssembly() throws {
+        for path in [
+            "Sources/WikiFS/Window/WikiFSApp.swift",
+            "Sources/wikid/WikiDaemon.swift",
+            "Sources/wikid/DaemonQueueIngestionProvider.swift",
+            "Sources/wikid/DaemonChatHost.swift",
+            "Sources/wikid/LauncherChatAgentRuntime.swift",
+        ] {
+            let source = try sourceText(path)
+            #expect(!source.contains("AgentProviderRuntimeFactory("))
+            #expect(!source.contains("CordisContext"))
+        }
     }
 
     @Test("only provider assembly constructs the runtime")

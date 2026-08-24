@@ -3,6 +3,38 @@ import Foundation
 import WikiFSCore
 
 #if os(macOS)
+public enum LauncherAdmissionPolicy {
+    public static let laneLimits: [GenerationGate.GenerationLane: Int] = [.ingest: 1, .interactive: 3]
+}
+
+@MainActor
+public struct LauncherPair {
+    public let gate: GenerationGate
+    public let launcher: AgentLauncher
+
+    public init(gate: GenerationGate, launcher: AgentLauncher) {
+        self.gate = gate
+        self.launcher = launcher
+    }
+}
+
+public struct LauncherFactory: Sendable {
+    private let makePair: @MainActor @Sendable (WikiID) -> LauncherPair
+
+    public init(makePair: @escaping @MainActor @Sendable (WikiID) -> LauncherPair) {
+        self.makePair = makePair
+    }
+
+    @MainActor
+    public func callAsFunction(wikiID: WikiID) -> LauncherPair {
+        makePair(wikiID)
+    }
+}
+
+public enum LauncherServiceKeys {
+    public static let factory = ServiceKey<LauncherFactory>(label: "wiki.launcher-factory")
+}
+
 /// Every stored reference is created and accessed on `MainActor`; the unchecked
 /// conformance only permits Cordis to carry the opaque bundle between actors.
 @MainActor
@@ -40,7 +72,7 @@ extension PerWikiRuntimeServices {
             changeStreamFactory: BusSearchChangeStreamFactory(bus: bus))
         model.searchServices = searchOwner.services
         searchOwner.start()
-        let gate = GenerationGate(laneLimits: [.ingest: 1, .interactive: 3])
+        let gate = GenerationGate(laneLimits: LauncherAdmissionPolicy.laneLimits)
         return PerWikiRuntimeServices(
             model: model,
             searchOwner: searchOwner,
@@ -131,7 +163,10 @@ public enum PerWikiRuntimePlugin {
                 ServiceDependency(ProcessServiceKeys.extraction),
                 ServiceDependency(AgentLoopServiceKeys.agentLoop),
             ],
-            provisions: [ServiceDependency(PerWikiRuntimeServiceKeys.services)],
+            provisions: [
+                ServiceDependency(PerWikiRuntimeServiceKeys.services),
+                ServiceDependency(LauncherServiceKeys.factory),
+            ],
             config: PerWikiRuntimeConfig.self
         ) { config in
             try ComponentDefinition(
@@ -143,7 +178,10 @@ public enum PerWikiRuntimePlugin {
                     ServiceDependency(ProcessServiceKeys.extraction),
                     ServiceDependency(AgentLoopServiceKeys.agentLoop),
                 ],
-                provisions: [ServiceDependency(PerWikiRuntimeServiceKeys.services)]
+                provisions: [
+                    ServiceDependency(PerWikiRuntimeServiceKeys.services),
+                    ServiceDependency(LauncherServiceKeys.factory),
+                ]
             ) { activation in
                 let store = try await activation.require(StoreServiceKeys.store)
                 let readPool = try await activation.require(StoreServiceKeys.readPool)
@@ -155,6 +193,16 @@ public enum PerWikiRuntimePlugin {
                 }
                 let wikiID = WikiID(rawValue: config.wikiID)
                 let containerDirectory = URL(fileURLWithPath: config.containerDirectory, isDirectory: true)
+                let launcherFactory = LauncherFactory { _ in
+                    let gate = GenerationGate(laneLimits: LauncherAdmissionPolicy.laneLimits)
+                    let launcher = AgentLauncher(
+                        generationGate: gate,
+                        extractionCoordinator: ExtractionCoordinator(services: extractionServices),
+                        providerServices: providerServices,
+                        agentLoopService: agentLoopService)
+                    launcher.pdf2mdScriptPathResolver = { PdfExtractionService.resolveScript()?.path }
+                    return LauncherPair(gate: gate, launcher: launcher)
+                }
                 let services = await MainActor.run {
                     let model = WikiStoreModel(store: store)
                     model.readPool = readPool
@@ -165,20 +213,16 @@ public enum PerWikiRuntimePlugin {
                         changeStreamFactory: BusSearchChangeStreamFactory(bus: eventBus))
                     model.searchServices = searchOwner.services
                     searchOwner.start()
-                    let gate = GenerationGate(laneLimits: [.ingest: 1, .interactive: 3])
-                    let launcher = AgentLauncher(
-                        generationGate: gate,
-                        extractionCoordinator: ExtractionCoordinator(services: extractionServices),
-                        providerServices: providerServices,
-                        agentLoopService: agentLoopService)
+                    let pair = launcherFactory(wikiID: wikiID)
                     return PerWikiRuntimeServices(
                         model: model,
                         searchOwner: searchOwner,
-                        generationGate: gate,
-                        agentLauncher: launcher)
+                        generationGate: pair.gate,
+                        agentLauncher: pair.launcher)
                 }
                 _ = try await activation.effect { _ in await services.searchOwner.shutdown() }
                 _ = try await activation.supply(PerWikiRuntimeServiceKeys.services, value: services)
+                _ = try await activation.supply(LauncherServiceKeys.factory, value: launcherFactory)
             }
         }
     }

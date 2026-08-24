@@ -107,6 +107,38 @@ public struct ChatContinueRequest: Codable, Sendable {
     }
 }
 
+public struct ChatMessageRequest: Codable, Sendable {
+    public let wikiID: WikiID
+    public let chatID: ChatID
+    public let message: String
+
+    public init(wikiID: WikiID, chatID: ChatID, message: String) {
+        self.wikiID = wikiID
+        self.chatID = chatID
+        self.message = message
+    }
+}
+
+public struct ChatStopRequest: Codable, Sendable {
+    public let wikiID: WikiID
+    public let chatID: ChatID
+
+    public init(wikiID: WikiID, chatID: ChatID) {
+        self.wikiID = wikiID
+        self.chatID = chatID
+    }
+}
+
+public struct ChatSessionStateRequest: Codable, Sendable {
+    public let wikiID: WikiID
+    public let chatID: ChatID
+
+    public init(wikiID: WikiID, chatID: ChatID) {
+        self.wikiID = wikiID
+        self.chatID = chatID
+    }
+}
+
 /// Generic error reply for `continueChat` / `sendChatMessage`.
 public struct ChatErrorReply: Codable, Sendable {
     public let error: String?
@@ -118,11 +150,13 @@ public struct ChatErrorReply: Codable, Sendable {
 
 /// Resolve a pending permission request for a chat (approve/reject).
 public struct ChatPermissionResolveRequest: Codable, Sendable {
+    public let wikiID: WikiID
     public let chatID: ChatID
     public let optionId: String
     public let approve: Bool
 
-    public init(chatID: ChatID, optionId: String, approve: Bool) {
+    public init(wikiID: WikiID, chatID: ChatID, optionId: String, approve: Bool) {
+        self.wikiID = wikiID
         self.chatID = chatID
         self.optionId = optionId
         self.approve = approve
@@ -133,13 +167,15 @@ public struct ChatPermissionResolveRequest: Codable, Sendable {
 /// restarting it. Sent by the client; the daemon forwards to the launcher's
 /// ACP backend (`session/set_config_option`). Reply is `ChatErrorReply`.
 public struct ChatConfigOptionRequest: Codable, Sendable {
+    public let wikiID: WikiID
     public let chatID: ChatID
     /// The ACP config option id (e.g. `"thought_level"`).
     public let option: String
     /// The value id to set (e.g. `"high"`).
     public let value: String
 
-    public init(chatID: ChatID, option: String, value: String) {
+    public init(wikiID: WikiID, chatID: ChatID, option: String, value: String) {
+        self.wikiID = wikiID
         self.chatID = chatID
         self.option = option
         self.value = value

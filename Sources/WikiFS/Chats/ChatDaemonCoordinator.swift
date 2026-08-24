@@ -11,8 +11,8 @@ import WikiFSEngine
 /// connection.
 public protocol ChatDaemonCommands: AnyObject, Sendable {
     func submitChatTurn(_ request: ChatSubmitRequest) async throws -> ChatID
-    func stopChat(_ chatID: ChatID) async throws
-    func chatSessionState(_ chatID: ChatID) async throws -> ChatSyncSnapshot
+    func stopChat(wikiID: WikiID, chatID: ChatID) async throws
+    func chatSessionState(wikiID: WikiID, chatID: ChatID) async throws -> ChatSyncSnapshot
     func chatDiagnosticSnapshot(_ request: ChatDiagnosticSnapshotRequest) async throws -> ChatDiagnosticSnapshotEnvelope
     func resetChatDiagnostics(_ request: ChatDiagnosticResetRequest) async throws
     func resolveChatPermission(_ request: ChatPermissionResolveRequest) async throws
@@ -101,13 +101,13 @@ public final class ChatDaemonCoordinator {
 
     /// Get-or-create the `RemoteChatSession` for a chat id. `nil` chatID
     /// returns the shared draft-state session (the `.newChat` composer).
-    public func session(for chatID: ChatID?) -> RemoteChatSession {
+    public func session(wikiID: WikiID, for chatID: ChatID?) -> RemoteChatSession {
         let key: ChatSessionKey = chatID.map(ChatSessionKey.chat) ?? .draft
         if let existing = sessions[key] { return existing }
         let session = providersConfigurationDirectory.map {
             RemoteChatSession(chatID: key, providersConfigurationDirectory: $0)
         } ?? RemoteChatSession(chatID: key)
-        wireSessionCallbacks(session)
+        wireSessionCallbacks(session, wikiID: wikiID)
         sessions[key] = session
         return session
     }
@@ -219,7 +219,6 @@ public final class ChatDaemonCoordinator {
     /// Replace the draft session with a fresh one (used by "start new chat").
     public func resetDraft() {
         let session = RemoteChatSession(chatID: .draft)
-        wireSessionCallbacks(session)
         sessions[.draft] = session
     }
 
@@ -295,16 +294,17 @@ public final class ChatDaemonCoordinator {
     }
 
     /// Stop/cancel the active chat turn. Errors are logged (best-effort).
-    public func stop(chatID: ChatID) async {
-        do { try await client.stopChat(chatID) }
+    public func stop(wikiID: WikiID, chatID: ChatID) async {
+        do { try await client.stopChat(wikiID: wikiID, chatID: chatID) }
         catch { DebugLog.agent("ChatDaemonCoordinator.stop failed for \(chatID.rawValue): \(error)") }
     }
 
     /// Resolve a pending permission request (approve/reject). Errors logged.
-    func resolvePermission(chatID: ChatID, intent: ChatPermissionResolutionIntent) async {
+    func resolvePermission(wikiID: WikiID, chatID: ChatID, intent: ChatPermissionResolutionIntent) async {
         do {
             try await client.resolveChatPermission(
                 ChatPermissionResolveRequest(
+                    wikiID: wikiID,
                     chatID: chatID,
                     optionId: intent.optionID.rawValue,
                     approve: intent.isApproval
@@ -319,12 +319,14 @@ public final class ChatDaemonCoordinator {
     /// daemon's `setChatConfigOption` XPC method. Errors are logged (the UI
     /// already flipped optimistically; a `chatState` envelope reconciles).
     public func setThinkingEffort(
+        wikiID: WikiID,
         chatID: ChatID,
         optionID: ChatConfigurationOptionID,
         valueID: ChatConfigurationValueID
     ) async {
         do {
             try await client.setChatConfigOption(ChatConfigOptionRequest(
+                wikiID: wikiID,
                 chatID: chatID,
                 option: optionID.rawValue,
                 value: valueID.rawValue))
@@ -340,7 +342,7 @@ public final class ChatDaemonCoordinator {
     /// `RemoteChatSession.setThinkingEffort` delegates to the daemon instead
     /// of being a local-only optimistic flip. Skipped for the draft session
     /// (no real chatID to target).
-    private func wireSessionCallbacks(_ session: RemoteChatSession) {
+    private func wireSessionCallbacks(_ session: RemoteChatSession, wikiID: WikiID) {
         // The draft has no daemon-side session to target, and now says so in
         // the type: `.draft` has no `ChatID`.
         guard let chatID = session.chatID.chatID else { return }
@@ -348,23 +350,23 @@ public final class ChatDaemonCoordinator {
         session.onSetChatConfigOption = { option, value in
             do {
                 try await client.setChatConfigOption(
-                    ChatConfigOptionRequest(chatID: chatID, option: option, value: value))
+                    ChatConfigOptionRequest(wikiID: wikiID, chatID: chatID, option: option, value: value))
             } catch {
                 DebugLog.agent("RemoteChatSession.onSetChatConfigOption failed for \(chatID): \(error)")
             }
         }
         session.onRequestAuthoritativeSnapshot = {
-            try await client.chatSessionState(chatID)
+            try await client.chatSessionState(wikiID: wikiID, chatID: chatID)
         }
     }
 
     /// Rehydrate a session from the daemon's live state. Call on view appear
     /// and whenever the active chat changes so the mirror reflects the
     /// daemon's live controller (or the persisted rows once evicted).
-    public func rehydrate(chatID: ChatID) async {
-        let session = self.session(for: chatID)
+    public func rehydrate(wikiID: WikiID, chatID: ChatID) async {
+        let session = self.session(wikiID: wikiID, for: chatID)
         do {
-            let state = try await client.chatSessionState(chatID)
+            let state = try await client.chatSessionState(wikiID: wikiID, chatID: chatID)
             session.hydrate(from: state)
             setChatGenerating(chatID, generating: state.projection.isAnswering)
         } catch {

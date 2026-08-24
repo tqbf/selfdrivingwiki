@@ -59,14 +59,14 @@ Sources/WikiFSEngine/QueueEventEnvelope.swift	public let chatID: ChatID?
 Sources/WikiFS/Chats/ChatSessionKey.swift	    case chat(ChatID)
 Sources/WikiFS/Chats/ChatWebView.swift	    case chat(ChatID)
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	    func submitChatTurn(_ request: ChatSubmitRequest) async throws -> ChatID
-Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	    func stopChat(_ chatID: ChatID) async throws
-Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	    func chatSessionState(_ chatID: ChatID) async throws -> ChatSyncSnapshot
+Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	    func stopChat(wikiID: WikiID, chatID: ChatID) async throws
+Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	    func chatSessionState(wikiID: WikiID, chatID: ChatID) async throws -> ChatSyncSnapshot
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func submitTurn(_ request: ChatSubmitRequest) async throws -> ChatID
-Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func stop(chatID: ChatID) async {
-Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	func resolvePermission(chatID: ChatID, intent: ChatPermissionResolutionIntent) async {
+Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func stop(wikiID: WikiID, chatID: ChatID) async {
+Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	func resolvePermission(wikiID: WikiID, chatID: ChatID, intent: ChatPermissionResolutionIntent) async {
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	        chatID: ChatID,
-Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func rehydrate(chatID: ChatID) async {
-Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func session(for chatID: ChatID?) -> RemoteChatSession {
+Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func rehydrate(wikiID: WikiID, chatID: ChatID) async {
+Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func session(wikiID: WikiID, for chatID: ChatID?) -> RemoteChatSession {
 Sources/WikiFS/Chats/ChatDaemonCoordinator.swift	public func discard(chatID: ChatID?) {
 Sources/WikiFS/Settings/AgentToolsView.swift	        activeChatID: ChatID?, isGenerating: Bool, chatID: ChatID
 Sources/WikiCtlCore/ChatCommand.swift	        case id(ChatID)

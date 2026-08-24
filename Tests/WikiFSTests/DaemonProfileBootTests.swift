@@ -70,7 +70,8 @@ struct DaemonProfileBootTests {
                 let entries = ProfileBootFixture.entries(
                     databaseURL: directory.appendingPathComponent("\(requestedWikiID.rawValue).sqlite"),
                     wikiID: requestedWikiID.rawValue,
-                    includeAppProviders: false)
+                    includeAppProviders: false,
+                    includeLauncherFactory: true)
                 return try await CordisBoot.boot(.init(
                     catalog: daemonCatalog,
                     layers: [PatchFile(entries: entries)],
@@ -86,6 +87,22 @@ struct DaemonProfileBootTests {
         await owner.shutdown()
         await owner.shutdown()
         #expect(await processDisposals.count == 2)
+    }
+
+    @Test("launcher factory label and plugin contract stay stable")
+    func launcherFactoryProvisionsAndDependenciesAreDeclared() {
+        #expect(LauncherServiceKeys.factory.label == "wiki.launcher-factory")
+        #expect(Set(PerWikiRuntimePlugin.definition.provisions.map(\.descriptor.label)) == [
+            "wiki.runtime-services",
+            "wiki.launcher-factory",
+        ])
+        #expect(Set(PerWikiRuntimePlugin.definition.dependencies.map(\.descriptor.label)) == [
+            "wiki.store",
+            "wiki.store.read-pool",
+            "process.agent-provider",
+            "process.extraction",
+            "wiki.agent-loop",
+        ])
     }
 
     @Test("removing then reopening a wiki creates a fresh live store and bus")
@@ -113,7 +130,8 @@ struct DaemonProfileBootTests {
                     layers: [PatchFile(entries: ProfileBootFixture.entries(
                         databaseURL: directory.appendingPathComponent("\(requestedWikiID.rawValue).sqlite"),
                         wikiID: requestedWikiID.rawValue,
-                        includeAppProviders: false))],
+                        includeAppProviders: false,
+                        includeLauncherFactory: true))],
                     parent: process.context))
             })
 

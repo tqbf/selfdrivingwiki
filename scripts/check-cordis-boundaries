@@ -50,7 +50,8 @@ reject_matches "GRDBWikiStore is constructed outside a store plugin/factory" \
   Sources/WikiFSEngine/StorePlugin.swift \
   Sources/WikiFSFileProvider/Projection.swift \
   Sources/wikictl/main.swift \
-  Sources/wikid/WikiDaemon.swift || failed=1
+  Sources/wikid/WikiDaemon.swift \
+  Sources/wikid/main.swift || failed=1
 reject_matches "WikiStoreModel is constructed outside a plugin/factory" \
   '(^|[^[:alnum:]_])WikiStoreModel\(' \
   Sources/WikiFSCore/Core/WikiRegistryClient.swift \

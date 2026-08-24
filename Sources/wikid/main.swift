@@ -399,18 +399,18 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         }
     }
 
-    func stopChat(chatID: String, reply: @escaping () -> Void) {
+    func stopChat(request: Data, reply: @escaping () -> Void) {
         let sendableReply = SendableVoidReply(reply: reply)
         Task { [daemon] in
-            await daemon.stopChat(chatID: ChatID(rawValue: chatID))
+            await daemon.stopChatData(request: request)
             sendableReply.reply()
         }
     }
 
-    func chatSessionState(chatID: String, reply: @escaping (Data) -> Void) {
+    func chatSessionState(request: Data, reply: @escaping (Data) -> Void) {
         let sendableReply = SendableDataReply(reply: reply)
         Task { [daemon] in
-            let data = await daemon.chatSessionStateData(chatID: ChatID(rawValue: chatID))
+            let data = await daemon.chatSessionStateData(request: request)
             sendableReply.reply(data)
         }
     }
@@ -524,8 +524,8 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         let envelope: [String: String?] = ["error": "chat unavailable on Linux"]
         reply((DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(envelope) })) ?? Data())
     }
-    func stopChat(chatID: String, reply: @escaping () -> Void) { reply() }
-    func chatSessionState(chatID: String, reply: @escaping (Data) -> Void) { reply(Data()) }
+    func stopChat(request: Data, reply: @escaping () -> Void) { reply() }
+    func chatSessionState(request: Data, reply: @escaping (Data) -> Void) { reply(Data()) }
     func chatDiagnosticSnapshot(request: Data, reply: @escaping (Data) -> Void) { reply(Data()) }
     func resetChatDiagnostics(request: Data, reply: @escaping (Data) -> Void) { reply(Data()) }
     func resolveChatPermission(request: Data, reply: @escaping () -> Void) { reply() }

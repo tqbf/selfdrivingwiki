@@ -188,6 +188,8 @@ final class WikiDaemon: @unchecked Sendable {
     }
 
     func removeWikiProfile(_ wikiID: WikiID) async {
+        let chatHost = queue.sync { chatHosts.removeValue(forKey: wikiID) }
+        await chatHost?.shutdown()
         // The daemon cache must release the services before its owning child profile
         // shuts down. A later prepare then resolves a fresh store and event bus.
         queue.sync {
@@ -230,7 +232,12 @@ final class WikiDaemon: @unchecked Sendable {
                 } catch {
                     DebugLog.store("wikid: queue shutdown did not settle cleanly: \(error)")
                 }
-                if let chatHost = self.queue.sync(execute: { self._chatHost }) {
+                let chatHosts = self.queue.sync { () -> [DaemonChatHost] in
+                    let hosts = Array(self.chatHosts.values)
+                    self.chatHosts.removeAll()
+                    return hosts
+                }
+                for chatHost in chatHosts {
                     await chatHost.shutdown()
                 }
                 if let profileOwner = self.profileOwner {
@@ -637,9 +644,6 @@ final class WikiDaemon: @unchecked Sendable {
     private func buildQueueResources() async throws -> DaemonQueueResources {
         let runtime = try await runtimeServices()
         let extractionServices = runtime.extraction
-        let coordinator = await MainActor.run {
-            ExtractionCoordinator(services: extractionServices)
-        }
 
         let storeResolver: @Sendable (WikiID) -> GRDBWikiStore? = { [weak self] wikiID in
             self?.preparedStoreIfAvailable(wikiID: wikiID)
@@ -651,8 +655,13 @@ final class WikiDaemon: @unchecked Sendable {
         let dir = containerDirectory
         let ingestionProvider = DaemonQueueIngestionProvider(
             containerDirectory: dir,
-            extractionCoordinator: coordinator,
             storeResolver: storeResolver,
+            launcherFactoryResolver: { [weak self] wikiID in
+                guard let self else {
+                    throw DaemonStoreResolutionError.unavailable(wikiID)
+                }
+                return try await self.prepareAndResolveWikiServices(wikiID: wikiID).launcherFactory
+            },
             queueStore: queueStore,
             resolveSelectedProvider: {
                 AgentProvidersConfig.loadOrSeed(from: dir).selectedProvider()
@@ -722,48 +731,63 @@ final class WikiDaemon: @unchecked Sendable {
     // MARK: - Chat host (Phase C)
 
     #if canImport(WikiFSEngine)
-    /// Lazily-constructed chat host owning the live `[chatID → ChatSession]`
-    /// registry. `nil` until `ensureChatHost()` is called.
-    private var _chatHost: DaemonChatHost?
+    /// One chat host per prepared wiki. Each host owns one launcher pair for its
+    /// session lifetime; no host can route work into another wiki's store.
+    private var chatHosts: [WikiID: DaemonChatHost] = [:]
 
-    /// Construct (or return the existing) `DaemonChatHost`. The host is wired
-    /// with the same `storeResolver` + container the queue engine uses, so chat
-    /// persistence lands on the same `GRDBWikiStore` instances.
-    func ensureChatHost() async throws -> DaemonChatHost {
-        if let host = queue.sync(execute: { _chatHost }) {
+    func distinctLauncherPairIdentitiesForTesting(
+        wikiID: WikiID
+    ) async throws -> (
+        firstGate: ObjectIdentifier,
+        firstLauncher: ObjectIdentifier,
+        secondGate: ObjectIdentifier,
+        secondLauncher: ObjectIdentifier
+    ) {
+        let services = try await prepareAndResolveWikiServices(wikiID: wikiID)
+        return await MainActor.run {
+            let first = services.launcherFactory(wikiID: wikiID)
+            let second = services.launcherFactory(wikiID: wikiID)
+            return (
+                ObjectIdentifier(first.gate),
+                ObjectIdentifier(first.launcher),
+                ObjectIdentifier(second.gate),
+                ObjectIdentifier(second.launcher)
+            )
+        }
+    }
+
+    func ensureChatHost(wikiID: WikiID) async throws -> DaemonChatHost {
+        if let host = queue.sync(execute: { chatHosts[wikiID] }) {
             return host
         }
 
+        let services = try await prepareAndResolveWikiServices(wikiID: wikiID)
         let runtime = try await runtimeServices()
-        let extractionServices = runtime.extraction
-        let coordinator = await MainActor.run {
-            ExtractionCoordinator(services: extractionServices)
+        let launcherPair = await MainActor.run {
+            services.launcherFactory(wikiID: wikiID)
         }
-        let generationGate = await MainActor.run {
-            GenerationGate(laneLimits: [.ingest: 1, .interactive: 3])
-        }
-
-        let storeResolver: @Sendable (WikiID) -> GRDBWikiStore? = { [weak self] wikiID in
-            self?.preparedStoreIfAvailable(wikiID: wikiID)
+        let storeResolver: @Sendable (WikiID) -> GRDBWikiStore? = { [weak self] requestedWikiID in
+            guard requestedWikiID == wikiID else { return nil }
+            return self?.preparedStoreIfAvailable(wikiID: requestedWikiID)
         }
 
-        let dir = containerDirectory
-        let host = DaemonChatHost(
-            containerDirectory: dir,
-            extractionCoordinator: coordinator,
-            generationGate: generationGate,
-            storeResolver: storeResolver,
-            pushEvent: { [weak self] envelope in
-                self?.pushChatEnvelope(envelope)
-            },
-            diagnosticTrace: daemonChatDiagnostics,
-            providerServices: runtime.provider)
+        let host = await MainActor.run {
+            DaemonChatHost(
+                containerDirectory: containerDirectory,
+                launcherPair: launcherPair,
+                storeResolver: storeResolver,
+                pushEvent: { [weak self] envelope in
+                    self?.pushChatEnvelope(envelope)
+                },
+                diagnosticTrace: daemonChatDiagnostics,
+                providerServices: runtime.provider)
+        }
 
         return queue.sync {
-            if let existing = _chatHost {
+            if let existing = chatHosts[wikiID] {
                 return existing
             }
-            _chatHost = host
+            chatHosts[wikiID] = host
             return host
         }
     }
@@ -776,7 +800,7 @@ final class WikiDaemon: @unchecked Sendable {
         do {
             let req = try JSONDecoder().decode(ChatStartRequest.self, from: request)
             try await prepareWiki(req.wikiID)
-            let host = try await ensureChatHost()
+            let host = try await ensureChatHost(wikiID: req.wikiID)
             let chatID = try await host.startChat(
                 wikiID: req.wikiID, firstMessage: req.firstMessage,
                 providerId: req.providerId,
@@ -799,7 +823,7 @@ final class WikiDaemon: @unchecked Sendable {
         do {
             let req = try JSONDecoder().decode(ChatSubmitRequest.self, from: request)
             try await prepareWiki(req.wikiID)
-            let host = try await ensureChatHost()
+            let host = try await ensureChatHost(wikiID: req.wikiID)
             let chatID = try await host.submitTurn(req)
             let reply = ChatSubmitReply(chatID: chatID, error: nil)
             return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
@@ -818,7 +842,7 @@ final class WikiDaemon: @unchecked Sendable {
         do {
             let req = try JSONDecoder().decode(ChatContinueRequest.self, from: request)
             try await prepareWiki(req.wikiID)
-            let host = try await ensureChatHost()
+            let host = try await ensureChatHost(wikiID: req.wikiID)
             try await host.continueChat(wikiID: req.wikiID, chatID: req.chatID, message: req.message)
             let reply = ChatErrorReply(error: nil)
             return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
@@ -835,14 +859,9 @@ final class WikiDaemon: @unchecked Sendable {
     func sendChatMessageData(request: Data) async -> Data {
         #if canImport(WikiFSEngine)
         do {
-            let host = try await ensureChatHost()
-            guard let dict = try JSONSerialization.jsonObject(with: request) as? [String: Any],
-                  let chatID = dict["chatID"] as? String,
-                  let message = dict["message"] as? String else {
-                let reply = ChatErrorReply(error: "invalid request")
-                return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
-            }
-            try await host.sendChatMessage(chatID: ChatID(rawValue: chatID), message: message)
+            let req = try JSONDecoder().decode(ChatMessageRequest.self, from: request)
+            let host = try await ensureChatHost(wikiID: req.wikiID)
+            try await host.sendChatMessage(chatID: req.chatID, message: req.message)
             let reply = ChatErrorReply(error: nil)
             return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
         } catch {
@@ -854,27 +873,33 @@ final class WikiDaemon: @unchecked Sendable {
         #endif
     }
 
-    /// Stop a chat.
-    func stopChat(chatID: ChatID) async {
+    /// Stop a chat in its explicitly named wiki.
+    func stopChatData(request: Data) async {
         #if canImport(WikiFSEngine)
-        if let host = await DebugLog.trying("ensureChatHost", operation: { try await ensureChatHost() }) {
-            await host.stopChat(chatID: chatID)
+        guard let req = DebugLog.trying("decode ChatStopRequest", operation: {
+            try JSONDecoder().decode(ChatStopRequest.self, from: request)
+        }) else { return }
+        if let host = await DebugLog.trying("ensureChatHost", operation: {
+            try await ensureChatHost(wikiID: req.wikiID)
+        }) {
+            await host.stopChat(chatID: req.chatID)
         }
         #endif
     }
 
     /// Get the authoritative chat sync snapshot. Returns JSON
     /// `ChatSyncSnapshotEnvelope` data.
-    func chatSessionStateData(chatID: ChatID) async -> Data {
+    func chatSessionStateData(request: Data) async -> Data {
         #if canImport(WikiFSEngine)
         do {
-            let host = try await ensureChatHost()
-            let state = try await host.chatSessionState(chatID: chatID)
+            let req = try JSONDecoder().decode(ChatSessionStateRequest.self, from: request)
+            let host = try await ensureChatHost(wikiID: req.wikiID)
+            let state = try await host.chatSessionState(chatID: req.chatID)
             return (DebugLog.trying("encode chat sync snapshot envelope", operation: {
                 try ChatSyncSnapshotEnvelope(snapshot: state).encodedData()
             })) ?? Data()
         } catch {
-            DebugLog.agent("WikiDaemon.chatSessionStateData failed for \(chatID.rawValue): \(error)")
+            DebugLog.agent("WikiDaemon.chatSessionStateData failed: \(error)")
             return Data()
         }
         #else
@@ -929,9 +954,10 @@ final class WikiDaemon: @unchecked Sendable {
     /// Resolve a chat permission.
     func resolveChatPermissionData(request: Data) async {
         #if canImport(WikiFSEngine)
-        if let host = await DebugLog.trying("ensureChatHost", operation: { try await ensureChatHost() }),
-           let req = DebugLog.trying("JSONDecoder.decode", operation: {
+        if let req = DebugLog.trying("JSONDecoder.decode", operation: {
             try JSONDecoder().decode(ChatPermissionResolveRequest.self, from: request)
+        }), let host = await DebugLog.trying("ensureChatHost", operation: {
+            try await ensureChatHost(wikiID: req.wikiID)
         }) {
             await host.resolvePermission(
                 chatID: req.chatID, optionId: req.optionId, approve: req.approve)
@@ -943,8 +969,8 @@ final class WikiDaemon: @unchecked Sendable {
     func setChatConfigOptionData(request: Data) async -> Data {
         #if canImport(WikiFSEngine)
         do {
-            let host = try await ensureChatHost()
             let req = try JSONDecoder().decode(ChatConfigOptionRequest.self, from: request)
+            let host = try await ensureChatHost(wikiID: req.wikiID)
             try await host.setChatConfigOption(
                 chatID: req.chatID, option: req.option, value: req.value)
             let reply = ChatErrorReply(error: nil)
