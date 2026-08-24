@@ -1,9 +1,12 @@
 # Cordis Full Architecture — Design Record
 
-Status: complete for Phases 1–5b. Phase 5b Stage 2 landed: `WikiSession`
-and all `*RuntimeAssembly.swift` files are deleted, the app/daemon/CLI boot
-from profiles, and `scripts/check-cordis-boundaries` is strict by default.
-Migration sequence record: `plans/cordis-5b-status.md`.
+Status: complete through the final extension. `WikiSession` and all
+`*RuntimeAssembly.swift` files are deleted. The app, daemon, and CLI boot from
+profiles. Daemon store and launcher paths resolve from per-wiki child profiles.
+Ordinary CLI commands resolve stores from request-scoped CLI profiles.
+`scripts/check-cordis-boundaries` rejects all migrated construction paths.
+Migration records: `plans/cordis-5b-status.md` and
+`plans/cordis-final-extension.md`.
 
 ## Goal
 
@@ -85,6 +88,7 @@ re-projection happens in the UI plugin, not the kernel.
 | `ctx.tools` | tool registry + execution waterfalls | done (`wiki.tools`) |
 | `ctx.systemPrompt` | prompt assembly | done (`wiki.system-prompt`) |
 | `ctx.agentLoop` / `ctx.agents` | queue worker, chat turn flow | done (`wiki.agent-loop`; QueueEngine/ChatAgentRuntime lifetimes now owned by process-profile leases) |
+| `ctx.launcherFactory` | per-wiki launcher pair creation | done (`wiki.launcher-factory`) |
 | `ctx.search` | Tantivy + embeddings providers | done (`wiki.search` + adapters) |
 | `ctx.renderers` | renderer packages | done (`wiki.renderers` + adapter) |
 | `ctx.transport` | daemon XPC/RPC | done (`wiki.transport` + adapter) |
