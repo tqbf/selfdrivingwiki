@@ -230,6 +230,207 @@ public final class AppProcessProfileOwner {
     }
 }
 
+/// Typed process services resolved once from the daemon process profile.
+public struct DaemonProcessServices: Sendable {
+    public let agentProvider: any AgentProviderServices
+    public let extraction: any ExtractionServices
+
+    public static func resolve(from profile: BootedProfile) async throws -> DaemonProcessServices {
+        DaemonProcessServices(
+            agentProvider: try await profile.context.require(ProcessServiceKeys.agentProvider),
+            extraction: try await profile.context.require(ProcessServiceKeys.extraction))
+    }
+}
+
+/// Owns daemon process-profile startup and its retained per-wiki child profiles.
+/// The actor owns every startup task and makes repeated shutdown requests safe.
+public actor DaemonProcessProfileOwner {
+    public typealias Boot = @Sendable () async throws -> BootedProfile
+    public typealias BootWiki = @Sendable (WikiID, BootedProfile) async throws -> BootedProfile
+
+    private let boot: Boot
+    private let bootWiki: BootWiki
+    private var startupTask: Task<(BootedProfile, DaemonProcessServices), Error>?
+    private var process: (BootedProfile, DaemonProcessServices)?
+    private var wikiTasks: [WikiID: Task<AppServices, Error>] = [:]
+    private var wikiServices: [WikiID: AppServices] = [:]
+    private var shutdownStarted = false
+
+    public init(boot: @escaping Boot, bootWiki: @escaping BootWiki) {
+        self.boot = boot
+        self.bootWiki = bootWiki
+    }
+
+    public static func production(
+        containerDirectory: URL,
+        makeLocalExtractor: @escaping ExtractionPluginFactory.LocalExtractor
+    ) throws -> DaemonProcessProfileOwner {
+        let providerServices = MutableAgentProviderServices()
+        let extractionCredentialStore = KeychainExtractionCredentialStore()
+        let acpCredentialStore = KeychainACPCredentialStore()
+        let processFactories = ProcessPluginCatalogFactories(
+            makeAgentProvider: {
+                let handle = try await AgentProviderRuntimeAssembly(
+                    readConfiguration: { AgentProvidersConfig.loadOrSeed(from: containerDirectory) },
+                    resolveCommand: { providers in
+                        let searchPath = await PathPreflight.loginShellPATH()
+                        return Dictionary(uniqueKeysWithValues: providers.compactMap { provider in
+                            AgentLauncher.resolveCommand(for: provider, searchPath: searchPath)
+                                .map { (provider.id, $0) }
+                        })
+                    },
+                    readCredential: { providerID in
+                        KeychainACPCredentialStore().apiKey(forProvider: providerID.rawValue)
+                    },
+                    resolvePermissionPolicy: { _ in .bypass })
+                    .assemble()
+                await providerServices.install(handle.services)
+                return ProcessRuntimeLease(service: providerServices) { try await handle.dispose() }
+            },
+            makeExtraction: {
+                let handle = try await ExtractionRuntimeAssembly(
+                    readConfiguration: { ExtractionConfig.load(from: containerDirectory) },
+                    readCredential: { extractionCredentialStore.secret($0) },
+                    resolveACP: { configuration in
+                        ACPExtractionClient.resolveProvider(
+                            containerDirectory: containerDirectory,
+                            acpProviderId: configuration.acpProviderId,
+                            acpCredentialStore: acpCredentialStore)
+                    },
+                    httpFetcher: URLSessionRequestFetcher(),
+                    makeLocalExtractor: makeLocalExtractor)
+                    .assemble()
+                return ProcessRuntimeLease(service: handle.services) { try await handle.dispose() }
+            })
+        let processCatalog = try ProcessPluginCatalog.build(factories: processFactories)
+        let childCatalog = try DaemonPluginCatalog.build(factories: .init(base: .init(
+            agentProviderServices: providerServices,
+            makePDFExtractor: makeLocalExtractor)))
+        return DaemonProcessProfileOwner(
+            boot: {
+                try await CordisBoot.boot(.init(
+                    catalog: processCatalog,
+                    layers: [PatchFile(entries: ProductionProfileEntries.daemonProcess())]))
+            },
+            bootWiki: { wikiID, processProfile in
+                let databaseURL = containerDirectory.appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false)
+                return try await CordisBoot.boot(.init(
+                    catalog: childCatalog,
+                    layers: [PatchFile(entries: ProductionProfileEntries.daemon(databaseURL: databaseURL, wikiID: wikiID))],
+                    parent: processProfile.context))
+            })
+    }
+
+    @discardableResult
+    public func start() async throws -> DaemonProcessServices {
+        if shutdownStarted { throw CancellationError() }
+        if let process { return process.1 }
+        if startupTask == nil {
+            let boot = self.boot
+            startupTask = Task {
+                let profile = try await boot()
+                do {
+                    return (profile, try await DaemonProcessServices.resolve(from: profile))
+                } catch {
+                    do { try await profile.shutdown() } catch {
+                        DebugLog.store("Daemon process profile cleanup after startup failure failed: \(error)")
+                    }
+                    throw error
+                }
+            }
+        }
+        guard let startupTask else { throw CancellationError() }
+        let resolved = try await startupTask.value
+        guard !shutdownStarted else {
+            try await resolved.0.shutdown()
+            throw CancellationError()
+        }
+        process = resolved
+        return resolved.1
+    }
+
+    public func services() async throws -> DaemonProcessServices {
+        try await start()
+    }
+
+    public func wiki(wikiID: WikiID) async throws -> AppServices {
+        if let services = wikiServices[wikiID] { return services }
+        let processProfile: BootedProfile
+        if let process { processProfile = process.0 } else {
+            _ = try await start()
+            guard let process else { throw CancellationError() }
+            processProfile = process.0
+        }
+        if wikiTasks[wikiID] == nil {
+            let bootWiki = self.bootWiki
+            wikiTasks[wikiID] = Task {
+                let profile = try await bootWiki(wikiID, processProfile)
+                do { return try await AppServices.resolve(from: profile) }
+                catch {
+                    do { try await profile.shutdown() } catch {
+                        DebugLog.store("Daemon wiki profile cleanup after startup failure failed: \(error)")
+                    }
+                    throw error
+                }
+            }
+        }
+        guard let wikiTask = wikiTasks[wikiID] else { throw CancellationError() }
+        let services = try await wikiTask.value
+        guard !shutdownStarted else {
+            try await services.shutdown()
+            throw CancellationError()
+        }
+        wikiServices[wikiID] = services
+        return services
+    }
+
+    public func removeWiki(_ wikiID: WikiID) async {
+        wikiTasks[wikiID]?.cancel()
+        if let task = wikiTasks.removeValue(forKey: wikiID) {
+            do { _ = try await task.value } catch is CancellationError {
+                // Removal intentionally cancels an unfinished child-profile boot.
+            } catch {
+                DebugLog.store("Daemon wiki profile task ended during removal: \(error)")
+            }
+        }
+        if let services = wikiServices.removeValue(forKey: wikiID) {
+            do { try await services.shutdown() } catch {
+                DebugLog.store("Daemon wiki profile shutdown failed: \(error)")
+            }
+        }
+    }
+
+    public func shutdown() async {
+        guard !shutdownStarted else { return }
+        shutdownStarted = true
+        startupTask?.cancel()
+        for task in wikiTasks.values { task.cancel() }
+        for services in wikiServices.values {
+            do { try await services.shutdown() } catch {
+                DebugLog.store("Daemon wiki profile shutdown failed: \(error)")
+            }
+        }
+        wikiServices.removeAll()
+        wikiTasks.removeAll()
+        if let profile = process?.0 {
+            do { try await profile.shutdown() } catch {
+                DebugLog.store("Daemon process profile shutdown failed: \(error)")
+            }
+        } else if let startupTask {
+            do {
+                let result = try await startupTask.value
+                try await result.0.shutdown()
+            } catch is CancellationError {
+                // Shutdown intentionally cancels unfinished process-profile boot.
+            } catch {
+                DebugLog.store("Daemon process profile shutdown failed: \(error)")
+            }
+        }
+        process = nil
+        startupTask = nil
+    }
+}
+
 /// Typed services resolved once from a booted profile. Consumers receive this
 /// facade rather than a Cordis context or a legacy runtime assembly.
 public struct AppServices: Sendable {

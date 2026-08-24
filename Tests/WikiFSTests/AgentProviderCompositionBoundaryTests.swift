@@ -25,9 +25,9 @@ struct AgentProviderCompositionBoundaryTests {
         let chat = try sourceText("Sources/wikid/DaemonChatHost.swift")
         let runtime = try sourceText("Sources/wikid/LauncherChatAgentRuntime.swift")
 
-        #expect(daemon.contains("MutableAgentProviderServices()"))
-        #expect(daemon.contains("await providerServices.install(handle.services)"))
-        #expect(daemon.contains("providerServices: agentProviderServices"))
+        #expect(daemon.contains("let runtime = try await runtimeServices()"))
+        #expect(daemon.contains("providerServices: runtime.provider"))
+        #expect(daemon.contains("profileOwner?.services()"))
         #expect(queue.contains("providerServices: providerServices"))
         #expect(chat.contains("providerServices: providerServices"))
         #expect(runtime.contains("providerServices: providerServices"))

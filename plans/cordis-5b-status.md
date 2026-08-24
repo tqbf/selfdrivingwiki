@@ -39,7 +39,13 @@ Two compatibility paths remain for the final deletion slice:
 - `SessionManager.session(for:descriptor:)` still constructs `WikiSession` for tests and unsafe synchronous callers. Production `RootScene` does not use this path.
 - `ProfileWikiSession` still delegates application behavior to `WikiSession` until the final deletion slice moves that behavior into the facade.
 
-The daemon part of step 12 remains incomplete. `WikiDaemon` still owns the provider and extraction assemblies.
+The daemon part of step 12 is complete. `DaemonProcessProfileOwner` owns process-profile startup, per-wiki child profiles, and idempotent shutdown.
+
+`wikid` awaits the process profile before it resumes the XPC listener. Store RPC replies use asynchronous tasks to await child-profile readiness. Queue enqueue and chat start, submit, and continue requests also await the child profile.
+
+The daemon resolves provider and extraction services from the process profile. Each child profile supplies the per-wiki store, read pool, and event bus. A successful XPC wiki deletion also stops and removes the child profile.
+
+One daemon compatibility path remains. The synchronous `WikiDaemon` initializer still starts the legacy extraction owner for direct unit tests. Production `main.swift` does not use this initializer. The process-profile production factory still uses the provider and extraction assembly implementations as temporary plugin leases.
 
 The CLI Tantivy path boots `CLIPluginCatalog`, resolves the Tantivy provider, and stops the profile.
 

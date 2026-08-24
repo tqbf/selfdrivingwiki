@@ -87,7 +87,13 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     }
 
     func deleteWiki(id: String, reply: @escaping (Bool) -> Void) {
-        reply(daemon.deleteWiki(id: WikiID(rawValue: id)))
+        let sendableReply = SendableBoolReply(reply: reply)
+        Task { [daemon] in
+            let wikiID = WikiID(rawValue: id)
+            let deleted = daemon.deleteWiki(id: wikiID)
+            if deleted { await daemon.removeWikiProfile(wikiID) }
+            sendableReply.reply(deleted)
+        }
     }
 
     func renameWiki(id: String, name: String, reply: @escaping (Bool) -> Void) {
@@ -99,16 +105,39 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     }
 
     func openStore(wikiID: String, reply: @escaping (Bool) -> Void) {
-        reply(daemon.openStore(wikiID: WikiID(rawValue: wikiID)))
+        let sendableReply = SendableBoolReply(reply: reply)
+        Task { [daemon] in
+            let id = WikiID(rawValue: wikiID)
+            do {
+                try await daemon.prepareWiki(id)
+                sendableReply.reply(daemon.openStore(wikiID: id))
+            } catch {
+                DebugLog.store("wikid: profile boot failed while opening \(wikiID): \(error)")
+                sendableReply.reply(false)
+            }
+        }
     }
 
     func closeStore(wikiID: String, reply: @escaping () -> Void) {
-        daemon.closeStore(wikiID: WikiID(rawValue: wikiID))
-        reply()
+        let sendableReply = SendableVoidReply(reply: reply)
+        Task { [daemon] in
+            daemon.closeStore(wikiID: WikiID(rawValue: wikiID))
+            sendableReply.reply()
+        }
     }
 
     func changeToken(wikiID: String, reply: @escaping (String) -> Void) {
-        reply(daemon.changeToken(wikiID: WikiID(rawValue: wikiID)))
+        let sendableReply = SendableStringReply(reply: reply)
+        Task { [daemon] in
+            let id = WikiID(rawValue: wikiID)
+            do {
+                try await daemon.prepareWiki(id)
+                sendableReply.reply(daemon.changeToken(wikiID: id))
+            } catch {
+                DebugLog.store("wikid: profile boot failed while reading change token for \(wikiID): \(error)")
+                sendableReply.reply(WikiDaemon.errorTokenSentinel)
+            }
+        }
     }
 
     // MARK: - Workload: event sink registration (Phase 0)
@@ -143,6 +172,7 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
             } catch {
                 throw QueueRPCError(code: .invalidRequest, message: "Queue request could not be decoded")
             }
+            try await daemon.prepareWiki(decoded.wikiID)
             let result = try await daemon.performQueueOperation { engine in
                 try await engine.enqueue(decoded)
             }
@@ -541,6 +571,13 @@ private struct SendableBoolReply: @unchecked Sendable {
     let reply: (Bool) -> Void
 }
 
+/// Wraps an XPC `@escaping (String) -> Void` reply. XPC reply closures are
+/// thread-safe, immutable, and called exactly once by the exporter task.
+// swiftlint:disable:next unchecked_sendable
+private struct SendableStringReply: @unchecked Sendable {
+    let reply: (String) -> Void
+}
+
 // MARK: - Main
 
 // Resolve the App Group container path. The daemon reaches the SHARED group
@@ -590,7 +627,11 @@ source=\(WikiIdentifiers.appGroupIDSource.rawValue) \
 container=\(containerDirectory.path)
 """)
 
-let daemon = WikiDaemon(containerDirectory: containerDirectory)
+let profileOwner = try DaemonProcessProfileOwner.production(
+    containerDirectory: containerDirectory,
+    makeLocalExtractor: { await MainActor.run { LocalPdf2MarkdownExtractor() } })
+let daemon = WikiDaemon(containerDirectory: containerDirectory, profileOwner: profileOwner)
+try await daemon.start()
 let processLifetime = DaemonProcessLifetimeCoordinator(
     shutdown: {
         await daemon.shutdown()
@@ -627,12 +668,6 @@ DebugLog.store("wikid: XPC service started, serving on \(WikiDaemonServiceName)"
 daemon.startHeartbeat()
 
 listener.resume()
-
-// Unreachable in production — `listener.resume()` above never returns. Kept as
-// a fallback for non-XPC execution contexts (tests, direct invocation for
-// debugging), where `service()` returns a listener whose `resume()` does not
-// block.
-RunLoop.current.run()
 
 #else // Linux
 

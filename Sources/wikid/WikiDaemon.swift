@@ -20,14 +20,11 @@ final class WikiDaemon: @unchecked Sendable {
     private let makeStore: (URL) throws -> WikiStore
     private let daemonChatDiagnostics = DaemonChatDiagnostics()
     #if canImport(WikiFSEngine)
-    /// Stable daemon-scoped facade. It remains unavailable until the isolated
-    /// provider composition has assembled, so XPC/store hosting never depends
-    /// on Cordis availability.
-    private let agentProviderServices = MutableAgentProviderServices()
-    /// Retains the provider composition context for the daemon lifetime.
-    private var agentProviderRuntimeHandle: AgentProviderRuntimeHandle?
-    /// Owns the single daemon-scoped extraction context and stable facade.
-    private let extractionCompositionOwner: ExtractionCompositionOwner
+    /// Production owns provider, extraction, and per-wiki store lifetimes here.
+    /// Tests that use the synchronous initializer retain the legacy fallback.
+    private let profileOwner: DaemonProcessProfileOwner?
+    private let legacyAgentProviderServices: MutableAgentProviderServices?
+    private let legacyExtractionCompositionOwner: ExtractionCompositionOwner?
     #endif
 
     // MARK: - State (accessed on `queue`)
@@ -99,9 +96,12 @@ final class WikiDaemon: @unchecked Sendable {
         self.makeStore = makeStore
         self.registry = WikiRegistry.load(from: containerDirectory)
         #if canImport(WikiFSEngine)
+        self.profileOwner = nil
+        let providerServices = MutableAgentProviderServices()
+        self.legacyAgentProviderServices = providerServices
         let extractionCredentialStore = KeychainExtractionCredentialStore()
         let acpCredentialStore = KeychainACPCredentialStore()
-        self.extractionCompositionOwner = ExtractionCompositionOwner(
+        let extractionOwner = ExtractionCompositionOwner(
             assemble: extractionAssembly ?? {
                 try await ExtractionRuntimeAssembly(
                     readConfiguration: { ExtractionConfig.load(from: containerDirectory) },
@@ -113,41 +113,66 @@ final class WikiDaemon: @unchecked Sendable {
                             acpCredentialStore: acpCredentialStore)
                     },
                     httpFetcher: URLSessionRequestFetcher(),
-                    makeLocalExtractor: {
-                        await MainActor.run { LocalPdf2MarkdownExtractor() }
-                    })
+                    makeLocalExtractor: { await MainActor.run { LocalPdf2MarkdownExtractor() } })
                     .assemble()
             })
-        let providerServices = agentProviderServices
-        let providerAssembly = AgentProviderRuntimeAssembly(
-            readConfiguration: {
-                AgentProvidersConfig.loadOrSeed(from: containerDirectory)
-            },
-            resolveCommand: { providers in
-                let searchPath = await PathPreflight.loginShellPATH()
-                return Dictionary(uniqueKeysWithValues: providers.compactMap { provider in
-                    AgentLauncher.resolveCommand(for: provider, searchPath: searchPath)
-                        .map { (provider.id, $0) }
-                })
-            },
-            readCredential: { providerID in
-                KeychainACPCredentialStore().apiKey(forProvider: providerID.rawValue)
-            },
-            resolvePermissionPolicy: { _ in .bypass })
-        Task { await extractionCompositionOwner.start() }
-        Task { [weak self, providerAssembly, providerServices] in
-            do {
-                let handle = try await providerAssembly.assemble()
-                await providerServices.install(handle.services)
-                self?.queue.sync {
-                    self?.agentProviderRuntimeHandle = handle
-                }
-            } catch {
-                DebugLog.agent("wikid: agent provider runtime assembly failed. Agent commands are unavailable: \(error)")
-            }
-        }
+        self.legacyExtractionCompositionOwner = extractionOwner
+        Task { await extractionOwner.start() }
         #endif
     }
+
+    #if canImport(WikiFSEngine)
+    init(
+        containerDirectory: URL,
+        profileOwner: DaemonProcessProfileOwner,
+        makeStore: @escaping (URL) throws -> WikiStore = { try GRDBWikiStore(databaseURL: $0) }
+    ) {
+        self.containerDirectory = containerDirectory
+        self.makeStore = makeStore
+        self.registry = WikiRegistry.load(from: containerDirectory)
+        self.profileOwner = profileOwner
+        self.legacyAgentProviderServices = nil
+        self.legacyExtractionCompositionOwner = nil
+    }
+
+    func start() async throws {
+        if let profileOwner { _ = try await profileOwner.start() }
+    }
+
+    func prepareWiki(_ wikiID: WikiID) async throws {
+        guard let profileOwner else { return }
+        let services = try await profileOwner.wiki(wikiID: wikiID)
+        guard let store = services.store as? GRDBWikiStore else {
+            throw QueueRPCError(code: .unavailable, message: "Daemon profile did not provide a GRDB store")
+        }
+        queue.sync {
+            wireEventBus(on: store, wikiID: wikiID)
+            cacheStore(store, wikiID: wikiID)
+        }
+    }
+
+    func removeWikiProfile(_ wikiID: WikiID) async {
+        await profileOwner?.removeWiki(wikiID)
+    }
+
+    private func processServices() async throws -> DaemonProcessServices? {
+        try await profileOwner?.services()
+    }
+
+    private func runtimeServices() async throws -> (
+        provider: any AgentProviderServices,
+        extraction: any ExtractionServices
+    ) {
+        if let services = try await processServices() {
+            return (services.agentProvider, services.extraction)
+        }
+        guard let provider = legacyAgentProviderServices,
+              let extraction = legacyExtractionCompositionOwner?.services else {
+            throw QueueRPCError(code: .unavailable, message: "Daemon runtime services are unavailable")
+        }
+        return (provider, extraction)
+    }
+    #endif
 
     func shutdown() async {
         let task = queue.sync { () -> Task<Void, Never> in
@@ -165,13 +190,10 @@ final class WikiDaemon: @unchecked Sendable {
                 if let chatHost = self.queue.sync(execute: { self._chatHost }) {
                     await chatHost.shutdown()
                 }
-                await self.extractionCompositionOwner.shutdown()
-                if let handle = self.queue.sync(execute: { self.agentProviderRuntimeHandle }) {
-                    do {
-                        try await handle.dispose()
-                    } catch {
-                        DebugLog.agent("wikid: provider runtime disposal failed: \(error)")
-                    }
+                if let profileOwner = self.profileOwner {
+                    await profileOwner.shutdown()
+                } else if let extractionOwner = self.legacyExtractionCompositionOwner {
+                    await extractionOwner.shutdown()
                 }
                 #endif
             }
@@ -584,7 +606,8 @@ final class WikiDaemon: @unchecked Sendable {
     }
 
     private func buildQueueResources() async throws -> DaemonQueueResources {
-        let extractionServices = extractionCompositionOwner.services
+        let runtime = try await runtimeServices()
+        let extractionServices = runtime.extraction
         let coordinator = await MainActor.run {
             ExtractionCoordinator(services: extractionServices)
         }
@@ -608,7 +631,7 @@ final class WikiDaemon: @unchecked Sendable {
             resolveProviderConfig: {
                 AgentProvidersConfig.loadOrSeed(from: dir)
             },
-            providerServices: agentProviderServices)
+            providerServices: runtime.provider)
 
         let outputChannel = QueueWorkerOutputChannel(store: queueStore)
         let extractionFactory = QueueExtractionWorkerFactory(
@@ -672,7 +695,8 @@ final class WikiDaemon: @unchecked Sendable {
             return host
         }
 
-        let extractionServices = extractionCompositionOwner.services
+        let runtime = try await runtimeServices()
+        let extractionServices = runtime.extraction
         let coordinator = await MainActor.run {
             ExtractionCoordinator(services: extractionServices)
         }
@@ -694,7 +718,7 @@ final class WikiDaemon: @unchecked Sendable {
                 self?.pushChatEnvelope(envelope)
             },
             diagnosticTrace: daemonChatDiagnostics,
-            providerServices: agentProviderServices)
+            providerServices: runtime.provider)
 
         return queue.sync {
             if let existing = _chatHost {
@@ -711,8 +735,9 @@ final class WikiDaemon: @unchecked Sendable {
     func startChatData(request: Data) async -> Data {
         #if canImport(WikiFSEngine)
         do {
-            let host = try await ensureChatHost()
             let req = try JSONDecoder().decode(ChatStartRequest.self, from: request)
+            try await prepareWiki(req.wikiID)
+            let host = try await ensureChatHost()
             let chatID = try await host.startChat(
                 wikiID: req.wikiID, firstMessage: req.firstMessage,
                 providerId: req.providerId,
@@ -733,8 +758,9 @@ final class WikiDaemon: @unchecked Sendable {
     func submitChatTurnData(request: Data) async -> Data {
         #if canImport(WikiFSEngine)
         do {
-            let host = try await ensureChatHost()
             let req = try JSONDecoder().decode(ChatSubmitRequest.self, from: request)
+            try await prepareWiki(req.wikiID)
+            let host = try await ensureChatHost()
             let chatID = try await host.submitTurn(req)
             let reply = ChatSubmitReply(chatID: chatID, error: nil)
             return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()
@@ -751,8 +777,9 @@ final class WikiDaemon: @unchecked Sendable {
     func continueChatData(request: Data) async -> Data {
         #if canImport(WikiFSEngine)
         do {
-            let host = try await ensureChatHost()
             let req = try JSONDecoder().decode(ChatContinueRequest.self, from: request)
+            try await prepareWiki(req.wikiID)
+            let host = try await ensureChatHost()
             try await host.continueChat(wikiID: req.wikiID, chatID: req.chatID, message: req.message)
             let reply = ChatErrorReply(error: nil)
             return (DebugLog.trying("JSONEncoder.encode", operation: { try JSONEncoder().encode(reply) })) ?? Data()

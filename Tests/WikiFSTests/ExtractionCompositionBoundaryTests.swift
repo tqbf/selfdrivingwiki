@@ -20,7 +20,8 @@ struct ExtractionCompositionBoundaryTests {
         let source = try productionSource("Sources/wikid/WikiDaemon.swift")
 
         #expect(source.occurrences(of: "ExtractionCompositionOwner(") == 1)
-        #expect(source.contains("let extractionServices = extractionCompositionOwner.services"))
+        #expect(source.contains("let runtime = try await runtimeServices()"))
+        #expect(source.contains("let extractionServices = runtime.extraction"))
         #expect(source.contains("extractionServices: extractionServices"))
         #expect(source.contains("ExtractionCoordinator(services: extractionServices)"))
         #expect(!source.contains("ExtractionCoordinator(\n                containerDirectory:"))
@@ -55,8 +56,8 @@ struct ExtractionCompositionBoundaryTests {
         #expect(appQueue.lowerBound < appExtraction.lowerBound)
 
         let daemonQueue = try #require(daemon.range(of: "daemonQueueHost.relinquish"))
-        let daemonExtraction = try #require(daemon.range(of: "extractionCompositionOwner.shutdown()"))
-        #expect(daemonQueue.lowerBound < daemonExtraction.lowerBound)
+        let daemonProfile = try #require(daemon.range(of: "profileOwner.shutdown()"))
+        #expect(daemonQueue.lowerBound < daemonProfile.lowerBound)
     }
 }
 
