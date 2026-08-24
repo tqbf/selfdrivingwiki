@@ -84,3 +84,12 @@ finding. Owner decision: fix all findings, then re-review until clean.
   emit/waterfall and listener disposal (`CordisEventsTests`).
 - Token-owned registries resist stale disposers.
 - Search-before-child shutdown ordering; app termination ordering.
+
+## Round 2
+
+1. **FIXED (`58e2377c`) — NEW-1: `EntryTree.update` kept stale state after a failed replacement.**
+   The tree now commits each retirement to its state before it disposes the handle.
+   A failed mount removes each new handle from the state before rollback disposal.
+   Therefore, the stored rows and mounted entry IDs describe only live services.
+   A retry can mount each missing row and restore a usable graph.
+   Tests cover failed replacement, retirement followed by partial mounting, service access, retry, and final disposal.
