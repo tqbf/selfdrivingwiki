@@ -41,6 +41,52 @@ struct ContentTypeDetectorTests {
         #expect(result.evidence.first?.origin == .binarySignature)
     }
 
+    @Test(arguments: signatures)
+    func commonSignaturesRejectTruncatedInputs(_ value: SignatureCase) {
+        let truncated = Data(value.bytes.prefix(1))
+        let result = ContentTypeDetector.detect(.init(data: truncated))
+        #expect(!result.evidence.contains { $0.origin == .binarySignature })
+        #expect(result.normalizedMIMEType != value.mimeType)
+    }
+
+    @Test(arguments: signatures)
+    func commonSignaturesRejectNearMisses(_ value: SignatureCase) {
+        var nearMiss = value.bytes
+        nearMiss[nearMiss.startIndex] ^= 0xFF
+        let result = ContentTypeDetector.detect(.init(data: nearMiss))
+        #expect(!result.evidence.contains { $0.origin == .binarySignature })
+        #expect(result.normalizedMIMEType != value.mimeType)
+    }
+
+    @Test(arguments: signatures)
+    func commonSignaturesOverrideConflictingHints(_ value: SignatureCase) {
+        let result = ContentTypeDetector.detect(.init(
+            data: value.bytes,
+            hints: .init(
+                declaredMIME: .init("text/plain", origin: .httpResponse),
+                filenameExtension: "txt")))
+        #expect(result.normalizedMIMEType == value.mimeType)
+        #expect(result.conflicts.contains { $0.conflictingEvidence.origin == .httpResponse })
+    }
+
+    @Test func conflictingHintsRetainEvidenceAndConflictOrigins() {
+        for origin in [DeclaredMIMEOrigin.httpResponse, .zoteroMetadata] {
+            let result = ContentTypeDetector.detect(.init(
+                data: Data("%PDF-1.7".utf8),
+                hints: .init(
+                    declaredMIME: .init("text/plain", origin: origin),
+                    filenameExtension: "txt",
+                    utiMIME: "text/plain")))
+            #expect(result.normalizedMIMEType == "application/pdf")
+            #expect(result.conflicts.map(\.conflictingEvidence.origin) == [
+                .utf8Text,
+                origin == .httpResponse ? .httpResponse : .zoteroMetadata,
+                .uti,
+                .filenameExtension,
+            ])
+        }
+    }
+
     @Test func binarySignatureOverridesDeclaredHTTPMIME() {
         let result = ContentTypeDetector.detect(.init(
             data: Data("%PDF-1.7".utf8),

@@ -49,6 +49,14 @@ The detector recognizes JSON, XML, SVG, HTML, XHTML, and plausible UTF-8 text. J
 
 `ContentArtifactValidator` validates JSON Canvas separately. It requires complete JSON with `nodes` and `edges` object arrays. Renderer matching repeats this bounded validation and fails closed for legacy or truncated input.
 
+## Architecture boundary
+
+`ContentTypeDetector` is a pure `WikiFSCore` policy. It is stateless, synchronous, and deterministic.
+
+The detector does not own resources or mutable operation state. It has no activation order or disposal work. Therefore, it is not a Cordis service.
+
+Cordis-composed ingestion services call the typed detector API as ordinary code. Architecture tests reject Cordis imports, service keys, and component definitions for content detection.
+
 ## Persistence
 
 Initial source writes, refresh versions, and snapshot image writes run the detector from their byte payload. The store writes the same normalized MIME to the active `source_versions` row and the `sources` mirror.
