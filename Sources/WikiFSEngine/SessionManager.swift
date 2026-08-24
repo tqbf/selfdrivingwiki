@@ -36,10 +36,14 @@ public final class SessionManager {
     }
 
     public typealias AsyncSessionLoader = @MainActor @Sendable (WikiID, WikiDescriptor) async throws -> any WikiSessionProtocol
+    public typealias TestSessionFactory = @MainActor (WikiID, WikiDescriptor) throws -> any WikiSessionProtocol
 
-    /// Observable readiness for the future per-wiki child-profile boot path.
+    /// Observable readiness for the mandatory per-wiki child-profile boot path.
     public private(set) var readiness: [WikiID: SessionReadiness] = [:]
     @ObservationIgnored private let asyncSessionLoader: AsyncSessionLoader?
+    /// Explicit synchronous fixture seam. Production must provide the async
+    /// child-profile loader and never sets this closure.
+    @ObservationIgnored private let testSessionFactory: TestSessionFactory?
 
     /// Live sessions keyed by wiki ID. A wiki open in multiple windows
     /// shares ONE session (one store, one bus, one gate).
@@ -160,7 +164,8 @@ public final class SessionManager {
         podcastBackendResolver: @escaping @MainActor () -> PodcastTranscriptionBackend? = { nil },
         interactiveUsageRecorder: @escaping (@MainActor (SessionUsage) -> Void) = { _ in },
         makeStore: @escaping @Sendable (URL) throws -> WikiStore = { try StoreBackend.current.makeStore(databaseURL: $0) },
-        asyncSessionLoader: AsyncSessionLoader? = nil
+        asyncSessionLoader: AsyncSessionLoader? = nil,
+        testSessionFactory: TestSessionFactory? = nil
     ) {
         self.containerDirectory = containerDirectory
         self.extractionCoordinator = extractionCoordinator
@@ -175,6 +180,7 @@ public final class SessionManager {
         self.interactiveUsageRecorder = interactiveUsageRecorder
         self.makeStore = makeStore
         self.asyncSessionLoader = asyncSessionLoader
+        self.testSessionFactory = testSessionFactory
     }
 
     // MARK: - Session lifecycle
@@ -185,9 +191,8 @@ public final class SessionManager {
 
     /// Await the per-wiki session composition boundary.
     ///
-    /// The injected loader is the target child-profile boot path. Until app and
-    /// daemon owners are rewired, the default preserves legacy synchronous
-    /// construction while exposing the same async readiness contract.
+    /// Production callers inject the child-profile loader. A synchronous path
+    /// exists only when tests explicitly install `testSessionFactory`.
     public func readySession(for wikiID: WikiID, descriptor: WikiDescriptor) async throws -> any WikiSessionProtocol {
         if let existing = sessions[wikiID] {
             existing.updateDescriptor(descriptor)
@@ -197,6 +202,12 @@ public final class SessionManager {
         }
         readiness[wikiID] = .loading
         guard let asyncSessionLoader else {
+            guard testSessionFactory != nil else {
+                let error = SessionLoadingError.processProfileUnavailable(
+                    "Per-wiki child-profile loader is unavailable")
+                readiness[wikiID] = .failed(String(describing: error))
+                throw error
+            }
             do {
                 let session = try self.session(for: wikiID, descriptor: descriptor)
                 readiness[wikiID] = .ready
@@ -269,25 +280,13 @@ public final class SessionManager {
             sessionLeaseCounts[wikiID, default: 0] += 1
             return existing
         }
-        let newSession: ProfileWikiSession
+        let newSession: any WikiSessionProtocol
         do {
-            newSession = try ProfileWikiSession(
-                wikiID: wikiID,
-                descriptor: descriptor,
-                containerDirectory: containerDirectory,
-                extractionCoordinator: extractionCoordinator,
-                queueEngine: queueEngine,
-                extractionProvider: extractionProvider,
-                searchRuntimeRegistry: searchRuntimeRegistry,
-                searchStartupPrerequisite: searchReleaseTasks[wikiID]?.task,
-                providerServices: providerServices,
-                makeStore: makeStore,
-                pdf2mdScriptPathResolver: pdf2mdScriptPathResolver,
-                htmlMarkdownExtractorFactory: htmlMarkdownExtractorFactory,
-                htmlBackendResolver: htmlBackendResolver,
-                podcastBackendResolver: podcastBackendResolver,
-                interactiveUsageRecorder: interactiveUsageRecorder
-            )
+            guard let testSessionFactory else {
+                throw SessionLoadingError.processProfileUnavailable(
+                    "Synchronous session construction is available only to injected test fixtures")
+            }
+            newSession = try testSessionFactory(wikiID, descriptor)
         } catch {
             // Record a user-visible message so RootScene can render an error
             // view. No in-memory fallback (#881) — the on-disk file is left

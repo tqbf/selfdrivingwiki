@@ -43,12 +43,56 @@ struct SessionManagerTests {
             extractionCoordinator: coordinator,
             queueEngine: queueEngine,
             extractionProvider: provider,
-            pdf2mdScriptPathResolver: { nil })
+            pdf2mdScriptPathResolver: { nil },
+            testSessionFactory: { wikiID, descriptor in
+                let runtime = try PerWikiRuntimeServices.testFixture(
+                    wikiID: wikiID,
+                    containerDirectory: dir,
+                    extractionCoordinator: coordinator)
+                return ProfileWikiSession(
+                    wikiID: wikiID,
+                    descriptor: descriptor,
+                    runtime: runtime,
+                    extractionCoordinator: coordinator,
+                    queueEngine: queueEngine,
+                    extractionProvider: provider)
+            })
+    }
+
+    private func makeSessionManager(
+        dir: URL,
+        makeStore: @escaping (URL) throws -> any WikiStore
+    ) throws -> SessionManager {
+        let coordinator = ExtractionCoordinator(
+            containerDirectory: dir,
+            localExtractorFactory: { StubExtractor() })
+        let queueEngine = try makeTestQueueEngine()
+        let provider = StubExtractionProvider()
+        return SessionManager(
+            containerDirectory: dir,
+            extractionCoordinator: coordinator,
+            queueEngine: queueEngine,
+            extractionProvider: provider,
+            pdf2mdScriptPathResolver: { nil },
+            testSessionFactory: { wikiID, descriptor in
+                let runtime = try PerWikiRuntimeServices.testFixture(
+                    wikiID: wikiID,
+                    containerDirectory: dir,
+                    extractionCoordinator: coordinator,
+                    makeStore: makeStore)
+                return ProfileWikiSession(
+                    wikiID: wikiID,
+                    descriptor: descriptor,
+                    runtime: runtime,
+                    extractionCoordinator: coordinator,
+                    queueEngine: queueEngine,
+                    extractionProvider: provider)
+            })
     }
 
     // MARK: - session(for:descriptor:)
 
-    @Test func asyncReadinessUsesLegacyPathUntilChildProfileLoaderIsInstalled() async throws {
+    @Test func asyncReadinessUsesExplicitTestFixtureWhenInstalled() async throws {
         let dir = tempDirectory()
         let registry = makeSeededRegistry(dir: dir)
         let manager = makeSessionManager(dir: dir)
@@ -119,7 +163,7 @@ struct SessionManagerTests {
             queueEngine: try makeTestQueueEngine(),
             extractionProvider: StubExtractionProvider(),
             pdf2mdScriptPathResolver: { nil },
-            makeStore: { _ in throw AsyncReadinessFailure() })
+            asyncSessionLoader: { _, _ in throw AsyncReadinessFailure() })
         let descriptor = try #require(registry.wikis.first)
 
         await #expect(throws: AsyncReadinessFailure.self) {
@@ -398,16 +442,9 @@ struct SessionManagerTests {
         struct StoreOpenFailure: Error {}
         // Inject a store factory that always throws — simulates a corrupt /
         // unopenable DB without filesystem tricks.
-        let coordinator = ExtractionCoordinator(
-            containerDirectory: dir,
-            localExtractorFactory: { StubExtractor() })
-        let manager = SessionManager(
-            containerDirectory: dir,
-            extractionCoordinator: coordinator,
-            queueEngine: try! makeTestQueueEngine(),
-            extractionProvider: StubExtractionProvider(),
-            pdf2mdScriptPathResolver: { nil },
-            makeStore: { _ in throw StoreOpenFailure() })
+        let manager = try! makeSessionManager(dir: dir) { _ in
+            throw StoreOpenFailure()
+        }
 
         #expect(throws: StoreOpenFailure.self) {
             _ = try manager.session(for: descriptor.id, descriptor: descriptor)
@@ -427,16 +464,9 @@ struct SessionManagerTests {
         let descriptor = registry.wikis.first!
 
         struct StoreOpenFailure: Error {}
-        let coordinator = ExtractionCoordinator(
-            containerDirectory: dir,
-            localExtractorFactory: { StubExtractor() })
-        let manager = SessionManager(
-            containerDirectory: dir,
-            extractionCoordinator: coordinator,
-            queueEngine: try! makeTestQueueEngine(),
-            extractionProvider: StubExtractionProvider(),
-            pdf2mdScriptPathResolver: { nil },
-            makeStore: { _ in throw StoreOpenFailure() })
+        let manager = try! makeSessionManager(dir: dir) { _ in
+            throw StoreOpenFailure()
+        }
 
         #expect(throws: StoreOpenFailure.self) {
             _ = try manager.session(for: descriptor.id, descriptor: descriptor)
@@ -469,19 +499,10 @@ struct SessionManagerTests {
             }
         }
         let toggle = FailingToggle()
-        let coordinator = ExtractionCoordinator(
-            containerDirectory: dir,
-            localExtractorFactory: { StubExtractor() })
-        let manager = SessionManager(
-            containerDirectory: dir,
-            extractionCoordinator: coordinator,
-            queueEngine: try! makeTestQueueEngine(),
-            extractionProvider: StubExtractionProvider(),
-            pdf2mdScriptPathResolver: { nil },
-            makeStore: { url in
-                if toggle.consume() { throw StoreOpenFailure() }
-                return try StoreBackend.current.makeStore(databaseURL: url)
-            })
+        let manager = try makeSessionManager(dir: dir) { url in
+            if toggle.consume() { throw StoreOpenFailure() }
+            return try StoreBackend.current.makeStore(databaseURL: url)
+        }
 
         // First attempt fails and records an error.
         #expect(throws: StoreOpenFailure.self) {

@@ -172,128 +172,37 @@ public final class ProfileWikiSession: WikiSessionProtocol {
     public init(
         wikiID: WikiID,
         descriptor: WikiDescriptor,
-        containerDirectory: URL,
+        runtime: PerWikiRuntimeServices,
         extractionCoordinator: ExtractionCoordinator,
         queueEngine: any QueueEngineClient,
         extractionProvider: any QueueExtractionProvider,
-        searchRuntimeRegistry: SearchRuntimeRegistry = SearchRuntimeRegistry(),
-        searchStartupPrerequisite: Task<Void, Never>? = nil,
-        providerServices: any AgentProviderServices = UnavailableAgentProviderServices(),
-        makeStore: @escaping (URL) throws -> WikiStore = { try StoreBackend.current.makeStore(databaseURL: $0) },
-        pdf2mdScriptPathResolver: @escaping () -> String? = { nil },
-        htmlMarkdownExtractorFactory: @escaping @MainActor () -> (any HtmlMarkdownExtractor)? = { nil },
-        htmlBackendResolver: @escaping @MainActor () -> HtmlExtractionBackend? = { nil },
-        podcastBackendResolver: @escaping @MainActor () -> PodcastTranscriptionBackend? = { nil },
-        interactiveUsageRecorder: @escaping (@MainActor (SessionUsage) -> Void) = { _ in },
-        profile: BootedProfile? = nil,
-        readPool: WikiReadPool? = nil
-    ) throws {
+        htmlMarkdownExtractor: (any HtmlMarkdownExtractor)? = nil,
+        htmlBackend: HtmlExtractionBackend? = nil,
+        podcastBackend: PodcastTranscriptionBackend? = nil,
+        profile: BootedProfile? = nil
+    ) {
         self.profile = profile
         self.wikiID = wikiID
         self.extractionCoordinator = extractionCoordinator
         self.queueEngine = queueEngine
         self.extractionProvider = extractionProvider
+        self.store = runtime.model
+        self.searchCompositionOwner = runtime.searchOwner
+        self.searchServices = runtime.searchServices
+        self.generationGate = runtime.generationGate
+        self.agentLauncher = runtime.agentLauncher
 
-        // `var` so the Home-page seeding below can set `homePageID` before it
-        // is committed to `self.descriptor`.
         var sessionDescriptor = descriptor
-
-        let url = containerDirectory.appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false)
-        let model: WikiStoreModel
-        // Open the on-disk store. There is NO in-memory fallback anymore
-        // (issue #881): a failure here is rethrown so `SessionManager` can
-        // surface a user-visible error instead of silently showing an empty
-        // wiki (which made users think their data was gone).
-        // `var`: the bus is set via the protocol's computed setter, which
-        // the compiler treats as mutating through the `WikiStore`
-        // existential.
-        var store = try makeStore(url)
-        // Attach the per-wiki event bus BEFORE the model is created, so the
-        // model's `.external`→reload subscription (in its init) sees it. The
-        // File Provider signaler and the change bridge subscribe to the
-        // same bus from the app layer. See `plans/event-bus.md`.
-        let searchBus = store.eventBus ?? WikiEventBus(wikiID: wikiID)
-        store.eventBus = searchBus
-        let contentSource = StoreBackedTantivyContentSource(store: store)
-        model = WikiStoreModel(store: store)
-        // Seed a Home page when the store is empty (mirrors
-        // `openActive` lines 334–341 + `createWiki`'s #315
-        // linkage: a freshly-seeded Home page becomes the wiki's home
-        // page when none is set yet).
-        if model.summaries.isEmpty, let homeID = model.newPage(title: "Home") {
-            if sessionDescriptor.homePageID == nil {
-                sessionDescriptor.homePageID = homeID
-            }
+        if store.summaries.isEmpty, let homeID = store.newPage(title: "Home"), sessionDescriptor.homePageID == nil {
+            sessionDescriptor.homePageID = homeID
         }
-        // Off-main snapshot reads (debounced search) go through a read-only
-        // pool over the same file. Only for real file-backed DBs — a second
-        // connection to an in-memory DB would see a different, empty database.
-        if let readPool {
-            model.readPool = readPool
-        } else if FileManager.default.fileExists(atPath: url.path) {
-            model.readPool = WikiReadPool(databaseURL: url)
-        }
-        self.store = model
         self.descriptor = sessionDescriptor
-        // Inject the HTML→Markdown extractor (defuddle) into the store model so
-        // the ingest path can enrich HTML sources (issue #761). The factory is
-        // provided by the app layer (WikiFSApp) which has access to the WikiFS
-        // target where the concrete `LocalDefuddleExtractor` lives. `nil` (the
-        // default in tests / CI) means fall back to tag-based HTMLToMarkdown.
-        model.htmlMarkdownExtractor = htmlMarkdownExtractorFactory()
-        // Issue #799 PR2: inject the configured HTML extraction backend so the
-        // Extract button and the "Re-extract with" menu in `SourceDetailView`
-        // have a default to fall back on when the user taps Extract without
-        // picking a backend explicitly. The resolver reads
-        // `ExtractionConfig.htmlBackend` at the app wiring time; `nil` (no
-        // default chosen — e.g. a fresh install) means the menu prompts the
-        // user to pick from `HtmlExtractionBackend.allCases`.
-        model.htmlBackend = htmlBackendResolver()
-        // Issue #799 PR4: inject the configured podcast transcription backend
-        // so the Transcribe button and the "Re-transcribe with" menu in
-        // `SourceDetailView` have a default when the user taps Transcribe
-        // without picking a backend explicitly. Mirrors the `htmlBackend`
-        // resolver shape one-to-one. `nil` (no default chosen — e.g. a fresh
-        // install) → the View-level `runTranscription` falls back to
-        // `.appleTranscript` directly (the only backend today).
-        model.podcastBackend = podcastBackendResolver()
 
-        // Subscribe synchronously before asynchronous child assembly so writes
-        // committed during startup or same-wiki replacement are buffered.
-        let streamFactory = BusSearchChangeStreamFactory(bus: searchBus)
-        let identity = SearchRuntimeIdentity(
-            wikiID: wikiID,
-            containerDirectory: containerDirectory)
-        let searchOwner = SearchCompositionOwner(
-            registry: searchRuntimeRegistry,
-            identity: identity,
-            contentSource: contentSource,
-            changeStreamFactory: streamFactory,
-            startupPrerequisite: searchStartupPrerequisite)
-        self.searchCompositionOwner = searchOwner
-        self.searchServices = searchOwner.services
-        model.searchServices = searchOwner.services
-        searchOwner.start()
-
-        // Per-session gate: lane limits match the app-wide gate the launchers
-        // previously shared. Each session gets its own so cross-wiki
-        // isolation is structural.
-        let gate = GenerationGate(laneLimits: [.ingest: 1, .interactive: 3])
-        self.generationGate = gate
-
-        // Per-session launcher — pairs on this session's gate so ingest and
-        // agent-query generations in the SAME wiki coordinate, while a
-        // different wiki's session runs independently. (Chat is daemon-hosted
-        // after Phase C4 — no per-session chat launcher here.)
-        let agent = AgentLauncher(
-            generationGate: gate,
-            extractionCoordinator: extractionCoordinator,
-            providerServices: providerServices)
-        agent.pdf2mdScriptPathResolver = pdf2mdScriptPathResolver
-        // Interactive (non-queue) query runs via `agentLauncher` also report
-        // their per-turn usage delta to the menu bar tracker when wired.
-        agent.onInteractiveUsage = interactiveUsageRecorder
-        self.agentLauncher = agent
+        // UI adaptation only: the child profile has already constructed all
+        // per-wiki domain services before this observable facade is initialized.
+        store.htmlMarkdownExtractor = htmlMarkdownExtractor
+        store.htmlBackend = htmlBackend
+        store.podcastBackend = podcastBackend
     }
 
     // MARK: - Descriptor updates

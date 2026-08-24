@@ -508,24 +508,20 @@ extension ProfileWikiSession {
             parent: processProfile.context))
         do {
             let childServices = try await AppServices.resolve(from: profile)
-            let resolvedStore = childServices.store
-            return try ProfileWikiSession(
+            let runtime = try await profile.context.require(PerWikiRuntimeServiceKeys.services)
+            runtime.agentLauncher.pdf2mdScriptPathResolver = pdf2mdScriptPathResolver
+            runtime.agentLauncher.onInteractiveUsage = interactiveUsageRecorder
+            return ProfileWikiSession(
                 wikiID: wikiID,
                 descriptor: descriptor,
-                containerDirectory: containerDirectory,
+                runtime: runtime,
                 extractionCoordinator: ExtractionCoordinator(services: processServices.extraction),
                 queueEngine: processServices.queue,
                 extractionProvider: extractionProvider,
-                searchRuntimeRegistry: searchRuntimeRegistry,
-                providerServices: processServices.agentProvider,
-                makeStore: { _ in resolvedStore },
-                pdf2mdScriptPathResolver: pdf2mdScriptPathResolver,
-                htmlMarkdownExtractorFactory: htmlMarkdownExtractorFactory,
-                htmlBackendResolver: htmlBackendResolver,
-                podcastBackendResolver: podcastBackendResolver,
-                interactiveUsageRecorder: interactiveUsageRecorder,
-                profile: childServices.profile,
-                readPool: childServices.readPool)
+                htmlMarkdownExtractor: htmlMarkdownExtractorFactory(),
+                htmlBackend: htmlBackendResolver(),
+                podcastBackend: podcastBackendResolver(),
+                profile: childServices.profile)
         } catch {
             do {
                 try await profile.shutdown()
@@ -588,6 +584,10 @@ public enum ProductionProfileEntries {
                 "wikiID": .string(wikiID.rawValue),
             ]),
             Entry(id: EntryID("sessions"), plugin: SessionsPlugin.id),
+            Entry(id: EntryID("runtime-services"), plugin: PerWikiRuntimePlugin.id, config: [
+                "wikiID": .string(wikiID.rawValue),
+                "containerDirectory": .string(databaseURL.deletingLastPathComponent().path),
+            ]),
             Entry(id: EntryID("chats-persistence"), plugin: ChatsPersistencePlugin.id),
             Entry(id: EntryID("llm-runtime"), plugin: LlmRuntimePlugin.id),
             Entry(id: EntryID("tools"), plugin: ToolsPlugin.id),
@@ -692,6 +692,7 @@ private func baseDefinitions(_ factories: BasePluginCatalogFactories) -> [Plugin
     [
         StorePlugin.definition,
         SessionsPlugin.definition,
+        PerWikiRuntimePlugin.definition,
         ChatsPersistencePlugin.definition,
         LlmRuntimePlugin.definition,
         ACPModelAdapterPlugin.definition(services: factories.agentProviderServices),

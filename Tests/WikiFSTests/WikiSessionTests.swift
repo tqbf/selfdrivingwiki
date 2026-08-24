@@ -37,7 +37,7 @@ struct ProfileWikiSessionTests {
             localExtractorFactory: { StubExtractor() })
 
         let session = try! ProfileWikiSession(
-            wikiID: descriptor.id,
+            testFixtureWikiID: descriptor.id,
             descriptor: descriptor,
             containerDirectory: dir,
             extractionCoordinator: coordinator,
@@ -61,14 +61,14 @@ struct ProfileWikiSessionTests {
             localExtractorFactory: { StubExtractor() })
 
         let sessionA = try! ProfileWikiSession(
-            wikiID: registryA.wikis.first!.id,
+            testFixtureWikiID: registryA.wikis.first!.id,
             descriptor: registryA.wikis.first!,
             containerDirectory: dirA,
             extractionCoordinator: coordinator,
             queueEngine: try! makeTestQueueEngine(),
             extractionProvider: StubExtractionProvider())
         let sessionB = try! ProfileWikiSession(
-            wikiID: registryB.wikis.first!.id,
+            testFixtureWikiID: registryB.wikis.first!.id,
             descriptor: registryB.wikis.first!,
             containerDirectory: dirB,
             extractionCoordinator: coordinator,
@@ -97,14 +97,14 @@ struct ProfileWikiSessionTests {
             localExtractorFactory: { StubExtractor() })
 
         let sessionA = try! ProfileWikiSession(
-            wikiID: registryA.wikis.first!.id,
+            testFixtureWikiID: registryA.wikis.first!.id,
             descriptor: registryA.wikis.first!,
             containerDirectory: dirA,
             extractionCoordinator: coordinator,
             queueEngine: try! makeTestQueueEngine(),
             extractionProvider: StubExtractionProvider())
         let sessionB = try! ProfileWikiSession(
-            wikiID: registryB.wikis.first!.id,
+            testFixtureWikiID: registryB.wikis.first!.id,
             descriptor: registryB.wikis.first!,
             containerDirectory: dirB,
             extractionCoordinator: coordinator,
@@ -131,7 +131,7 @@ struct ProfileWikiSessionTests {
             containerDirectory: dir,
             localExtractorFactory: { StubExtractor() })
         let session = try! ProfileWikiSession(
-            wikiID: registry.wikis.first!.id,
+            testFixtureWikiID: registry.wikis.first!.id,
             descriptor: registry.wikis.first!,
             containerDirectory: dir,
             extractionCoordinator: coordinator,
@@ -156,7 +156,7 @@ struct ProfileWikiSessionTests {
             containerDirectory: dir,
             localExtractorFactory: { StubExtractor() })
         let session = try! ProfileWikiSession(
-            wikiID: registry.wikis.first!.id,
+            testFixtureWikiID: registry.wikis.first!.id,
             descriptor: registry.wikis.first!,
             containerDirectory: dir,
             extractionCoordinator: coordinator,
@@ -183,7 +183,7 @@ struct ProfileWikiSessionTests {
             containerDirectory: dir,
             localExtractorFactory: { StubExtractor() })
         let session = try! ProfileWikiSession(
-            wikiID: registry.wikis.first!.id,
+            testFixtureWikiID: registry.wikis.first!.id,
             descriptor: registry.wikis.first!,
             containerDirectory: dir,
             extractionCoordinator: coordinator,
@@ -213,7 +213,7 @@ struct ProfileWikiSessionTests {
         // `makeStore` always throws — simulates a corrupt / unopenable DB.
         #expect(throws: StoreOpenFailure.self) {
             _ = try ProfileWikiSession(
-                wikiID: descriptor.id,
+                testFixtureWikiID: descriptor.id,
                 descriptor: descriptor,
                 containerDirectory: dir,
                 extractionCoordinator: coordinator,
