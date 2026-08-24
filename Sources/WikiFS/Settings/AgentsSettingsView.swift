@@ -281,6 +281,14 @@ struct AgentsSettingsView: View {
 
     // MARK: - Bindings / helpers
 
+    /// Shared selection type for the provider-settings picker and all its tags.
+    /// A different tag type makes SwiftUI ignore the selected model.
+    typealias ModelPickerSelection = ModelID?
+
+    nonisolated static func modelPickerTag(for modelID: ModelID?) -> ModelPickerSelection {
+        modelID
+    }
+
     private func enabledBinding(for provider: AgentProvider) -> Binding<Bool> {
         Binding(
             get: { provider.enabled },
@@ -498,9 +506,9 @@ private struct ProviderDetailPane: View {
     private var defaultModelRow: some View {
         let cachedModels = config.cachedModels(forProvider: provider.id)
         Picker("Default Model", selection: modelBinding) {
-            Text("Agent default").tag("")
+            Text("Agent default").tag(AgentsSettingsView.modelPickerTag(for: nil))
             ForEach(cachedModels, id: \.modelId) { model in
-                Text(model.displayLabel).tag(model.modelId)
+                Text(model.displayLabel).tag(AgentsSettingsView.modelPickerTag(for: model.modelId))
             }
         }
     }
@@ -536,12 +544,12 @@ private struct ProviderDetailPane: View {
         }
     }
 
-    private var modelBinding: Binding<String> {
+    private var modelBinding: Binding<AgentsSettingsView.ModelPickerSelection> {
         Binding(
-            get: { config.selectedModelId(forProvider: provider.id)?.rawValue ?? "" },
-            set: { newID in
+            get: { config.selectedModelId(forProvider: provider.id) },
+            set: { modelID in
                 saveConfig(config.settingSelectedModel(
-                    newID.isEmpty ? nil : ModelID(rawValue: newID),
+                    modelID,
                     forProvider: provider.id))
             })
     }
