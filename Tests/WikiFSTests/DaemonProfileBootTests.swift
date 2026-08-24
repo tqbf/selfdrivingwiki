@@ -88,5 +88,46 @@ struct DaemonProfileBootTests {
         await owner.shutdown()
         #expect(await processDisposals.count == 2)
     }
+
+    @Test("removing then reopening a wiki creates a fresh live store and bus")
+    func daemonOwnerRemoveThenReopenCreatesFreshStore() async throws {
+        let directory = try ProfileBootFixture.directory(named: "daemon-reopen")
+        defer {
+            do { try FileManager.default.removeItem(at: directory) }
+            catch { Issue.record("could not remove daemon reopen fixture: \(error)") }
+        }
+        let wikiID = WikiID(rawValue: "daemon-reopen-wiki")
+        let processDisposals = ProfileProcessDisposalRecorder()
+        let processCatalog = try ProfileBootFixture.processCatalog(
+            includeAppServices: false,
+            recorder: processDisposals)
+        let daemonCatalog = try ProfileBootFixture.daemonCatalog()
+        let owner = DaemonProcessProfileOwner(
+            boot: {
+                try await CordisBoot.boot(.init(
+                    catalog: processCatalog,
+                    layers: [PatchFile(entries: ProfileBootFixture.processEntries(includeAppServices: false))]))
+            },
+            bootWiki: { requestedWikiID, process in
+                try await CordisBoot.boot(.init(
+                    catalog: daemonCatalog,
+                    layers: [PatchFile(entries: ProfileBootFixture.entries(
+                        databaseURL: directory.appendingPathComponent("\(requestedWikiID.rawValue).sqlite"),
+                        wikiID: requestedWikiID.rawValue,
+                        includeAppProviders: false))],
+                    parent: process.context))
+            })
+
+        let first = try await owner.wiki(wikiID: wikiID)
+        let firstStore = ObjectIdentifier(first.store as AnyObject)
+        let firstBus = ObjectIdentifier(try #require(first.store.eventBus))
+        await owner.removeWiki(wikiID)
+        let second = try await owner.wiki(wikiID: wikiID)
+
+        #expect(ObjectIdentifier(second.store as AnyObject) != firstStore)
+        #expect(ObjectIdentifier(try #require(second.store.eventBus)) != firstBus)
+        _ = try second.store.listPages(sortBy: PageSortOrder.newestFirst)
+        await owner.shutdown()
+    }
 }
 #endif

@@ -253,10 +253,14 @@ public actor DaemonProcessProfileOwner {
 
     private let boot: Boot
     private let bootWiki: BootWiki
+    private struct WikiLifecycle: Sendable {
+        let task: Task<AppServices, Error>
+        var services: AppServices?
+    }
+
     private var startupTask: Task<(BootedProfile, DaemonProcessServices), Error>?
     private var process: (BootedProfile, DaemonProcessServices)?
-    private var wikiTasks: [WikiID: Task<AppServices, Error>] = [:]
-    private var wikiServices: [WikiID: AppServices] = [:]
+    private var wikis: [WikiID: WikiLifecycle] = [:]
     private var shutdownStarted = false
 
     public init(boot: @escaping Boot, bootWiki: @escaping BootWiki) {
@@ -357,16 +361,16 @@ public actor DaemonProcessProfileOwner {
     }
 
     public func wiki(wikiID: WikiID) async throws -> AppServices {
-        if let services = wikiServices[wikiID] { return services }
+        if let services = wikis[wikiID]?.services { return services }
         let processProfile: BootedProfile
         if let process { processProfile = process.0 } else {
             _ = try await start()
             guard let process else { throw CancellationError() }
             processProfile = process.0
         }
-        if wikiTasks[wikiID] == nil {
+        if wikis[wikiID] == nil {
             let bootWiki = self.bootWiki
-            wikiTasks[wikiID] = Task {
+            let task = Task {
                 let profile = try await bootWiki(wikiID, processProfile)
                 do { return try await AppServices.resolve(from: profile) }
                 catch {
@@ -376,27 +380,31 @@ public actor DaemonProcessProfileOwner {
                     throw error
                 }
             }
+            wikis[wikiID] = WikiLifecycle(task: task, services: nil)
         }
-        guard let wikiTask = wikiTasks[wikiID] else { throw CancellationError() }
-        let services = try await wikiTask.value
-        guard !shutdownStarted else {
+        guard let task = wikis[wikiID]?.task else { throw CancellationError() }
+        let services = try await task.value
+        guard !shutdownStarted, wikis[wikiID]?.task == task else {
             try await services.shutdown()
             throw CancellationError()
         }
-        wikiServices[wikiID] = services
+        wikis[wikiID]?.services = services
         return services
     }
 
     public func removeWiki(_ wikiID: WikiID) async {
-        wikiTasks[wikiID]?.cancel()
-        if let task = wikiTasks.removeValue(forKey: wikiID) {
-            do { _ = try await task.value } catch is CancellationError {
-                // Removal intentionally cancels an unfinished child-profile boot.
-            } catch {
-                DebugLog.store("Daemon wiki profile task ended during removal: \(error)")
-            }
+        guard let lifecycle = wikis.removeValue(forKey: wikiID) else { return }
+        lifecycle.task.cancel()
+        let services: AppServices?
+        do { services = try await lifecycle.task.value }
+        catch is CancellationError {
+            // Removal intentionally cancels an unfinished child-profile boot.
+            services = lifecycle.services
+        } catch {
+            DebugLog.store("Daemon wiki profile task ended during removal: \(error)")
+            services = lifecycle.services
         }
-        if let services = wikiServices.removeValue(forKey: wikiID) {
+        if let services {
             do { try await services.shutdown() } catch {
                 DebugLog.store("Daemon wiki profile shutdown failed: \(error)")
             }
@@ -407,14 +415,23 @@ public actor DaemonProcessProfileOwner {
         guard !shutdownStarted else { return }
         shutdownStarted = true
         startupTask?.cancel()
-        for task in wikiTasks.values { task.cancel() }
-        for services in wikiServices.values {
-            do { try await services.shutdown() } catch {
-                DebugLog.store("Daemon wiki profile shutdown failed: \(error)")
+        let lifecycles = Array(wikis.values)
+        wikis.removeAll()
+        for lifecycle in lifecycles { lifecycle.task.cancel() }
+        for lifecycle in lifecycles {
+            let services: AppServices?
+            do { services = try await lifecycle.task.value }
+            catch is CancellationError { services = lifecycle.services }
+            catch {
+                DebugLog.store("Daemon wiki profile task ended during shutdown: \(error)")
+                services = lifecycle.services
+            }
+            if let services {
+                do { try await services.shutdown() } catch {
+                    DebugLog.store("Daemon wiki profile shutdown failed: \(error)")
+                }
             }
         }
-        wikiServices.removeAll()
-        wikiTasks.removeAll()
         if let profile = process?.0 {
             do { try await profile.shutdown() } catch {
                 DebugLog.store("Daemon process profile shutdown failed: \(error)")

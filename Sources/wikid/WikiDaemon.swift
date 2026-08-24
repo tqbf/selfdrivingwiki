@@ -152,6 +152,9 @@ final class WikiDaemon: @unchecked Sendable {
     }
 
     func removeWikiProfile(_ wikiID: WikiID) async {
+        // The daemon cache must release the store before its owning child profile
+        // shuts down. A later prepare then resolves a fresh store and event bus.
+        queue.sync { _ = openStores.removeValue(forKey: wikiID) }
         await profileOwner?.removeWiki(wikiID)
     }
 
