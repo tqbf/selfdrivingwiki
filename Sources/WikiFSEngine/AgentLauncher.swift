@@ -1149,16 +1149,58 @@ public final class AgentLauncher {
     /// The app- or daemon-scoped provider composition facade. The launcher remains
     /// the owner of active backend sessions and subprocess lifecycle.
     @ObservationIgnored public let providerServices: (any AgentProviderServices)?
+    @ObservationIgnored public let agentLoopService: AgentLoopService?
 
     public init(
         generationGate: GenerationGate = GenerationGate(),
         extractionCoordinator: ExtractionCoordinator = ExtractionCoordinator(
             services: UnavailableExtractionServices()),
-        providerServices: (any AgentProviderServices)? = nil
+        providerServices: (any AgentProviderServices)? = nil,
+        agentLoopService: AgentLoopService? = nil
     ) {
         self.generationGate = generationGate
         self.extractionCoordinator = extractionCoordinator
         self.providerServices = providerServices
+        self.agentLoopService = agentLoopService
+    }
+
+    func sendAgentTurn(
+        prompt: String,
+        backend: any AgentBackend,
+        session: SessionHandle,
+        chatID: ChatID? = nil
+    ) async throws -> AsyncStream<AgentEvent> {
+        guard let agentLoopService else {
+            return await backend.send(TurnInput(userText: prompt), into: session)
+        }
+        let request = AgentTurnRequest(
+            chatID: chatID ?? ChatID(rawValue: UUID().uuidString),
+            turnID: ChatTurnID(rawValue: UUID().uuidString),
+            userText: prompt,
+            projectsToSessionLog: false)
+        let step = try await agentLoopService.prepare(request)
+        let source: AsyncStream<AgentEvent>
+        if let events = step.events {
+            source = AsyncStream { continuation in
+                for event in events { continuation.yield(event) }
+                continuation.finish()
+            }
+        } else {
+            source = await backend.send(TurnInput(userText: step.prompt), into: session)
+        }
+        let (stream, continuation) = AsyncStream<AgentEvent>.makeStream()
+        let forwardingTask = Task {
+            var events: [AgentEvent] = []
+            for await event in source {
+                events.append(event)
+                continuation.yield(event)
+            }
+            await agentLoopService.stepCompleted(step, events: events)
+            await agentLoopService.turnCompleted(request)
+            continuation.finish()
+        }
+        continuation.onTermination = { _ in forwardingTask.cancel() }
+        return stream
     }
 
     private var privateProviderServices: (any AgentProviderPrivateServices)? {
@@ -1730,8 +1772,8 @@ public final class AgentLauncher {
             // an instruction to do everything directly.
             var promptText = operation.prompt(wikiRoot: wikiRoot)
             promptText += "\n\nIMPORTANT: Do NOT dispatch sub-agents, background tasks, or async agents. Do NOT use sleep or ScheduleWakeup. Read all sources, process them, and write all wiki pages directly in THIS session — everything must complete before you stop."
-            let stream = await self.backend.send(
-                TurnInput(userText: promptText), into: session)
+            let stream = try await self.sendAgentTurn(
+                prompt: promptText, backend: self.backend, session: session)
             for await event in stream {
                 self.lastActivityAt = Date()
                 self.mergeOrAppend(event)
@@ -2459,7 +2501,14 @@ public final class AgentLauncher {
                     // merge logic (events within a batch are from one session, in
                     // order) while allowing concurrent agent processing.
                     DebugLog.agent("runACPIngest[\(phaseName)]: sending executor prompt")
-                    let stream = await backend.send(TurnInput(userText: executorPrompt), into: session)
+                    let stream: AsyncStream<AgentEvent>
+                    do {
+                        stream = try await self.sendAgentTurn(
+                            prompt: executorPrompt, backend: backend, session: session)
+                    } catch {
+                        DebugLog.agent("runACPIngest[\(phaseName)]: agent loop failed: \(error.localizedDescription)")
+                        return ExecutorResult(session: session)
+                    }
                     var batch: [AgentEvent] = []
                     for await event in stream {
                         batch.append(event)
@@ -2821,7 +2870,8 @@ public final class AgentLauncher {
             currentRunToken = runToken
 
             setGenerating(true)
-            let stream = await backend.send(TurnInput(userText: prompt), into: session)
+            let stream = try await sendAgentTurn(
+                prompt: prompt, backend: backend, session: session)
             // #727: capture a quota signal if a `.turnFailed(.quotaExhausted)`
             // appears in the stream. Do NOT return mid-iteration — break the
             // loop so the AsyncStream drains to completion (or is cancelled),
@@ -3782,8 +3832,19 @@ public final class AgentLauncher {
             // Send the turn and consume the per-turn stream. The backend writes
             // the NDJSON line to stdin; the stream finishes at `.messageStop`
             // (turn boundary) or `.result` (session end).
-            let stream = await backend.send(
-                TurnInput(userText: trimmed), into: session)
+            let stream: AsyncStream<AgentEvent>
+            do {
+                stream = try await self.sendAgentTurn(
+                    prompt: trimmed,
+                    backend: backend,
+                    session: session,
+                    chatID: self.activeChatID)
+            } catch {
+                DebugLog.agent("sendInteractiveMessage: agent loop failed: \(error.localizedDescription)")
+                self.setGenerating(false)
+                self.releaseGenerationSlot()
+                return
+            }
             for await event in stream {
                 self.lastActivityAt = Date()
                 self.mergeOrAppend(event)

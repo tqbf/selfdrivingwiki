@@ -89,5 +89,120 @@ struct AgentLoopPluginBootTests {
 
         try await booted.shutdown()
     }
+
+    @Test("real launcher send transforms, short-circuits, and emits lifecycle")
+    @MainActor
+    func realLauncherSendTraversesAgentLoop() async throws {
+        let recorder = AgentLoopLifecycleRecorder()
+        let service = AgentLoopService(
+            emitTurnStarted: { _, event in await recorder.started(event) },
+            emitStepCompleted: { _, event in await recorder.completed(event) },
+            emitTurnCompleted: { _, event in await recorder.finished(event) },
+            waterfall: { key, request in
+                var request = request
+                if key == AgentLoopEventKeys.request { request.prompt += " transformed" }
+                return request
+            })
+        let backend = FakeAgentBackend(behaviors: [FakeSessionBehavior(events: [.assistantText("ok"), .messageStop])])
+        let session = try await backend.start(profile: BackendProfile(), systemPrompt: "", onExit: { _ in })
+        let launcher = AgentLauncher(agentLoopService: service)
+
+        let stream = try await launcher.sendAgentTurn(prompt: "hello", backend: backend, session: session)
+        var received: [AgentEvent] = []
+        for await event in stream { received.append(event) }
+
+        #expect(await backend.sentTexts == ["hello transformed"])
+        #expect(received == [.assistantText("ok"), .messageStop])
+        let snapshot = await recorder.snapshot()
+        #expect(snapshot.starts.count == 1)
+        #expect(snapshot.steps.map(\.events) == [received])
+        #expect(snapshot.finishes.count == 1)
+        #expect(snapshot.starts.first?.request.projectsToSessionLog == false)
+    }
+
+    @Test("real launcher path forwards events before backend stream finishes")
+    @MainActor
+    func realLauncherPathStreamsIncrementally() async throws {
+        let recorder = AgentLoopLifecycleRecorder()
+        let service = AgentLoopService(
+            emitTurnStarted: { _, event in await recorder.started(event) },
+            emitStepCompleted: { _, event in await recorder.completed(event) },
+            emitTurnCompleted: { _, event in await recorder.finished(event) },
+            waterfall: { _, request in request })
+        let backend = ControlledAgentBackend()
+        let launcher = AgentLauncher(agentLoopService: service)
+        let stream = try await launcher.sendAgentTurn(
+            prompt: "interactive", backend: backend, session: SessionHandle(id: "controlled"))
+        var iterator = stream.makeAsyncIterator()
+
+        await backend.yield(.assistantText("first"))
+        #expect(await iterator.next() == .assistantText("first"))
+        #expect(await recorder.snapshot().finishes.isEmpty)
+
+        await backend.yield(.messageStop)
+        await backend.finish()
+        #expect(await iterator.next() == .messageStop)
+        #expect(await iterator.next() == nil)
+        #expect(await recorder.snapshot().finishes.count == 1)
+    }
+
+    @Test("pre-step short-circuit skips backend send")
+    @MainActor
+    func preStepShortCircuitSkipsSend() async throws {
+        let service = AgentLoopService(
+            emitTurnStarted: { _, _ in },
+            emitStepCompleted: { _, _ in },
+            emitTurnCompleted: { _, _ in },
+            waterfall: { key, request in
+                var request = request
+                if key == AgentLoopEventKeys.preStep {
+                    request.events = [.assistantText("blocked"), .messageStop]
+                }
+                return request
+            })
+        let backend = FakeAgentBackend()
+        let launcher = AgentLauncher(agentLoopService: service)
+        let stream = try await launcher.sendAgentTurn(
+            prompt: "blocked", backend: backend, session: SessionHandle(id: "unused"))
+        var received: [AgentEvent] = []
+        for await event in stream { received.append(event) }
+
+        #expect(await backend.sendCount == 0)
+        #expect(received == [.assistantText("blocked"), .messageStop])
+    }
+}
+
+private actor ControlledAgentBackend: AgentBackend {
+    private let pair = AsyncStream<AgentEvent>.makeStream()
+
+    func start(
+        profile: BackendProfile,
+        systemPrompt: String,
+        onExit: @escaping @Sendable (Int) -> Void
+    ) async throws -> SessionHandle {
+        SessionHandle(id: "controlled")
+    }
+
+    func send(_ turn: TurnInput, into session: SessionHandle) async -> AsyncStream<AgentEvent> {
+        pair.stream
+    }
+
+    func resume(sessionID: String, profile: BackendProfile) async throws -> SessionHandle? { nil }
+    func cancel(_ session: SessionHandle) async { pair.continuation.finish() }
+    func yield(_ event: AgentEvent) { pair.continuation.yield(event) }
+    func finish() { pair.continuation.finish() }
+}
+
+private actor AgentLoopLifecycleRecorder {
+    private var starts: [AgentTurnStarted] = []
+    private var steps: [AgentStepCompleted] = []
+    private var finishes: [AgentTurnCompleted] = []
+
+    func started(_ event: AgentTurnStarted) { starts.append(event) }
+    func completed(_ event: AgentStepCompleted) { steps.append(event) }
+    func finished(_ event: AgentTurnCompleted) { finishes.append(event) }
+    func snapshot() -> (starts: [AgentTurnStarted], steps: [AgentStepCompleted], finishes: [AgentTurnCompleted]) {
+        (starts, steps, finishes)
+    }
 }
 #endif

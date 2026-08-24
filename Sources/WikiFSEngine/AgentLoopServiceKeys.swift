@@ -6,11 +6,19 @@ public struct AgentTurnRequest: Equatable, Sendable {
     public let chatID: ChatID
     public let turnID: ChatTurnID
     public let userText: String
+    /// False when an existing durable transcript owner already persists this turn.
+    public let projectsToSessionLog: Bool
 
-    public init(chatID: ChatID, turnID: ChatTurnID, userText: String) {
+    public init(
+        chatID: ChatID,
+        turnID: ChatTurnID,
+        userText: String,
+        projectsToSessionLog: Bool = true
+    ) {
         self.chatID = chatID
         self.turnID = turnID
         self.userText = userText
+        self.projectsToSessionLog = projectsToSessionLog
     }
 }
 
@@ -51,22 +59,36 @@ public struct AgentStepCompleted: Equatable, Sendable {
     public let turnID: ChatTurnID
     public let stepIndex: Int
     public let events: [AgentEvent]
+    public let projectsToSessionLog: Bool
 
-    public init(chatID: ChatID, turnID: ChatTurnID, stepIndex: Int, events: [AgentEvent]) {
+    public init(
+        chatID: ChatID,
+        turnID: ChatTurnID,
+        stepIndex: Int,
+        events: [AgentEvent],
+        projectsToSessionLog: Bool = true
+    ) {
         self.chatID = chatID
         self.turnID = turnID
         self.stepIndex = stepIndex
         self.events = events
+        self.projectsToSessionLog = projectsToSessionLog
     }
 }
 
 public struct AgentTurnCompleted: Equatable, Sendable {
     public let chatID: ChatID
     public let turnID: ChatTurnID
+    public let projectsToSessionLog: Bool
 
-    public init(chatID: ChatID, turnID: ChatTurnID) {
+    public init(
+        chatID: ChatID,
+        turnID: ChatTurnID,
+        projectsToSessionLog: Bool = true
+    ) {
         self.chatID = chatID
         self.turnID = turnID
+        self.projectsToSessionLog = projectsToSessionLog
     }
 
     public var sessionEvents: [AgentEvent] { [.messageStop] }
@@ -123,13 +145,17 @@ public struct AgentLoopService: Sendable {
                 chatID: step.turn.chatID,
                 turnID: step.turn.turnID,
                 stepIndex: step.stepIndex,
-                events: events))
+                events: events,
+                projectsToSessionLog: step.turn.projectsToSessionLog))
     }
 
     public func turnCompleted(_ request: AgentTurnRequest) async {
         await emitTurnCompleted(
             AgentLoopEventKeys.turnCompleted,
-            AgentTurnCompleted(chatID: request.chatID, turnID: request.turnID))
+            AgentTurnCompleted(
+                chatID: request.chatID,
+                turnID: request.turnID,
+                projectsToSessionLog: request.projectsToSessionLog))
     }
 
     @discardableResult

@@ -8,9 +8,6 @@ entries:
   - id: sessions
     plugin: wiki.sessions
     config: { _scope: wiki }
-  - id: runtime-services
-    plugin: wiki.runtime-services
-    config: { _scope: wiki, wikiID: "${WIKI_ID}", containerDirectory: "${WIKI_HOME}" }
   - id: chats-persistence
     plugin: wiki.chats-persistence
     config: { _scope: wiki }
@@ -26,6 +23,9 @@ entries:
   - id: agent-loop
     plugin: wiki.agent-loop
     config: { _scope: wiki }
+  - id: runtime-services
+    plugin: wiki.runtime-services
+    config: { _scope: wiki, wikiID: "${WIKI_ID}", containerDirectory: "${WIKI_HOME}" }
   - id: extraction
     plugin: wiki.extraction
     config: { _scope: wiki }

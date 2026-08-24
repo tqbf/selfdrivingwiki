@@ -129,6 +129,7 @@ public enum PerWikiRuntimePlugin {
                 ServiceDependency(StoreServiceKeys.readPool),
                 ServiceDependency(ProcessServiceKeys.agentProvider),
                 ServiceDependency(ProcessServiceKeys.extraction),
+                ServiceDependency(AgentLoopServiceKeys.agentLoop),
             ],
             provisions: [ServiceDependency(PerWikiRuntimeServiceKeys.services)],
             config: PerWikiRuntimeConfig.self
@@ -140,6 +141,7 @@ public enum PerWikiRuntimePlugin {
                     ServiceDependency(StoreServiceKeys.readPool),
                     ServiceDependency(ProcessServiceKeys.agentProvider),
                     ServiceDependency(ProcessServiceKeys.extraction),
+                    ServiceDependency(AgentLoopServiceKeys.agentLoop),
                 ],
                 provisions: [ServiceDependency(PerWikiRuntimeServiceKeys.services)]
             ) { activation in
@@ -147,6 +149,7 @@ public enum PerWikiRuntimePlugin {
                 let readPool = try await activation.require(StoreServiceKeys.readPool)
                 let providerServices = try await activation.require(ProcessServiceKeys.agentProvider)
                 let extractionServices = try await activation.require(ProcessServiceKeys.extraction)
+                let agentLoopService = try await activation.require(AgentLoopServiceKeys.agentLoop)
                 guard let eventBus = store.eventBus else {
                     throw PerWikiRuntimePluginError.missingEventBus
                 }
@@ -166,7 +169,8 @@ public enum PerWikiRuntimePlugin {
                     let launcher = AgentLauncher(
                         generationGate: gate,
                         extractionCoordinator: ExtractionCoordinator(services: extractionServices),
-                        providerServices: providerServices)
+                        providerServices: providerServices,
+                        agentLoopService: agentLoopService)
                     return PerWikiRuntimeServices(
                         model: model,
                         searchOwner: searchOwner,
