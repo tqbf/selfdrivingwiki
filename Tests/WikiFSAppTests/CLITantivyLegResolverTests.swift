@@ -28,6 +28,10 @@ struct CLITantivyLegResolverTests {
         case expected
     }
 
+    enum ExpectedCleanupFailure: Error {
+        case expected
+    }
+
     actor CLIProfileRecorder {
         private var resolvedStoreID: ObjectIdentifier?
         private var operationStoreID: ObjectIdentifier?
@@ -491,7 +495,7 @@ struct CLITantivyLegResolverTests {
             entries.append(Entry(id: EntryID("store-observer"), plugin: observerID))
             let definitions = CLIPluginCatalog.definitions() + [observer]
             return try await CordisBoot.boot(.init(
-                catalog: try PluginCatalog(definitions.reversed()),
+                catalog: try PluginCatalog(definitions),
                 layers: [PatchFile(entries: entries)]))
         }
         let descriptor = WikiDescriptor(
@@ -527,6 +531,62 @@ struct CLITantivyLegResolverTests {
         let snapshot = await recorder.snapshot()
         #expect(snapshot.resolvedStoreID == snapshot.operationStoreID)
         #expect(snapshot.disposalCount == 1)
+    }
+
+    @Test func cliStoreProfilePreservesOperationAndCleanupFailures() async throws {
+        let (container, fm) = try makeTempContainer()
+        defer { removeTempContainer(container, fileManager: fm) }
+        let wikiID = WikiID(rawValue: "01TESTCLI02")
+        var registry = WikiRegistry()
+        registry.add(WikiDescriptor(
+            id: wikiID,
+            displayName: "CLI Failure Test",
+            createdAt: Date(timeIntervalSince1970: 0),
+            lastUsedAt: Date(timeIntervalSince1970: 0)))
+        try registry.save(to: container)
+
+        let cleanupID = PluginID("test.cli-cleanup-failure")
+        let cleanupDefinition = PluginDefinition(id: cleanupID) {
+            try ComponentDefinition(label: cleanupID.rawValue) { activation in
+                _ = try await activation.effect { _ in
+                    throw ExpectedCleanupFailure.expected
+                }
+            }
+        }
+        let profile = CLIStoreProfile { request in
+            var entries = try ProductionProfiles.cli(
+                databaseURL: request.databaseURL,
+                wikiID: request.wikiID,
+                homeDirectory: request.containerDirectory)
+            entries.append(Entry(id: EntryID("cleanup-failure"), plugin: cleanupID))
+            return try await CordisBoot.boot(.init(
+                catalog: try PluginCatalog(CLIPluginCatalog.definitions() + [cleanupDefinition]),
+                layers: [PatchFile(entries: entries)]))
+        }
+        let runner = WikiCtlRunner(
+            resolveContainer: { WikiResolver(containerDirectory: container) },
+            storeProfile: profile
+        ) { _, _, _, _ in
+            throw ExpectedCommandFailure.expected
+        }
+
+        do {
+            _ = try await runner.runOrdinary(
+                command: .page(.list(json: false)),
+                wikiSelector: wikiID.rawValue,
+                environment: [:])
+            Issue.record("expected combined operation and cleanup failure")
+        } catch CLIStoreProfileError.operationAndCleanup(let operation, let cleanup) {
+            #expect(operation is ExpectedCommandFailure)
+            guard case .cleanup(let aggregate) = cleanup as? CordisError else {
+                Issue.record("expected Cordis cleanup error, got \(cleanup)")
+                return
+            }
+            #expect(aggregate.failures.count == 1)
+            #expect(aggregate.failures.first?.error.message == "expected")
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
     }
 
     @Test func wikiCreateSeedsDatabaseThroughBootstrapBoundary() throws {

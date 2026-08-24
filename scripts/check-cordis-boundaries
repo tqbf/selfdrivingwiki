@@ -10,6 +10,7 @@ fi
 
 failed=0
 source_root="${CORDIS_BOUNDARY_SOURCE_ROOT:-Sources}"
+policy_prefix="${CORDIS_BOUNDARY_POLICY_PREFIX-Sources}"
 
 reject_matches() {
   local label="$1"
@@ -18,12 +19,17 @@ reject_matches() {
   local matches
   matches="$({ grep -RIlE --include='*.swift' "$pattern" "$source_root" || true; } | while IFS= read -r path; do
     [[ -z "$path" ]] && continue
+    local relative_path="${path#"$source_root"/}"
+    local policy_path="$relative_path"
+    if [[ -n "$policy_prefix" ]]; then
+      policy_path="$policy_prefix/$relative_path"
+    fi
     local allowed=0
     for prefix in "$@"; do
-      [[ "$path" == "$prefix" ]] && allowed=1 && break
+      [[ "$policy_path" == "$prefix" ]] && allowed=1 && break
     done
     if [[ $allowed -eq 0 ]]; then
-      printf '%s\n' "$path"
+      printf '%s\n' "$policy_path"
     fi
   done | LC_ALL=C sort)"
   if [[ -n "$matches" ]]; then

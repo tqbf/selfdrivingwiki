@@ -32,7 +32,7 @@ Removing a wiki stops only that wiki's host. Daemon shutdown drains all hosts be
 
 `CLIStoreProfile` boots the CLI profile with one ambient store entry. It resolves `StoreServiceKeys.store`, runs one command, and shuts down the profile.
 
-The profile shuts down after command success and command failure. A successful command reports a shutdown error. A failed command preserves the command error and logs a shutdown error.
+The profile shuts down after command success and command failure. A successful command reports a shutdown error. If the command and shutdown both fail, `CLIStoreProfileError.operationAndCleanup` preserves both errors.
 
 The runner returns stdout bytes, stderr bytes, and an optional changed wiki ID. The executable writes those bytes and posts the Darwin change notification. The runner does not own process I/O.
 
@@ -53,7 +53,9 @@ The runner accepts four injected boundaries:
 - store bootstrap
 - command execution
 
-The integration tests use real Cordis activation with reversed plugin definitions. They verify exact store identity and one profile disposal after success or failure. Separate runner tests verify dump-config formatting and seeded wiki creation.
+The integration tests use real Cordis activation. They verify exact store identity, one profile disposal after success or failure, and combined operation and cleanup failures. Separate runner tests verify dump-config formatting and seeded wiki creation.
+
+Cordis kernel tests own registration-order settlement. The CLI tests do not repeat that kernel contract.
 
 These tests replace positive source-text assertions. The boundary script retains negative source-policy tests for forbidden constructors.
 

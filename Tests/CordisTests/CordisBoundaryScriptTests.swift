@@ -93,6 +93,30 @@ struct CordisBoundaryScriptTests {
         #expect(result.standardError.contains(fixture.path))
     }
 
+    @Test("documented allowlisted path is accepted in fixture mode")
+    func documentedAllowlistedPathIsAcceptedInFixtureMode() async throws {
+        let root = repositoryRoot()
+        let fixtureRoot = root.appendingPathComponent(
+            "tmp/cordis-allowed-path-\(UUID().uuidString)",
+            isDirectory: true)
+        let file = fixtureRoot.appendingPathComponent(
+            "Sources/WikiFSCore/Store/StoreBackend.swift")
+        try FileManager.default.createDirectory(
+            at: file.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try "let store = GRDBWikiStore(".write(
+            to: file,
+            atomically: false,
+            encoding: .utf8)
+        defer {
+            do { try FileManager.default.removeItem(at: fixtureRoot) }
+            catch { Issue.record("Could not remove allowlisted-path fixture: \(error)") }
+        }
+
+        let result = try await runBoundaryCheck(arguments: [], sourceRoot: fixtureRoot)
+        #expect(result.status == 0, "Boundary check failed: \(result.standardError)")
+    }
+
     private func runBoundaryCheck(
         arguments: [String],
         sourceRoot: URL? = nil
@@ -105,6 +129,7 @@ struct CordisBoundaryScriptTests {
         if let sourceRoot {
             var environment = ProcessInfo.processInfo.environment
             environment["CORDIS_BOUNDARY_SOURCE_ROOT"] = sourceRoot.path
+            environment["CORDIS_BOUNDARY_POLICY_PREFIX"] = ""
             process.environment = environment
         }
         let standardError = Pipe()

@@ -6,8 +6,9 @@ import Cordis
 import CordisLoader
 import WikiFSEngine
 
-public enum CLIStoreProfileError: Error, Equatable {
+public enum CLIStoreProfileError: Error {
     case incompatibleStore
+    case operationAndCleanup(operation: any Error, cleanup: any Error)
 }
 
 public struct CLIStoreProfile: Sendable {
@@ -40,27 +41,31 @@ public struct CLIStoreProfile: Sendable {
         operation: (GRDBWikiStore) async throws -> Result
     ) async throws -> Result {
         let profile = try await boot(request)
-        let store: GRDBWikiStore
+        let operationResult: Swift.Result<Result, any Error>
         do {
             let service = try await profile.context.require(StoreServiceKeys.store)
-            guard let resolved = service as? GRDBWikiStore else {
+            guard let store = service as? GRDBWikiStore else {
                 throw CLIStoreProfileError.incompatibleStore
             }
-            store = resolved
+            operationResult = .success(try await operation(store))
         } catch {
-            await disposeAfterFailure(profile)
-            throw error
+            operationResult = .failure(error)
         }
 
-        let result: Result
         do {
-            result = try await operation(store)
+            try await profile.shutdown()
         } catch {
-            await disposeAfterFailure(profile)
-            throw error
+            switch operationResult {
+            case .success:
+                throw error
+            case .failure(let operationError):
+                throw CLIStoreProfileError.operationAndCleanup(
+                    operation: operationError,
+                    cleanup: error)
+            }
         }
-        try await profile.shutdown()
-        return result
+
+        return try operationResult.get()
     }
 
     public static func withStore<Result>(
@@ -86,13 +91,6 @@ public struct CLIStoreProfile: Sendable {
                 homeDirectory: request.containerDirectory))]))
     }
 
-    private func disposeAfterFailure(_ profile: BootedProfile) async {
-        do {
-            try await profile.shutdown()
-        } catch {
-            DebugLog.store("wikictl: CLI profile cleanup failed: \(error)")
-        }
-    }
 }
 
 public struct WikiCtlRunner {
@@ -569,8 +567,9 @@ public enum CLITantivyLegResolver {
 }
 
 #else
-public enum CLIStoreProfileError: Error, Equatable {
+public enum CLIStoreProfileError: Error {
     case incompatibleStore
+    case operationAndCleanup(operation: any Error, cleanup: any Error)
 }
 
 public enum CLIStoreProfile {

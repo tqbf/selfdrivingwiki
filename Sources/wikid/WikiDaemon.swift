@@ -5,6 +5,51 @@ import WikiFSCore
 import WikiFSEngine
 #endif
 
+#if canImport(WikiFSEngine)
+private actor ChatHostCreationGate {
+    private var waiters: [WikiID: [CheckedContinuation<Void, any Error>]] = [:]
+    private var isShuttingDown = false
+
+    func acquire(wikiID: WikiID) async throws -> Bool {
+        guard !isShuttingDown else { throw CancellationError() }
+        guard waiters[wikiID] != nil else {
+            waiters[wikiID] = []
+            return true
+        }
+        try await withCheckedThrowingContinuation { continuation in
+            waiters[wikiID, default: []].append(continuation)
+        }
+        return false
+    }
+
+    func finish(wikiID: WikiID, result: Swift.Result<Void, any Error>) {
+        let pending = waiters.removeValue(forKey: wikiID) ?? []
+        for continuation in pending {
+            continuation.resume(with: result)
+        }
+    }
+
+    func waitForCreation(wikiID: WikiID) async {
+        guard waiters[wikiID] != nil else { return }
+        do {
+            try await withCheckedThrowingContinuation { continuation in
+                waiters[wikiID, default: []].append(continuation)
+            }
+        } catch {
+            // The creator reports the error to its request. Removal only waits for settlement.
+        }
+    }
+
+    func closeAndWait() async {
+        isShuttingDown = true
+        let wikiIDs = Array(waiters.keys)
+        for wikiID in wikiIDs {
+            await waitForCreation(wikiID: wikiID)
+        }
+    }
+}
+#endif
+
 enum DaemonStoreResolutionError: Error, Equatable, LocalizedError {
     case notPrepared(WikiID)
     case unavailable(WikiID)
@@ -39,6 +84,7 @@ final class WikiDaemon: @unchecked Sendable {
     private let profileOwner: DaemonProcessProfileOwner?
     private let legacyAgentProviderServices: MutableAgentProviderServices?
     private let legacyExtractionCompositionOwner: ExtractionCompositionOwner?
+    private let chatHostCreationGate = ChatHostCreationGate()
     #endif
 
     // MARK: - State (accessed on `queue`)
@@ -188,6 +234,7 @@ final class WikiDaemon: @unchecked Sendable {
     }
 
     func removeWikiProfile(_ wikiID: WikiID) async {
+        await chatHostCreationGate.waitForCreation(wikiID: wikiID)
         let chatHost = queue.sync { chatHosts.removeValue(forKey: wikiID) }
         await chatHost?.shutdown()
         // The daemon cache must release the services before its owning child profile
@@ -232,6 +279,7 @@ final class WikiDaemon: @unchecked Sendable {
                 } catch {
                     DebugLog.store("wikid: queue shutdown did not settle cleanly: \(error)")
                 }
+                await self.chatHostCreationGate.closeAndWait()
                 let chatHosts = self.queue.sync { () -> [DaemonChatHost] in
                     let hosts = Array(self.chatHosts.values)
                     self.chatHosts.removeAll()
@@ -760,6 +808,25 @@ final class WikiDaemon: @unchecked Sendable {
         if let host = queue.sync(execute: { chatHosts[wikiID] }) {
             return host
         }
+        if try await chatHostCreationGate.acquire(wikiID: wikiID) {
+            do {
+                try await createChatHost(wikiID: wikiID)
+                await chatHostCreationGate.finish(wikiID: wikiID, result: .success(()))
+            } catch {
+                await chatHostCreationGate.finish(wikiID: wikiID, result: .failure(error))
+                throw error
+            }
+        }
+        guard let host = queue.sync(execute: { chatHosts[wikiID] }) else {
+            throw DaemonStoreResolutionError.unavailable(wikiID)
+        }
+        return host
+    }
+
+    private func createChatHost(wikiID: WikiID) async throws {
+        if queue.sync(execute: { chatHosts[wikiID] != nil }) {
+            return
+        }
 
         let services = try await prepareAndResolveWikiServices(wikiID: wikiID)
         let runtime = try await runtimeServices()
@@ -782,13 +849,17 @@ final class WikiDaemon: @unchecked Sendable {
                 diagnosticTrace: daemonChatDiagnostics,
                 providerServices: runtime.provider)
         }
+        try Task.checkCancellation()
 
-        return queue.sync {
-            if let existing = chatHosts[wikiID] {
-                return existing
+        let inserted = queue.sync { () -> Bool in
+            if chatHosts[wikiID] != nil {
+                return false
             }
             chatHosts[wikiID] = host
-            return host
+            return true
+        }
+        if !inserted {
+            await host.shutdown()
         }
     }
     #endif

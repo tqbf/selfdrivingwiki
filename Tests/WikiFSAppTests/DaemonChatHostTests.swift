@@ -538,6 +538,29 @@ struct DaemonChatHostTests {
         #expect(identities.firstLauncher != identities.secondLauncher)
     }
 
+    @Test func concurrentFirstAccessCreatesOneChatHost() async throws {
+        let dir = makeTempDir()
+        let (daemon, wiki) = try await makeProfileDaemon(dir: dir)
+
+        let identities = try await withThrowingTaskGroup(
+            of: ObjectIdentifier.self,
+            returning: [ObjectIdentifier].self
+        ) { group in
+            for _ in 0..<10 {
+                group.addTask {
+                    ObjectIdentifier(try await daemon.ensureChatHost(wikiID: wiki.id))
+                }
+            }
+            var values: [ObjectIdentifier] = []
+            for try await identity in group {
+                values.append(identity)
+            }
+            return values
+        }
+
+        #expect(Set(identities).count == 1)
+    }
+
     @Test func daemonChatHostUsesSharedGenerationGate() async throws {
         let dir = makeTempDir()
         let (daemon, wiki) = try await makeProfileDaemon(dir: dir)

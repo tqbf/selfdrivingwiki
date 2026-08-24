@@ -24,10 +24,12 @@ Completed the final production Cordis migration on
 - The boundary gate rejects concrete store and launcher construction at all
   migrated daemon and CLI paths.
 - Each remaining construction boundary has a documented reason.
+- Review remediation adds per-wiki chat-host single-flight creation, preserves
+  combined CLI operation and cleanup errors, and normalizes fixture policy paths.
 
 Implementation commits:
 
-- `8ea3036f` and `eff71730`: daemon prepared stores, launcher factory, and
+- `dfd284a4` and `eff71730`: daemon prepared stores, launcher factory, and
   explicit wiki chat routing.
 - `38ad1e62`: CLI profile resolution, store bootstrap, and runner tests.
 - `1d56bb35`: tightened source boundaries and synthetic violation tests.
@@ -39,7 +41,7 @@ Design record: `plans/cordis-final-extension.md`.
 - `make build` passed.
 - `make test` passed with 3,586 tests in 360 suites.
 - `make check-cordis` passed.
-- The final opt-in Cordis selection passed with 59 tests in five suites.
+- The final opt-in Cordis selection passed with 66 tests in six suites after review remediation.
 - `CLITantivyLegResolverTests` passed with 11 tests.
 - `CordisBoundaryScriptTests` passed with 12 parameterized cases.
 - The focused daemon store, launcher, chat, workload, and profile suites passed
