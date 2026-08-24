@@ -28,11 +28,12 @@ finding. Owner decision: fix all findings, then re-review until clean.
    (`RendererCompositionOwner.swift:176-329`, `WikiFSApp.swift:174-328`).
    Fix: reduce app boot to ambient facts + injected factory catalog +
    profile-layer loading; move owners/factories into row-selected plugins.
-4. **Per-wiki privileged construction survives** — `ProfileWikiSession`
-   constructs store/model/search/gate/launcher directly
-   (`ProfileWikiSession.swift:201-296`); `SessionManager` keeps a sync
-   fallback; boundary script only greps `WikiSession(`. Fix: child-profile
-   resolution mandatory; sync path test-only; strengthen the script.
+4. **FIXED (`dce9ea95`, `7a18c341`) — Per-wiki privileged construction survived.**
+   The child profile now supplies the store, read pool, model, search runtime,
+   generation gate, and agent launcher. `ProfileWikiSession` adapts these
+   services for the UI. `SessionManager` permits synchronous construction only
+   through an explicit test fixture. The boundary script rejects direct domain
+   service construction outside narrow plugin and factory allowlists.
 5. **FIXED (`9697ddba`) — `CordisBoot.boot`/`EntryTree.update` leaked partial state on failure.**
    Boot failures now dispose the tree and context. Update failures dispose all
    new handles exactly once and preserve cleanup failures.
