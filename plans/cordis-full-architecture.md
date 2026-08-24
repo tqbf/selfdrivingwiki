@@ -1,12 +1,9 @@
 # Cordis Full Architecture — Design Record
 
-Status: in progress. Phases 1–4 complete (all 11 domain plugin seams), Phase 5a
-complete (bundles/profiles as data, dump-config), Phase 5b Stage 1 complete
-(boundary checker); Phase 5b Stage 2 — deleting `WikiSession` and the
-`*RuntimeAssembly.swift` files and rewiring the app/daemon/CLI entry points —
-is deliberately deferred as a staged follow-up: see
-`plans/cordis-5b-status.md` for the exact caller inventory and the ordered
-migration sequence.
+Status: complete for Phases 1–5b. Phase 5b Stage 2 landed: `WikiSession`
+and all `*RuntimeAssembly.swift` files are deleted, the app/daemon/CLI boot
+from profiles, and `scripts/check-cordis-boundaries` is strict by default.
+Migration sequence record: `plans/cordis-5b-status.md`.
 
 ## Goal
 
@@ -87,7 +84,7 @@ re-projection happens in the UI plugin, not the kernel.
 | `ctx.llm` | model adapter runtime | done (`wiki.llm-runtime` + `wiki.llm-acp-adapter`) |
 | `ctx.tools` | tool registry + execution waterfalls | done (`wiki.tools`) |
 | `ctx.systemPrompt` | prompt assembly | done (`wiki.system-prompt`) |
-| `ctx.agentLoop` / `ctx.agents` | queue worker, chat turn flow | seam done (`wiki.agent-loop`; dissolution of QueueEngine/ChatAgentRuntime deferred to 5b Stage 2) |
+| `ctx.agentLoop` / `ctx.agents` | queue worker, chat turn flow | done (`wiki.agent-loop`; QueueEngine/ChatAgentRuntime lifetimes now owned by process-profile leases) |
 | `ctx.search` | Tantivy + embeddings providers | done (`wiki.search` + adapters) |
 | `ctx.renderers` | renderer packages | done (`wiki.renderers` + adapter) |
 | `ctx.transport` | daemon XPC/RPC | done (`wiki.transport` + adapter) |
