@@ -281,14 +281,10 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             store.endIngest()
         }
 
-        // #765: if the run failed (turn ceiling exceeded, process died, etc.),
-        // throw so the queue worker transitions the item to .failed instead of
-        // .completed. exitStatus is nil before the run starts, 0 on success,
-        // non-zero on failure.
-        if let status = launcher.exitStatus, status != 0, launcher.runHadTurnFailure {
-            throw QueueIngestionError.spawnFailed(
-                "The agent turn exceeded the time ceiling or failed unexpectedly (exit status \(status)).")
-        }
+        try Self.validateLauncherOutcome(
+            exitStatus: launcher.exitStatus,
+            preflightError: launcher.preflightError,
+            runHadTurnFailure: launcher.runHadTurnFailure)
     }
 
     // MARK: - Lint (payload variant of .ingestion)
@@ -332,11 +328,10 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         )
         onUsage?(launcher.runTotalUsage)
         onLogPaths?(launcher.logFileURL, launcher.debugFolderURL)
-        // #765: turn-ceiling failures must propagate to the queue.
-        if let status = launcher.exitStatus, status != 0, launcher.runHadTurnFailure {
-            throw QueueIngestionError.spawnFailed(
-                "The agent turn exceeded the time ceiling or failed unexpectedly (exit status \(status)).")
-        }
+        try Self.validateLauncherOutcome(
+            exitStatus: launcher.exitStatus,
+            preflightError: launcher.preflightError,
+            runHadTurnFailure: launcher.runHadTurnFailure)
     }
 
     func runLintPages(
@@ -401,10 +396,24 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         )
         onUsage?(launcher.runTotalUsage)
         onLogPaths?(launcher.logFileURL, launcher.debugFolderURL)
-        // #765: turn-ceiling failures must propagate to the queue.
-        if let status = launcher.exitStatus, status != 0, launcher.runHadTurnFailure {
+        try Self.validateLauncherOutcome(
+            exitStatus: launcher.exitStatus,
+            preflightError: launcher.preflightError,
+            runHadTurnFailure: launcher.runHadTurnFailure)
+    }
+
+    static func validateLauncherOutcome(
+        exitStatus: Int32?,
+        preflightError: String?,
+        runHadTurnFailure: Bool
+    ) throws {
+        guard let exitStatus else {
             throw QueueIngestionError.spawnFailed(
-                "The agent turn exceeded the time ceiling or failed unexpectedly (exit status \(status)).")
+                preflightError ?? "The agent did not start.")
+        }
+        if exitStatus != 0, runHadTurnFailure {
+            throw QueueIngestionError.spawnFailed(
+                "The agent turn exceeded the time ceiling or failed unexpectedly (exit status \(exitStatus)).")
         }
     }
 
