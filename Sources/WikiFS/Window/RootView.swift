@@ -19,7 +19,7 @@ struct RootView: View {
     /// The per-active-wiki session (store + launchers + gate). Non-optional —
     /// `RootScene` guarantees the session is resolved before instantiating
     /// `RootView`. The empty/loading state is handled by `RootScene`.
-    var session: WikiSession
+    var session: any WikiSessionProtocol
     /// App-scoped registry: wiki list + active id + create/select/delete.
     @Bindable var registry: WikiRegistryClient
     let fileProvider: FileProviderFacade

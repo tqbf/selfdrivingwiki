@@ -15,7 +15,7 @@ import WikiFSCore
 struct PagesListView: NSViewControllerRepresentable {
     let store: WikiStoreModel
     let fileProvider: FileProviderFacade
-    let session: WikiSession
+    let session: any WikiSessionProtocol
     let launcher: AgentLauncher
     let callbacks: PagesListCallbacks
 

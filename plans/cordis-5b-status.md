@@ -28,7 +28,16 @@ The async session-readiness gap is complete. `SessionManager.readySession(for:de
 
 The async accessor supports an injected child-profile loader. Its default path keeps the legacy synchronous session construction for this slice.
 
-Steps 10–11 remain incomplete because the app views still call the synchronous accessor. The next slice will install the child-profile loader and update those callers.
+Steps 10–11 are complete. `SessionManager` stores the `WikiSessionProtocol` abstraction and the production loader returns `ProfileWikiSession`.
+
+`RootScene` now awaits `readySession(for:descriptor:)`. App views and bridges use the session abstraction.
+
+The app process profile is the parent of each per-wiki child profile. Session shutdown disposes the child profile before process-profile shutdown.
+
+Two compatibility paths remain for the final deletion slice:
+
+- `SessionManager.session(for:descriptor:)` still constructs `WikiSession` for tests and unsafe synchronous callers. Production `RootScene` does not use this path.
+- `ProfileWikiSession` still delegates application behavior to `WikiSession` until the final deletion slice moves that behavior into the facade.
 
 The daemon part of step 12 remains incomplete. `WikiDaemon` still owns the provider and extraction assemblies.
 

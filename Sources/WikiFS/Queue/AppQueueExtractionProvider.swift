@@ -35,7 +35,7 @@ final class SessionLookupBox: @unchecked Sendable {
 
     /// Returns the live `WikiSession` for a wikiID, or nil if no session is
     /// open. Used by the ingestion provider to access the session's launcher.
-    private var sessionLookup: @MainActor @Sendable (WikiID) -> WikiSession?
+    private var sessionLookup: @MainActor @Sendable (WikiID) -> (any WikiSessionProtocol)?
 
     init() {
         // No sessions exist yet — return nil. Replaced after SessionManager
@@ -50,7 +50,7 @@ final class SessionLookupBox: @unchecked Sendable {
     }
 
     /// Synchronous session resolution (caller must be on the main actor).
-    func resolveSession(for wikiID: WikiID) -> WikiSession? {
+    func resolveSession(for wikiID: WikiID) -> (any WikiSessionProtocol)? {
         sessionLookup(wikiID)
     }
 
@@ -60,7 +60,7 @@ final class SessionLookupBox: @unchecked Sendable {
     }
 
     /// Wire the session-lookup closure to the real session manager.
-    func setSessionLookup(_ lookup: @escaping @MainActor @Sendable (WikiID) -> WikiSession?) {
+    func setSessionLookup(_ lookup: @escaping @MainActor @Sendable (WikiID) -> (any WikiSessionProtocol)?) {
         self.sessionLookup = lookup
     }
 }

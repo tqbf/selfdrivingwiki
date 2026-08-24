@@ -12,7 +12,7 @@ struct SourcesContainerView: View {
     @Bindable var store: WikiStoreModel
     let fileProvider: FileProviderFacade
     /// The per-active-wiki session (store + launchers + descriptor).
-    var session: WikiSession
+    var session: any WikiSessionProtocol
     @Environment(QueueActivityTracker.self) private var tracker
     let launcher: AgentLauncher
     let queueEngine: any QueueEngineClient

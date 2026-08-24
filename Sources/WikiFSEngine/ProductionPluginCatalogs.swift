@@ -257,7 +257,7 @@ public struct AppServices: Sendable {
 /// inherited process services. It mirrors `WikiSession` until callers migrate.
 @MainActor
 @Observable
-public final class ProfileWikiSession {
+public final class ProfileWikiSession: WikiSessionProtocol {
     public let profile: BootedProfile
     @ObservationIgnored private let session: WikiSession
 

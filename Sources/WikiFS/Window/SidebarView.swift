@@ -13,7 +13,7 @@ struct SidebarView: View {
     /// App-scoped registry — backs the switcher header at the top of the list.
     @Bindable var registry: WikiRegistryClient
     /// The per-active-wiki session (store + launchers + descriptor).
-    var session: WikiSession
+    var session: any WikiSessionProtocol
     /// Used to open an ingested file in its default app via its user-visible URL.
     let fileProvider: FileProviderFacade
     /// Required to launch the LLM lint from the sidebar context menu.

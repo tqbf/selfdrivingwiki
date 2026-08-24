@@ -313,6 +313,28 @@ struct WikiFSApp: App {
         _activityTracker = State(initialValue: activityTracker)
 
         let searchRuntimeRegistry = SearchRuntimeRegistry()
+        let processProfileOwner = AppProcessProfileOwner(
+            agentProvider: providerServices,
+            extraction: extractionServices,
+            queue: queueEngine,
+            transport: transportOwner.services,
+            renderer: AppProcessRendererService())
+        _processProfileOwner = State(initialValue: processProfileOwner)
+        processProfileOwner.start()
+        let appCatalog = {
+            do {
+                return try AppPluginCatalog.build(factories: AppPluginCatalogFactories(
+                    base: BasePluginCatalogFactories(
+                        agentProviderServices: providerServices,
+                        makePDFExtractor: { await MainActor.run { LocalPdf2MarkdownExtractor() } }),
+                    makeRendererServices: { AppProcessRendererService() },
+                    makeDefuddleExtractor: { await MainActor.run { LocalDefuddleExtractor() } },
+                    makeDaemonTransport: { transportOwner.services },
+                    makeURLFetcher: { URLSessionRequestFetcher() }))
+            } catch {
+                preconditionFailure("App profile catalog construction failed: \(error)")
+            }
+        }()
         let sm = SessionManager(
             containerDirectory: directory,
             extractionCoordinator: coordinator,
@@ -326,6 +348,32 @@ struct WikiFSApp: App {
             podcastBackendResolver: { ExtractionConfig.load(from: directory).podcastBackend },
             interactiveUsageRecorder: { [weak activityTracker] usage in
                 activityTracker?.recordInteractiveUsage(usage)
+            },
+            asyncSessionLoader: { [weak processProfileOwner, weak activityTracker] wikiID, descriptor in
+                guard let processProfileOwner else {
+                    throw SessionLoadingError.processProfileUnavailable("app process profile owner was released")
+                }
+                await processProfileOwner.awaitSettled()
+                guard let processProfile = processProfileOwner.profile,
+                      let processServices = processProfileOwner.services else {
+                    throw SessionLoadingError.processProfileUnavailable("app process profile is not ready: \(processProfileOwner.readiness)")
+                }
+                return try await ProfileWikiSession.boot(
+                    wikiID: wikiID,
+                    descriptor: descriptor,
+                    containerDirectory: directory,
+                    catalog: appCatalog,
+                    processProfile: processProfile,
+                    processServices: processServices,
+                    extractionProvider: extractionProvider,
+                    searchRuntimeRegistry: searchRuntimeRegistry,
+                    pdf2mdScriptPathResolver: { PdfExtractionService.resolveScript()?.path },
+                    htmlMarkdownExtractorFactory: { LocalDefuddleExtractor() },
+                    htmlBackendResolver: { ExtractionConfig.load(from: directory).htmlBackend },
+                    podcastBackendResolver: { ExtractionConfig.load(from: directory).podcastBackend },
+                    interactiveUsageRecorder: { usage in
+                        activityTracker?.recordInteractiveUsage(usage)
+                    })
             }
         )
         _sessionManager = State(initialValue: sm)
@@ -346,14 +394,6 @@ struct WikiFSApp: App {
                 .assemble()
         }
         rendererCompositionOwner = rendererOwner
-        let processProfileOwner = AppProcessProfileOwner(
-            agentProvider: providerServices,
-            extraction: extractionServices,
-            queue: queueEngine,
-            transport: transportOwner.services,
-            renderer: AppProcessRendererService())
-        _processProfileOwner = State(initialValue: processProfileOwner)
-        processProfileOwner.start()
         let rendererHost = InstalledRendererHost(services: rendererOwner.services)
         _installedRendererHost = State(initialValue: rendererHost)
         Task { @MainActor in

@@ -16,7 +16,7 @@ import WikiFSCore
 struct SourcesListView: NSViewControllerRepresentable {
     let store: WikiStoreModel
     let fileProvider: FileProviderFacade
-    let session: WikiSession
+    let session: any WikiSessionProtocol
     let launcher: AgentLauncher
     let ingestingSourceIDs: Set<SourceID>
     let extractingSourceIDs: Set<SourceID>

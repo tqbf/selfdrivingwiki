@@ -155,7 +155,7 @@ final class BackgroundIngestCoordinator {
     // MARK: - Per-wiki scan
 
     
-    private func scanWiki(session: WikiSession) async {
+    private func scanWiki(session: any WikiSessionProtocol) async {
         let wikiID = session.wikiID
         let store = session.store
         let sources = store.sources

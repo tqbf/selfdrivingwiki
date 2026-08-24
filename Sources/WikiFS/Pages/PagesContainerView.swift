@@ -10,7 +10,7 @@ struct PagesContainerView: View {
     @Bindable var store: WikiStoreModel
     let fileProvider: FileProviderFacade
     /// The per-active-wiki session (store + launchers + descriptor).
-    var session: WikiSession
+    var session: any WikiSessionProtocol
     /// App-scoped registry — used for `setHomePage` persistence.
     var registry: WikiRegistryClient
     let launcher: AgentLauncher

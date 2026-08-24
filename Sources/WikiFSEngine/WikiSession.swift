@@ -27,8 +27,33 @@ import WikiFSCore
 ///
 /// See `plans/dissolve-wikimanager.md` for the full dissolution rationale.
 @MainActor
+public protocol WikiSessionProtocol: AnyObject, Observable, Sendable {
+    var wikiID: WikiID { get }
+    var descriptor: WikiDescriptor { get }
+    var store: WikiStoreModel { get }
+    var agentLauncher: AgentLauncher { get }
+    var extractionCoordinator: ExtractionCoordinator { get }
+    var queueEngine: any QueueEngineClient { get }
+    var extractionProvider: any QueueExtractionProvider { get }
+    var generationGate: GenerationGate { get }
+    var searchServices: any SearchServices { get }
+    var pendingBlobVacuum: BlobVacuumReport? { get set }
+    var pendingVacuumAll: VacuumReport? { get set }
+    var pendingWikiLink: (url: URL, openInNewTab: Bool)? { get set }
+
+    func updateDescriptor(_ descriptor: WikiDescriptor)
+    func previewBlobVacuum()
+    func applyBlobVacuum()
+    func previewVacuumAll()
+    func applyVacuumAll()
+    func upgradeSearchIndex() async
+    func searchTantivy(query: String, kinds: [TantivyDocumentKind], limit: Int) async -> [TantivyShadowSearchResult]?
+    func shutdown() async
+}
+
+@MainActor
 @Observable
-public final class WikiSession {
+public final class WikiSession: WikiSessionProtocol {
     /// The wiki's stable ULID. Guaranteed non-nil (a session only exists while
     /// a wiki is open). Views read `session.wikiID` instead of the old
     /// `activeWikiID ?? ""`.
@@ -345,6 +370,10 @@ public final class WikiSession {
 
     public func shutdownSearchRuntime() async {
         await searchCompositionOwner.shutdown()
+    }
+
+    public func shutdown() async {
+        await shutdownSearchRuntime()
     }
 }
 #endif

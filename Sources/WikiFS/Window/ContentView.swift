@@ -12,7 +12,7 @@ struct ContentView: View {
     @Environment(QueueActivityTracker.self) private var tracker
     @Bindable var store: WikiStoreModel
     /// The per-active-wiki session (store + launchers + gate + descriptor).
-    var session: WikiSession
+    var session: any WikiSessionProtocol
     /// App-scoped registry: wiki list + active id + create/select/delete.
     @Bindable var registry: WikiRegistryClient
     let fileProvider: FileProviderFacade
@@ -61,7 +61,7 @@ struct ContentView: View {
 
     init(
         store: WikiStoreModel,
-        session: WikiSession,
+        session: any WikiSessionProtocol,
         registry: WikiRegistryClient,
         fileProvider: FileProviderFacade,
         agentLauncher: AgentLauncher,
