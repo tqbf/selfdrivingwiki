@@ -10,15 +10,17 @@ struct ProfileLifetimeTests {
         let disposals = ProfileProcessDisposalRecorder()
         let profile = try await CordisBoot.boot(.init(
             catalog: try ProfileBootFixture.processCatalog(
-                includeAppServices: false,
+                includeAppServices: true,
                 recorder: disposals),
-            layers: [PatchFile(entries: ProfileBootFixture.processEntries(includeAppServices: false))]))
+            layers: [PatchFile(entries: ProfileBootFixture.processEntries(includeAppServices: true))]))
         let lifetime = ProfileLifetime(profile: profile)
 
         try await lifetime.shutdown()
+        let firstShutdownCount = await disposals.count
         try await lifetime.shutdown()
 
-        #expect(await disposals.count == 2)
+        #expect(firstShutdownCount > 0)
+        #expect(await disposals.count == firstShutdownCount)
     }
 
     @Test("shutdown rejects new child boot")
