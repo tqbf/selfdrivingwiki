@@ -24,7 +24,7 @@ extension WikiDaemon {
     convenience init(containerDirectory: URL) {
         self.init(
             containerDirectory: containerDirectory,
-            makeStore: { try GRDBWikiStore(databaseURL: $0) })
+            testFixtureMakeStore: { try GRDBWikiStore(databaseURL: $0) })
     }
 
     static func profileBackedForTesting(containerDirectory: URL) async throws -> WikiDaemon {
@@ -34,7 +34,7 @@ extension WikiDaemon {
         let daemon = WikiDaemon(
             containerDirectory: containerDirectory,
             profileOwner: owner,
-            makeStore: { try GRDBWikiStore(databaseURL: $0) })
+            storeBootstrap: StoreBootstrap())
         try await daemon.start()
         return daemon
     }

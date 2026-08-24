@@ -76,7 +76,8 @@ final class WikiDaemon: @unchecked Sendable {
     // MARK: - Dependencies
 
     private let containerDirectory: URL
-    private let makeStore: (URL) throws -> WikiStore
+    private let registryPersistence: DaemonRegistryPersistence?
+    private let testFixtureMakeStore: ((URL) throws -> WikiStore)?
     private let daemonChatDiagnostics = DaemonChatDiagnostics()
     #if canImport(WikiFSEngine)
     /// Production owns provider, extraction, and per-wiki store lifetimes here.
@@ -96,6 +97,10 @@ final class WikiDaemon: @unchecked Sendable {
     #endif
     private var openStores: [WikiID: GRDBWikiStore] = [:]
     private var shutdownTask: Task<Void, Never>?
+    #if canImport(WikiFSEngine)
+    private let creationTaskRegistry = DaemonCreationTaskRegistry()
+    private var creationCoordinator: DaemonWikiCreationCoordinator?
+    #endif
 
     /// The per-connection event-sink proxies the daemon pushes live workload
     /// events to. Populated by `listener(_:shouldAcceptNewConnection:)` when
@@ -149,14 +154,15 @@ final class WikiDaemon: @unchecked Sendable {
 
     // MARK: - Init
 
-    /// Inject `containerDirectory` + `makeStore` for the test and Linux compatibility boundary.
+    /// Explicit synchronous test and Linux compatibility boundary.
     init(
         containerDirectory: URL,
-        makeStore: @escaping (URL) throws -> WikiStore,
+        testFixtureMakeStore: @escaping (URL) throws -> WikiStore,
         extractionAssembly: ExtractionCompositionOwner.AssemblyFactory? = nil
     ) {
         self.containerDirectory = containerDirectory
-        self.makeStore = makeStore
+        self.registryPersistence = nil
+        self.testFixtureMakeStore = testFixtureMakeStore
         self.registry = WikiRegistry.load(from: containerDirectory)
         #if canImport(WikiFSEngine)
         self.profileOwner = nil
@@ -188,14 +194,38 @@ final class WikiDaemon: @unchecked Sendable {
     init(
         containerDirectory: URL,
         profileOwner: DaemonProcessProfileOwner,
-        makeStore: @escaping (URL) throws -> WikiStore
+        storeBootstrap: StoreBootstrap = StoreBootstrap(),
+        registryPersistence: DaemonRegistryPersistence = DaemonRegistryPersistence()
     ) {
         self.containerDirectory = containerDirectory
-        self.makeStore = makeStore
+        self.registryPersistence = registryPersistence
+        self.testFixtureMakeStore = nil
         self.registry = WikiRegistry.load(from: containerDirectory)
         self.profileOwner = profileOwner
         self.legacyAgentProviderServices = nil
         self.legacyExtractionCompositionOwner = nil
+        self.creationCoordinator = DaemonWikiCreationCoordinator(
+            containerDirectory: containerDirectory,
+            bootstrap: storeBootstrap,
+            persistDescriptor: { [weak self] descriptor in
+                guard let self else { throw CancellationError() }
+                try self.persistCreatedDescriptor(descriptor, persistence: registryPersistence)
+            },
+            removeDescriptor: { [weak self] wikiID in
+                guard let self else { throw CancellationError() }
+                try self.removePersistedDescriptor(wikiID, persistence: registryPersistence)
+            },
+            prepareProfile: { [weak self] wikiID in
+                guard let self else { throw CancellationError() }
+                _ = try await self.prepareAndResolveWikiServices(wikiID: wikiID)
+            },
+            removeProfile: { [weak self] wikiID in
+                await self?.removeWikiProfile(wikiID)
+            },
+            deleteArtifacts: { [weak self] wikiID in
+                guard let self else { return }
+                try self.deleteDatabaseArtifacts(wikiID: wikiID)
+            })
     }
 
     func start() async throws {
@@ -273,6 +303,8 @@ final class WikiDaemon: @unchecked Sendable {
                 guard let self else { return }
                 self.stopHeartbeat()
                 #if canImport(WikiFSEngine)
+                await self.creationCoordinator?.beginShutdown()
+                await self.creationTaskRegistry.cancelAndWait()
                 let status = await self.daemonQueueHost.status()
                 do {
                     _ = try await self.daemonQueueHost.relinquish(expectedEpoch: status.epoch)
@@ -390,7 +422,37 @@ final class WikiDaemon: @unchecked Sendable {
         }
     }
 
-    func createWiki(name: String) -> Data? {
+    #if canImport(WikiFSEngine)
+    func startCreateWikiTask(name: String) async -> Task<Data?, Never> {
+        let taskID = UUID()
+        let task = Task<Data?, Never> { [weak self] in
+            guard let self else { return nil }
+            let result = await self.createWiki(name: name)
+            await self.creationTaskRegistry.remove(id: taskID)
+            return result
+        }
+        await creationTaskRegistry.insert(task, id: taskID)
+        return task
+    }
+
+    func createWiki(name: String) async -> Data? {
+        guard profileOwner != nil, let creationCoordinator else {
+            DebugLog.store("wikid: production create requested without a profile owner")
+            return nil
+        }
+        do {
+            let descriptor = try await creationCoordinator.createWiki(name: name)
+            return try JSONEncoder().encode(descriptor)
+        } catch {
+            DebugLog.store("wikid: createWiki failed: \(error)")
+            return nil
+        }
+    }
+    #endif
+
+    /// Synchronous test/Linux compatibility boundary. Production uses
+    /// `createWiki(name:) async` with `StoreBootstrap` and child profiles.
+    func testFixtureCreateWiki(name: String) -> Data? {
         queue.sync { () -> Data? in
             let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
             let displayName = trimmed.isEmpty ? "Untitled Wiki" : trimmed
@@ -399,7 +461,8 @@ final class WikiDaemon: @unchecked Sendable {
             // Open + seed the DB (runs the bootstrap ladder — pages, system prompt, search tables)
             let dbURL = databaseURL(forWikiID: descriptor.id)
             do {
-                let store = try makeStore(dbURL) as? GRDBWikiStore
+                guard let testFixtureMakeStore else { return nil }
+                let store = try testFixtureMakeStore(dbURL) as? GRDBWikiStore
                 if let store {
                     wireEventBus(on: store, wikiID: descriptor.id)
                     cacheStore(store, wikiID: descriptor.id)
@@ -445,7 +508,27 @@ final class WikiDaemon: @unchecked Sendable {
         }
     }
 
-    func deleteWiki(id wikiID: WikiID) -> Bool {
+    #if canImport(WikiFSEngine)
+    func deleteWiki(id wikiID: WikiID) async -> Bool {
+        guard profileOwner != nil, let creationCoordinator else {
+            DebugLog.store("wikid: production delete requested without a profile owner")
+            return false
+        }
+        await creationCoordinator.awaitCreationSettlement(wikiID: wikiID)
+        await removeWikiProfile(wikiID)
+        do {
+            guard let registryPersistence else { return false }
+            try removePersistedDescriptor(wikiID, persistence: registryPersistence)
+            try deleteDatabaseArtifacts(wikiID: wikiID)
+            return true
+        } catch {
+            DebugLog.store("wikid: deleteWiki failed for \(wikiID.rawValue): \(error)")
+            return false
+        }
+    }
+    #endif
+
+    func testFixtureDeleteWiki(id wikiID: WikiID) -> Bool {
         queue.sync { () -> Bool in
             // Close the held store if open
             openStores.removeValue(forKey: wikiID)
@@ -542,7 +625,8 @@ final class WikiDaemon: @unchecked Sendable {
             guard registry.descriptor(id: wikiID) != nil else {
                 throw DaemonStoreResolutionError.unavailable(wikiID)
             }
-            guard let store = try makeStore(databaseURL(forWikiID: wikiID)) as? GRDBWikiStore else {
+            guard let testFixtureMakeStore,
+                  let store = try testFixtureMakeStore(databaseURL(forWikiID: wikiID)) as? GRDBWikiStore else {
                 throw DaemonStoreResolutionError.unavailable(wikiID)
             }
             wireEventBus(on: store, wikiID: wikiID)
@@ -574,6 +658,45 @@ final class WikiDaemon: @unchecked Sendable {
     }
 
     // MARK: - Internal
+
+    #if canImport(WikiFSEngine)
+    private func persistCreatedDescriptor(
+        _ descriptor: WikiDescriptor,
+        persistence: DaemonRegistryPersistence
+    ) throws {
+        try queue.sync {
+            registry.add(descriptor)
+            do {
+                try persistence.save(registry, containerDirectory)
+            } catch {
+                registry.remove(id: descriptor.id)
+                throw error
+            }
+        }
+    }
+
+    private func removePersistedDescriptor(
+        _ wikiID: WikiID,
+        persistence: DaemonRegistryPersistence
+    ) throws {
+        try queue.sync {
+            registry.remove(id: wikiID)
+            preparedServices.removeValue(forKey: wikiID)
+            openStores.removeValue(forKey: wikiID)
+            try persistence.save(registry, containerDirectory)
+        }
+    }
+    #endif
+
+    private func deleteDatabaseArtifacts(wikiID: WikiID) throws {
+        let databaseURL = databaseURL(forWikiID: wikiID)
+        let fileManager = FileManager.default
+        for suffix in ["", "-wal", "-shm"] {
+            let path = databaseURL.path + suffix
+            guard fileManager.fileExists(atPath: path) else { continue }
+            try fileManager.removeItem(atPath: path)
+        }
+    }
 
     private func databaseURL(forWikiID id: WikiID) -> URL {
         containerDirectory.appendingPathComponent("\(id.rawValue).sqlite", isDirectory: false)
