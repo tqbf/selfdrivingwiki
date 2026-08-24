@@ -62,6 +62,7 @@ public final class ProfileWikiSession: WikiSessionProtocol {
     /// a wiki is open). Views read `session.wikiID` instead of the old
     /// `activeWikiID ?? ""`.
     public let wikiID: WikiID
+    @ObservationIgnored private let databaseWikiID: WikiID?
 
     /// The wiki's registry descriptor (display name, home page, etc). Updated
     /// in place if the app layer mutates the registry (rename / set home page)
@@ -186,6 +187,7 @@ public final class ProfileWikiSession: WikiSessionProtocol {
     ) {
         self.profileLifetime = profileLifetime
         self.wikiID = wikiID
+        self.databaseWikiID = wikiID
         self.extractionCoordinator = extractionCoordinator
         self.queueEngine = queueEngine
         self.extractionProvider = extractionProvider
@@ -208,6 +210,20 @@ public final class ProfileWikiSession: WikiSessionProtocol {
         store.podcastBackend = podcastBackend
     }
 
+    internal func scopeIdentitySnapshot(
+        host: WikiScopeHostAssociation
+    ) async throws -> WikiScopeIdentitySnapshot? {
+        guard let profileLifetime else { return nil }
+        return try await WikiScopeIdentitySnapshot(
+            scope: profileLifetime.scopeDiagnostics(),
+            profileWikiID: wikiID,
+            sessionWikiID: wikiID,
+            storeWikiID: store.eventBus?.wikiID,
+            eventBusWikiID: store.eventBus?.wikiID,
+            databaseWikiID: databaseWikiID,
+            host: host)
+    }
+
     /// Explicit fixture initializer for tests that do not boot a Cordis profile.
     public init(
         testFixtureWikiID wikiID: WikiID,
@@ -225,6 +241,7 @@ public final class ProfileWikiSession: WikiSessionProtocol {
     ) {
         self.profileLifetime = nil
         self.wikiID = wikiID
+        self.databaseWikiID = nil
         self.extractionCoordinator = extractionCoordinator
         self.queueEngine = queueEngine
         self.extractionProvider = extractionProvider

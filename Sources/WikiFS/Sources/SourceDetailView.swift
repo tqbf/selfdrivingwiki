@@ -179,15 +179,23 @@ struct SourceDetailView: View {
 
     private var rendererFactoryInputs: BuiltInRendererFactoryInputs {
         let bytes = sourceBytesSnapshot
+        let mermaidProjection = SourceRendererPresentationPlanner
+            .renderableMermaidMarkdown(currentMarkdownContent)
+            .map { markdown in
+                AnyView(WikiReaderView(
+                    markdown: markdown,
+                    currentSelection: store.selection,
+                    store: store)
+                    .zoomShortcuts($readerZoom)
+                    .zoomScroll($readerZoom))
+            }
         return BuiltInRendererFactoryInputs(
             sourceBytes: bytes,
             pdfQuote: pdfQuote,
             htmlSource: SourceRendererPresentationPlanner.htmlSourceString(for: file, bytes: bytes),
-            mermaidMarkdown: SourceRendererPresentationPlanner.renderableMermaidMarkdown(currentMarkdownContent),
+            mermaidProjection: mermaidProjection,
             mediaTarget: SourceRendererPresentationPlanner.mediaTarget(for: file, origin: origin),
-            selection: store.selection,
-            store: store,
-            readerZoom: $readerZoom)
+            jsonCanvasHostAction: JSONCanvasHostActionRouter.handler(for: store))
     }
 
     private var rendererAuthorizedInputResolver: any RendererAuthorizedInputResolving { store }

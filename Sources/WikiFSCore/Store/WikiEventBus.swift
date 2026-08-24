@@ -59,9 +59,27 @@ public final class WikiEventBus: @unchecked Sendable {
     /// Monotone per-emit counter, stamped onto each delivered resource event's
     /// `seq`. Guarded by `lock`.
     private var seqCounter: UInt64 = 0
+    private var diagnosticObserver: (id: UUID, observer: WikiEventDiagnosticObserver)?
 
-    public init(wikiID: WikiID) {
+    public init(
+        wikiID: WikiID,
+        diagnosticObserver: WikiEventDiagnosticObserver? = nil
+    ) {
         self.wikiID = wikiID
+        self.diagnosticObserver = diagnosticObserver.map { (UUID(), $0) }
+    }
+
+    public func installDiagnosticObserver(_ observer: WikiEventDiagnosticObserver, id: UUID) {
+        lock.lock()
+        defer { lock.unlock() }
+        diagnosticObserver = (id, observer)
+    }
+
+    public func removeDiagnosticObserver(id: UUID) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard diagnosticObserver?.id == id else { return }
+        diagnosticObserver = nil
     }
 
     /// Register `handler` for events matching `kind` (`nil` = all kinds).
@@ -115,9 +133,11 @@ public final class WikiEventBus: @unchecked Sendable {
             change: event.change,
             seq: seqCounter
         )
+        let diagnosticObserver = diagnosticObserver?.observer
         let snapshot = Array(resourceSubscribers.values)
         lock.unlock()
 
+        diagnosticObserver?.observe(stamped)
         for (kindFilter, handler) in snapshot {
             // A nil filter matches everything. A concrete filter matches only
             // its own kind — so a coarse (`kind == nil`) event reaches only

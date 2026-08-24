@@ -583,12 +583,10 @@ struct RendererActivationView: View {
             sourceBytes: inputBytes,
             pdfQuote: nil,
             htmlSource: nil,
-            mermaidMarkdown: nil,
+            mermaidProjection: nil,
             mermaidDiagramSource: mermaidDiagramSource,
             mediaTarget: nil,
-            selection: store.selection,
-            store: store,
-            readerZoom: .constant(Double(ZoomScale.defaultScale)))
+            jsonCanvasHostAction: JSONCanvasHostActionRouter.handler(for: store))
     }
 
     private func packageRendererView(for descriptor: RendererDescriptor) -> AnyView? {

@@ -4,13 +4,14 @@ import Testing
 
 @Suite("Cordis source policy", .timeLimit(.minutes(1)))
 struct CordisSourcePolicyTests {
-    @Test("target graph is Foundation-only")
+    @Test("target graph uses only the typed leaf dependency")
     func foundationOnlyTargetGraph() throws {
         let root = repositoryRoot()
         let package = try String(contentsOf: root.appendingPathComponent("Package.swift"), encoding: .utf8)
         let expected = """
         .target(
                     name: "Cordis",
+                    dependencies: ["WikiFSTypes"],
                     path: "Sources/Cordis",
                     swiftSettings: strictSwiftSettings
                 )
@@ -26,16 +27,23 @@ struct CordisSourcePolicyTests {
             at: sourceURL,
             includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "swift" }
-        let source = try files.map { try String(contentsOf: $0, encoding: .utf8) }.joined(separator: "\n")
+        let sourcesByFile = try Dictionary(uniqueKeysWithValues: files.map {
+            ($0.lastPathComponent, try String(contentsOf: $0, encoding: .utf8))
+        })
+        let source = sourcesByFile.values.joined(separator: "\n")
 
         let uncheckedSendable = "@unchecked" + " Sendable"
         let detachedTask = "Task." + "detached"
-        #expect(!source.contains(uncheckedSendable))
+        for (name, fileSource) in sourcesByFile where name != "InvariantRegistry.swift" {
+            #expect(!fileSource.contains(uncheckedSendable), "Unexpected unchecked Sendable in \(name)")
+        }
+        #expect(sourcesByFile["InvariantRegistry.swift"]?.contains(
+            "RecordingInvariantViolationSink: InvariantViolationSink, @unchecked Sendable") == true)
         #expect(!source.contains(detachedTask))
         #expect(!source.contains("import SwiftUI"))
         #expect(!source.contains("import AppKit"))
         #expect(!source.contains("import GRDB"))
-        #expect(!source.contains("import WikiFS"))
+        #expect(!source.split(separator: "\n").contains("import WikiFS"))
     }
 
     @Test("UI, model, session, and daemon code cannot import Cordis contexts")
@@ -79,6 +87,8 @@ struct CordisSourcePolicyTests {
             "Sources/WikiFSEngine/SearchRuntimeFactory.swift",
             "Sources/WikiFSEngine/ProductionPluginCatalogs.swift",
             "Sources/WikiFSEngine/ProfileWikiSession.swift",
+            "Sources/WikiFSEngine/WikiScopeDiagnostics.swift",
+            "Sources/WikiFSCore/Store/WikiEventDiagnostics.swift",
             "Sources/WikiFSEngine/DaemonTransportRuntimeFactory.swift",
             "Sources/WikiFSEngine/SearchRuntimeRegistry.swift",
             // Phase 4.1 store-domain composition boundary: typed keys and the
@@ -123,6 +133,9 @@ struct CordisSourcePolicyTests {
             // registry with reversible Zotero and URL-fetch adapters.
             "Sources/WikiFSEngine/IntegrationServiceKeys.swift",
             "Sources/WikiFSEngine/IntegrationPlugins.swift",
+            // Process-owned runtime invariant composition. This file keeps
+            // diagnostic child contexts private from application facades.
+            "Sources/WikiFSEngine/RuntimeInvariantCoordinator.swift",
             "Sources/WikiCtlCore/CLITantivyLegResolver.swift",
             "Sources/WikiCtlCore/CLIPluginCatalog.swift",
             // Phase 5a diagnostic composition boundary: resolves loader data

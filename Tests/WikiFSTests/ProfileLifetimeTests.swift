@@ -1,6 +1,7 @@
 #if os(macOS)
 import CordisLoader
 import Testing
+import WikiFSTypes
 @testable import WikiFSEngine
 
 @Suite("Opaque profile lifetime", .serialized, .timeLimit(.minutes(1)))
@@ -35,7 +36,10 @@ struct ProfileLifetimeTests {
         try await lifetime.shutdown()
 
         await #expect(throws: ProfileLifetimeError.shutdownStarted) {
-            _ = try await lifetime.bootChild(catalog: try ProfileBootFixture.daemonCatalog(), layers: [])
+            _ = try await lifetime.bootChild(
+                wikiID: WikiID(rawValue: "shutdown-wiki"),
+                catalog: try ProfileBootFixture.daemonCatalog(),
+                layers: [])
         }
     }
 }

@@ -1,14 +1,24 @@
 import Foundation
+import WikiFSTypes
 
 internal enum ContextLifecycle: Sendable {
     case live
     case disposing
     case disposed
+
+    var scopeState: ScopeLifecycleState {
+        switch self {
+        case .live: .live
+        case .disposing: .disposing
+        case .disposed: .disposed
+        }
+    }
 }
 
 internal struct ContextRecord: Sendable {
     let id: ContextID
     let parentID: ContextID?
+    let descriptor: ScopeDescriptor?
     var childIDs: [ContextID] = []
     var componentIDs: [ComponentID] = []
     var listenerIDs: [ListenerID] = []
@@ -115,20 +125,60 @@ internal actor CordisRuntime {
     private var disposedProviderIDs: Set<ProviderID> = []
     private var disposedEffectIDs: Set<EffectID> = []
 
-    init() {
+    init(descriptor: ScopeDescriptor?) {
         let rootID = ContextID()
         rootContextID = rootID
-        contexts = [rootID: ContextRecord(id: rootID, parentID: nil)]
+        contexts = [rootID: ContextRecord(id: rootID, parentID: nil, descriptor: descriptor)]
     }
 
     // MARK: Context tree
 
-    func createChild(parentID: ContextID) throws -> ContextID {
+    func createChild(parentID: ContextID, descriptor: ScopeDescriptor?) throws -> ContextID {
         try requireLiveContext(parentID)
+        try validate(descriptor: descriptor, parentID: parentID)
         let childID = ContextID()
-        contexts[childID] = ContextRecord(id: childID, parentID: parentID)
+        contexts[childID] = ContextRecord(
+            id: childID,
+            parentID: parentID,
+            descriptor: descriptor)
         contexts[parentID]?.childIDs.append(childID)
         return childID
+    }
+
+    func scopeDiagnostics(contextID: ContextID) throws -> ScopeDiagnosticsSnapshot {
+        guard let context = contexts[contextID] else {
+            throw CordisError.disposedContext(contextID)
+        }
+        let activeComponentCount = components.values.count {
+            $0.contextID == contextID && $0.state.kind != .disposed
+        }
+        let activeEffectCount = effects.values.count { $0.contextID == contextID }
+        let activeRegistrationCount = activeComponentCount
+            + context.listenerIDs.count
+            + context.providers.count
+            + activeEffectCount
+        return ScopeDiagnosticsSnapshot(
+            contextID: context.id,
+            parentContextID: context.parentID,
+            descriptor: context.descriptor,
+            parentDescriptor: context.parentID.flatMap { contexts[$0]?.descriptor },
+            lifecycle: context.lifecycle.scopeState,
+            activeChildCount: context.childIDs.count,
+            activeRegistrationCount: activeRegistrationCount)
+    }
+
+    private func validate(descriptor: ScopeDescriptor?, parentID: ContextID) throws {
+        guard let descriptor else { return }
+        switch descriptor {
+        case .process:
+            throw ScopeDescriptorError.processRequiresRoot
+        case .wiki:
+            if case .process? = contexts[parentID]?.descriptor { return }
+            guard contexts[parentID]?.parentID == nil,
+                  contexts[parentID]?.descriptor == nil else {
+                throw ScopeDescriptorError.wikiRequiresProcessParent
+            }
+        }
     }
 
     func disposeContext(_ contextID: ContextID) async throws {

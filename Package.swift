@@ -71,6 +71,7 @@ let package = Package(
         // domain types. See plans/cordis-swift-components.md.
         .target(
             name: "Cordis",
+            dependencies: ["WikiFSTypes"],
             path: "Sources/Cordis",
             swiftSettings: strictSwiftSettings
         ),
@@ -283,6 +284,7 @@ let package = Package(
         .target(
             name: "WikiFSCore",
             dependencies: [
+                "Cordis",
                 "WikiFSTypes",
                 "WikiFSLinks",
                 "WikiFSMarkdown",
