@@ -20,10 +20,21 @@ finding. Owner decision: fix all findings, then re-review until clean.
 
 ## Major
 
-3. **`AppProcessComposition` is a new privileged assembly root**
-   (`RendererCompositionOwner.swift:176-329`, `WikiFSApp.swift:174-328`).
-   Fix: reduce app boot to ambient facts + injected factory catalog +
-   profile-layer loading; move owners/factories into row-selected plugins.
+3. **FIXED (`95025abd`, `test(cordis): pin demoted app boot`) — App boot was a privileged assembly root.**
+   `AppProcessPluginCatalog` now contains the injected app-target factories.
+   The committed process-profile rows select all five process runtime leases.
+   `WikiFSApp.init` no longer constructs `GenerationGate`, `AgentLauncher`, or
+   any concrete process runtime factory. The boundary check rejects those
+   constructors in the app initializer.
+
+   Three process-scoped UI adapters remain in `WikiFSApp.init`:
+   `DaemonTransportAppCoordinator`, `QueueActivityTracker`, and
+   `BackgroundIngestCoordinator`. Each adapter depends on main-actor UI state
+   or on the `SessionManager`, which the app creates after process startup.
+   Cordis accepts only `Sendable` services and must not store these observable
+   main-actor objects. These adapters do not select a domain implementation or
+   own a Cordis runtime. Moving them requires new asynchronous forwarding
+   facades, so this change keeps them as documented UI-shell concerns.
 4. **FIXED (`dce9ea95`, `7a18c341`) — Per-wiki privileged construction survived.**
    The child profile now supplies the store, read pool, model, search runtime,
    generation gate, and agent launcher. `ProfileWikiSession` adapts these

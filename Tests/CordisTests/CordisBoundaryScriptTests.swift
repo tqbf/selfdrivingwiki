@@ -9,6 +9,28 @@ struct CordisBoundaryScriptTests {
         #expect(result.status == 0, "Boundary check failed: \(result.standardError)")
     }
 
+    @Test("app initializer is not a privileged domain assembly root")
+    func appInitializerHasNoDirectDomainConstruction() throws {
+        let root = repositoryRoot()
+        let app = try String(
+            contentsOf: root.appendingPathComponent("Sources/WikiFS/Window/WikiFSApp.swift"),
+            encoding: .utf8)
+        let catalog = try String(
+            contentsOf: root.appendingPathComponent("Sources/WikiFS/Renderer/RendererCompositionOwner.swift"),
+            encoding: .utf8)
+
+        for constructor in [
+            "GenerationGate(", "AgentLauncher(", "AgentProviderRuntimeFactory(",
+            "ExtractionRuntimeFactory(", "QueueRuntimeFactory(",
+            "DaemonTransportRuntimeFactory(", "RendererRuntimeFactory(",
+        ] {
+            #expect(!app.contains(constructor), "WikiFSApp must not construct \(constructor)")
+        }
+        #expect(!app.contains("AppProcessComposition"))
+        #expect(catalog.contains("final class AppProcessPluginCatalog"))
+        #expect(catalog.contains("ProcessRuntimePlugins"))
+    }
+
     @Test("rejects privileged construction outside allowlisted boundaries", arguments: [
         "let value = ProfileWikiSession(",
         "let value = GRDBWikiStore(",

@@ -13,11 +13,19 @@ struct AppProfileBootTests {
     func processOwnerReadinessAndShutdown() async throws {
         let disposals = ProfileProcessDisposalRecorder()
         let gate = ProfileBootGate()
+        let committedRows = try ProfileBootFixture.processEntries(includeAppServices: true)
+        #expect(Set(committedRows.map(\.plugin)) == Set([
+            ProcessRuntimePlugins.agentProviderID,
+            ProcessRuntimePlugins.extractionID,
+            ProcessRuntimePlugins.queueID,
+            ProcessRuntimePlugins.transportID,
+            ProcessRuntimePlugins.rendererID,
+        ]))
         let owner = AppProcessProfileOwner {
             await gate.wait()
             return try await CordisBoot.boot(.init(
                 catalog: try ProfileBootFixture.processCatalog(includeAppServices: true, recorder: disposals),
-                layers: [PatchFile(entries: ProfileBootFixture.processEntries(includeAppServices: true))]))
+                layers: [PatchFile(entries: committedRows)]))
         }
 
         #expect(owner.readiness == .idle)
