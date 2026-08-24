@@ -2,6 +2,7 @@
 import Cordis
 import Foundation
 import WikiFSCore
+import WikiFSEngine
 import WikiFSTypes
 
 enum RendererRuntimeFactoryError: Error, Equatable, Sendable {

@@ -42,24 +42,30 @@ public enum EmbeddingsSearchPlugin {
     public static let id = PluginID("wiki.search.embeddings")
     public static let key = SearchProviderKey(kind: .embeddings, providerID: "embedding-service")
 
-    public static func definition(
-        configure: @escaping EmbeddingsSearchProvider.Configure = { await EmbeddingService.configure() },
-        selectedIdentifier: @escaping EmbeddingsSearchProvider.SelectedIdentifier = {
-            EmbeddingService.selectedEmbedderIdentifier()
-        },
-        isAvailable: @escaping EmbeddingsSearchProvider.Availability = {
-            EmbeddingService.isAvailable
-        }
-    ) -> PluginDefinition {
-        adapterDefinition(
-            id: id,
-            label: "Embedding semantic search",
-            provider: RegisteredSearchProvider(
+    public static let definition = PluginDefinition(
+        id: id,
+        label: "Embedding semantic search",
+        dependencies: [
+            ServiceDependency(SearchServiceKeys.providers),
+            ServiceDependency(ProcessServiceKeys.embeddings),
+        ]
+    ) {
+        try ComponentDefinition(
+            label: id.rawValue,
+            dependencies: [
+                ServiceDependency(SearchServiceKeys.providers),
+                ServiceDependency(ProcessServiceKeys.embeddings),
+            ]
+        ) { activation in
+            let registry = try await activation.require(SearchServiceKeys.providers)
+            let embeddings = try await activation.require(ProcessServiceKeys.embeddings)
+            let registration = try await registry.register(RegisteredSearchProvider(
                 key: key,
-                adapter: .embeddings(EmbeddingsSearchProvider(
-                    configure: configure,
-                    selectedIdentifier: selectedIdentifier,
-                    isAvailable: isAvailable))))
+                adapter: .embeddings(embeddings)))
+            _ = try await activation.effect { _ in
+                await registration.dispose()
+            }
+        }
     }
 }
 

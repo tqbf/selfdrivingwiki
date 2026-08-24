@@ -20,6 +20,9 @@ struct AppProfileBootTests {
             ProcessRuntimePlugins.queueID,
             ProcessRuntimePlugins.transportID,
             ProcessRuntimePlugins.rendererID,
+            ProcessRuntimePlugins.embeddingsID,
+            ProcessRuntimePlugins.urlFetchProviderID,
+            ProcessRuntimePlugins.zoteroClientProviderID,
         ]))
         let owner = AppProcessProfileOwner {
             await gate.wait()
@@ -38,9 +41,9 @@ struct AppProfileBootTests {
 
         await owner.shutdown()
         #expect(owner.services == nil)
-        #expect(await disposals.count == 3)
+        #expect(await disposals.count == 5)
         await owner.shutdown()
-        #expect(await disposals.count == 3)
+        #expect(await disposals.count == 5)
     }
 
     @Test("process owner reports boot failure")
@@ -138,7 +141,7 @@ struct AppProfileBootTests {
         await facade.shutdown()
         #expect(await disposals.count == 0)
         await owner.shutdown()
-        #expect(await disposals.count == 3)
+        #expect(await disposals.count == 5)
     }
 
     @Test("production-shaped app profile activates services and owns store listener")
@@ -175,6 +178,10 @@ struct AppProfileBootTests {
         _ = try #require(try await booted.context.find(ProcessServiceKeys.queue))
         _ = try #require(try await booted.context.find(ProcessServiceKeys.transport))
         _ = try #require(try await booted.context.find(ProcessServiceKeys.renderer))
+        _ = try #require(try await booted.context.find(ProcessServiceKeys.urlFetchProvider))
+        _ = try #require(try await booted.context.find(ProcessServiceKeys.zoteroClientProvider))
+        #expect(ProcessServiceKeys.urlFetchProvider.label == "process.integration.url-fetch-provider")
+        #expect(ProcessServiceKeys.zoteroClientProvider.label == "process.integration.zotero-client-provider")
         let store = try #require(try await booted.context.find(StoreServiceKeys.store))
         let page = try store.createPage(title: "Committed app profile page")
 
@@ -204,7 +211,7 @@ struct AppProfileBootTests {
         try await booted.shutdown()
         #expect(await processDisposals.count == 0)
         try await process.shutdown()
-        #expect(await processDisposals.count == 3)
+        #expect(await processDisposals.count == 5)
     }
 
     @Test("editing copied app YAML changes the running renderer registry")
@@ -216,16 +223,30 @@ struct AppProfileBootTests {
             catch { Issue.record("could not remove YAML authority fixture: \(error)") }
         }
         let selectedIDs = Set([EntryID("renderers"), EntryID("renderer-services")])
+        let process = try await CordisBoot.boot(.init(
+            catalog: try ProcessPluginCatalog.build(factories: ProcessPluginCatalogFactories(
+                makeAgentProvider: { ProcessRuntimeLease(service: UnavailableAgentProviderServices()) {} },
+                makeExtraction: { ProcessRuntimeLease(service: UnavailableExtractionServices()) {} },
+                makeRenderer: {
+                    ProcessRuntimeLease<any RendererServices>(service: UnavailableRendererServices()) {}
+                },
+                makeEmbeddings: {
+                    ProcessRuntimeLease(service: .unavailable(identifier: "unavailable-fixture"), dispose: {})
+                })),
+            layers: [PatchFile(entries: [
+                Entry(id: EntryID("renderer"), plugin: ProcessRuntimePlugins.rendererID),
+            ])]))
         let catalog = try PluginCatalog([
             RenderersPlugin.definition,
-            RendererServicesPlugin.definition(makeServices: { ProfileAuthorityRenderer() }),
+            RendererServicesPlugin.definition,
         ])
         let baselineRows = try ProductionProfiles.resolve(
             kind: .app, scope: .wiki, bundlesDirectory: bundles).entries
             .filter { selectedIDs.contains($0.id) }
         let baseline = try await CordisBoot.boot(.init(
             catalog: catalog,
-            layers: [PatchFile(entries: baselineRows)]))
+            layers: [PatchFile(entries: baselineRows)],
+            parent: process.context))
         let baselineRegistry = try await baseline.context.require(RendererServiceKeys.renderers)
         #expect(await baselineRegistry.providerIDs() == [RendererServicesPlugin.providerID])
         try await baseline.shutdown()
@@ -237,12 +258,12 @@ struct AppProfileBootTests {
             .filter { selectedIDs.contains($0.id) }
         let changed = try await CordisBoot.boot(.init(
             catalog: catalog,
-            layers: [PatchFile(entries: changedRows)]))
+            layers: [PatchFile(entries: changedRows)],
+            parent: process.context))
         let changedRegistry = try await changed.context.require(RendererServiceKeys.renderers)
         #expect(await changedRegistry.providerIDs().isEmpty)
         try await changed.shutdown()
+        try await process.shutdown()
     }
 }
-
-private struct ProfileAuthorityRenderer: Sendable {}
 #endif

@@ -29,7 +29,10 @@ public enum ProcessServiceKeys {
     public static let extraction = ServiceKey<any ExtractionServices>(label: "process.extraction")
     public static let queue = ServiceKey<any QueueEngineClient>(label: "process.queue")
     public static let transport = ServiceKey<DaemonTransportServices>(label: "process.transport")
-    public static let renderer = ServiceKey<any Sendable>(label: "process.renderer")
+    public static let renderer = ServiceKey<any RendererServices>(label: "process.renderer")
+    public static let embeddings = ServiceKey<EmbeddingsSearchProvider>(label: "process.embeddings")
+    public static let urlFetchProvider = ServiceKey<URLFetchProvider>(label: "process.integration.url-fetch-provider")
+    public static let zoteroClientProvider = ServiceKey<ZoteroClientProvider>(label: "process.integration.zotero-client-provider")
 }
 
 public struct ProcessPluginCatalogFactories: Sendable {
@@ -37,72 +40,69 @@ public struct ProcessPluginCatalogFactories: Sendable {
     public typealias ExtractionFactory = @Sendable () async throws -> ProcessRuntimeLease<any ExtractionServices>
     public typealias QueueFactory = @Sendable () async throws -> ProcessRuntimeLease<any QueueEngineClient>
     public typealias TransportFactory = @Sendable () async throws -> ProcessRuntimeLease<DaemonTransportServices>
-    public typealias RendererFactory = @Sendable () async throws -> ProcessRuntimeLease<any Sendable>
+    public typealias RendererFactory = @Sendable () async throws -> ProcessRuntimeLease<any RendererServices>
+    public typealias EmbeddingsFactory = @Sendable () async throws -> ProcessRuntimeLease<EmbeddingsSearchProvider>
+    public typealias URLFetchProviderFactory = @Sendable () async throws -> ProcessRuntimeLease<URLFetchProvider>
+    public typealias ZoteroClientProviderFactory = @Sendable () async throws -> ProcessRuntimeLease<ZoteroClientProvider>
 
     public let makeAgentProvider: AgentProviderFactory
     public let makeExtraction: ExtractionFactory
     public let makeQueue: QueueFactory?
     public let makeTransport: TransportFactory?
     public let makeRenderer: RendererFactory?
+    public let makeEmbeddings: EmbeddingsFactory
+    public let makeURLFetchProvider: URLFetchProviderFactory?
+    public let makeZoteroClientProvider: ZoteroClientProviderFactory?
 
     public init(
         makeAgentProvider: @escaping AgentProviderFactory,
         makeExtraction: @escaping ExtractionFactory,
         makeQueue: QueueFactory? = nil,
         makeTransport: TransportFactory? = nil,
-        makeRenderer: RendererFactory? = nil
+        makeRenderer: RendererFactory? = nil,
+        makeEmbeddings: @escaping EmbeddingsFactory,
+        makeURLFetchProvider: URLFetchProviderFactory? = nil,
+        makeZoteroClientProvider: ZoteroClientProviderFactory? = nil
     ) {
         self.makeAgentProvider = makeAgentProvider
         self.makeExtraction = makeExtraction
         self.makeQueue = makeQueue
         self.makeTransport = makeTransport
         self.makeRenderer = makeRenderer
+        self.makeEmbeddings = makeEmbeddings
+        self.makeURLFetchProvider = makeURLFetchProvider
+        self.makeZoteroClientProvider = makeZoteroClientProvider
     }
 }
 
 public struct BasePluginCatalogFactories: Sendable {
     public let agentProviderServices: any AgentProviderServices
     public let makePDFExtractor: ExtractionPluginFactory.LocalExtractor
-    public let configureEmbeddings: EmbeddingsSearchProvider.Configure
-    public let selectedEmbeddingIdentifier: EmbeddingsSearchProvider.SelectedIdentifier
-    public let embeddingsAvailable: EmbeddingsSearchProvider.Availability
 
     public init(
         agentProviderServices: any AgentProviderServices,
-        makePDFExtractor: @escaping ExtractionPluginFactory.LocalExtractor,
-        configureEmbeddings: @escaping EmbeddingsSearchProvider.Configure = { await EmbeddingService.configure() },
-        selectedEmbeddingIdentifier: @escaping EmbeddingsSearchProvider.SelectedIdentifier = { EmbeddingService.selectedEmbedderIdentifier() },
-        embeddingsAvailable: @escaping EmbeddingsSearchProvider.Availability = { EmbeddingService.isAvailable }
+        makePDFExtractor: @escaping ExtractionPluginFactory.LocalExtractor
     ) {
         self.agentProviderServices = agentProviderServices
         self.makePDFExtractor = makePDFExtractor
-        self.configureEmbeddings = configureEmbeddings
-        self.selectedEmbeddingIdentifier = selectedEmbeddingIdentifier
-        self.embeddingsAvailable = embeddingsAvailable
     }
 }
 
 public struct AppPluginCatalogFactories: Sendable {
     public let base: BasePluginCatalogFactories
-    public let makeRendererServices: RegisteredRendererProvider.Factory
     public let makeDefuddleExtractor: @Sendable () async -> any HtmlMarkdownExtractor
     public let makeDaemonTransport: RegisteredTransportProvider.Factory
-    public let makeURLFetcher: RegisteredIntegrationCapability.Factory
     public let makeTantivyRuntime: SearchRuntimeFactory.Factory
 
     public init(
         base: BasePluginCatalogFactories,
-        makeRendererServices: @escaping RegisteredRendererProvider.Factory,
         makeDefuddleExtractor: @escaping @Sendable () async -> any HtmlMarkdownExtractor,
         makeDaemonTransport: @escaping RegisteredTransportProvider.Factory,
-        makeURLFetcher: @escaping RegisteredIntegrationCapability.Factory,
         makeTantivyRuntime: @escaping SearchRuntimeFactory.Factory = SearchRuntimeCompositionFactory.runtimeFactory
     ) {
         self.base = base
-        self.makeRendererServices = makeRendererServices
         self.makeDefuddleExtractor = makeDefuddleExtractor
         self.makeDaemonTransport = makeDaemonTransport
-        self.makeURLFetcher = makeURLFetcher
         self.makeTantivyRuntime = makeTantivyRuntime
     }
 }
@@ -116,16 +116,12 @@ public struct DaemonPluginCatalogFactories: Sendable {
 }
 
 /// Typed process services resolved once from the app process profile.
-public struct AppProcessRendererService: Sendable {
-    public init() {}
-}
-
 public struct AppProcessServices: Sendable {
     public let agentProvider: any AgentProviderServices
     public let extraction: any ExtractionServices
     public let queue: any QueueEngineClient
     public let transport: DaemonTransportServices
-    public let renderer: any Sendable
+    public let renderer: any RendererServices
 
     public static func resolve(from profile: BootedProfile) async throws -> AppProcessServices {
         AppProcessServices(
@@ -222,14 +218,17 @@ public final class AppProcessProfileOwner {
         extraction: any ExtractionServices,
         queue: any QueueEngineClient,
         transport: DaemonTransportServices,
-        renderer: any Sendable
+        renderer: any RendererServices
     ) {
         self.init(factories: ProcessPluginCatalogFactories(
             makeAgentProvider: { ProcessRuntimeLease(service: agentProvider) {} },
             makeExtraction: { ProcessRuntimeLease(service: extraction) {} },
             makeQueue: { ProcessRuntimeLease(service: queue) {} },
             makeTransport: { ProcessRuntimeLease(service: transport) {} },
-            makeRenderer: { ProcessRuntimeLease(service: renderer) {} }))
+            makeRenderer: { ProcessRuntimeLease(service: renderer) {} },
+            makeEmbeddings: {
+                ProcessRuntimeLease(service: .unavailable(identifier: "unavailable-fixture"), dispose: {})
+            }))
     }
 
     public func start() {
@@ -374,6 +373,11 @@ public actor DaemonProcessProfileOwner {
                     makeLocalExtractor: makeLocalExtractor)
                     .assemble()
                 return ProcessRuntimeLease(service: handle.services) { try await handle.dispose() }
+            },
+            makeEmbeddings: {
+                ProcessRuntimeLease(
+                    service: .unavailable(identifier: "unavailable-daemon"),
+                    dispose: {})
             })
         let processCatalog = try ProcessPluginCatalog.build(factories: processFactories)
         let childCatalog = try DaemonPluginCatalog.build(factories: .init(base: .init(
@@ -624,11 +628,15 @@ public enum ProcessRuntimePlugins {
     public static let queueID = PluginID("process.queue")
     public static let transportID = PluginID("process.transport")
     public static let rendererID = PluginID("process.renderer")
+    public static let embeddingsID = PluginID("process.embeddings")
+    public static let urlFetchProviderID = PluginID("process.integration.url-fetch-provider")
+    public static let zoteroClientProviderID = PluginID("process.integration.zotero-client-provider")
 
     public static func definitions(_ factories: ProcessPluginCatalogFactories) -> [PluginDefinition] {
         var definitions = [
             definition(id: agentProviderID, key: ProcessServiceKeys.agentProvider, factory: factories.makeAgentProvider),
             definition(id: extractionID, key: ProcessServiceKeys.extraction, factory: factories.makeExtraction),
+            definition(id: embeddingsID, key: ProcessServiceKeys.embeddings, factory: factories.makeEmbeddings),
         ]
         if let factory = factories.makeQueue {
             definitions.append(definition(id: queueID, key: ProcessServiceKeys.queue, factory: factory))
@@ -638,6 +646,18 @@ public enum ProcessRuntimePlugins {
         }
         if let factory = factories.makeRenderer {
             definitions.append(definition(id: rendererID, key: ProcessServiceKeys.renderer, factory: factory))
+        }
+        if let factory = factories.makeURLFetchProvider {
+            definitions.append(definition(
+                id: urlFetchProviderID,
+                key: ProcessServiceKeys.urlFetchProvider,
+                factory: factory))
+        }
+        if let factory = factories.makeZoteroClientProvider {
+            definitions.append(definition(
+                id: zoteroClientProviderID,
+                key: ProcessServiceKeys.zoteroClientProvider,
+                factory: factory))
         }
         return definitions
     }
@@ -673,9 +693,9 @@ public enum AppPluginCatalog {
         var definitions = baseDefinitions(factories.base)
         definitions.append(contentsOf: [
             DefuddleExtractionPlugin.definition(makeExtractor: factories.makeDefuddleExtractor),
-            RendererServicesPlugin.definition(makeServices: factories.makeRendererServices),
+            RendererServicesPlugin.definition,
             DaemonTransportPlugin.definition(makeServices: factories.makeDaemonTransport),
-            URLFetchIntegrationPlugin.definition(makeFetcher: factories.makeURLFetcher),
+            URLFetchIntegrationPlugin.definition,
         ])
         definitions.append(TantivySearchPlugin.definition(makeRuntime: factories.makeTantivyRuntime))
         definitions.append(contentsOf: additionalDefinitions)
@@ -725,10 +745,7 @@ private func baseDefinitions(_ factories: BasePluginCatalogFactories) -> [Plugin
         ExtractionPlugin.definition,
         Pdf2mdExtractionPlugin.definition(makeExtractor: factories.makePDFExtractor),
         SearchPlugin.definition,
-        EmbeddingsSearchPlugin.definition(
-            configure: factories.configureEmbeddings,
-            selectedIdentifier: factories.selectedEmbeddingIdentifier,
-            isAvailable: factories.embeddingsAvailable),
+        EmbeddingsSearchPlugin.definition,
         RenderersPlugin.definition,
         TransportPlugin.definition,
         IntegrationsPlugin.definition,

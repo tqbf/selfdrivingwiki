@@ -98,7 +98,7 @@ struct DaemonProfileBootTests {
         ])
         #expect(Set(PerWikiRuntimePlugin.definition.dependencies.map(\.descriptor.label)) == [
             "wiki.store",
-            "wiki.store.read-pool",
+            "wiki.store.read-service",
             "process.agent-provider",
             "process.extraction",
             "wiki.agent-loop",

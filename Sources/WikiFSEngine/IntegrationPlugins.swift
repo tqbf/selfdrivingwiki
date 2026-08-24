@@ -62,51 +62,38 @@ public struct ZoteroIntegrationConfig: PluginConfig, Equatable {
 }
 
 public enum ZoteroIntegrationPlugin {
-    public typealias Factory = @Sendable (_ apiBaseURL: URL) async throws -> any Sendable
-
     public static let id = PluginID("wiki.integration.zotero")
     public static let capabilityID = IntegrationCapabilityID("zotero")
 
-    public static func definition(makeClient: @escaping Factory) -> PluginDefinition {
-        PluginDefinition(
-            id: id,
-            label: "Zotero integration adapter",
-            dependencies: [ServiceDependency(IntegrationServiceKeys.capabilities)],
-            config: ZoteroIntegrationConfig.self
-        ) { config in
-            try ComponentDefinition(
-                label: "wiki.integration.zotero",
-                dependencies: [ServiceDependency(IntegrationServiceKeys.capabilities)]
-            ) { activation in
-                let registry = try await activation.require(IntegrationServiceKeys.capabilities)
-                // Config validation guarantees this conversion before activation.
-                guard let baseURL = URL(string: config.apiBaseURL) else {
-                    throw CordisFailure("validated Zotero API base URL became invalid")
-                }
-                let registration = try await registry.register(RegisteredIntegrationCapability(
-                    id: capabilityID,
-                    makeEntryPoint: { try await makeClient(baseURL) }))
-                _ = try await activation.effect { _ in
-                    await registration.dispose()
-                }
+    public static let definition = PluginDefinition(
+        id: id,
+        label: "Zotero integration adapter",
+        dependencies: [
+            ServiceDependency(IntegrationServiceKeys.capabilities),
+            ServiceDependency(ProcessServiceKeys.zoteroClientProvider),
+        ],
+        config: ZoteroIntegrationConfig.self
+    ) { config in
+        try ComponentDefinition(
+            label: "wiki.integration.zotero",
+            dependencies: [
+                ServiceDependency(IntegrationServiceKeys.capabilities),
+                ServiceDependency(ProcessServiceKeys.zoteroClientProvider),
+            ]
+        ) { activation in
+            let registry = try await activation.require(IntegrationServiceKeys.capabilities)
+            let clientProvider = try await activation.require(ProcessServiceKeys.zoteroClientProvider)
+            // Config validation guarantees this conversion before activation.
+            guard let baseURL = URL(string: config.apiBaseURL) else {
+                throw CordisFailure("validated Zotero API base URL became invalid")
+            }
+            let registration = try await registry.register(RegisteredIntegrationCapability(
+                id: capabilityID,
+                makeEntryPoint: { .zotero(try clientProvider.client(apiBaseURL: baseURL)) }))
+            _ = try await activation.effect { _ in
+                await registration.dispose()
             }
         }
-    }
-}
-
-public enum PodcastIntegrationPlugin {
-    public static let id = PluginID("wiki.integration.podcast")
-    public static let capabilityID = IntegrationCapabilityID("podcast")
-
-    public static func definition(
-        makeIngestion: @escaping RegisteredIntegrationCapability.Factory
-    ) -> PluginDefinition {
-        capabilityDefinition(
-            pluginID: id,
-            label: "Podcast ingestion adapter",
-            componentLabel: "wiki.integration.podcast",
-            capabilityID: capabilityID,
-            factory: makeIngestion)
     }
 }
 
@@ -114,38 +101,26 @@ public enum URLFetchIntegrationPlugin {
     public static let id = PluginID("wiki.integration.url-fetch")
     public static let capabilityID = IntegrationCapabilityID("url-fetch")
 
-    public static func definition(
-        makeFetcher: @escaping RegisteredIntegrationCapability.Factory
-    ) -> PluginDefinition {
-        capabilityDefinition(
-            pluginID: id,
-            label: "URL fetch integration adapter",
-            componentLabel: "wiki.integration.url-fetch",
-            capabilityID: capabilityID,
-            factory: makeFetcher)
-    }
-}
-
-private func capabilityDefinition(
-    pluginID: PluginID,
-    label: String,
-    componentLabel: String,
-    capabilityID: IntegrationCapabilityID,
-    factory: @escaping RegisteredIntegrationCapability.Factory
-) -> PluginDefinition {
-    PluginDefinition(
-        id: pluginID,
-        label: label,
-        dependencies: [ServiceDependency(IntegrationServiceKeys.capabilities)]
+    public static let definition = PluginDefinition(
+        id: id,
+        label: "URL fetch integration adapter",
+        dependencies: [
+            ServiceDependency(IntegrationServiceKeys.capabilities),
+            ServiceDependency(ProcessServiceKeys.urlFetchProvider),
+        ]
     ) {
         try ComponentDefinition(
-            label: componentLabel,
-            dependencies: [ServiceDependency(IntegrationServiceKeys.capabilities)]
+            label: "wiki.integration.url-fetch",
+            dependencies: [
+                ServiceDependency(IntegrationServiceKeys.capabilities),
+                ServiceDependency(ProcessServiceKeys.urlFetchProvider),
+            ]
         ) { activation in
             let registry = try await activation.require(IntegrationServiceKeys.capabilities)
+            let fetchProvider = try await activation.require(ProcessServiceKeys.urlFetchProvider)
             let registration = try await registry.register(RegisteredIntegrationCapability(
                 id: capabilityID,
-                makeEntryPoint: factory))
+                makeEntryPoint: { .urlFetch(try await fetchProvider.fetcher()) }))
             _ = try await activation.effect { _ in
                 await registration.dispose()
             }

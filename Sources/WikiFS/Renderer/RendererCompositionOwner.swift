@@ -328,6 +328,27 @@ final class AppProcessPluginCatalog {
                     return ProcessRuntimeLease(service: rendererOwner.services) {
                         await rendererOwner.shutdown()
                     }
+                },
+                makeEmbeddings: {
+                    ProcessRuntimeLease(
+                        service: EmbeddingsSearchProvider(
+                            configure: { await EmbeddingService.configure() },
+                            selectedIdentifier: { EmbeddingService.selectedEmbedderIdentifier() },
+                            isAvailable: { EmbeddingService.isAvailable }),
+                        dispose: {})
+                },
+                makeURLFetchProvider: {
+                    ProcessRuntimeLease(
+                        service: URLFetchProvider(makeFetcher: { URLSessionFetcher() }),
+                        dispose: {})
+                },
+                makeZoteroClientProvider: {
+                    ProcessRuntimeLease(
+                        service: ZoteroClientProvider(
+                            readConfiguration: { ZoteroConfig.load(from: containerDirectory) },
+                            readCredential: { KeychainZoteroCredentialStore().apiKey() },
+                            makeFetcher: { URLSessionZoteroFetcher() }),
+                        dispose: {})
                 }), homeDirectory: containerDirectory)
     }
 

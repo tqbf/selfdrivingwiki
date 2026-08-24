@@ -16,21 +16,12 @@ public struct RendererProviderID: Hashable, RawRepresentable, Sendable, CustomSt
 }
 
 public struct RegisteredRendererProvider: Sendable {
-    public typealias Factory = @Sendable () async throws -> any Sendable
-
     public let id: RendererProviderID
-    private let makeValue: Factory
+    public let services: any RendererServices
 
-    public init<Value: Sendable>(
-        id: RendererProviderID,
-        makeValue: @escaping @Sendable () async throws -> Value
-    ) {
+    public init(id: RendererProviderID, services: any RendererServices) {
         self.id = id
-        self.makeValue = makeValue
-    }
-
-    public func value() async throws -> any Sendable {
-        try await makeValue()
+        self.services = services
     }
 }
 

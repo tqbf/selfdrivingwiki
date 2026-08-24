@@ -70,6 +70,13 @@ public struct EmbeddingsSearchProvider: Sendable {
     public var isAvailable: Bool {
         availabilityOperation()
     }
+
+    public static func unavailable(identifier: String) -> EmbeddingsSearchProvider {
+        EmbeddingsSearchProvider(
+            configure: {},
+            selectedIdentifier: { identifier },
+            isAvailable: { false })
+    }
 }
 
 public enum SearchProviderAdapter: Sendable {

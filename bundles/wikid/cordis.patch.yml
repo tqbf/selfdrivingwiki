@@ -5,3 +5,6 @@ entries:
   - id: process-extraction
     plugin: process.extraction
     config: { _scope: process }
+  - id: process-embeddings
+    plugin: process.embeddings
+    config: { _scope: process }

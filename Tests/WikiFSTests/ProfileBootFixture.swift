@@ -42,10 +42,8 @@ enum ProfileBootFixture {
         return try AppPluginCatalog.build(
             factories: AppPluginCatalogFactories(
                 base: baseFactories,
-                makeRendererServices: { ProfileRendererServices() },
                 makeDefuddleExtractor: { ProfileHTMLExtractor() },
-                makeDaemonTransport: { fixtureTransportServices() },
-                makeURLFetcher: { ProfileIntegrationEntryPoint() }),
+                makeDaemonTransport: { fixtureTransportServices() }),
             additionalDefinitions: additionalDefinitions)
     }
 
@@ -67,7 +65,20 @@ enum ProfileBootFixture {
             return ProcessRuntimeLease(service: services) { await services.stop() }
         } : nil
         let rendererFactory: ProcessPluginCatalogFactories.RendererFactory? = includeAppServices ? { @Sendable in
-            ProcessRuntimeLease<any Sendable>(service: ProfileRendererServices()) { await recorder.record() }
+            ProcessRuntimeLease<any RendererServices>(service: UnavailableRendererServices()) { await recorder.record() }
+        } : nil
+        let urlFetchProviderFactory: ProcessPluginCatalogFactories.URLFetchProviderFactory? = includeAppServices ? { @Sendable in
+            ProcessRuntimeLease(service: URLFetchProvider(makeFetcher: { URLSessionFetcher() })) {
+                await recorder.record()
+            }
+        } : nil
+        let zoteroClientProviderFactory: ProcessPluginCatalogFactories.ZoteroClientProviderFactory? = includeAppServices ? { @Sendable in
+            ProcessRuntimeLease(service: ZoteroClientProvider(
+                readConfiguration: { ZoteroConfig() },
+                readCredential: { nil },
+                makeFetcher: { URLSessionZoteroFetcher() })) {
+                    await recorder.record()
+                }
         } : nil
         return try ProcessPluginCatalog.build(factories: ProcessPluginCatalogFactories(
             makeAgentProvider: {
@@ -78,7 +89,12 @@ enum ProfileBootFixture {
             },
             makeQueue: queueFactory,
             makeTransport: transportFactory,
-            makeRenderer: rendererFactory))
+            makeRenderer: rendererFactory,
+            makeEmbeddings: {
+                ProcessRuntimeLease(service: .unavailable(identifier: "unavailable-fixture"), dispose: {})
+            },
+            makeURLFetchProvider: urlFetchProviderFactory,
+            makeZoteroClientProvider: zoteroClientProviderFactory))
     }
 
     static func processEntries(includeAppServices: Bool) throws -> [Entry] {
@@ -147,10 +163,7 @@ enum ProfileBootFixture {
     private static var baseFactories: BasePluginCatalogFactories {
         BasePluginCatalogFactories(
             agentProviderServices: UnavailableAgentProviderServices(),
-            makePDFExtractor: { ProfilePDFExtractor() },
-            configureEmbeddings: {},
-            selectedEmbeddingIdentifier: { "fixture-embedding" },
-            embeddingsAvailable: { false })
+            makePDFExtractor: { ProfilePDFExtractor() })
     }
 
     private static var launcherFactoryDefinition: PluginDefinition {
@@ -258,7 +271,6 @@ private struct ProfileHTMLExtractor: HtmlMarkdownExtractor {
     }
 }
 
-private struct ProfileRendererServices: Sendable {}
 private struct ProfileIntegrationEntryPoint: Sendable {}
 
 private func makeProfileQueueEngine() throws -> QueueEngine {

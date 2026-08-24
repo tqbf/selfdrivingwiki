@@ -240,10 +240,8 @@ struct WikiFSApp: App {
                     base: BasePluginCatalogFactories(
                         agentProviderServices: providerServices,
                         makePDFExtractor: { await MainActor.run { LocalPdf2MarkdownExtractor() } }),
-                    makeRendererServices: { rendererOwner.services },
                     makeDefuddleExtractor: { await MainActor.run { LocalDefuddleExtractor() } },
-                    makeDaemonTransport: { transportOwner.services },
-                    makeURLFetcher: { URLSessionRequestFetcher() }))
+                    makeDaemonTransport: { transportOwner.services }))
             } catch {
                 preconditionFailure("App profile catalog construction failed: \(error)")
             }
