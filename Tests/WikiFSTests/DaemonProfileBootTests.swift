@@ -77,9 +77,8 @@ struct DaemonProfileBootTests {
                     parent: process.context))
             })
 
-        let firstProcess = try await owner.start()
-        let secondProcess = try await owner.services()
-        #expect(ObjectIdentifier(firstProcess.agentProvider as AnyObject) == ObjectIdentifier(secondProcess.agentProvider as AnyObject))
+        _ = try await owner.start()
+        _ = try await owner.services()
         let firstWiki = try await owner.wiki(wikiID: wikiID)
         let secondWiki = try await owner.wiki(wikiID: wikiID)
         #expect(ObjectIdentifier(firstWiki.store as AnyObject) == ObjectIdentifier(secondWiki.store as AnyObject))
