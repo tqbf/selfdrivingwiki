@@ -46,7 +46,9 @@ enum JSONCanvasHostActionRouter {
         }
     }
 
-    static func handler(for store: WikiStoreModel) -> (JSONCanvasHostAction) -> Void {
+    static func handler(
+        for store: WikiStoreModel
+    ) -> @MainActor @Sendable (JSONCanvasHostAction) -> Void {
         { action in route(action, store: store) }
     }
 

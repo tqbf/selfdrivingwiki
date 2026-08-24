@@ -1,7 +1,9 @@
 #if os(macOS)
+import Cordis
 import CordisLoader
 import Foundation
 import Testing
+import WikiFSCore
 @testable import WikiFSEngine
 
 @Suite("Cordis boot integration", .serialized, .timeLimit(.minutes(1)))
@@ -34,25 +36,43 @@ struct CordisBootIntegrationTests {
             catalog: try ProfileBootFixture.processCatalog(
                 includeAppServices: false,
                 recorder: processDisposals),
-            layers: [PatchFile(entries: ProfileBootFixture.processEntries(includeAppServices: false))]))
+            layers: [PatchFile(entries: ProfileBootFixture.processEntries(includeAppServices: false))],
+            descriptor: .process(.daemon)))
         let first = try await CordisBoot.boot(.init(
             catalog: try ProfileBootFixture.daemonCatalog(),
             layers: [PatchFile(entries: firstEntries)],
-            parent: process.context))
+            parent: process.context,
+            descriptor: .wiki(WikiID(rawValue: "config-swap-test"))))
         let second = try await CordisBoot.boot(.init(
             catalog: try ProfileBootFixture.daemonCatalog(),
             layers: [PatchFile(entries: secondEntries)],
-            parent: process.context))
-        let firstStore = try #require(try await first.context.find(StoreServiceKeys.store))
-        let secondStore = try #require(try await second.context.find(StoreServiceKeys.store))
+            parent: process.context,
+            descriptor: .wiki(WikiID(rawValue: "config-swap-test"))))
+        let firstStore: any WikiStore = try #require(
+            try await first.context.find(StoreServiceKeys.store))
+        let secondStore: any WikiStore = try #require(
+            try await second.context.find(StoreServiceKeys.store))
+
+        let processScope = try await process.context.scopeDiagnostics()
+        let firstScope = try await first.context.scopeDiagnostics()
+        let secondScope = try await second.context.scopeDiagnostics()
+        #expect(processScope.descriptor == .process(.daemon))
+        #expect(firstScope.parentContextID == process.context.id)
+        #expect(firstScope.parentDescriptor == .process(.daemon))
+        #expect(firstScope.descriptor == .wiki(WikiID(rawValue: "config-swap-test")))
+        #expect(firstScope.contextID != secondScope.contextID)
 
         #expect(ObjectIdentifier(firstStore as AnyObject) != ObjectIdentifier(secondStore as AnyObject))
         let page = try firstStore.createPage(title: "First profile only")
-        #expect(try firstStore.listPages(sortBy: .lastUpdated).map(\.id).contains(page.id))
-        #expect(!((try secondStore.listPages(sortBy: .lastUpdated)).map(\.id).contains(page.id)))
+        #expect(try firstStore.listPages(sortBy: .lastUpdated).map { $0.id }.contains(page.id))
+        #expect(!(try secondStore.listPages(sortBy: .lastUpdated).map { $0.id }.contains(page.id)))
 
         try await second.shutdown()
         try await first.shutdown()
+        let disposedFirst = try await first.context.scopeDiagnostics()
+        #expect(disposedFirst.lifecycle == ScopeLifecycleState.disposed)
+        #expect(disposedFirst.activeRegistrationCount == 0)
+        #expect((try await process.context.scopeDiagnostics()).activeChildCount == 0)
         try await process.shutdown()
     }
 }

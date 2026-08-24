@@ -63,12 +63,9 @@ import WikiFSTypes
             sourceBytes: Data("%PDF".utf8),
             pdfQuote: "a retained quote",
             htmlSource: nil,
-            mermaidMarkdown: nil,
+            mermaidProjection: nil,
             mediaTarget: nil,
-            selection: nil,
-            store: WikiStoreModel(store: try GRDBWikiStore(
-                databaseURL: URL.temporaryDirectory.appending(path: "renderer-quote-\(UUID().uuidString).sqlite"))),
-            readerZoom: .constant(1))
+            jsonCanvasHostAction: { _ in })
 
         #expect(state.selection == .rendered)
         #expect(state.pinnedRenderer == descriptor.reference)
@@ -130,10 +127,14 @@ import WikiFSTypes
 
     @Test("Planner maps a complete JSON Canvas document to the native built-in")
     func plannerMatchesJSONCanvas() throws {
-        let source = fixtureSource(filename: "diagram.canvas", ext: "canvas", mimeType: "application/json", byteSize: 90)
         let data = Data("""
         {"nodes":[{"id":"note","type":"text","x":0,"y":0,"width":120,"height":60,"text":"Note"}],"edges":[]}
         """.utf8)
+        let source = fixtureSource(
+            filename: "diagram.canvas",
+            ext: "canvas",
+            mimeType: "application/json",
+            byteSize: data.count)
 
         let id = try SourceRendererPresentationPlanner.plannedBuiltInRenderer(
             for: source,
@@ -230,12 +231,9 @@ import WikiFSTypes
             sourceBytes: nil,
             pdfQuote: nil,
             htmlSource: nil,
-            mermaidMarkdown: nil,
+            mermaidProjection: nil,
             mediaTarget: nil,
-            selection: nil,
-            store: WikiStoreModel(store: try GRDBWikiStore(
-                databaseURL: URL.temporaryDirectory.appending(path: "renderer-factory-\(UUID().uuidString).sqlite"))),
-            readerZoom: .constant(1))
+            jsonCanvasHostAction: { _ in })
         #expect(BuiltInRendererFactoryMap.makeView(for: descriptor, inputs: inputs) == nil)
     }
 
@@ -425,12 +423,9 @@ import WikiFSTypes
             sourceBytes: sourceBytes,
             pdfQuote: nil,
             htmlSource: nil,
-            mermaidMarkdown: nil,
+            mermaidProjection: nil,
             mediaTarget: nil,
-            selection: nil,
-            store: WikiStoreModel(store: try GRDBWikiStore(
-                databaseURL: URL.temporaryDirectory.appending(path: "json-canvas-renderer-\(UUID().uuidString).sqlite"))),
-            readerZoom: .constant(1))
+            jsonCanvasHostAction: { _ in })
     }
 }
 

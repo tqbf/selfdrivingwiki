@@ -209,15 +209,48 @@ public enum ProfileLifetimeError: Error, Equatable, Sendable {
 /// Normal application code can shut the profile down but cannot access its context.
 public actor ProfileLifetime {
     private var profile: BootedProfile?
+    private var invariantCoordinatorTask: Task<RuntimeInvariantCoordinator?, Never>?
+    private var invariantCoordinator: RuntimeInvariantCoordinator?
     private var shutdownStarted = false
 
     internal init(profile: BootedProfile) {
         self.profile = profile
     }
 
+    private func diagnosticsCoordinator() async -> RuntimeInvariantCoordinator? {
+        if let invariantCoordinator { return invariantCoordinator }
+        guard !shutdownStarted, let profile else { return nil }
+        if invariantCoordinatorTask == nil {
+            let context = profile.context
+            invariantCoordinatorTask = Task {
+                do {
+                    guard case .process? = try await context.scopeDiagnostics().descriptor else { return nil }
+                    let coordinator = try RuntimeInvariantCoordinator(
+                        processContext: context,
+                        sink: DebugLogInvariantViolationSink())
+                    try await coordinator.start()
+                    return coordinator
+                } catch {
+                    DebugLog.store("Runtime invariant startup failed: \(error)")
+                    return nil
+                }
+            }
+        }
+        guard let task = invariantCoordinatorTask else { return nil }
+        let coordinator = await task.value
+        guard !shutdownStarted, self.profile?.context.id == profile.context.id else {
+            await coordinator?.shutdown()
+            return nil
+        }
+        invariantCoordinator = coordinator
+        return coordinator
+    }
+
     internal func bootChild(
+        wikiID: WikiID,
         catalog: PluginCatalog,
-        layers: [PatchFile]
+        layers: [PatchFile],
+        host: WikiScopeHostAssociation = .app
     ) async throws -> AppServices {
         guard !shutdownStarted, let profile else {
             throw ProfileLifetimeError.shutdownStarted
@@ -225,13 +258,24 @@ public actor ProfileLifetime {
         let child = try await CordisBoot.boot(.init(
             catalog: catalog,
             layers: layers,
-            parent: profile.context))
+            parent: profile.context,
+            descriptor: .wiki(wikiID)))
         guard !shutdownStarted else {
             try await child.shutdown()
             throw ProfileLifetimeError.shutdownStarted
         }
         do {
-            return try await AppServices.resolve(from: child)
+            let services = try await AppServices.resolve(from: child)
+            if let coordinator = await diagnosticsCoordinator() {
+                try await coordinator.observeWiki(
+                    profile: child,
+                    profileWikiID: wikiID,
+                    store: services.store,
+                    databaseWikiID: wikiID,
+                    host: host)
+            }
+            guard !shutdownStarted else { throw ProfileLifetimeError.shutdownStarted }
+            return services
         } catch {
             do { try await child.shutdown() } catch let cleanupError {
                 DebugLog.store("Child profile cleanup after resolution failure failed: \(cleanupError)")
@@ -240,11 +284,25 @@ public actor ProfileLifetime {
         }
     }
 
+    internal func scopeDiagnostics() async throws -> ScopeDiagnosticsSnapshot {
+        guard let profile else { throw ProfileLifetimeError.shutdownStarted }
+        return try await profile.context.scopeDiagnostics()
+    }
+
     public func shutdown() async throws {
         guard !shutdownStarted else { return }
         shutdownStarted = true
         let ownedProfile = profile
+        let coordinatorTask = invariantCoordinatorTask
+        let coordinator = invariantCoordinator
         profile = nil
+        invariantCoordinatorTask = nil
+        invariantCoordinator = nil
+        if let coordinator {
+            await coordinator.shutdown()
+        } else if let coordinatorTask {
+            await coordinatorTask.value?.shutdown()
+        }
         try await ownedProfile?.shutdown()
     }
 }
@@ -277,7 +335,8 @@ public final class AppProcessProfileOwner {
         self.init {
             try await CordisBoot.boot(.init(
                 catalog: try ProcessPluginCatalog.build(factories: factories),
-                layers: [PatchFile(entries: try ProductionProfiles.appProcess(homeDirectory: homeDirectory))]))
+                layers: [PatchFile(entries: try ProductionProfiles.appProcess(homeDirectory: homeDirectory))],
+                descriptor: .process(.app)))
         }
     }
 
@@ -373,8 +432,14 @@ public actor DaemonProcessProfileOwner {
         var services: AppServices?
     }
 
-    private var startupTask: Task<(BootedProfile, DaemonProcessServices), Error>?
+    private typealias ProcessStartup = (
+        profile: BootedProfile,
+        services: DaemonProcessServices,
+        coordinator: RuntimeInvariantCoordinator?)
+
+    private var startupTask: Task<ProcessStartup, Error>?
     private var process: (BootedProfile, DaemonProcessServices)?
+    private var invariantCoordinator: RuntimeInvariantCoordinator?
     private var wikis: [WikiID: WikiLifecycle] = [:]
     private var shutdownStarted = false
 
@@ -432,7 +497,8 @@ public actor DaemonProcessProfileOwner {
             boot: {
                 try await CordisBoot.boot(.init(
                     catalog: processCatalog,
-                    layers: [PatchFile(entries: try ProductionProfiles.daemonProcess(homeDirectory: containerDirectory))]))
+                    layers: [PatchFile(entries: try ProductionProfiles.daemonProcess(homeDirectory: containerDirectory))],
+                    descriptor: .process(.daemon)))
             },
             bootWiki: { wikiID, processProfile in
                 let databaseURL = containerDirectory.appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false)
@@ -440,7 +506,8 @@ public actor DaemonProcessProfileOwner {
                     catalog: childCatalog,
                     layers: [PatchFile(entries: try ProductionProfiles.daemon(
                         databaseURL: databaseURL, wikiID: wikiID, homeDirectory: containerDirectory))],
-                    parent: processProfile.context))
+                    parent: processProfile.context,
+                    descriptor: .wiki(wikiID)))
             })
     }
 
@@ -453,7 +520,19 @@ public actor DaemonProcessProfileOwner {
             startupTask = Task {
                 let profile = try await boot()
                 do {
-                    return (profile, try await DaemonProcessServices.resolve(from: profile))
+                    let services = try await DaemonProcessServices.resolve(from: profile)
+                    let coordinator: RuntimeInvariantCoordinator?
+                    do {
+                        let candidate = try RuntimeInvariantCoordinator(
+                            processContext: profile.context,
+                            sink: DebugLogInvariantViolationSink())
+                        try await candidate.start()
+                        coordinator = candidate
+                    } catch {
+                        DebugLog.store("Daemon runtime invariant startup failed: \(error)")
+                        coordinator = nil
+                    }
+                    return (profile, services, coordinator)
                 } catch {
                     do { try await profile.shutdown() } catch {
                         DebugLog.store("Daemon process profile cleanup after startup failure failed: \(error)")
@@ -465,11 +544,13 @@ public actor DaemonProcessProfileOwner {
         guard let startupTask else { throw CancellationError() }
         let resolved = try await startupTask.value
         guard !shutdownStarted else {
-            try await resolved.0.shutdown()
+            await resolved.coordinator?.shutdown()
+            try await resolved.profile.shutdown()
             throw CancellationError()
         }
-        process = resolved
-        return resolved.1
+        process = (resolved.profile, resolved.services)
+        invariantCoordinator = resolved.coordinator
+        return resolved.services
     }
 
     public func services() async throws -> DaemonProcessServices {
@@ -486,10 +567,19 @@ public actor DaemonProcessProfileOwner {
         }
         if wikis[wikiID] == nil {
             let bootWiki = self.bootWiki
+            let coordinator = invariantCoordinator
             let task = Task {
                 let profile = try await bootWiki(wikiID, processProfile)
-                do { return try await AppServices.resolve(from: profile) }
-                catch {
+                do {
+                    let services = try await AppServices.resolve(from: profile)
+                    try await coordinator?.observeWiki(
+                        profile: profile,
+                        profileWikiID: wikiID,
+                        store: services.store,
+                        databaseWikiID: wikiID,
+                        host: .daemon(cacheKey: wikiID))
+                    return services
+                } catch {
                     do { try await profile.shutdown() } catch {
                         DebugLog.store("Daemon wiki profile cleanup after startup failure failed: \(error)")
                     }
@@ -548,6 +638,8 @@ public actor DaemonProcessProfileOwner {
                 }
             }
         }
+        await invariantCoordinator?.shutdown()
+        invariantCoordinator = nil
         if let profile = process?.0 {
             do { try await profile.shutdown() } catch {
                 DebugLog.store("Daemon process profile shutdown failed: \(error)")
@@ -555,7 +647,8 @@ public actor DaemonProcessProfileOwner {
         } else if let startupTask {
             do {
                 let result = try await startupTask.value
-                try await result.0.shutdown()
+                await result.coordinator?.shutdown()
+                try await result.profile.shutdown()
             } catch is CancellationError {
                 // Shutdown intentionally cancels unfinished process-profile boot.
             } catch {

@@ -69,10 +69,8 @@ enum BuiltInRendererFactoryMap {
         AnyView(Group {
             if let source = inputs.mermaidDiagramSource {
                 MermaidRendererView(source: source)
-            } else if let markdown = inputs.mermaidMarkdown {
-                WikiReaderView(markdown: markdown, currentSelection: inputs.selection, store: inputs.store)
-                    .zoomShortcuts(inputs.readerZoom)
-                    .zoomScroll(inputs.readerZoom)
+            } else if let mermaidProjection = inputs.mermaidProjection {
+                mermaidProjection
             } else {
                 ContentUnavailableView {
                     Label("No Diagram", systemImage: "flowchart.fill")
@@ -104,7 +102,7 @@ enum BuiltInRendererFactoryMap {
             let document = try JSONCanvasDocument.decode(inputs.sourceBytes)
             return AnyView(JSONCanvasRendererView(
                 document: document,
-                onHostAction: JSONCanvasHostActionRouter.handler(for: inputs.store)))
+                onHostAction: inputs.jsonCanvasHostAction))
         } catch {
             DebugLog.tabs("BuiltInRendererFactoryMap: JSON Canvas decode failed: \(error)")
             return nil
@@ -117,33 +115,27 @@ struct BuiltInRendererFactoryInputs {
     let sourceBytes: Data?
     let pdfQuote: String?
     let htmlSource: String?
-    let mermaidMarkdown: String?
+    let mermaidProjection: AnyView?
     let mermaidDiagramSource: String?
     let mediaTarget: EmbedTarget?
-    let selection: WikiSelection?
-    let store: WikiStoreModel
-    let readerZoom: Binding<Double>
+    let jsonCanvasHostAction: @MainActor @Sendable (JSONCanvasHostAction) -> Void
 
     init(
         sourceBytes: Data?,
         pdfQuote: String?,
         htmlSource: String?,
-        mermaidMarkdown: String?,
+        mermaidProjection: AnyView?,
         mermaidDiagramSource: String? = nil,
         mediaTarget: EmbedTarget?,
-        selection: WikiSelection?,
-        store: WikiStoreModel,
-        readerZoom: Binding<Double>
+        jsonCanvasHostAction: @escaping @MainActor @Sendable (JSONCanvasHostAction) -> Void
     ) {
         self.sourceBytes = sourceBytes
         self.pdfQuote = pdfQuote
         self.htmlSource = htmlSource
-        self.mermaidMarkdown = mermaidMarkdown
+        self.mermaidProjection = mermaidProjection
         self.mermaidDiagramSource = mermaidDiagramSource
         self.mediaTarget = mediaTarget
-        self.selection = selection
-        self.store = store
-        self.readerZoom = readerZoom
+        self.jsonCanvasHostAction = jsonCanvasHostAction
     }
 }
 #endif

@@ -230,6 +230,8 @@ public enum CordisBoot {
         /// Optional process context whose services are inherited by this profile.
         /// Per-wiki profiles use a child so process services keep process lifetime.
         public var parent: CordisContext?
+        /// Immutable metadata installed when the context record is created.
+        public var descriptor: ScopeDescriptor?
         /// Supplies ambient facts (home path, app group id, wiki id) on the
         /// profile context before entries mount.
         public var configure: (@Sendable (CordisContext) async throws -> Void)?
@@ -238,18 +240,22 @@ public enum CordisBoot {
             catalog: PluginCatalog,
             layers: [PatchFile],
             parent: CordisContext? = nil,
+            descriptor: ScopeDescriptor? = nil,
             configure: (@Sendable (CordisContext) async throws -> Void)? = nil
         ) {
             self.catalog = catalog
             self.layers = layers
             self.parent = parent
+            self.descriptor = descriptor
             self.configure = configure
         }
     }
 
     public static func boot(_ options: Options) async throws -> BootedProfile {
         let context = if let parent = options.parent {
-            try await parent.child()
+            try await parent.child(descriptor: options.descriptor)
+        } else if let descriptor = options.descriptor {
+            try CordisContext(descriptor: descriptor)
         } else {
             CordisContext()
         }

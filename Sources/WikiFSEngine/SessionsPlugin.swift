@@ -139,6 +139,7 @@ extension AppProcessProfileOwner {
         let (lifetime, processServices) = try await readyComposition()
         let databaseURL = containerDirectory.appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false)
         let childServices = try await lifetime.bootChild(
+            wikiID: wikiID,
             catalog: catalog,
             layers: [PatchFile(entries: try ProductionProfiles.app(
                 databaseURL: databaseURL, wikiID: wikiID, homeDirectory: containerDirectory))])

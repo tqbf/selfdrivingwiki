@@ -1,4 +1,59 @@
 import Foundation
+import WikiFSTypes
+
+public enum ProcessScopeRole: String, Sendable, Equatable, CaseIterable {
+    case app
+    case daemon
+    case commandLine
+    case standalone
+}
+
+/// Immutable diagnostic metadata for a Cordis context.
+/// `ContextID`, not this value, remains the runtime identity.
+public enum ScopeDescriptor: Sendable, Equatable {
+    case process(ProcessScopeRole)
+    case wiki(WikiID)
+}
+
+public enum ScopeLifecycleState: Sendable, Equatable {
+    case live
+    case disposing
+    case disposed
+}
+
+/// An immutable view of actor-owned context metadata.
+public struct ScopeDiagnosticsSnapshot: Sendable, Equatable {
+    public let contextID: ContextID
+    public let parentContextID: ContextID?
+    public let descriptor: ScopeDescriptor?
+    public let parentDescriptor: ScopeDescriptor?
+    public let lifecycle: ScopeLifecycleState
+    public let activeChildCount: Int
+    public let activeRegistrationCount: Int
+
+    internal init(
+        contextID: ContextID,
+        parentContextID: ContextID?,
+        descriptor: ScopeDescriptor?,
+        parentDescriptor: ScopeDescriptor?,
+        lifecycle: ScopeLifecycleState,
+        activeChildCount: Int,
+        activeRegistrationCount: Int
+    ) {
+        self.contextID = contextID
+        self.parentContextID = parentContextID
+        self.descriptor = descriptor
+        self.parentDescriptor = parentDescriptor
+        self.lifecycle = lifecycle
+        self.activeChildCount = activeChildCount
+        self.activeRegistrationCount = activeRegistrationCount
+    }
+}
+
+public enum ScopeDescriptorError: Error, Sendable, Equatable {
+    case processRequiresRoot
+    case wikiRequiresProcessParent
+}
 
 /// A `Sendable` handle for one actor-owned runtime context.
 public struct CordisContext: Sendable {
@@ -6,7 +61,16 @@ public struct CordisContext: Sendable {
     internal let runtime: CordisRuntime
 
     public init() {
-        let runtime = CordisRuntime()
+        let runtime = CordisRuntime(descriptor: nil)
+        self.id = runtime.rootContextID
+        self.runtime = runtime
+    }
+
+    public init(descriptor: ScopeDescriptor) throws {
+        guard case .process = descriptor else {
+            throw ScopeDescriptorError.wikiRequiresProcessParent
+        }
+        let runtime = CordisRuntime(descriptor: descriptor)
         self.id = runtime.rootContextID
         self.runtime = runtime
     }
@@ -17,8 +81,16 @@ public struct CordisContext: Sendable {
     }
 
     public func child() async throws -> CordisContext {
-        let childID = try await runtime.createChild(parentID: id)
+        try await child(descriptor: nil)
+    }
+
+    public func child(descriptor: ScopeDescriptor?) async throws -> CordisContext {
+        let childID = try await runtime.createChild(parentID: id, descriptor: descriptor)
         return CordisContext(id: childID, runtime: runtime)
+    }
+
+    public func scopeDiagnostics() async throws -> ScopeDiagnosticsSnapshot {
+        try await runtime.scopeDiagnostics(contextID: id)
     }
 
     public func find<Value: Sendable>(_ key: ServiceKey<Value>) async throws -> Value? {
