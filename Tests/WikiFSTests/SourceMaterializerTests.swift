@@ -48,6 +48,63 @@ struct SourceMaterializerTests {
 
     // MARK: - AC.1: WebsiteMaterializer + store provenance
 
+    @Test func localWebsiteZoteroAndMarkdownFolderShareDetectorPolicy() async throws {
+        let pdfBytes = Data("%PDF-1.7".utf8)
+        let localURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("detector-policy-\(UUID().uuidString).txt")
+        try pdfBytes.write(to: localURL)
+        defer { try? FileManager.default.removeItem(at: localURL) }
+
+        let local = try await LocalFileMaterializer(fileURL: localURL).materialize()
+        #expect(local.mimeType == MimeType.pdf)
+        #expect(local.detectionResult.evidence.contains { $0.origin == .filenameExtension })
+
+        let website = try await WebsiteMaterializer(
+            rawInput: "https://example.com/report.txt",
+            fetcher: FakeFetcher(response: .init(
+                data: pdfBytes,
+                contentType: "text/plain",
+                finalURL: URL(string: "https://example.com/report.txt")!)))
+            .materialize()
+        #expect(website.mimeType == MimeType.pdf)
+        #expect(website.detectionHints.declaredMIME?.origin == .httpResponse)
+        #expect(website.detectionResult.conflicts.contains {
+            $0.conflictingEvidence.origin == .httpResponse
+        })
+
+        let zoteroDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("detector-zotero-\(UUID().uuidString)", isDirectory: true)
+        let attachmentDirectory = zoteroDirectory
+            .appendingPathComponent("storage", isDirectory: true)
+            .appendingPathComponent("DETECTOR", isDirectory: true)
+        try FileManager.default.createDirectory(at: attachmentDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: zoteroDirectory) }
+        try pdfBytes.write(to: attachmentDirectory.appendingPathComponent("report.txt"))
+        let zotero = try await ZoteroMaterializer(
+            attachment: .init(
+                key: "DETECTOR", parentItem: "PARENT", linkMode: "imported_file",
+                filename: "report.txt", contentType: "text/plain", title: nil),
+            parentItem: .init(
+                key: "PARENT", version: 1, itemType: "document",
+                title: "Report", creatorSummary: nil, date: nil),
+            zoteroDir: zoteroDirectory)
+            .materialize()
+        #expect(zotero.mimeType == MimeType.pdf)
+        #expect(zotero.detectionHints.declaredMIME?.origin == .zoteroMetadata)
+        #expect(zotero.detectionResult.conflicts.contains {
+            $0.conflictingEvidence.origin == .zoteroMetadata
+        })
+
+        let folder = try await MarkdownFolderMaterializer(
+            filename: "report.txt", data: pdfBytes, mimeType: "text/plain")
+            .materialize()
+        #expect(folder.mimeType == MimeType.pdf)
+        #expect(folder.detectionHints.declaredMIME?.origin == .trustedGenerated)
+        #expect(folder.detectionResult.conflicts.contains {
+            $0.conflictingEvidence.origin == .trustedGenerated
+        })
+    }
+
     @Test func websiteProviderRecordsOriginURL() async throws {
         let fetcher = FakeFetcher(response: htmlResponse(
             "<html><head><title>Example</title></head><body><p>Hi</p></body></html>",

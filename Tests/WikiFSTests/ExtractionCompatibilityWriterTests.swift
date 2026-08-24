@@ -43,6 +43,79 @@ struct ExtractionCompatibilityWriterTests {
         #expect(provenance.producer == .tool(.transcript))
     }
 
+    @Test func sourceCommandAddAndRefreshPreserveDetectionPolicy() async throws {
+        struct PDFAsTextFetcher: URLFetchService.URLResourceFetcher {
+            func fetch(_ url: URL) async throws -> URLFetchService.FetchResponse {
+                .init(
+                    data: Data("%PDF-1.7".utf8),
+                    contentType: "text/plain",
+                    finalURL: URL(string: "https://example.com/report.txt")!)
+            }
+        }
+
+        let store = try TestStoreFactory.inMemory()
+        _ = try await SourceCommand.runAddURL(
+            "https://example.com/report.txt",
+            allowDuplicateURL: false,
+            in: store,
+            fetcher: PDFAsTextFetcher())
+        let added = try #require(try store.listSources().first)
+        #expect(added.mimeType == MimeType.pdf)
+
+        try SourceCommand.persistRefreshMaterial(
+            .contentVersion(
+                data: Data("%PDF-1.7 refreshed".utf8),
+                detectionHints: .init(
+                    declaredMIME: .init("text/plain", origin: .httpResponse),
+                    filenameExtension: "txt"),
+                provenance: .init(
+                    agentName: "website", activityKind: "fetch",
+                    plan: "https://example.com/report.txt")),
+            sourceID: added.id,
+            in: store)
+        let refreshed = try store.getSource(id: added.id)
+        let activeVersion = try #require(try store.activeContentVersion(sourceID: added.id))
+        #expect(refreshed.mimeType == MimeType.pdf)
+        #expect(activeVersion.mimeType == MimeType.pdf)
+    }
+
+    @Test func GRDBAddAppendAndSnapshotImageRedetectAtFinalBoundary() throws {
+        let store = try TestStoreFactory.inMemory()
+        let pdfBytes = Data("%PDF-1.7".utf8)
+        let hints = ContentTypeDetectionHints(
+            declaredMIME: .init("text/plain", origin: .httpResponse),
+            filenameExtension: "txt")
+
+        let typed = try store.addSource(
+            filename: "typed.txt", data: pdfBytes,
+            detectionHints: hints, ingestMetadata: nil, provenance: nil,
+            role: .primary, originalPath: nil, activityID: nil,
+            resolvedDisplayName: nil)
+        #expect(typed.mimeType == MimeType.pdf)
+        #expect(try store.activeContentVersion(sourceID: typed.id)?.mimeType == MimeType.pdf)
+
+        let appended = try store.appendContentVersion(
+            sourceID: typed.id,
+            data: Data("%PDF-1.7 appended".utf8),
+            detectionHints: hints,
+            provenance: nil)
+        #expect(appended.mimeType == MimeType.pdf)
+        #expect(try store.getSource(id: typed.id).mimeType == MimeType.pdf)
+
+        let activityID = try store.ensureFetchActivity(provenance: .init(
+            agentName: "website", activityKind: "fetch",
+            plan: "https://example.com/page"))
+        let snapshot = try store.addSnapshotImage(
+            filename: "snapshot.txt", data: pdfBytes,
+            detectionHints: hints,
+            originalPath: "snapshot.txt",
+            sourceURL: URL(string: "https://example.com/snapshot.txt")!,
+            activityID: activityID,
+            role: .media)
+        #expect(snapshot.mimeType == MimeType.pdf)
+        #expect(try store.activeContentVersion(sourceID: snapshot.id)?.mimeType == MimeType.pdf)
+    }
+
     @Test func wikictlContentRefreshPreservesDeclaredMIMEHints() throws {
         let store = try TestStoreFactory.inMemory()
         let summary = try source(store)
