@@ -34,6 +34,28 @@ struct MimeTypeTests {
         #expect(MimeType.isText("application/octet-stream") == false)
     }
 
+    // MARK: - isSourceTextPresentable
+
+    @Test func sourceTextPresentationIncludesXML() {
+        #expect(MimeType.isSourceTextPresentable("text/xml"))
+        #expect(MimeType.isSourceTextPresentable("application/xml"))
+        #expect(MimeType.isSourceTextPresentable("image/svg+xml"))
+        #expect(MimeType.isSourceTextPresentable("Application/XML"))
+        #expect(MimeType.isSourceTextPresentable("IMAGE/SVG+XML"))
+    }
+
+    @Test func sourceTextPresentationIncludesOrdinaryText() {
+        #expect(MimeType.isSourceTextPresentable("text/plain"))
+        #expect(MimeType.isSourceTextPresentable("text/markdown"))
+    }
+
+    @Test func sourceTextPresentationRejectsNonTextContent() {
+        #expect(MimeType.isSourceTextPresentable(nil) == false)
+        #expect(MimeType.isSourceTextPresentable("application/pdf") == false)
+        #expect(MimeType.isSourceTextPresentable("application/json") == false)
+        #expect(MimeType.isSourceTextPresentable("image/jpeg") == false)
+    }
+
     // MARK: - isPDF (nil guard — already covered, included for symmetry)
 
     @Test func isPDFReturnsFalseForNil() {
