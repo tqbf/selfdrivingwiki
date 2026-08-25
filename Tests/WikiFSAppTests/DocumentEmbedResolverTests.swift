@@ -101,6 +101,37 @@ struct DocumentEmbedResolverTests {
         #expect(fragment == "Section")
     }
 
+    @Test func sourceLinksKeepLegacyExistenceTiersWithoutBroadeningEmbeds() throws {
+        let exactLink = try sourceLink("[[source:Report]]")
+        let looseLink = try sourceLink("[[source:My-Paper]]")
+        let legacyLiteral = "Paper.pdf–\(sourceID.rawValue).md"
+        let legacyLink = try sourceLink("[[source:\(legacyLiteral)]]")
+        let ambiguousEmbed = try sourceEmbed("![[source:Report]]")
+        let resolver = DocumentEmbedResolver(inputs: .init(
+            sourceByName: [:],
+            sourceLinkNames: ["report"],
+            uniqueSourceLooseKeys: [WikiNameRules.looseMatchKey("My Paper")],
+            sourceNamesByID: [sourceID: "Paper.pdf"]))
+
+        #expect(resolver.resolveWikiLink(exactLink).isResolved)
+        #expect(resolver.resolveWikiLink(looseLink).isResolved)
+        #expect(resolver.resolveWikiLink(legacyLink).isResolved)
+        guard case .missing(.source(let literal), _) = resolver.resolveWikiEmbed(ambiguousEmbed) else {
+            Issue.record("Ambiguous source names must not authorize embeds")
+            return
+        }
+        #expect(literal == "Report")
+    }
+
+    @Test func missingSourceLinkRemainsUnresolved() throws {
+        let link = try sourceLink("[[source:Missing]]")
+        let resolver = DocumentEmbedResolver(inputs: .init(
+            sourceLinkNames: ["known"],
+            uniqueSourceLooseKeys: [WikiNameRules.looseMatchKey("Other")]))
+
+        #expect(!resolver.resolveWikiLink(link).isResolved)
+    }
+
     @Test func rendererMustKeepInlineRole() throws {
         let embed = try sourceEmbed("![[source:image.png]]")
         let source = sourceResolution(mime: "image/png")
@@ -128,6 +159,14 @@ struct DocumentEmbedResolverTests {
         return embed
     }
 
+    private func sourceLink(_ markdown: String) throws -> WikiMarkdownSyntaxNode.Link {
+        let node = try #require(WikiLinkParser.syntaxNodes(in: markdown).first)
+        guard case .link(let link) = node else {
+            throw TestError.expectedLink
+        }
+        return link
+    }
+
     private func sourceResolution(mime: String) -> DocumentSourceResolution {
         DocumentSourceResolution(
             sourceID: sourceID,
@@ -146,6 +185,6 @@ struct DocumentEmbedResolverTests {
             registrationID: try RendererRegistrationID(validating: "renderer"))
     }
 
-    private enum TestError: Error { case expectedEmbed }
+    private enum TestError: Error { case expectedEmbed, expectedLink }
 }
 #endif

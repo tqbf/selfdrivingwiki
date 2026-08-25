@@ -9,6 +9,8 @@ struct DocumentEmbedResolver: Sendable {
     struct Inputs: Sendable {
         let pageIDByName: [String: PageID]
         let sourceByName: [String: DocumentSourceResolution]
+        let sourceLinkNames: Set<String>
+        let uniqueSourceLooseKeys: Set<String>
         let pageTitlesByID: [PageID: String]
         let sourceNamesByID: [SourceID: String]
         let chatIDByName: [String: ChatID]
@@ -21,6 +23,8 @@ struct DocumentEmbedResolver: Sendable {
         init(
             pageIDByName: [String: PageID] = [:],
             sourceByName: [String: DocumentSourceResolution] = [:],
+            sourceLinkNames: Set<String> = [],
+            uniqueSourceLooseKeys: Set<String> = [],
             pageTitlesByID: [PageID: String] = [:],
             sourceNamesByID: [SourceID: String] = [:],
             chatIDByName: [String: ChatID] = [:],
@@ -32,6 +36,8 @@ struct DocumentEmbedResolver: Sendable {
         ) {
             self.pageIDByName = pageIDByName
             self.sourceByName = sourceByName
+            self.sourceLinkNames = sourceLinkNames
+            self.uniqueSourceLooseKeys = uniqueSourceLooseKeys
             self.pageTitlesByID = pageTitlesByID
             self.sourceNamesByID = sourceNamesByID
             self.chatIDByName = chatIDByName
@@ -88,7 +94,11 @@ struct DocumentEmbedResolver: Sendable {
                 resolved = currentName != nil
             } else {
                 currentName = nil
-                resolved = exactSource(for: link.target.literal) != nil
+                let literal = link.target.literal
+                resolved = inputs.sourceLinkNames.contains(literal.lowercased())
+                    || inputs.uniqueSourceLooseKeys.contains(WikiNameRules.looseMatchKey(literal))
+                    || WikiLinkResolver.legacySourceProjectionID(from: literal)
+                        .map { inputs.sourceNamesByID[$0] != nil } == true
             }
         case .chat:
             if let canonicalID {

@@ -37,6 +37,8 @@ extension WikiRenderContext {
         return DocumentEmbedResolver(inputs: .init(
             pageIDByName: pageIDByName,
             sourceByName: sourceByName,
+            sourceLinkNames: sourceNames,
+            uniqueSourceLooseKeys: uniqueLooseKeys,
             pageTitlesByID: pageIDToName,
             sourceNamesByID: sourceIDToName,
             chatIDByName: chatIDByName,
