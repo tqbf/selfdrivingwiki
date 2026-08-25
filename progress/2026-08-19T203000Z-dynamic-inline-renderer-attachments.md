@@ -119,3 +119,17 @@ The implementation preserves reader page zoom as a separate presentation scale. 
 - An independent review reported a Mermaid wheel-owner conflict. The finding does not apply because inline and separate-window Mermaid use different HTML documents. The inline document installs only the JavaScript handler. The separate window installs only the Swift monitor.
 - The review found no other package-integrity or JavaScript syntax issue.
 - A human pointer test in the signed app remains pending. Automated tests cover viewport math and source contracts, but they do not dispatch wheel events into all hosted renderer windows.
+
+## Generic SVG source renderer
+
+Generic `image/svg+xml` sources now match a built-in SVG renderer. Source Rendered and Split presentations, plus separate renderer windows, use the same inert WebKit view.
+
+The host embeds exact SVG bytes as a base64 image. WebKit JavaScript is disabled, the content security policy blocks external content, the data store is nonpersistent, and navigation is cancelled. Ordinary Markdown SVG images keep their existing image-embed path.
+
+Wheel and keyboard zoom use the shared 0.5–3.0 diagram scale. The SVG input limit is 16 MiB.
+
+### SVG verification
+
+- The focused built-in registry and SVG suites passed with 32 tests in 2 suites.
+- `make build` passed and produced a signed app.
+- Swift language-server diagnostics reported no issues in the SVG view or built-in descriptor registry.

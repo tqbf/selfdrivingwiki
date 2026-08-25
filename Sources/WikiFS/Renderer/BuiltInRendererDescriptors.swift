@@ -38,6 +38,16 @@ enum BuiltInRendererDescriptors {
                 ],
                 maximumInputByteCount: BuiltInRendererLimits.bytefulMaximumInputByteCount,
                 priority: BuiltInRendererPriority.bytefulDocument)
+        case .svg:
+            return make(
+                id: .svg,
+                displayName: "SVG",
+                matchers: [
+                    .normalizedMIME(mime(BuiltInRendererMIME.svg)),
+                    .extensionFallback(fileExtension("svg")),
+                ],
+                maximumInputByteCount: BuiltInRendererLimits.svgMaximumInputByteCount,
+                priority: BuiltInRendererPriority.bytefulDocument)
         case .mermaid:
             return make(
                 id: .mermaid,
@@ -151,12 +161,14 @@ enum BuiltInRendererPriority {
 
 enum BuiltInRendererLimits {
     static let bytefulMaximumInputByteCount = 512 * 1_024 * 1_024
+    static let svgMaximumInputByteCount = 16 * 1_024 * 1_024
     static let markdownMaximumInputByteCount = 64 * 1_024 * 1_024
     static let bytelessMaximumInputByteCount = 1
 }
 
 enum BuiltInRendererMIME {
     static let json = "application/json"
+    static let svg = "image/svg+xml"
     static let mermaid = "text/mermaid"
     static let youtube = "video/youtube"
     static let vimeo = "video/vimeo"

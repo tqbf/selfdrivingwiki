@@ -111,6 +111,7 @@ public struct RendererRegistrationID: RawRepresentable, Codable, Hashable, Senda
 public enum BuiltInRendererID: String, Codable, CaseIterable, Hashable, Sendable, Comparable {
     case pdf
     case html
+    case svg
     case mermaid
     case media
     case jsonCanvas = "json-canvas"

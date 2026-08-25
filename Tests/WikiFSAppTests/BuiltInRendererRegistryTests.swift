@@ -115,6 +115,36 @@ import WikiFSTypes
         #expect(SourceRendererPresentationPlanner.htmlSourceString(for: source, bytes: nil) == nil)
     }
 
+    @Test("Planner maps SVG MIME and bytes to the SVG built-in")
+    func plannerMatchesSVG() throws {
+        let bytes = Data("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 10 10\"></svg>".utf8)
+        let source = fixtureSource(
+            filename: "diagram.svg",
+            ext: "svg",
+            mimeType: "image/svg+xml",
+            byteSize: bytes.count)
+
+        let id = try SourceRendererPresentationPlanner.plannedBuiltInRenderer(
+            for: source,
+            boundedBytes: bytes,
+            currentMarkdown: nil,
+            origin: nil)
+
+        #expect(id == .svg)
+    }
+
+    @Test("SVG factory requires source bytes")
+    @MainActor
+    func svgFactoryRequiresSourceBytes() throws {
+        let descriptor = BuiltInRendererDescriptors.descriptor(for: .svg)
+        #expect(BuiltInRendererFactoryMap.makeView(
+            for: descriptor,
+            inputs: try Self.factoryInputs(sourceBytes: Data("<svg/>".utf8))) != nil)
+        #expect(BuiltInRendererFactoryMap.makeView(
+            for: descriptor,
+            inputs: try Self.factoryInputs(sourceBytes: nil)) == nil)
+    }
+
     @Test("Planner maps Mermaid extension/content to the Mermaid built-in")
     func plannerMatchesMermaid() throws {
         let source = fixtureSource(filename: "diagram.mmd", ext: "mmd", mimeType: nil, byteSize: 12)
