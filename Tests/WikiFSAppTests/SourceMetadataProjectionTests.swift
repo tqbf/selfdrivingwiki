@@ -24,7 +24,10 @@ struct SourceMetadataProjectionTests {
 
     private func hasCompare(alternatives: Int) -> Bool { fields(nil, alternatives: alternatives).contains(.compareExtractions) }
     private func fields(_ provenance: ExtractionProvenance?, markdown: SourceMarkdownVersion? = nil, alternatives: Int = 0) -> [MetadataFieldID] {
-        SourceMetadataProjection.make(input: .init(source: source(), markdown: markdown, extraction: provenance, alternativeCount: alternatives)).sections.flatMap(\.rows).map(\.id)
+        SourceMetadataProjection.make(input: .init(
+            source: source(), markdown: markdown, extraction: provenance,
+            alternativeCount: alternatives, okfMetadata: .init()
+        )).sections.flatMap(\.rows).map(\.id)
     }
     private func source() -> SourceSummary { .init(id: .init(rawValue: "source"), filename: "source.pdf", ext: "pdf", mimeType: "application/pdf", byteSize: 12, createdAt: .distantPast, updatedAt: .distantPast, version: 1) }
     private func markdown(hash: String? = nil) -> SourceMarkdownVersion { .init(id: .init(rawValue: "markdown"), sourceID: .init(rawValue: "source"), parentID: nil, content: "", origin: .extraction, note: nil, createdAt: .distantPast, blobHash: hash) }

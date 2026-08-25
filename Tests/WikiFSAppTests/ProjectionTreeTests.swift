@@ -1,6 +1,7 @@
 #if os(macOS)
 import FileProvider
 import Foundation
+import SQLite3
 import Testing
 import WikiFSCore
 import WikiFSLinks
@@ -470,6 +471,49 @@ struct ProjectionTreeTests {
         #expect(node.name == "Alpha.md")
         let expected = Data(PageMarkdownFormat.fileContent(for: b.pages[0]).utf8)
         #expect(b.projection.contents(for: id) == expected)
+    }
+
+    @Test func corruptPageOKFMetadataFailsAllPageAliasesIncludingBookmark() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-corrupt-okf-\(UUID().uuidString).sqlite")
+        do {
+            let store = try GRDBWikiStore(databaseURL: url)
+            let page = try store.createPage(title: "Corrupt OKF")
+            let versionID = try #require(try store.pageHeadVersionID(pageID: page.id))
+            _ = try store.recordPageOKFVerification(
+                versionID: versionID,
+                verifier: try OKFVerifierIdentity("human:reviewer"),
+                verifiedAt: Date(timeIntervalSince1970: 2_000_000_000),
+                basis: .init(kind: .humanReview), freshnessPolicy: nil)
+            _ = try store.createBookmarkNode(
+                parentID: nil, position: 0, content: .page(page.id))
+        }
+
+        var database: OpaquePointer?
+        #expect(sqlite3_open(url.path, &database) == SQLITE_OK)
+        defer { sqlite3_close(database) }
+        #expect(sqlite3_exec(
+            database,
+            "UPDATE page_okf_verifications SET basis_json = '{\"version\":999}';",
+            nil, nil, nil) == SQLITE_OK)
+
+        let projection = Projection(
+            wikiID: WikiID(rawValue: "corrupt-okf-\(UUID().uuidString)"),
+            databaseURL: url)
+        let page = try #require(try GRDBWikiStore(databaseURL: url).listAllPagesOrderedByID().first)
+        let bookmark = try #require(try GRDBWikiStore(databaseURL: url).listBookmarkNodes().first)
+        let aliases = [
+            Projection.Identity.pageByID(page.id.rawValue),
+            Projection.Identity.pageByTitle(page.id.rawValue),
+            Projection.Identity.bookmarkPageRef(bookmark.id.rawValue),
+        ]
+
+        for alias in aliases {
+            #expect(projection.node(for: alias) == nil)
+            #expect(projection.contents(for: alias) == nil)
+        }
+        #expect(!projection.children(of: Projection.Identity.bookmarks)
+            .contains { $0.id == Projection.Identity.bookmarkPageRef(bookmark.id.rawValue) })
     }
 
     @Test func bookmarkSourceRefServesTargetContent() throws {

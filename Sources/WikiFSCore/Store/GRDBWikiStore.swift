@@ -145,7 +145,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     /// databases produced by that store carry `PRAGMA user_version` up to 37, and
     /// this store must recognize them as already-current so the ladder is a no-op
     /// on re-open (the proven `if version < N`)
-    private static let currentSchemaVersion = 51
+    private static let currentSchemaVersion = 52
     /// The current schema version (mirrors the former
     /// `SQLiteWikiStore.currentSchemaVersion`). Public so tests can assert the
     /// migration ladder landed at the expected `user_version`.
@@ -1525,6 +1525,18 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             version = 51
         }
 
+        // v51→v52: exact-version OKF trust, lifecycle, and freshness metadata.
+        // This is additive and intentionally performs no historical backfill.
+        if version < 52 {
+            try schemaForeignKeyChecker.verifyEnforcement(db)
+            try db.inTransaction(.immediate) {
+                try Self.createOKFTrustTablesV52(in: db)
+                try db.execute(sql: "PRAGMA user_version = 52;")
+                return .commit
+            }
+            version = 52
+        }
+
         // Catch-all fallback: any DB older than `currentSchemaVersion` whose
         // per-step work has not been added above (the steady-state guard for a
         // genuine currentSchemaVersion bump). Drops FTS5 + stamps
@@ -1675,6 +1687,71 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         );
         """)
         try createRendererSourcePresentationsTableV50(in: db)
+    }
+
+    private static func createOKFTrustTablesV52(in db: Database) throws {
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS page_okf_metadata (
+            page_version_id TEXT PRIMARY KEY REFERENCES page_versions(id) ON DELETE CASCADE,
+            status TEXT CHECK (status IS NULL OR status IN ('draft', 'stable', 'deprecated')),
+            stale_after REAL,
+            freshness_policy_json TEXT,
+            projection_revision INTEGER NOT NULL DEFAULT 0 CHECK (projection_revision >= 0),
+            updated_at REAL NOT NULL
+        );
+        """)
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS source_markdown_okf_metadata (
+            source_markdown_version_id TEXT PRIMARY KEY REFERENCES source_markdown_versions(id) ON DELETE CASCADE,
+            status TEXT CHECK (status IS NULL OR status IN ('draft', 'stable', 'deprecated')),
+            stale_after REAL,
+            freshness_policy_json TEXT,
+            projection_revision INTEGER NOT NULL DEFAULT 0 CHECK (projection_revision >= 0),
+            updated_at REAL NOT NULL
+        );
+        """)
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS page_okf_verifications (
+            id TEXT PRIMARY KEY,
+            page_version_id TEXT NOT NULL REFERENCES page_versions(id) ON DELETE CASCADE,
+            activity_id TEXT NOT NULL REFERENCES activities(id),
+            basis_json TEXT NOT NULL,
+            verified_at REAL NOT NULL,
+            removed_at REAL,
+            removed_by_activity_id TEXT REFERENCES activities(id),
+            correction_reason_json TEXT,
+            CHECK ((removed_at IS NULL AND removed_by_activity_id IS NULL AND correction_reason_json IS NULL)
+                OR (removed_at IS NOT NULL AND removed_by_activity_id IS NOT NULL))
+        );
+        """)
+        try db.execute(sql: """
+        CREATE TABLE IF NOT EXISTS source_markdown_okf_verifications (
+            id TEXT PRIMARY KEY,
+            source_markdown_version_id TEXT NOT NULL REFERENCES source_markdown_versions(id) ON DELETE CASCADE,
+            activity_id TEXT NOT NULL REFERENCES activities(id),
+            basis_json TEXT NOT NULL,
+            verified_at REAL NOT NULL,
+            removed_at REAL,
+            removed_by_activity_id TEXT REFERENCES activities(id),
+            correction_reason_json TEXT,
+            CHECK ((removed_at IS NULL AND removed_by_activity_id IS NULL AND correction_reason_json IS NULL)
+                OR (removed_at IS NOT NULL AND removed_by_activity_id IS NOT NULL))
+        );
+        """)
+        try db.execute(sql: """
+        CREATE INDEX IF NOT EXISTS page_okf_verifications_target_order
+            ON page_okf_verifications(page_version_id, verified_at, id);
+        CREATE INDEX IF NOT EXISTS page_okf_verifications_activity
+            ON page_okf_verifications(activity_id);
+        CREATE INDEX IF NOT EXISTS page_okf_verifications_correction_activity
+            ON page_okf_verifications(removed_by_activity_id);
+        CREATE INDEX IF NOT EXISTS source_markdown_okf_verifications_target_order
+            ON source_markdown_okf_verifications(source_markdown_version_id, verified_at, id);
+        CREATE INDEX IF NOT EXISTS source_markdown_okf_verifications_activity
+            ON source_markdown_okf_verifications(activity_id);
+        CREATE INDEX IF NOT EXISTS source_markdown_okf_verifications_correction_activity
+            ON source_markdown_okf_verifications(removed_by_activity_id);
+        """)
     }
 
     private static func createRendererSourcePresentationsTableV50(in db: Database) throws {
@@ -3400,6 +3477,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         """)
         try createMetadataProvenanceTablesV48(in: db)
         try createRendererSettingsTablesV49(in: db)
+        try createOKFTrustTablesV52(in: db)
     }
 
     // MARK: - Internal helpers (mirrors of SQLiteWikiStore privates)
@@ -3851,6 +3929,13 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
     internal func chatMessageCount(on db: Database) -> Int64 {
         resilientScalar("SELECT COUNT(*) FROM chat_messages;", on: db)
     }
+    internal func okfMetadataRevisionSum(on db: Database) -> Int64 {
+        resilientScalar("""
+        SELECT
+            COALESCE((SELECT SUM(projection_revision) FROM page_okf_metadata), 0)
+          + COALESCE((SELECT SUM(projection_revision) FROM source_markdown_okf_metadata), 0);
+        """, on: db)
+    }
 
     // MARK: - changeToken contributors (slice 2b)
 
@@ -3871,6 +3956,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         SourceGraphTokenContributor(),
         BookmarkTokenContributor(),
         ChatTokenContributor(),
+        OKFMetadataTokenContributor(),
     ]
 
     internal struct PagesTokenContributor: ChangeTokenContributor {
@@ -3948,6 +4034,15 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         let kind: ResourceKind = .chat
         func fold(in store: GRDBWikiStore, on db: Database) throws -> ChangeTokenFold {
             .chat(count: store.chatCount(on: db), messageCount: store.chatMessageCount(on: db))
+        }
+    }
+
+    internal struct OKFMetadataTokenContributor: ChangeTokenContributor {
+        // Metadata applies to both page and source concepts. One final fold is
+        // sufficient because it is a whole-wiki invalidation token.
+        let kind: ResourceKind = .page
+        func fold(in store: GRDBWikiStore, on db: Database) throws -> ChangeTokenFold {
+            .okfMetadata(revisionSum: store.okfMetadataRevisionSum(on: db))
         }
     }
 
@@ -6376,6 +6471,444 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             ) else { return nil }
             let bodyData: Data = row["content"]
             return String(data: bodyData, encoding: .utf8) ?? ""
+        }
+    }
+
+    // MARK: - Exact-version OKF trust, lifecycle, and freshness (v52)
+
+    private enum OKFTarget {
+        case page(PageVersionID)
+        case sourceMarkdown(SourceMarkdownVersionID)
+
+        var versionID: String {
+            switch self {
+            case .page(let id): return id.rawValue
+            case .sourceMarkdown(let id): return id.rawValue
+            }
+        }
+
+        var metadataTable: String {
+            switch self {
+            case .page: return "page_okf_metadata"
+            case .sourceMarkdown: return "source_markdown_okf_metadata"
+            }
+        }
+
+        var metadataVersionColumn: String {
+            switch self {
+            case .page: return "page_version_id"
+            case .sourceMarkdown: return "source_markdown_version_id"
+            }
+        }
+
+        var verificationTable: String {
+            switch self {
+            case .page: return "page_okf_verifications"
+            case .sourceMarkdown: return "source_markdown_okf_verifications"
+            }
+        }
+
+        var verificationVersionColumn: String { metadataVersionColumn }
+    }
+
+    private struct OKFTargetContext {
+        let ownerID: String
+        let generatedAt: Date
+    }
+
+    public func pageOKFMetadata(
+        versionID: PageVersionID, includeCorrected: Bool = false
+    ) throws -> PageOKFTrustMetadata? {
+        try dbWriter.read { db in
+            let target = OKFTarget.page(versionID)
+            guard let context = try self.okfTargetContext(target, on: db) else { return nil }
+            return PageOKFTrustMetadata(
+                pageID: PageID(rawValue: context.ownerID), versionID: versionID,
+                metadata: try self.readOKFMetadata(target, includeCorrected: includeCorrected, on: db))
+        }
+    }
+
+    public func sourceMarkdownOKFMetadata(
+        versionID: SourceMarkdownVersionID, includeCorrected: Bool = false
+    ) throws -> SourceMarkdownOKFTrustMetadata? {
+        try dbWriter.read { db in
+            let target = OKFTarget.sourceMarkdown(versionID)
+            guard let context = try self.okfTargetContext(target, on: db) else { return nil }
+            return SourceMarkdownOKFTrustMetadata(
+                sourceID: SourceID(rawValue: context.ownerID), versionID: versionID,
+                metadata: try self.readOKFMetadata(target, includeCorrected: includeCorrected, on: db))
+        }
+    }
+
+    public func setPageOKFStatus(versionID: PageVersionID, status: OKFConceptStatus?) throws {
+        let ownerID = try mutate(event: { self.localEvent(.page, id: $0, change: .updated) }) { db in
+            try self.setOKFStatus(.page(versionID), status: status, on: db)
+        }
+        _ = ownerID
+    }
+
+    public func setSourceMarkdownOKFStatus(
+        versionID: SourceMarkdownVersionID, status: OKFConceptStatus?
+    ) throws {
+        let ownerID = try mutate(event: { self.localEvent(.source, id: $0, change: .updated) }) { db in
+            try self.setOKFStatus(.sourceMarkdown(versionID), status: status, on: db)
+        }
+        _ = ownerID
+    }
+
+    public func setPageOKFFreshness(
+        versionID: PageVersionID, policy: OKFFreshnessPolicy?
+    ) throws {
+        _ = try mutate(event: { self.localEvent(.page, id: $0, change: .updated) }) { db in
+            try self.setOKFFreshness(.page(versionID), policy: policy, on: db)
+        }
+    }
+
+    public func setSourceMarkdownOKFFreshness(
+        versionID: SourceMarkdownVersionID, policy: OKFFreshnessPolicy?
+    ) throws {
+        _ = try mutate(event: { self.localEvent(.source, id: $0, change: .updated) }) { db in
+            try self.setOKFFreshness(.sourceMarkdown(versionID), policy: policy, on: db)
+        }
+    }
+
+    @discardableResult
+    public func recordPageOKFVerification(
+        versionID: PageVersionID, verifier: OKFVerifierIdentity,
+        verifiedAt: Date, basis: OKFVerificationBasis,
+        freshnessPolicy: OKFFreshnessPolicy? = nil
+    ) throws -> OKFVerificationID {
+        try recordOKFVerification(
+            .page(versionID), resourceKind: .page, verifier: verifier,
+            verifiedAt: verifiedAt, basis: basis, freshnessPolicy: freshnessPolicy)
+    }
+
+    @discardableResult
+    public func recordSourceMarkdownOKFVerification(
+        versionID: SourceMarkdownVersionID, verifier: OKFVerifierIdentity,
+        verifiedAt: Date, basis: OKFVerificationBasis,
+        freshnessPolicy: OKFFreshnessPolicy? = nil
+    ) throws -> OKFVerificationID {
+        try recordOKFVerification(
+            .sourceMarkdown(versionID), resourceKind: .source, verifier: verifier,
+            verifiedAt: verifiedAt, basis: basis, freshnessPolicy: freshnessPolicy)
+    }
+
+    public func correctPageOKFVerification(
+        versionID: PageVersionID, verificationID: OKFVerificationID,
+        correctingVerifier: OKFVerifierIdentity, correctedAt: Date,
+        reason: OKFVerificationCorrectionReason?
+    ) throws {
+        try correctOKFVerification(
+            .page(versionID), resourceKind: .page, verificationID: verificationID,
+            correctingVerifier: correctingVerifier, correctedAt: correctedAt, reason: reason)
+    }
+
+    public func correctSourceMarkdownOKFVerification(
+        versionID: SourceMarkdownVersionID, verificationID: OKFVerificationID,
+        correctingVerifier: OKFVerifierIdentity, correctedAt: Date,
+        reason: OKFVerificationCorrectionReason?
+    ) throws {
+        try correctOKFVerification(
+            .sourceMarkdown(versionID), resourceKind: .source, verificationID: verificationID,
+            correctingVerifier: correctingVerifier, correctedAt: correctedAt, reason: reason)
+    }
+
+    private func okfTargetContext(_ target: OKFTarget, on db: Database) throws -> OKFTargetContext? {
+        let row: Row?
+        switch target {
+        case .page:
+            row = try Row.fetchOne(db, sql: "SELECT page_id AS owner_id, saved_at AS generated_at FROM page_versions WHERE id = ?;", arguments: [target.versionID])
+        case .sourceMarkdown:
+            row = try Row.fetchOne(db, sql: "SELECT file_id AS owner_id, created_at AS generated_at FROM source_markdown_versions WHERE id = ?;", arguments: [target.versionID])
+        }
+        guard let row else { return nil }
+        return OKFTargetContext(
+            ownerID: row["owner_id"],
+            generatedAt: Date(timeIntervalSince1970: row["generated_at"]))
+    }
+
+    private static func okfJSON<T: Encodable>(_ value: T) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return String(decoding: try encoder.encode(value), as: UTF8.self)
+    }
+
+    private static func decodeOKFJSON<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(type, from: Data(json.utf8))
+        } catch let error as OKFMetadataError {
+            throw error
+        } catch {
+            throw OKFMetadataError.corruptPersistedMetadata(error.localizedDescription)
+        }
+    }
+
+    private func setOKFStatus(
+        _ target: OKFTarget, status: OKFConceptStatus?, on db: Database
+    ) throws -> String {
+        guard let context = try okfTargetContext(target, on: db) else { throw OKFMetadataError.targetNotFound }
+        let sql = """
+        INSERT INTO \(target.metadataTable) (\(target.metadataVersionColumn), status, projection_revision, updated_at)
+        VALUES (?, ?, 1, ?)
+        ON CONFLICT(\(target.metadataVersionColumn)) DO UPDATE SET
+            status = excluded.status,
+            projection_revision = \(target.metadataTable).projection_revision + 1,
+            updated_at = excluded.updated_at;
+        """
+        try db.execute(sql: sql, arguments: [target.versionID, status?.rawValue, Date().timeIntervalSince1970])
+        return context.ownerID
+    }
+
+    private func resolveOKFFreshness(
+        _ policy: OKFFreshnessPolicy, target: OKFTarget,
+        newVerification: (id: OKFVerificationID, at: Date)? = nil,
+        on db: Database
+    ) throws -> Date {
+        switch policy {
+        case .fixed(let date): return date
+        case .ttl(let seconds, let anchor):
+            guard seconds > 0 else { throw OKFMetadataError.invalidFreshnessDuration }
+            let base: Date
+            switch anchor {
+            case .generated:
+                guard let context = try okfTargetContext(target, on: db) else { throw OKFMetadataError.targetNotFound }
+                base = context.generatedAt
+            case .verification(let verificationID):
+                guard let timestamp = try Double.fetchOne(
+                    db,
+                    sql: "SELECT verified_at FROM \(target.verificationTable) WHERE id = ? AND \(target.verificationVersionColumn) = ? AND removed_at IS NULL;",
+                    arguments: [verificationID.rawValue, target.versionID]
+                ) else { throw OKFMetadataError.verificationTargetMismatch }
+                base = Date(timeIntervalSince1970: timestamp)
+            case .recordedVerification:
+                guard let newVerification else {
+                    throw OKFMetadataError.verificationNotFound
+                }
+                base = newVerification.at
+            }
+            return base.addingTimeInterval(TimeInterval(seconds))
+        }
+    }
+
+    private func setOKFFreshness(
+        _ target: OKFTarget, policy: OKFFreshnessPolicy?, on db: Database
+    ) throws -> String {
+        guard let context = try okfTargetContext(target, on: db) else { throw OKFMetadataError.targetNotFound }
+        let deadline = try policy.map { try resolveOKFFreshness($0, target: target, on: db) }
+        let policyJSON = try policy.map(Self.okfJSON)
+        let sql = """
+        INSERT INTO \(target.metadataTable) (\(target.metadataVersionColumn), stale_after, freshness_policy_json, projection_revision, updated_at)
+        VALUES (?, ?, ?, 1, ?)
+        ON CONFLICT(\(target.metadataVersionColumn)) DO UPDATE SET
+            stale_after = excluded.stale_after,
+            freshness_policy_json = excluded.freshness_policy_json,
+            projection_revision = \(target.metadataTable).projection_revision + 1,
+            updated_at = excluded.updated_at;
+        """
+        try db.execute(sql: sql, arguments: [target.versionID, deadline?.timeIntervalSince1970, policyJSON, Date().timeIntervalSince1970])
+        return context.ownerID
+    }
+
+    private func readOKFMetadata(
+        _ target: OKFTarget, includeCorrected: Bool, on db: Database
+    ) throws -> OKFConceptMetadata {
+        let metadataRow = try Row.fetchOne(
+            db,
+            sql: "SELECT status, stale_after, freshness_policy_json, projection_revision FROM \(target.metadataTable) WHERE \(target.metadataVersionColumn) = ?;",
+            arguments: [target.versionID])
+        let statusRaw: String? = metadataRow?["status"]
+        let status: OKFConceptStatus?
+        if let statusRaw {
+            guard let decoded = OKFConceptStatus(rawValue: statusRaw) else {
+                throw OKFMetadataError.corruptPersistedMetadata("invalid status \(statusRaw)")
+            }
+            status = decoded
+        } else { status = nil }
+        let staleAfterTimestamp: Double? = metadataRow?["stale_after"]
+        let policyJSON: String? = metadataRow?["freshness_policy_json"]
+        let policy = try policyJSON.map { try Self.decodeOKFJSON(OKFFreshnessPolicy.self, $0) }
+        if (staleAfterTimestamp == nil) != (policy == nil) {
+            throw OKFMetadataError.corruptPersistedMetadata("freshness policy and deadline must be stored together")
+        }
+
+        let correctedClause = includeCorrected ? "" : " AND v.removed_at IS NULL"
+        let rows = try Row.fetchAll(db, sql: """
+        SELECT v.id, v.basis_json, v.verified_at, v.removed_at, v.correction_reason_json,
+               a.agent_id, g.name AS agent_name,
+               v.removed_by_activity_id, correction_agent.name AS correction_agent_name
+        FROM \(target.verificationTable) v
+        JOIN activities a ON a.id = v.activity_id AND a.kind = 'verify'
+        JOIN agents g ON g.id = a.agent_id
+        LEFT JOIN activities correction_activity
+          ON correction_activity.id = v.removed_by_activity_id
+         AND correction_activity.kind = 'correct-verification'
+        LEFT JOIN agents correction_agent ON correction_agent.id = correction_activity.agent_id
+        WHERE v.\(target.verificationVersionColumn) = ?\(correctedClause)
+        ORDER BY v.verified_at, v.id;
+        """, arguments: [target.versionID])
+        let events = try rows.map { row -> OKFVerificationEvent in
+            let basis: OKFVerificationBasis = try Self.decodeOKFJSON(OKFVerificationBasis.self, row["basis_json"])
+            try basis.validateVersion()
+            let correctionJSON: String? = row["correction_reason_json"]
+            let correction = try correctionJSON.map { try Self.decodeOKFJSON(OKFVerificationCorrectionReason.self, $0) }
+            try correction?.validateVersion()
+            let removedAt = (row["removed_at"] as Double?).map(Date.init(timeIntervalSince1970:))
+            let correctionActivityRaw: String? = row["removed_by_activity_id"]
+            let correctionAgentName: String? = row["correction_agent_name"]
+            if removedAt != nil && (correctionActivityRaw == nil || correctionAgentName == nil) {
+                throw OKFMetadataError.corruptPersistedMetadata(
+                    "corrected verification is missing a valid correct-verification activity and agent")
+            }
+            do {
+                return OKFVerificationEvent(
+                    id: OKFVerificationID(rawValue: row["id"]),
+                    by: try OKFVerifierIdentity(row["agent_name"]),
+                    verifiedAt: Date(timeIntervalSince1970: row["verified_at"]),
+                    basis: basis,
+                    removedAt: removedAt,
+                    correctionActivityID: correctionActivityRaw.map(OKFActivityID.init(rawValue:)),
+                    correctedBy: try correctionAgentName.map(OKFVerifierIdentity.init),
+                    correctionReason: correction)
+            } catch let error as OKFMetadataError { throw error }
+            catch { throw OKFMetadataError.corruptPersistedMetadata(error.localizedDescription) }
+        }
+        return OKFConceptMetadata(
+            status: status,
+            staleAfter: staleAfterTimestamp.map(Date.init(timeIntervalSince1970:)),
+            freshnessPolicy: policy,
+            verifications: events,
+            projectionRevision: metadataRow?["projection_revision"] ?? 0)
+    }
+
+    private func validateOKFVerificationBasis(
+        _ basis: OKFVerificationBasis, on db: Database
+    ) throws {
+        try basis.validateVersion()
+        for evidence in basis.evidence {
+            switch evidence {
+            case .source(let sourceID):
+                let exists = try Int.fetchOne(
+                    db, sql: "SELECT 1 FROM sources WHERE id = ?;",
+                    arguments: [sourceID.rawValue]) ?? 0
+                guard exists == 1 else {
+                    throw OKFMetadataError.invalidEvidence(
+                        "source \(sourceID.rawValue) does not exist")
+                }
+            case .external(let url):
+                guard let scheme = url.scheme?.lowercased(),
+                      scheme == "http" || scheme == "https",
+                      url.host?.isEmpty == false else {
+                    throw OKFMetadataError.invalidEvidence(
+                        "external evidence must be an absolute HTTP or HTTPS URL")
+                }
+            }
+        }
+    }
+
+    private func recordOKFVerification(
+        _ target: OKFTarget, resourceKind: ResourceKind,
+        verifier: OKFVerifierIdentity, verifiedAt: Date,
+        basis: OKFVerificationBasis, freshnessPolicy: OKFFreshnessPolicy?
+    ) throws -> OKFVerificationID {
+        let result: (OKFVerificationID, String) = try mutate(event: {
+            self.localEvent(resourceKind, id: $0.1, change: .updated)
+        }) { db in
+            guard let context = try self.okfTargetContext(target, on: db) else { throw OKFMetadataError.targetNotFound }
+            try self.validateOKFVerificationBasis(basis, on: db)
+            let verificationID = OKFVerificationID(rawValue: ULID.generate())
+            let agentID = try self.ensureAgent(
+                name: verifier.rawValue, kind: verifier.agentKind,
+                version: verifier.version, on: db)
+            let activityID = ULID.generate()
+            let timestamp = verifiedAt.timeIntervalSince1970
+            try db.execute(sql: "INSERT INTO activities (id, kind, agent_id, started_at, ended_at) VALUES (?, 'verify', ?, ?, ?);", arguments: [activityID, agentID, timestamp, timestamp])
+            try db.execute(
+                sql: "INSERT INTO \(target.verificationTable) (id, \(target.verificationVersionColumn), activity_id, basis_json, verified_at) VALUES (?, ?, ?, ?, ?);",
+                arguments: [verificationID.rawValue, target.versionID, activityID, try Self.okfJSON(basis), timestamp])
+            var staleAfter: Date?
+            var policyJSON: String?
+            if let freshnessPolicy {
+                staleAfter = try self.resolveOKFFreshness(
+                    freshnessPolicy, target: target,
+                    newVerification: (verificationID, verifiedAt), on: db)
+                let persistedPolicy: OKFFreshnessPolicy
+                if case .ttl(let seconds, .recordedVerification) = freshnessPolicy {
+                    persistedPolicy = .ttl(seconds: seconds, anchor: .verification(verificationID))
+                } else {
+                    persistedPolicy = freshnessPolicy
+                }
+                policyJSON = try Self.okfJSON(persistedPolicy)
+            }
+            let sql = """
+            INSERT INTO \(target.metadataTable) (\(target.metadataVersionColumn), stale_after, freshness_policy_json, projection_revision, updated_at)
+            VALUES (?, ?, ?, 1, ?)
+            ON CONFLICT(\(target.metadataVersionColumn)) DO UPDATE SET
+                stale_after = CASE WHEN ? IS NULL THEN \(target.metadataTable).stale_after ELSE excluded.stale_after END,
+                freshness_policy_json = CASE WHEN ? IS NULL THEN \(target.metadataTable).freshness_policy_json ELSE excluded.freshness_policy_json END,
+                projection_revision = \(target.metadataTable).projection_revision + 1,
+                updated_at = excluded.updated_at;
+            """
+            try db.execute(sql: sql, arguments: [
+                target.versionID, staleAfter?.timeIntervalSince1970, policyJSON, timestamp,
+                policyJSON, policyJSON])
+            return (verificationID, context.ownerID)
+        }
+        return result.0
+    }
+
+    private func correctOKFVerification(
+        _ target: OKFTarget, resourceKind: ResourceKind,
+        verificationID: OKFVerificationID, correctingVerifier: OKFVerifierIdentity,
+        correctedAt: Date, reason: OKFVerificationCorrectionReason?
+    ) throws {
+        try reason?.validateVersion()
+        _ = try mutate(event: { self.localEvent(resourceKind, id: $0, change: .updated) }) { db in
+            guard let context = try self.okfTargetContext(target, on: db) else { throw OKFMetadataError.targetNotFound }
+            guard let row = try Row.fetchOne(
+                db,
+                sql: "SELECT \(target.verificationVersionColumn) AS target_id, removed_at FROM \(target.verificationTable) WHERE id = ?;",
+                arguments: [verificationID.rawValue])
+            else { throw OKFMetadataError.verificationNotFound }
+            let rowTarget: String = row["target_id"]
+            guard rowTarget == target.versionID else { throw OKFMetadataError.verificationTargetMismatch }
+            let removedAt: Double? = row["removed_at"]
+            guard removedAt == nil else { throw OKFMetadataError.verificationAlreadyCorrected }
+            let agentID = try self.ensureAgent(
+                name: correctingVerifier.rawValue, kind: correctingVerifier.agentKind,
+                version: correctingVerifier.version, on: db)
+            let activityID = ULID.generate()
+            let timestamp = correctedAt.timeIntervalSince1970
+            try db.execute(sql: "INSERT INTO activities (id, kind, agent_id, started_at, ended_at) VALUES (?, 'correct-verification', ?, ?, ?);", arguments: [activityID, agentID, timestamp, timestamp])
+            try db.execute(
+                sql: "UPDATE \(target.verificationTable) SET removed_at = ?, removed_by_activity_id = ?, correction_reason_json = ? WHERE id = ? AND removed_at IS NULL;",
+                arguments: [timestamp, activityID, try reason.map(Self.okfJSON), verificationID.rawValue])
+
+            let metadataRow = try Row.fetchOne(
+                db,
+                sql: "SELECT freshness_policy_json FROM \(target.metadataTable) WHERE \(target.metadataVersionColumn) = ?;",
+                arguments: [target.versionID])
+            var clearFreshness = false
+            if let json = metadataRow?["freshness_policy_json"] as String? {
+                let policy: OKFFreshnessPolicy = try Self.decodeOKFJSON(OKFFreshnessPolicy.self, json)
+                if case .ttl(_, .verification(let anchorID)) = policy, anchorID == verificationID {
+                    clearFreshness = true
+                }
+            }
+            let sql = """
+            INSERT INTO \(target.metadataTable) (\(target.metadataVersionColumn), projection_revision, updated_at)
+            VALUES (?, 1, ?)
+            ON CONFLICT(\(target.metadataVersionColumn)) DO UPDATE SET
+                stale_after = CASE WHEN ? THEN NULL ELSE \(target.metadataTable).stale_after END,
+                freshness_policy_json = CASE WHEN ? THEN NULL ELSE \(target.metadataTable).freshness_policy_json END,
+                projection_revision = \(target.metadataTable).projection_revision + 1,
+                updated_at = excluded.updated_at;
+            """
+            try db.execute(sql: sql, arguments: [target.versionID, timestamp, clearFreshness, clearFreshness])
+            return context.ownerID
         }
     }
 
@@ -9223,6 +9756,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             id NOT IN (SELECT activity_id FROM source_versions            WHERE activity_id IS NOT NULL)
             AND id NOT IN (SELECT activity_id FROM source_markdown_versions WHERE activity_id IS NOT NULL)
             AND id NOT IN (SELECT activity_id FROM page_versions           WHERE activity_id IS NOT NULL)
+            AND id NOT IN (SELECT activity_id FROM page_okf_verifications WHERE activity_id IS NOT NULL)
+            AND id NOT IN (SELECT removed_by_activity_id FROM page_okf_verifications WHERE removed_by_activity_id IS NOT NULL)
+            AND id NOT IN (SELECT activity_id FROM source_markdown_okf_verifications WHERE activity_id IS NOT NULL)
+            AND id NOT IN (SELECT removed_by_activity_id FROM source_markdown_okf_verifications WHERE removed_by_activity_id IS NOT NULL)
             """
             let orphanCount = try Int.fetchOne(
                 db,

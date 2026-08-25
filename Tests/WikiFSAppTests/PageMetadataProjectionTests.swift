@@ -36,12 +36,54 @@ struct PageMetadataProjectionTests {
         #expect(!technical(hash: nil).contains { $0.id == .hash })
     }
 
+    @Test func trustSectionDistinguishesUnsetFromExplicitStable() {
+        let unset = OKFMetadataPresentation.section(.init(), now: .distantPast)
+        let stable = OKFMetadataPresentation.section(.init(status: .stable), now: .distantPast)
+        #expect(textValue(.lifecycleStatus, in: unset) == "Not explicitly set")
+        #expect(textValue(.lifecycleStatus, in: stable) == "Stable")
+    }
+
+    @Test func trustSectionShowsVerificationEvidenceAndFreshnessWithoutColor() throws {
+        let verificationID = OKFVerificationID(rawValue: "verification")
+        let deadline = Date(timeIntervalSince1970: 100)
+        let metadata = OKFConceptMetadata(
+            status: .draft, staleAfter: deadline,
+            freshnessPolicy: .fixed(deadline),
+            verifications: [.init(
+                id: verificationID,
+                by: try OKFVerifierIdentity("human:reviewer"),
+                verifiedAt: Date(timeIntervalSince1970: 50),
+                basis: .init(
+                    kind: .humanReview,
+                    evidence: [.source(.init(rawValue: "source"))],
+                    note: "Reviewed against source"))])
+        let section = OKFMetadataPresentation.section(
+            metadata, now: Date(timeIntervalSince1970: 100))
+        #expect(textValue(.trustTier, in: section) == "Human reviewed")
+        #expect(textValue(.freshnessState, in: section) == "Stale")
+        #expect(section.rows.contains { $0.id == .verificationActor(verificationID) })
+        #expect(section.rows.contains { $0.id == .verificationNote(verificationID) })
+        guard case .link(_, .source(let sourceID))? = section.rows.first(where: {
+            $0.id == .verificationEvidence(verificationID, 0)
+        })?.value else {
+            Issue.record("Expected typed source evidence link")
+            return
+        }
+        #expect(sourceID == SourceID(rawValue: "source"))
+    }
+
+    private func textValue(_ id: MetadataFieldID, in section: MetadataSection) -> String? {
+        guard case .text(let value)? = section.rows.first(where: { $0.id == id })?.value else { return nil }
+        return value
+    }
+
     private func model(_ sources: [MetadataPageSource], hash: String? = nil) -> MetadataPanelModel {
         PageMetadataProjection.make(input: .init(
             page: .init(id: .init(rawValue: "page"), title: "Page", slug: "page", bodyMarkdown: "", createdAt: .distantPast, updatedAt: .distantPast, version: 1),
             currentVersion: hash.map { .init(id: .init(rawValue: "version"), pageID: .init(rawValue: "page"), parentID: nil, mergeParentID: nil, blobHash: $0, title: "Page", activityID: nil, savedAt: .distantPast) },
             origin: nil,
-            sources: sources))
+            sources: sources,
+            okfMetadata: .init()))
     }
 
     private func rows(_ sources: [MetadataPageSource]) -> [MetadataRow] {

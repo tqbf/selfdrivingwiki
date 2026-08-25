@@ -57,7 +57,8 @@ public enum PageMarkdownFormat {
             type: .page,
             title: page.title,
             generated: metadata.generated,
-            sources: metadata.sources
+            sources: metadata.sources,
+            trust: metadata.trust
         )
         var result = "---\n\(fm)\n---\n\n# \(page.title)"
         if !cleanBody.isEmpty {
@@ -110,7 +111,8 @@ public enum SourceMarkdownFormat {
             type: .source,
             title: metadata.title,
             generated: metadata.generated,
-            sources: metadata.sources
+            sources: metadata.sources,
+            trust: metadata.trust
         )
         return "---\n\(fm)\n---\n\n\(version.content)"
     }

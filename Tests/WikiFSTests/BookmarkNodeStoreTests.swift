@@ -665,7 +665,7 @@ private struct FixedRendererEventClock: RendererEventClock {
         #expect(first.scalarText("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='renderer_event_journal';") == "1")
 
         let reopened = try store(url: url)
-        #expect(reopened.pragmaValue("user_version") == "51")
+        #expect(reopened.pragmaValue("user_version") == "52")
         #expect(try reopened.listRendererWikiEnablement().isEmpty)
     }
 
@@ -841,13 +841,13 @@ private struct FixedRendererEventClock: RendererEventClock {
         #expect(try MetadataSQLiteFixtureSupport.scalar("PRAGMA user_version", at: url) == "48")
 
         let upgraded = try store(url: url)
-        #expect(upgraded.pragmaValue("user_version") == "51")
+        #expect(upgraded.pragmaValue("user_version") == "52")
         #expect(upgraded.scalarText("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='renderer_wiki_enablement';") == "1")
         #expect(upgraded.scalarText("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='renderer_event_journal_scope_sequence';") == "1")
         upgraded.close()
 
         let reopened = try store(url: url)
-        #expect(reopened.pragmaValue("user_version") == "51")
+        #expect(reopened.pragmaValue("user_version") == "52")
         #expect(try reopened.listRendererWikiEnablement().isEmpty)
     }
 

@@ -55,6 +55,11 @@ public enum PageCommand {
         /// page. Mirrors `source info` (`SourceCommand.info`) — a read-side
         /// diagnostic for agents + debugging. Read-only.
         case info(Selector)
+        case okfInspect(versionID: PageVersionID, json: Bool)
+        case okfStatus(versionID: PageVersionID, status: OKFConceptStatus?)
+        case okfFreshness(versionID: PageVersionID, input: OKFFreshnessInput)
+        case okfVerify(versionID: PageVersionID, input: OKFVerificationInput)
+        case okfCorrect(versionID: PageVersionID, input: OKFCorrectionInput)
     }
 
     public enum Failure: Error, CustomStringConvertible {
@@ -107,6 +112,35 @@ public enum PageCommand {
             return try revert(selector, versionID: versionID, in: store)
         case .info(let selector):
             return try info(selector, in: store)
+        case .okfInspect(let versionID, let json):
+            guard let projection = try store.pageOKFMetadata(
+                versionID: versionID, includeCorrected: true) else {
+                throw Failure.message("page version not found: \(versionID.rawValue)")
+            }
+            return Result(
+                output: try OKFCommandSupport.format(
+                    ownerID: projection.pageID.rawValue,
+                    versionID: versionID.rawValue,
+                    metadata: projection.metadata, json: json),
+                didCommit: false)
+        case .okfStatus(let versionID, let status):
+            try store.setPageOKFStatus(versionID: versionID, status: status)
+            return Result(output: status.map { "status\t\($0.rawValue)" } ?? "status\tunset", didCommit: true)
+        case .okfFreshness(let versionID, let input):
+            try store.setPageOKFFreshness(versionID: versionID, policy: try input.policy)
+            return Result(output: "freshness\tupdated", didCommit: true)
+        case .okfVerify(let versionID, let input):
+            let id = try store.recordPageOKFVerification(
+                versionID: versionID, verifier: input.verifier,
+                verifiedAt: input.verifiedAt, basis: input.basis,
+                freshnessPolicy: try input.freshness?.policy)
+            return Result(output: "verification_id\t\(id.rawValue)", didCommit: true)
+        case .okfCorrect(let versionID, let input):
+            try store.correctPageOKFVerification(
+                versionID: versionID, verificationID: input.verificationID,
+                correctingVerifier: input.verifier, correctedAt: input.correctedAt,
+                reason: input.reason)
+            return Result(output: "corrected\t\(input.verificationID.rawValue)", didCommit: true)
         }
     }
 

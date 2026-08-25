@@ -399,7 +399,7 @@ struct SchemaV48MigrationTests {
             afterChatCopy: { source, copied in recorder.append("copy"); return copied }
         )
         let store = try migrationStore(at: v47URL(), hooks: hooks, checker: checker)
-        #expect(recorder.events == ["verify", "cleanup", "copy", "check"])
+        #expect(recorder.events == ["verify", "cleanup", "copy", "check", "verify"])
         #expect(store.pragmaValue("user_version") == "\(GRDBWikiStore.schemaVersion)")
     }
 

@@ -17,6 +17,7 @@ public enum ChangeTokenFold: Sendable {
     case sourceGraph(versionCount: Int64, refsGenerationSum: Int64, activitiesCount: Int64)
     case bookmarks(count: Int64)
     case chat(count: Int64, messageCount: Int64)
+    case okfMetadata(revisionSum: Int64)
 }
 
 /// A structured view over the whole-wiki change token — the File Provider sync
@@ -65,6 +66,7 @@ public struct ChangeToken: Sendable, Equatable {
     public var sourceGraph = SourceGraph()
     public var bookmarks: Int64 = 0
     public var chat = Chat()
+    public var okfMetadataRevisionSum: Int64 = 0
 
     /// Colon-joined form reproducing the historical positional token, for the
     /// File Provider sync anchor. Append-only (never reorder fields).
@@ -73,7 +75,7 @@ public struct ChangeToken: Sendable, Equatable {
         + "\(sourceTable.count):\(sourceTable.versionSum):"
         + "\(systemPrompt):\(log):\(wikiIndex):\(sourceMarkdownVersions):"
         + "\(sourceGraph.versionCount):\(sourceGraph.refsGenerationSum):\(sourceGraph.activitiesCount):"
-        + "\(bookmarks):\(chat.count):\(chat.messageCount)"
+        + "\(bookmarks):\(chat.count):\(chat.messageCount):\(okfMetadataRevisionSum)"
     }
 
     /// Applies one fold's values into the matching named field.
@@ -99,6 +101,8 @@ public struct ChangeToken: Sendable, Equatable {
             bookmarks = count
         case let .chat(count, messageCount):
             chat = Chat(count: count, messageCount: messageCount)
+        case let .okfMetadata(revisionSum):
+            okfMetadataRevisionSum = revisionSum
         }
     }
 }

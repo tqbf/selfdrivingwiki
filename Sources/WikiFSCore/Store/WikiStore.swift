@@ -606,6 +606,48 @@ public protocol WikiStore: Sendable {
     /// Versions window to view/diff a historical version without restoring it.
     func pageVersionBody(versionID: PageVersionID) throws -> String?
 
+    // MARK: - Exact-version OKF trust, lifecycle, and freshness (v52)
+
+    func pageOKFMetadata(versionID: PageVersionID, includeCorrected: Bool) throws -> PageOKFTrustMetadata?
+    func sourceMarkdownOKFMetadata(
+        versionID: SourceMarkdownVersionID, includeCorrected: Bool
+    ) throws -> SourceMarkdownOKFTrustMetadata?
+
+    func setPageOKFStatus(versionID: PageVersionID, status: OKFConceptStatus?) throws
+    func setSourceMarkdownOKFStatus(
+        versionID: SourceMarkdownVersionID, status: OKFConceptStatus?
+    ) throws
+    func setPageOKFFreshness(
+        versionID: PageVersionID, policy: OKFFreshnessPolicy?
+    ) throws
+    func setSourceMarkdownOKFFreshness(
+        versionID: SourceMarkdownVersionID, policy: OKFFreshnessPolicy?
+    ) throws
+
+    @discardableResult
+    func recordPageOKFVerification(
+        versionID: PageVersionID, verifier: OKFVerifierIdentity,
+        verifiedAt: Date, basis: OKFVerificationBasis,
+        freshnessPolicy: OKFFreshnessPolicy?
+    ) throws -> OKFVerificationID
+    @discardableResult
+    func recordSourceMarkdownOKFVerification(
+        versionID: SourceMarkdownVersionID, verifier: OKFVerifierIdentity,
+        verifiedAt: Date, basis: OKFVerificationBasis,
+        freshnessPolicy: OKFFreshnessPolicy?
+    ) throws -> OKFVerificationID
+
+    func correctPageOKFVerification(
+        versionID: PageVersionID, verificationID: OKFVerificationID,
+        correctingVerifier: OKFVerifierIdentity, correctedAt: Date,
+        reason: OKFVerificationCorrectionReason?
+    ) throws
+    func correctSourceMarkdownOKFVerification(
+        versionID: SourceMarkdownVersionID, verificationID: OKFVerificationID,
+        correctingVerifier: OKFVerifierIdentity, correctedAt: Date,
+        reason: OKFVerificationCorrectionReason?
+    ) throws
+
     /// Revert a page to a specific version: repoint the `page-content` ref to
     /// `versionID` and update the denormalized `pages.body_markdown` from the
     /// version's blob. Emits a `.page .updated` change event.

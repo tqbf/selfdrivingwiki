@@ -196,6 +196,44 @@ struct ProjectionTests {
         #expect(!node.isFolder)
     }
 
+    @Test func sourceMarkdownRevisionChangesContentVersionButNotMetadataVersion() {
+        let source = SourceSummary(
+            id: .init(rawValue: "source"), filename: "source.pdf", ext: "pdf",
+            mimeType: "application/pdf", byteSize: 10,
+            createdAt: .distantPast, updatedAt: .distantPast, version: 1)
+        let head = SourceMarkdownVersion(
+            id: .init(rawValue: "markdown"), sourceID: source.id, parentID: nil,
+            content: "body", origin: .extraction, note: nil, createdAt: .distantPast)
+        let byID = Projection.sourceMarkdownNode(
+            for: Projection.Identity.sourceMarkdownByID(source.id.rawValue),
+            source: source, head: head, projectionRevision: 3)
+        let byName = Projection.sourceMarkdownNode(
+            for: Projection.Identity.sourceMarkdownByName(source.id.rawValue),
+            source: source, head: head, projectionRevision: 3)
+        #expect(byID.contentVersion == Data("markdown:okf:3".utf8))
+        #expect(byName.contentVersion == byID.contentVersion)
+        #expect(byID.metadataVersion == Data("markdown".utf8))
+        #expect(byName.metadataVersion == byID.metadataVersion)
+    }
+
+    @Test func pageRevisionChangesBothAliasContentVersionsAndZeroIsNeutral() {
+        let page = WikiPage(
+            id: .init(rawValue: "page"), title: "Page", slug: "page",
+            bodyMarkdown: "body", createdAt: .distantPast,
+            updatedAt: .distantPast, version: 7)
+        let byID = Projection.pageFileNode(
+            for: Projection.Identity.pageByID(page.id.rawValue), page: page,
+            projectionRevision: 2)
+        let byTitle = Projection.pageFileNode(
+            for: Projection.Identity.pageByTitle(page.id.rawValue), page: page,
+            projectionRevision: 2)
+        let legacy = Projection.pageFileNode(
+            for: Projection.Identity.pageByID(page.id.rawValue), page: page)
+        #expect(byID.contentVersion == Data("7:okf:2".utf8))
+        #expect(byTitle.contentVersion == byID.contentVersion)
+        #expect(legacy.contentVersion == Data("7".utf8))
+    }
+
     // MARK: - Cross-module prefix consistency
 
     /// The `source-by-name:` prefix is the contract between the app
