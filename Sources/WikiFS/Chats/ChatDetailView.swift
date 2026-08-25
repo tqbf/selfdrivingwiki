@@ -33,6 +33,8 @@ struct ChatDetailView: View {
     @State private var queuedMessages: [PendingQueuedMessage] = []
     @State private var diagnosticExportError: String?
     @State private var metadataState: MetadataHydrationState = .idle
+    @State private var chatResolution: ChatResolution?
+    @State private var chatResolutionRetryVersion = 0
     /// Durable data is refreshed by the keyed read task. Daemon snapshots only
     /// re-project this cache; they never cause a SQLite read from the inspector.
     @State private var durableChatMetadata: ChatMetadataInput?
@@ -44,7 +46,10 @@ struct ChatDetailView: View {
     }
 
     private var chatSummary: ChatSummary? {
-        store.chats.first { $0.id == chatID }
+        if case .available(let summary) = chatResolution {
+            return summary
+        }
+        return nil
     }
 
     private var remotePresentationState: ChatDetailPresentation.RemoteState {
@@ -63,7 +68,7 @@ struct ChatDetailView: View {
     private var presentation: ChatDetailPresentation {
         ChatDetailPresentation.make(
             chatID: chatID,
-            chatSummary: chatSummary,
+            chatResolution: chatResolution,
             showsInternals: showsInternals,
             remoteSession: remotePresentationState,
             persistedTranscriptItems: persistedTranscriptItems,
@@ -131,6 +136,17 @@ struct ChatDetailView: View {
             }
             guard !runState.isAnswering, runState.isLive, !queuedMessages.isEmpty else { return }
             firePendingQueuedMessage()
+        }
+        .task(id: ChatResolutionTaskKey(
+            chatID: chatID,
+            messageVersion: store.messageVersion,
+            retryVersion: chatResolutionRetryVersion
+        )) {
+            guard let chatID, !isLiveChat else {
+                chatResolution = nil
+                return
+            }
+            chatResolution = store.resolveChat(id: chatID)
         }
         .task(id: ChatHydrationTaskKey(chatID: chatID, sessionID: remoteSession.instanceID)) {
             if let chatID {
@@ -259,8 +275,14 @@ struct ChatDetailView: View {
         case .internals:
             internalsContent
 
-        case .missingChat:
-            missingChatContent
+        case .loadingChat:
+            loadingChatContent
+
+        case .deletedChat:
+            deletedChatContent
+
+        case .failedToLoadChat(let message):
+            failedToLoadChatContent(message: message)
 
         case .chatSurface:
             chatSurfaceContent
@@ -277,11 +299,34 @@ struct ChatDetailView: View {
         .padding(ChatMetrics.contentInset)
     }
 
-    private var missingChatContent: some View {
+    private var loadingChatContent: some View {
         ContentUnavailableView {
-            Label("Chat Missing", systemImage: ResourceKind.chat.systemImageName)
+            Label("Loading Chat", systemImage: ResourceKind.chat.systemImageName)
         } description: {
-            Text("This chat is no longer available.")
+            ProgressView()
+                .controlSize(.small)
+                .accessibilityLabel("Loading chat")
+        }
+    }
+
+    private var deletedChatContent: some View {
+        ContentUnavailableView {
+            Label("Chat Deleted", systemImage: ResourceKind.chat.systemImageName)
+        } description: {
+            Text("This chat no longer exists in this wiki.")
+        }
+    }
+
+    private func failedToLoadChatContent(message: String) -> some View {
+        ContentUnavailableView {
+            Label("Couldn’t Load Chat", systemImage: "exclamationmark.triangle")
+        } description: {
+            Text(message)
+        } actions: {
+            Button("Retry") {
+                chatResolution = nil
+                chatResolutionRetryVersion &+= 1
+            }
         }
     }
 
@@ -830,6 +875,12 @@ private struct ChatAnchorTaskKey: Hashable {
     let chatID: ChatID?
     let anchorVersion: Int
     let messageCount: Int
+}
+
+private struct ChatResolutionTaskKey: Hashable {
+    let chatID: ChatID?
+    let messageVersion: Int
+    let retryVersion: Int
 }
 
 private struct ChatHydrationTaskKey: Hashable {

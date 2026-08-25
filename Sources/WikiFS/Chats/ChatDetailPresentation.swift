@@ -7,7 +7,9 @@ import WikiFSCore
 struct ChatDetailPresentation {
     enum ContentState: Equatable {
         case internals
-        case missingChat
+        case loadingChat
+        case deletedChat
+        case failedToLoadChat(String)
         case chatSurface
     }
 
@@ -54,7 +56,7 @@ struct ChatDetailPresentation {
 
     static func make(
         chatID: ChatID?,
-        chatSummary: ChatSummary?,
+        chatResolution: ChatResolution?,
         showsInternals: Bool,
         remoteSession: RemoteState,
         persistedTranscriptItems: [PersistedChatTranscriptItem],
@@ -102,8 +104,17 @@ struct ChatDetailPresentation {
         let contentState: ContentState
         if showsInternals && controls.showsDebugControls {
             contentState = .internals
-        } else if chatID != nil && !isLiveChat && chatSummary == nil {
-            contentState = .missingChat
+        } else if chatID != nil && !isLiveChat {
+            switch chatResolution {
+            case .available:
+                contentState = .chatSurface
+            case .notFound:
+                contentState = .deletedChat
+            case .failed(let message):
+                contentState = .failedToLoadChat(message)
+            case nil:
+                contentState = .loadingChat
+            }
         } else {
             contentState = .chatSurface
         }
