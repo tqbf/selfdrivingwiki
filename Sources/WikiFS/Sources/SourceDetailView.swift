@@ -424,34 +424,13 @@ struct SourceDetailView: View {
     private var currentMarkdownContent: String? {
         if isEditing { return editBuffer }
         if let head = headVersion { return pinnedExtraction?.content ?? head.content }
-        // Issue #599: HTML sources preserve the original HTML bytes as the
-        // source blob — the markdown lives in a processed-markdown version
-        // (headVersion, above). Don't fall through to `sourceBytes` for HTML
-        // sources — the raw bytes are HTML, not markdown, and rendering them
-        // as markdown would show raw `<html>` tags. The Reader tab falls back
-        // to its "No Processed Markdown" placeholder until headVersion loads.
-        if SourceRendererPresentationPlanner.isHTMLSource(file) {
-            return nil
-        }
-        if isMarkdownNative, let data = sourceBytesSnapshot {
-            return String(data: data, encoding: .utf8)
-        }
-        if SourceRendererPresentationPlanner.standaloneDiagramSource(file),
-           let data = sourceBytesSnapshot {
-            return String(data: data, encoding: .utf8)
-        }
-        // #620: defense-in-depth — when a Mermaid-detected source arrives
-        // without a text MIME (e.g. a pre-existing NULL-mime `.mmd` row from
-        // before the `addSource` extension fallback, or any future ingest path
-        // that bypasses it), still surface the raw diagram bytes so the Reader
-        // and Rendered tabs render instead of empty states. Calls the static
-        // detector with `content: nil` (mime+filename arms only) — NOT the
-        // renderer matcher, which reads this same property and would recurse.
-        // The content-scan arm is irrelevant here: this
-        // branch is only reached when `isMarkdownNative` is false, and a
-        // fenced-block-only source (no `.mmd`, no `text/mermaid` mime) already
-        // had nowhere to read its bytes from before #620.
-        return nil
+        // Raw source presentation is byte-authoritative rather than an
+        // extension allowlist. The planner reuses ContentTypeDetector, so JSON,
+        // XML, PEM, AsciiDoc, source code, and extensionless UTF-8 are readable,
+        // while binary signatures, malformed UTF-8, and NUL-containing bodies
+        // continue to fail closed to Raw Source.
+        return SourceRendererPresentationPlanner.sourceText(
+            for: file, bytes: sourceBytesSnapshot)
     }
 
     private var findText: String? {
@@ -1220,6 +1199,7 @@ struct SourceDetailView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if SourceRendererPresentationPlanner.usesMarkdownSourcePresentation(
             for: file,
+            boundedBytes: sourceBytesSnapshot,
             currentMarkdown: currentMarkdownContent
         ) {
             markdownContent
