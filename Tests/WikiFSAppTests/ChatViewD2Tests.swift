@@ -72,6 +72,21 @@ struct ChatViewD2Tests {
 
     // MARK: - (a) Source-of-truth rule + flip timing
 
+    @Test func persistedChatResolvesByIDWhenSummaryCacheIsStale() throws {
+        let (model, store) = try tempModel()
+        let chat = try store.createChat(kind: .edit, title: "Created outside the model")
+
+        #expect(model.chats.contains { $0.id == chat.id } == false)
+        #expect(model.resolveChat(id: chat.id) == .available(chat))
+    }
+
+    @Test func absentPersistedChatResolvesAsNotFound() throws {
+        let (model, _) = try tempModel()
+        let missingID = ChatID(rawValue: "01J" + String(repeating: "Z", count: 22))
+
+        #expect(model.resolveChat(id: missingID) == .notFound)
+    }
+
     @Test func activeChatID_isNil_byDefault() {
         let launcher = makeLauncher()
         #expect(launcher.activeChatID == nil)

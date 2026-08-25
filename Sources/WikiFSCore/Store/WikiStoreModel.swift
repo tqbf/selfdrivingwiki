@@ -23,6 +23,12 @@ public struct SearchUpgradeState: Identifiable {
     }
 }
 
+public enum ChatResolution: Equatable, Sendable {
+    case available(ChatSummary)
+    case notFound
+    case failed(String)
+}
+
 /// The app's single source of truth for wiki state and the in-flight editing
 /// session. `@MainActor @Observable` (uses `Observation`, NOT SwiftUI — this
 /// type is UI-framework-agnostic so it can be unit-tested directly).
@@ -4594,10 +4600,24 @@ public final class WikiStoreModel {
         }
     }
 
-    /// `@MainActor` wrapper for `getChat(id:)` (#830). Returns `nil` if the
-    /// chat doesn't exist or the read fails.
+    /// Resolves one chat authoritatively instead of inferring existence from
+    /// the cached `chats` projection. Only `.chatNotFound` means the chat was
+    /// deleted; database failures remain retryable errors.
+    public func resolveChat(id: ChatID) -> ChatResolution {
+        do {
+            return .available(try store.getChat(id: id))
+        } catch WikiStoreError.chatNotFound {
+            return .notFound
+        } catch {
+            DebugLog.store("WikiStoreModel.resolveChat failed for \(id.rawValue): \(error)")
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    /// Compatibility wrapper for callers that only need an optional summary.
     public func getChat(id: ChatID) -> ChatSummary? {
-        DebugLog.trying("getChat", operation: { try store.getChat(id: id) })
+        guard case .available(let summary) = resolveChat(id: id) else { return nil }
+        return summary
     }
 
     /// `@MainActor` wrapper for the per-chat model override write/clear (the

@@ -12,7 +12,7 @@ struct ChatDetailPresentationTests {
     @Test func contentStateShowsInternalsOnlyForRunningQueryDebugSurface() {
         let presentation = ChatDetailPresentation.make(
             chatID: ChatID(rawValue: "01J" + String(repeating: "A", count: 22)),
-            chatSummary: nil,
+            chatResolution: nil,
             showsInternals: true,
             remoteSession: .fixture(runState: .answering, runningKind: .query),
             persistedTranscriptItems: [],
@@ -25,10 +25,10 @@ struct ChatDetailPresentationTests {
         #expect(presentation.controls.showsDebugControls)
     }
 
-    @Test func contentStateShowsMissingForDeletedPersistedChat() {
+    @Test func unresolvedPersistedChatShowsLoadingUntilAuthoritativeLookupCompletes() {
         let presentation = ChatDetailPresentation.make(
             chatID: ChatID(rawValue: "01J" + String(repeating: "B", count: 22)),
-            chatSummary: nil,
+            chatResolution: nil,
             showsInternals: false,
             remoteSession: .fixture(),
             persistedTranscriptItems: [],
@@ -37,7 +37,37 @@ struct ChatDetailPresentationTests {
             isChatOperationConfigured: true
         )
 
-        #expect(presentation.contentState == .missingChat)
+        #expect(presentation.contentState == .loadingChat)
+    }
+
+    @Test func contentStateShowsDeletedOnlyAfterAuthoritativeNotFound() {
+        let presentation = ChatDetailPresentation.make(
+            chatID: ChatID(rawValue: "01J" + String(repeating: "N", count: 22)),
+            chatResolution: .notFound,
+            showsInternals: false,
+            remoteSession: .fixture(),
+            persistedTranscriptItems: [],
+            queuedMessages: [],
+            hasDraftText: false,
+            isChatOperationConfigured: true
+        )
+
+        #expect(presentation.contentState == .deletedChat)
+    }
+
+    @Test func contentStateKeepsReadFailureDistinctFromDeletion() {
+        let presentation = ChatDetailPresentation.make(
+            chatID: ChatID(rawValue: "01J" + String(repeating: "F", count: 22)),
+            chatResolution: .failed("database is busy"),
+            showsInternals: false,
+            remoteSession: .fixture(),
+            persistedTranscriptItems: [],
+            queuedMessages: [],
+            hasDraftText: false,
+            isChatOperationConfigured: true
+        )
+
+        #expect(presentation.contentState == .failedToLoadChat("database is busy"))
     }
 
     @Test func transcriptProjectionSelectsTheTypedLiveTranscriptInsteadOfPersistedRows() {
@@ -62,7 +92,7 @@ struct ChatDetailPresentationTests {
         ])
         let live = ChatDetailPresentation.make(
             chatID: chatID,
-            chatSummary: ChatSummary.fixture(id: chatID),
+            chatResolution: .available(ChatSummary.fixture(id: chatID)),
             showsInternals: false,
             remoteSession: .fixture(
                 sessionChatID: chatID,
@@ -76,7 +106,7 @@ struct ChatDetailPresentationTests {
         )
         let persisted = ChatDetailPresentation.make(
             chatID: chatID,
-            chatSummary: ChatSummary.fixture(id: chatID),
+            chatResolution: .available(ChatSummary.fixture(id: chatID)),
             showsInternals: false,
             remoteSession: .fixture(transcript: liveTranscript),
             persistedTranscriptItems: persistedItems,
@@ -141,7 +171,7 @@ struct ChatDetailPresentationTests {
         #expect(persistedAssistant.cachedResponseSummary == "Distinctive model summary.")
         let presentation = ChatDetailPresentation.make(
             chatID: chat.id,
-            chatSummary: chat,
+            chatResolution: .available(chat),
             showsInternals: false,
             remoteSession: .fixture(),
             persistedTranscriptItems: page.items,
@@ -174,7 +204,7 @@ struct ChatDetailPresentationTests {
 
         let live = ChatDetailPresentation.make(
             chatID: liveChatID,
-            chatSummary: ChatSummary.fixture(id: liveChatID),
+            chatResolution: .available(ChatSummary.fixture(id: liveChatID)),
             showsInternals: false,
             remoteSession: .fixture(sessionChatID: liveChatID, runState: .warm, pendingPermissions: [request]),
             persistedTranscriptItems: [],
@@ -184,7 +214,7 @@ struct ChatDetailPresentationTests {
         )
         let persisted = ChatDetailPresentation.make(
             chatID: liveChatID,
-            chatSummary: ChatSummary.fixture(id: liveChatID),
+            chatResolution: .available(ChatSummary.fixture(id: liveChatID)),
             showsInternals: false,
             remoteSession: .fixture(pendingPermissions: [request]),
             persistedTranscriptItems: [],
@@ -201,7 +231,7 @@ struct ChatDetailPresentationTests {
         let liveChatID = ChatID(rawValue: "01J" + String(repeating: "E", count: 22))
         let presentation = ChatDetailPresentation.make(
             chatID: liveChatID,
-            chatSummary: ChatSummary.fixture(id: liveChatID),
+            chatResolution: .available(ChatSummary.fixture(id: liveChatID)),
             showsInternals: false,
             remoteSession: .fixture(
                 sessionChatID: liveChatID,
@@ -224,7 +254,7 @@ struct ChatDetailPresentationTests {
         let liveChatID = ChatID(rawValue: "01J" + String(repeating: "F", count: 22))
         let presentation = ChatDetailPresentation.make(
             chatID: liveChatID,
-            chatSummary: ChatSummary.fixture(id: liveChatID),
+            chatResolution: .available(ChatSummary.fixture(id: liveChatID)),
             showsInternals: false,
             remoteSession: .fixture(
                 sessionChatID: liveChatID,
@@ -245,7 +275,7 @@ struct ChatDetailPresentationTests {
     @Test func composerProjectionDisablesInputAndSendWhenChatOperationIsNotConfigured() {
         let presentation = ChatDetailPresentation.make(
             chatID: nil,
-            chatSummary: nil,
+            chatResolution: nil,
             showsInternals: false,
             remoteSession: .fixture(),
             persistedTranscriptItems: [],
@@ -263,7 +293,7 @@ struct ChatDetailPresentationTests {
         let chatID = ChatID(rawValue: "01J" + String(repeating: "G", count: 22))
         let presentation = ChatDetailPresentation.make(
             chatID: chatID,
-            chatSummary: ChatSummary.fixture(id: chatID),
+            chatResolution: .available(ChatSummary.fixture(id: chatID)),
             showsInternals: false,
             remoteSession: .fixture(),
             persistedTranscriptItems: [],
