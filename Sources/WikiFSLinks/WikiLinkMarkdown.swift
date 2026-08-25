@@ -1,17 +1,10 @@
 import Foundation
 import WikiFSTypes
 
-/// Pure, view-free transform that rewrites Obsidian-style `[[wiki-links]]` in a
-/// Markdown body into ordinary Markdown links pointing at a private `wiki://`
-/// scheme — consumed by the WKWebView reader (`WikiReaderView` +
-/// `MarkdownHTMLRenderer`), which renders to HTML (CommonMark has no concept of
-/// `[[…]]`). Wiki-link cite spans become `<a href="wiki://…">`; embed spans
-/// (`![[…]]`) become either inline media HTML (`<img>`/`<video>`/`<audio>`/
-/// `<iframe>`/fenced mermaid — unchanged) or a collapsed
-/// `<details class="sdw-transclusion">` disclosure (Plan v2: pages + non-media
-/// sources) whose body is fetched + rendered lazily on expand through the same
-/// `ReaderMarkdown.prepared` + `MarkdownHTMLRenderer.render` pipeline the
-/// top-level reader uses (`plans/page-embed-v2.md`).
+/// A pure compatibility transform for non-render callers. It rewrites
+/// `[[wiki-links]]` as private `wiki://` Markdown links. It preserves every
+/// `![[embed]]` occurrence exactly. The production reader uses typed syntax,
+/// resolution, and HTML lowering instead of this string bridge.
 ///
 /// This is an **in-app preview/navigation** concern only — the on-disk / mounted
 /// body STAYS literal `[[…]]` (that's the canonical wiki format the agents and
@@ -186,49 +179,12 @@ public enum WikiLinkMarkdown {
             // fall back to the stored alias). Non-canonical links keep the
             // name-resolution path below.
             if WikiLinkParser.isCanonicalULID(bareTarget) {
-                let pageID = PageID(rawValue: bareTarget)
                 let sourceID = SourceID(rawValue: bareTarget)
 
-                // Embed dispatch (Plan v2): page embeds + non-media source
-                // transclusions emit a collapsed `<details>`; media sources
-                // stay inline via `embedHTML`; missing → broken header. The
-                // page/source probe consults both tables so a bare
-                // `![[<ULID>]]` resolves correctly regardless of which table
-                // owns the id — page wins on collision. An explicit `page:` /
-                // `source:` prefix forces the namespace (no cross-namespace
-                // probe), matching the cite-link semantics.
+                // The compatibility adapter converts cite links only. Typed
+                // preparation owns all embed syntax and its presentation role.
                 if isEmbedPrefix {
-                    let hasPagePrefix = bareBase.lowercased().hasPrefix(ParsedLink.LinkType.page.linkPrefix)
-                    let hasSourcePrefix = bareBase.lowercased().hasPrefix(ParsedLink.LinkType.source.linkPrefix)
-                    let pageName = hasSourcePrefix ? nil : displayName(pageID.rawValue, .page)
-                    let sourceName = hasPagePrefix ? nil : displayName(sourceID.rawValue, .source)
-                    let aliasDisplay: String? = fixed.alias.flatMap { collapseWhitespace($0) }.flatMap { $0.isEmpty ? nil : $0 }
-
-                    if let pageName {
-                        let display = aliasDisplay ?? pageName
-                        out += transclusionEmbedHTML(display: display, kind: .page,
-                                                     id: pageID.rawValue, target: nil,
-                                                     fragment: fragment, name: pageName)
-                        continue
-                    }
-                    if sourceName != nil, let info = embedInfo?(bareTarget),
-                       let html = embedHTML(display: aliasDisplay ?? sourceName ?? bareTarget,
-                                            id: info.id, mimeType: info.mimeType, target: info.target) {
-                        out += html
-                        continue
-                    }
-                    if sourceName != nil,
-                       let info = embedInfo?(bareTarget),
-                       isNonMediaSource(mimeType: info.mimeType, target: info.target) {
-                        let display = aliasDisplay ?? sourceName ?? bareTarget
-                        out += transclusionEmbedHTML(display: display, kind: .source,
-                                                     id: sourceID.rawValue, target: nil,
-                                                     fragment: fragment, name: display)
-                        continue
-                    }
-                    // Neither table owns this id → broken embed (no fetch).
-                    let display = aliasDisplay ?? bareTarget
-                    out += brokenEmbedHTML(display: display, kind: hasSourcePrefix ? .source : .page)
+                    out += "!" + ns.substring(with: full)
                     continue
                 }
 
@@ -338,70 +294,11 @@ public enum WikiLinkMarkdown {
                 display = linkTarget
             }
 
-            // Embed dispatch (Plan v2): a `!` prefix routes pages + non-media
-            // sources to a collapsed `<details>` (lazy fetch+render on expand),
-            // media sources stay inline via `embedHTML`, missing targets render
-            // a muted broken header, and `chat:` embeds fall through to a
-            // normal cite link (chat is not embeddable — `WikiLinkParser.parse`
-            // rejects `![[chat:…]]` at L184). Bare `![[Foo]]` falls back to the
-            // source namespace when the page doesn't exist (page wins on
-            // collision); `page:`/`source:` prefixes force the namespace.
-            if isEmbedPrefix && kind != .chat {
-                let hasPagePrefix = bareBase.lowercased().hasPrefix(ParsedLink.LinkType.page.linkPrefix)
-
-                if kind == .page {
-                    // Explicit `page:` prefix → page only (no source fallback).
-                    // Bare name → page first, fall back to source on miss.
-                    if isResolved(linkTarget, .page) {
-                        out += transclusionEmbedHTML(display: display, kind: .page,
-                                                     id: nil, target: linkTarget,
-                                                     fragment: linkFragment, name: linkTarget)
-                        continue
-                    }
-                    if !hasPagePrefix, let info = embedInfo?(linkTarget) {
-                        if let html = embedHTML(display: display, id: info.id,
-                                                mimeType: info.mimeType, target: info.target) {
-                            out += html
-                            continue
-                        }
-                        if isNonMediaSource(mimeType: info.mimeType, target: info.target) {
-                            out += transclusionEmbedHTML(display: display, kind: .source,
-                                                         id: info.id.rawValue, target: nil,
-                                                         fragment: linkFragment, name: linkTarget)
-                            continue
-                        }
-                        // Synthetic provider mime w/o target on a bare-name
-                        // fallback → drop to cite link below (the source
-                        // resolves, but has nothing to embed).
-                    } else {
-                        // Page unresolved, no source fallback (explicit prefix
-                        // OR bare name with no source either) → broken page
-                        // embed (Plan v2 §7.1: muted header, inert).
-                        out += brokenEmbedHTML(display: display, kind: .page)
-                        continue
-                    }
-                }
-
-                if kind == .source {
-                    if let info = embedInfo?(linkTarget) {
-                        if let html = embedHTML(display: display, id: info.id,
-                                                mimeType: info.mimeType, target: info.target) {
-                            out += html
-                            continue
-                        }
-                        if isNonMediaSource(mimeType: info.mimeType, target: info.target) {
-                            out += transclusionEmbedHTML(display: display, kind: .source,
-                                                         id: info.id.rawValue, target: nil,
-                                                         fragment: linkFragment, name: linkTarget)
-                            continue
-                        }
-                        // Synthetic provider mime w/o target → cite link below.
-                    } else {
-                        // Source not in embedInfo → broken source embed.
-                        out += brokenEmbedHTML(display: display, kind: .source)
-                        continue
-                    }
-                }
+            // The compatibility adapter never lowers embeds. Preserve the exact
+            // authored syntax for the typed render pipeline.
+            if isEmbedPrefix {
+                out += "!" + ns.substring(with: full)
+                continue
             }
 
             out += markdownLink(display: display, target: linkTarget, kind: kind,
@@ -554,121 +451,6 @@ public enum WikiLinkMarkdown {
         return "[\(safeDisplay)](\(url))"
     }
 
-    /// Inline HTML for an embed source link. Returns `nil` for unrecognized
-    /// cases so the caller falls back to a cite link.
-    ///
-    /// **Load-bearing ordering:** an external `target` (byteless external media)
-    /// is checked FIRST — before the byteful `wiki-blob://` MIME dispatch — so a
-    /// byteless source carrying a synthetic mime (`video/youtube`, `audio/spotify`)
-    /// NEVER reaches the blob branch (which would emit a broken
-    /// `<video src="wiki-blob://…">` against empty bytes). The `wiki-blob://` URL
-    /// is served by `BlobSchemeHandler` (Phase 4a).
-    private static func embedHTML(display: String, id: SourceID, mimeType: String?, target: EmbedTarget?) -> String? {
-        // 1. Byteless external media or inline diagram: provider iframe,
-        // direct-remote native tag, or a fenced ```mermaid code block.
-        if let target {
-            switch target.kind {
-            case .iframe:
-                let sizeClass = iframeSizeClass(for: target.url)
-                // YouTube-specific: the player initializes a JS runtime that
-                // 153-errors under `loading="lazy"` (WebKit suspends the frame,
-                // the player inits against a detached/zero-size iframe) and needs
-                // the reader's referrer to be forwarded. Eager-load it and set an
-                // explicit referrer policy. Other providers (Vimeo/Spotify/…) keep
-                // lazy loading unchanged — they render fine as-is (issue #206 non-goal).
-                if target.url.contains("youtube-nocookie.com") || target.url.contains("youtube.com") {
-                    return "<iframe src=\"\(embedEscape(target.url))\" class=\"wiki-embed \(sizeClass)\" allow=\"encrypted-media; picture-in-picture; fullscreen\" referrerpolicy=\"strict-origin-when-cross-origin\" allowfullscreen></iframe>"
-                }
-                return "<iframe src=\"\(embedEscape(target.url))\" class=\"wiki-embed \(sizeClass)\" allow=\"encrypted-media; picture-in-picture; fullscreen\" loading=\"lazy\"></iframe>"
-            case .audio:
-                return "<audio src=\"\(embedEscape(target.url))\" controls class=\"wiki-embed\"></audio>"
-            case .video:
-                return "<video src=\"\(embedEscape(target.url))\" controls class=\"wiki-embed\"></video>"
-            case .diagram:
-                // #670 — inline Mermaid diagram. Emit a fenced ```mermaid
-                // code block (NOT a raw `<div class="mermaid">…</div>`).
-                //
-                // Why a fenced code block instead of a raw div: the reader's
-                // body is parsed by swift-markdown before reaching the
-                // WKWebView. CommonMark's HTML-block rule (type 6, which
-                // `<div>` falls under) ends at the first blank line — so a
-                // diagram with a blank line inside its source, or an embed
-                // placed mid-paragraph / inside a list item, gets re-parsed
-                // as markdown: the contents are wrapped in `<p>`s, indent is
-                // reinterpreted as a code block, and `>` gets double-escaped
-                // to `&amp;gt;` (literal text `&gt;`). The scrambled
-                // `div.textContent` then trips `mermaid.parse()` with
-                // "Syntax error in text". A fenced code block is a
-                // first-class markdown construct that survives ALL of those
-                // contexts (paragraphs, lists, blockquotes, blank lines)
-                // intact — the same path every other ```mermaid block uses.
-                //
-                // The reader's `mermaidBootstrapJS` (in WikiReaderView) then
-                // scans for `code.language-mermaid`, reads
-                // `code.textContent` (which un-escapes the renderer's `&gt;`
-                // back to the raw `>`), creates a `<div class="mermaid">`
-                // with the un-escaped diagram text, and replaces the parent
-                // `<pre>` — then `mermaid.run({querySelector:'.mermaid'})`
-                // renders the SVG. Same pipeline as a hand-written fenced
-                // ```mermaid block.
-                //
-                // Escape hatch: pick a fence length strictly longer than any
-                // backtick run in the diagram source so a diagram containing
-                // ``` (or longer) doesn't prematurely close the fence. Default
-                // is 3 (standard GFM).
-                let source = target.content ?? ""
-                let n = String(repeating: "`", count: mermaidFenceLength(for: source))
-                let fenceInfo = MarkdownFenceInfo(alias: .mermaid).canonicalInfoString
-                return "\n\(n)\(fenceInfo)\n\(source)\n\(n)\n"
-            }
-        }
-        // 2. Byteful blob dispatch (Phase 4a) — unchanged.
-        let url = "\(blobScheme)://source/\(id.rawValue)"
-        guard let mime = mimeType else { return nil }
-        // Safety: a synthetic provider mime (video/youtube, audio/spotify, …)
-        // that did NOT resolve to a target must NOT reach the blob branch — its
-        // `hasPrefix("video/")` / `("audio/")` would otherwise emit a broken
-        // `<video src="wiki-blob://…">` against empty bytes. Fall back to a cite
-        // link instead (§1.3 / R2 ordering invariant).
-        if syntheticProviderMimes.contains(mime) { return nil }
-        if mime.hasPrefix("image/") {
-            return "<img src=\"\(url)\" alt=\"\(embedEscape(display))\" class=\"wiki-embed\">"
-        }
-        if mime.hasPrefix("video/") {
-            return "<video src=\"\(url)\" controls class=\"wiki-embed\"></video>"
-        }
-        if mime.hasPrefix("audio/") {
-            return "<audio src=\"\(url)\" controls class=\"wiki-embed\"></audio>"
-        }
-        if MimeType.isPDF(mime) {
-            return "<iframe src=\"\(url)\" class=\"wiki-embed-pdf\"></iframe>"
-        }
-        return nil // unknown MIME → caller falls back to cite link or transclusion
-    }
-
-    /// Whether a resolved source is **genuinely non-media** — i.e. eligible for
-    /// the Plan v2 `<details>` transclusion fallback when `embedHTML` returned
-    /// `nil`. Mirrors the EXACT predicate order `embedHTML` encodes (Plan v2
-    /// §15.2): an external `target`, a media MIME (image/video/audio/PDF), a
-    /// Mermaid MIME, or a byteless synthetic provider mime MUST NOT reach the
-    /// transclusion branch — they stay inline (`embedHTML`) or fall through to
-    /// a cite link (synthetic mime with no target).
-    ///
-    /// Returns `false` for an unknown/`nil` MIME so a source we know nothing
-    /// about stays a cite link (the pre-v2 behavior) rather than speculative
-    /// transclusion.
-    private static func isNonMediaSource(mimeType: String?, target: EmbedTarget?) -> Bool {
-        if target != nil { return false }
-        guard let mime = mimeType?.lowercased() else { return false }
-        if mime.hasPrefix("image/") { return false }
-        if mime.hasPrefix("video/")  { return false }
-        if mime.hasPrefix("audio/")  { return false }
-        if MimeType.isPDF(mime)      { return false }
-        if MimeType.isMermaid(mime)  { return false }
-        if syntheticProviderMimes.contains(mime) { return false }
-        return true
-    }
-
     // MARK: - Transclusion (<details> disclosure) — Plan v2
 
     /// HTML attribute namespace for the lazy transclusion seam. The web view's
@@ -707,128 +489,6 @@ public enum WikiLinkMarkdown {
     /// The kind value carried on `data-sdw-embed-kind` for pages. Sources use
     /// `ParsedLink.LinkType.source.rawValue` ("source").
     public static let pageEmbedKind = "page"
-
-    /// Emit the collapsed-transclusion `<details>` for a page or non-media
-    /// source embed (Plan v2 §3.1). Pure — no store, no IO. The body stays
-    /// empty (a `Loading…` placeholder) and is filled on first expand by the
-    /// reader's `embedFetchName` handler.
-    ///
-    /// - Parameters:
-    ///   - display: the `<summary>` header text (alias when provided, else the
-    ///     resolved current name for canonical, else the raw target).
-    ///   - kind: `"page"` or `"source"` — drives the fetch dispatch.
-    ///   - id: the canonical ULID when known at linkify; `nil` for name-based
-    ///     page embeds (resolved at expand via `store.pageID(forTitle:)`).
-    ///   - target: the raw name for name-based page embeds; `nil` when `id` is
-    ///     known.
-    ///   - fragment: the optional `#fragment`, verbatim.
-    ///   - name: the human-readable name shown in the cycle marker / missing
-    ///     placeholder (the raw target / current name).
-    /// - Returns: inline HTML starting on its own line (leading `\n` so the
-    ///   swift-markdown HTML-block rule reliably opens it; see gotcha §15.9).
-    public static func transclusionEmbedHTML(
-        display: String,
-        kind: ParsedLink.LinkType,
-        id: String?,
-        target: String?,
-        fragment: String?,
-        name: String
-    ) -> String {
-        let kindAttr = kind == .page ? pageEmbedKind : kind.rawValue
-        let idAttr = id ?? ""
-        let targetAttr = target?.addingPercentEncoding(withAllowedCharacters: targetAllowed) ?? ""
-        let fragAttr = fragment?.addingPercentEncoding(withAllowedCharacters: fragmentAllowed) ?? ""
-        let node = "embed-\(UUID().uuidString)"
-        let titleEscaped = embedEscape(display)
-        let nameEscaped = embedEscape(name)
-        return """
-        \n<details class="\(TransclusionAttr.className)" \
-        \(TransclusionAttr.kind)="\(kindAttr)" \
-        \(TransclusionAttr.id)="\(idAttr)" \
-        \(TransclusionAttr.target)="\(targetAttr)" \
-        \(TransclusionAttr.fragment)="\(fragAttr)" \
-        \(TransclusionAttr.name)="\(nameEscaped)" \
-        \(TransclusionAttr.path)="" \
-        \(TransclusionAttr.node)="\(node)" \
-        \(TransclusionAttr.state)="empty">\
-        <summary><span class="sdw-embed-title">\(titleEscaped)</span></summary>\
-        <div class="sdw-embed-body">\
-        <span class="sdw-embed-placeholder">Loading…</span>\
-        </div>\
-        </details>\n
-        """
-    }
-
-    /// Emit a broken/missing transclusion `<details>` (Plan v2 §7.1): collapsed,
-    /// inert (no fetch metadata), header muted red via the
-    /// `.sdw-transclusion[data-sdw-state="missing"]` CSS rule. Pure.
-    public static func brokenEmbedHTML(display: String, kind: ParsedLink.LinkType) -> String {
-        let kindAttr = kind == .page ? pageEmbedKind : kind.rawValue
-        let label = kind == .page ? "Page not found" : "Source not found"
-        let titleEscaped = embedEscape(display)
-        return """
-        \n<details class="\(TransclusionAttr.className)" \
-        \(TransclusionAttr.state)="missing" \
-        \(TransclusionAttr.kind)="\(kindAttr)">\
-        <summary><span class="sdw-embed-title">\(label): \(titleEscaped)</span></summary>\
-        </details>\n
-        """
-    }
-
-    /// URL-allowed set for the `data-sdw-embed-target` value. Same shape as the
-    /// title-query set but tighter (no `=` reserved by attributes).
-    private static let targetAllowed: CharacterSet = {
-        var set = CharacterSet.urlQueryAllowed
-        set.remove(charactersIn: "&=?#\"' <>")
-        return set
-    }()
-
-    /// Pick the reader-CSS sizing class for a provider iframe: audio-player
-    /// iframes (Spotify, SoundCloud, Apple Podcasts) get a fixed height; video
-    /// iframes (YouTube, Vimeo) get a 16:9 aspect ratio. Derived from the embed
-    /// URL host so `EmbedTarget` stays a minimal (kind, url) pair.
-    private static func iframeSizeClass(for url: String) -> String {
-        if url.contains("open.spotify.com")
-            || url.contains("w.soundcloud.com")
-            || url.contains("embed.podcasts.apple.com") {
-            return "wiki-embed-audio"
-        }
-        return "wiki-embed-video"
-    }
-
-    /// The synthetic MIME types used for byteless provider embeds. A source
-    /// carrying one of these MUST render via an `EmbedTarget` (checked first);
-    /// if it has no target it falls back to a cite link, never the blob branch.
-    private static let syntheticProviderMimes: Set<String> = [
-        "video/youtube", "video/vimeo", "audio/spotify", "audio/soundcloud"
-    ]
-
-    /// Escape `"` and `<`/`>`/`&` for an HTML attribute value (alt text).
-    private static func embedEscape(_ s: String) -> String {
-        s.replacingOccurrences(of: "&", with: "&amp;")
-         .replacingOccurrences(of: "<", with: "&lt;")
-         .replacingOccurrences(of: ">", with: "&gt;")
-         .replacingOccurrences(of: "\"", with: "&quot;")
-    }
-
-    /// Pick a fenced-code-block fence length strictly longer than any backtick
-    /// run in `source`, so a diagram containing ``` (or longer) doesn't close
-    /// the fence we emit. Default is 3 (standard GFM). CommonMark §4.5 says a
-    /// closing fence must be at least as long as the opening fence, so length
-    /// `maxRun + 1` is immune to any run inside the diagram body.
-    private static func mermaidFenceLength(for source: String) -> Int {
-        var maxRun = 0
-        var run = 0
-        for ch in source {
-            if ch == "`" {
-                run += 1
-                if run > maxRun { maxRun = run }
-            } else {
-                run = 0
-            }
-        }
-        return max(maxRun + 1, 3)
-    }
 
     /// Collapse whitespace runs to one space and trim — delegates to the single
     /// shared normalizer.

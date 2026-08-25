@@ -503,220 +503,36 @@ struct WikiLinkMarkdownTests {
         #expect(!out.contains("sdw-transclusion"))
     }
 
-    // MARK: - Embed rendering `![[source:…]]` (Phase 4a, AC.4)
+    // MARK: - Embed compatibility bridge
 
-    @Test func embedImageRendersAsImgTag() {
+    @Test func compatibilityBridgePreservesSourceEmbedSyntax() {
+        let authored = "![[source:img.png]]"
         let id = SourceID(rawValue: "01HTESTIMG0000000000000001")
         let out = WikiLinkMarkdown.linkified(
-            "![[source:img.png]]",
+            authored,
             isResolved: { _, _ in true },
             embedInfo: { _ in WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "image/png") }
         )
-        #expect(out.contains("<img"))
-        #expect(out.contains("wiki-blob://source/\(id.rawValue)"))
-        #expect(out.contains("class=\"wiki-embed\""))
-        #expect(!out.contains("wiki://"))  // not a fallback cite link
-    }
 
-    @Test func embedVideoRendersAsVideoTag() {
-        let id = SourceID(rawValue: "01HTESTVID00000000000000002")
-        let out = WikiLinkMarkdown.linkified(
-            "![[source:clip.mp4]]",
-            isResolved: { _, _ in true },
-            embedInfo: { _ in WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "video/mp4") }
-        )
-        #expect(out.contains("<video"))
-        #expect(out.contains("controls"))
-        #expect(out.contains("wiki-blob://source/\(id.rawValue)"))
-    }
-
-    @Test func embedAudioRendersAsAudioTag() {
-        let id = SourceID(rawValue: "01HTESTAUD00000000000000003")
-        let out = WikiLinkMarkdown.linkified(
-            "![[source:song.mp3]]",
-            isResolved: { _, _ in true },
-            embedInfo: { _ in WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "audio/mpeg") }
-        )
-        #expect(out.contains("<audio"))
-        #expect(out.contains("controls"))
-        #expect(out.contains("wiki-blob://source/\(id.rawValue)"))
-    }
-
-    @Test func embedPdfRendersAsIframe() {
-        let id = SourceID(rawValue: "01HTESTPDF00000000000000004")
-        let out = WikiLinkMarkdown.linkified(
-            "![[source:doc.pdf]]",
-            isResolved: { _, _ in true },
-            embedInfo: { _ in WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "application/pdf") }
-        )
-        #expect(out.contains("<iframe"))
-        #expect(out.contains("wiki-blob://source/\(id.rawValue)"))
-    }
-
-    @Test func embedUnresolvedSourceRendersBrokenHeader() {
-        // Plan v2: a `![[source:…]]` whose source does NOT resolve (embedInfo
-        // returns nil) renders a muted broken-source `<details>` instead of a
-        // cite link — header is "Source not found: Ghost", no fetch metadata.
-        let out = WikiLinkMarkdown.linkified(
-            "![[source:Ghost]]",
-            isResolved: { _, _ in false },
-            embedInfo: { _ in nil }
-        )
-        #expect(out.contains("sdw-transclusion"))
-        #expect(out.contains("data-sdw-state=\"missing\""))
-        #expect(out.contains("Source not found: Ghost"))
-        #expect(!out.contains("data-sdw-embed-target"))  // inert — no fetch
+        #expect(out == authored)
         #expect(!out.contains("<img"))
-    }
-
-    @Test func embedUnknownMimeRendersTransclusion() {
-        // Plan v2: a resolved source whose MIME is non-media (text/plain)
-        // renders a collapsed `<details>` transclusion (lazy fetch on expand),
-        // not a cite link.
-        let id = SourceID(rawValue: "01HTESTTXT00000000000000005")
-        let out = WikiLinkMarkdown.linkified(
-            "![[source:notes.txt]]",
-            isResolved: { _, _ in true },
-            embedInfo: { _ in WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "text/plain") }
-        )
-        #expect(out.contains("sdw-transclusion"))
-        #expect(out.contains("data-sdw-embed-kind=\"source\""))
-        #expect(out.contains("data-sdw-embed-id=\"\(id.rawValue)\""))
-        #expect(!out.contains("<img"))
-        #expect(!out.contains("<video"))
-        #expect(!out.contains("wiki://source"))
-    }
-
-    @Test func embedWithNoResolverRendersBrokenHeader() {
-        // Plan v2: no embedInfo passed → the source is treated as unresolved
-        // and renders a muted broken-source `<details>`.
-        let out = WikiLinkMarkdown.linkified(
-            "![[source:img.png]]",
-            isResolved: { _, _ in true }
-        )
-        #expect(out.contains("sdw-transclusion"))
-        #expect(out.contains("data-sdw-state=\"missing\""))
-        #expect(out.contains("Source not found"))
-        #expect(!out.contains("<img"))
-    }
-
-    // MARK: - Byteless external-embed targets (Phase 4b, AC.1/AC.2/AC.4)
-
-    @Test func embedProviderIframeTargetRendersIframe() {
-        let id = SourceID(rawValue: "01HTESTYT0000000000000000A")
-        let target = EmbedTarget(kind: .iframe, url: "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ")
-        let out = WikiLinkMarkdown.linkified(
-            "![[source:video]]",
-            isResolved: { _, _ in true },
-            embedInfo: { _ in WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "video/youtube", target: target) }
-        )
-        #expect(out.contains("<iframe"))
-        #expect(out.contains("youtube-nocookie.com/embed/dQw4w9WgXcQ"))
-        #expect(out.contains("wiki-embed"))
-        // YouTube iframes are eager-loaded (NOT lazy) and carry a referrer policy —
-        // lazy-loading + null referrer is what produced error 153 (issue #206).
-        #expect(!out.contains("loading=\"lazy\""))
-        #expect(out.contains("referrerpolicy=\"strict-origin-when-cross-origin\""))
-        #expect(!out.contains("wiki-blob://"))  // external, not blob
-        #expect(!out.contains("wiki://"))  // not a fallback cite link
-    }
-
-    @Test func embedNonYouTubeIframeKeepsLazyLoading() {
-        // Non-goal guard (issue #206): Vimeo/Spotify/etc. iframes render unchanged —
-        // still lazy-loaded, no YouTube-specific attributes.
-        let id = SourceID(rawValue: "01HTESTVIMEO00000000000000")
-        let target = EmbedTarget(kind: .iframe, url: "https://player.vimeo.com/video/76979871")
-        let out = WikiLinkMarkdown.linkified(
-            "![[source:video]]",
-            isResolved: { _, _ in true },
-            embedInfo: { _ in WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "video/vimeo", target: target) }
-        )
-        #expect(out.contains("<iframe"))
-        #expect(out.contains("player.vimeo.com/video/76979871"))
-        #expect(out.contains("loading=\"lazy\""))
-    }
-
-    @Test func embedDirectRemoteAudioTargetRendersNativeAudio() {
-        let id = SourceID(rawValue: "01HTESTMP3000000000000000B")
-        let target = EmbedTarget(kind: .audio, url: "https://radio.example.com/live.mp3")
-        let out = WikiLinkMarkdown.linkified(
-            "![[source:stream]]",
-            isResolved: { _, _ in true },
-            embedInfo: { _ in WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "audio/mpeg", target: target) }
-        )
-        #expect(out.contains("<audio"))
-        #expect(out.contains("radio.example.com/live.mp3"))
-        #expect(out.contains("controls"))
         #expect(!out.contains("wiki-blob://"))
+    }
+
+    @Test func compatibilityBridgePreservesPageAndChatEmbedSyntax() {
+        let authored = "![[Home]] and ![[chat:Conversation]]"
+        let out = WikiLinkMarkdown.linkified(authored, isResolved: { _, _ in true })
+
+        #expect(out == authored)
+        #expect(!out.contains("<details"))
         #expect(!out.contains("wiki://"))
     }
 
-    @Test func embedDirectRemoteVideoTargetRendersNativeVideo() {
-        let id = SourceID(rawValue: "01HTESTMP4000000000000000C")
-        let target = EmbedTarget(kind: .video, url: "https://example.com/clip.mp4")
-        let out = WikiLinkMarkdown.linkified(
-            "![[source:clip]]",
-            isResolved: { _, _ in true },
-            embedInfo: { _ in WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "video/mp4", target: target) }
-        )
-        #expect(out.contains("<video"))
-        #expect(out.contains("example.com/clip.mp4"))
-        #expect(out.contains("controls"))
-        #expect(!out.contains("wiki-blob://"))
-    }
+    @Test func compatibilityBridgePreservesEmbedContext() {
+        let authored = "Here is ![[source:img.png]] inline."
+        let out = WikiLinkMarkdown.linkified(authored, isResolved: { _, _ in true })
 
-    @Test func embedSyntheticMimeWithoutTargetFallsBackToCiteLink() {
-        // AC.4 / R2 regression + Plan v2 §15.2 gotcha: a byteless source with
-        // a synthetic mime (video/youtube) but NO resolved target must NOT
-        // become a transclusion either — it falls back to a cite link so the
-        // user can navigate to the source page. (A non-media transclusion
-        // would render an empty body.)
-        let id = SourceID(rawValue: "01HTESTSYN000000000000000D")
-        let out = WikiLinkMarkdown.linkified(
-            "![[source:video]]",
-            isResolved: { _, _ in true },
-            embedInfo: { _ in WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "video/youtube") }
-        )
-        #expect(out.contains("wiki://source"))  // cite link fallback
-        #expect(!out.contains("<video"))
-        #expect(!out.contains("wiki-blob://"))
-        #expect(!out.contains("sdw-transclusion"))
-    }
-
-    @Test func embedBytefulStillUsesBlobDispatch() {
-        // AC.4 regression: a byteful source (target nil) still emits wiki-blob://.
-        let id = SourceID(rawValue: "01HTESTBYT000000000000000E")
-        let out = WikiLinkMarkdown.linkified(
-            "![[source:pic.png]]",
-            isResolved: { _, _ in true },
-            embedInfo: { _ in WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "image/png") }
-        )
-        #expect(out.contains("<img"))
-        #expect(out.contains("wiki-blob://source/\(id.rawValue)"))
-    }
-
-    @Test func pageEmbedPrefixRendersTransclusion() {
-        // Plan v2: `![[Page]]` is a valid embed — it renders a collapsed
-        // `<details>` transclusion. The `!` is consumed (not emitted as text).
-        let out = WikiLinkMarkdown.linkified("![[Home]]", isResolved: { _, _ in true })
-        #expect(out.contains("sdw-transclusion"))
-        #expect(out.contains("data-sdw-embed-kind=\"page\""))
-        #expect(out.contains("<summary>"))
-        #expect(out.contains("Home"))
-        #expect(!out.contains("!"))
-        #expect(!out.contains("wiki://page"))  // not a cite link
-    }
-
-    @Test func embedInSentenceDoesNotConsumePrecedingText() {
-        let id = SourceID(rawValue: "01HTESTIMG00000000000000006")
-        let out = WikiLinkMarkdown.linkified(
-            "Here is ![[source:img.png]] inline.",
-            isResolved: { _, _ in true },
-            embedInfo: { _ in WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "image/png") }
-        )
-        #expect(out.hasPrefix("Here is "))
-        #expect(out.hasSuffix(" inline."))
-        #expect(out.contains("<img"))
+        #expect(out == authored)
     }
 
     @Test func escapedBangIsNotEmbedAndStaysLiteral() {
@@ -776,13 +592,12 @@ struct WikiLinkMarkdownTests {
         #expect(!out.contains("wiki://"))
     }
 
-    @Test func chatEmbedPrefixConsumedAndRendersAsLink() {
-        // `![[chat:…]]` is not a valid embed — the `!` is consumed and it
-        // renders as a normal chat link (consistent with `![[Page]]`).
-        let out = WikiLinkMarkdown.linkified("![[chat:Conv]]") { _, _ in true }
-        #expect(out.contains("wiki://chat?title=Conv"))
-        #expect(!out.contains("<img"))
-        #expect(!out.contains("!"))
+    @Test func chatEmbedSyntaxRemainsLiteralInCompatibilityBridge() {
+        let authored = "![[chat:Conv]]"
+        let out = WikiLinkMarkdown.linkified(authored) { _, _ in true }
+
+        #expect(out == authored)
+        #expect(!out.contains("wiki://"))
     }
 
     // Pull the URL substring out of a single `[text](url)` for assertions.

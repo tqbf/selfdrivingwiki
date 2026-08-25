@@ -53,7 +53,7 @@ struct RendererHostView<Source: View, Rendered: View>: View {
                             fallbackWithSource(reason: "The selected renderer could not be loaded.")
                         }
                     } else {
-                        fallbackWithSource(reason: "The selected renderer is unavailable.")
+                        fallbackWithSource(reason: RendererPresentationState.unavailableFallbackMessage)
                     }
                 case .split:
                     if RendererPresentationLayout.supportsSplit(detailWidth: PageEditorMetrics.detailMinWidth) {
@@ -66,7 +66,7 @@ struct RendererHostView<Source: View, Rendered: View>: View {
                                     fallbackPane(reason: "The selected renderer could not be loaded.")
                                 }
                             } else {
-                                fallbackPane(reason: "The selected renderer is unavailable.")
+                                fallbackPane(reason: RendererPresentationState.unavailableFallbackMessage)
                             }
                         }
                     } else {

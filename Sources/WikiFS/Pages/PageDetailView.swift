@@ -525,7 +525,7 @@ struct PageDetailView: View {
                             installedRendererFactory: installedRendererFactory,
                             installedRendererFactoryInputs: installedRendererFactoryInputs,
                             onJSONCanvasHostAction: JSONCanvasHostActionRouter.handler(for: store)),
-                        inlineImageRendererDescriptors: installedRendererFactoryInputs.enabledDescriptors,
+                        inlineRendererDescriptors: installedRendererFactoryInputs.enabledDescriptors,
                         findText: findText, findVersion: findVersion,
                         findOccurrence: findOccurrence)
             .frame(maxWidth: .infinity)

@@ -5,6 +5,10 @@ Status: retained design record for PR 2.
 > Superseded scope note, 2026-08-19: The static-card and no-PR-3 attachment
 > limits in this record apply to the retained PR 2 history. The active inline
 > attachment design is in [`dynamic-inline-renderer-attachments.md`](dynamic-inline-renderer-attachments.md).
+>
+> Superseded role note, 2026-08-25: Syntax now owns the embedding role. Images
+> and media stay inline. Approved rich fences use disclosure rows. See
+> [`typed-markdown-embed-pipeline.md`](typed-markdown-embed-pipeline.md).
 
 This document records the approved PR 2 contract for typed Markdown embeds,
 rich fences, and static renderer cards. It inherits the Phase 1 ordinary code

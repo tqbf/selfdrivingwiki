@@ -15,6 +15,7 @@ internal struct RendererEmbedActivationContext: Hashable, Sendable {
     let pageID: PageID
     let pageVersionID: PageVersionID
     let identity: Identity
+    let embeddingRole: RendererEmbeddingRole
     let rendererReference: RendererReference
     let input: RendererBridgeInput
     let capability: RendererSessionCapability
@@ -31,23 +32,24 @@ internal struct RendererEmbedActivationContext: Hashable, Sendable {
     }
 
     init(pageID: PageID, pageVersionID: PageVersionID, blockID: MarkdownBlockID,
+         embeddingRole: RendererEmbeddingRole = .disclosureRow,
          rendererReference: RendererReference, input: RendererBridgeInput,
          capability: RendererSessionCapability, generation: Int,
          displayTitle: String? = nil) {
         self.init(pageID: pageID, pageVersionID: pageVersionID, identity: .block(blockID),
-                  rendererReference: rendererReference, input: input,
+                  embeddingRole: embeddingRole, rendererReference: rendererReference, input: input,
                   capability: capability, generation: generation, displayTitle: displayTitle)
     }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.pageID == rhs.pageID && lhs.pageVersionID == rhs.pageVersionID && lhs.identity == rhs.identity &&
-        lhs.rendererReference == rhs.rendererReference && lhs.input == rhs.input &&
+        lhs.embeddingRole == rhs.embeddingRole && lhs.rendererReference == rhs.rendererReference && lhs.input == rhs.input &&
         lhs.capability == rhs.capability && lhs.generation == rhs.generation
     }
 
     func hash(into hasher: inout Hasher) {
         hasher.combine(pageID); hasher.combine(pageVersionID); hasher.combine(identity)
-        hasher.combine(rendererReference); hasher.combine(capability); hasher.combine(generation)
+        hasher.combine(embeddingRole); hasher.combine(rendererReference); hasher.combine(capability); hasher.combine(generation)
         switch input {
         case .source(let versionID):
             hasher.combine(0); hasher.combine(versionID)
@@ -59,12 +61,14 @@ internal struct RendererEmbedActivationContext: Hashable, Sendable {
     }
 
     init(pageID: PageID, pageVersionID: PageVersionID, identity: Identity,
+         embeddingRole: RendererEmbeddingRole = .disclosureRow,
          rendererReference: RendererReference, input: RendererBridgeInput,
          capability: RendererSessionCapability, generation: Int,
          displayTitle: String? = nil) {
         self.pageID = pageID
         self.pageVersionID = pageVersionID
         self.identity = identity
+        self.embeddingRole = embeddingRole
         self.rendererReference = rendererReference
         self.input = input
         self.capability = capability
@@ -195,7 +199,7 @@ struct WikiReaderView: View {
     var inlineAttachmentResolver: RendererInlineAttachmentResolver = RendererInlineAttachmentResolverFactory.defaultResolver
     /// Validated installed descriptor snapshot supplied by the reader host.
     /// It is data-only; constructing renderer sessions remains downstream.
-    var inlineImageRendererDescriptors: [RendererDescriptor] = []
+    var inlineRendererDescriptors: [RendererDescriptor] = []
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
     @State private var isLoading = true
 
@@ -222,7 +226,7 @@ struct WikiReaderView: View {
                           addBookmarkHandler: addBookmarkHandler,
                           onRendererActivation: onRendererActivation,
                           inlineAttachmentResolver: inlineAttachmentResolver,
-                          inlineImageRendererDescriptors: inlineImageRendererDescriptors,
+                          inlineRendererDescriptors: inlineRendererDescriptors,
                           findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
             if isLoading {
                 ProgressView()
@@ -252,6 +256,7 @@ struct WikiReaderView: View {
         guard let packageID = RendererPackageID(rawValue: items["package"] ?? ""),
               let version = RendererPackageVersion(rawValue: items["version"] ?? ""),
               let registrationID = RendererRegistrationID(rawValue: items["registration"] ?? ""),
+              let embeddingRole = RendererEmbeddingRole(rawValue: items["embeddingRole"] ?? ""),
               let capability = items["capability"],
               let generation = Int(items["generation"] ?? ""),
               capability == admission.capability.rawValue,
@@ -285,7 +290,8 @@ struct WikiReaderView: View {
                   artifact.mimeType.rawValue == mimeType else { return nil }
             let reference = RendererReference(packageID: packageID, version: version, registrationID: registrationID)
             let context = RendererEmbedActivationContext(pageID: admission.pageID, pageVersionID: admission.pageVersionID,
-                                                         blockID: artifact.blockID, rendererReference: reference,
+                                                         blockID: artifact.blockID, embeddingRole: embeddingRole,
+                                                         rendererReference: reference,
                                                          input: input, capability: admission.capability, generation: admission.generation)
             guard admission.authorizes(context: context) else { return nil }
             return (reference: reference, input: .inlineArtifact(artifact))
@@ -297,6 +303,7 @@ struct WikiReaderView: View {
             guard let sourceMIME = RendererMIMEType(rawValue: mimeType),
                   let context = admission.sourceContext(
                       sourceID: sourceID, digest: digest, mimeType: sourceMIME, input: input),
+                  context.embeddingRole == embeddingRole,
                   case .source(let admittedSource) = context.identity,
                   admittedSource.bytes.count <= WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount,
                   RendererSHA256.digest(admittedSource.bytes) == admittedSource.digest,
@@ -399,12 +406,10 @@ struct WikiReaderView: View {
         }
     }
 
-    /// Bootstrap that initializes Mermaid (matching the system appearance via
-    /// `prefers-color-scheme`), converts each
-    /// `<pre><code class="language-mermaid">` into a `<div class="mermaid">`
-    /// using `textContent` (which un-escapes the renderer's `&lt;`/`&gt;`/`&amp;`),
-    /// then renders. Wrapped in try/catch so a bad diagram logs but never breaks
-    /// the page.
+    /// Bootstrap that initializes Mermaid for the system appearance. It renders
+    /// typed inline containers on load and disclosure-row containers on demand.
+    /// Each path keeps readable source visible until Mermaid renders an SVG.
+    /// Errors leave that source visible and do not break the page.
     nonisolated static let mermaidBootstrapJS = """
     (function(){
       try {
@@ -445,6 +450,22 @@ struct WikiReaderView: View {
             if (window.__sdwRendererAttachmentReport) window.__sdwRendererAttachmentReport();
           }, { passive: false });
         };
+        window.__sdwRenderInlineMermaid = function(diagram) {
+          if (!diagram || !diagram.classList.contains('sdw-inline-mermaid')) return;
+          var fallback = diagram.nextElementSibling;
+          if (!fallback || !fallback.classList.contains('sdw-inline-mermaid__fallback') || diagram.getAttribute('data-mermaid-rendered') === 'true' || diagram.getAttribute('data-mermaid-rendering') === 'true') return;
+          diagram.setAttribute('data-mermaid-rendering', 'true');
+          try {
+            mermaid.run({ nodes: [diagram] }).then(function(){
+              diagram.removeAttribute('data-mermaid-rendering');
+              diagram.setAttribute('data-mermaid-rendered', 'true');
+              fallback.hidden = true;
+              window.__sdwInstallMermaidScrollZoom(diagram);
+              if (window.__sdwRendererAttachmentReport) window.__sdwRendererAttachmentReport();
+            }).catch(function(e){ diagram.removeAttribute('data-mermaid-rendering'); diagram.textContent = ''; fallback.hidden = false; console.error('inline mermaid render failed', e); });
+          } catch(e) { diagram.removeAttribute('data-mermaid-rendering'); diagram.textContent = ''; fallback.hidden = false; console.error('inline mermaid render failed', e); }
+        };
+        document.querySelectorAll('.sdw-inline-mermaid').forEach(window.__sdwRenderInlineMermaid);
         window.__sdwRenderMermaidRow = function(row) {
           if (!row || row.getAttribute('data-renderer-kind') !== 'mermaid') return;
           var expansion = row.querySelector('.sdw-mermaid-row__expansion');
@@ -475,7 +496,10 @@ struct WikiReaderView: View {
     /// body contains a mermaid block and the library is bundled, the Mermaid lib
     /// + bootstrap are appended at the end of `<body>` so they run after the DOM
     /// exists without blocking first paint.
-    nonisolated static func documentHTML(_ body: String) -> String {
+    nonisolated static func documentHTML(
+        _ body: String,
+        mermaidLibrary: String? = MermaidRendererAssets.library
+    ) -> String {
         let width = Int(PageEditorMetrics.readableContentWidth)
         let inset = Int(PageEditorMetrics.contentInset)
         // Embed the vendored Mermaid library + bootstrap only when the page
@@ -489,7 +513,7 @@ struct WikiReaderView: View {
         var mermaidScripts = ""
         if (body.contains("class=\"language-mermaid\"")
                 || body.contains("class=\"mermaid\"")),
-           let lib = MermaidRendererAssets.library {
+           let lib = mermaidLibrary {
             mermaidScripts = "<script>\(lib)</script>\n<script>\(mermaidBootstrapJS)</script>"
         }
         return """
@@ -654,6 +678,17 @@ struct WikiReaderView: View {
           iframe.wiki-embed-video { width: 100%; aspect-ratio: 16/9; height: auto; border: none; border-radius: 8px; }
           iframe.wiki-embed-audio { width: 100%; height: 152px; border: none; border-radius: 8px; }
           audio.wiki-embed { width: 100%; }
+          .sdw-inline-renderer { display: block; position: relative; width: 100%; }
+          .sdw-inline-renderer[data-renderer-admitted="true"] {
+            min-height: \(Int(RendererAttachmentHostPolicy.dynamicInlineRendererReservedHeight))px;
+            margin: 0 0 1em; overflow: hidden; border-radius: 8px;
+          }
+          .sdw-inline-renderer--dom { margin: 0 0 1em; }
+          .sdw-inline-renderer__svg {
+            display: block; width: 100%; height: auto; max-height: 640px;
+            border: 1px solid var(--border); border-radius: 8px;
+          }
+          .sdw-inline-renderer__action { display: inline-block; margin-top: 0.45em; font-size: 0.9em; }
           mark.sdwhl { background: rgba(255, 213, 79, 0.8); border-radius: 2px; }
           \(MermaidRendererAssets.sharedCSS)
           .sdw-mermaid-row__expansion { margin-top:0.6em; }
@@ -797,15 +832,19 @@ final class WikiReaderWebView: WKWebView {
 
     nonisolated static let rendererAttachmentGeometryJS = """
     (function(){
-      var known={}; function report(){ var g=window.__sdwRendererAttachmentGeneration; if(typeof g!=='number')return; var current={};
-        document.querySelectorAll('.sdw-renderer-card[id]').forEach(function(e,i){current[e.id]=true;var expansion=e.querySelector('.sdw-renderer-card__expansion');var target=e.dataset.rendererExpanded==='true'&&expansion?expansion:e;var r=target.getBoundingClientRect();
-          window.webkit.messageHandlers.rendererAttachmentGeometry.postMessage({generation:g,placeholderID:e.id,x:r.x,y:r.y,width:r.width,height:r.height,visible:r.bottom>0&&r.right>0&&r.top<innerHeight&&r.left<innerWidth,revision:(window.__sdwRendererAttachmentRevision||0)});});
-        Object.keys(known).forEach(function(id){if(!current[id])window.webkit.messageHandlers.rendererAttachmentGeometry.postMessage({kind:'removed',generation:g,placeholderID:id});}); known=current; }
+      var known={};var visible={};var margin=600;
+      var observer=new IntersectionObserver(function(entries){entries.forEach(function(entry){visible[entry.target.id]=entry.isIntersecting;});window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();},{root:null,rootMargin:margin+'px 0px '+margin+'px 0px',threshold:0});
+      function role(e){return e.classList.contains('sdw-inline-renderer')?'inlineContent':'disclosureRow';}
+      function nodes(){return document.querySelectorAll('.sdw-renderer-card[id],.sdw-inline-renderer[id][data-renderer-admitted="true"]');}
+      function report(){var g=window.__sdwRendererAttachmentGeneration;if(typeof g!=='number')return;var current={};
+        nodes().forEach(function(e){current[e.id]=true;if(!known[e.id])observer.observe(e);var expansion=e.querySelector('.sdw-renderer-card__expansion');var target=role(e)==='disclosureRow'&&e.dataset.rendererExpanded==='true'&&expansion?expansion:e;var r=target.getBoundingClientRect();var retained=visible[e.id]===true;
+          window.webkit.messageHandlers.rendererAttachmentGeometry.postMessage({generation:g,placeholderID:e.id,embeddingRole:role(e),x:r.x,y:r.y,width:r.width,height:r.height,visible:retained,revision:(window.__sdwRendererAttachmentRevision||0)});});
+        Object.keys(known).forEach(function(id){if(!current[id]){observer.unobserve(known[id]);delete visible[id];window.webkit.messageHandlers.rendererAttachmentGeometry.postMessage({kind:'removed',generation:g,placeholderID:id});}});known={};nodes().forEach(function(e){known[e.id]=e;});}
       window.__sdwRendererAttachmentReport=function(g){window.__sdwRendererAttachmentGeneration=g;window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();};
-      window.__sdwRendererAttachmentReserve=function(id,height){var card=document.getElementById(id);var expansion=card&&card.querySelector('.sdw-renderer-card__expansion');if(!expansion||!Number.isFinite(height))return;expansion.style.minHeight=height+'px';window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();};
-      window.__sdwRendererAttachmentState=function(id,expanded,status){var card=document.getElementById(id);if(!card)return;card.dataset.rendererExpanded=expanded?'true':'false';var disclosure=card.querySelector('.sdw-renderer-card__disclosure');if(disclosure)disclosure.setAttribute('aria-expanded',expanded?'true':'false');var expansion=card.querySelector('.sdw-renderer-card__expansion');if(expansion){expansion.hidden=!expanded;expansion.setAttribute('aria-hidden',expanded?'false':'true');}var prior=card.querySelector('.sdw-renderer-card__status');if(prior)prior.remove();if(status){var node=document.createElement('p');node.className='sdw-renderer-card__status';node.setAttribute('role','status');node.textContent=status;expansion.appendChild(node);}window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();};
+      window.__sdwRendererAttachmentReserve=function(id,height){var card=document.getElementById(id);if(!card||!Number.isFinite(height))return;var target=card.classList.contains('sdw-inline-renderer')?card:card.querySelector('.sdw-renderer-card__expansion');if(!target)return;target.style.minHeight=height+'px';window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();};
+      window.__sdwRendererAttachmentState=function(id,expanded,status){var card=document.getElementById(id);if(!card)return;card.dataset.rendererExpanded=expanded?'true':'false';var disclosure=card.querySelector('.sdw-renderer-card__disclosure');if(disclosure)disclosure.setAttribute('aria-expanded',expanded?'true':'false');var expansion=card.querySelector('.sdw-renderer-card__expansion');if(expansion){expansion.hidden=!expanded;expansion.setAttribute('aria-hidden',expanded?'false':'true');}var prior=card.querySelector('.sdw-renderer-card__status');if(prior)prior.remove();if(status&&expansion){var node=document.createElement('p');node.className='sdw-renderer-card__status';node.setAttribute('role','status');node.textContent=status;expansion.appendChild(node);}window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();};
       document.addEventListener('click',function(event){if(event.target.closest('[data-renderer-action="open-window"]'))return;var rowHeader=event.target.closest('.sdw-renderer-card__row');if(!rowHeader)return;var card=rowHeader.closest('.sdw-renderer-card[id]');if(!card)return;event.preventDefault();if(card.dataset.rendererKind==='mermaid'){var mermaid=card.querySelector('[data-mermaid-disclosure="true"]');var expanded=card.dataset.rendererExpanded==='true';card.dataset.rendererExpanded=expanded?'false':'true';if(mermaid)mermaid.setAttribute('aria-expanded',expanded?'false':'true');var region=card.querySelector('.sdw-mermaid-row__expansion');if(region){region.hidden=expanded;region.setAttribute('aria-hidden',expanded?'true':'false');}if(!expanded&&window.__sdwRenderMermaidRow)window.__sdwRenderMermaidRow(card);report();return;}window.webkit.messageHandlers.rendererAttachmentAction.postMessage({action:card.dataset.rendererExpanded==='true'?'collapse':'activate',placeholderID:card.id});});
-      addEventListener('scroll',report,{passive:true}); addEventListener('resize',report); new MutationObserver(report).observe(document.documentElement,{childList:true,subtree:true,attributes:true});
+      addEventListener('scroll',report,{passive:true});addEventListener('resize',report);new MutationObserver(function(){window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();}).observe(document.documentElement,{childList:true,subtree:true,attributes:true});
     })();
     """
 
@@ -1214,8 +1253,10 @@ final class WikiReaderWebView: WKWebView {
         // Propagate the ancestor path: parent path + this embed's id, so a
         // nested `<details>` opened next carries the chain (cycle check).
         var parentId = host.getAttribute('\(WikiLinkMarkdown.TransclusionAttr.id)') || '';
+        var parentKind = host.getAttribute('\(WikiLinkMarkdown.TransclusionAttr.kind)') || '';
+        var parentToken = parentId && parentKind ? parentKind + ':' + parentId : '';
         var parentPath = host.getAttribute('\(WikiLinkMarkdown.TransclusionAttr.path)') || '';
-        var childPath = parentId ? (parentPath ? parentPath + ' ' + parentId : parentId) : parentPath;
+        var childPath = parentToken ? (parentPath ? parentPath + ' ' + parentToken : parentToken) : parentPath;
         var nested = host.querySelectorAll('details.\(WikiLinkMarkdown.TransclusionAttr.className)');
         for(var i=0;i<nested.length;i++){
           nested[i].setAttribute('\(WikiLinkMarkdown.TransclusionAttr.path)', childPath);
@@ -1362,7 +1403,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
     let addBookmarkHandler: (@MainActor @Sendable (BookmarkTargetPickerContext) -> Void)?
     let onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)?
     let inlineAttachmentResolver: RendererInlineAttachmentResolver
-    let inlineImageRendererDescriptors: [RendererDescriptor]
+    let inlineRendererDescriptors: [RendererDescriptor]
     let findText: String?
     let findVersion: Int
     let findOccurrence: Int
@@ -1379,7 +1420,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         webView.addBookmarkHandler = addBookmarkHandler
         webView.onRendererActivation = onRendererActivation
         context.coordinator.inlineAttachmentResolver = inlineAttachmentResolver
-        context.coordinator.inlineImageRendererDescriptors = inlineImageRendererDescriptors
+        context.coordinator.inlineRendererDescriptors = inlineRendererDescriptors
         webView.navigationDelegate = context.coordinator
         webView.coordinator = context.coordinator
         context.coordinator.webView = webView
@@ -1404,7 +1445,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         webView.addBookmarkHandler = addBookmarkHandler
         webView.onRendererActivation = onRendererActivation
         context.coordinator.inlineAttachmentResolver = inlineAttachmentResolver
-        context.coordinator.inlineImageRendererDescriptors = inlineImageRendererDescriptors
+        context.coordinator.inlineRendererDescriptors = inlineRendererDescriptors
         context.coordinator.store = store
         context.coordinator.currentSelection = currentSelection
         if context.coordinator.loadedMarkdown != markdown ||
@@ -1441,7 +1482,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         weak var attachmentContainer: WikiReaderContainerView?
         private var attachmentCoordinator: RendererAttachmentCoordinator?
         var inlineAttachmentResolver: RendererInlineAttachmentResolver = RendererInlineAttachmentResolverFactory.defaultResolver
-        var inlineImageRendererDescriptors: [RendererDescriptor] = []
+        var inlineRendererDescriptors: [RendererDescriptor] = []
         var store: WikiStoreModel?
         var currentSelection: WikiSelection?
         var loadedMarkdown: String?
@@ -1453,8 +1494,11 @@ internal struct WikiReaderRep: NSViewRepresentable {
         var appliedAnchorVersion = 0
         var appliedFindVersion = 0
         private var convertTask: Task<Void, Never>?
+        private var transclusionTasks: [UUID: Task<Void, Never>] = [:]
+        private var inlineRetentionTasks: [RendererAttachmentPlaceholderID: Task<Void, Never>] = [:]
         private var loadStart: DispatchTime?
         private var loadGeneration = 0
+        private var transclusionGeneration = 0
         private var appliedReaderZoom: CGFloat?
         private var isDismantled = false
         /// Timestamp captured right before `loadHTMLString`, to split
@@ -1470,7 +1514,10 @@ internal struct WikiReaderRep: NSViewRepresentable {
             isLoading: Binding<Bool>
         ) {
             convertTask?.cancel()  // drop any in-flight conversion for stale markdown
+            cancelTransclusionTasks()
+            cancelInlineRetentionTasks()
             loadGeneration += 1
+            transclusionGeneration += 1
             let generation = loadGeneration
             attachmentCoordinator?.closeAll()
             attachmentContainer?.removeAllAttachments()
@@ -1508,15 +1555,18 @@ internal struct WikiReaderRep: NSViewRepresentable {
             // before, just lifted to a shared seam (so chat transcripts can
             // render through it too in Phase A.2).
             let context: WikiRenderContext? = store.map { $0.renderContext() }
-            // The rendered source's own sibling map (nil for pages — no sibling
-            // images). Selection-specific, so it stays here, not in the context.
-            var renderedSourceMap: [String: SourceID]? = nil
-            let contentKind: ReaderMarkdown.ContentKind
-            if case .source(let sourceID) = currentSelection {
-                renderedSourceMap = context?.siblingMaps[sourceID]
-                contentKind = .source
+            // Sources use their exact sibling map. Pages resolve only authored
+            // File Provider by-ID, by-name, and bookmark paths to typed sources.
+            let renderedSourceMap = Self.markdownImageSourceMap(
+                markdown: markdown,
+                currentSelection: currentSelection,
+                context: context,
+                sources: store?.sources ?? [],
+                bookmarkNodes: store?.bookmarkNodes ?? [])
+            let contentKind: ReaderMarkdown.ContentKind = if case .source = currentSelection {
+                .source
             } else {
-                contentKind = .document
+                .document
             }
             let rendererActivationAdmission: RendererEmbedActivationAdmission? = {
                 guard webView?.onRendererActivation != nil,
@@ -1528,14 +1578,18 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     capability: RendererSessionCapability(rawValue: UUID().uuidString),
                     generation: generation)
             }()
-            let imageEmbedProjection = Self.imageEmbedProjection(
+            let sourceRendererCandidates = Self.sourceRendererCandidates(
+                markdown: markdown,
+                context: context,
+                store: store?.internalStore,
+                installedDescriptors: inlineRendererDescriptors)
+            let markdownImageTargets = Self.markdownImageTargets(
                 siblingSourceMap: renderedSourceMap,
                 store: store?.internalStore,
-                installedDescriptors: inlineImageRendererDescriptors)
+                installedDescriptors: inlineRendererDescriptors)
             let documentRenderOptions = MarkdownRenderOptions(
                 codeHighlighting: .enabled(HighlightedCodeBlockBudget()),
                 rendererEmbedProjection: context?.rendererEmbedProjection,
-                imageEmbedProjection: imageEmbedProjection,
                 documentIdentity: documentIdentity,
                 rendererActivationAdmission: rendererActivationAdmission)
             self.renderOptions = documentRenderOptions
@@ -1561,37 +1615,19 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 // constant-true). The transcript's nil-context=constant-true
                 // contract (Phase A.2) is a separate concern, handled at the
                 // ChatWebView layer, not here.
-                let isResolved: (String, ParsedLink.LinkType) -> Bool
-                let embedInfo: ((String) -> WikiLinkMarkdown.SourceEmbedInfo?)?
-                let displayName: (String, ParsedLink.LinkType) -> String?
-                let pinnedExtractionID: ((SourceID, Int) -> SourceMarkdownVersionID?)?
-                if let context {
-                    isResolved = context.isResolved
-                    embedInfo = context.embedInfo
-                    displayName = context.displayName
-                    pinnedExtractionID = context.pinnedExtractionID
-                } else {
-                    isResolved = { _, _ in false }
-                    embedInfo = nil
-                    displayName = { _, _ in nil }
-                    pinnedExtractionID = nil
-                }
-                let prepared = ReaderMarkdown.prepared(markdown,
+                let prepared = ReaderMarkdown.preparedDocument(
+                    markdown,
                     contentKind: contentKind,
-                    isResolved: isResolved,
-                    embedInfo: embedInfo,
-                    displayName: displayName,
-                    pinnedExtractionID: pinnedExtractionID
-                )
+                    documentIdentity: documentIdentity)
+                let projection = context?.documentEmbedResolver(
+                    sourceRendererCandidates: sourceRendererCandidates,
+                    markdownImageTargets: markdownImageTargets).projection(for: prepared)
+                    ?? ResolvedDocumentProjection(markdownImages: markdownImageTargets)
                 guard Task.isCancelled == false else { return }
-                let body = MarkdownHTMLRenderer.render(prepared, imageResolver: { src in
-                    // Phase 4: rewrite a relative image src to its stored blob.
-                    // Only the rendered source's own sibling map is consulted
-                    // (nil for pages → no-op). The renderer already filters out
-                    // absolute/data:/wiki: srcs before calling us.
-                    guard let map = renderedSourceMap, let siblingID = map[src] else { return nil }
-                    return "\(WikiLinkMarkdown.blobScheme)://source/\(siblingID.rawValue)"
-                }, options: documentRenderOptions)
+                let body = MarkdownHTMLRenderer.render(
+                    prepared,
+                    projection: projection,
+                    options: documentRenderOptions)
                 guard Task.isCancelled == false else { return }
                 let html = WikiReaderView.documentHTML(body)
                 let convertMs = Self.elapsedMs(since: t0)
@@ -1619,20 +1655,118 @@ internal struct WikiReaderRep: NSViewRepresentable {
             }
         }
 
-        private static func imageEmbedProjection(
+        static func sourceRendererCandidates(
+            markdown: String,
+            context: WikiRenderContext?,
+            store: WikiStore?,
+            installedDescriptors: [RendererDescriptor]
+        ) -> [SourceID: RendererEmbedPlan] {
+            guard let context, let store,
+                  let registry = rendererRegistry(installedDescriptors: installedDescriptors)
+            else { return [:] }
+            let inlineReferences = inlineCapableReferences(installedDescriptors: installedDescriptors)
+            let sourceIDs = sourceRendererCandidateIDs(
+                markdown: markdown,
+                context: context,
+                registry: registry,
+                inlineCapableReferences: inlineReferences)
+            guard sourceIDs.isEmpty == false else { return [:] }
+
+            var sources: [SourceID: RendererEmbeddedContent.Source] = [:]
+            for sourceID in sourceIDs {
+                do {
+                    guard let version = try store.activeContentVersion(sourceID: sourceID),
+                          let source = try pinnedImageSource(
+                              sourceID: sourceID,
+                              version: version,
+                              inputByteCount: { input in try store.rendererInputByteCount(input) },
+                              readBytes: { versionID in try store.sourceContent(versionID: versionID) })
+                    else { continue }
+                    sources[sourceID] = source
+                } catch {
+                    DebugLog.reader("Source renderer projection could not pin an embedded source; keeping transclusion fallback.")
+                }
+            }
+            do {
+                return try DocumentSourceRendererProjection.build(
+                    sources: sources,
+                    displayNames: context.sourceIDToName,
+                    registry: registry,
+                    inlineCapableReferences: inlineReferences)
+            } catch {
+                DebugLog.reader("Source renderer projection could not validate embedded source facts; keeping transclusion fallback.")
+                return [:]
+            }
+        }
+
+        static func sourceRendererCandidateIDs(
+            markdown: String,
+            context: WikiRenderContext,
+            registry: RendererRegistrySnapshot,
+            inlineCapableReferences: Set<RendererReference>
+        ) -> Set<SourceID> {
+            Set(WikiLinkParser.syntaxNodes(in: markdown).compactMap { node -> SourceID? in
+                guard case .embed(let embed) = node else { return nil }
+                let lookupName: String
+                switch embed.target.namespace {
+                case .source:
+                    lookupName = embed.target.canonicalID ?? embed.target.literal
+                case .page:
+                    if let canonicalID = embed.target.canonicalID,
+                       context.pageIDToName[PageID(rawValue: canonicalID)] != nil {
+                        return nil
+                    }
+                    if embed.target.canonicalID == nil,
+                       context.pageTitles.contains(embed.target.literal.lowercased()) {
+                        return nil
+                    }
+                    lookupName = embed.target.canonicalID ?? embed.target.literal
+                case .chat:
+                    return nil
+                }
+                guard let info = context.embedInfo(lookupName),
+                      info.target == nil,
+                      DocumentSourceRendererProjection.hasEligibleRenderer(
+                          mimeType: info.mimeType,
+                          registry: registry,
+                          inlineCapableReferences: inlineCapableReferences)
+                else { return nil }
+                return info.id
+            })
+        }
+
+        static func markdownImageSourceMap(
+            markdown: String,
+            currentSelection: WikiSelection?,
+            context: WikiRenderContext?,
+            sources: [SourceSummary],
+            bookmarkNodes: [BookmarkNode]
+        ) -> [String: SourceID]? {
+            if case .source(let sourceID) = currentSelection {
+                return context?.siblingMaps[sourceID]
+            }
+            let resolved = MarkdownImageSourcePathResolver.resolve(
+                markdown: markdown,
+                sources: sources,
+                bookmarkNodes: bookmarkNodes)
+            return resolved.isEmpty ? nil : resolved
+        }
+
+        static func markdownImageTargets(
             siblingSourceMap: [String: SourceID]?,
             store: WikiStore?,
             installedDescriptors: [RendererDescriptor]
-        ) -> MarkdownImageEmbedProjection? {
-            guard let siblingSourceMap, siblingSourceMap.isEmpty == false, let store else { return nil }
-            let registry: RendererRegistrySnapshot
-            do {
-                registry = try RendererRegistrySnapshot(
-                    builtInDescriptors: BuiltInRendererDescriptors.all,
-                    enabledInstalledDescriptors: installedDescriptors)
-            } catch {
-                DebugLog.reader("Image renderer projection rejected an invalid descriptor snapshot.")
-                return nil
+        ) -> [String: ResolvedMarkdownImageTarget] {
+            guard let siblingSourceMap, siblingSourceMap.isEmpty == false else { return [:] }
+            guard let store else {
+                return siblingSourceMap.reduce(into: [:]) { targets, entry in
+                    targets[entry.key] = .blob(entry.value)
+                }
+            }
+            guard let registry = rendererRegistry(installedDescriptors: installedDescriptors) else {
+                return siblingSourceMap.reduce(into: [:]) { targets, entry in
+                    targets[entry.key] = .blob(entry.value)
+                }
             }
             var sources = [String: RendererEmbeddedContent.Source]()
             for (target, sourceID) in siblingSourceMap {
@@ -1649,22 +1783,42 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     DebugLog.reader("Image renderer projection could not pin a sibling source; keeping the ordinary image.")
                 }
             }
-            guard sources.isEmpty == false else { return nil }
-            let inlineCapableReferences = Set(BuiltInRendererID.allCases.compactMap { id in
+            do {
+                return try MarkdownImageTargetProjection.build(
+                    siblingSources: sources,
+                    siblingSourceIDs: siblingSourceMap,
+                    registry: registry,
+                    inlineCapableReferences: inlineCapableReferences(installedDescriptors: installedDescriptors))
+            } catch {
+                DebugLog.reader("Image renderer projection could not validate sibling facts; keeping ordinary images.")
+                return siblingSourceMap.reduce(into: [:]) { targets, entry in
+                    targets[entry.key] = .blob(entry.value)
+                }
+            }
+        }
+
+        private static func rendererRegistry(
+            installedDescriptors: [RendererDescriptor]
+        ) -> RendererRegistrySnapshot? {
+            do {
+                return try RendererRegistrySnapshot(
+                    builtInDescriptors: BuiltInRendererDescriptors.all,
+                    enabledInstalledDescriptors: installedDescriptors)
+            } catch {
+                DebugLog.reader("Document renderer projection rejected an invalid descriptor snapshot.")
+                return nil
+            }
+        }
+
+        private static func inlineCapableReferences(
+            installedDescriptors: [RendererDescriptor]
+        ) -> Set<RendererReference> {
+            Set(BuiltInRendererID.allCases.compactMap { id in
                 id == .jsonCanvas ? BuiltInRendererReference.reference(for: id) : nil
             }).union(installedDescriptors.compactMap { descriptor in
                 if case .webPackage = descriptor.implementation { return descriptor.reference }
                 return nil
             })
-            do {
-                return try MarkdownImageEmbedProjection(
-                    siblingSources: sources,
-                    registry: registry,
-                    inlineCapableReferences: inlineCapableReferences)
-            } catch {
-                DebugLog.reader("Image renderer projection could not validate sibling facts; keeping ordinary images.")
-                return nil
-            }
         }
 
         /// Verifies metadata for one exact source version before requesting its
@@ -1700,8 +1854,11 @@ internal struct WikiReaderRep: NSViewRepresentable {
         func teardown() {
             isDismantled = true
             loadGeneration += 1
+            transclusionGeneration += 1
             convertTask?.cancel()
             convertTask = nil
+            cancelTransclusionTasks()
+            cancelInlineRetentionTasks()
             webView?.addURLHandler = nil
             webView?.addBookmarkHandler = nil
             webView?.onRendererActivation = nil
@@ -1848,36 +2005,131 @@ internal struct WikiReaderRep: NSViewRepresentable {
         // WebKit's delegate protocol requires an implicitly unwrapped navigation argument.
         // swiftlint:disable:next implicitly_unwrapped_optional
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-            // A real reload begins a new document generation before didFinish;
-            // no native child may survive while WebKit replaces its DOM.
+            // WebKit now replaces the DOM for the current load generation.
+            // Invalidate lazy DOM work and release children from the old document.
+            transclusionGeneration += 1
+            cancelTransclusionTasks()
+            cancelInlineRetentionTasks()
             attachmentCoordinator?.closeAll()
             attachmentContainer?.removeAllAttachments()
+            attachmentCoordinator = RendererAttachmentCoordinator(generation: loadGeneration)
         }
 
         func handleAttachmentGeometry(_ message: RendererAttachmentGeometryMessage) {
             guard let attachmentCoordinator else { return }
-            let isFirstAcceptedGeometry = attachmentCoordinator.state(for: message.placeholderID) == .unresolved
+            let isFirstGeometry = attachmentCoordinator.state(for: message.placeholderID) == .unresolved
+            let isFirstRowGeometry = message.embeddingRole == .disclosureRow && isFirstGeometry
+            let isFirstInlineGeometry = message.embeddingRole == .inlineContent && isFirstGeometry
             guard attachmentCoordinator.ingest(message),
                   let webView, let attachmentContainer else { return }
-            if isFirstAcceptedGeometry {
+            if isFirstRowGeometry || isFirstInlineGeometry {
                 let renderer = webView.rendererActivationAdmission?
                     .attachmentContext(for: message.placeholderID)?
                     .rendererReference
                 let reservedHeight = attachmentCoordinator.reserveHeight(
-                    RendererAttachmentHostPolicy.preferredReservedHeight(for: renderer),
+                    RendererAttachmentHostPolicy.preferredReservedHeight(
+                        for: renderer,
+                        role: message.embeddingRole),
                     for: message.placeholderID)
                 let identifier = WikiReaderRep.jsString(message.placeholderID.rawValue)
                 webView.evaluateJavaScript("window.__sdwRendererAttachmentReserve && window.__sdwRendererAttachmentReserve(\"\(identifier)\", \(reservedHeight));")
             }
             updateAttachmentViewport(for: message.placeholderID, in: webView, container: attachmentContainer)
+            guard message.embeddingRole == .inlineContent else { return }
+            if message.visible {
+                inlineRetentionTasks.removeValue(forKey: message.placeholderID)?.cancel()
+                mountInlineContentIfEligible(message.placeholderID)
+            } else if attachmentCoordinator.inlineState(for: message.placeholderID) == .mounted {
+                scheduleInlineRetentionRelease(message.placeholderID, generation: message.generation)
+            }
         }
 
         func handleAttachmentRemoval(_ placeholderID: RendererAttachmentPlaceholderID, generation: Int) {
             guard let attachmentCoordinator, attachmentCoordinator.generation == generation else { return }
+            inlineRetentionTasks.removeValue(forKey: placeholderID)?.cancel()
+            let role = attachmentCoordinator.role(for: placeholderID)
             let removedMountedChild = attachmentContainer?.ownsMountedAttachment(named: placeholderID) == true
-            attachmentCoordinator.close(placeholderID)
+            if role == .inlineContent {
+                attachmentCoordinator.removeInline(placeholderID)
+            } else {
+                attachmentCoordinator.close(placeholderID)
+            }
             if removedMountedChild { attachmentContainer?.removeAttachment(named: placeholderID) }
-            setRowExpansion(false, for: placeholderID)
+            if role == .disclosureRow { setRowExpansion(false, for: placeholderID) }
+            retryWaitingInlineContent()
+        }
+
+        private func mountInlineContentIfEligible(_ placeholderID: RendererAttachmentPlaceholderID) {
+            guard let attachmentCoordinator,
+                  let attachmentContainer,
+                  attachmentCoordinator.role(for: placeholderID) == .inlineContent,
+                  attachmentCoordinator.inlineState(for: placeholderID) != .mounted,
+                  let context = webView?.rendererActivationAdmission?.attachmentContext(for: placeholderID),
+                  context.embeddingRole == .inlineContent else { return }
+            guard attachmentCoordinator.admitInline(placeholderID) == .activate else { return }
+
+            switch inlineAttachmentResolver(
+                context,
+                placeholderID,
+                inlineSessionFailureHandler(for: placeholderID, generation: context.generation)
+            ) {
+            case .content(let content):
+                attachmentContainer.activateAttachment(
+                    named: placeholderID,
+                    title: context.displayTitle ?? context.rendererReference.registrationID.rawValue,
+                    content: content,
+                    takesFocus: false,
+                    onExit: nil)
+                if let webView {
+                    updateAttachmentViewport(for: placeholderID, in: webView, container: attachmentContainer)
+                }
+            case .unsupported:
+                attachmentCoordinator.failInline(placeholderID)
+            case .failed:
+                attachmentCoordinator.failInline(placeholderID)
+            }
+        }
+
+        private func scheduleInlineRetentionRelease(
+            _ placeholderID: RendererAttachmentPlaceholderID,
+            generation: Int
+        ) {
+            guard inlineRetentionTasks[placeholderID] == nil else { return }
+            inlineRetentionTasks[placeholderID] = Task { @MainActor [weak self] in
+                do {
+                    try await Task.sleep(for: RendererAttachmentHostPolicy.inlineOffscreenRetentionDuration)
+                } catch {
+                    return
+                }
+                guard let self,
+                      let attachmentCoordinator = self.attachmentCoordinator,
+                      attachmentCoordinator.generation == generation,
+                      attachmentCoordinator.geometry(for: placeholderID)?.visible == false
+                else { return }
+                attachmentCoordinator.releaseInline(placeholderID)
+                self.attachmentContainer?.removeAttachment(named: placeholderID)
+                self.inlineRetentionTasks.removeValue(forKey: placeholderID)
+                self.retryWaitingInlineContent()
+            }
+        }
+
+        private func retryWaitingInlineContent() {
+            guard let attachmentCoordinator else { return }
+            for placeholderID in attachmentCoordinator.placeholderIDs
+            where attachmentCoordinator.inlineState(for: placeholderID) == .waitingForResources
+                && attachmentCoordinator.geometry(for: placeholderID)?.visible == true {
+                mountInlineContentIfEligible(placeholderID)
+            }
+        }
+
+        private func cancelTransclusionTasks() {
+            for task in transclusionTasks.values { task.cancel() }
+            transclusionTasks.removeAll()
+        }
+
+        private func cancelInlineRetentionTasks() {
+            for task in inlineRetentionTasks.values { task.cancel() }
+            inlineRetentionTasks.removeAll()
         }
 
         /// Activate the card's explicit control. The injected resolver owns the
@@ -1954,7 +2206,9 @@ internal struct WikiReaderRep: NSViewRepresentable {
             setRowExpansion(true, for: placeholderID)
             if let webView {
                 let reservedHeight = attachmentCoordinator.reserveHeight(
-                    RendererAttachmentHostPolicy.preferredReservedHeight(for: context.rendererReference),
+                    RendererAttachmentHostPolicy.preferredReservedHeight(
+                        for: context.rendererReference,
+                        role: context.embeddingRole),
                     for: placeholderID)
                 let identifier = WikiReaderRep.jsString(placeholderID.rawValue)
                 webView.evaluateJavaScript(
@@ -1978,9 +2232,20 @@ internal struct WikiReaderRep: NSViewRepresentable {
                       let attachmentCoordinator = self.attachmentCoordinator,
                       attachmentCoordinator.generation == generation
                 else { return }
+                let role = attachmentCoordinator.role(for: placeholderID)
                 let state = attachmentCoordinator.state(for: placeholderID)
-                guard state != .unresolved, state != .closed else { return }
+                guard state != .closed else { return }
                 DebugLog.reader("inline renderer session failed for \(placeholderID.rawValue): \(failure.kind)")
+                if role == .inlineContent {
+                    self.attachmentContainer?.removeAttachment(named: placeholderID)
+                    if failure.kind == .concurrencyLimitReached {
+                        attachmentCoordinator.waitForInlineResources(placeholderID)
+                    } else {
+                        attachmentCoordinator.failInline(placeholderID)
+                    }
+                    return
+                }
+                guard state != .unresolved else { return }
                 if failure.kind == .concurrencyLimitReached {
                     attachmentCoordinator.refuse(placeholderID, reason: .resourcePressure)
                     self.attachmentContainer?.removeAttachment(named: placeholderID)
@@ -2040,7 +2305,14 @@ internal struct WikiReaderRep: NSViewRepresentable {
             attachmentCoordinator?.state(for: placeholderID) ?? .unresolved
         }
 
+        func inlineAttachmentState(
+            for placeholderID: RendererAttachmentPlaceholderID
+        ) -> InlineRendererAttachmentState {
+            attachmentCoordinator?.inlineState(for: placeholderID) ?? .fallback
+        }
+
         var attachmentGeneration: Int? { attachmentCoordinator?.generation }
+        var currentTransclusionGeneration: Int { transclusionGeneration }
 
         func collapseAttachment(_ placeholderID: RendererAttachmentPlaceholderID) {
             guard let attachmentCoordinator,
@@ -2183,9 +2455,13 @@ internal struct WikiReaderRep: NSViewRepresentable {
         /// Tests use ``processEmbedFetch(body:)`` (async) to await completion
         /// rather than sleep.
         func handleEmbedFetch(body: [String: String]) {
-            Task { [weak self] in
-                await self?.processEmbedFetch(body: body)
+            let taskID = UUID()
+            let generation = transclusionGeneration
+            let task = Task { [weak self] in
+                await self?.processEmbedFetch(body: body, generation: generation)
+                self?.transclusionTasks.removeValue(forKey: taskID)
             }
+            transclusionTasks[taskID] = task
         }
 
         /// Async, awaitable form of ``handleEmbedFetch(body:)``. Does the
@@ -2194,6 +2470,13 @@ internal struct WikiReaderRep: NSViewRepresentable {
         /// callers go through `handleEmbedFetch` (fire-and-forget); tests go
         /// through this directly.
         func processEmbedFetch(body: [String: String]) async {
+            await processEmbedFetch(body: body, generation: transclusionGeneration)
+        }
+
+        func processEmbedFetch(body: [String: String], generation: Int) async {
+            guard generation == transclusionGeneration,
+                  isDismantled == false,
+                  Task.isCancelled == false else { return }
             let nodeId = body["nodeId"] ?? ""
             let kindStr = body["kind"] ?? ""
             let idStr = body["id"] ?? ""
@@ -2206,17 +2489,9 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 ? .page
                 : (kindStr == ParsedLink.LinkType.source.rawValue ? .source : .page)
 
-            // 1. Cycle check (Plan v2 §8): the target id is already in this
-            //    embed's ancestor chain → render the muted marker, no fetch.
-            //    Off-main read path stays untouched (hard invariant).
-            if !idStr.isEmpty, TransclusionEmbedder.isCycle(path: pathStr, id: idStr) {
-                let js = TransclusionEmbedder.cycleMarkerJSCall(nodeId: nodeId, name: nameStr)
-                emit(js)
-                DebugLog.reader("embed-fetch cycle kind=\(kindStr) id=\(idStr) name=\(nameStr)")
-                return
-            }
+            let ancestors = TransclusionEmbedder.ancestors(path: pathStr)
 
-            // 2. Resolve id. Canonical ULID embeds carry their id directly;
+            // 1. Resolve the typed target. Canonical ULID embeds carry their id directly;
             //    name-based page embeds resolve here on the main actor.
             let resolvedTarget: TransclusionEmbedder.TargetID?
             if !idStr.isEmpty {
@@ -2231,7 +2506,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 resolvedTarget = nil
             }
 
-            // 3. Missing target → render the "not found" body inline (no fetch).
+            // 2. Missing target → render the "not found" body inline (no fetch).
             guard let target = resolvedTarget, let store else {
                 let html = "<div class=\"sdw-embed-body sdw-embed-empty\">"
                          + "<span class=\"sdw-embed-placeholder\">"
@@ -2239,6 +2514,15 @@ internal struct WikiReaderRep: NSViewRepresentable {
                          + "</span></div>"
                 emit(TransclusionEmbedder.injectJSCall(nodeId: nodeId, html: html))
                 DebugLog.reader("embed-fetch unresolved kind=\(kindStr) target=\(targetStr) name=\(nameStr)")
+                return
+            }
+
+            // 3. Stop a cycle only when the full tagged target matches.
+            //    Page and source IDs remain separate namespaces.
+            if ancestors.contains(target) {
+                let js = TransclusionEmbedder.cycleMarkerJSCall(nodeId: nodeId, name: nameStr)
+                emit(js)
+                DebugLog.reader("embed-fetch cycle kind=\(kindStr) id=\(idStr) name=\(nameStr)")
                 return
             }
 
@@ -2260,33 +2544,52 @@ internal struct WikiReaderRep: NSViewRepresentable {
             //    No transaction, no extraction — the read path invariant.
             let loadStart = DispatchTime.now()
             do {
-                let raw: String
+                let result: TransclusionEmbedder.Result
                 if let readService = store.readService {
-                    raw = try await readService.asyncRead { access in
+                    result = try await readService.asyncRead { access in
                         try TransclusionEmbedder.renderEmbedBody(
-                            access: access, target: target, context: context, options: renderOptions)
+                            access: access,
+                            target: target,
+                            context: context,
+                            options: renderOptions,
+                            ancestors: ancestors)
                     }
                 } else if let grdb = store.internalStore as? GRDBWikiStore {
                     // Main-actor fallback (in-memory tests; rare in prod).
-                    raw = try TransclusionEmbedder.renderEmbedBody(
-                        testFixtureStore: grdb, target: target, context: context, options: renderOptions)
+                    result = try TransclusionEmbedder.renderEmbedBody(
+                        testFixtureStore: grdb,
+                        target: target,
+                        context: context,
+                        options: renderOptions,
+                        ancestors: ancestors)
                 } else {
-                    raw = TransclusionEmbedder.emptySentinel
+                    result = .empty
                 }
+                guard generation == transclusionGeneration,
+                      isDismantled == false,
+                      Task.isCancelled == false else { return }
                 DebugLog.reader("embed-fetch ok kind=\(kindStr) id=\(target.rawValue) "
                               + "name=\(nameStr) ms=\(Self.elapsedMs(since: loadStart))")
                 let html: String
-                if TransclusionEmbedder.isEmpty(raw) {
+                switch result {
+                case .content(let content):
+                    html = content
+                case .empty:
                     // Source has no extractable body (binary, no head
                     // markdown) — render the muted placeholder + open
                     // link. NO extraction is triggered.
                     html = TransclusionEmbedder.placeholderBodyHTML(
                         kind: kind, id: target.rawValue, name: nameStr)
-                } else {
-                    html = raw
+                case .cycle:
+                    html = TransclusionEmbedder.cycleMarkerHTML(name: nameStr)
+                case .failed:
+                    html = "<div class=\"sdw-embed-body sdw-embed-empty\"><span class=\"sdw-embed-placeholder\">Failed to load.</span></div>"
                 }
                 emit(TransclusionEmbedder.injectJSCall(nodeId: nodeId, html: html))
             } catch {
+                guard generation == transclusionGeneration,
+                      isDismantled == false,
+                      Task.isCancelled == false else { return }
                 DebugLog.reader("embed-fetch failed kind=\(kindStr) id=\(target.rawValue) "
                               + "error=\(error)")
                 let html = "<div class=\"sdw-embed-body sdw-embed-empty\">"

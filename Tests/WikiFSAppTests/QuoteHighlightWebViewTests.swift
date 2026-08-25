@@ -219,7 +219,8 @@ struct QuoteHighlightWebViewTests {
         // End-to-end: real markdown → ReaderMarkdown → MarkdownHTMLRenderer →
         // documentHTML, then the same highlight JS the reader runs.
         let markdown = "# Study\n\nThe results show a 30% improvement in latency."
-        let body = MarkdownHTMLRenderer.render(ReaderMarkdown.prepared(markdown) { _, _ in true }, options: .disabled)
+        let prepared = ReaderMarkdown.preparedDocument(markdown)
+        let body = MarkdownHTMLRenderer.render(prepared, projection: .init(), options: .disabled)
         let (lease, window, webView) = await makeHostedWebView()
         defer { Self.releaseWindow(window); lease.release() }
         try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML(body))
@@ -257,7 +258,8 @@ struct QuoteHighlightWebViewTests {
         let markdown = """
         As Nathen Harvey said in the 2025 DORA report: “ [AI is an amplifier.](https://services.google.com/fh/files/misc/2025_state_of_ai_assisted_software_development.pdf) It magnifies the strengths of high-performing organizations and the dysfunctions of struggling ones.” AI will not solve for a lack of discipline.
         """
-        let body = MarkdownHTMLRenderer.render(ReaderMarkdown.prepared(markdown) { _, _ in true }, options: .disabled)
+        let prepared = ReaderMarkdown.preparedDocument(markdown)
+        let body = MarkdownHTMLRenderer.render(prepared, projection: .init(), options: .disabled)
         let (lease, window, webView) = await makeHostedWebView()
         defer { Self.releaseWindow(window); lease.release() }
         try await NavigationWaiter().wait(for: webView, html: WikiReaderView.documentHTML(body))

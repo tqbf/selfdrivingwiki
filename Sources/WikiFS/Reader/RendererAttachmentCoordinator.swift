@@ -10,16 +10,24 @@ enum RendererAttachmentHostPolicy {
     static let maximumPlaceholderCount = 64
     static let maximumUpdatesPerPlaceholder = 1_024
     static let maximumCoordinateMagnitude = 1_000_000.0
-    static let minimumReservedHeight = 96.0
-    static let maximumReservedHeight = 1_200.0
-    /// Per-document reader policy; unrelated to the process-wide WebKit permit pool.
+    static let minimumReservedHeight: CGFloat = 96.0
+    static let maximumReservedHeight: CGFloat = 1_200.0
+    /// Per-document row policy; unrelated to inline content and the process-wide WebKit pool.
     static let maximumExpandedRendererRows = 4
-    static let jsonCanvasReservedHeight = 480.0
+    /// Per-document inline policy; unrelated to disclosure rows and the process-wide WebKit pool.
+    static let maximumMountedInlineRenderers = 6
+    /// Inline content stays mounted for this interval after it leaves the retained visibility window.
+    static let inlineOffscreenRetentionDuration = Duration.seconds(2)
+    /// The retained visibility window extends this distance above and below the viewport.
+    static let inlineVisibilityPreloadMargin = 600
+    static let dynamicInlineRendererReservedHeight: CGFloat = 480.0
 
-    static func preferredReservedHeight(for renderer: RendererReference?) -> CGFloat {
-        renderer == BuiltInRendererReference.reference(for: .jsonCanvas)
-            ? jsonCanvasReservedHeight
-            : minimumReservedHeight
+    static func preferredReservedHeight(
+        for renderer: RendererReference?,
+        role: RendererEmbeddingRole
+    ) -> CGFloat {
+        guard renderer != nil, role == .inlineContent else { return minimumReservedHeight }
+        return dynamicInlineRendererReservedHeight
     }
 }
 
@@ -49,13 +57,22 @@ extension RendererAttachmentPlaceholderID {
 struct RendererAttachmentGeometryMessage: Sendable, Equatable {
     let generation: Int
     let placeholderID: RendererAttachmentPlaceholderID
+    let embeddingRole: RendererEmbeddingRole
     let cssRect: CGRect
     let visible: Bool
     let revision: Int
 
-    init(generation: Int, placeholderID: RendererAttachmentPlaceholderID, cssRect: CGRect, visible: Bool, revision: Int) {
+    init(
+        generation: Int,
+        placeholderID: RendererAttachmentPlaceholderID,
+        embeddingRole: RendererEmbeddingRole = .disclosureRow,
+        cssRect: CGRect,
+        visible: Bool,
+        revision: Int
+    ) {
         self.generation = generation
         self.placeholderID = placeholderID
+        self.embeddingRole = embeddingRole
         self.cssRect = cssRect
         self.visible = visible
         self.revision = revision
@@ -68,12 +85,15 @@ struct RendererAttachmentGeometryMessage: Sendable, Equatable {
               let x = Self.number(body["x"]), let y = Self.number(body["y"]),
               let width = Self.number(body["width"]), let height = Self.number(body["height"]),
               let visible = body["visible"] as? Bool,
+              let rawRole = body["embeddingRole"] as? String,
+              let embeddingRole = RendererEmbeddingRole(rawValue: rawRole),
               let revision = body["revision"] as? Int
         else { return nil }
         let cssRect = CGRect(x: x, y: y, width: width, height: height)
         guard cssRect.isFiniteRect else { return nil }
         self.generation = generation
         self.placeholderID = placeholderID
+        self.embeddingRole = embeddingRole
         self.cssRect = cssRect
         self.visible = visible
         self.revision = revision
@@ -112,6 +132,15 @@ enum RendererAttachmentState: Equatable {
     case closed
 }
 
+enum InlineRendererAttachmentState: Equatable {
+    case fallback
+    case eligible
+    case waitingForResources
+    case mounted
+    case failed
+    case removed
+}
+
 enum RendererAttachmentActivationResult: Equatable {
     case activate
     case showInFullRenderer
@@ -127,7 +156,9 @@ enum RendererAttachmentActivationRefusal: Equatable {
 @MainActor
 final class RendererAttachmentCoordinator {
     private struct Record {
+        var role: RendererEmbeddingRole?
         var state: RendererAttachmentState = .unresolved
+        var inlineState: InlineRendererAttachmentState = .fallback
         var latestRevision = -1
         var updateCount = 0
         var reservedHeight = RendererAttachmentHostPolicy.minimumReservedHeight
@@ -136,16 +167,30 @@ final class RendererAttachmentCoordinator {
     }
 
     let generation: Int
-    private let activeLimit: Int
+    private let rowActiveLimit: Int
+    private let inlineActiveLimit: Int
     private var records: [RendererAttachmentPlaceholderID: Record] = [:]
 
-    init(generation: Int, activeLimit: Int = RendererAttachmentHostPolicy.maximumExpandedRendererRows) {
+    init(
+        generation: Int,
+        activeLimit: Int = RendererAttachmentHostPolicy.maximumExpandedRendererRows,
+        inlineActiveLimit: Int = RendererAttachmentHostPolicy.maximumMountedInlineRenderers
+    ) {
         self.generation = generation
-        self.activeLimit = max(0, activeLimit)
+        self.rowActiveLimit = max(0, activeLimit)
+        self.inlineActiveLimit = max(0, inlineActiveLimit)
     }
 
     func state(for placeholderID: RendererAttachmentPlaceholderID) -> RendererAttachmentState {
         records[placeholderID]?.state ?? .unresolved
+    }
+
+    func inlineState(for placeholderID: RendererAttachmentPlaceholderID) -> InlineRendererAttachmentState {
+        records[placeholderID]?.inlineState ?? .fallback
+    }
+
+    func role(for placeholderID: RendererAttachmentPlaceholderID) -> RendererEmbeddingRole? {
+        records[placeholderID]?.role
     }
 
     @discardableResult
@@ -158,13 +203,25 @@ final class RendererAttachmentCoordinator {
 
         var record = records[message.placeholderID] ?? Record()
         guard record.state != .closed,
+              record.inlineState != .removed,
+              record.role == nil || record.role == message.embeddingRole,
               message.revision > record.latestRevision,
               record.updateCount < RendererAttachmentHostPolicy.maximumUpdatesPerPlaceholder
         else { return false }
+        record.role = message.embeddingRole
         record.latestRevision = message.revision
         record.updateCount += 1
         record.latestGeometry = message
-        if record.state == .unresolved { record.state = .card }
+        switch message.embeddingRole {
+        case .disclosureRow:
+            if record.state == .unresolved { record.state = .card }
+        case .inlineContent:
+            if record.inlineState == .fallback, message.visible {
+                record.inlineState = .eligible
+            } else if record.inlineState == .eligible, !message.visible {
+                record.inlineState = .fallback
+            }
+        }
         records[message.placeholderID] = record
         return true
     }
@@ -192,8 +249,9 @@ final class RendererAttachmentCoordinator {
 
     func activate(_ placeholderID: RendererAttachmentPlaceholderID) -> RendererAttachmentActivationResult {
         guard var record = records[placeholderID], record.state == .card else { return .rejected }
-        let activeCount = records.values.filter { $0.state == .active }.count
-        guard activeCount < activeLimit else {
+        guard record.role == .disclosureRow else { return .rejected }
+        let activeCount = records.values.filter { $0.role == .disclosureRow && $0.state == .active }.count
+        guard activeCount < rowActiveLimit else {
             record.activationRefusal = .rowBudget
             records[placeholderID] = record
             return .refused(.rowBudget)
@@ -211,6 +269,60 @@ final class RendererAttachmentCoordinator {
         records[placeholderID] = record
     }
 
+    func admitInline(_ placeholderID: RendererAttachmentPlaceholderID) -> RendererAttachmentActivationResult {
+        guard var record = records[placeholderID],
+              record.role == .inlineContent,
+              record.inlineState == .eligible || record.inlineState == .waitingForResources
+        else { return .rejected }
+        let mountedCount = records.values.filter {
+            $0.role == .inlineContent && $0.inlineState == .mounted
+        }.count
+        guard mountedCount < inlineActiveLimit else {
+            record.inlineState = .waitingForResources
+            record.activationRefusal = .resourcePressure
+            records[placeholderID] = record
+            return .refused(.resourcePressure)
+        }
+        record.inlineState = .mounted
+        record.activationRefusal = nil
+        records[placeholderID] = record
+        return .activate
+    }
+
+    func releaseInline(_ placeholderID: RendererAttachmentPlaceholderID) {
+        guard var record = records[placeholderID],
+              record.role == .inlineContent,
+              record.inlineState == .mounted || record.inlineState == .waitingForResources
+        else { return }
+        record.inlineState = .fallback
+        record.activationRefusal = nil
+        records[placeholderID] = record
+    }
+
+    func waitForInlineResources(_ placeholderID: RendererAttachmentPlaceholderID) {
+        guard var record = records[placeholderID],
+              record.role == .inlineContent,
+              record.inlineState != .removed else { return }
+        record.inlineState = .waitingForResources
+        record.activationRefusal = .resourcePressure
+        records[placeholderID] = record
+    }
+
+    func failInline(_ placeholderID: RendererAttachmentPlaceholderID) {
+        guard var record = records[placeholderID],
+              record.role == .inlineContent,
+              record.inlineState != .removed else { return }
+        record.inlineState = .failed
+        records[placeholderID] = record
+    }
+
+    func removeInline(_ placeholderID: RendererAttachmentPlaceholderID) {
+        guard var record = records[placeholderID], record.role == .inlineContent else { return }
+        record.inlineState = .removed
+        record.state = .closed
+        records[placeholderID] = record
+    }
+
     func refuse(_ placeholderID: RendererAttachmentPlaceholderID, reason: RendererAttachmentActivationRefusal) {
         guard var record = records[placeholderID], record.state == .card else { return }
         record.state = .card
@@ -221,18 +333,23 @@ final class RendererAttachmentCoordinator {
     func fail(_ placeholderID: RendererAttachmentPlaceholderID) {
         guard var record = records[placeholderID], record.state != .closed else { return }
         record.state = .failed
+        if record.role == .inlineContent { record.inlineState = .failed }
         records[placeholderID] = record
     }
 
     func closeAll() {
         for key in records.keys {
             records[key]?.state = .closed
+            if records[key]?.role == .inlineContent {
+                records[key]?.inlineState = .removed
+            }
         }
     }
 
     func close(_ placeholderID: RendererAttachmentPlaceholderID) {
         guard var record = records[placeholderID] else { return }
         record.state = .closed
+        if record.role == .inlineContent { record.inlineState = .removed }
         records[placeholderID] = record
     }
 

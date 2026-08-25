@@ -1,5 +1,10 @@
 # Goal
 
+> Superseded scope note, 2026-08-25: Image and media syntax no longer promotes
+> content to disclosure rows. Syntax owns the embedding role. Approved rich
+> fences use rows. Images and media stay inline. See
+> [`typed-markdown-embed-pipeline.md`](typed-markdown-embed-pipeline.md).
+
 Change interactive Markdown embeds into compact disclosure rows. Each row shows a title, places **Open in Window** at the trailing edge, expands an interactive renderer inline, and scales with reader page zoom.
 
 Rows start collapsed. A reader can keep up to four rows expanded at once. The fifth row stays collapsed and can still open in a separate window.

@@ -10,6 +10,8 @@ enum RendererFixtures {
         version: RendererPackageVersion = version,
         registrationID: RendererRegistrationID = registrationID,
         matchers: [RendererMatcher] = [.normalizedMIME(try! RendererMIMEType(validating: "application/pdf"))],
+        embeddingRoles: Set<RendererEmbeddingRole> = [.disclosureRow],
+        explicitEmbeddingRoles: Bool = false,
         compatibility: RendererCompatibility? = nil,
         priority: Int = 0
     ) throws -> RendererDescriptor {
@@ -19,6 +21,8 @@ enum RendererFixtures {
             implementation: .builtIn(.pdf),
             matchers: matchers,
             presentations: [.native],
+            supportedEmbeddingRoles: embeddingRoles,
+            hasExplicitEmbeddingRoles: explicitEmbeddingRoles,
             approvedAssets: [],
             capabilities: [.inputRead],
             sizeLimits: try .init(maximumInputByteCount: 1_024, maximumDecodedByteCount: 2_048),
@@ -35,6 +39,8 @@ enum RendererFixtures {
         version: RendererPackageVersion = version,
         registrationID: RendererRegistrationID = registrationID,
         matchers: [RendererMatcher] = [.artifactKind(.source)],
+        embeddingRoles: Set<RendererEmbeddingRole> = [.disclosureRow],
+        explicitEmbeddingRoles: Bool = false,
         priority: Int = 0
     ) throws -> RendererDescriptor {
         guard let entry = assets.first else { throw RendererValidationError.invalidPresentation }
@@ -44,6 +50,8 @@ enum RendererFixtures {
             implementation: .webPackage(.init(path: entry.path)),
             matchers: matchers,
             presentations: [.web],
+            supportedEmbeddingRoles: embeddingRoles,
+            hasExplicitEmbeddingRoles: explicitEmbeddingRoles,
             approvedAssets: assets,
             capabilities: [.inputRead],
             sizeLimits: try .init(maximumInputByteCount: 1_024, maximumDecodedByteCount: 2_048),

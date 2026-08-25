@@ -10,10 +10,122 @@ import WikiFSTypes
 
 @Suite("Reader renderer attachment coordinator", .serialized, .timeLimit(.minutes(5)))
 struct RendererAttachmentCoordinatorTests {
-    @Test("JSON Canvas reserves an expanded inline surface")
-    func jsonCanvasReservesExpandedInlineSurface() {
+    @Test("provisional navigation accepts current document geometry")
+    @MainActor
+    func provisionalNavigationResetsCoordinatorForCurrentGeneration() throws {
+        let webView = WikiReaderWebView()
+        let container = WikiReaderContainerView(webView: webView)
+        defer { container.teardown() }
+        let coordinator = WikiReaderRep.Coordinator()
+        coordinator.webView = webView
+        coordinator.attachmentContainer = container
+        Self.startLifecycleLoad(coordinator, webView: webView)
+        let generation = try #require(coordinator.attachmentGeneration)
+        let placeholder = try RendererAttachmentPlaceholderID(validating: "navigation-row")
+
+        coordinator.webView(webView, didStartProvisionalNavigation: nil)
+        coordinator.handleAttachmentGeometry(.init(
+            generation: generation,
+            placeholderID: placeholder,
+            embeddingRole: .disclosureRow,
+            cssRect: CGRect(x: 0, y: 0, width: 100, height: 100),
+            visible: true,
+            revision: 1))
+
+        #expect(coordinator.attachmentGeneration == generation)
+        #expect(coordinator.attachmentState(for: placeholder) == .card)
+    }
+
+    @Test("reserved height follows the syntax-owned embedding role")
+    func reservedHeightFollowsEmbeddingRole() throws {
+        let descriptor = BuiltInRendererDescriptors.descriptor(for: .jsonCanvas)
+
         #expect(RendererAttachmentHostPolicy.preferredReservedHeight(
-            for: BuiltInRendererReference.reference(for: .jsonCanvas)) == 480)
+            for: descriptor.reference,
+            role: .inlineContent) == RendererAttachmentHostPolicy.dynamicInlineRendererReservedHeight)
+        #expect(RendererAttachmentHostPolicy.preferredReservedHeight(
+            for: descriptor.reference,
+            role: .disclosureRow) == RendererAttachmentHostPolicy.minimumReservedHeight)
+        #expect(RendererAttachmentHostPolicy.preferredReservedHeight(
+            for: nil,
+            role: .inlineContent) == RendererAttachmentHostPolicy.minimumReservedHeight)
+    }
+
+    @Test("inline and disclosure budgets are independent")
+    @MainActor
+    func inlineAndDisclosureBudgetsAreIndependent() throws {
+        let coordinator = RendererAttachmentCoordinator(
+            generation: 1,
+            activeLimit: 1,
+            inlineActiveLimit: 1)
+        let row = try RendererAttachmentPlaceholderID(validating: "row")
+        let firstInline = try RendererAttachmentPlaceholderID(validating: "inline-first")
+        let secondInline = try RendererAttachmentPlaceholderID(validating: "inline-second")
+        let rect = CGRect(x: 0, y: 0, width: 100, height: 100)
+
+        #expect(coordinator.ingest(.init(
+            generation: 1, placeholderID: row, embeddingRole: .disclosureRow,
+            cssRect: rect, visible: true, revision: 1)))
+        #expect(coordinator.ingest(.init(
+            generation: 1, placeholderID: firstInline, embeddingRole: .inlineContent,
+            cssRect: rect, visible: true, revision: 1)))
+        #expect(coordinator.ingest(.init(
+            generation: 1, placeholderID: secondInline, embeddingRole: .inlineContent,
+            cssRect: rect, visible: true, revision: 1)))
+
+        #expect(coordinator.activate(row) == .activate)
+        #expect(coordinator.admitInline(firstInline) == .activate)
+        #expect(coordinator.admitInline(secondInline) == .refused(.resourcePressure))
+        #expect(coordinator.state(for: row) == .active)
+        #expect(coordinator.inlineState(for: firstInline) == .mounted)
+        #expect(coordinator.inlineState(for: secondInline) == .waitingForResources)
+    }
+
+    @Test("inline pressure keeps fallback and becomes retryable after release")
+    @MainActor
+    func inlinePressurePreservesFallbackAndRetries() throws {
+        let coordinator = RendererAttachmentCoordinator(generation: 1, inlineActiveLimit: 1)
+        let first = try RendererAttachmentPlaceholderID(validating: "inline-mounted")
+        let waiting = try RendererAttachmentPlaceholderID(validating: "inline-waiting")
+        let rect = CGRect(x: 0, y: 0, width: 100, height: 100)
+        for placeholder in [first, waiting] {
+            #expect(coordinator.ingest(.init(
+                generation: 1, placeholderID: placeholder, embeddingRole: .inlineContent,
+                cssRect: rect, visible: true, revision: 1)))
+        }
+        #expect(coordinator.admitInline(first) == .activate)
+        #expect(coordinator.admitInline(waiting) == .refused(.resourcePressure))
+        coordinator.releaseInline(first)
+        #expect(coordinator.admitInline(waiting) == .activate)
+    }
+
+    @Test("placeholder role cannot change after admission")
+    @MainActor
+    func placeholderRoleCannotChange() throws {
+        let coordinator = RendererAttachmentCoordinator(generation: 1)
+        let placeholder = try RendererAttachmentPlaceholderID(validating: "stable-role")
+        let rect = CGRect(x: 0, y: 0, width: 100, height: 100)
+        #expect(coordinator.ingest(.init(
+            generation: 1, placeholderID: placeholder, embeddingRole: .inlineContent,
+            cssRect: rect, visible: true, revision: 1)))
+        #expect(!coordinator.ingest(.init(
+            generation: 1, placeholderID: placeholder, embeddingRole: .disclosureRow,
+            cssRect: rect, visible: true, revision: 2)))
+        #expect(coordinator.role(for: placeholder) == .inlineContent)
+    }
+
+    @Test("dynamic inline renderers reserve a full viewer surface")
+    func dynamicInlineRenderersReserveViewerSurface() throws {
+        #expect(RendererAttachmentHostPolicy.preferredReservedHeight(
+            for: BuiltInRendererReference.reference(for: .jsonCanvas),
+            role: .inlineContent) == 480)
+        let installed = RendererReference(
+            packageID: try RendererPackageID(validating: "org.example.viewer"),
+            version: try RendererPackageVersion(validating: "1.0.0"),
+            registrationID: try RendererRegistrationID(validating: "viewer"))
+        #expect(RendererAttachmentHostPolicy.preferredReservedHeight(
+            for: installed,
+            role: .inlineContent) == 480)
     }
 
     @Test("Escape exits the hosted native attachment and restores reader focus")
@@ -103,6 +215,137 @@ struct RendererAttachmentCoordinatorTests {
         try await Self.waitUntil("placeholder removal") { coordinator.attachmentState(for: placeholder) == .closed }
         #expect(container.subviews.flatMap(\.subviews).contains { $0.accessibilityIdentifier() == "renderer-attachment-dom-removal-canvas" } == false)
         #expect(window.firstResponder === webView)
+    }
+
+    @Test("visible inline placeholder mounts automatically and DOM removal releases it")
+    @MainActor
+    func visibleInlinePlaceholderMountsAndRemoves() async throws {
+        let webView = WikiReaderWebView()
+        let container = WikiReaderContainerView(webView: webView)
+        container.frame = .init(x: 0, y: 0, width: 400, height: 300)
+        let window = NSWindow(
+            contentRect: container.bounds,
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        defer { container.teardown(); window.orderOut(nil) }
+
+        let coordinator = WikiReaderRep.Coordinator()
+        coordinator.webView = webView
+        coordinator.attachmentContainer = container
+        webView.coordinator = coordinator
+        webView.navigationDelegate = coordinator
+        Self.startLifecycleLoad(coordinator, webView: webView)
+        try await Self.waitUntil("reader document") { webView.isLoading == false }
+        try await Self.waitForReporter(in: webView)
+
+        let placeholder = try RendererAttachmentPlaceholderID(validating: "inline-hosted-canvas")
+        let generation = try #require(coordinator.attachmentGeneration)
+        try Self.admitInlineJSONCanvasPlaceholder(
+            placeholder,
+            coordinator: coordinator,
+            webView: webView)
+        try await Self.runJS("""
+        var e=document.createElement('span');
+        e.id='inline-hosted-canvas';
+        e.className='sdw-inline-renderer';
+        e.dataset.rendererAdmitted='true';
+        e.style.cssText='display:block;width:240px;height:160px';
+        e.innerHTML='<span class="sdw-inline-renderer__fallback">fallback</span>';
+        document.body.appendChild(e);
+        window.__sdwRendererAttachmentReport(\(generation));
+        """, in: webView)
+
+        try await Self.waitUntil("inline mount") {
+            coordinator.inlineAttachmentState(for: placeholder) == .mounted
+                && container.ownsMountedAttachment(named: placeholder)
+        }
+        #expect(coordinator.attachmentState(for: placeholder) == .unresolved)
+        #expect(try await Self.javaScriptBoolean(
+            "document.getElementById('inline-hosted-canvas').textContent.includes('fallback')",
+            in: webView))
+
+        try await Self.runJS("document.getElementById('inline-hosted-canvas').remove();", in: webView)
+        try await Self.waitUntil("inline removal") {
+            coordinator.inlineAttachmentState(for: placeholder) == .removed
+                && !container.ownsMountedAttachment(named: placeholder)
+        }
+    }
+
+    @Test("inert inline renderer output scrolls as a DOM descendant without a native attachment")
+    @MainActor
+    func inertInlineRendererOutputScrollsWithDocument() async throws {
+        let webView = WikiReaderWebView()
+        let container = WikiReaderContainerView(webView: webView)
+        container.frame = .init(x: 0, y: 0, width: 500, height: 320)
+        let window = NSWindow(contentRect: container.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        defer { container.teardown(); window.orderOut(nil) }
+
+        let sourceID = SourceID(rawValue: "01JDOMSCROLLSOURCE000000001")
+        let bytes = Data(##"{"type":"excalidraw","version":2,"elements":[{"type":"rectangle","x":0,"y":0,"width":100,"height":50,"angle":0,"strokeColor":"#112233","backgroundColor":"#ffffff","strokeWidth":2,"opacity":100,"roundness":null,"isDeleted":false}]}"##.utf8)
+        let source = try RendererEmbeddedContent.Source(
+            sourceID: sourceID,
+            sourceVersionID: SourceVersionID(rawValue: "01JDOMSCROLLVERSION0000001"),
+            mimeType: try .init(validating: "application/json"),
+            bytes: bytes)
+        let fallbackSource = try RendererEmbeddedContent.Source(
+            sourceID: SourceID(rawValue: "01JDOMSCROLLSOURCE000000002"),
+            sourceVersionID: SourceVersionID(rawValue: "01JDOMSCROLLVERSION0000002"),
+            mimeType: try .init(validating: "image/svg+xml"),
+            bytes: Data("<svg xmlns=\"http://www.w3.org/2000/svg\"><text>Fallback</text></svg>".utf8))
+        let markdown = """
+        <p style="height:500px">Leading content</p>
+
+        ![Drawing](drawing.excalidraw)
+
+        ![Generic image](generic.svg)
+
+        <p style="height:500px">Trailing content</p>
+        """
+        let prepared = ReaderMarkdown.preparedDocument(markdown)
+        let projection = ResolvedDocumentProjection(markdownImages: [
+            "drawing.excalidraw": .renderer(
+                rendererReference: .init(
+                    packageID: BundledRendererPackages.excalidrawPackageID,
+                    version: BundledRendererPackages.excalidrawVersion,
+                    registrationID: BundledRendererPackages.excalidrawRegistrationID),
+                source: source),
+            "generic.svg": .renderer(
+                rendererReference: BuiltInRendererDescriptors.descriptor(for: .jsonCanvas).reference,
+                source: fallbackSource),
+        ])
+        let body = MarkdownHTMLRenderer.render(prepared, projection: projection, options: .disabled)
+        #expect(body.contains("class=\"sdw-inline-renderer__svg\""))
+        #expect(body.contains("alt=\"Generic image\""))
+        #expect(body.components(separatedBy: "class=\"sdw-inline-renderer sdw-inline-renderer--dom\"").count - 1 == 2)
+        #expect(!body.contains("data-renderer-admitted=\"true\""))
+        webView.loadHTMLString(WikiReaderView.documentHTML(body, mermaidLibrary: nil), baseURL: WikiReaderOrigin.url)
+        try await Self.waitUntil("inert renderer document") { webView.isLoading == false }
+
+        let initialY = try await Self.javaScriptDouble(
+            "document.querySelector('.sdw-inline-renderer__svg').getBoundingClientRect().y",
+            in: webView)
+        try await Self.runJS("window.scrollTo(0, 180)", in: webView)
+        let scrolledY = try await Self.javaScriptDouble(
+            "document.querySelector('.sdw-inline-renderer__svg').getBoundingClientRect().y",
+            in: webView)
+        let genericImageY = try await Self.javaScriptDouble(
+            "document.querySelector('img[alt=\\\"Generic image\\\"]').getBoundingClientRect().y",
+            in: webView)
+
+        #expect(scrolledY < initialY - 100)
+        #expect(genericImageY.isFinite)
+        #expect(try await Self.javaScriptBoolean(
+            "document.querySelectorAll('.sdw-inline-renderer--dom').length === 2",
+            in: webView))
+        #expect(try await Self.javaScriptBoolean(
+            "document.querySelector('.sdw-inline-renderer[data-renderer-admitted=\\\"true\\\"]') === null",
+            in: webView))
+        #expect(container.mountedAttachmentCount == 0)
     }
 
     @Test("removing an inactive placeholder preserves the active native attachment")
@@ -195,6 +438,10 @@ struct RendererAttachmentCoordinatorTests {
 
     @MainActor private static func javaScriptBoolean(_ source: String, in webView: WKWebView) async throws -> Bool {
         try await runJavaScript(source, in: webView) { $0 as? Bool ?? false }
+    }
+
+    @MainActor private static func javaScriptDouble(_ source: String, in webView: WKWebView) async throws -> Double {
+        try await runJavaScript(source, in: webView) { ($0 as? NSNumber)?.doubleValue ?? .nan }
     }
 
     @MainActor private static func runJavaScript<T: Sendable>(
@@ -292,7 +539,8 @@ struct RendererAttachmentCoordinatorTests {
                 $0.accessibilityIdentifier() == "renderer-attachment-reload-canvas"
             } == false
         }
-        #expect(coordinator.attachmentState(for: placeholder) == .closed)
+        #expect(coordinator.attachmentGeneration == generation)
+        #expect(coordinator.attachmentState(for: placeholder) == .unresolved)
         #expect(window.firstResponder === webView)
     }
 
@@ -935,16 +1183,22 @@ struct RendererAttachmentCoordinatorTests {
     @Test("geometry bridge accepts only a complete finite typed payload")
     func geometryBridgeDecodesTrustedShape() throws {
         let message = try #require(RendererAttachmentGeometryMessage(body: [
-            "generation": 3, "placeholderID": "canvas-1", "x": 8.0, "y": 12.0,
-            "width": 240.0, "height": 120.0, "visible": true, "revision": 4,
+            "generation": 3, "placeholderID": "canvas-1", "embeddingRole": "disclosureRow",
+            "x": 8.0, "y": 12.0, "width": 240.0, "height": 120.0,
+            "visible": true, "revision": 4,
         ]))
         #expect(message.generation == 3)
         #expect(message.placeholderID.rawValue == "canvas-1")
+        #expect(message.embeddingRole == .disclosureRow)
         #expect(message.cssRect == .init(x: 8, y: 12, width: 240, height: 120))
         #expect(RendererAttachmentGeometryMessage(body: ["generation": 3]) == nil)
         #expect(RendererAttachmentGeometryMessage(body: [
-            "generation": 3, "placeholderID": "canvas-1", "x": Double.nan, "y": 0,
-            "width": 1, "height": 1, "visible": true, "revision": 1,
+            "generation": 3, "placeholderID": "canvas-1", "embeddingRole": "invalid",
+            "x": 0, "y": 0, "width": 1, "height": 1, "visible": true, "revision": 1,
+        ]) == nil)
+        #expect(RendererAttachmentGeometryMessage(body: [
+            "generation": 3, "placeholderID": "canvas-1", "embeddingRole": "disclosureRow",
+            "x": Double.nan, "y": 0, "width": 1, "height": 1, "visible": true, "revision": 1,
         ]) == nil)
     }
 
@@ -1116,6 +1370,30 @@ struct RendererAttachmentCoordinatorTests {
             markdown: markdown,
             documentIdentity: lifecycleIdentity,
             isLoading: .constant(true))
+    }
+
+    @MainActor
+    private static func admitInlineJSONCanvasPlaceholder(
+        _ placeholderID: RendererAttachmentPlaceholderID,
+        coordinator: WikiReaderRep.Coordinator,
+        webView: WikiReaderWebView
+    ) throws {
+        let generation = try #require(coordinator.attachmentGeneration)
+        let admission = try #require(webView.rendererActivationAdmission)
+        let source = try RendererEmbeddedContent.Source(
+            sourceID: SourceID(rawValue: "01JINLINECANVASSOURCE00000001"),
+            sourceVersionID: SourceVersionID(rawValue: "01JINLINECANVASVERSION000001"),
+            mimeType: try .init(validating: "application/json"),
+            bytes: jsonCanvasBytes)
+        admission.register(context: .init(
+            pageID: lifecycleIdentity.pageID,
+            pageVersionID: lifecycleIdentity.pageVersionID,
+            identity: .source(source),
+            embeddingRole: .inlineContent,
+            rendererReference: BuiltInRendererReference.reference(for: .jsonCanvas),
+            input: .source(versionID: try #require(source.sourceVersionID)),
+            capability: admission.capability,
+            generation: generation), attachmentPlaceholderID: placeholderID)
     }
 
     /// Admit `placeholderID` as a JSON Canvas fence — the one renderer with a

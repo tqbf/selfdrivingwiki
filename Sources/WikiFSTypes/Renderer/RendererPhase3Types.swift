@@ -469,6 +469,7 @@ public struct RendererEmbedActivationMetadata: Codable, Hashable, Sendable {
 /// Immutable semantic data describing one markdown-fence render target.
 public struct RendererEmbedPlan: Codable, Hashable, Sendable {
     public let placeholderID: String
+    public let embeddingRole: RendererEmbeddingRole
     public let rendererReference: RendererReference
     public let input: RendererEmbeddedContent?
     public let semanticContent: String
@@ -480,6 +481,7 @@ public struct RendererEmbedPlan: Codable, Hashable, Sendable {
 
     public init(
         placeholderID: String,
+        embeddingRole: RendererEmbeddingRole = .disclosureRow,
         rendererReference: RendererReference,
         input: RendererEmbeddedContent? = nil,
         semanticContent: String,
@@ -488,6 +490,7 @@ public struct RendererEmbedPlan: Codable, Hashable, Sendable {
         activationMetadata: RendererEmbedActivationMetadata? = nil
     ) {
         self.placeholderID = placeholderID
+        self.embeddingRole = embeddingRole
         self.rendererReference = rendererReference
         self.input = input
         self.semanticContent = semanticContent

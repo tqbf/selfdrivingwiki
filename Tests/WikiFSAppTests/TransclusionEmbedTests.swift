@@ -14,228 +14,86 @@ import WikiFSTypes
 @MainActor
 struct TransclusionEmbedTests {
 
-    // MARK: - §12.1 Pure linkify dispatch (WikiLinkMarkdown.linkified)
+    // MARK: - §12.1 Typed syntax, resolution, and lowering
 
-    @Test func pageEmbedEmitsDetailsBlock() {
-        let out = WikiLinkMarkdown.linkified(
-            "![[Home]]", isResolved: { _, _ in true })
+    @Test func pageEmbedEmitsCollapsedDetailsWithStateOnHost() throws {
+        let pageID = PageID(rawValue: "01HTESTPG0000000000000000A")
+        let out = renderTyped(
+            "![[Home]]",
+            inputs: .init(
+                pageIDByName: ["home": pageID],
+                pageTitlesByID: [pageID: "Home"]))
+
         #expect(out.contains("<details class=\"sdw-transclusion\""))
         #expect(out.contains("data-sdw-embed-kind=\"page\""))
-        #expect(out.contains("<summary>"))
-        #expect(out.contains("Home"))
-        #expect(!out.contains(" open"))           // collapsed-by-default
-        #expect(!out.contains("wiki://page"))     // not a cite link
-        #expect(!out.contains("!"))               // bang consumed
+        #expect(out.contains("data-sdw-embed-id=\"\(pageID.rawValue)\""))
+        #expect(!out.contains(" open"))
+        let detailsStart = try #require(out.range(of: "<details class=\"sdw-transclusion\""))
+        let afterDetails = String(out[detailsStart.upperBound...])
+        let openingTagEnd = try #require(afterDetails.firstIndex(of: ">"))
+        #expect(afterDetails[..<openingTagEnd].contains("data-sdw-state=\"empty\""))
     }
 
-    /// #725 regression: the JS `postEmbed` guard reads `data-sdw-state` from the
-    /// `<details>` element (`details.getAttribute('data-sdw-state')`). If the
-    /// `empty` initial state is on the inner `.sdw-embed-body` div instead of the
-    /// `<details>` element itself, `state` is `''` → the guard
-    /// `if(state !== 'empty') return` bails → no `postMessage` → no fetch →
-    /// "Loading…" forever. Assert the attribute is on the `<details>` host, not
-    /// just the body div.
-    @Test func pageEmbedStateAttrOnDetailsHost() {
-        let out = WikiLinkMarkdown.linkified(
-            "![[Home]]", isResolved: { _, _ in true })
-        // The <details> element must carry data-sdw-state="empty" — the JS reads
-        // it from the details host, not the inner body div.
-        #expect(out.contains("<details class=\"sdw-transclusion\""))
-        // Find the details tag and verify it has the state attr
-        let detailsRange = out.range(of: "<details class=\"sdw-transclusion\"")
-        #expect(detailsRange != nil)
-        let afterDetails = String(out[detailsRange!.upperBound...])
-        let summaryRange = afterDetails.range(of: ">")  // end of the details opening tag
-        #expect(summaryRange != nil)
-        let tagContents = String(afterDetails[..<summaryRange!.lowerBound])
-        #expect(tagContents.contains("data-sdw-state=\"empty\""))
+    @Test func pageEmbedAliasAndCanonicalNameUseTypedDisplayMetadata() {
+        let pageID = PageID(rawValue: "01HTESTPG0000000000000000B")
+        let inputs = DocumentEmbedResolver.Inputs(
+            pageIDByName: ["cycle": pageID],
+            pageTitlesByID: [pageID: "Live Title"])
+        let alias = renderTyped("![[Cycle|the cycle]]", inputs: inputs)
+        let canonical = renderTyped("![[\(pageID.rawValue)]]", inputs: inputs)
+
+        #expect(alias.contains("<span class=\"sdw-embed-title\">the cycle</span>"))
+        #expect(canonical.contains("data-sdw-embed-id=\"\(pageID.rawValue)\""))
+        #expect(canonical.contains("<span class=\"sdw-embed-title\">Live Title</span>"))
     }
 
-    @Test func pageEmbedIsDistinctFromCiteLink() {
-        let out = WikiLinkMarkdown.linkified(
-            "[[Home]] and ![[Home]]", isResolved: { _, _ in true })
-        #expect(out.contains("[Home](wiki://page?title=Home)"))  // cite link
-        #expect(out.contains("sdw-transclusion"))                // embed
-    }
+    @Test func sourceSyntaxSelectsInlineMediaOrTypedTransclusion() {
+        let textID = SourceID(rawValue: "01HTESTTXT00000000000000005")
+        let imageID = SourceID(rawValue: "01HTESTIMG0000000000000001")
+        let inputs = DocumentEmbedResolver.Inputs(
+            sourceByName: [
+                "notes.txt": sourceResolution(id: textID, name: "notes.txt", mime: "text/plain"),
+                "pic.png": sourceResolution(id: imageID, name: "pic.png", mime: "image/png"),
+            ],
+            sourceNamesByID: [textID: "notes.txt", imageID: "pic.png"])
+        let text = renderTyped("![[source:notes.txt]]", inputs: inputs)
+        let image = renderTyped("![[source:pic.png]]", inputs: inputs)
 
-    @Test func pageEmbedAliasBecomesSummaryHeader() {
-        let out = WikiLinkMarkdown.linkified(
-            "![[Cycle|the cycle]]", isResolved: { _, _ in true })
-        #expect(out.contains("<span class=\"sdw-embed-title\">the cycle</span>"))
-    }
-
-    @Test func pageEmbedCanonicalULIDUsesCurrentName() {
-        // 26-char Crockford base32 ULID (the form ULID.generate emits).
-        let ulid = "01HTESTPG0000000000000000A"
-        #expect(WikiLinkParser.isCanonicalULID(ulid))
-        let out = WikiLinkMarkdown.linkified(
-            "![[\(ulid)]]",
-            isResolved: { _, _ in true },
-            displayName: { id, kind in
-                (id == ulid && kind == .page) ? "Live Title" : nil
-            })
-        #expect(out.contains("data-sdw-embed-kind=\"page\""))
-        #expect(out.contains("data-sdw-embed-id=\"\(ulid)\""))
-        #expect(out.contains("<span class=\"sdw-embed-title\">Live Title</span>"))
-    }
-
-    @Test func nonMediaSourceEmbedEmitsDetails() {
-        let id = SourceID(rawValue: "01HTESTTXT00000000000000005")
-        let out = WikiLinkMarkdown.linkified(
-            "![[source:notes.txt]]",
-            isResolved: { _, _ in true },
-            embedInfo: { _ in
-                WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "text/plain")
-            })
-        #expect(out.contains("data-sdw-embed-kind=\"source\""))
-        #expect(out.contains("data-sdw-embed-id=\"\(id.rawValue)\""))
-        #expect(!out.contains("<img"))
-        #expect(!out.contains("<video"))
-    }
-
-    @Test func mediaSourceEmbedStillInline() {
-        let id = SourceID(rawValue: "01HTESTIMG0000000000000001")
-        let out = WikiLinkMarkdown.linkified(
-            "![[source:pic.png]]",
-            isResolved: { _, _ in true },
-            embedInfo: { _ in
-                WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "image/png")
-            })
-        #expect(out.contains("<img"))
-        #expect(out.contains("wiki-blob://source/\(id.rawValue)"))
-        #expect(!out.contains("sdw-transclusion"))
-    }
-
-    @Test func pdfSourceEmbedFollowsPolicy() {
-        // Plan v2 §9: PDF is media — stays inline `<iframe>`.
-        let id = SourceID(rawValue: "01HTESTPDF0000000000000004")
-        let out = WikiLinkMarkdown.linkified(
-            "![[source:doc.pdf]]",
-            isResolved: { _, _ in true },
-            embedInfo: { _ in
-                WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "application/pdf")
-            })
-        #expect(out.contains("<iframe"))
-        #expect(out.contains("wiki-blob://source/\(id.rawValue)"))
-        #expect(!out.contains("sdw-transclusion"))
-    }
-
-    @Test func mermaidSourceEmbedStillFenced() {
-        let id = SourceID(rawValue: "01HTESTMMD0000000000000007")
-        let diagram = "graph TD\nA-->B"
-        let target = EmbedTarget(kind: .diagram, url: id.rawValue, content: diagram)
-        let out = WikiLinkMarkdown.linkified(
-            "![[source:d.mmd]]",
-            isResolved: { _, _ in true },
-            embedInfo: { _ in
-                WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "text/mermaid", target: target)
-            })
-        #expect(out.contains("```mermaid"))
-        #expect(out.contains(diagram))
-        #expect(!out.contains("sdw-transclusion"))
-    }
-
-    @Test func bareNameFallsBackToSource() {
-        // `![[Foo]]` where no page "Foo" exists but a source does → source.
-        let id = SourceID(rawValue: "01HTESTSRC000000000000000F")
-        let out = WikiLinkMarkdown.linkified(
-            "![[Foo]]",
-            isResolved: { name, kind in
-                // Only the source namespace resolves "Foo".
-                (name == "Foo" && kind == .source)
-            },
-            embedInfo: { _ in
-                WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "text/plain")
-            })
-        #expect(out.contains("data-sdw-embed-kind=\"source\""))
-        #expect(out.contains("data-sdw-embed-id=\"\(id.rawValue)\""))
-    }
-
-    @Test func pageWinsOnCollision() {
-        // Both page and source "Foo" resolve → page transclusion.
-        let id = SourceID(rawValue: "01HTESTPG0000000000000000B")
-        let out = WikiLinkMarkdown.linkified(
-            "![[Foo]]",
-            isResolved: { _, _ in true },   // both namespaces resolve
-            embedInfo: { _ in
-                WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "text/plain")
-            })
-        #expect(out.contains("data-sdw-embed-kind=\"page\""))
-        #expect(out.contains("data-sdw-embed-target=\"Foo\""))
-    }
-
-    @Test func explicitPagePrefixNeverSource() {
-        // `![[page:Foo]]` with a source also named "Foo" → still page (no probe).
-        let srcID = SourceID(rawValue: "01HTESTPG0000000000000000C")
-        let out = WikiLinkMarkdown.linkified(
-            "![[page:Foo]]",
-            isResolved: { _, _ in true },
-            embedInfo: { _ in
-                WikiLinkMarkdown.SourceEmbedInfo(id: srcID, mimeType: "text/plain")
-            })
-        #expect(out.contains("data-sdw-embed-kind=\"page\""))
-        #expect(out.contains("data-sdw-embed-target=\"Foo\""))
-    }
-
-    @Test func sourceEmbedResolvesBySourceID() {
-        let id = SourceID(rawValue: "01HTESTPG0000000000000000D")
-        let out = WikiLinkMarkdown.linkified(
-            "![[source:Foo]]",
-            isResolved: { _, _ in true },
-            embedInfo: { _ in
-                WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "text/plain")
-            })
-        #expect(out.contains("data-sdw-embed-kind=\"source\""))
-    }
-
-    @Test func missingPageEmbedRendersBrokenHeader() {
-        let out = WikiLinkMarkdown.linkified(
-            "![[Ghost]]",
-            isResolved: { _, _ in false })   // nothing resolves
-        #expect(out.contains("sdw-transclusion"))
-        #expect(out.contains("data-sdw-state=\"missing\""))
-        #expect(out.contains("Page not found: Ghost"))
-        #expect(!out.contains("data-sdw-embed-target"))  // no fetch metadata
-    }
-
-    @Test func missingSourceEmbedRendersBrokenHeader() {
-        let out = WikiLinkMarkdown.linkified(
-            "![[source:Ghost]]",
-            isResolved: { _, _ in false },
-            embedInfo: { _ in nil })
-        #expect(out.contains("sdw-transclusion"))
-        #expect(out.contains("data-sdw-state=\"missing\""))
-        #expect(out.contains("Source not found: Ghost"))
-        #expect(!out.contains("data-sdw-embed-target"))
-    }
-
-    @Test func pageEmbedInsideCodeSpanIsLiteral() {
-        let out = WikiLinkMarkdown.linkified(
-            "Use `![[Home]]` literally.", isResolved: { _, _ in true })
-        #expect(out.contains("`![[Home]]`"))
-        #expect(!out.contains("sdw-transclusion"))
-    }
-
-    @Test func escapedEmbedPrefixIsLiteral() {
-        // `\![[Home]]` — the `\!` stays literal, the link is a normal cite link
-        // (the `!` is NOT consumed for non-embeds). Regression for the
-        // WikiLinkSpan.isEmbedPrefix escape guard.
-        let out = WikiLinkMarkdown.linkified(
-            "\\![[Home]]", isResolved: { _, _ in true })
-        #expect(out.contains("wiki://page?title=Home"))
-        #expect(!out.contains("sdw-transclusion"))
-    }
-
-    @Test func chatEmbedPrefixStillCiteLink() {
-        // `![[chat:…]]` is invalid — falls through to a normal cite link
-        // (the WikiLinkParser L184 reject gate stays in place for the graph).
-        let out = WikiLinkMarkdown.linkified(
-            "![[chat:Conv]]", isResolved: { _, _ in true })
-        #expect(out.contains("wiki://chat?title=Conv"))
-        #expect(!out.contains("sdw-transclusion"))
+        #expect(text.contains("data-sdw-embed-kind=\"source\""))
+        #expect(text.contains("data-sdw-embed-id=\"\(textID.rawValue)\""))
+        #expect(image.contains("<img"))
+        #expect(image.contains("wiki-blob://source/\(imageID.rawValue)"))
+        #expect(!image.contains("sdw-transclusion"))
     }
 
     // MARK: - §12.2 Pure fetch+render (TransclusionEmbedder.renderEmbedBody)
+
+    private func renderTyped(
+        _ markdown: String,
+        inputs: DocumentEmbedResolver.Inputs
+    ) -> String {
+        let prepared = ReaderMarkdown.preparedDocument(markdown)
+        let projection = DocumentEmbedResolver(inputs: inputs).projection(for: prepared)
+        return MarkdownHTMLRenderer.render(
+            prepared,
+            projection: projection,
+            options: .disabled)
+    }
+
+    private func sourceResolution(
+        id: SourceID,
+        name: String,
+        mime: String
+    ) -> DocumentSourceResolution {
+        DocumentSourceResolution(
+            sourceID: id,
+            version: nil,
+            displayName: name,
+            mimeType: mime,
+            bytes: nil,
+            externalTarget: nil,
+            isMermaidSource: false)
+    }
 
     /// Build an in-memory store + a minimal hand-built WikiRenderContext that
     /// knows about its pages/sources. Keeps the test pure (no @MainActor model).
@@ -268,10 +126,34 @@ struct TransclusionEmbedTests {
         try store.updatePage(id: page.id, title: "Inner", body: "Hello **world**.")
         let context = contextFor(store: store, pages: [(page.id.rawValue, "Inner")])
 
-        let html = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .page(page.id), context: context, options: .disabled)
+        let result = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .page(page.id), context: context, options: .disabled)
+        let html = try #require(result.contentHTML)
         #expect(html.contains("Hello"))
         #expect(html.contains("<strong>world</strong>"))
-        #expect(!TransclusionEmbedder.isEmpty(html))
+        #expect(!result.isEmpty)
+    }
+
+    @Test func renderEmbedBodyCarriesTaggedAncestorsIntoNestedTransclusions() throws {
+        let store = try TestStoreFactory.inMemory()
+        let outer = try store.createPage(title: "Outer")
+        let inner = try store.createPage(title: "Inner")
+        try store.updatePage(id: outer.id, title: "Outer", body: "![[Inner]]")
+        let context = contextFor(
+            store: store,
+            pages: [(outer.id.rawValue, "Outer"), (inner.id.rawValue, "Inner")])
+        let collidingSource = DocumentTransclusionTarget.source(
+            SourceID(rawValue: outer.id.rawValue))
+
+        let result = try TransclusionEmbedder.renderEmbedBody(
+            testFixtureStore: store,
+            target: .page(outer.id),
+            context: context,
+            options: .disabled,
+            ancestors: [collidingSource])
+        let html = try #require(result.contentHTML)
+
+        #expect(html.contains("data-sdw-embed-path=\"page:\(outer.id.rawValue) source:\(outer.id.rawValue)\""))
+        #expect(html.contains("data-sdw-embed-id=\"\(inner.id.rawValue)\""))
     }
 
     @Test func renderEmbedBodyRichFencesStayStaticWithoutOuterAdmission() throws {
@@ -304,7 +186,8 @@ struct TransclusionEmbedTests {
                 capability: .init(rawValue: "capability"),
                 generation: 1))
 
-        let html = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .page(embedded.id), context: context, options: options)
+        let result = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .page(embedded.id), context: context, options: options)
+        let html = try #require(result.contentHTML)
 
         #expect(html.contains("sdw-renderer-card"))
         #expect(html.contains("JSON Canvas"))
@@ -342,8 +225,10 @@ struct TransclusionEmbedTests {
                 capability: .init(rawValue: "capability"),
                 generation: 1))
 
-        let firstHTML = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .page(firstPage.id), context: context, options: options)
-        let secondHTML = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .page(secondPage.id), context: context, options: options)
+        let firstResult = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .page(firstPage.id), context: context, options: options)
+        let secondResult = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .page(secondPage.id), context: context, options: options)
+        let firstHTML = try #require(firstResult.contentHTML)
+        let secondHTML = try #require(secondResult.contentHTML)
 
         #expect(firstHTML == secondHTML)
         #expect(firstHTML.contains("sdw-renderer-card"))
@@ -366,7 +251,8 @@ struct TransclusionEmbedTests {
             Array(repeating: fence, count: CodeHighlightingPolicy.maximumHighlightedBlockCount - 1)
                 .joined(separator: "\n\n"),
             options: options)
-        let embeddedHTML = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .page(embedded.id), context: context, options: options)
+        let embeddedResult = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .page(embedded.id), context: context, options: options)
+        let embeddedHTML = try #require(embeddedResult.contentHTML)
         let marker = "<span class=\"sdw-code-keyword\">let</span>"
 
         #expect(root.components(separatedBy: marker).count - 1 == CodeHighlightingPolicy.maximumHighlightedBlockCount - 1)
@@ -387,7 +273,8 @@ struct TransclusionEmbedTests {
             store: store,
             pages: [(inner.id.rawValue, "Inner"), (outer.id.rawValue, "Outer")])
 
-        let html = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .page(outer.id), context: context, options: .disabled)
+        let result = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .page(outer.id), context: context, options: .disabled)
+        let html = try #require(result.contentHTML)
         #expect(html.contains("sdw-transclusion"))
         #expect(html.contains("data-sdw-embed-kind=\"page\""))
         // Collapsed-by-default: NO `open` attribute on the nested details.
@@ -414,7 +301,8 @@ struct TransclusionEmbedTests {
             sourceID: src.id, content: "# Extracted\n\nThe body.", origin: .extraction, note: nil)
         let context = contextFor(store: store, pages: [], sources: [(src.id.rawValue, "doc.pdf")])
 
-        let html = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .source(src.id), context: context, options: .disabled)
+        let result = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .source(src.id), context: context, options: .disabled)
+        let html = try #require(result.contentHTML)
         #expect(html.contains("Extracted"))
         #expect(html.contains("The body."))
     }
@@ -446,7 +334,8 @@ struct TransclusionEmbedTests {
             blobScheme: WikiLinkMarkdown.blobScheme
         )
 
-        let html = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .page(page.id), context: context, options: .disabled)
+        let result = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .page(page.id), context: context, options: .disabled)
+        let html = try #require(result.contentHTML)
         #expect(html.contains("pin=\(v2.id.rawValue)"))
     }
 
@@ -457,14 +346,15 @@ struct TransclusionEmbedTests {
         // No extraction row → helper falls back to raw UTF-8 bytes.
         let context = contextFor(store: store, pages: [], sources: [(src.id.rawValue, "notes.txt")])
 
-        let html = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .source(src.id), context: context, options: .disabled)
+        let result = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .source(src.id), context: context, options: .disabled)
+        let html = try #require(result.contentHTML)
         #expect(html.contains("Plain text body."))
     }
 
     @Test func renderEmbedBodySourceNilForUnextractedBinary() throws {
         // Plan v2 §4.2 invariant: a binary source with no extraction →
-        // sourceEmbedBody returns nil → renderEmbedBody returns the empty
-        // sentinel. NO extraction is triggered (hard read-path rule).
+        // sourceEmbedBody returns nil, so renderEmbedBody returns `.empty`.
+        // The read path does not start extraction.
         let store = try TestStoreFactory.inMemory()
         let pdf = Data([0x25, 0x50, 0x44, 0x46, 0x2D])  // "%PDF-" header bytes
         let src = try store.addSource(filename: "doc.pdf", data: pdf, mimeType: "application/pdf")
@@ -473,18 +363,22 @@ struct TransclusionEmbedTests {
         let body = try TransclusionEmbedder.sourceEmbedBody(testFixtureStore: store, id: src.id)
         #expect(body == nil)
 
-        let html = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .source(src.id), context: context, options: .disabled)
-        #expect(TransclusionEmbedder.isEmpty(html))
+        let result = try TransclusionEmbedder.renderEmbedBody(testFixtureStore: store, target: .source(src.id), context: context, options: .disabled)
+        #expect(result.isEmpty)
     }
 
     // MARK: - §12.2 Pure helpers (cycle + safe injection)
 
-    @Test func cycleDetectionRecognizesAncestorId() {
-        #expect(TransclusionEmbedder.isCycle(path: "A B C", id: "B"))
-        #expect(TransclusionEmbedder.isCycle(path: "A B C", id: "C"))
-        #expect(!TransclusionEmbedder.isCycle(path: "A B C", id: "D"))
-        #expect(!TransclusionEmbedder.isCycle(path: "", id: "A"))
-        #expect(!TransclusionEmbedder.isCycle(path: "A B", id: ""))
+    @Test func cycleDetectionPreservesTargetNamespaces() {
+        let pageA = DocumentTransclusionTarget.page(PageID(rawValue: "A"))
+        let pageB = DocumentTransclusionTarget.page(PageID(rawValue: "B"))
+        let sourceB = DocumentTransclusionTarget.source(SourceID(rawValue: "B"))
+        let path = "page:A source:B"
+
+        #expect(TransclusionEmbedder.isCycle(path: path, target: pageA))
+        #expect(TransclusionEmbedder.isCycle(path: path, target: sourceB))
+        #expect(!TransclusionEmbedder.isCycle(path: path, target: pageB))
+        #expect(!TransclusionEmbedder.isCycle(path: "", target: pageA))
     }
 
     @Test func cycleMarkerHtmlIsMuted() {
@@ -550,14 +444,14 @@ struct TransclusionEmbedTests {
         let recorder = JSRecorder()
         coord.deliverJS = { [weak recorder] in recorder?.record($0) }
 
-        // Simulate an embed whose ancestor path already contains the target
-        // id "B" — the handler must render the cycle marker WITHOUT fetching.
+        // Simulate an embed whose tagged ancestor path contains the same page.
+        // The handler must render the cycle marker without a store fetch.
         await coord.processEmbedFetch(body: [
             "nodeId": "n-cycle",
             "kind": "page",
             "id": "B",
             "target": "",
-            "path": "A B",
+            "path": "page:A page:B",
             "name": "Page B",
         ])
 
@@ -566,6 +460,30 @@ struct TransclusionEmbedTests {
         #expect(js.hasPrefix("sdwInjectEmbed(\"n-cycle\", \""))
         #expect(js.contains("sdw-embed-cycle"))
         #expect(js.contains("Page B"))
+    }
+
+    @Test func staleEmbedFetchGenerationDoesNotInject() async throws {
+        let store = try TestStoreFactory.inMemory()
+        let page = try store.createPage(title: "Stale")
+        let model = WikiStoreModel(store: store)
+        let coord = WikiReaderRep.Coordinator()
+        coord.store = model
+        let recorder = JSRecorder()
+        coord.deliverJS = { [weak recorder] in recorder?.record($0) }
+
+        let staleGeneration = coord.currentTransclusionGeneration
+        coord.webView(WikiReaderWebView(), didStartProvisionalNavigation: nil)
+        await coord.processEmbedFetch(body: [
+            "nodeId": "n-stale",
+            "kind": "page",
+            "id": page.id.rawValue,
+            "target": "",
+            "path": "",
+            "name": "Stale",
+        ], generation: staleGeneration)
+
+        #expect(coord.currentTransclusionGeneration != staleGeneration)
+        #expect(recorder.calls.isEmpty)
     }
 
     @Test func embedFetchHandlerCallsEvaluateJavaScriptWithEscapedPayload() async throws {

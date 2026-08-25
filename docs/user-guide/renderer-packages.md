@@ -28,9 +28,11 @@ Every compatible installed renderer is available to every wiki on this Mac. You 
 
 Import accepts one local folder. It does not accept ZIP files, other archives, remote catalogs, signing services, or network installation.
 
-## Renderer rows in Markdown
+## Renderer roles in Markdown
 
-A supported interactive embed appears as a renderer row. The row starts collapsed and shows **Open in Window** at the trailing edge.
+Markdown syntax selects the renderer role. A package can fill a compatible role, but it cannot change the role.
+
+Approved rich fences use a disclosure row. The row starts collapsed and shows **Open in Window** at the trailing edge.
 
 Use a quoted title after an approved rich-fence name:
 
@@ -49,15 +51,17 @@ Use Markdown image syntax for a renderer-claimed sibling source:
 ![System architecture](images/architecture.canvas)
 ```
 
-The alt text becomes the renderer row title. The app creates a renderer row only when an approved renderer claims the exact source MIME type and supports inline use.
+Image syntax always stays inline and remains part of the reader document. A compatible renderer cannot replace it with a native attachment or promote it to a disclosure row.
 
-Interactive image input has a 48,384-byte limit. A larger image stays an ordinary Markdown image.
+The reader uses a DOM image fallback. Mermaid and approved typed projectors can create inert DOM SVG. A renderer-backed image can also show **Open interactive renderer** when exact admission succeeds.
 
-An unclaimed, unresolved, external, or data image also stays an ordinary image. The app preserves the alt text in every fallback.
+The alt text remains available to accessibility tools and fallback content. Interactive image input has a 48,384-byte limit.
 
-A reader can keep four native or installed renderer rows expanded. A fifth row stays collapsed until another row closes. **Open in Window** remains available.
+An unclaimed, unresolved, external, data, oversized, or failed image keeps its ordinary inline fallback.
 
-Mermaid uses the same renderer row interaction, but its SVG stays in the Markdown document. Mermaid does not use the four-row native renderer limit.
+A reader can keep four native or installed disclosure rows expanded. A fifth row stays collapsed until another row closes.
+
+Mermaid source embeds stay inline. Authored Mermaid fences use disclosure rows. Inline Mermaid SVG does not use native or installed renderer budgets.
 
 ## Preferences and fallback
 
@@ -71,6 +75,21 @@ Removing a package deletes its copied payload from this Mac. It does not delete 
 
 ## Author a package
 
-Most users only import packages. Package authors must define the full manifest, asset digests, security limits, and accessibility values.
+Most users only import packages. Package authors must define the full manifest, asset digests, security limits, accessibility values, and embedding roles.
+
+Manifest revision 2 requires a nonempty `supportedEmbeddingRoles` array. Supported values are `inlineContent` and `disclosureRow`.
+
+```json
+{
+  "manifestRevision": 2,
+  "supportedEmbeddingRoles": ["inlineContent"]
+}
+```
+
+Declare only roles that the package can present safely. `inlineContent` must work without disclosure chrome and must preserve readable fallback content.
+
+Revision 1 package bytes and hashes remain unchanged. The app grants only the approved legacy `disclosureRow` role to compatible revision 1 registrations. Revision 1 packages never receive `inlineContent` authority.
+
+The manifest role is one admission requirement. MIME matching, capabilities, byte limits, digests, exact versions, package state, and runtime resources must also pass.
 
 Repository agents and developers must use the [`renderer-package-maintainer`](../skills/renderer-package-maintainer/SKILL.md) workflow. They must validate a package before a user imports it.

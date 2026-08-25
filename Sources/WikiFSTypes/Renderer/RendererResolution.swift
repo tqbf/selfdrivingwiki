@@ -39,9 +39,13 @@ public enum RendererResolution {
     public static func matching(
         descriptors: [RendererDescriptor],
         input: RendererMatchInput,
+        requiredEmbeddingRole: RendererEmbeddingRole? = nil,
         hostProtocolRevision: Int
     ) -> [RendererDescriptor] {
-        let compatible = descriptors.filter { $0.compatibility.supports(hostProtocolRevision: hostProtocolRevision) }
+        let compatible = descriptors.filter { descriptor in
+            descriptor.compatibility.supports(hostProtocolRevision: hostProtocolRevision)
+                && requiredEmbeddingRole.map(descriptor.supportedEmbeddingRoles.contains) != false
+        }
         let strong = compatible.filter { $0.matchTier(for: input) == .strong }
         let candidates = strong.isEmpty ? compatible.filter { $0.matchTier(for: input) == .extensionFallback } : strong
         return candidates.sorted { $0.stableTieBreakKey < $1.stableTieBreakKey }

@@ -4,16 +4,14 @@ import WikiFSCore
 
 /// A self-contained WKWebView that renders one provider player iframe for a
 /// byteless media source (YouTube/Vimeo/Spotify/SoundCloud). Used by
-/// `SourceDetailView` to surface the embed player above the transcript — the
-/// transcript markdown has no `![[source:…]]` directive, so the inline reader
-/// path (`WikiLinkMarkdown.embedHTML`) never emits the iframe for a source's
-/// own detail view. This view fills that gap.
+/// `SourceDetailView` to show the player above the transcript. A source detail
+/// page has no authored embed syntax, so the document resolver cannot create
+/// this player.
 ///
 /// Mirrors the reader's origin discipline (`WikiReaderOrigin`): the document is
 /// loaded under the same synthetic https origin that the YouTube embed URL's
 /// `?origin=` param claims, so YouTube's parent-origin check does not 153-error
-/// (issue #206). The iframe attributes mirror `WikiLinkMarkdown.embedHTML`
-/// exactly so playback behavior matches the in-page reader.
+/// (issue #206). The iframe attributes match the typed reader media lowerer.
 ///
 /// Issue #572.
 struct MediaEmbedPlayerView: View {
@@ -26,8 +24,7 @@ struct MediaEmbedPlayerView: View {
             .background(.regularMaterial)
     }
 
-    /// Poll the embed URL host to pick a video (16:9) vs audio-player (fixed)
-    /// height, mirroring `WikiLinkMarkdown.iframeSizeClass`.
+    /// Use the embed URL host to select a video or audio-player height.
     private var playerHeight: CGFloat {
         let url = target.url
         if url.contains("open.spotify.com")
@@ -79,11 +76,8 @@ private struct EmbedWebViewRep: NSViewRepresentable {
     }
 }
 
-/// Pure HTML builder for the single-iframe player document. Extracted so it is
-/// unit-testable without a WKWebView. The iframe attributes mirror
-/// `WikiLinkMarkdown.embedHTML` (eager-load + referrer policy for YouTube,
-/// `loading="lazy"` for other providers) so playback behavior matches the
-/// in-page reader exactly.
+/// Pure HTML builder for the single-player document. YouTube uses eager loading
+/// and a referrer policy. Other providers use lazy loading.
 enum MediaEmbedPlayerHTML {
 
     /// The full HTML document for one embed target. Loads under
@@ -105,9 +99,7 @@ enum MediaEmbedPlayerHTML {
         """
     }
 
-    /// The HTML element for the embed target. Mirrors the reader's
-    /// `embedHTML` iframe branch (YouTube eager-loads + forwards the referrer;
-    /// others lazy-load). Pure.
+    /// The HTML element for the embed target. This function is pure.
     static func element(for target: EmbedTarget) -> String {
         let sizeClass = sizeClass(for: target.url)
         func esc(_ s: String) -> String {
@@ -128,18 +120,13 @@ enum MediaEmbedPlayerHTML {
         case .video:
             return "<video src=\"\(esc(target.url))\" controls class=\"wiki-embed\"></video>"
         case .diagram:
-            // #670 — diagrams render inline through `WikiLinkMarkdown.embedHTML`
-            // in the page reader; this media-player view is never used for a
-            // diagram (no Source Detail Media tab is shown for `.mmd` sources).
-            // Defensive empty fallback for exhaustiveness.
+            // The typed reader lowers diagrams. The source detail media view
+            // does not show a player for Mermaid sources.
             return ""
         }
     }
 
-    /// Video iframes (YouTube, Vimeo) get a 16:9 aspect ratio; audio-player
-    /// iframes (Spotify, SoundCloud, Apple Podcasts) get a fixed height.
-    /// Derived from the embed URL host so `EmbedTarget` stays minimal. Mirrors
-    /// `WikiLinkMarkdown.iframeSizeClass`.
+    /// Video iframes use a 16:9 ratio. Audio-player iframes use a fixed height.
     static func sizeClass(for url: String) -> String {
         if url.contains("open.spotify.com")
             || url.contains("w.soundcloud.com")

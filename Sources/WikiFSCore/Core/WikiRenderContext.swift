@@ -189,6 +189,17 @@ public struct WikiRenderContext: Sendable {
         //      + Apple Podcasts + direct-remote media, dispatched through
         //      `ExternalEmbed.target(for:)` as before.
         let embedDescriptorMap = store.embedDescriptors()
+        let normalizedEmbedNamesBySource: [SourceID: Set<String>] = Dictionary(
+            uniqueKeysWithValues: store.sources.map { source in
+                let names = [source.displayName, source.filename].compactMap { $0 }
+                let stripped = names.map { ($0 as NSString).deletingPathExtension }
+                return (source.id, Set((names + stripped).map { $0.lowercased() }))
+            })
+        var embedNameCounts: [String: Int] = [:]
+        for names in normalizedEmbedNamesBySource.values {
+            for name in names { embedNameCounts[name, default: 0] += 1 }
+        }
+
         var embedMap: [String: WikiLinkMarkdown.SourceEmbedInfo] = [:]
         for source in store.sources {
             let target: EmbedTarget? = {
@@ -209,9 +220,8 @@ public struct WikiRenderContext: Sendable {
             }()
             let info = WikiLinkMarkdown.SourceEmbedInfo(
                 id: source.id, mimeType: source.mimeType, target: target)
-            let names = [source.displayName, source.filename].compactMap({ $0 })
-            let stripped = names.map { ($0 as NSString).deletingPathExtension }
-            for name in (names + stripped).map({ $0.lowercased() }) {
+            for name in normalizedEmbedNamesBySource[source.id] ?? []
+            where embedNameCounts[name] == 1 {
                 embedMap[name] = info
             }
             embedMap[source.id.rawValue.lowercased()] = info
@@ -239,7 +249,7 @@ public struct WikiRenderContext: Sendable {
     /// existence sets. Canonical ULID targets check id-keyed existence;
     /// legacy/forward links check the name sets (plus the unique loose-key tier
     /// for sources). This is the exact `isResolved` closure
-    /// `WikiReaderView.startLoad` passed to `ReaderMarkdown.prepared` — moved
+    /// `WikiReaderView.startLoad` used for legacy resolution — moved
     /// here verbatim so reader and transcript agree on ghost styling.
     public var isResolved: (String, ParsedLink.LinkType) -> Bool {
         { name, kind in

@@ -14,6 +14,60 @@ struct MermaidRendererHostedTests {
         return app
     }()
 
+    @MainActor
+    private final class NavigationWaiter: NSObject, WKNavigationDelegate {
+        private var continuation: CheckedContinuation<Bool, Never>?
+        private var timeoutTask: Task<Void, Never>?
+
+        func load(
+            _ html: String,
+            in webView: WKWebView,
+            timeout: Duration = .seconds(15)
+        ) async -> Bool {
+            webView.navigationDelegate = self
+            return await withCheckedContinuation { continuation in
+                self.continuation = continuation
+                timeoutTask = Task { @MainActor [weak self] in
+                    do {
+                        try await Task.sleep(for: timeout)
+                    } catch {
+                        return
+                    }
+                    self?.finish(succeeded: false)
+                }
+                webView.loadHTMLString(html, baseURL: URL(string: "about:blank"))
+            }
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            finish(succeeded: true)
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            didFail navigation: WKNavigation!,
+            withError error: any Error
+        ) {
+            finish(succeeded: false)
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            didFailProvisionalNavigation navigation: WKNavigation!,
+            withError error: any Error
+        ) {
+            finish(succeeded: false)
+        }
+
+        private func finish(succeeded: Bool) {
+            guard let continuation else { return }
+            self.continuation = nil
+            timeoutTask?.cancel()
+            timeoutTask = nil
+            continuation.resume(returning: succeeded)
+        }
+    }
+
     @Test(
         "standalone Mermaid renderer paints the requested palette at reader size",
         arguments: [ColorScheme.light, .dark])
@@ -82,6 +136,116 @@ struct MermaidRendererHostedTests {
             #expect(fields[3] == Substring(String(expectedWidth)))
             #expect(fields[4] == Substring(String(expectedWidth)))
         }
+    }
+
+    @Test("reader inline Mermaid bootstrap renders SVG and hides its fallback")
+    func readerInlineMermaidBootstrapRendersTypedContainer() async throws {
+        _ = Self.app
+        let appURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appending(path: "build/Self Driving Wiki.app")
+        let appBundle = try #require(Bundle(url: appURL))
+        let library = try #require(MermaidRendererAssets.library(in: appBundle))
+        let body = """
+        <div class="mermaid sdw-inline-mermaid">flowchart LR\nA --&gt; B</div>
+        <pre class="sdw-inline-mermaid__fallback"><code class="language-mermaid">flowchart LR\nA --&gt; B</code></pre>
+        """
+        let html = WikiReaderView.documentHTML(body, mermaidLibrary: library)
+
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 900, height: 640))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 900, height: 640),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false)
+        window.contentView = webView
+        window.orderFront(nil)
+        defer {
+            window.orderOut(nil)
+            lease.release()
+        }
+
+        let navigationLoaded = await NavigationWaiter().load(html, in: webView)
+        try #require(navigationLoaded)
+        var result = ""
+        for _ in 0..<100 {
+            result = await evaluateJavaScriptWithTimeout(webView, """
+            (function(){
+              var diagram = document.querySelector('.sdw-inline-mermaid');
+              var fallback = document.querySelector('.sdw-inline-mermaid__fallback');
+              if (!diagram || !fallback) return 'missing';
+              return [
+                diagram.getAttribute('data-mermaid-rendered') || 'waiting',
+                diagram.querySelector('svg') ? 'svg' : 'no-svg',
+                fallback.hidden ? 'hidden' : 'visible'
+              ].join('|');
+            })()
+            """, timeout: .seconds(2)) ?? "no-result"
+            if result == "true|svg|hidden" { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(result == "true|svg|hidden", "reader inline Mermaid runtime result: \(result)")
+    }
+
+    @Test("reader inline Mermaid bootstrap preserves source after parse failure")
+    func readerInlineMermaidBootstrapPreservesFallbackOnFailure() async throws {
+        _ = Self.app
+        let appURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appending(path: "build/Self Driving Wiki.app")
+        let appBundle = try #require(Bundle(url: appURL))
+        let library = try #require(MermaidRendererAssets.library(in: appBundle))
+        let body = """
+        <div class="mermaid sdw-inline-mermaid">this is not valid Mermaid source</div>
+        <pre class="sdw-inline-mermaid__fallback"><code class="language-mermaid">this is not valid Mermaid source</code></pre>
+        """
+        let html = WikiReaderView.documentHTML(body, mermaidLibrary: library)
+
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 900, height: 640))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 900, height: 640),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false)
+        window.contentView = webView
+        window.orderFront(nil)
+        defer {
+            window.orderOut(nil)
+            lease.release()
+        }
+
+        let navigationLoaded = await NavigationWaiter().load(html, in: webView)
+        try #require(navigationLoaded)
+        var result = ""
+        for _ in 0..<100 {
+            result = await evaluateJavaScriptWithTimeout(webView, """
+            (function(){
+              var diagram = document.querySelector('.sdw-inline-mermaid');
+              var fallback = document.querySelector('.sdw-inline-mermaid__fallback');
+              if (!diagram || !fallback) return 'missing';
+              var rendering = diagram.getAttribute('data-mermaid-rendering') === 'true';
+              if (rendering) return 'waiting';
+              return [
+                diagram.querySelector('svg') ? 'svg' : 'no-svg',
+                fallback.hidden ? 'hidden' : 'visible',
+                fallback.textContent.trim()
+              ].join('|');
+            })()
+            """, timeout: .seconds(2)) ?? "no-result"
+            if result != "waiting" { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(
+            result == "no-svg|visible|this is not valid Mermaid source",
+            "reader inline Mermaid failure result: \(result)")
     }
 
     private func waitForWebView(in window: NSWindow, timeout: Duration = .seconds(5)) async throws -> WKWebView {

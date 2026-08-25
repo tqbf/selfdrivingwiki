@@ -86,6 +86,7 @@ enum BuiltInRendererDescriptors {
         displayName: String,
         matchers: [RendererMatcher],
         maximumInputByteCount: Int,
+        embeddingRoles: Set<RendererEmbeddingRole> = [.inlineContent],
         accessibility: RendererAccessibility = .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
         priority: Int
     ) -> RendererDescriptor {
@@ -96,6 +97,8 @@ enum BuiltInRendererDescriptors {
                 implementation: .builtIn(id),
                 matchers: matchers,
                 presentations: [.native],
+                supportedEmbeddingRoles: embeddingRoles,
+                hasExplicitEmbeddingRoles: true,
                 approvedAssets: [],
                 capabilities: [.inputRead],
                 sizeLimits: try .init(

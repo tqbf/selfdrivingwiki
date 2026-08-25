@@ -1,51 +1,239 @@
 import Foundation
+import Markdown
 import WikiFSCore
 import WikiFSTypes
 
 // pattern: Functional Core — deterministic projection from pinned source facts.
 
-/// Immutable image routing for one Markdown document. It accepts only exact
-/// sibling-map keys already resolved by the source index; raw image paths never
-/// select a renderer on their own.
-struct MarkdownImageEmbedProjection: Sendable {
-    struct InteractiveCandidate: Hashable, Sendable {
-        let rendererReference: RendererReference
-        let source: RendererEmbeddedContent.Source
-    }
-
-    enum Outcome: Hashable, Sendable {
-        case ordinary
-        case interactive(InteractiveCandidate)
-    }
-
-    private let outcomes: [String: Outcome]
-
-    init(
-        siblingSources: [String: RendererEmbeddedContent.Source],
+/// Immutable renderer plans for exact source IDs already resolved from typed
+/// wiki embed syntax. Matching stays role-aware and fail-closed.
+enum DocumentSourceRendererProjection {
+    static func hasEligibleRenderer(
+        mimeType: String?,
         registry: RendererRegistrySnapshot,
         inlineCapableReferences: Set<RendererReference>
-    ) throws {
-        var outcomes = [String: Outcome]()
+    ) -> Bool {
+        guard let mimeType else { return false }
+        let normalizedMIME: RendererMIMEType
+        do {
+            normalizedMIME = try RendererMIMEType(validating: mimeType)
+        } catch {
+            DebugLog.reader("Source renderer projection rejected an invalid MIME type.")
+            return false
+        }
+        return registry.descriptors.contains { descriptor in
+            descriptor.compatibility.supports(hostProtocolRevision: registry.hostProtocolRevision) &&
+                descriptor.supportedEmbeddingRoles.contains(.inlineContent) &&
+                inlineCapableReferences.contains(descriptor.reference) &&
+                descriptor.capabilities.contains(.inputRead) &&
+                descriptor.matchers.contains(.normalizedMIME(normalizedMIME))
+        }
+    }
+
+    static func build(
+        sources: [SourceID: RendererEmbeddedContent.Source],
+        displayNames: [SourceID: String],
+        registry: RendererRegistrySnapshot,
+        inlineCapableReferences: Set<RendererReference>
+    ) throws -> [SourceID: RendererEmbedPlan] {
+        var plans: [SourceID: RendererEmbedPlan] = [:]
+        for (sourceID, source) in sources {
+            guard source.bytes.count <= WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount,
+                  let descriptor = try matchingDescriptor(
+                      for: source,
+                      registry: registry,
+                      inlineCapableReferences: inlineCapableReferences)
+            else { continue }
+            plans[sourceID] = RendererEmbedPlan(
+                placeholderID: "sdw-inline-renderer-\(source.digest.hex.prefix(16))",
+                embeddingRole: .inlineContent,
+                rendererReference: descriptor.reference,
+                input: .source(source),
+                semanticContent: "Source available as \(source.mimeType.rawValue).",
+                displayTitle: displayNames[sourceID],
+                activationMetadata: .init(
+                    controlLabel: "Open",
+                    accessibilityLabel: "Open inline source renderer",
+                    summary: "Open the source in the renderer pane."))
+        }
+        return plans
+    }
+
+    private static func matchingDescriptor(
+        for source: RendererEmbeddedContent.Source,
+        registry: RendererRegistrySnapshot,
+        inlineCapableReferences: Set<RendererReference>
+    ) throws -> RendererDescriptor? {
+        let sniffedBytes = Data(source.bytes.prefix(RendererMatchingLimits.maximumSniffByteCount))
+        let input = try RendererMatchInput(
+            mimeType: source.mimeType,
+            fileExtension: nil,
+            sniffedBytes: sniffedBytes,
+            sniffedBytesAreComplete: sniffedBytes.count == source.bytes.count,
+            artifactKind: .source)
+        return registry.matching(input, requiredEmbeddingRole: .inlineContent).first { descriptor in
+            inlineCapableReferences.contains(descriptor.reference) &&
+                descriptor.capabilities.contains(.inputRead) &&
+                source.bytes.count <= descriptor.sizeLimits.maximumInputByteCount &&
+                source.bytes.count <= descriptor.sizeLimits.maximumDecodedByteCount
+        }
+    }
+}
+
+/// Resolves only image destinations authored in the current Markdown. File
+/// Provider paths become typed source IDs after their structure and current
+/// source or bookmark facts match exactly.
+enum MarkdownImageSourcePathResolver {
+    static func resolve(
+        markdown: String,
+        sources: [SourceSummary],
+        bookmarkNodes: [BookmarkNode]
+    ) -> [String: SourceID] {
+        let destinations = imageDestinations(in: markdown)
+        guard destinations.isEmpty == false else { return [:] }
+        let sourcesByID = Dictionary(uniqueKeysWithValues: sources.map { ($0.id, $0) })
+        let sourcesByShortID = Dictionary(grouping: sources, by: { FilenameEscaping.shortID($0.id.rawValue) })
+        return destinations.reduce(into: [:]) { result, destination in
+            let decoded = destination.removingPercentEncoding ?? destination
+            if let sourceID = sourceID(
+                for: decoded,
+                sourcesByID: sourcesByID,
+                sourcesByShortID: sourcesByShortID,
+                bookmarkNodes: bookmarkNodes) {
+                result[destination] = sourceID
+            }
+        }
+    }
+
+    private static func imageDestinations(in markdown: String) -> Set<String> {
+        let document = Document(parsing: markdown)
+        var result = Set<String>()
+        func collect(_ markup: Markup) {
+            if let image = markup as? Image, let source = image.source {
+                result.insert(source)
+            }
+            for child in markup.children { collect(child) }
+        }
+        collect(document)
+        return result
+    }
+
+    private static func sourceID(
+        for path: String,
+        sourcesByID: [SourceID: SourceSummary],
+        sourcesByShortID: [String: [SourceSummary]],
+        bookmarkNodes: [BookmarkNode]
+    ) -> SourceID? {
+        guard let components = rootedComponents(for: path) else { return nil }
+        if components.count == 3, components[0] == "sources", components[1] == "by-id" {
+            let rawID = (components[2] as NSString).deletingPathExtension
+            let sourceID = SourceID(rawValue: rawID)
+            guard let source = sourcesByID[sourceID],
+                  components[2] == FilenameEscaping.byIDSourceFilename(sourceID: sourceID, ext: source.ext)
+            else { return nil }
+            return sourceID
+        }
+        if components.count == 3, components[0] == "sources", components[1] == "by-name" {
+            let stem = ((components[2] as NSString).deletingPathExtension as NSString)
+            let delimiter = stem.range(of: "--", options: .backwards)
+            guard delimiter.location != NSNotFound else { return nil }
+            let shortID = stem.substring(from: NSMaxRange(delimiter))
+            let matches = (sourcesByShortID[shortID] ?? []).filter { source in
+                let humanName = source.displayName ?? source.filename
+                return components[2] == FilenameEscaping.byNameSourceFilename(
+                    filename: humanName,
+                    ext: source.ext,
+                    sourceID: source.id)
+            }
+            return matches.count == 1 ? matches[0].id : nil
+        }
+        if components.first == "bookmarks" {
+            return bookmarkSourceID(
+                components: Array(components.dropFirst()),
+                sourcesByID: sourcesByID,
+                nodes: bookmarkNodes)
+        }
+        return nil
+    }
+
+    /// File Provider links can be relative to a projected page directory. Drop
+    /// only a leading relative prefix and keep the rooted path exact.
+    private static func rootedComponents(for path: String) -> [String]? {
+        let components = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard components.isEmpty == false, components[0].isEmpty == false else { return nil }
+        var rootIndex = 0
+        while rootIndex < components.count,
+              components[rootIndex] == "." || components[rootIndex] == ".." {
+            rootIndex += 1
+        }
+        guard rootIndex < components.count,
+              components[rootIndex] == "sources" || components[rootIndex] == "bookmarks"
+        else { return nil }
+        let rooted = Array(components[rootIndex...])
+        guard rooted.allSatisfy({ $0.isEmpty == false && $0 != "." && $0 != ".." }) else { return nil }
+        return rooted
+    }
+
+    private static func bookmarkSourceID(
+        components: [String],
+        sourcesByID: [SourceID: SourceSummary],
+        nodes: [BookmarkNode]
+    ) -> SourceID? {
+        guard let leaf = components.last else { return nil }
+        var parentID: BookmarkID?
+        for folderName in components.dropLast() {
+            let matches = nodes.filter { node in
+                node.parentID == parentID
+                    && node.kind == .folder
+                    && sanitize(node.label ?? "Untitled") == folderName
+            }
+            guard matches.count == 1 else { return nil }
+            parentID = matches[0].id
+        }
+        let matches = nodes.compactMap { node -> SourceID? in
+            guard node.parentID == parentID,
+                  case .source(let sourceID) = node.content,
+                  let source = sourcesByID[sourceID],
+                  sanitize(source.displayName ?? source.filename) == leaf
+            else { return nil }
+            return sourceID
+        }
+        return matches.count == 1 ? matches[0] : nil
+    }
+
+    private static func sanitize(_ value: String) -> String {
+        value.replacingOccurrences(of: "/", with: "-")
+    }
+}
+
+/// Immutable image routing for one Markdown document. It accepts only exact
+/// sibling-map keys or File Provider paths already resolved to typed source IDs.
+enum MarkdownImageTargetProjection {
+    static func build(
+        siblingSources: [String: RendererEmbeddedContent.Source],
+        siblingSourceIDs: [String: SourceID],
+        registry: RendererRegistrySnapshot,
+        inlineCapableReferences: Set<RendererReference>
+    ) throws -> [String: ResolvedMarkdownImageTarget] {
+        var targets = [String: ResolvedMarkdownImageTarget]()
+        for (target, sourceID) in siblingSourceIDs where isRelativeSiblingTarget(target) {
+            targets[target] = .blob(sourceID)
+        }
         for (target, source) in siblingSources {
-            guard Self.isRelativeSiblingTarget(target),
+            guard isRelativeSiblingTarget(target),
                   source.bytes.count <= WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount,
-                  let descriptor = try Self.matchingDescriptor(
+                  let descriptor = try matchingDescriptor(
                       for: source,
                       registry: registry,
                       inlineCapableReferences: inlineCapableReferences)
             else {
                 continue
             }
-            outcomes[target] = .interactive(.init(
+            targets[target] = .renderer(
                 rendererReference: descriptor.reference,
-                source: source))
+                source: source)
         }
-        self.outcomes = outcomes
-    }
-
-    func outcome(for rawTarget: String) -> Outcome {
-        guard Self.isRelativeSiblingTarget(rawTarget) else { return .ordinary }
-        return outcomes[rawTarget] ?? .ordinary
+        return targets
     }
 
     private static func matchingDescriptor(
@@ -60,7 +248,7 @@ struct MarkdownImageEmbedProjection: Sendable {
             sniffedBytes: sniffedBytes,
             sniffedBytesAreComplete: sniffedBytes.count == source.bytes.count,
             artifactKind: nil)
-        return registry.matching(input).first { descriptor in
+        return registry.matching(input, requiredEmbeddingRole: .inlineContent).first { descriptor in
             inlineCapableReferences.contains(descriptor.reference) &&
                 descriptor.capabilities.contains(.inputRead) &&
                 descriptor.matchers.contains(.normalizedMIME(source.mimeType)) &&
@@ -73,9 +261,19 @@ struct MarkdownImageEmbedProjection: Sendable {
         guard target.isEmpty == false,
               target.hasPrefix("/") == false,
               target.hasPrefix("#") == false,
-              URLComponents(string: target)?.scheme == nil,
-              target.split(separator: "/").contains("..") == false
+              URLComponents(string: target)?.scheme == nil
         else { return false }
-        return true
+        let components = target.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard components.allSatisfy({ $0.isEmpty == false }) else { return false }
+        guard components.contains("..") else { return true }
+        var rootIndex = 0
+        while rootIndex < components.count,
+              components[rootIndex] == "." || components[rootIndex] == ".." {
+            rootIndex += 1
+        }
+        guard rootIndex < components.count,
+              components[rootIndex] == "sources" || components[rootIndex] == "bookmarks"
+        else { return false }
+        return components[rootIndex...].allSatisfy({ $0 != "." && $0 != ".." })
     }
 }

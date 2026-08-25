@@ -267,8 +267,7 @@ public enum WikiLinkSpan {
     ///   * the char at `location - 2` is NOT `!` (the bang is the START of the
     ///     `![[` run — a double bang `!![[` is not an embed).
     ///
-    /// Shared by `WikiLinkParser.parse()` (sets `isEmbed`) and
-    /// `WikiLinkMarkdown.linkified()` (emits embed HTML / consumes the `!`).
+    /// Shared by `WikiLinkParser.parse()` and the typed Markdown syntax overlay.
     public static func isEmbedPrefix(_ body: NSString, _ range: NSRange) -> Bool {
         guard range.location > 0,
               body.character(at: range.location - 1) == bang else { return false }
