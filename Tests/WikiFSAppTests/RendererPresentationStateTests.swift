@@ -377,6 +377,121 @@ import WikiFSTypes
         }
     }
 
+    @Test("Lifecycle: a renderer that returns after a transient refresh restores the persisted presentation")
+    func lifecycleRecoversRendererAfterTransientUnavailableRefresh() {
+        let source = lifecycleSource(
+            filename: "architecture.svg",
+            ext: "svg",
+            mimeType: "image/svg+xml",
+            byteSize: 848)
+        let svg = BuiltInRendererReference.reference(for: .svg)
+        var lifecycle = RendererPresentationLifecycle(sourceID: source.id)
+        lifecycle.resolveLoadedSource(
+            source: source,
+            matchingRenderer: svg,
+            boundedBytes: Data("<svg></svg>".utf8),
+            currentMarkdown: nil,
+            persistedSelection: .rendered)
+
+        lifecycle.refreshLoadedSource(
+            source: source,
+            availableRenderers: [],
+            matchingRenderer: nil,
+            boundedBytes: Data("<svg></svg>".utf8),
+            currentMarkdown: nil,
+            persistedSelection: .rendered)
+        #expect(lifecycle.state.selection == .source)
+        #expect(lifecycle.state.fallbackReason == RendererPresentationState.unavailableFallbackMessage)
+
+        lifecycle.refreshLoadedSource(
+            source: source,
+            availableRenderers: [svg],
+            matchingRenderer: svg,
+            boundedBytes: Data("<svg></svg>".utf8),
+            currentMarkdown: nil,
+            persistedSelection: .rendered)
+
+        #expect(lifecycle.state.selection == .rendered)
+        #expect(lifecycle.state.pinnedRenderer == svg)
+        #expect(lifecycle.state.fallbackReason == nil)
+    }
+
+    @Test("Lifecycle: automatic Rendered mode recovers after a transient renderer omission")
+    func lifecycleAutomaticRenderedModeRecoversAfterTransientOmission() {
+        let source = lifecycleSource(filename: "paper.pdf", ext: "pdf", mimeType: MimeType.pdf, byteSize: 4)
+        let pdf = BuiltInRendererReference.reference(for: .pdf)
+        var lifecycle = RendererPresentationLifecycle(sourceID: source.id)
+        lifecycle.resolveLoadedSource(
+            source: source,
+            matchingRenderer: pdf,
+            currentMarkdown: nil,
+            persistedSelection: nil)
+        lifecycle.refreshLoadedSource(
+            source: source,
+            availableRenderers: [],
+            matchingRenderer: nil,
+            currentMarkdown: nil,
+            persistedSelection: nil)
+        lifecycle.refreshLoadedSource(
+            source: source,
+            availableRenderers: [pdf],
+            matchingRenderer: pdf,
+            currentMarkdown: nil,
+            persistedSelection: nil)
+
+        #expect(lifecycle.state.selection == .rendered)
+        #expect(lifecycle.state.pinnedRenderer == pdf)
+        #expect(lifecycle.state.fallbackReason == nil)
+    }
+
+    @Test("Lifecycle: transient omission restores Split only with the same exact renderer")
+    func lifecycleSplitRecoveryRejectsRendererSubstitution() {
+        let source = lifecycleSource(
+            filename: "architecture.svg",
+            ext: "svg",
+            mimeType: "image/svg+xml",
+            byteSize: 848)
+        let svg = BuiltInRendererReference.reference(for: .svg)
+        let html = BuiltInRendererReference.reference(for: .html)
+        let bytes = Data("<svg></svg>".utf8)
+        var lifecycle = RendererPresentationLifecycle(sourceID: source.id)
+        lifecycle.resolveLoadedSource(
+            source: source,
+            matchingRenderer: svg,
+            boundedBytes: bytes,
+            currentMarkdown: nil,
+            persistedSelection: .split)
+        lifecycle.refreshLoadedSource(
+            source: source,
+            availableRenderers: [],
+            matchingRenderer: nil,
+            boundedBytes: bytes,
+            currentMarkdown: nil,
+            persistedSelection: .split)
+
+        lifecycle.refreshLoadedSource(
+            source: source,
+            availableRenderers: [html],
+            matchingRenderer: html,
+            boundedBytes: bytes,
+            currentMarkdown: nil,
+            persistedSelection: .split)
+        #expect(lifecycle.state.selection == .source)
+        #expect(lifecycle.state.pinnedRenderer == nil)
+        #expect(lifecycle.state.fallbackReason == RendererPresentationState.unavailableFallbackMessage)
+
+        lifecycle.refreshLoadedSource(
+            source: source,
+            availableRenderers: [svg],
+            matchingRenderer: svg,
+            boundedBytes: bytes,
+            currentMarkdown: nil,
+            persistedSelection: .split)
+        #expect(lifecycle.state.selection == .split)
+        #expect(lifecycle.state.pinnedRenderer == svg)
+        #expect(lifecycle.state.fallbackReason == nil)
+    }
+
     @Test("Lifecycle: source navigation clears the prior source pin before resolving the destination")
     func lifecycleSourceNavigationDoesNotRetainPriorPresentation() {
         let firstSource = SourceID(rawValue: "01J00000000000000000000000")

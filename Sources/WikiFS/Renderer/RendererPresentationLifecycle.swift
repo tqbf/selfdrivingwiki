@@ -12,6 +12,14 @@ import WikiFSCore
 struct RendererPresentationLifecycle: Sendable, Equatable {
     private(set) var state: RendererPresentationState
     private var loadedFacts: LoadedFacts?
+    /// The exact pin and mode removed by a transient registry omission. A later
+    /// refresh can restore only this reference, never substitute another match.
+    private var temporarilyUnavailableRenderer: UnavailableRenderer?
+
+    private struct UnavailableRenderer: Sendable, Equatable {
+        let reference: RendererReference
+        let selection: RendererSourcePresentationMode
+    }
 
     private struct LoadedFacts: Sendable, Equatable {
         let source: SourceSummary
@@ -23,31 +31,38 @@ struct RendererPresentationLifecycle: Sendable, Equatable {
     init(sourceID: SourceID) {
         state = RendererPresentationState(sourceID: sourceID)
         loadedFacts = nil
+        temporarilyUnavailableRenderer = nil
     }
 
     mutating func beginLoading(sourceID: SourceID) {
         state = RendererPresentationState(sourceID: sourceID)
         loadedFacts = nil
+        temporarilyUnavailableRenderer = nil
     }
 
     mutating func replaceState(_ state: RendererPresentationState) {
         self.state = state
+        temporarilyUnavailableRenderer = nil
     }
 
     mutating func selectSource() {
         state.selectSource()
+        temporarilyUnavailableRenderer = nil
     }
 
     mutating func selectSplit(_ reference: RendererReference) {
         state.selectSplit(reference)
+        temporarilyUnavailableRenderer = nil
     }
 
     mutating func selectRendered(_ reference: RendererReference) {
         state.selectRendered(reference)
+        temporarilyUnavailableRenderer = nil
     }
 
     mutating func selectFallback(reason: String) {
         state.selectFallback(reason: reason)
+        temporarilyUnavailableRenderer = nil
     }
 
     mutating func resolveLoadedSource(
@@ -70,6 +85,7 @@ struct RendererPresentationLifecycle: Sendable, Equatable {
             boundedBytes: boundedBytes,
             currentMarkdown: currentMarkdown,
             origin: origin)
+        temporarilyUnavailableRenderer = nil
     }
 
     /// Retains a pane-lifetime pin during unrelated source-list refreshes.
@@ -95,7 +111,29 @@ struct RendererPresentationLifecycle: Sendable, Equatable {
             currentMarkdown: currentMarkdown,
             origin: origin)
         guard state.sourceID != source.id || loadedFacts != refreshedFacts else {
+            if let unavailable = temporarilyUnavailableRenderer,
+               matchingRenderer == unavailable.reference,
+               availableRenderers.contains(unavailable.reference),
+               persistedSelection != .source {
+                switch persistedSelection ?? unavailable.selection {
+                case .rendered:
+                    state.selectRendered(unavailable.reference)
+                case .split:
+                    state.selectSplit(unavailable.reference)
+                case .source:
+                    break
+                }
+                temporarilyUnavailableRenderer = nil
+                return
+            }
+            let previousPin = state.pinnedRenderer
+            let previousSelection = state.selection
             state.keepPinnedRenderer(available: availableRenderers)
+            if let previousPin, state.pinnedRenderer == nil {
+                temporarilyUnavailableRenderer = UnavailableRenderer(
+                    reference: previousPin,
+                    selection: previousSelection)
+            }
             return
         }
         resolveLoadedSource(

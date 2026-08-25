@@ -11,6 +11,8 @@ import WikiFSTypes
 struct RendererPresentationState: Sendable, Equatable {
     typealias Selection = RendererSourcePresentationMode
 
+    static let unavailableFallbackMessage = "The selected renderer is unavailable."
+
     let sourceID: SourceID
     private(set) var selection: Selection
     private(set) var pinnedRenderer: RendererReference?
@@ -63,7 +65,7 @@ struct RendererPresentationState: Sendable, Equatable {
     mutating func keepPinnedRenderer(available: [RendererReference]) {
         guard let pinnedRenderer, available.contains(pinnedRenderer) else {
             if self.pinnedRenderer != nil {
-                selectFallback(reason: "The selected renderer is unavailable.")
+                selectFallback(reason: Self.unavailableFallbackMessage)
             }
             return
         }
