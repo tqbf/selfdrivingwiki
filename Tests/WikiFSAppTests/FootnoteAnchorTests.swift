@@ -48,21 +48,23 @@ struct FootnoteAnchorTests {
     // MARK: - Definition anchor + the load-bearing invariant
 
     @Test func preparedAppendixInjectsDefinitionAnchors() {
-        let prepared = ReaderMarkdown.prepared(Self.footnoteMarkdown) { _, _ in true }
+        let prepared = ReaderMarkdown.preparedDocument(Self.footnoteMarkdown)
         // Each definition gets a wiki-fn-<id> anchor.
-        #expect(prepared.contains("id=\"wiki-fn-n\""))
-        #expect(prepared.contains("id=\"wiki-fn-other\""))
+        #expect(prepared.normalizedMarkdown.contains("id=\"wiki-fn-n\""))
+        #expect(prepared.normalizedMarkdown.contains("id=\"wiki-fn-other\""))
         // And the references are fragment links.
-        #expect(prepared.contains("](#wiki-fn-n)"))
-        #expect(prepared.contains("](#wiki-fn-other)"))
+        #expect(prepared.normalizedMarkdown.contains("](#wiki-fn-n)"))
+        #expect(prepared.normalizedMarkdown.contains("](#wiki-fn-other)"))
     }
 
     @Test func fragmentHrefMatchesDefinitionElementID() {
         // The whole point: the ref's href and the definition's id must be the
         // same string, or native WKWebView scroll won't find the target. Checked
         // on the fully rendered HTML (the format actually loaded into the view).
+        let prepared = ReaderMarkdown.preparedDocument(Self.footnoteMarkdown)
         let html = MarkdownHTMLRenderer.render(
-            ReaderMarkdown.prepared(Self.footnoteMarkdown) { _, _ in true },
+            prepared,
+            projection: .init(),
             options: .disabled)
         for id in ["n", "other"] {
             let anchor = "id=\"wiki-fn-\(id)\""
@@ -73,8 +75,10 @@ struct FootnoteAnchorTests {
     }
 
     @Test func renderedHTMLContainsAnchorAndReferenceLink() {
+        let prepared = ReaderMarkdown.preparedDocument(Self.footnoteMarkdown)
         let html = MarkdownHTMLRenderer.render(
-            ReaderMarkdown.prepared(Self.footnoteMarkdown) { _, _ in true },
+            prepared,
+            projection: .init(),
             options: .disabled)
         // The anchor element is emitted verbatim (raw inline HTML).
         #expect(html.contains("<a id=\"wiki-fn-n\"></a>"))

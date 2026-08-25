@@ -7,45 +7,32 @@ import WikiFSTypes
 /// Immutable image routing for one Markdown document. It accepts only exact
 /// sibling-map keys already resolved by the source index; raw image paths never
 /// select a renderer on their own.
-struct MarkdownImageEmbedProjection: Sendable {
-    struct InteractiveCandidate: Hashable, Sendable {
-        let rendererReference: RendererReference
-        let source: RendererEmbeddedContent.Source
-    }
-
-    enum Outcome: Hashable, Sendable {
-        case ordinary
-        case interactive(InteractiveCandidate)
-    }
-
-    private let outcomes: [String: Outcome]
-
-    init(
+enum MarkdownImageTargetProjection {
+    static func build(
         siblingSources: [String: RendererEmbeddedContent.Source],
+        siblingSourceIDs: [String: SourceID],
         registry: RendererRegistrySnapshot,
         inlineCapableReferences: Set<RendererReference>
-    ) throws {
-        var outcomes = [String: Outcome]()
+    ) throws -> [String: ResolvedMarkdownImageTarget] {
+        var targets = [String: ResolvedMarkdownImageTarget]()
+        for (target, sourceID) in siblingSourceIDs where isRelativeSiblingTarget(target) {
+            targets[target] = .blob(sourceID)
+        }
         for (target, source) in siblingSources {
-            guard Self.isRelativeSiblingTarget(target),
+            guard isRelativeSiblingTarget(target),
                   source.bytes.count <= WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount,
-                  let descriptor = try Self.matchingDescriptor(
+                  let descriptor = try matchingDescriptor(
                       for: source,
                       registry: registry,
                       inlineCapableReferences: inlineCapableReferences)
             else {
                 continue
             }
-            outcomes[target] = .interactive(.init(
+            targets[target] = .renderer(
                 rendererReference: descriptor.reference,
-                source: source))
+                source: source)
         }
-        self.outcomes = outcomes
-    }
-
-    func outcome(for rawTarget: String) -> Outcome {
-        guard Self.isRelativeSiblingTarget(rawTarget) else { return .ordinary }
-        return outcomes[rawTarget] ?? .ordinary
+        return targets
     }
 
     private static func matchingDescriptor(
@@ -60,7 +47,7 @@ struct MarkdownImageEmbedProjection: Sendable {
             sniffedBytes: sniffedBytes,
             sniffedBytesAreComplete: sniffedBytes.count == source.bytes.count,
             artifactKind: nil)
-        return registry.matching(input).first { descriptor in
+        return registry.matching(input, requiredEmbeddingRole: .inlineContent).first { descriptor in
             inlineCapableReferences.contains(descriptor.reference) &&
                 descriptor.capabilities.contains(.inputRead) &&
                 descriptor.matchers.contains(.normalizedMIME(source.mimeType)) &&

@@ -5,34 +5,36 @@ import Testing
 import WikiFSCore
 import WikiFSTypes
 
-struct MarkdownImageEmbedProjectionTests {
+struct MarkdownImageTargetProjectionTests {
     @Test("an exact sibling target projects pinned image facts")
     func exactSiblingTargetProjectsPinnedImageFacts() throws {
         let source = try imageSource(bytes: Self.jsonCanvasBytes)
         let descriptor = BuiltInRendererDescriptors.descriptor(for: .jsonCanvas)
-        let projection = try MarkdownImageEmbedProjection(
+        let targets = try MarkdownImageTargetProjection.build(
             siblingSources: ["images/board.canvas": source],
+            siblingSourceIDs: ["images/board.canvas": source.sourceID],
             registry: try RendererRegistrySnapshot(builtInDescriptors: [descriptor]),
             inlineCapableReferences: [descriptor.reference])
 
-        guard case let .interactive(candidate) = projection.outcome(for: "images/board.canvas") else {
-            Issue.record("expected the exact sibling path to be interactive")
+        guard case let .renderer(reference, pinnedSource) = targets["images/board.canvas"] else {
+            Issue.record("expected the exact sibling path to select an inline renderer")
             return
         }
-        #expect(candidate.rendererReference == descriptor.reference)
-        #expect(candidate.source.sourceID == source.sourceID)
-        #expect(candidate.source.sourceVersionID == source.sourceVersionID)
-        #expect(candidate.source.mimeType == source.mimeType)
-        #expect(candidate.source.bytes == Self.jsonCanvasBytes)
-        #expect(candidate.source.digest == RendererSHA256.digest(Self.jsonCanvasBytes))
+        #expect(reference == descriptor.reference)
+        #expect(pinnedSource.sourceID == source.sourceID)
+        #expect(pinnedSource.sourceVersionID == source.sourceVersionID)
+        #expect(pinnedSource.mimeType == source.mimeType)
+        #expect(pinnedSource.bytes == Self.jsonCanvasBytes)
+        #expect(pinnedSource.digest == RendererSHA256.digest(Self.jsonCanvasBytes))
     }
 
     @Test("external unresolved and nonexact paths stay ordinary")
     func untrustedPathsStayOrdinary() throws {
         let source = try imageSource(bytes: Self.jsonCanvasBytes)
         let descriptor = BuiltInRendererDescriptors.descriptor(for: .jsonCanvas)
-        let projection = try MarkdownImageEmbedProjection(
+        let targets = try MarkdownImageTargetProjection.build(
             siblingSources: ["images/board.canvas": source],
+            siblingSourceIDs: ["images/board.canvas": source.sourceID],
             registry: try RendererRegistrySnapshot(builtInDescriptors: [descriptor]),
             inlineCapableReferences: [descriptor.reference])
 
@@ -43,7 +45,7 @@ struct MarkdownImageEmbedProjectionTests {
             "images/../images/board.canvas",
             "images/missing.canvas",
         ] {
-            #expect(projection.outcome(for: target) == .ordinary)
+            #expect(targets[target] == nil)
         }
     }
 
@@ -52,12 +54,15 @@ struct MarkdownImageEmbedProjectionTests {
         let descriptor = BuiltInRendererDescriptors.descriptor(for: .jsonCanvas)
         let registry = try RendererRegistrySnapshot(builtInDescriptors: [descriptor])
         let validSource = try imageSource(bytes: Self.jsonCanvasBytes)
-        let unclaimed = try MarkdownImageEmbedProjection(
+        let siblingIDs = ["images/board.canvas": validSource.sourceID]
+        let unclaimed = try MarkdownImageTargetProjection.build(
             siblingSources: ["images/board.canvas": validSource],
+            siblingSourceIDs: siblingIDs,
             registry: try RendererRegistrySnapshot(builtInDescriptors: []),
             inlineCapableReferences: [])
-        let unsupportedFactory = try MarkdownImageEmbedProjection(
+        let unsupportedFactory = try MarkdownImageTargetProjection.build(
             siblingSources: ["images/board.canvas": validSource],
+            siblingSourceIDs: siblingIDs,
             registry: registry,
             inlineCapableReferences: [])
         let wrongMIME = try imageSource(
@@ -65,45 +70,48 @@ struct MarkdownImageEmbedProjectionTests {
             bytes: Self.jsonCanvasBytes)
         let oversized = try imageSource(
             bytes: Data(repeating: 0, count: WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount + 1))
-        let mimeFailure = try MarkdownImageEmbedProjection(
+        let mimeFailure = try MarkdownImageTargetProjection.build(
             siblingSources: ["images/board.canvas": wrongMIME],
+            siblingSourceIDs: siblingIDs,
             registry: registry,
             inlineCapableReferences: [descriptor.reference])
-        let sizeFailure = try MarkdownImageEmbedProjection(
+        let sizeFailure = try MarkdownImageTargetProjection.build(
             siblingSources: ["images/board.canvas": oversized],
+            siblingSourceIDs: siblingIDs,
             registry: registry,
             inlineCapableReferences: [descriptor.reference])
+        let blobTarget = ResolvedMarkdownImageTarget.blob(validSource.sourceID)
 
-        #expect(unclaimed.outcome(for: "images/board.canvas") == .ordinary)
-        #expect(unsupportedFactory.outcome(for: "images/board.canvas") == .ordinary)
-        #expect(mimeFailure.outcome(for: "images/board.canvas") == .ordinary)
-        #expect(sizeFailure.outcome(for: "images/board.canvas") == .ordinary)
+        #expect(unclaimed["images/board.canvas"] == blobTarget)
+        #expect(unsupportedFactory["images/board.canvas"] == blobTarget)
+        #expect(mimeFailure["images/board.canvas"] == blobTarget)
+        #expect(sizeFailure["images/board.canvas"] == blobTarget)
     }
 
-    @Test("claimed image rows preserve escaped alt text without activation metadata")
-    func claimedImageRowsPreserveAltTextWithoutActivationMetadata() throws {
+    @Test("claimed images stay inline and preserve escaped fallback alt text")
+    func claimedImagesStayInlineWithReadableFallback() throws {
         let source = try imageSource(bytes: Self.jsonCanvasBytes)
         let descriptor = BuiltInRendererDescriptors.descriptor(for: .jsonCanvas)
-        let projection = try MarkdownImageEmbedProjection(
+        let targets = try MarkdownImageTargetProjection.build(
             siblingSources: ["images/board.canvas": source],
+            siblingSourceIDs: ["images/board.canvas": source.sourceID],
             registry: try RendererRegistrySnapshot(builtInDescriptors: [descriptor]),
             inlineCapableReferences: [descriptor.reference])
+        let prepared = ReaderMarkdown.preparedDocument("![System <&>](images/board.canvas)")
+        let projection = ResolvedDocumentProjection(markdownImages: targets)
         let html = MarkdownHTMLRenderer.render(
-            "![System <&>](images/board.canvas)",
-            options: MarkdownRenderOptions(
-                codeHighlighting: .disabled,
-                rendererEmbedProjection: nil,
-                imageEmbedProjection: projection,
-                documentIdentity: nil,
-                rendererActivationAdmission: nil))
+            prepared,
+            projection: projection,
+            options: .disabled)
 
-        #expect(html.contains("sdw-renderer-card"))
+        #expect(html.contains("sdw-inline-renderer"))
+        #expect(html.contains("data-renderer-role=\"inlineContent\""))
         #expect(html.contains("System &lt;&amp;&gt;"))
-        #expect(html.contains(#"<img src="images/board.canvas" alt="System &lt;&amp;&gt;">"#))
-        #expect(html.contains(#"data-renderer-expanded="true""#))
-        #expect(html.contains(#"aria-expanded="true""#))
+        #expect(html.contains(#"<img src="wiki-blob://source/01HIMAGEPROJECTION0000000001" alt="System &lt;&amp;&gt;">"#))
+        #expect(!html.contains("sdw-renderer-card__row"))
+        #expect(!html.contains("sdw-renderer-card__disclosure"))
         #expect(!html.contains("renderer-action://open"))
-        #expect(!html.contains("data-renderer-input="))
+        #expect(!html.contains("data-renderer-admitted=\"true\""))
     }
 
     @Test("missing oversized and untrusted metadata never materialize image bytes")

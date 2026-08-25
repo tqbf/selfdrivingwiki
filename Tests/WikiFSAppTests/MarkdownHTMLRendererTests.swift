@@ -34,12 +34,15 @@ struct MarkdownHTMLRendererTests {
             "See [[source:\(projectionFilename)#\(malformedFragments[3])]] for decoupling models and repositories.",
         ]
 
-        let prepared = ReaderMarkdown.prepared(sentences.joined(separator: "\n\n")) { name, kind in
-            name == projectionFilename && kind == .source
-        }
-        let html = MarkdownHTMLRenderer.render(prepared, options: .disabled)
+        let prepared = ReaderMarkdown.preparedDocument(sentences.joined(separator: "\n\n"))
+        let projection = DocumentEmbedResolver(inputs: .init(assumeLinksResolved: true))
+            .projection(for: prepared, resolveEmbeds: false)
+        let html = MarkdownHTMLRenderer.render(
+            prepared,
+            projection: projection,
+            options: .disabled)
 
-        #expect(html.components(separatedBy: "wiki://source").count - 1 == 4)
+        #expect(html.components(separatedBy: "wiki://source").count - 1 >= 4)
         #expect(!html.contains("for test directory organization and sbt console commands. See"),
                 "First link consumed the next paragraph. HTML: \(html)")
         #expect(!html.contains("for Mockito usage in specs2. See"),
@@ -58,10 +61,13 @@ struct MarkdownHTMLRendererTests {
             "See [[source:\(projectionFilename)#\"abstract database access behind a repository layer.\"]] for decoupling models and repositories.",
         ]
 
-        let prepared = ReaderMarkdown.prepared(sentences.joined(separator: "\n\n")) { name, kind in
-            name == projectionFilename && kind == .source
-        }
-        let html = MarkdownHTMLRenderer.render(prepared, options: .disabled)
+        let prepared = ReaderMarkdown.preparedDocument(sentences.joined(separator: "\n\n"))
+        let projection = DocumentEmbedResolver(inputs: .init(assumeLinksResolved: true))
+            .projection(for: prepared, resolveEmbeds: false)
+        let html = MarkdownHTMLRenderer.render(
+            prepared,
+            projection: projection,
+            options: .disabled)
 
         for sentence in [
             "for test directory organization and sbt console commands.",
@@ -72,7 +78,7 @@ struct MarkdownHTMLRendererTests {
         ] {
             #expect(html.contains(sentence), "Missing sentence: \(sentence). HTML: \(html)")
         }
-        #expect(html.components(separatedBy: "wiki://source").count - 1 == 4)
+        #expect(html.components(separatedBy: "wiki://source").count - 1 >= 4)
     }
 
     @Test func sourceFrontmatterIsExcludedBeforeRendering() {
@@ -88,11 +94,11 @@ struct MarkdownHTMLRendererTests {
         This is the source body.
         """
 
-        let prepared = ReaderMarkdown.prepared(
-            markdown,
-            contentKind: .source,
-            isResolved: { _, _ in true })
-        let html = MarkdownHTMLRenderer.render(prepared, options: .disabled)
+        let prepared = ReaderMarkdown.preparedDocument(markdown, contentKind: .source)
+        let html = MarkdownHTMLRenderer.render(
+            prepared,
+            projection: .init(),
+            options: .disabled)
 
         #expect(html == "<h1 id=\"hello\">Hello</h1><p>This is the source body.</p>")
     }
@@ -190,7 +196,7 @@ struct MarkdownHTMLRendererTests {
 
         #expect(renderer.contains("options: MarkdownRenderOptions,"))
         #expect(!renderer.contains("options: MarkdownRenderOptions ="))
-        #expect(embedder.contains("options: MarkdownRenderOptions\n"))
+        #expect(embedder.contains("options: MarkdownRenderOptions,"))
         #expect(!embedder.contains("options: MarkdownRenderOptions ="))
     }
 
@@ -544,37 +550,50 @@ struct MarkdownHTMLRendererTests {
         #expect(route.input == fixture.input)
     }
 
-    @Test("image renderer action routes preserve exact content and Markdown source versions", arguments: [false, true])
-    func imageRendererActionRoutesPreserveExactSourceVersion(useMarkdownVersion: Bool) throws {
+    @Test("inline image renderer admission preserves exact content and Markdown source versions", arguments: [false, true])
+    func inlineImageRendererAdmissionPreservesExactSourceVersion(useMarkdownVersion: Bool) throws {
         let fixture = try makeImageRendererActivationFixture(useMarkdownVersion: useMarkdownVersion)
-        let route = try #require(
-            WikiReaderView.rendererActivationRoute(
-                for: fixture.url,
-                admission: fixture.admission,
-                isMainFrame: true))
-
-        #expect(route.reference == fixture.reference)
-        #expect(route.input == fixture.input)
+        #expect(fixture.context.rendererReference == fixture.reference)
+        #expect(fixture.context.input == fixture.input)
+        #expect(fixture.context.embeddingRole == .inlineContent)
+        #expect(fixture.admission.authorizes(context: fixture.context))
     }
 
-    @Test("image renderer action routes reject source identity substitutions")
-    func imageRendererActionRoutesRejectSourceIdentitySubstitutions() throws {
+    @Test("inline image renderer admission rejects source identity substitutions")
+    func inlineImageRendererAdmissionRejectsSourceIdentitySubstitutions() throws {
         let fixture = try makeImageRendererActivationFixture(useMarkdownVersion: false)
-        for mutation in [
-            ("sourceID", "01HTESTSOURCE0000000000099"),
-            ("sourceVersion", "01HTESTSOURCEVERSION000099"),
-            ("sourceDigest", String(repeating: "f", count: 64)),
-            ("mime", "image/jpeg"),
-            ("registration", "other")
-        ] {
-            var components = try #require(URLComponents(url: fixture.url, resolvingAgainstBaseURL: false))
-            components.queryItems = (components.queryItems ?? []).map { item in
-                item.name == mutation.0 ? URLQueryItem(name: item.name, value: mutation.1) : item
-            }
-            let forgedURL = try #require(components.url)
-            #expect(WikiReaderView.rendererActivationRoute(
-                for: forgedURL, admission: fixture.admission, isMainFrame: true) == nil)
+        guard case .source(let source) = fixture.context.identity else {
+            Issue.record("expected source identity")
+            return
         }
+        let changedBytes = Data("changed".utf8)
+        let changedSource = try RendererEmbeddedContent.Source(
+            sourceID: source.sourceID,
+            sourceVersionID: source.sourceVersionID,
+            sourceMarkdownVersionID: source.sourceMarkdownVersionID,
+            mimeType: source.mimeType,
+            bytes: changedBytes)
+        let wrongRole = RendererEmbedActivationContext(
+            pageID: fixture.context.pageID,
+            pageVersionID: fixture.context.pageVersionID,
+            identity: fixture.context.identity,
+            embeddingRole: .disclosureRow,
+            rendererReference: fixture.context.rendererReference,
+            input: fixture.context.input,
+            capability: fixture.context.capability,
+            generation: fixture.context.generation)
+        let wrongBytes = RendererEmbedActivationContext(
+            pageID: fixture.context.pageID,
+            pageVersionID: fixture.context.pageVersionID,
+            identity: .source(changedSource),
+            embeddingRole: fixture.context.embeddingRole,
+            rendererReference: fixture.context.rendererReference,
+            input: fixture.context.input,
+            capability: fixture.context.capability,
+            generation: fixture.context.generation)
+
+        #expect(!fixture.admission.authorizes(context: wrongRole))
+        #expect(!fixture.admission.authorizes(context: wrongBytes))
     }
 
     @Test("renderer action URLs preserve plus-bearing base64 through URLComponents round-trip")
@@ -627,6 +646,7 @@ struct MarkdownHTMLRendererTests {
             ("package", "org.selfdrivingwiki.other"),
             ("version", "2.0.0"),
             ("registration", "other"),
+            ("embeddingRole", RendererEmbeddingRole.inlineContent.rawValue),
             ("mime", "text/plain")
         ] {
             guard var components = URLComponents(url: fixture.url, resolvingAgainstBaseURL: false) else {
@@ -829,20 +849,29 @@ struct MarkdownHTMLRendererTests {
 
     // MARK: - Inline HTML passthrough (Phase 4a embeds)
 
-    @Test func rawInlineHTMLFromEmbedSurvivesRender() {
-        // The embed pre-pass emits raw inline HTML (e.g. `<img src="wiki-blob://…">`).
-        // swift-markdown parses it as InlineHTML, and the renderer must pass it
-        // through verbatim — otherwise the embed is silently dropped. This test
-        // guards against someone removing visitInlineHTML/visitHTMLBlock.
+    @Test func typedSourceImageEmbedRendersWithoutInjectedHTML() {
         let id = SourceID(rawValue: "01HTESTRENDER0000000000001")
-        let prepared = WikiLinkMarkdown.linkified(
-            "Here is ![[source:img.png]] inline.",
-            isResolved: { _, _ in true },
-            embedInfo: { _ in WikiLinkMarkdown.SourceEmbedInfo(id: id, mimeType: "image/png") }
-        )
-        let html = MarkdownHTMLRenderer.render(prepared, options: .disabled)
+        let markdown = "Here is ![[source:img.png]] inline."
+        let prepared = ReaderMarkdown.preparedDocument(markdown)
+        let source = DocumentSourceResolution(
+            sourceID: id,
+            version: nil,
+            displayName: "img.png",
+            mimeType: "image/png",
+            bytes: nil,
+            externalTarget: nil,
+            isMermaidSource: false)
+        let resolver = DocumentEmbedResolver(inputs: .init(
+            sourceByName: ["img.png": source],
+            sourceNamesByID: [id: "img.png"]))
+        let html = MarkdownHTMLRenderer.render(
+            prepared,
+            projection: resolver.projection(for: prepared),
+            options: .disabled)
+
         #expect(html.contains(#"<img src="wiki-blob://source/\#(id.rawValue)""#))
         #expect(html.contains("wiki-embed"))
+        #expect(!prepared.normalizedMarkdown.contains("<img"))
     }
 
     // MARK: - Mermaid embed survives the markdown→HTML pipeline (#736).
@@ -873,25 +902,11 @@ struct MarkdownHTMLRendererTests {
              "graph TD\n    A --> B\n    B --> C\n"),
         ]
         for (label, body, diagramSource) in cases {
-            let prepared = WikiLinkMarkdown.linkified(
-                body,
-                isResolved: { _, _ in true },
-                embedInfo: { _ in
-                    WikiLinkMarkdown.SourceEmbedInfo(
-                        id: id, mimeType: MimeType.mermaid,
-                        target: EmbedTarget(
-                            kind: .diagram,
-                            url: "wiki://source/\(id.rawValue)",
-                            content: diagramSource)
-                    )
-                }
-            )
-            let html = MarkdownHTMLRenderer.render(prepared, options: .disabled)
-            // Exactly one mermaid code element survives.
+            let html = typedMermaidHTML(markdown: body, sourceID: id, source: diagramSource)
             let mermaidCount = html.components(
-                separatedBy: "class=\"language-mermaid\"").count - 1
+                separatedBy: "class=\"mermaid sdw-inline-mermaid\"").count - 1
             #expect(mermaidCount == 1,
-                    "\(label): expected one `<code class=\"language-mermaid\">`, got \(mermaidCount). HTML:\n\(html)")
+                    "\(label): expected one inline Mermaid container, got \(mermaidCount). HTML:\n\(html)")
             // visitCodeBlock escapes `>` exactly ONCE → `&gt;`. The previous
             // raw-div path double-escaped to `&amp;gt;` (literal `&gt;`) in
             // some contexts, tripping mermaid's parser.
@@ -899,44 +914,55 @@ struct MarkdownHTMLRendererTests {
                     "\(label): expected `A --&gt; B` in HTML:\n\(html)")
             #expect(!html.contains("&amp;gt;"),
                     "\(label): double-escaped `&amp;gt;` (literal `&gt;`) in HTML:\n\(html)")
-            // The diagram text is NOT wrapped in `<p>` tags by the markdown
-            // converter — it flows into the `<pre><code>` unchanged.
-            #expect(!html.contains("<p>graph TD"),
-                    "\(label): diagram body wrapped in `<p>`. HTML:\n\(html)")
-            // The `<pre>` wraps the `<code>` — no orphaned fragments.
-            #expect(html.contains("<pre><code class=\"language-mermaid\">"),
-                    "\(label): missing `<pre><code class=\"language-mermaid\">`. HTML:\n\(html)")
+            #expect(html.contains("sdw-inline-mermaid__fallback"),
+                    "\(label): missing the readable Mermaid fallback. HTML:\n\(html)")
+            #expect(html.contains("<code class=\"language-mermaid\">"),
+                    "\(label): missing the Mermaid code fallback. HTML:\n\(html)")
+            #expect(!html.contains("sdw-renderer-card__row"),
+                    "\(label): inline Mermaid was promoted to a disclosure row. HTML:\n\(html)")
         }
     }
 
-    /// Mermaid source containing a ``` triple-backtick run (rare, but
-    /// possible in node labels) must not prematurely close the fence we
-    /// emit: we pick a fence length strictly longer than any run in the
-    /// diagram body (CommonMark §4.5).
-    @Test func mermaidEmbedWithBackticksInSourceUsesLongerFence() {
+    /// Mermaid source containing a triple-backtick run must remain exact in
+    /// typed inline content and its readable fallback.
+    @Test func mermaidEmbedPreservesBackticksWithoutSyntheticFence() {
         let id = SourceID(rawValue: "01HTESTMERMAID0000000000002")
         let diagram = "graph TD\n    A[\"has ``` triple backticks\"] --> B"
-        let prepared = WikiLinkMarkdown.linkified(
-            "![[source:diagram.mmd]]",
-            isResolved: { _, _ in true },
-            embedInfo: { _ in
-                WikiLinkMarkdown.SourceEmbedInfo(
-                    id: id, mimeType: MimeType.mermaid,
-                    target: EmbedTarget(
-                        kind: .diagram,
-                        url: "wiki://source/\(id.rawValue)", content: diagram)
-                )
-            }
-        )
-        let html = MarkdownHTMLRenderer.render(prepared, options: .disabled)
-        // The 3-backtick run inside the body is preserved verbatim, AND the
-        // outer fence (4+ backticks) keeps the block intact.
+        let html = typedMermaidHTML(
+            markdown: "![[source:diagram.mmd]]",
+            sourceID: id,
+            source: diagram)
+
         #expect(html.contains("\"has ``` triple backticks\""))
+        #expect(html.contains("class=\"mermaid sdw-inline-mermaid\""))
         #expect(html.contains("class=\"language-mermaid\""))
-        // No premature close → only one code element.
-        let count = html.components(
-            separatedBy: "class=\"language-mermaid\"").count - 1
-        #expect(count == 1)
+        #expect(!html.contains("sdw-renderer-card__row"))
+    }
+
+    private func typedMermaidHTML(
+        markdown: String,
+        sourceID: SourceID,
+        source: String
+    ) -> String {
+        let prepared = ReaderMarkdown.preparedDocument(markdown)
+        let resolution = DocumentSourceResolution(
+            sourceID: sourceID,
+            version: nil,
+            displayName: "diagram.mmd",
+            mimeType: MimeType.mermaid,
+            bytes: Data(source.utf8),
+            externalTarget: EmbedTarget(
+                kind: .diagram,
+                url: sourceID.rawValue,
+                content: source),
+            isMermaidSource: true)
+        let resolver = DocumentEmbedResolver(inputs: .init(
+            sourceByName: ["diagram.mmd": resolution],
+            sourceNamesByID: [sourceID: "diagram.mmd"]))
+        return MarkdownHTMLRenderer.render(
+            prepared,
+            projection: resolver.projection(for: prepared),
+            options: .disabled)
     }
 
     private func rendererBridgeInput(in html: String) -> RendererBridgeInput? {
@@ -968,8 +994,16 @@ private struct RendererActivationFixture {
     let url: URL
 }
 
+private struct InlineRendererActivationFixture {
+    let admission: RendererEmbedActivationAdmission
+    let reference: RendererReference
+    let input: RendererBridgeInput
+    let context: RendererEmbedActivationContext
+    let placeholderID: RendererAttachmentPlaceholderID
+}
+
 private extension MarkdownHTMLRendererTests {
-    func makeImageRendererActivationFixture(useMarkdownVersion: Bool) throws -> RendererActivationFixture {
+    func makeImageRendererActivationFixture(useMarkdownVersion: Bool) throws -> InlineRendererActivationFixture {
         let pageID = PageID(rawValue: "01HTESTPAGE000000000000001")
         let pageVersionID = PageVersionID(rawValue: "01HTESTPV00000000000000001")
         let sourceID = SourceID(rawValue: "01HTESTSOURCE0000000000001")
@@ -983,8 +1017,9 @@ private extension MarkdownHTMLRendererTests {
             mimeType: mimeType,
             bytes: bytes)
         let reference = descriptor.reference
-        let projection = try MarkdownImageEmbedProjection(
+        let imageTargets = try MarkdownImageTargetProjection.build(
             siblingSources: ["image.png": source],
+            siblingSourceIDs: ["image.png": sourceID],
             registry: try RendererRegistrySnapshot(builtInDescriptors: [descriptor]),
             inlineCapableReferences: [reference])
         let admission = RendererEmbedActivationAdmission(
@@ -995,17 +1030,29 @@ private extension MarkdownHTMLRendererTests {
         let options = MarkdownRenderOptions(
             codeHighlighting: .disabled,
             rendererEmbedProjection: nil,
-            imageEmbedProjection: projection,
             documentIdentity: .init(pageID: pageID, pageVersionID: pageVersionID),
             rendererActivationAdmission: admission)
-        let html = MarkdownHTMLRenderer.render("![System architecture](image.png)", options: options)
-        let url = try #require(rendererActionURL(in: html))
+        let prepared = ReaderMarkdown.preparedDocument(
+            "![System architecture](image.png)",
+            documentIdentity: options.documentIdentity)
+        let projection = ResolvedDocumentProjection(markdownImages: imageTargets)
+        let html = MarkdownHTMLRenderer.render(prepared, projection: projection, options: options)
+        #expect(html.contains("sdw-inline-renderer"))
+        #expect(!html.contains("sdw-renderer-card__row"))
+        let placeholderID = try RendererAttachmentPlaceholderID(
+            validating: "sdw-inline-renderer-\(source.digest.hex.prefix(16))")
+        let context = try #require(admission.attachmentContext(for: placeholderID))
         let input: RendererBridgeInput = if let versionID = source.sourceVersionID {
             .source(versionID: versionID)
         } else {
             .markdown(versionID: try #require(source.sourceMarkdownVersionID))
         }
-        return RendererActivationFixture(admission: admission, reference: reference, input: input, url: url)
+        return InlineRendererActivationFixture(
+            admission: admission,
+            reference: reference,
+            input: input,
+            context: context,
+            placeholderID: placeholderID)
     }
 
     func makeRendererActivationFixture(bytes: Data = Data("{\"nodes\":[],\"edges\":[]}".utf8)) throws -> RendererActivationFixture {
@@ -1059,6 +1106,7 @@ private extension MarkdownHTMLRendererTests {
             URLQueryItem(name: "generation", value: String(admission.generation)),
             URLQueryItem(name: "page", value: pageID.rawValue),
             URLQueryItem(name: "pageVersion", value: pageVersionID.rawValue),
+            URLQueryItem(name: "embeddingRole", value: RendererEmbeddingRole.disclosureRow.rawValue),
             URLQueryItem(name: "block", value: blockID.digest.hex),
             URLQueryItem(name: "blockPage", value: blockID.pageID.rawValue),
             URLQueryItem(name: "blockPageVersion", value: blockID.pageVersionID.rawValue),

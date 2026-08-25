@@ -36,6 +36,18 @@ public struct RendererRegistrySnapshot: Hashable, Sendable {
             hostProtocolRevision: hostProtocolRevision)
     }
 
+    /// Document embedding must always provide the syntax-owned role.
+    public func matching(
+        _ input: RendererMatchInput,
+        requiredEmbeddingRole: RendererEmbeddingRole
+    ) -> [RendererDescriptor] {
+        RendererResolution.matching(
+            descriptors: descriptors,
+            input: input,
+            requiredEmbeddingRole: requiredEmbeddingRole,
+            hostProtocolRevision: hostProtocolRevision)
+    }
+
     public func preferred(
         preference: RendererPreferenceReference?,
         input: RendererMatchInput

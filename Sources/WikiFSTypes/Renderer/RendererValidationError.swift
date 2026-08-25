@@ -13,6 +13,7 @@ public enum RendererValidationError: Error, Equatable, Sendable, CustomStringCon
     case invalidSizeLimit(String)
     case invalidCompatibilityRange
     case invalidPresentation
+    case missingEmbeddingRoles
     case forbiddenCapability(RendererCapability)
     case missingRequiredCapability(RendererCapability)
     case duplicateRegistration(RendererRegistrationID)
@@ -39,6 +40,7 @@ public enum RendererValidationError: Error, Equatable, Sendable, CustomStringCon
         case let .invalidSizeLimit(value): "invalid renderer size limit: \(value)"
         case .invalidCompatibilityRange: "invalid compatibility revision range"
         case .invalidPresentation: "invalid renderer presentation for implementation"
+        case .missingEmbeddingRoles: "renderer must declare at least one supported embedding role"
         case let .forbiddenCapability(capability): "forbidden renderer capability: \(capability.rawValue)"
         case let .missingRequiredCapability(capability): "missing required renderer capability: \(capability.rawValue)"
         case let .duplicateRegistration(id): "duplicate renderer registration: \(id.rawValue)"

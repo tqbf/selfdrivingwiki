@@ -34,6 +34,11 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
     public let implementation: RendererImplementation
     public let matchers: [RendererMatcher]
     public let presentations: Set<RendererPresentation>
+    public let supportedEmbeddingRoles: Set<RendererEmbeddingRole>
+    /// True only when the role set was explicitly present at the decode or
+    /// construction boundary. Revision-1 manifests may project the narrow
+    /// legacy disclosure role without changing their canonical bytes.
+    public let hasExplicitEmbeddingRoles: Bool
     public let approvedAssets: [RendererAsset]
     public let capabilities: Set<RendererCapability>
     public let sizeLimits: RendererSizeLimits
@@ -48,6 +53,8 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
         implementation: RendererImplementation,
         matchers: [RendererMatcher],
         presentations: Set<RendererPresentation>,
+        supportedEmbeddingRoles: Set<RendererEmbeddingRole> = [.disclosureRow],
+        hasExplicitEmbeddingRoles: Bool = false,
         approvedAssets: [RendererAsset],
         capabilities: Set<RendererCapability>,
         sizeLimits: RendererSizeLimits,
@@ -60,6 +67,9 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
               matchers.isEmpty == false,
               presentations.isEmpty == false else {
             throw RendererValidationError.invalidPresentation
+        }
+        guard supportedEmbeddingRoles.isEmpty == false else {
+            throw RendererValidationError.missingEmbeddingRoles
         }
         guard capabilities.contains(.inputRead) else {
             throw RendererValidationError.missingRequiredCapability(.inputRead)
@@ -93,6 +103,8 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
         self.implementation = implementation
         self.matchers = matchers
         self.presentations = presentations
+        self.supportedEmbeddingRoles = supportedEmbeddingRoles
+        self.hasExplicitEmbeddingRoles = hasExplicitEmbeddingRoles
         self.approvedAssets = assets
         self.capabilities = capabilities
         self.sizeLimits = sizeLimits
@@ -102,14 +114,54 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
         self.priority = priority
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case reference
+        case displayName
+        case implementation
+        case matchers
+        case presentations
+        case supportedEmbeddingRoles
+        case approvedAssets
+        case capabilities
+        case sizeLimits
+        case linkPolicy
+        case accessibility
+        case compatibility
+        case priority
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(reference, forKey: .reference)
+        try container.encode(displayName, forKey: .displayName)
+        try container.encode(implementation, forKey: .implementation)
+        try container.encode(matchers, forKey: .matchers)
+        try container.encode(presentations, forKey: .presentations)
+        if hasExplicitEmbeddingRoles {
+            try container.encode(supportedEmbeddingRoles, forKey: .supportedEmbeddingRoles)
+        }
+        try container.encode(approvedAssets, forKey: .approvedAssets)
+        try container.encode(capabilities, forKey: .capabilities)
+        try container.encode(sizeLimits, forKey: .sizeLimits)
+        try container.encode(linkPolicy, forKey: .linkPolicy)
+        try container.encode(accessibility, forKey: .accessibility)
+        try container.encode(compatibility, forKey: .compatibility)
+        try container.encode(priority, forKey: .priority)
+    }
+
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let explicitRoles = try container.decodeIfPresent(
+            Set<RendererEmbeddingRole>.self,
+            forKey: .supportedEmbeddingRoles)
         try self.init(
             reference: container.decode(RendererReference.self, forKey: .reference),
             displayName: container.decode(String.self, forKey: .displayName),
             implementation: container.decode(RendererImplementation.self, forKey: .implementation),
             matchers: container.decode([RendererMatcher].self, forKey: .matchers),
             presentations: container.decode(Set<RendererPresentation>.self, forKey: .presentations),
+            supportedEmbeddingRoles: explicitRoles ?? [.disclosureRow],
+            hasExplicitEmbeddingRoles: explicitRoles != nil,
             approvedAssets: container.decode([RendererAsset].self, forKey: .approvedAssets),
             capabilities: container.decode(Set<RendererCapability>.self, forKey: .capabilities),
             sizeLimits: container.decode(RendererSizeLimits.self, forKey: .sizeLimits),

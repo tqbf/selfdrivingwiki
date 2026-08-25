@@ -499,16 +499,9 @@ struct ChatWebView: NSViewRepresentable {
 
         // MARK: - Row rendering
 
-        /// Render assistant/result markdown with the shared footnote + wiki-link
-        /// pre-pass. With a `WikiRenderContext` (Phase A.2), it threads the
-        /// context's pure `isResolved`/`embedInfo`/`displayName`/`pinnedExtractionID`
-        /// closures into `ReaderMarkdown.prepared` — so chat transcripts render
-        /// source references exactly as the reader does: healed display names,
-        /// `&pin=` URLs, ghost styling for broken links, and inline `![[source:…]]`
-        /// embeds. **Two-tier:** while a row is still streaming (`isFinal == false`),
-        /// `embedInfo` is forced to nil so a half-typed `![[source:…` never
-        /// instantiates a broken iframe/player that churns per token; the row
-        /// re-renders with embeds once it finalizes.
+        /// Render assistant and result Markdown with typed wiki syntax.
+        /// A render context supplies immutable link, embed, display-name, and pin facts.
+        /// Streaming rows resolve links but keep embed syntax literal until the row is final.
         ///
         /// nil context keeps the historical constant-`true` resolution (used by
         /// `AgentQueueView`'s internals feed, where ghost styling is noise).
@@ -517,20 +510,22 @@ struct ChatWebView: NSViewRepresentable {
         /// unit-testable.
         static func renderedMarkdown(_ text: String, context: WikiRenderContext? = nil, isFinal: Bool = true) -> String {
             let presentationMarkdown = normalizingInsightCallout(in: text)
+            let prepared = ReaderMarkdown.preparedDocument(presentationMarkdown)
             if let context {
-                // Two-tier: a non-final (still-streaming) row renders links only —
-                // pass nil embedInfo so a half-typed `![[source:…` can't render a
-                // broken iframe/player. The row re-renders with embeds on finalize.
-                let embedInfo = isFinal ? context.embedInfo : nil
-                let prepared = ReaderMarkdown.prepared(presentationMarkdown,
-                    isResolved: context.isResolved,
-                    embedInfo: embedInfo,
-                    displayName: context.displayName,
-                    pinnedExtractionID: context.pinnedExtractionID)
-                return MarkdownHTMLRenderer.render(prepared, options: .chat)
+                let resolver = context.documentEmbedResolver()
+                let projection = resolver.projection(
+                    for: prepared,
+                    resolveEmbeds: isFinal)
+                return MarkdownHTMLRenderer.render(
+                    prepared,
+                    projection: projection,
+                    options: .chat)
             }
+            let resolver = DocumentEmbedResolver(inputs: .init(assumeLinksResolved: true))
+            let projection = resolver.projection(for: prepared, resolveEmbeds: false)
             return MarkdownHTMLRenderer.render(
-                ReaderMarkdown.prepared(presentationMarkdown) { _, _ in true },
+                prepared,
+                projection: projection,
                 options: .chat)
         }
 

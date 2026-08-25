@@ -73,9 +73,9 @@ source-detail.pending-pin-on-change	surface	Sources/WikiFS/Sources/SourceDetailV
 source-detail.has-multiple-extractions	surface	Sources/WikiFS/Sources/SourceDetailView.swift	store.processedMarkdownHistory(for: file.id).count >= 2
 source-detail.history-menu	surface	Sources/WikiFS/Sources/SourceDetailView.swift	let history = store.processedMarkdownHistory(for: file.id)
 source-detail.nominate-active	surface	Sources/WikiFS/Sources/SourceDetailView.swift	store.setActiveMarkdown(for: file.id, to: version.id)
-reader-markdown.pinned-extraction-id	typed	Sources/WikiFS/Reader/ReaderMarkdown.swift	pinnedExtractionID: ((SourceID, Int) -> SourceMarkdownVersionID?)? = nil
+reader-markdown.pinned-extraction-id	typed	Sources/WikiFS/Reader/DocumentEmbedModel.swift	let pinnedSourceVersion: SourceMarkdownVersionID?
 wiki-reader.on-wikilink-pinned-route	surface	Sources/WikiFS/Reader/WikiReaderView.swift	if let id, store.selectSource(byID: id, anchor: frag, openInNewTab: openInNewTab, pinnedExtractionID: pin) { }
-wiki-reader.context-pinned-extraction-id	typed	Sources/WikiFS/Reader/WikiReaderView.swift	let pinnedExtractionID: ((SourceID, Int) -> SourceMarkdownVersionID?)?
+wiki-reader.context-pinned-extraction-id	typed	Sources/WikiFS/Reader/DocumentEmbedResolver.swift	let pinnedSourceVersion: SourceMarkdownVersionID? = {
 render-context.source-derived-chain	typed	Sources/WikiFSCore/Core/WikiRenderContext.swift	public let sourceDerivedChain: [SourceID: [SourceMarkdownVersionID]]
 render-context.pinned-extraction-id	typed	Sources/WikiFSCore/Core/WikiRenderContext.swift	public var pinnedExtractionID: (SourceID, Int) -> SourceMarkdownVersionID? {
 cli.source-command.set-active	typed	Sources/WikiCtlCore/SourceCommand.swift	case setActive(Selector, versionID: SourceMarkdownVersionID)

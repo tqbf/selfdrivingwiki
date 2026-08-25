@@ -127,6 +127,21 @@ struct WikiRenderContextTests {
         #expect(embedInfo("nope") == nil)
     }
 
+    @Test func embedInfoRejectsAmbiguousNamesButKeepsCanonicalIDs() throws {
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
+        let first = try store.addSource(filename: "report.txt", data: Data("first".utf8))
+        let second = try store.addSource(filename: "report.md", data: Data("second".utf8))
+        try store.renameSource(id: first.id, to: "Report")
+        try store.renameSource(id: second.id, to: "Report")
+        let model = WikiStoreModel(store: store)
+        model.reloadFromStore()
+        let context = WikiRenderContext.build(from: model)
+
+        #expect(context.embedInfo("report") == nil)
+        #expect(context.embedInfo(first.id.rawValue)?.id == first.id)
+        #expect(context.embedInfo(second.id.rawValue)?.id == second.id)
+    }
+
     @Test func embedInfoResolvesBytelessExternalTarget() throws {
         let (_, model, _, _, _, _, _, ytID) = try makeFixture()
         let ctx = WikiRenderContext.build(from: model)

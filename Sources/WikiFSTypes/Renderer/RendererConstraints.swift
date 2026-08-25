@@ -126,6 +126,14 @@ public enum RendererPresentation: String, Codable, CaseIterable, Hashable, Senda
     case web
 }
 
+/// The document-owned presentation role a renderer is allowed to fill.
+/// Syntax selects this role before renderer matching; a renderer cannot promote
+/// inline content into disclosure chrome or remove disclosure from a rich fence.
+public enum RendererEmbeddingRole: String, Codable, CaseIterable, Hashable, Sendable {
+    case inlineContent
+    case disclosureRow
+}
+
 public enum RendererLinkPolicy: String, Codable, Hashable, Sendable {
     case none
     case userActivatedExternal

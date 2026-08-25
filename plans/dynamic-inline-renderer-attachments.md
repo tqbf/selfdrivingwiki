@@ -2,9 +2,13 @@
 
 Status: active design record.
 
+> Updated 2026-08-25: Syntax now owns the embedding role. Markdown images and
+> media-capable wiki source embeds stay inline. Approved rich fences use
+> disclosure rows. See [`typed-markdown-embed-pipeline.md`](typed-markdown-embed-pipeline.md).
+
 ## Purpose
 
-The Markdown reader shows eligible interactive embeds as compact renderer rows. Each row starts collapsed and has a disclosure control, a title, and a trailing **Open in Window** action.
+The Markdown reader has two renderer attachment paths. Approved rich fences use compact renderer rows. Eligible image and source syntax uses inline content without disclosure chrome.
 
 The reader owns admission, geometry, focus, resource policy, and teardown. Each renderer owns its expanded view.
 
@@ -12,9 +16,9 @@ Readable code, summaries, or images remain in the expansion region as fallback c
 
 ## Titles and stable identity
 
-A rich fence can use one optional quoted title after its approved alias. An interactive image uses its Markdown alt text as the title.
+A rich fence can use one optional quoted title after its approved alias. A renderer row uses this title or the registered renderer name.
 
-An untitled embed uses the registered renderer display name. The reader escapes authored titles before it adds them to HTML or accessibility attributes.
+An inline image uses its Markdown alt text for fallback and accessibility content. The reader escapes authored text before it adds the text to HTML or attributes.
 
 A title is presentation metadata. A title edit does not change renderer bytes, the canonical fence digest, the block ID, or the placeholder ID.
 
@@ -40,17 +44,23 @@ An installed renderer receives the exact admitted `RendererBridgeInput` through 
 
 An unsupported disclosure request stays collapsed. It does not open a window. **Open in Window** is a separate direct action that uses the same admitted context.
 
-## Keyed host and row budget
+## Keyed hosts and separate budgets
 
-`WikiReaderContainerView` stores native children and visible rectangles by `RendererAttachmentPlaceholderID`. Geometry, focus, collapse, failure, DOM removal, and teardown are also keyed.
+`WikiReaderContainerView` stores native children and visible rectangles by `RendererAttachmentPlaceholderID`. Geometry, focus, failure, DOM removal, and teardown are keyed.
 
-A reader document can keep four native or installed renderer rows expanded. The coordinator enforces this budget before resolver, factory, host-child, or session creation.
+A reader document can keep four native or installed renderer rows expanded. A fifth disclosure request stays collapsed and creates no renderer resources.
 
-A fifth disclosure request stays collapsed and creates no renderer resources. Closing, removing, or failing one expanded row frees one document slot.
+Inline content uses a separate document budget. It does not consume a renderer-row slot. The coordinator checks this budget immediately before resolver, factory, host-child, or session creation.
 
-The process-wide installed-WebKit permit pool is a separate resource. Permit pressure keeps the row collapsed and retryable. It does not create a terminal failure or open a window automatically.
+Each inline placeholder uses one state: `fallback`, `eligible`, `waitingForResources`, `mounted`, `failed`, or `removed`.
 
-Mermaid expands as HTML and SVG inside the document. It does not create a native child or consume the four-row native budget.
+An `IntersectionObserver` uses the viewport plus a 600-pixel preload margin. It mounts eligible inline content inside this retained visibility window.
+
+The coordinator releases an inline child after it stays outside the retained window or leaves the DOM. Ordinary geometry and zoom updates keep the existing child.
+
+The process-wide installed-WebKit permit pool is a third resource. Permit pressure keeps fallback content visible and retryable.
+
+Inline Mermaid stays inside the document. It does not consume native or installed renderer budgets. Authored Mermaid fences continue to use disclosure rows.
 
 ## Geometry, zoom, and focus
 
@@ -66,11 +76,13 @@ Disclosure activation moves focus into the selected inline renderer. Escape coll
 
 ## Mermaid boundary
 
-A Mermaid row uses the shared title and disclosure semantics. An explicit disclosure action asks the vendored Mermaid 10.9.6 library to create the SVG.
+A Mermaid source embed uses inline content. It emits no disclosure control or renderer-row markup.
 
-The reader keeps Mermaid source in escaped `textContent`. A missing library or parse failure preserves readable raw code.
+An authored Mermaid fence uses the shared title and disclosure semantics. Its disclosure action asks the vendored Mermaid library to create the SVG.
 
-Mermaid does not use the inline resolver, an installed renderer session, or the native row budget.
+The reader keeps Mermaid source as escaped text. A missing library or parse failure preserves readable raw code.
+
+Inline Mermaid does not use the inline attachment budget unless an approved installed renderer explicitly handles it.
 
 ## Failure and teardown
 
@@ -89,9 +101,11 @@ This design does not pass reader zoom to a separate renderer window. Renderer-ow
 ## Required checks
 
 - Test initial collapsed rows, titles, trailing window actions, and ARIA state.
-- Test four independent expanded rows and zero renderer work on a fifth request.
-- Test exact source and fence admission, forged action rejection, and stale generations.
-- Test keyed geometry, focus, failure, DOM removal, reload, and teardown.
+- Test inline placeholders without disclosure markup.
+- Test separate inline, disclosure-row, and process-wide budgets.
+- Test visibility mount, retained-window release, retry, and DOM removal.
+- Test exact source and fence admission, forged action rejection, role mismatch, and stale generations.
+- Test keyed geometry, focus, failure, reload, and teardown.
 - Test zoom alignment below and above 100 percent without double scaling.
-- Test Mermaid expansion, escaping, parse failure, and no-library fallback.
-- Test ordinary-image fallback for unclaimed, unresolved, external, and oversized images.
+- Test inline source Mermaid and authored Mermaid rows.
+- Test readable fallback for unclaimed, unresolved, external, oversized, and failed content.

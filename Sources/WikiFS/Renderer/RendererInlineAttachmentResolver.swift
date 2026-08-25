@@ -73,7 +73,8 @@ enum RendererInlineAttachmentResolverFactory {
 
         guard let descriptor = installedRendererFactoryInputs.enabledDescriptors.first(where: {
             $0.reference == context.rendererReference
-        }) else {
+        }), descriptor.supportedEmbeddingRoles.contains(context.embeddingRole) else {
+            DebugLog.reader("inline installed renderer role mismatch for \(placeholderID.rawValue)")
             return .unsupported
         }
 

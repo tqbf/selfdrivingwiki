@@ -18,20 +18,17 @@ enum MarkdownCodeHighlightingPolicy: Sendable {
 struct MarkdownRenderOptions: Sendable {
     let codeHighlighting: MarkdownCodeHighlightingPolicy
     let rendererEmbedProjection: RendererEmbedProjection?
-    let imageEmbedProjection: MarkdownImageEmbedProjection?
     let documentIdentity: MarkdownDocumentIdentity?
     let rendererActivationAdmission: RendererEmbedActivationAdmission?
 
     init(
         codeHighlighting: MarkdownCodeHighlightingPolicy,
         rendererEmbedProjection: RendererEmbedProjection?,
-        imageEmbedProjection: MarkdownImageEmbedProjection? = nil,
         documentIdentity: MarkdownDocumentIdentity?,
         rendererActivationAdmission: RendererEmbedActivationAdmission?
     ) {
         self.codeHighlighting = codeHighlighting
         self.rendererEmbedProjection = rendererEmbedProjection
-        self.imageEmbedProjection = imageEmbedProjection
         self.documentIdentity = documentIdentity
         self.rendererActivationAdmission = rendererActivationAdmission
     }
@@ -40,14 +37,13 @@ struct MarkdownRenderOptions: Sendable {
         Self(
             codeHighlighting: .enabled(HighlightedCodeBlockBudget()),
             rendererEmbedProjection: nil,
-            imageEmbedProjection: nil,
             documentIdentity: nil,
             rendererActivationAdmission: nil)
     }
 
     /// Fail-closed policy for callers without an authoritative reader context.
-    static let disabled = Self(codeHighlighting: .disabled, rendererEmbedProjection: nil, imageEmbedProjection: nil, documentIdentity: nil, rendererActivationAdmission: nil)
-    static let chat = Self(codeHighlighting: .disabled, rendererEmbedProjection: nil, imageEmbedProjection: nil, documentIdentity: nil, rendererActivationAdmission: nil)
+    static let disabled = Self(codeHighlighting: .disabled, rendererEmbedProjection: nil, documentIdentity: nil, rendererActivationAdmission: nil)
+    static let chat = Self(codeHighlighting: .disabled, rendererEmbedProjection: nil, documentIdentity: nil, rendererActivationAdmission: nil)
 }
 
 /// A document-scoped fence budget. The mutex protects only the remaining
@@ -87,26 +83,33 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
 
     /// Render `markdown` to an HTML fragment (no `<html>`/`<body>` wrapper —
     /// `WikiReaderView.documentHTML` wraps it).
-    ///
-    /// When `imageResolver` is provided, relative image srcs (those that are not
-    /// `http(s)`, `data:`, or already `wiki-blob:`/`wiki:`) are passed to it; a
-    /// non-nil return rewrites the `<img src>`. Absolute/protocol/data srcs and
-    /// unresolved relatives are left verbatim. Phase 4 sibling resolution.
     static func render(
         _ markdown: String,
-        imageResolver: ((String) -> String?)? = nil,
+        options: MarkdownRenderOptions,
+        isCancelled: @escaping @Sendable () -> Bool = { Task.isCancelled }
+    ) -> String {
+        render(
+            ReaderMarkdown.preparedDocument(markdown, documentIdentity: options.documentIdentity),
+            projection: nil,
+            options: options,
+            isCancelled: isCancelled)
+    }
+
+    static func render(
+        _ prepared: PreparedMarkdownDocument,
+        projection: ResolvedDocumentProjection?,
         options: MarkdownRenderOptions,
         isCancelled: @escaping @Sendable () -> Bool = { Task.isCancelled }
     ) -> String {
         var renderer = MarkdownHTMLRenderer()
-        renderer.imageResolver = imageResolver
         renderer.codeHighlighting = options.codeHighlighting
         renderer.rendererEmbedProjection = options.rendererEmbedProjection
-        renderer.imageEmbedProjection = options.imageEmbedProjection
-        renderer.documentIdentity = options.documentIdentity
+        renderer.documentIdentity = prepared.documentIdentity ?? options.documentIdentity
         renderer.rendererActivationAdmission = options.rendererActivationAdmission
+        renderer.preparedDocument = prepared
+        renderer.resolvedDocumentProjection = projection
         renderer.isCancelled = isCancelled
-        return renderer.visit(Document(parsing: markdown))
+        return renderer.visit(prepared.document)
     }
 
     /// Per-render slug dedup counts, mirroring `AnchorBlock.makeSlug` so heading
@@ -114,14 +117,13 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
     private var slugCounts: [String: Int] = [:]
     private var fenceOrdinal = 0
 
-    /// Phase 4: optional resolver that rewrites a relative image src to a
-    /// `wiki-blob://source/<id>` URL. Set by the static `render` before visiting.
-    private var imageResolver: ((String) -> String?)?
     private var codeHighlighting: MarkdownCodeHighlightingPolicy = .disabled
     private var rendererEmbedProjection: RendererEmbedProjection?
-    private var imageEmbedProjection: MarkdownImageEmbedProjection?
     private var documentIdentity: MarkdownDocumentIdentity?
     private var rendererActivationAdmission: RendererEmbedActivationAdmission?
+    private var preparedDocument: PreparedMarkdownDocument?
+    private var resolvedDocumentProjection: ResolvedDocumentProjection?
+    private var emittedWikiRanges: Set<MarkdownSourceRange> = []
     private var isCancelled: @Sendable () -> Bool = { Task.isCancelled }
 
     private enum RendererCardActivationState {
@@ -135,9 +137,322 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
     }
 
     private mutating func visitChildren(_ markup: Markup) -> String {
-        var s = ""
-        for child in markup.children { s += visit(child) }
-        return s
+        guard let prepared = preparedDocument,
+              prepared.wikiSyntax.isEmpty == false else {
+            return markup.children.reduce(into: "") { result, child in result += visit(child) }
+        }
+        guard let containerRange = sourceRange(of: markup, in: prepared) else {
+            // Swift Markdown's synthetic root Document has no range. Descend;
+            // ranged descendants establish ownership. A range-less descendant
+            // that intersects an overlay still fails closed below.
+            return markup.children.reduce(into: "") { result, child in result += visit(child) }
+        }
+
+        let overlays = prepared.wikiSyntax.filter { node in
+            containerRange.contains(node.sourceRange) && emittedWikiRanges.contains(node.sourceRange) == false
+        }
+        guard overlays.isEmpty == false else {
+            return markup.children.reduce(into: "") { result, child in result += visit(child) }
+        }
+
+        var output = ""
+        var overlayIndex = 0
+        for child in markup.children {
+            guard let childRange = sourceRange(of: child, in: prepared) else {
+                // A range-less node is safe only when no remaining overlay is
+                // owned by this container. Otherwise preserve the exact authored
+                // container slice once instead of guessing ownership.
+                if overlayIndex < overlays.count {
+                    DebugLog.reader("Range-less Markdown node intersects wiki overlay; rendering authored container literally")
+                    return escapedAuthoredSlice(containerRange, prepared: prepared)
+                }
+                output += visit(child)
+                continue
+            }
+
+            while overlayIndex < overlays.count,
+                  overlays[overlayIndex].sourceRange.upperBound <= childRange.lowerBound {
+                let node = overlays[overlayIndex]
+                if emittedWikiRanges.contains(node.sourceRange) == false {
+                    output += renderWikiNode(node)
+                }
+                overlayIndex += 1
+            }
+            if overlayIndex < overlays.count {
+                let overlayRange = overlays[overlayIndex].sourceRange
+                if overlayRange.contains(childRange) {
+                    if emittedWikiRanges.insert(overlayRange).inserted {
+                        output += renderWikiNode(overlays[overlayIndex])
+                    }
+                    if childRange.upperBound == overlayRange.upperBound { overlayIndex += 1 }
+                    continue
+                }
+                if childRange.contains(overlayRange) {
+                    if child.childCount == 0 {
+                        output += renderTextRange(childRange, overlays: overlays, overlayIndex: &overlayIndex, prepared: prepared)
+                    } else {
+                        output += visit(child)
+                        while overlayIndex < overlays.count,
+                              overlays[overlayIndex].sourceRange.upperBound <= childRange.upperBound,
+                              emittedWikiRanges.contains(overlays[overlayIndex].sourceRange) {
+                            overlayIndex += 1
+                        }
+                    }
+                    continue
+                }
+                if childRange.intersects(overlayRange) {
+                    // Leaf nodes may contain ordinary text around an overlay.
+                    // Split them from the exact authored UTF-8 slice.
+                    if child.childCount == 0 {
+                        output += renderTextRange(childRange, overlays: overlays, overlayIndex: &overlayIndex, prepared: prepared)
+                        continue
+                    }
+                    DebugLog.reader("Crossing Markdown AST and wiki overlay ranges; rendering authored child literally")
+                    output += escapedAuthoredSlice(childRange, prepared: prepared)
+                    while overlayIndex < overlays.count,
+                          overlays[overlayIndex].sourceRange.upperBound <= childRange.upperBound {
+                        emittedWikiRanges.insert(overlays[overlayIndex].sourceRange)
+                        overlayIndex += 1
+                    }
+                    continue
+                }
+            }
+            output += visit(child)
+        }
+        while overlayIndex < overlays.count {
+            let node = overlays[overlayIndex]
+            if emittedWikiRanges.contains(node.sourceRange) == false {
+                output += renderWikiNode(node)
+            }
+            overlayIndex += 1
+        }
+        return output
+    }
+
+    private func sourceRange(of markup: Markup, in prepared: PreparedMarkdownDocument) -> MarkdownSourceRange? {
+        guard let range = markup.range else { return nil }
+        return prepared.lineTable.range(
+            startLine: range.lowerBound.line,
+            startUTF8Column: range.lowerBound.column,
+            endLine: range.upperBound.line,
+            endUTF8Column: range.upperBound.column)
+    }
+
+    private func authoredSlice(_ range: MarkdownSourceRange, prepared: PreparedMarkdownDocument) -> String? {
+        guard range.upperBound <= prepared.sourceMarkdown.utf8.count,
+              let lowerUTF8 = prepared.sourceMarkdown.utf8.index(
+                  prepared.sourceMarkdown.utf8.startIndex,
+                  offsetBy: range.lowerBound,
+                  limitedBy: prepared.sourceMarkdown.utf8.endIndex),
+              let upperUTF8 = prepared.sourceMarkdown.utf8.index(
+                  prepared.sourceMarkdown.utf8.startIndex,
+                  offsetBy: range.upperBound,
+                  limitedBy: prepared.sourceMarkdown.utf8.endIndex),
+              let lower = String.Index(lowerUTF8, within: prepared.sourceMarkdown),
+              let upper = String.Index(upperUTF8, within: prepared.sourceMarkdown) else {
+            return nil
+        }
+        return String(prepared.sourceMarkdown[lower..<upper])
+    }
+
+    private func escapedAuthoredSlice(_ range: MarkdownSourceRange, prepared: PreparedMarkdownDocument) -> String {
+        guard let literal = authoredSlice(range, prepared: prepared) else {
+            DebugLog.reader("UTF-8 source range conversion failed during Markdown lowering")
+            return ""
+        }
+        return escape(literal)
+    }
+
+    private mutating func renderTextRange(
+        _ textRange: MarkdownSourceRange,
+        overlays: [WikiMarkdownSyntaxNode],
+        overlayIndex: inout Int,
+        prepared: PreparedMarkdownDocument
+    ) -> String {
+        var output = ""
+        var cursor = textRange.lowerBound
+        while overlayIndex < overlays.count {
+            let node = overlays[overlayIndex]
+            let range = node.sourceRange
+            guard range.lowerBound < textRange.upperBound else { break }
+            guard range.lowerBound >= cursor, range.upperBound <= textRange.upperBound else {
+                DebugLog.reader("Invalid text and wiki overlay crossing; rendering authored text literally")
+                return escapedAuthoredSlice(textRange, prepared: prepared)
+            }
+            if cursor < range.lowerBound {
+                do {
+                    let gap = try MarkdownSourceRange(
+                        lowerBound: cursor,
+                        upperBound: range.lowerBound)
+                    output += escapedAuthoredSlice(gap, prepared: prepared)
+                } catch {
+                    DebugLog.reader("Invalid wiki overlay text gap: \(error)")
+                    return escapedAuthoredSlice(textRange, prepared: prepared)
+                }
+            }
+            output += renderWikiNode(node)
+            emittedWikiRanges.insert(range)
+            cursor = range.upperBound
+            overlayIndex += 1
+        }
+        if cursor < textRange.upperBound {
+            do {
+                let tail = try MarkdownSourceRange(
+                    lowerBound: cursor,
+                    upperBound: textRange.upperBound)
+                output += escapedAuthoredSlice(tail, prepared: prepared)
+            } catch {
+                DebugLog.reader("Invalid wiki overlay text tail: \(error)")
+                return escapedAuthoredSlice(textRange, prepared: prepared)
+            }
+        }
+        return output
+    }
+
+    private mutating func renderWikiNode(_ node: WikiMarkdownSyntaxNode) -> String {
+        emittedWikiRanges.insert(node.sourceRange)
+        switch node {
+        case .link(let link):
+            return wikiLinkHTML(link)
+        case .embed(let embed):
+            guard let resolved = resolvedDocumentProjection?.wikiEmbed(at: embed.sourceRange) else {
+                return escape(embed.authoredLiteral)
+            }
+            return lowerResolvedEmbed(resolved)
+        }
+    }
+
+    private func wikiLinkHTML(_ link: WikiMarkdownSyntaxNode.Link) -> String {
+        guard let resolved = resolvedDocumentProjection?.wikiLink(at: link.sourceRange) else {
+            return escape(link.authoredLiteral)
+        }
+        let host: String
+        if !resolved.isResolved {
+            host = WikiLinkMarkdown.unresolvedHost
+        } else {
+            switch resolved.namespace {
+            case .page: host = WikiLinkMarkdown.resolvedHost
+            case .source: host = WikiLinkMarkdown.sourceHost
+            case .chat: host = WikiLinkMarkdown.chatHost
+            }
+        }
+        var components = URLComponents()
+        components.scheme = WikiLinkMarkdown.scheme
+        components.host = host
+        components.queryItems = [URLQueryItem(name: "title", value: resolved.title)]
+        if let canonicalID = resolved.canonicalID {
+            components.queryItems?.append(URLQueryItem(name: "id", value: canonicalID))
+        }
+        if let pinnedVersion = resolved.pinnedSourceVersion {
+            components.queryItems?.append(URLQueryItem(name: "pin", value: pinnedVersion.rawValue))
+        }
+        components.fragment = resolved.fragment
+        let destination = components.url?.absoluteString ?? ""
+        return "<a href=\"\(escapeAttribute(destination))\">\(escape(resolved.displayText))</a>"
+    }
+
+    private mutating func lowerResolvedEmbed(_ embed: ResolvedDocumentEmbed) -> String {
+        switch embed {
+        case .inlineMedia(let syntax, let kind, let display, let target, let fallback):
+            return inlineMediaHTML(
+                syntax: syntax,
+                kind: kind,
+                display: display,
+                target: target,
+                fallback: fallback)
+        case .renderer(_, let role, let plan, let fallback):
+            guard role == plan.embeddingRole else { return fallbackHTML(fallback) }
+            if role == .inlineContent {
+                return inlineRendererHTML(plan: plan, fallback: fallbackHTML(fallback))
+            }
+            return rendererCardHTML(plan: plan, fallbackHTML: fallbackHTML(fallback), readableFallbackHTML: fallbackHTML(fallback))
+        case .transclusion(let target, let display, let fragment, let ancestors):
+            return transclusionHTML(target: target, display: display, fragment: fragment, ancestors: ancestors)
+        case .missing(_, let fallback), .fallback(let fallback):
+            return fallbackHTML(fallback)
+        }
+    }
+
+    private func inlineMediaHTML(
+        syntax: DocumentEmbedSyntax,
+        kind: DocumentMediaKind,
+        display: DocumentEmbedDisplayMetadata,
+        target: DocumentInlineTarget,
+        fallback: DocumentEmbedFallback
+    ) -> String {
+        let source = inlineTargetURL(target)
+        let alt = display.altText ?? display.title ?? ""
+        let isWikiSource: Bool = if case .wikiSourceMedia = syntax { true } else { false }
+        switch kind {
+        case .image:
+            if isWikiSource {
+                return "<img src=\"\(escapeAttribute(source))\" alt=\"\(escape(alt))\" class=\"wiki-embed\">"
+            }
+            return ordinaryImageHTML(src: source, altText: alt)
+        case .audio:
+            return "<audio controls preload=\"metadata\" src=\"\(escapeAttribute(source))\" class=\"wiki-embed\">\(fallbackHTML(fallback))</audio>"
+        case .video:
+            return "<video controls preload=\"metadata\" src=\"\(escapeAttribute(source))\" class=\"wiki-embed\">\(fallbackHTML(fallback))</video>"
+        case .pdf:
+            return "<iframe class=\"wiki-embed-pdf\" src=\"\(escapeAttribute(source))\" title=\"\(escapeAttribute(alt))\" loading=\"lazy\"></iframe>"
+        case .externalFrame:
+            return "<iframe class=\"wiki-embed\" src=\"\(escapeAttribute(source))\" title=\"\(escapeAttribute(alt))\" loading=\"lazy\"></iframe>"
+        case .mermaidSource:
+            let sourceText: String
+            if case .authored(let value) = target { sourceText = value } else { return fallbackHTML(fallback) }
+            return "<div class=\"mermaid sdw-inline-mermaid\">\(escape(sourceText))</div><pre class=\"sdw-inline-mermaid__fallback\"><code class=\"language-mermaid\">\(escape(sourceText))</code></pre>"
+        }
+    }
+
+    private func inlineRendererHTML(plan: RendererEmbedPlan, fallback: String) -> String {
+        guard plan.embeddingRole == .inlineContent else { return fallback }
+        let id = escapeAttribute(plan.placeholderID)
+        let reference = plan.rendererReference
+        let referenceValue = "\(reference.packageID.rawValue)/\(reference.version.rawValue)/\(reference.registrationID.rawValue)"
+        let context = registerActivationContext(for: plan)
+        let admissionAttribute = context == nil ? "" : " data-renderer-admitted=\"true\""
+        return "<span class=\"sdw-inline-renderer\" id=\"\(id)\" data-renderer-role=\"inlineContent\" data-renderer-reference=\"\(escapeAttribute(referenceValue))\"\(admissionAttribute)><span class=\"sdw-inline-renderer__fallback\">\(fallback)</span></span>"
+    }
+
+    private func transclusionHTML(
+        target: DocumentTransclusionTarget,
+        display: DocumentEmbedDisplayMetadata,
+        fragment: String?,
+        ancestors: Set<DocumentTransclusionTarget>
+    ) -> String {
+        let kind: String
+        let id: String
+        switch target {
+        case .page(let pageID): kind = "page"; id = pageID.rawValue
+        case .source(let sourceID): kind = "source"; id = sourceID.rawValue
+        }
+        let ancestorValue = ancestors.map(\.pathComponent).sorted().joined(separator: " ")
+        let title = display.title ?? id
+        let encodedFragment = fragment?.addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed) ?? ""
+        let nodeID = "embed-\(UUID().uuidString)"
+        return """
+        <details class="sdw-transclusion" data-sdw-embed-kind="\(kind)" data-sdw-embed-id="\(escapeAttribute(id))" data-sdw-embed-target="" data-sdw-embed-fragment="\(escapeAttribute(encodedFragment))" data-sdw-embed-name="\(escapeAttribute(title))" data-sdw-embed-path="\(escapeAttribute(ancestorValue))" data-sdw-node="\(escapeAttribute(nodeID))" data-sdw-state="empty"><summary><span class="sdw-embed-title">\(escape(title))</span></summary><div class="sdw-embed-body"><span class="sdw-embed-placeholder">Loading…</span></div></details>
+        """
+    }
+
+    private func inlineTargetURL(_ target: DocumentInlineTarget) -> String {
+        switch target {
+        case .source(let source): return "wiki-blob://source/\(source.sourceID.rawValue)"
+        case .blob(let sourceID): return "wiki-blob://source/\(sourceID.rawValue)"
+        case .external(let url): return url.absoluteString
+        case .authored(let value): return value
+        }
+    }
+
+    private func fallbackHTML(_ fallback: DocumentEmbedFallback) -> String {
+        switch fallback {
+        case .image(let source, let altText): return ordinaryImageHTML(src: source, altText: altText)
+        case .media(let label, let target): return "<a href=\"\(escapeAttribute(inlineTargetURL(target)))\">\(escape(label))</a>"
+        case .code(let language, let source):
+            let cls = language.map { " class=\"language-\(escapeAttribute($0))\"" } ?? ""
+            return plainCodeBlockHTML(source, cls: cls)
+        case .literal(let literal): return escape(literal)
+        }
     }
 
     /// Fallback for nodes we don't specialize (Document, BlockDirective, …):
@@ -272,42 +587,12 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
     }
 
     mutating func visitImage(_ image: Image) -> String {
-        let rawSrc = image.source ?? ""
-        let src = resolvedImageSrc(rawSrc)
-        let altText = plainText(image)
-        let fallbackHTML = ordinaryImageHTML(src: src, altText: altText)
-        guard case let .interactive(candidate) = imageEmbedProjection?.outcome(for: rawSrc) else {
-            return fallbackHTML
-        }
-        fenceOrdinal += 1
-        let placeholderID = "sdw-image-renderer-\(candidate.source.digest.hex)-\(fenceOrdinal)"
-        return rendererCardHTML(
-            plan: RendererEmbedPlan(
-                placeholderID: placeholderID,
-                rendererReference: candidate.rendererReference,
-                input: .source(candidate.source),
-                semanticContent: "Image source available as \(candidate.source.mimeType.rawValue).",
-                displayTitle: altText.isEmpty ? nil : altText,
-                activationMetadata: RendererEmbedActivationMetadata(
-                    controlLabel: "Open",
-                    accessibilityLabel: "Open image renderer",
-                    summary: "Open the image source in the renderer pane.")),
-            fallbackHTML: fallbackHTML,
-            readableFallbackHTML: fallbackHTML)
-    }
-
-    /// Phase 4: resolve a relative image src through the `imageResolver` (when
-    /// present). Only relative srcs are candidates — absolute (`http`/`https`),
-    /// `data:`, and already-rewritten (`wiki-blob:`/`wiki:`) srcs pass through
-    /// verbatim. An unresolved relative is left verbatim (no crash).
-    private func resolvedImageSrc(_ src: String) -> String {
-        guard let resolver = imageResolver, !src.isEmpty else { return src }
-        let lower = src.lowercased()
-        if lower.hasPrefix("http") || lower.hasPrefix("data:")
-            || lower.hasPrefix("wiki-blob:") || lower.hasPrefix("wiki:") {
-            return src
-        }
-        return resolver(src) ?? src
+        let source = image.source ?? ""
+        let resolved = DocumentEmbedResolver(inputs: .init()).resolveMarkdownImage(
+            source: source,
+            altText: plainText(image),
+            target: resolvedDocumentProjection?.markdownImage(source: source))
+        return lowerResolvedEmbed(resolved)
     }
 
     // MARK: Tables
@@ -374,7 +659,8 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
            admission.pageVersionID == artifact.pageVersionID {
             let context = RendererEmbedActivationContext(
                 pageID: artifact.pageID, pageVersionID: artifact.pageVersionID,
-                blockID: artifact.blockID, rendererReference: reference,
+                blockID: artifact.blockID, embeddingRole: plan.embeddingRole,
+                rendererReference: reference,
                 input: .inlineArtifact(artifact), capability: admission.capability,
                 generation: admission.generation, displayTitle: title)
             let placeholder = RendererAttachmentPlaceholderID.validatedOrNil(placeholderID)
@@ -386,7 +672,8 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
                     registrationID: reference.registrationID.rawValue, inputJSON: encoded,
                     capability: context.capability.rawValue, generation: context.generation,
                     pageID: context.pageID.rawValue, pageVersionID: context.pageVersionID.rawValue,
-                    identity: .block(artifact.blockID), mimeType: artifact.mimeType.rawValue)
+                    identity: .block(artifact.blockID), embeddingRole: context.embeddingRole,
+                    mimeType: artifact.mimeType.rawValue)
                 actionHTML = "<a class=\"sdw-renderer-card__action\" data-renderer-action=\"open-window\" href=\"\(escapeAttribute(url))\" aria-label=\"Open \(escapeAttribute(label)) in Window\" style=\"flex:0 0 auto\">Open in Window</a>"
             } catch {
                 DebugLog.reader("Mermaid renderer action encoding failed: \(error.localizedDescription)")
@@ -406,6 +693,57 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
           </div>
         </section>
         """
+    }
+
+    private func registerActivationContext(
+        for plan: RendererEmbedPlan
+    ) -> RendererEmbedActivationContext? {
+        guard plan.activationMetadata != nil,
+              let input = plan.input,
+              let admission = rendererActivationAdmission,
+              let placeholder = RendererAttachmentPlaceholderID.validatedOrNil(plan.placeholderID)
+        else { return nil }
+
+        let context: RendererEmbedActivationContext
+        switch input {
+        case .inlineArtifact(let artifact):
+            guard artifact.pageID == admission.pageID,
+                  artifact.pageVersionID == admission.pageVersionID else { return nil }
+            context = RendererEmbedActivationContext(
+                pageID: artifact.pageID,
+                pageVersionID: artifact.pageVersionID,
+                blockID: artifact.blockID,
+                embeddingRole: plan.embeddingRole,
+                rendererReference: plan.rendererReference,
+                input: .inlineArtifact(artifact),
+                capability: admission.capability,
+                generation: admission.generation,
+                displayTitle: plan.displayTitle)
+        case .source(let source):
+            guard let identity = documentIdentity,
+                  identity.pageID == admission.pageID,
+                  identity.pageVersionID == admission.pageVersionID else { return nil }
+            let bridgeInput: RendererBridgeInput
+            if let sourceVersionID = source.sourceVersionID {
+                bridgeInput = .source(versionID: sourceVersionID)
+            } else if let sourceMarkdownVersionID = source.sourceMarkdownVersionID {
+                bridgeInput = .markdown(versionID: sourceMarkdownVersionID)
+            } else {
+                return nil
+            }
+            context = RendererEmbedActivationContext(
+                pageID: identity.pageID,
+                pageVersionID: identity.pageVersionID,
+                identity: .source(source),
+                embeddingRole: plan.embeddingRole,
+                rendererReference: plan.rendererReference,
+                input: bridgeInput,
+                capability: admission.capability,
+                generation: admission.generation,
+                displayTitle: plan.displayTitle)
+        }
+        admission.register(context: context, attachmentPlaceholderID: placeholder)
+        return context
     }
 
     private func rendererCardHTML(
@@ -441,41 +779,7 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
             case nil: return nil
             }
         }()
-        let activationContext: RendererEmbedActivationContext? = {
-            guard plan.activationMetadata != nil,
-                  let input = plan.input,
-                  let admission = rendererActivationAdmission else { return nil }
-            let context: RendererEmbedActivationContext
-            switch input {
-            case .inlineArtifact(let artifact):
-                context = RendererEmbedActivationContext(
-                    pageID: artifact.pageID, pageVersionID: artifact.pageVersionID,
-                    blockID: artifact.blockID, rendererReference: ref,
-                    input: .inlineArtifact(artifact), capability: admission.capability,
-                    generation: admission.generation, displayTitle: title)
-            case .source(let source):
-                guard let identity = documentIdentity,
-                      identity.pageID == admission.pageID,
-                      identity.pageVersionID == admission.pageVersionID else { return nil }
-                let bridgeInput: RendererBridgeInput
-                if let sourceVersionID = source.sourceVersionID {
-                    bridgeInput = .source(versionID: sourceVersionID)
-                } else if let sourceMarkdownVersionID = source.sourceMarkdownVersionID {
-                    bridgeInput = .markdown(versionID: sourceMarkdownVersionID)
-                } else {
-                    return nil
-                }
-                context = RendererEmbedActivationContext(
-                    pageID: identity.pageID, pageVersionID: identity.pageVersionID,
-                    identity: .source(source), rendererReference: ref,
-                    input: bridgeInput,
-                    capability: admission.capability, generation: admission.generation,
-                    displayTitle: title)
-            }
-            let placeholder = RendererAttachmentPlaceholderID.validatedOrNil(plan.placeholderID)
-            admission.register(context: context, attachmentPlaceholderID: placeholder)
-            return context
-        }()
+        let activationContext = registerActivationContext(for: plan)
         let inputAttribute: String
         let inputJSON: String?
         if let activationContext {
@@ -503,6 +807,7 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
                 pageID: activationContext.pageID.rawValue,
                 pageVersionID: activationContext.pageVersionID.rawValue,
                 identity: activationContext.identity,
+                embeddingRole: activationContext.embeddingRole,
                 mimeType: mimeType
             )
             activationState = .admitted(actionURL: actionURL)
@@ -727,6 +1032,7 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         pageID: String,
         pageVersionID: String,
         identity: RendererEmbedActivationContext.Identity,
+        embeddingRole: RendererEmbeddingRole,
         mimeType: String
     ) -> String {
         var components = URLComponents()
@@ -741,6 +1047,7 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
             URLQueryItem(name: "generation", value: String(generation)),
             URLQueryItem(name: "page", value: pageID),
             URLQueryItem(name: "pageVersion", value: pageVersionID),
+            URLQueryItem(name: "embeddingRole", value: embeddingRole.rawValue),
             URLQueryItem(name: "mime", value: mimeType)
         ]
         switch identity {

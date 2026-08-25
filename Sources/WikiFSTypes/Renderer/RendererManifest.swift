@@ -3,7 +3,9 @@ import Foundation
 // pattern: Functional Core
 
 public enum RendererManifestRevision {
-    public static let current = 1
+    public static let legacy = 1
+    public static let current = 2
+    public static let supported: ClosedRange<Int> = legacy ... current
 }
 
 /// The normalized package document. It contains metadata only and no package
@@ -16,7 +18,7 @@ public struct RendererManifest: Codable, Hashable, Sendable {
     public let assets: [RendererAsset]
 
     public init(revision: Int, packageID: RendererPackageID, version: RendererPackageVersion, descriptors: [RendererDescriptor], assets: [RendererAsset]) throws {
-        guard revision == RendererManifestRevision.current else {
+        guard RendererManifestRevision.supported.contains(revision) else {
             throw RendererValidationError.unsupportedManifestRevision(revision)
         }
         let sortedDescriptors = descriptors.sorted { $0.reference.registrationID < $1.reference.registrationID }
@@ -37,6 +39,10 @@ public struct RendererManifest: Codable, Hashable, Sendable {
             throw RendererValidationError.duplicatePath(duplicate)
         }
         for descriptor in sortedDescriptors {
+            if revision == RendererManifestRevision.current,
+               descriptor.hasExplicitEmbeddingRoles == false {
+                throw RendererValidationError.missingEmbeddingRoles
+            }
             guard descriptor.reference.packageID == packageID, descriptor.reference.version == version else {
                 throw RendererValidationError.manifestIdentityMismatch
             }
@@ -72,7 +78,14 @@ public struct RendererManifest: Codable, Hashable, Sendable {
     public func canonicalJSON() throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        return try encoder.encode(CanonicalManifest(self))
+        switch revision {
+        case RendererManifestRevision.legacy:
+            return try encoder.encode(CanonicalManifestV1(self))
+        case RendererManifestRevision.current:
+            return try encoder.encode(CanonicalManifestV2(self))
+        default:
+            throw RendererValidationError.unsupportedManifestRevision(revision)
+        }
     }
 
     /// SHA-256 of a versioned envelope that embeds normalized manifest JSON and
@@ -82,7 +95,7 @@ public struct RendererManifest: Codable, Hashable, Sendable {
         let manifestObject = try JSONSerialization.jsonObject(with: canonicalJSON(), options: [.fragmentsAllowed])
         let envelope: [String: Any] = [
             "format": "selfdrivingwiki.renderer-package-hash",
-            "revision": RendererManifestRevision.current,
+            "revision": revision,
             "manifest": manifestObject,
             "assets": assets.map { ["path": $0.path.rawValue, "sha256": $0.digest.hex] },
         ]
@@ -91,23 +104,39 @@ public struct RendererManifest: Codable, Hashable, Sendable {
     }
 }
 
-private struct CanonicalManifest: Encodable {
+private struct CanonicalManifestV1: Encodable {
     let revision: Int
     let packageID: RendererPackageID
     let version: RendererPackageVersion
-    let descriptors: [CanonicalRendererDescriptor]
+    let descriptors: [CanonicalRendererDescriptorV1]
     let assets: [RendererAsset]
 
     init(_ manifest: RendererManifest) throws {
         revision = manifest.revision
         packageID = manifest.packageID
         version = manifest.version
-        descriptors = try manifest.descriptors.map(CanonicalRendererDescriptor.init)
+        descriptors = try manifest.descriptors.map(CanonicalRendererDescriptorV1.init)
         assets = manifest.assets.sorted()
     }
 }
 
-private struct CanonicalRendererDescriptor: Encodable {
+private struct CanonicalManifestV2: Encodable {
+    let revision: Int
+    let packageID: RendererPackageID
+    let version: RendererPackageVersion
+    let descriptors: [CanonicalRendererDescriptorV2]
+    let assets: [RendererAsset]
+
+    init(_ manifest: RendererManifest) throws {
+        revision = manifest.revision
+        packageID = manifest.packageID
+        version = manifest.version
+        descriptors = try manifest.descriptors.map(CanonicalRendererDescriptorV2.init)
+        assets = manifest.assets.sorted()
+    }
+}
+
+private struct CanonicalRendererDescriptorV1: Encodable {
     let reference: RendererReference
     let displayName: String
     let implementation: RendererImplementation
@@ -125,8 +154,48 @@ private struct CanonicalRendererDescriptor: Encodable {
         reference = descriptor.reference
         displayName = descriptor.displayName
         implementation = descriptor.implementation
-        matchers = try CanonicalRendererDescriptor.sortedCodable(descriptor.matchers)
+        matchers = try Self.sortedCodable(descriptor.matchers)
         presentations = descriptor.presentations.sorted { $0.rawValue < $1.rawValue }
+        approvedAssets = descriptor.approvedAssets.sorted()
+        capabilities = descriptor.capabilities.sorted { $0.rawValue < $1.rawValue }
+        sizeLimits = descriptor.sizeLimits
+        linkPolicy = descriptor.linkPolicy
+        accessibility = descriptor.accessibility
+        compatibility = descriptor.compatibility
+        priority = descriptor.priority
+    }
+
+    private static func sortedCodable<T: Encodable>(_ values: [T]) throws -> [T] {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return try values.map { (value: $0, key: try encoder.encode($0)) }
+            .sorted { $0.key.lexicographicallyPrecedes($1.key) }
+            .map(\.value)
+    }
+}
+
+private struct CanonicalRendererDescriptorV2: Encodable {
+    let reference: RendererReference
+    let displayName: String
+    let implementation: RendererImplementation
+    let matchers: [RendererMatcher]
+    let presentations: [RendererPresentation]
+    let supportedEmbeddingRoles: [RendererEmbeddingRole]
+    let approvedAssets: [RendererAsset]
+    let capabilities: [RendererCapability]
+    let sizeLimits: RendererSizeLimits
+    let linkPolicy: RendererLinkPolicy
+    let accessibility: RendererAccessibility
+    let compatibility: RendererCompatibility
+    let priority: Int
+
+    init(_ descriptor: RendererDescriptor) throws {
+        reference = descriptor.reference
+        displayName = descriptor.displayName
+        implementation = descriptor.implementation
+        matchers = try Self.sortedCodable(descriptor.matchers)
+        presentations = descriptor.presentations.sorted { $0.rawValue < $1.rawValue }
+        supportedEmbeddingRoles = descriptor.supportedEmbeddingRoles.sorted { $0.rawValue < $1.rawValue }
         approvedAssets = descriptor.approvedAssets.sorted()
         capabilities = descriptor.capabilities.sorted { $0.rawValue < $1.rawValue }
         sizeLimits = descriptor.sizeLimits

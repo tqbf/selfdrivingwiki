@@ -26,6 +26,33 @@ struct RendererPackageActivationTests {
         #expect(FileManager.default.fileExists(atPath: package.stagedRoot.path) == false)
     }
 
+    @Test func revisionOnePackageRevalidatesAfterMachineIndexRestart() async throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let validated = try fixture.validate()
+        let store = RendererMachineIndexStore(layout: fixture.layout)
+        let activated = try await store.activate(validated, expectedGeneration: 0, clock: fixture.clock)
+        let expectedHash = try RendererSHA256Digest(
+            hex: "3e7d33a4a6f942c1da4ada03fce445b8e7cf4e5d0ebcf69abc43104d729418c3")
+        #expect(activated.records.first?.expectedPackageHash == expectedHash)
+        let installedRoot = fixture.layout.packageURL(
+            packageID: fixture.packageID,
+            version: fixture.version)
+
+        let restarted = RendererMachineIndexStore(layout: fixture.layout)
+        let restartedIndex = try await restarted.read()
+        let revalidated = try RendererPackageValidator(
+            packageRoot: fixture.layout.root,
+            stagingRoot: fixture.layout.stagingRoot)
+            .revalidateDirectory(installedRoot, expectedHash: expectedHash)
+        let descriptor = try #require(restartedIndex.availableDescriptorProjection.first)
+
+        #expect(revalidated.packageHash == expectedHash)
+        #expect(revalidated.manifest.revision == RendererManifestRevision.legacy)
+        #expect(descriptor.supportedEmbeddingRoles == [.disclosureRow])
+        #expect(!descriptor.supportedEmbeddingRoles.contains(.inlineContent))
+    }
+
     @Test("the machine index rejects two active versions of one logical renderer")
     func machineIndexRejectsDuplicateActiveLogicalRenderer() throws {
         let packageID = try RendererPackageID(validating: "org.example.logical")

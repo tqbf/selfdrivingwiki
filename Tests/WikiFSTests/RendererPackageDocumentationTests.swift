@@ -87,8 +87,8 @@ struct RendererPackageDocumentationTests {
         #expect(!html.contains("<form"))
     }
 
-    @Test("user guide indexes renderer documentation and preserves package v1 boundaries")
-    func userGuideIndexesRendererPackageDocumentation() throws {
+    @Test("renderer documentation records syntax-owned roles and compatibility")
+    func rendererDocumentationRecordsEmbeddingRoles() throws {
         let root = repositoryRoot()
         let index = try String(contentsOf: root.appending(path: "docs/user-guide/README.md"), encoding: .utf8)
         let guide = try String(contentsOf: root.appending(path: "docs/user-guide/renderer-packages.md"), encoding: .utf8)
@@ -107,11 +107,16 @@ struct RendererPackageDocumentationTests {
         #expect(guide.contains("![System architecture](images/architecture.canvas)"))
         #expect(guide.contains("48,384-byte limit"))
         #expect(guide.contains("A fifth row stays collapsed"))
+        #expect(guide.contains("supportedEmbeddingRoles"))
+        #expect(guide.contains("inlineContent"))
+        #expect(guide.contains("disclosureRow"))
+        #expect(guide.contains("Revision 1 packages never receive `inlineContent` authority."))
         #expect(design.contains("SourceVersionID"))
         #expect(design.contains("SourceMarkdownVersionID"))
-        #expect(design.contains("four native or installed renderer rows"))
-        #expect(plan.contains("plans/collapsible-renderer-embeds.md"))
-        #expect(plan.contains("48,384-byte bridge limit"))
+        #expect(design.contains("separate document budget"))
+        #expect(design.contains("six-state lifecycle") || design.contains("`fallback`, `eligible`"))
+        #expect(plan.contains("plans/typed-markdown-embed-pipeline.md"))
+        #expect(plan.contains("Images and media stay inline"))
     }
 
     private func minimalTemplateRoot() -> URL {
