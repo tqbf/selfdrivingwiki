@@ -366,6 +366,12 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
                 return inlineRendererHTML(plan: plan, fallback: fallbackHTML(fallback))
             }
             return rendererCardHTML(plan: plan, fallbackHTML: fallbackHTML(fallback), readableFallbackHTML: fallbackHTML(fallback))
+        case .rendererDOM(_, let role, let plan, let output, let fallback):
+            guard role == .inlineContent,
+                  role == plan.embeddingRole,
+                  DocumentRendererDOMProjector.project(plan) == output
+            else { return fallbackHTML(fallback) }
+            return rendererDOMOutputHTML(output, plan: plan)
         case .transclusion(let target, let display, let fragment, let ancestors):
             return transclusionHTML(target: target, display: display, fragment: fragment, ancestors: ancestors)
         case .missing(_, let fallback), .fallback(let fallback):
@@ -402,6 +408,96 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
             if case .authored(let value) = target { sourceText = value } else { return fallbackHTML(fallback) }
             return "<div class=\"mermaid sdw-inline-mermaid\">\(escape(sourceText))</div><pre class=\"sdw-inline-mermaid__fallback\"><code class=\"language-mermaid\">\(escape(sourceText))</code></pre>"
         }
+    }
+
+    private func rendererDOMOutputHTML(_ output: DocumentRendererDOMOutput, plan: RendererEmbedPlan) -> String {
+        switch output {
+        case .vectorScene(let scene):
+            return vectorSceneHTML(scene, plan: plan)
+        }
+    }
+
+    private func vectorSceneHTML(_ scene: DocumentVectorScene, plan: RendererEmbedPlan) -> String {
+        let bounds = scene.bounds
+        let viewBox = [bounds.minimumX, bounds.minimumY, bounds.width, bounds.height]
+            .map(Self.svgNumber).joined(separator: " ")
+        let background: String = scene.backgroundColor.map { color in
+            #"<rect x="\#(Self.svgNumber(bounds.minimumX))" y="\#(Self.svgNumber(bounds.minimumY))" width="\#(Self.svgNumber(bounds.width))" height="\#(Self.svgNumber(bounds.height))" fill="\#(color)"/>"#
+        } ?? ""
+        let markerID = "sdw-arrow-\(plan.placeholderID)"
+        let elements = scene.elements.map { vectorElementHTML($0, markerID: markerID) }.joined()
+        let title = escapeAttribute(plan.displayTitle ?? scene.accessibilityLabel)
+        let actionURL = rendererActionURL(for: plan)
+        let actionHTML = actionURL.map { url in
+            #"<a class="sdw-inline-renderer__action" data-renderer-action="open-window" href="\#(escapeAttribute(url))">Open interactive renderer</a>"#
+        } ?? ""
+        return """
+        <figure class="sdw-inline-renderer sdw-inline-renderer--dom" data-renderer-role="inlineContent">
+          <svg class="sdw-inline-renderer__svg" viewBox="\(viewBox)" role="img" aria-label="\(title)" preserveAspectRatio="xMidYMid meet">
+            <defs><marker id="\(escapeAttribute(markerID))" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,4 L0,8 z" fill="context-stroke"/></marker></defs>
+            \(background)\(elements)
+          </svg>
+          \(actionHTML)
+        </figure>
+        """
+    }
+
+    private func vectorElementHTML(_ element: DocumentVectorScene.Element, markerID: String) -> String {
+        switch element {
+        case .rectangle(let x, let y, let width, let height, let cornerRadius, let style):
+            return #"<rect x="\#(Self.svgNumber(x))" y="\#(Self.svgNumber(y))" width="\#(Self.svgNumber(width))" height="\#(Self.svgNumber(height))" rx="\#(Self.svgNumber(cornerRadius))" \#(vectorStyleAttributes(style))/>"#
+        case .ellipse(let x, let y, let width, let height, let style):
+            return #"<ellipse cx="\#(Self.svgNumber(x + width / 2))" cy="\#(Self.svgNumber(y + height / 2))" rx="\#(Self.svgNumber(width / 2))" ry="\#(Self.svgNumber(height / 2))" \#(vectorStyleAttributes(style))/>"#
+        case .diamond(let x, let y, let width, let height, let style):
+            let points = "\(Self.svgNumber(x + width / 2)),\(Self.svgNumber(y)) \(Self.svgNumber(x + width)),\(Self.svgNumber(y + height / 2)) \(Self.svgNumber(x + width / 2)),\(Self.svgNumber(y + height)) \(Self.svgNumber(x)),\(Self.svgNumber(y + height / 2))"
+            return #"<polygon points="\#(points)" \#(vectorStyleAttributes(style))/>"#
+        case .text(let x, let y, let text, let fontSize, let style):
+            return #"<text x="\#(Self.svgNumber(x))" y="\#(Self.svgNumber(y + fontSize))" font-size="\#(Self.svgNumber(fontSize))" font-family="-apple-system, BlinkMacSystemFont, sans-serif" fill="\#(style.strokeColor)" opacity="\#(Self.svgNumber(style.opacity))">\#(escape(text))</text>"#
+        case .polyline(let x, let y, let points, let arrowhead, let style):
+            let values = points.map { "\(Self.svgNumber(x + $0.x)),\(Self.svgNumber(y + $0.y))" }.joined(separator: " ")
+            let marker = arrowhead ? #" marker-end="url(#\#(escapeAttribute(markerID)))""# : ""
+            return #"<polyline points="\#(values)" fill="none" \#(vectorStyleAttributes(style))\#(marker)/>"#
+        }
+    }
+
+    private func vectorStyleAttributes(_ style: DocumentVectorScene.Style) -> String {
+        let fill = style.fillColor ?? "none"
+        return #"stroke="\#(style.strokeColor)" fill="\#(fill)" stroke-width="\#(Self.svgNumber(style.strokeWidth))" opacity="\#(Self.svgNumber(style.opacity))" vector-effect="non-scaling-stroke""#
+    }
+
+    private static func svgNumber(_ value: Double) -> String {
+        guard value.isFinite else { return "0" }
+        return String(format: "%.4f", locale: Locale(identifier: "en_US_POSIX"), value)
+            .replacingOccurrences(of: #"\.?0+$"#, with: "", options: .regularExpression)
+    }
+
+    private func rendererActionURL(for plan: RendererEmbedPlan) -> String? {
+        guard let context = registerActivationContext(for: plan),
+              let mimeType = plan.input.map({ input -> String in
+                  switch input {
+                  case .inlineArtifact(let artifact): artifact.mimeType.rawValue
+                  case .source(let source): source.mimeType.rawValue
+                  }
+              }) else { return nil }
+        let inputJSON: String
+        do {
+            inputJSON = String(decoding: try JSONEncoder().encode(context.input), as: UTF8.self)
+        } catch {
+            DebugLog.reader("inline DOM renderer action encoding failed: \(error.localizedDescription)")
+            return nil
+        }
+        return Self.rendererActionURL(
+            packageID: context.rendererReference.packageID.rawValue,
+            version: context.rendererReference.version.rawValue,
+            registrationID: context.rendererReference.registrationID.rawValue,
+            inputJSON: inputJSON,
+            capability: context.capability.rawValue,
+            generation: context.generation,
+            pageID: context.pageID.rawValue,
+            pageVersionID: context.pageVersionID.rawValue,
+            identity: context.identity,
+            embeddingRole: context.embeddingRole,
+            mimeType: mimeType)
     }
 
     private func inlineRendererHTML(plan: RendererEmbedPlan, fallback: String) -> String {

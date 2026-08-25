@@ -192,7 +192,7 @@ struct DocumentEmbedResolver: Sendable {
                     controlLabel: "Open",
                     accessibilityLabel: "Open inline image renderer",
                     summary: "Open the image source in the renderer pane."))
-            return .renderer(syntax: syntax, role: .inlineContent, plan: plan, fallback: fallback)
+            return resolvedRenderer(syntax: syntax, plan: plan, fallback: fallback)
         case .blob(let sourceID):
             resolvedSource = .blob(sourceID)
         case nil:
@@ -205,6 +205,25 @@ struct DocumentEmbedResolver: Sendable {
             display: .init(title: nil, altText: altText),
             target: resolvedSource,
             fallback: .image(source: fallbackSource, altText: altText))
+    }
+
+    private func resolvedRenderer(
+        syntax: DocumentEmbedSyntax,
+        plan: RendererEmbedPlan,
+        fallback: DocumentEmbedFallback
+    ) -> ResolvedDocumentEmbed {
+        if let output = DocumentRendererDOMProjector.project(plan) {
+            return .rendererDOM(
+                syntax: syntax,
+                role: .inlineContent,
+                plan: plan,
+                output: output,
+                fallback: fallback)
+        }
+        if DocumentRendererDOMProjector.usesTrustedDOMProjection(plan) {
+            return .fallback(fallback)
+        }
+        return .renderer(syntax: syntax, role: .inlineContent, plan: plan, fallback: fallback)
     }
 
     private func inlineImageSource(_ target: DocumentInlineTarget) -> String {
@@ -257,11 +276,7 @@ struct DocumentEmbedResolver: Sendable {
                 displayTitle: title,
                 fallbackReason: rendererPlan.fallbackReason,
                 activationMetadata: rendererPlan.activationMetadata)
-            return .renderer(
-                syntax: syntax,
-                role: .inlineContent,
-                plan: occurrencePlan,
-                fallback: literalFallback)
+            return resolvedRenderer(syntax: syntax, plan: occurrencePlan, fallback: literalFallback)
         }
         if let mediaKind = bytefulMediaKind(mimeType: source.mimeType) {
             let target = DocumentInlineTarget.blob(source.sourceID)

@@ -274,6 +274,60 @@ struct RendererAttachmentCoordinatorTests {
         }
     }
 
+    @Test("inert inline renderer output scrolls as a DOM descendant without a native attachment")
+    @MainActor
+    func inertInlineRendererOutputScrollsWithDocument() async throws {
+        let webView = WikiReaderWebView()
+        let container = WikiReaderContainerView(webView: webView)
+        container.frame = .init(x: 0, y: 0, width: 500, height: 320)
+        let window = NSWindow(contentRect: container.bounds, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        defer { container.teardown(); window.orderOut(nil) }
+
+        let sourceID = SourceID(rawValue: "01JDOMSCROLLSOURCE000000001")
+        let bytes = Data(##"{"type":"excalidraw","version":2,"elements":[{"type":"rectangle","x":0,"y":0,"width":100,"height":50,"angle":0,"strokeColor":"#112233","backgroundColor":"#ffffff","strokeWidth":2,"opacity":100,"roundness":null,"isDeleted":false}]}"##.utf8)
+        let source = try RendererEmbeddedContent.Source(
+            sourceID: sourceID,
+            sourceVersionID: SourceVersionID(rawValue: "01JDOMSCROLLVERSION0000001"),
+            mimeType: try .init(validating: "application/json"),
+            bytes: bytes)
+        let markdown = """
+        <p style="height:500px">Leading content</p>
+
+        ![Drawing](drawing.excalidraw)
+
+        <p style="height:500px">Trailing content</p>
+        """
+        let prepared = ReaderMarkdown.preparedDocument(markdown)
+        let projection = ResolvedDocumentProjection(markdownImages: [
+            "drawing.excalidraw": .renderer(
+                rendererReference: .init(
+                    packageID: BundledRendererPackages.excalidrawPackageID,
+                    version: BundledRendererPackages.excalidrawVersion,
+                    registrationID: BundledRendererPackages.excalidrawRegistrationID),
+                source: source),
+        ])
+        let body = MarkdownHTMLRenderer.render(prepared, projection: projection, options: .disabled)
+        #expect(body.contains("class=\"sdw-inline-renderer__svg\""))
+        webView.loadHTMLString(WikiReaderView.documentHTML(body, mermaidLibrary: nil), baseURL: WikiReaderOrigin.url)
+        try await Self.waitUntil("inert renderer document") { webView.isLoading == false }
+
+        let initialY = try await Self.javaScriptDouble(
+            "document.querySelector('.sdw-inline-renderer__svg').getBoundingClientRect().y",
+            in: webView)
+        try await Self.runJS("window.scrollTo(0, 180)", in: webView)
+        let scrolledY = try await Self.javaScriptDouble(
+            "document.querySelector('.sdw-inline-renderer__svg').getBoundingClientRect().y",
+            in: webView)
+
+        #expect(scrolledY < initialY - 100)
+        #expect(try await Self.javaScriptBoolean(
+            "document.querySelector('.sdw-inline-renderer[data-renderer-admitted=\\\"true\\\"]') === null",
+            in: webView))
+        #expect(container.mountedAttachmentCount == 0)
+    }
+
     @Test("removing an inactive placeholder preserves the active native attachment")
     @MainActor
     func removingInactivePlaceholderPreservesActiveAttachment() throws {
@@ -364,6 +418,10 @@ struct RendererAttachmentCoordinatorTests {
 
     @MainActor private static func javaScriptBoolean(_ source: String, in webView: WKWebView) async throws -> Bool {
         try await runJavaScript(source, in: webView) { $0 as? Bool ?? false }
+    }
+
+    @MainActor private static func javaScriptDouble(_ source: String, in webView: WKWebView) async throws -> Double {
+        try await runJavaScript(source, in: webView) { ($0 as? NSNumber)?.doubleValue ?? .nan }
     }
 
     @MainActor private static func runJavaScript<T: Sendable>(

@@ -138,7 +138,7 @@ struct DiagramEmbedTests {
     @Test func canonicalAliasedExcalidrawSourceRendersInlineWithViewerGeometry() throws {
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let model = WikiStoreModel(store: store)
-        let bytes = Data(#"{"type":"excalidraw","version":2,"elements":[]}"#.utf8)
+        let bytes = Data(##"{"type":"excalidraw","version":2,"elements":[{"id":"box","type":"rectangle","x":40,"y":80,"width":180,"height":90,"angle":0,"strokeColor":"#1e3a8a","backgroundColor":"#dbeafe","strokeWidth":2,"opacity":100,"roundness":{"type":3},"isDeleted":false},{"id":"label","type":"text","x":88,"y":110,"width":84,"height":30,"angle":0,"strokeColor":"#1e1e1e","backgroundColor":"transparent","strokeWidth":1,"opacity":100,"roundness":null,"isDeleted":false,"text":"Input <trusted>","fontSize":24},{"id":"flow","type":"arrow","x":220,"y":125,"width":80,"height":0,"angle":0,"strokeColor":"#475569","backgroundColor":"transparent","strokeWidth":2,"opacity":100,"roundness":{"type":2},"isDeleted":false,"points":[[0,0],[80,0]],"endArrowhead":"triangle"}],"appState":{"viewBackgroundColor":"#ffffff"}}"##.utf8)
         let source = try store.addSource(
             filename: "architecture.json",
             data: bytes,
@@ -196,17 +196,17 @@ struct DiagramEmbedTests {
             options: options)
         let html = WikiReaderView.documentHTML(body, mermaidLibrary: nil)
 
-        #expect(body.contains("class=\"sdw-inline-renderer\""))
+        #expect(body.contains("class=\"sdw-inline-renderer sdw-inline-renderer--dom\""))
+        #expect(body.contains("class=\"sdw-inline-renderer__svg\""))
         #expect(body.contains("data-renderer-role=\"inlineContent\""))
-        #expect(body.contains("data-renderer-admitted=\"true\""))
-        #expect(body.contains("Excalidraw architecture"))
-        let placeholder = try RendererAttachmentPlaceholderID(
-            validating: "sdw-inline-renderer-\(pinnedSource.digest.hex.prefix(16))-0")
-        let activation = try #require(admission.attachmentContext(for: placeholder))
-        #expect(activation.embeddingRole == .inlineContent)
-        #expect(activation.identity == .source(pinnedSource))
+        #expect(body.contains("viewBox=\"16 56 308 138\""))
+        #expect(body.contains("Input &lt;trusted&gt;"))
+        #expect(body.contains("Open interactive renderer"))
+        #expect(!body.contains("data-renderer-admitted=\"true\""))
+        #expect(!body.contains("id=\"sdw-inline-renderer-"))
         #expect(!body.contains("sdw-renderer-card__row"))
         #expect(!body.contains("sdw-renderer-card__disclosure"))
+        #expect(html.contains(".sdw-inline-renderer__svg"))
         #expect(html.contains("min-height: 480px"))
     }
 
