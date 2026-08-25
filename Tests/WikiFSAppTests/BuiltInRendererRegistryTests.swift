@@ -247,6 +247,22 @@ import WikiFSTypes
             currentMarkdown: "{\"nodes\":[],\"edges\":[]}"))
     }
 
+    @Test("Excalidraw sources use the readable source presentation")
+    func plannerUsesReadablePresentationForExcalidrawSources() {
+        let content = #"{"type":"excalidraw","version":2,"elements":[]}"#
+        let source = fixtureSource(
+            filename: "diagram.excalidraw",
+            ext: "excalidraw",
+            mimeType: MimeType.json,
+            byteSize: content.utf8.count)
+
+        #expect(SourceRendererPresentationPlanner.standaloneDiagramSource(source))
+        #expect(SourceRendererPresentationPlanner.usesMarkdownSourcePresentation(
+            for: source,
+            currentMarkdown: nil))
+        #expect(MermaidSourceDetector.codeBlockMarkdown(from: content) == "````\n\(content)\n````")
+    }
+
     @Test("JSON Canvas factory returns nil for unavailable and malformed input so the host keeps Source")
     @MainActor
     func jsonCanvasFactoryFailsClosedToHostFallback() throws {

@@ -132,8 +132,8 @@ struct SourceRendererPresentationPlanner: Sendable {
     }
 
     /// Whether Source should use the Markdown/reader path instead of the raw
-    /// binary fallback. Standalone Mermaid sources retain this path even for
-    /// legacy rows whose MIME type is NULL (#620).
+    /// binary fallback. Standalone diagram sources retain this path even when
+    /// their MIME type is not text-presentable or is NULL.
     nonisolated static func usesMarkdownSourcePresentation(
         for source: SourceSummary,
         currentMarkdown: String?
@@ -175,6 +175,7 @@ struct SourceRendererPresentationPlanner: Sendable {
             || source.ext.lowercased() == MermaidSourceDetector.mermaidExtension
             || source.ext.lowercased() == "mermaid"
             || source.ext.lowercased() == "canvas"
+            || source.ext.lowercased() == "excalidraw"
     }
 
     private enum MediaMIMECandidate: Sendable, Equatable {
