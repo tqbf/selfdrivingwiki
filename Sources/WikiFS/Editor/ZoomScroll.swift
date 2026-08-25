@@ -19,9 +19,30 @@ extension View {
     func zoomScroll(_ scale: Binding<Double>) -> some View {
         modifier(ZoomScrollModifier(scale: scale))
     }
+
+    /// Consumes unmodified scroll-wheel input while the pointer is over this
+    /// subtree and reports bounded zoom steps to a renderer-owned viewport.
+    func diagramScrollZoom(_ onSteps: @escaping (Int) -> Void) -> some View {
+        modifier(DiagramScrollZoomModifier(onSteps: onSteps))
+    }
 }
 
 // MARK: - Private implementation
+
+private struct DiagramScrollZoomModifier: ViewModifier {
+    let onSteps: (Int) -> Void
+    @StateObject private var monitor = ZoomScrollMonitor(requiredModifiers: [])
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { monitor.isHovering = $0 }
+            .onAppear {
+                monitor.onSteps = onSteps
+                monitor.start()
+            }
+            .onDisappear { monitor.stop() }
+    }
+}
 
 private struct ZoomScrollModifier: ViewModifier {
     @Binding var scale: Double
@@ -59,6 +80,11 @@ private struct ZoomScrollModifier: ViewModifier {
 private final class ZoomScrollMonitor: ObservableObject {
     /// Set by the modifier from `.onHover`; gates which subtree handles a scroll.
     var isHovering = false
+    private let requiredModifiers: NSEvent.ModifierFlags
+
+    init(requiredModifiers: NSEvent.ModifierFlags = .command) {
+        self.requiredModifiers = requiredModifiers
+    }
     /// Invoked with a signed step count when the accumulated delta crosses the
     /// threshold. Set by the modifier in `.onAppear`.
     var onSteps: ((Int) -> Void)?
@@ -84,10 +110,14 @@ private final class ZoomScrollMonitor: ObservableObject {
         accumulated = 0
     }
 
-    /// Returns `nil` to swallow a handled `⌘`+scroll (so the underlying scroll
+    /// Returns `nil` to swallow a handled zoom scroll (so the underlying scroll
     /// view does not also scroll), or the event unchanged to let it pass.
     private func handle(_ event: NSEvent) -> NSEvent? {
-        guard isHovering, event.modifierFlags.contains(.command) else { return event }
+        let activeModifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let modifiersMatch = requiredModifiers.isEmpty
+            ? activeModifiers.isEmpty
+            : activeModifiers.isSuperset(of: requiredModifiers)
+        guard isHovering, modifiersMatch else { return event }
         accumulated += event.scrollingDeltaY
         let (steps, remainder) = ZoomScale.scrollSteps(accumulated: accumulated)
         accumulated = remainder

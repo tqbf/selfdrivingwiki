@@ -94,3 +94,28 @@ Unsupported disclosure requests stay collapsed. They do not open a separate rend
 The automated hosted suites validate AppKit hit testing, keyboard focus, Escape, keyed geometry, zoom reprojection, and renderer teardown. The signed app build passed.
 
 This environment did not perform a human visual check of light and dark appearance or pointer gestures in the signed app. The pull request must keep that limitation visible for operator approval.
+
+## 2026-08-24 diagram scroll zoom update
+
+SVG, JSON Canvas, and Excalidraw diagrams now accept unmodified wheel input while the pointer is over the diagram. The same renderer view serves expanded rows and separate windows.
+
+Mermaid keeps its expanded SVG point below the pointer. Its separate window uses the shared bounded wheel-step monitor.
+
+JSON Canvas adds pointer-anchored viewport math. The SwiftUI surface uses the viewport center because the shared hover monitor does not provide pointer coordinates. Existing drag and magnification gestures remain unchanged.
+
+Excalidraw keeps the diagram point below the pointer. The package manifest contains the new reviewed `viewer.js` digest.
+
+The implementation preserves reader page zoom as a separate presentation scale. Modified wheel events pass through to existing app and system commands.
+
+### Verification
+
+- `make test` passed with 3,653 tests in 374 suites.
+- `make build` passed and produced a signed app.
+- Swift language-server diagnostics reported no issues in the four changed Swift implementation files.
+- `node --check RendererPackages/Excalidraw/viewer.js` passed.
+- The Excalidraw manifest digest matches the changed `viewer.js` asset.
+- `git diff --check` passed.
+- Focused `swift test --filter` commands compiled the changes but matched zero tests. They do not count as test evidence.
+- An independent review reported a Mermaid wheel-owner conflict. The finding does not apply because inline and separate-window Mermaid use different HTML documents. The inline document installs only the JavaScript handler. The separate window installs only the Swift monitor.
+- The review found no other package-integrity or JavaScript syntax issue.
+- A human pointer test in the signed app remains pending. Automated tests cover viewport math and source contracts, but they do not dispatch wheel events into all hosted renderer windows.

@@ -55,7 +55,15 @@ struct MermaidRendererView: View {
             theme: MermaidRendererTheme(colorScheme: colorScheme),
             zoom: readerZoom)
             .zoomShortcuts($readerZoom)
-            .zoomScroll($readerZoom)
+            .diagramScrollZoom { steps in
+                var next = readerZoom
+                if steps > 0 {
+                    for _ in 0..<steps { next = ZoomScale.zoomedIn(next) }
+                } else {
+                    for _ in 0..<(-steps) { next = ZoomScale.zoomedOut(next) }
+                }
+                readerZoom = next
+            }
     }
 }
 

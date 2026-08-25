@@ -413,6 +413,38 @@ struct WikiReaderView: View {
           mermaid.initialize({ startOnLoad:false, securityLevel:'strict', theme: dark ? 'dark' : 'default' });
           window.__sdwMermaidInitialized = true;
         }
+        window.__sdwInstallMermaidScrollZoom = function(diagram) {
+          var svg = diagram && diagram.querySelector('svg');
+          if (!svg || svg.getAttribute('data-scroll-zoom-installed') === 'true') return;
+          svg.setAttribute('data-scroll-zoom-installed', 'true');
+          var viewport = svg.querySelector('g');
+          if (!viewport) return;
+          var view = { scale: 1, x: 0, y: 0 };
+          var minimumScale = 0.5;
+          var maximumScale = 3;
+          var zoomFactor = 1.1;
+          function applyView() {
+            viewport.style.transformOrigin = '0 0';
+            viewport.style.transform = 'translate(' + view.x + 'px,' + view.y + 'px) scale(' + view.scale + ')';
+          }
+          svg.addEventListener('wheel', function(event) {
+            if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+            event.preventDefault();
+            var bounds = svg.getBoundingClientRect();
+            var pointerX = event.clientX - bounds.left;
+            var pointerY = event.clientY - bounds.top;
+            var previousScale = view.scale;
+            var nextScale = event.deltaY < 0 ? previousScale * zoomFactor : previousScale / zoomFactor;
+            view.scale = Math.min(maximumScale, Math.max(minimumScale, nextScale));
+            if (view.scale === previousScale) return;
+            var documentX = (pointerX - view.x) / previousScale;
+            var documentY = (pointerY - view.y) / previousScale;
+            view.x = pointerX - documentX * view.scale;
+            view.y = pointerY - documentY * view.scale;
+            applyView();
+            if (window.__sdwRendererAttachmentReport) window.__sdwRendererAttachmentReport();
+          }, { passive: false });
+        };
         window.__sdwRenderMermaidRow = function(row) {
           if (!row || row.getAttribute('data-renderer-kind') !== 'mermaid') return;
           var expansion = row.querySelector('.sdw-mermaid-row__expansion');
@@ -426,6 +458,7 @@ struct WikiReaderView: View {
               diagram.removeAttribute('data-mermaid-rendering');
               diagram.setAttribute('data-mermaid-rendered', 'true');
               code.parentElement.hidden = true;
+              window.__sdwInstallMermaidScrollZoom(diagram);
               if (window.__sdwRendererAttachmentReport) window.__sdwRendererAttachmentReport();
             }).catch(function(e){ diagram.removeAttribute('data-mermaid-rendering'); diagram.textContent = ''; code.parentElement.hidden = false; console.error('mermaid row render failed', e); });
           } catch(e) { diagram.removeAttribute('data-mermaid-rendering'); diagram.textContent = ''; code.parentElement.hidden = false; console.error('mermaid row render failed', e); }

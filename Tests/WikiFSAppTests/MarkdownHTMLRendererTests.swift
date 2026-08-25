@@ -332,6 +332,21 @@ struct MarkdownHTMLRendererTests {
         #expect(html.contains("A--&gt;B"))   // escape(): > → &gt;
     }
 
+    @Test("inline Mermaid SVG installs bounded pointer-anchored scroll zoom")
+    func mermaidBootstrapInstallsScrollZoom() {
+        let source = WikiReaderView.mermaidBootstrapJS
+
+        #expect(source.contains("__sdwInstallMermaidScrollZoom"))
+        #expect(source.contains("addEventListener('wheel'"))
+        #expect(source.contains("{ passive: false }"))
+        #expect(source.contains("event.ctrlKey || event.metaKey || event.altKey || event.shiftKey"))
+        #expect(source.contains("var minimumScale = 0.5"))
+        #expect(source.contains("var maximumScale = 3"))
+        #expect(source.contains("var pointerX = event.clientX - bounds.left"))
+        #expect(source.contains("view.x = pointerX - documentX * view.scale"))
+        #expect(source.contains("window.__sdwInstallMermaidScrollZoom(diagram)"))
+    }
+
     @Test("a Mermaid fence title remains presentation metadata")
     func titledMermaidFenceKeepsTitleOutOfClassAndSource() {
         let source = "graph TD\nA-->B\n"

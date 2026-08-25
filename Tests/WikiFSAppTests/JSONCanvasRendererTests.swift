@@ -392,6 +392,25 @@ struct JSONCanvasRendererTests {
         #expect(viewport.scale == 2)
     }
 
+    @Test("viewport wheel zoom keeps the anchored document point fixed")
+    func viewportZoomPreservesAnchor() {
+        var viewport = JSONCanvasViewportState(
+            scale: 1.25,
+            translation: .init(x: 40, y: -25))
+        let anchor = JSONCanvasPoint(x: 320, y: 180)
+        let documentPoint = viewport.documentPoint(screenX: anchor.x, screenY: anchor.y)
+
+        viewport.zoom(by: 1.1, anchoredAt: anchor)
+
+        let projectedX = documentPoint.x * viewport.scale + viewport.translation.x
+        let projectedY = documentPoint.y * viewport.scale + viewport.translation.y
+        #expect(abs(projectedX - anchor.x) < 0.000_001)
+        #expect(abs(projectedY - anchor.y) < 0.000_001)
+
+        viewport.zoom(by: .infinity, anchoredAt: anchor)
+        #expect(viewport.scale == 1.375)
+    }
+
     @Test("viewport fits the complete canvas inside the available surface")
     func viewportFitsDocumentBounds() throws {
         let document = try JSONCanvasDocument.decode(Self.fileSubpathAndExternalLinkCanvas)
@@ -446,6 +465,8 @@ struct JSONCanvasRendererTests {
         #expect(source.contains("List(document.outline)"))
         #expect(source.contains("Divider()"))
         #expect(source.contains("lineWidth: viewport.selectedNodeID == node.id ? 2 : 1"))
+        #expect(source.contains(".diagramScrollZoom { steps in"))
+        #expect(source.contains("viewport.zoom(by: factor, anchoredAt: point)"))
         #expect(source.contains("withAnimation") == false)
         #expect(source.contains(".animation(") == false)
         #expect(source.contains(".transition(") == false)

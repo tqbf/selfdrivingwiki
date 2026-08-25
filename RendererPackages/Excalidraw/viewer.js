@@ -131,9 +131,19 @@
     svg.addEventListener("pointerup", () => { drag = null; });
     svg.addEventListener("pointercancel", () => { drag = null; });
     svg.addEventListener("wheel", (event) => {
+      if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
       event.preventDefault();
-      const next = event.deltaY < 0 ? view.scale * zoomFactor : view.scale / zoomFactor;
+      const bounds = svg.getBoundingClientRect();
+      const pointerX = event.clientX - bounds.left;
+      const pointerY = event.clientY - bounds.top;
+      const previousScale = view.scale;
+      const next = event.deltaY < 0 ? previousScale * zoomFactor : previousScale / zoomFactor;
       setScale(next);
+      if (view.scale === previousScale) return;
+      const documentX = (pointerX - view.x) / previousScale;
+      const documentY = (pointerY - view.y) / previousScale;
+      view.x = pointerX - documentX * view.scale;
+      view.y = pointerY - documentY * view.scale;
       applyView();
     }, { passive: false });
     viewer.addEventListener("keydown", (event) => {

@@ -36,6 +36,20 @@ struct JSONCanvasViewportState: Sendable, Equatable {
         setScale(scale * factor)
     }
 
+    mutating func zoom(by factor: Double, anchoredAt screenPoint: JSONCanvasPoint) {
+        guard factor.isFinite,
+              screenPoint.x.isFinite,
+              screenPoint.y.isFinite
+        else { return }
+        let documentPoint = documentPoint(screenX: screenPoint.x, screenY: screenPoint.y)
+        let previousScale = scale
+        setScale(scale * factor)
+        guard scale != previousScale else { return }
+        setTranslation(.init(
+            x: screenPoint.x - documentPoint.x * scale,
+            y: screenPoint.y - documentPoint.y * scale))
+    }
+
     mutating func setScale(_ scale: Double) {
         self.scale = Self.clampedScale(scale)
     }
