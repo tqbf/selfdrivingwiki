@@ -30,7 +30,12 @@ func run() async -> Int32 {
         return 2
     }
 
-    // `version` doesn't need a wiki — print and exit before wiki resolution.
+    // Help and version don't need a wiki — print and exit before wiki resolution.
+    if case .help = invocation.command {
+        print(ArgumentParser.usageText)
+        return 0
+    }
+
     if case .version(let json) = invocation.command {
         // The App Group id and WHERE it came from are reported here on purpose.
         // A wrong container is otherwise invisible: the CLI just says "no wiki
@@ -196,7 +201,7 @@ func execute(
     case .workspace(let action):
         let r = try WorkspaceCommand.run(action, in: store)
         return SourceCommand.Result(payload: .text(r.output), didCommit: r.didCommit)
-    case .version, .dumpConfig:
+    case .help, .version, .dumpConfig:
         // Handled before wiki resolution in `run()` — unreachable here.
         return SourceCommand.Result(payload: .text(""), didCommit: false)
     case .wikiList, .wikiCreate, .wikiDelete, .wikiRename:

@@ -18,6 +18,12 @@ struct WikiCtlCommandTests {
 
     // MARK: - Argument parsing
 
+    @Test func parsesTopLevelHelpWithoutWikiSelector() throws {
+        let invocation = try ArgumentParser.parse(["--help"], env: noEnv)
+        #expect(invocation.wikiSelector.isEmpty)
+        #expect(invocation.command == .help)
+    }
+
     @Test func parsesWikiFromFlag() throws {
         let invocation = try ArgumentParser.parse(["--wiki", "WIKI1", "page", "list"], env: noEnv)
         #expect(invocation.wikiSelector == "WIKI1")

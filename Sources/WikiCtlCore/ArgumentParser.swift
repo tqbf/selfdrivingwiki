@@ -55,6 +55,8 @@ public enum ArgumentParser {
         case bookmark(BookmarkCommand.Action)
         /// Workspace commands (W1, PR #312): create, status, abandon, merge.
         case workspace(WorkspaceCommand.Action)
+        /// Print command usage. Does not require a wiki selection.
+        case help
         /// Print build version info. Does not require a wiki selection.
         case version(json: Bool)
         /// Print the resolved Cordis profile. Does not require a wiki selection.
@@ -192,10 +194,12 @@ public enum ArgumentParser {
     ) throws -> Invocation {
         var args = arguments
 
-        // `version` / `--version` / `-v` — print build version info and exit.
-        // Intercepted BEFORE the wiki selector requirement so it works without
-        // --wiki or WIKI_DB.
+        // Help and version commands are intercepted BEFORE the wiki selector
+        // requirement so they work without --wiki or WIKI_DB.
         if let first = args.first {
+            if first == "--help" {
+                return Invocation(wikiSelector: "", command: .help)
+            }
             if first == "version" {
                 let options = try Options(Array(args.dropFirst()), booleanFlags: ["--json"])
                 return Invocation(wikiSelector: "", command: .version(json: options.flag("--json")))
