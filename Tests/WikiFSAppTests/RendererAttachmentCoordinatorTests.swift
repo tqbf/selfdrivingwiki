@@ -36,6 +36,21 @@ struct RendererAttachmentCoordinatorTests {
         #expect(coordinator.attachmentState(for: placeholder) == .card)
     }
 
+    @Test("reserved height follows the syntax-owned embedding role")
+    func reservedHeightFollowsEmbeddingRole() throws {
+        let descriptor = BuiltInRendererDescriptors.descriptor(for: .jsonCanvas)
+
+        #expect(RendererAttachmentHostPolicy.preferredReservedHeight(
+            for: descriptor.reference,
+            role: .inlineContent) == RendererAttachmentHostPolicy.dynamicInlineRendererReservedHeight)
+        #expect(RendererAttachmentHostPolicy.preferredReservedHeight(
+            for: descriptor.reference,
+            role: .disclosureRow) == RendererAttachmentHostPolicy.minimumReservedHeight)
+        #expect(RendererAttachmentHostPolicy.preferredReservedHeight(
+            for: nil,
+            role: .inlineContent) == RendererAttachmentHostPolicy.minimumReservedHeight)
+    }
+
     @Test("inline and disclosure budgets are independent")
     @MainActor
     func inlineAndDisclosureBudgetsAreIndependent() throws {
@@ -99,10 +114,18 @@ struct RendererAttachmentCoordinatorTests {
         #expect(coordinator.role(for: placeholder) == .inlineContent)
     }
 
-    @Test("JSON Canvas reserves an expanded inline surface")
-    func jsonCanvasReservesExpandedInlineSurface() {
+    @Test("dynamic inline renderers reserve a full viewer surface")
+    func dynamicInlineRenderersReserveViewerSurface() throws {
         #expect(RendererAttachmentHostPolicy.preferredReservedHeight(
-            for: BuiltInRendererReference.reference(for: .jsonCanvas)) == 480)
+            for: BuiltInRendererReference.reference(for: .jsonCanvas),
+            role: .inlineContent) == 480)
+        let installed = RendererReference(
+            packageID: try RendererPackageID(validating: "org.example.viewer"),
+            version: try RendererPackageVersion(validating: "1.0.0"),
+            registrationID: try RendererRegistrationID(validating: "viewer"))
+        #expect(RendererAttachmentHostPolicy.preferredReservedHeight(
+            for: installed,
+            role: .inlineContent) == 480)
     }
 
     @Test("Escape exits the hosted native attachment and restores reader focus")
@@ -228,6 +251,7 @@ struct RendererAttachmentCoordinatorTests {
         var e=document.createElement('span');
         e.id='inline-hosted-canvas';
         e.className='sdw-inline-renderer';
+        e.dataset.rendererAdmitted='true';
         e.style.cssText='display:block;width:240px;height:160px';
         e.innerHTML='<span class="sdw-inline-renderer__fallback">fallback</span>';
         document.body.appendChild(e);

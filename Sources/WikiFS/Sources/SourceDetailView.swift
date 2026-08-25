@@ -1414,7 +1414,7 @@ struct SourceDetailView: View {
                                 installedRendererFactory: installedRendererFactory,
                                 installedRendererFactoryInputs: installedRendererFactoryInputs,
                                 onJSONCanvasHostAction: JSONCanvasHostActionRouter.handler(for: store)),
-                            inlineImageRendererDescriptors: installedRendererFactoryInputs.enabledDescriptors,
+                            inlineRendererDescriptors: installedRendererFactoryInputs.enabledDescriptors,
                             findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
                 .zoomShortcuts($readerZoom)
                 .zoomScroll($readerZoom)
@@ -1435,7 +1435,7 @@ struct SourceDetailView: View {
                                 installedRendererFactory: installedRendererFactory,
                                 installedRendererFactoryInputs: installedRendererFactoryInputs,
                                 onJSONCanvasHostAction: JSONCanvasHostActionRouter.handler(for: store)),
-                            inlineImageRendererDescriptors: installedRendererFactoryInputs.enabledDescriptors,
+                            inlineRendererDescriptors: installedRendererFactoryInputs.enabledDescriptors,
                             findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
                 .zoomShortcuts($readerZoom)
                 .zoomScroll($readerZoom)

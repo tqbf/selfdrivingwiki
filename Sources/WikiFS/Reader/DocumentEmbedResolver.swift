@@ -248,10 +248,19 @@ struct DocumentEmbedResolver: Sendable {
         }
         if let rendererPlan = inputs.sourceRendererCandidates[source.sourceID],
            rendererPlan.embeddingRole == .inlineContent {
+            let occurrencePlan = RendererEmbedPlan(
+                placeholderID: "\(rendererPlan.placeholderID)-\(embed.sourceRange.lowerBound)",
+                embeddingRole: rendererPlan.embeddingRole,
+                rendererReference: rendererPlan.rendererReference,
+                input: rendererPlan.input,
+                semanticContent: rendererPlan.semanticContent,
+                displayTitle: title,
+                fallbackReason: rendererPlan.fallbackReason,
+                activationMetadata: rendererPlan.activationMetadata)
             return .renderer(
                 syntax: syntax,
                 role: .inlineContent,
-                plan: rendererPlan,
+                plan: occurrencePlan,
                 fallback: literalFallback)
         }
         if let mediaKind = bytefulMediaKind(mimeType: source.mimeType) {

@@ -820,14 +820,19 @@ struct MarkdownHTMLRendererTests {
         #expect(html.contains(".sdw-renderer-card__disclosure:focus-visible"))
         #expect(html.contains("outline: 2px solid -webkit-focus-ring-color"))
         #expect(html.contains("@media (prefers-reduced-motion: reduce)"))
+        #expect(html.contains(".sdw-inline-renderer { display: block; position: relative; width: 100%; }"))
+        #expect(html.contains(".sdw-inline-renderer[data-renderer-admitted=\"true\"]"))
+        #expect(html.contains("min-height: 480px"))
     }
 
     @Test("native renderer reservation and geometry use the expansion region below the row")
     func nativeRendererLayoutTargetsExpansionRegion() {
         let script = WikiReaderWebView.rendererAttachmentGeometryJS
 
-        #expect(script.contains("expansion.style.minHeight=height+'px'"))
-        #expect(script.contains("e.style.minHeight=height+'px'") == false)
+        #expect(script.contains(".sdw-inline-renderer[id][data-renderer-admitted=\"true\"]"))
+        #expect(script.contains("card.classList.contains('sdw-inline-renderer')?card:card.querySelector('.sdw-renderer-card__expansion')"))
+        #expect(script.contains("target.style.minHeight=height+'px'"))
+        #expect(script.contains("expansion.style.minHeight=height+'px'") == false)
         #expect(script.contains("e.dataset.rendererExpanded==='true'&&expansion?expansion:e"))
         #expect(script.contains("var r=e.getBoundingClientRect()") == false)
         #expect(script.contains("window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();"))

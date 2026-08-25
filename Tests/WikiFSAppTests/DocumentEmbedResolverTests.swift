@@ -132,6 +132,39 @@ struct DocumentEmbedResolverTests {
         #expect(!resolver.resolveWikiLink(link).isResolved)
     }
 
+    @Test func repeatedInlineSourceRendererEmbedsUseUniquePlaceholders() throws {
+        let markdown = "![[source:image.png|First]] and ![[source:image.png|Second]]"
+        let prepared = ReaderMarkdown.preparedDocument(markdown)
+        let source = sourceResolution(mime: "image/png")
+        let plan = RendererEmbedPlan(
+            placeholderID: "source-plan",
+            embeddingRole: .inlineContent,
+            rendererReference: try reference(),
+            input: nil,
+            semanticContent: "source",
+            activationMetadata: .init(
+                controlLabel: "Open",
+                accessibilityLabel: "Open source",
+                summary: "Source renderer"))
+        let resolver = DocumentEmbedResolver(inputs: .init(
+            sourceByName: ["image.png": source],
+            sourceNamesByID: [sourceID: "image.png"],
+            sourceRendererCandidates: [sourceID: plan]))
+        let projection = resolver.projection(for: prepared)
+        let embeds = prepared.wikiSyntax.compactMap { node -> ResolvedDocumentEmbed? in
+            guard case .embed(let embed) = node else { return nil }
+            return projection.wikiEmbed(at: embed.sourceRange)
+        }
+        let placeholderIDs = embeds.compactMap { embed -> String? in
+            guard case .renderer(_, let role, let plan, _) = embed,
+                  role == .inlineContent else { return nil }
+            return plan.placeholderID
+        }
+
+        #expect(placeholderIDs.count == 2)
+        #expect(Set(placeholderIDs).count == 2)
+    }
+
     @Test func rendererMustKeepInlineRole() throws {
         let embed = try sourceEmbed("![[source:image.png]]")
         let source = sourceResolution(mime: "image/png")

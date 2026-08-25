@@ -4,6 +4,7 @@ import WikiFSTypes
 
 extension WikiRenderContext {
     func documentEmbedResolver(
+        sourceRendererCandidates: [SourceID: RendererEmbedPlan] = [:],
         markdownImageTargets: [String: ResolvedMarkdownImageTarget] = [:]
     ) -> DocumentEmbedResolver {
         var pageIDByName: [String: PageID] = [:]
@@ -44,6 +45,7 @@ extension WikiRenderContext {
             chatIDByName: chatIDByName,
             chatTitlesByID: chatIDToName,
             sourceDerivedChain: sourceDerivedChain,
+            sourceRendererCandidates: sourceRendererCandidates,
             markdownImageTargets: markdownImageTargets))
     }
 }

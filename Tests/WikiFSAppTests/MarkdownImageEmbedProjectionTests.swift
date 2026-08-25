@@ -114,6 +114,160 @@ struct MarkdownImageTargetProjectionTests {
         #expect(!html.contains("data-renderer-admitted=\"true\""))
     }
 
+    @Test("typed source embeds select a role-compatible structurally validated renderer")
+    func typedSourceEmbedsSelectInlineRenderer() throws {
+        let source = try imageSource(bytes: Self.excalidrawBytes)
+        let descriptor = try excalidrawDescriptor(embeddingRoles: [.inlineContent, .disclosureRow])
+        let plans = try DocumentSourceRendererProjection.build(
+            sources: [source.sourceID: source],
+            displayNames: [source.sourceID: "Excalidraw Architecture"],
+            registry: try RendererRegistrySnapshot(
+                builtInDescriptors: [],
+                enabledInstalledDescriptors: [descriptor]),
+            inlineCapableReferences: [descriptor.reference])
+
+        let plan = try #require(plans[source.sourceID])
+        #expect(plan.embeddingRole == .inlineContent)
+        #expect(plan.rendererReference == descriptor.reference)
+        #expect(plan.input == .source(source))
+        #expect(plan.displayTitle == "Excalidraw Architecture")
+        #expect(plan.activationMetadata != nil)
+    }
+
+    @Test("typed source renderer eligibility fails closed")
+    func typedSourceRendererEligibilityFailsClosed() throws {
+        let source = try imageSource(bytes: Self.excalidrawBytes)
+        let inline = try excalidrawDescriptor(embeddingRoles: [.inlineContent])
+        let rowOnly = try excalidrawDescriptor(embeddingRoles: [.disclosureRow])
+        let malformed = try imageSource(bytes: Data(#"{"type":"other","version":2,"elements":[]}"#.utf8))
+
+        let rowDenied = try DocumentSourceRendererProjection.build(
+            sources: [source.sourceID: source],
+            displayNames: [:],
+            registry: try RendererRegistrySnapshot(
+                builtInDescriptors: [],
+                enabledInstalledDescriptors: [rowOnly]),
+            inlineCapableReferences: [rowOnly.reference])
+        let factoryDenied = try DocumentSourceRendererProjection.build(
+            sources: [source.sourceID: source],
+            displayNames: [:],
+            registry: try RendererRegistrySnapshot(
+                builtInDescriptors: [],
+                enabledInstalledDescriptors: [inline]),
+            inlineCapableReferences: [])
+        let artifactDenied = try DocumentSourceRendererProjection.build(
+            sources: [malformed.sourceID: malformed],
+            displayNames: [:],
+            registry: try RendererRegistrySnapshot(
+                builtInDescriptors: [],
+                enabledInstalledDescriptors: [inline]),
+            inlineCapableReferences: [inline.reference])
+
+        #expect(rowDenied.isEmpty)
+        #expect(factoryDenied.isEmpty)
+        #expect(artifactDenied.isEmpty)
+    }
+
+    @Test("source renderer metadata prefilter requires inline MIME support and a factory")
+    func sourceRendererMetadataPrefilterIsFailClosed() throws {
+        let inline = try excalidrawDescriptor(embeddingRoles: [.inlineContent])
+        let rowOnly = try excalidrawDescriptor(embeddingRoles: [.disclosureRow])
+        let incompatible = try excalidrawDescriptor(
+            embeddingRoles: [.inlineContent],
+            minimumProtocolRevision: 2)
+        let jsonMIME = "application/json"
+
+        #expect(DocumentSourceRendererProjection.hasEligibleRenderer(
+            mimeType: jsonMIME,
+            registry: try RendererRegistrySnapshot(
+                builtInDescriptors: [],
+                enabledInstalledDescriptors: [inline]),
+            inlineCapableReferences: [inline.reference]))
+        #expect(!DocumentSourceRendererProjection.hasEligibleRenderer(
+            mimeType: jsonMIME,
+            registry: try RendererRegistrySnapshot(
+                builtInDescriptors: [],
+                enabledInstalledDescriptors: [rowOnly]),
+            inlineCapableReferences: [rowOnly.reference]))
+        #expect(!DocumentSourceRendererProjection.hasEligibleRenderer(
+            mimeType: jsonMIME,
+            registry: try RendererRegistrySnapshot(
+                builtInDescriptors: [],
+                enabledInstalledDescriptors: [inline]),
+            inlineCapableReferences: []))
+        #expect(!DocumentSourceRendererProjection.hasEligibleRenderer(
+            mimeType: "image/png",
+            registry: try RendererRegistrySnapshot(
+                builtInDescriptors: [],
+                enabledInstalledDescriptors: [inline]),
+            inlineCapableReferences: [inline.reference]))
+        #expect(!DocumentSourceRendererProjection.hasEligibleRenderer(
+            mimeType: jsonMIME,
+            registry: try RendererRegistrySnapshot(
+                builtInDescriptors: [],
+                enabledInstalledDescriptors: [incompatible]),
+            inlineCapableReferences: [incompatible.reference]))
+    }
+
+    @Test("source candidate selection excludes media unsupported MIME and page winners")
+    @MainActor
+    func sourceCandidateSelectionAvoidsUnneededContentReads() throws {
+        let eligibleID = SourceID(rawValue: "01HCANDIDATEELIGIBLE00000001")
+        let mermaidID = SourceID(rawValue: "01HCANDIDATEMERMAID00000001")
+        let externalID = SourceID(rawValue: "01HCANDIDATEEXTERNAL0000001")
+        let unsupportedID = SourceID(rawValue: "01HCANDIDATEUNSUPPORTED0001")
+        let collisionID = SourceID(rawValue: "01HCANDIDATECOLLISION000001")
+        let descriptor = try excalidrawDescriptor(embeddingRoles: [.inlineContent])
+        let registry = try RendererRegistrySnapshot(
+            builtInDescriptors: [],
+            enabledInstalledDescriptors: [descriptor])
+        let context = WikiRenderContext(
+            pageTitles: ["collision"],
+            pageIDToName: [:],
+            sourceNames: ["eligible", "mermaid", "external", "unsupported", "collision"],
+            sourceIDToName: [
+                eligibleID: "Eligible",
+                mermaidID: "Mermaid",
+                externalID: "External",
+                unsupportedID: "Unsupported",
+                collisionID: "Collision",
+            ],
+            chatTitles: [],
+            chatIDToName: [:],
+            uniqueLooseKeys: [],
+            embedMap: [
+                "eligible": .init(id: eligibleID, mimeType: "application/json", target: nil),
+                "mermaid": .init(
+                    id: mermaidID,
+                    mimeType: "text/mermaid",
+                    target: .init(kind: .diagram, url: mermaidID.rawValue, content: "flowchart LR")),
+                "external": .init(
+                    id: externalID,
+                    mimeType: "video/youtube",
+                    target: .init(kind: .iframe, url: "https://example.invalid/embed")),
+                "unsupported": .init(id: unsupportedID, mimeType: "image/png", target: nil),
+                "collision": .init(id: collisionID, mimeType: "application/json", target: nil),
+            ],
+            sourceDerivedChain: [:],
+            siblingMaps: [:],
+            blobScheme: "wiki-blob")
+        let markdown = """
+        ![[source:Eligible]]
+        ![[source:Mermaid]]
+        ![[source:External]]
+        ![[source:Unsupported]]
+        ![[Collision]]
+        """
+
+        let candidates = WikiReaderRep.Coordinator.sourceRendererCandidateIDs(
+            markdown: markdown,
+            context: context,
+            registry: registry,
+            inlineCapableReferences: [descriptor.reference])
+
+        #expect(candidates == [eligibleID])
+    }
+
     @Test("missing oversized and untrusted metadata never materialize image bytes")
     @MainActor
     func rejectedMetadataNeverReadsImageBytes() throws {
@@ -160,6 +314,46 @@ struct MarkdownImageTargetProjectionTests {
     }
 
     private static let jsonCanvasBytes = Data(#"{"nodes":[],"edges":[]}"#.utf8)
+    private static let excalidrawBytes = Data(#"{"type":"excalidraw","version":2,"elements":[]}"#.utf8)
+
+    private func excalidrawDescriptor(
+        embeddingRoles: Set<RendererEmbeddingRole>,
+        minimumProtocolRevision: Int = 1
+    ) throws -> RendererDescriptor {
+        let packageID = try RendererPackageID(validating: "org.example.excalidraw")
+        let version = try RendererPackageVersion(validating: "1.0.0")
+        let entryAsset = RendererAsset(
+            path: try RendererRelativePath(validating: "index.html"),
+            digest: try RendererSHA256Digest(hex: String(repeating: "0", count: 64)))
+        return try RendererDescriptor(
+            reference: RendererReference(
+                packageID: packageID,
+                version: version,
+                registrationID: try RendererRegistrationID(validating: "excalidraw")),
+            displayName: "Excalidraw",
+            implementation: .webPackage(RendererWebEntryPoint(
+                path: try RendererRelativePath(validating: "index.html"))),
+            matchers: [
+                .normalizedMIME(try RendererMIMEType(validating: "application/json")),
+                .boundedJSONArtifact(.excalidraw),
+            ],
+            presentations: [.web],
+            supportedEmbeddingRoles: embeddingRoles,
+            hasExplicitEmbeddingRoles: true,
+            approvedAssets: [entryAsset],
+            capabilities: [.inputRead],
+            sizeLimits: try RendererSizeLimits(
+                maximumInputByteCount: 48_000,
+                maximumDecodedByteCount: 48_000),
+            linkPolicy: .none,
+            accessibility: .init(
+                supportsVoiceOver: true,
+                supportsKeyboardNavigation: true),
+            compatibility: try RendererCompatibility(
+                minimumProtocolRevision: minimumProtocolRevision,
+                maximumProtocolRevision: minimumProtocolRevision),
+            priority: 110)
+    }
 
     private func imageSource(
         mimeType: String = "application/json",

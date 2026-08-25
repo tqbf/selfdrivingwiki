@@ -10,8 +10,8 @@ enum RendererAttachmentHostPolicy {
     static let maximumPlaceholderCount = 64
     static let maximumUpdatesPerPlaceholder = 1_024
     static let maximumCoordinateMagnitude = 1_000_000.0
-    static let minimumReservedHeight = 96.0
-    static let maximumReservedHeight = 1_200.0
+    static let minimumReservedHeight: CGFloat = 96.0
+    static let maximumReservedHeight: CGFloat = 1_200.0
     /// Per-document row policy; unrelated to inline content and the process-wide WebKit pool.
     static let maximumExpandedRendererRows = 4
     /// Per-document inline policy; unrelated to disclosure rows and the process-wide WebKit pool.
@@ -20,12 +20,14 @@ enum RendererAttachmentHostPolicy {
     static let inlineOffscreenRetentionDuration = Duration.seconds(2)
     /// The retained visibility window extends this distance above and below the viewport.
     static let inlineVisibilityPreloadMargin = 600
-    static let jsonCanvasReservedHeight = 480.0
+    static let dynamicInlineRendererReservedHeight: CGFloat = 480.0
 
-    static func preferredReservedHeight(for renderer: RendererReference?) -> CGFloat {
-        renderer == BuiltInRendererReference.reference(for: .jsonCanvas)
-            ? jsonCanvasReservedHeight
-            : minimumReservedHeight
+    static func preferredReservedHeight(
+        for renderer: RendererReference?,
+        role: RendererEmbeddingRole
+    ) -> CGFloat {
+        guard renderer != nil, role == .inlineContent else { return minimumReservedHeight }
+        return dynamicInlineRendererReservedHeight
     }
 }
 

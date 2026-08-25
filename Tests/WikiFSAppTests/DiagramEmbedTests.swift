@@ -105,6 +105,111 @@ struct DiagramEmbedTests {
         #expect(info.id == src.id)
     }
 
+    @Test func canonicalAliasedMmdEmbedRendersInlineForCustomMime() throws {
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
+        let model = WikiStoreModel(store: store)
+        let diagram = """
+        flowchart LR
+            Input["Input"] --> Process["Process"]
+            Process --> Output["Output"]
+        """
+        let source = try store.addSource(
+            filename: "architecture.mmd",
+            data: Data(diagram.utf8),
+            mimeType: "application/vnd.chipnuts.karaoke-mmd")
+        try store.renameSource(id: source.id, to: "Mermaid Architecture")
+        model.reloadFromStore()
+        let context = WikiRenderContext.build(from: model)
+        let markdown = "![[source:\(source.id.rawValue)|Mermaid Architecture]]"
+        let prepared = ReaderMarkdown.preparedDocument(markdown)
+        let projection = context.documentEmbedResolver().projection(for: prepared)
+
+        let html = MarkdownHTMLRenderer.render(
+            prepared,
+            projection: projection,
+            options: .disabled)
+
+        #expect(html.contains("class=\"mermaid sdw-inline-mermaid\""))
+        #expect(html.contains("flowchart LR"))
+        #expect(!html.contains("sdw-transclusion"))
+        #expect(!html.contains("sdw-renderer-card"))
+    }
+
+    @Test func canonicalAliasedExcalidrawSourceRendersInlineWithViewerGeometry() throws {
+        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
+        let model = WikiStoreModel(store: store)
+        let bytes = Data(#"{"type":"excalidraw","version":2,"elements":[]}"#.utf8)
+        let source = try store.addSource(
+            filename: "architecture.json",
+            data: bytes,
+            mimeType: "application/json")
+        try store.renameSource(id: source.id, to: "Excalidraw Architecture")
+        model.reloadFromStore()
+        let context = WikiRenderContext.build(from: model)
+        let activeVersion = try store.activeContentVersion(sourceID: source.id)
+        let pinnedVersion = try #require(activeVersion)
+        let projectedSource = try WikiReaderRep.Coordinator.pinnedImageSource(
+            sourceID: source.id,
+            version: pinnedVersion,
+            inputByteCount: { input in try store.rendererInputByteCount(input) },
+            readBytes: { versionID in try store.sourceContent(versionID: versionID) })
+        let pinnedSource = try #require(projectedSource)
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let package = try RendererPackageValidator(
+            packageRoot: tempDatabaseURL().deletingLastPathComponent())
+            .validate(directory: packageRoot.appending(path: "RendererPackages/Excalidraw"))
+        #expect(package.manifest.descriptors.count == 1)
+        let descriptor = try #require(package.manifest.descriptors.first)
+        let markdown = "![[source:\(source.id.rawValue)|Excalidraw architecture]]"
+        let candidates = WikiReaderRep.Coordinator.sourceRendererCandidates(
+            markdown: markdown,
+            context: context,
+            store: store,
+            installedDescriptors: [descriptor])
+        #expect(candidates[source.id]?.input == .source(pinnedSource))
+        let bareCandidates = WikiReaderRep.Coordinator.sourceRendererCandidates(
+            markdown: "![[Excalidraw Architecture]]",
+            context: context,
+            store: store,
+            installedDescriptors: [descriptor])
+        #expect(bareCandidates[source.id]?.input == .source(pinnedSource))
+        let pageID = PageID(rawValue: "01HTESTEXCALIDRAWPAGE000001")
+        let pageVersionID = PageVersionID(rawValue: "01HTESTEXCALIDRAWPV0000001")
+        let identity = MarkdownDocumentIdentity(pageID: pageID, pageVersionID: pageVersionID)
+        let admission = RendererEmbedActivationAdmission(
+            pageID: pageID,
+            pageVersionID: pageVersionID,
+            capability: .init(rawValue: "excalidraw-test-capability"),
+            generation: 1)
+        let options = MarkdownRenderOptions(
+            codeHighlighting: .disabled,
+            rendererEmbedProjection: nil,
+            documentIdentity: identity,
+            rendererActivationAdmission: admission)
+        let prepared = ReaderMarkdown.preparedDocument(markdown, documentIdentity: identity)
+        let projection = context.documentEmbedResolver(
+            sourceRendererCandidates: candidates).projection(for: prepared)
+        let body = MarkdownHTMLRenderer.render(
+            prepared,
+            projection: projection,
+            options: options)
+        let html = WikiReaderView.documentHTML(body, mermaidLibrary: nil)
+
+        #expect(body.contains("class=\"sdw-inline-renderer\""))
+        #expect(body.contains("data-renderer-role=\"inlineContent\""))
+        #expect(body.contains("data-renderer-admitted=\"true\""))
+        #expect(body.contains("Excalidraw architecture"))
+        let placeholder = try RendererAttachmentPlaceholderID(
+            validating: "sdw-inline-renderer-\(pinnedSource.digest.hex.prefix(16))-0")
+        let activation = try #require(admission.attachmentContext(for: placeholder))
+        #expect(activation.embeddingRole == .inlineContent)
+        #expect(activation.identity == .source(pinnedSource))
+        #expect(!body.contains("sdw-renderer-card__row"))
+        #expect(!body.contains("sdw-renderer-card__disclosure"))
+        #expect(html.contains("min-height: 480px"))
+    }
+
     @Test func renderContextDoesNotResolveNonMermaidTextSource() throws {
         // A generic `.md` source with no fenced ```mermaid block does NOT
         // produce a `.diagram` target — the cheap detector (mime + filename
