@@ -100,7 +100,8 @@ public enum ArgumentParser {
                                               print a page body; --json adds head_version_id;
                                               --workspace W reads the staged version
       page add --title X [--id Y] --body-file <path|-> [--expect-head <ver>] [--workspace W] [--author <who>] [--source <source-id[:role]> ...]
-                                              create-or-update a page;
+                                              create-or-update a page; use --body-file -
+                                              with a pipe or heredoc;
                                               --expect-head enables CAS (exit 3 on conflict);
                                               --workspace W writes into workspace W;
                                               --author <who> stamps created_by/last_edited_by (defaults to WIKI_AUTHOR env)
@@ -121,8 +122,10 @@ public enum ArgumentParser {
                                               rewrite the curated index.md body;
                                               --workspace W stages into workspace W
       source list [--json]                    list sources (TSV, or JSON lines)
-      source add --url URL [--allow-duplicate]
-                                              fetch and add a URL source
+      source add (--url URL [--allow-duplicate] | --body-file <path|-> [--name NAME])
+                                              fetch a URL or add raw file/stdin bytes;
+                                              use --body-file - with a pipe or heredoc;
+                                              --name is required for stdin
       source cat  (--id X | --name N) [--markdown]
                                               write raw source bytes (or extracted markdown
                                               with --markdown) to stdout
@@ -474,10 +477,25 @@ public enum ArgumentParser {
 
         switch sub {
         case "add":
-            guard let url = options.value("--url") else {
-                throw Failure.usage("source add: --url is required")
+            let url = options.value("--url")
+            let bodyFile = options.value("--body-file")
+            guard (url == nil) != (bodyFile == nil) else {
+                throw Failure.usage("source add: pass exactly one of --url URL or --body-file <path|->")
             }
-            return .source(.addURL(url, allowDuplicateURL: options.flag("--allow-duplicate")))
+            if let url {
+                return .source(.addURL(url, allowDuplicateURL: options.flag("--allow-duplicate")))
+            }
+            guard !options.flag("--allow-duplicate") else {
+                throw Failure.usage("source add: --allow-duplicate applies only to --url")
+            }
+            guard let bodyFile else {
+                throw Failure.usage("source add: --body-file is required")
+            }
+            let name = options.value("--name")
+            if bodyFile == "-", name == nil {
+                throw Failure.usage("source add: --name is required when --body-file is -")
+            }
+            return .source(.addFile(path: bodyFile, name: name))
         case "list":
             return .source(.list(json: options.flag("--json")))
 

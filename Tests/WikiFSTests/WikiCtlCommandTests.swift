@@ -24,6 +24,12 @@ struct WikiCtlCommandTests {
         #expect(invocation.command == .help)
     }
 
+    @Test func usageDocumentsPipeAndHeredocBodyFiles() {
+        #expect(ArgumentParser.usageText.contains("page add --title X"))
+        #expect(ArgumentParser.usageText.contains("source add (--url URL"))
+        #expect(ArgumentParser.usageText.contains("with a pipe or heredoc"))
+    }
+
     @Test func parsesWikiFromFlag() throws {
         let invocation = try ArgumentParser.parse(["--wiki", "WIKI1", "page", "list"], env: noEnv)
         #expect(invocation.wikiSelector == "WIKI1")
@@ -405,6 +411,37 @@ struct WikiCtlCommandTests {
 
     // MARK: - File command parsing
 
+    @Test func parsesSourceAddFromURL() throws {
+        let invocation = try ArgumentParser.parse(
+            ["--wiki", "W", "source", "add", "--url", "https://example.com"], env: noEnv)
+        #expect(invocation.command == .source(.addURL("https://example.com", allowDuplicateURL: false)))
+    }
+
+    @Test func parsesSourceAddFromBodyFileAndStdin() throws {
+        let file = try ArgumentParser.parse(
+            ["--wiki", "W", "source", "add", "--body-file", "notes.md"], env: noEnv)
+        #expect(file.command == .source(.addFile(path: "notes.md", name: nil)))
+
+        let stdin = try ArgumentParser.parse(
+            ["--wiki", "W", "source", "add", "--name", "notes.md", "--body-file", "-"], env: noEnv)
+        #expect(stdin.command == .source(.addFile(path: "-", name: "notes.md")))
+    }
+
+    @Test func sourceAddRequiresOneInputModeAndNamesStdin() {
+        #expect(throws: ArgumentParser.Failure.self) {
+            try ArgumentParser.parse(["--wiki", "W", "source", "add"], env: noEnv)
+        }
+        #expect(throws: ArgumentParser.Failure.self) {
+            try ArgumentParser.parse(
+                ["--wiki", "W", "source", "add", "--url", "https://example.com", "--body-file", "notes.md"],
+                env: noEnv)
+        }
+        #expect(throws: ArgumentParser.Failure.self) {
+            try ArgumentParser.parse(
+                ["--wiki", "W", "source", "add", "--body-file", "-"], env: noEnv)
+        }
+    }
+
     @Test func parsesFileList() throws {
         let invocation = try ArgumentParser.parse(
             ["--wiki", "W", "source", "list"], env: noEnv)
@@ -467,6 +504,40 @@ struct WikiCtlCommandTests {
     }
 
     // MARK: - File command dispatch (against a temp DB)
+
+    @Test func sourceAddBodyFilePreservesBytesAndDerivesName() throws {
+        let store = try tempStore()
+        let input = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikictl-source-\(UUID().uuidString).bin")
+        let bytes = Data([0x00, 0xFF, 0x42, 0x0A])
+        try bytes.write(to: input)
+        defer {
+            do {
+                try FileManager.default.removeItem(at: input)
+            } catch {
+                Issue.record("failed to remove test input: \(error)")
+            }
+        }
+
+        let result = try SourceCommand.run(
+            .addFile(path: input.path, name: nil), in: store, cwd: "/tmp")
+        #expect(result.didCommit)
+        let source = try #require(try store.listSources().first)
+        #expect(source.filename == input.lastPathComponent)
+        #expect(try store.sourceContent(id: source.id) == bytes)
+    }
+
+    @Test func sourceAddStdinUsesSuppliedNameAndPreservesBytes() throws {
+        let store = try tempStore()
+        let bytes = Data("# From stdin\n\nPipe and heredoc body.\n".utf8)
+
+        let result = try SourceCommand.addFile(
+            path: "-", name: "piped-notes.md", data: bytes, in: store)
+        #expect(result.didCommit)
+        let source = try #require(try store.listSources().first)
+        #expect(source.filename == "piped-notes.md")
+        #expect(try store.sourceContent(id: source.id) == bytes)
+    }
 
     @Test func fileListTSV() throws {
         let store = try tempStore()

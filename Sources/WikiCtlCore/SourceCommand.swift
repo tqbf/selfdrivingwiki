@@ -39,6 +39,8 @@ public enum SourceCommand {
 
     public enum Action: Equatable {
         case addURL(String, allowDuplicateURL: Bool)
+        /// Add raw source bytes from a body-file path or `-` for stdin.
+        case addFile(path: String, name: String?)
         case list(json: Bool)
         case cat(Selector, markdown: Bool)
         case export(Selector, out: String?, markdown: Bool)
@@ -82,7 +84,9 @@ public enum SourceCommand {
     ) throws -> Result {
         switch action {
         case .addURL:
-            throw Failure.message("source add requires async execution")
+            throw Failure.message("source add --url requires async execution")
+        case .addFile(let path, let name):
+            return try addFile(path: path, name: name, in: store)
         case .list(let json):
             return try list(in: store, json: json)
         case .cat(let selector, let markdown):
@@ -161,6 +165,49 @@ public enum SourceCommand {
             ingestMetadata: material.ingestMetadata,
             provenance: material.provenance,
             role: .primary, originalPath: nil, activityID: nil,
+            resolvedDisplayName: nil)
+        return Result(
+            payload: .text("Added \(summary.effectiveName) (\(summary.id.rawValue))."),
+            didCommit: true)
+    }
+
+    private static func readSourceData(_ path: String) throws -> Data {
+        if path == "-" {
+            return FileHandle.standardInput.readDataToEndOfFile()
+        }
+        return try Data(contentsOf: URL(fileURLWithPath: path))
+    }
+
+    private static func addFile(path: String, name: String?, in store: WikiStore) throws -> Result {
+        let data = try readSourceData(path)
+        return try addFile(path: path, name: name, data: data, in: store)
+    }
+
+    static func addFile(
+        path: String,
+        name: String?,
+        data: Data,
+        in store: WikiStore
+    ) throws -> Result {
+        let filename: String
+        if let name {
+            filename = name
+        } else {
+            filename = URL(fileURLWithPath: path).lastPathComponent
+        }
+        guard !filename.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw Failure.message("source add: --name must not be empty")
+        }
+
+        let summary = try store.addSource(
+            filename: filename,
+            data: data,
+            detectionHints: ContentTypeDetectionHints(filename: filename),
+            ingestMetadata: nil,
+            provenance: SourceProvenance(agentName: "wikictl", activityKind: "import", plan: path == "-" ? "stdin" : path),
+            role: .primary,
+            originalPath: path == "-" ? nil : path,
+            activityID: nil,
             resolvedDisplayName: nil)
         return Result(
             payload: .text("Added \(summary.effectiveName) (\(summary.id.rawValue))."),
