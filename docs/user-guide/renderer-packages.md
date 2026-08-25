@@ -51,13 +51,13 @@ Use Markdown image syntax for a renderer-claimed sibling source:
 ![System architecture](images/architecture.canvas)
 ```
 
-Image syntax always stays inline. A compatible renderer can replace the inline image area. It cannot promote the image to a disclosure row.
+Image syntax always stays inline and remains part of the reader document. A compatible renderer cannot replace it with a native attachment or promote it to a disclosure row.
+
+The reader uses a DOM image fallback. Mermaid and approved typed projectors can create inert DOM SVG. A renderer-backed image can also show **Open interactive renderer** when exact admission succeeds.
 
 The alt text remains available to accessibility tools and fallback content. Interactive image input has a 48,384-byte limit.
 
 An unclaimed, unresolved, external, data, oversized, or failed image keeps its ordinary inline fallback.
-
-Inline dynamic renderers use a separate document budget and visibility policy. Resource pressure keeps fallback content visible and retryable.
 
 A reader can keep four native or installed disclosure rows expanded. A fifth row stays collapsed until another row closes.
 

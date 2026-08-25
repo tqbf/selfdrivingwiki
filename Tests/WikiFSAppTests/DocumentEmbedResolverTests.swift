@@ -132,7 +132,7 @@ struct DocumentEmbedResolverTests {
         #expect(!resolver.resolveWikiLink(link).isResolved)
     }
 
-    @Test func repeatedInlineSourceRendererEmbedsUseUniquePlaceholders() throws {
+    @Test func repeatedImageRendererCandidatesUseUniqueActionPlansWithoutDynamicHosts() throws {
         let markdown = "![[source:image.png|First]] and ![[source:image.png|Second]]"
         let prepared = ReaderMarkdown.preparedDocument(markdown)
         let source = sourceResolution(mime: "image/png")
@@ -155,14 +155,23 @@ struct DocumentEmbedResolverTests {
             guard case .embed(let embed) = node else { return nil }
             return projection.wikiEmbed(at: embed.sourceRange)
         }
-        let placeholderIDs = embeds.compactMap { embed -> String? in
-            guard case .renderer(_, let role, let plan, _) = embed,
+        let actionPlanIDs = embeds.compactMap { embed -> String? in
+            guard case .rendererDOMFallback(_, let role, let plan, _) = embed,
                   role == .inlineContent else { return nil }
             return plan.placeholderID
         }
 
-        #expect(placeholderIDs.count == 2)
-        #expect(Set(placeholderIDs).count == 2)
+        #expect(actionPlanIDs.count == 2)
+        #expect(Set(actionPlanIDs).count == 2)
+
+        let html = MarkdownHTMLRenderer.render(
+            prepared,
+            projection: projection,
+            options: .disabled)
+        #expect(html.components(separatedBy: "<img src=\"wiki-blob://source/\(sourceID.rawValue)\"").count - 1 == 2)
+        #expect(html.components(separatedBy: "class=\"sdw-inline-renderer sdw-inline-renderer--dom\"").count - 1 == 2)
+        #expect(!html.contains("data-renderer-admitted=\"true\""))
+        #expect(!html.contains("id=\"sdw-inline-renderer-"))
     }
 
     @Test func bundledExcalidrawProjectsToTypedInertDOMOutput() throws {
@@ -221,10 +230,11 @@ struct DocumentEmbedResolverTests {
             source: "unsupported.excalidraw",
             altText: "Unsupported drawing",
             target: .renderer(rendererReference: exactPlan.rendererReference, source: source))
-        guard case .fallback(.image(let fallbackSource, let altText)) = resolved else {
-            Issue.record("Unsupported trusted Excalidraw input must keep the image fallback")
+        guard case .rendererDOMFallback(_, .inlineContent, let fallbackPlan, .image(let fallbackSource, let altText)) = resolved else {
+            Issue.record("Unsupported trusted Excalidraw input must keep a DOM image fallback")
             return
         }
+        #expect(fallbackPlan.rendererReference == exactPlan.rendererReference)
         #expect(fallbackSource == "wiki-blob://source/\(sourceID.rawValue)")
         #expect(altText == "Unsupported drawing")
 

@@ -39,6 +39,8 @@ Page and source targets use separate ID types. Source content versions and sourc
 
 Ordinary Markdown images use the same typed inline lowerer as wiki source media. Exact sibling targets resolve to typed blob targets. Eligible renderer targets carry pinned immutable source facts.
 
+Image syntax always remains in the reader DOM. Ordinary images use `<img>`. Mermaid uses DOM SVG. Trusted structured formats can use bounded typed DOM projectors. Other renderer-backed images keep a DOM image fallback and can show an exact-authorized interactive action. Image syntax never creates an automatic native attachment.
+
 ## Renderer selection and admission
 
 Renderer descriptors declare `supportedEmbeddingRoles`. Registry matching filters by the required role before priority selection.
@@ -51,7 +53,9 @@ The host validates the tuple before resolver, factory, child host, or session cr
 
 ## Inline renderer lifecycle
 
-Inline dynamic renderers use a separate keyed lifecycle:
+The dynamic attachment lifecycle does not apply to image syntax. Image syntax stays in the DOM and uses an optional action for a separate interactive renderer.
+
+Non-image inline dynamic renderers use a separate keyed lifecycle:
 
 - `fallback`
 - `eligible`

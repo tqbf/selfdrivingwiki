@@ -550,9 +550,15 @@ struct MarkdownHTMLRendererTests {
         #expect(route.input == fixture.input)
     }
 
-    @Test("inline image renderer admission preserves exact content and Markdown source versions", arguments: [false, true])
-    func inlineImageRendererAdmissionPreservesExactSourceVersion(useMarkdownVersion: Bool) throws {
+    @Test("renderer-backed image syntax stays in the DOM and preserves exact action admission", arguments: [false, true])
+    func rendererBackedImageSyntaxStaysInDOMWithExactAction(useMarkdownVersion: Bool) throws {
         let fixture = try makeImageRendererActivationFixture(useMarkdownVersion: useMarkdownVersion)
+        #expect(fixture.html.contains("class=\"sdw-inline-renderer sdw-inline-renderer--dom\""))
+        #expect(fixture.html.contains("<img src=\"wiki-blob://source/"))
+        #expect(fixture.html.contains("Open interactive renderer"))
+        #expect(!fixture.html.contains("data-renderer-admitted=\"true\""))
+        #expect(!fixture.html.contains("id=\"sdw-inline-renderer-"))
+        #expect(!fixture.html.contains("sdw-renderer-card__row"))
         #expect(fixture.context.rendererReference == fixture.reference)
         #expect(fixture.context.input == fixture.input)
         #expect(fixture.context.embeddingRole == .inlineContent)
@@ -1005,6 +1011,7 @@ private struct InlineRendererActivationFixture {
     let input: RendererBridgeInput
     let context: RendererEmbedActivationContext
     let placeholderID: RendererAttachmentPlaceholderID
+    let html: String
 }
 
 private extension MarkdownHTMLRendererTests {
@@ -1057,7 +1064,8 @@ private extension MarkdownHTMLRendererTests {
             reference: reference,
             input: input,
             context: context,
-            placeholderID: placeholderID)
+            placeholderID: placeholderID,
+            html: html)
     }
 
     func makeRendererActivationFixture(bytes: Data = Data("{\"nodes\":[],\"edges\":[]}".utf8)) throws -> RendererActivationFixture {

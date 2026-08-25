@@ -8,11 +8,13 @@ Status: active design record.
 
 ## Purpose
 
-The Markdown reader has two renderer attachment paths. Approved rich fences use compact renderer rows. Eligible image and source syntax uses inline content without disclosure chrome.
+The Markdown reader has two presentation paths. Approved rich fences use compact renderer rows. Image syntax remains in the reader DOM without disclosure chrome.
 
-The reader owns admission, geometry, focus, resource policy, and teardown. Each renderer owns its expanded view.
+The reader owns admission, geometry, focus, resource policy, and teardown for dynamic attachments. Each renderer owns its expanded view.
 
-Readable code, summaries, or images remain in the expansion region as fallback content. A failed or unavailable renderer never produces an empty row.
+Image syntax does not auto-mount a dynamic attachment. Ordinary images use DOM `<img>` elements. Mermaid and trusted typed projectors can create inert DOM SVG. Other renderer-backed images keep a DOM image fallback and can show an exact-authorized interactive action.
+
+Readable code, summaries, or images remain as fallback content. A failed or unavailable renderer never produces an empty row.
 
 ## Titles and stable identity
 
@@ -46,7 +48,9 @@ An unsupported disclosure request stays collapsed. It does not open a window. **
 
 ## Keyed hosts and separate budgets
 
-`WikiReaderContainerView` stores native children and visible rectangles by `RendererAttachmentPlaceholderID`. Geometry, focus, failure, DOM removal, and teardown are keyed.
+Image syntax does not use a keyed host or an inline attachment budget. Its DOM content follows normal document layout and scrolling.
+
+`WikiReaderContainerView` stores other native children and visible rectangles by `RendererAttachmentPlaceholderID`. Geometry, focus, failure, DOM removal, and teardown are keyed.
 
 A reader document can keep four native or installed renderer rows expanded. A fifth disclosure request stays collapsed and creates no renderer resources.
 

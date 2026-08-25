@@ -20,6 +20,13 @@ enum DocumentEmbedSyntax: Hashable, Sendable {
             return nil
         }
     }
+
+    var requiresDOMOwnership: Bool {
+        switch self {
+        case .markdownImage, .wikiSourceMedia: true
+        case .wikiTransclusion, .richFence: false
+        }
+    }
 }
 
 /// Exact tagged target for lazy recursive transclusion.
@@ -143,6 +150,11 @@ enum ResolvedDocumentEmbed: Hashable, Sendable {
         role: RendererEmbeddingRole,
         plan: RendererEmbedPlan,
         output: DocumentRendererDOMOutput,
+        fallback: DocumentEmbedFallback)
+    case rendererDOMFallback(
+        syntax: DocumentEmbedSyntax,
+        role: RendererEmbeddingRole,
+        plan: RendererEmbedPlan,
         fallback: DocumentEmbedFallback)
     case transclusion(
         target: DocumentTransclusionTarget,

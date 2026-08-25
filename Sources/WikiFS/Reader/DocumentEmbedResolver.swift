@@ -220,10 +220,11 @@ struct DocumentEmbedResolver: Sendable {
                 output: output,
                 fallback: fallback)
         }
-        if DocumentRendererDOMProjector.usesTrustedDOMProjection(plan) {
-            return .fallback(fallback)
-        }
-        return .renderer(syntax: syntax, role: .inlineContent, plan: plan, fallback: fallback)
+        return .rendererDOMFallback(
+            syntax: syntax,
+            role: .inlineContent,
+            plan: plan,
+            fallback: fallback)
     }
 
     private func inlineImageSource(_ target: DocumentInlineTarget) -> String {
@@ -276,7 +277,15 @@ struct DocumentEmbedResolver: Sendable {
                 displayTitle: title,
                 fallbackReason: rendererPlan.fallbackReason,
                 activationMetadata: rendererPlan.activationMetadata)
-            return resolvedRenderer(syntax: syntax, plan: occurrencePlan, fallback: literalFallback)
+            let rendererFallback: DocumentEmbedFallback
+            if bytefulMediaKind(mimeType: source.mimeType) == .image {
+                rendererFallback = .image(
+                    source: "wiki-blob://source/\(source.sourceID.rawValue)",
+                    altText: title)
+            } else {
+                rendererFallback = literalFallback
+            }
+            return resolvedRenderer(syntax: syntax, plan: occurrencePlan, fallback: rendererFallback)
         }
         if let mediaKind = bytefulMediaKind(mimeType: source.mimeType) {
             let target = DocumentInlineTarget.blob(source.sourceID)

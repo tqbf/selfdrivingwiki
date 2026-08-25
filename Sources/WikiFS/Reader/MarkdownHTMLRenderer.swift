@@ -360,8 +360,11 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
                 display: display,
                 target: target,
                 fallback: fallback)
-        case .renderer(_, let role, let plan, let fallback):
+        case .renderer(let syntax, let role, let plan, let fallback):
             guard role == plan.embeddingRole else { return fallbackHTML(fallback) }
+            if syntax.requiresDOMOwnership {
+                return rendererDOMFallbackHTML(fallbackHTML(fallback), plan: plan)
+            }
             if role == .inlineContent {
                 return inlineRendererHTML(plan: plan, fallback: fallbackHTML(fallback))
             }
@@ -372,6 +375,9 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
                   DocumentRendererDOMProjector.project(plan) == output
             else { return fallbackHTML(fallback) }
             return rendererDOMOutputHTML(output, plan: plan)
+        case .rendererDOMFallback(_, let role, let plan, let fallback):
+            guard role == .inlineContent, role == plan.embeddingRole else { return fallbackHTML(fallback) }
+            return rendererDOMFallbackHTML(fallbackHTML(fallback), plan: plan)
         case .transclusion(let target, let display, let fragment, let ancestors):
             return transclusionHTML(target: target, display: display, fragment: fragment, ancestors: ancestors)
         case .missing(_, let fallback), .fallback(let fallback):
@@ -427,19 +433,33 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         let markerID = "sdw-arrow-\(plan.placeholderID)"
         let elements = scene.elements.map { vectorElementHTML($0, markerID: markerID) }.joined()
         let title = escapeAttribute(plan.displayTitle ?? scene.accessibilityLabel)
-        let actionURL = rendererActionURL(for: plan)
-        let actionHTML = actionURL.map { url in
-            #"<a class="sdw-inline-renderer__action" data-renderer-action="open-window" href="\#(escapeAttribute(url))">Open interactive renderer</a>"#
-        } ?? ""
-        return """
+        let content = """
+        <svg class="sdw-inline-renderer__svg" viewBox="\(viewBox)" role="img" aria-label="\(title)" preserveAspectRatio="xMidYMid meet">
+          <defs><marker id="\(escapeAttribute(markerID))" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,4 L0,8 z" fill="context-stroke"/></marker></defs>
+          \(background)\(elements)
+        </svg>
+        """
+        return rendererDOMContainerHTML(content: content, plan: plan)
+    }
+
+    private func rendererDOMFallbackHTML(_ fallback: String, plan: RendererEmbedPlan) -> String {
+        rendererDOMContainerHTML(
+            content: "<span class=\"sdw-inline-renderer__fallback\">\(fallback)</span>",
+            plan: plan)
+    }
+
+    private func rendererDOMContainerHTML(content: String, plan: RendererEmbedPlan) -> String {
+        """
         <figure class="sdw-inline-renderer sdw-inline-renderer--dom" data-renderer-role="inlineContent">
-          <svg class="sdw-inline-renderer__svg" viewBox="\(viewBox)" role="img" aria-label="\(title)" preserveAspectRatio="xMidYMid meet">
-            <defs><marker id="\(escapeAttribute(markerID))" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,4 L0,8 z" fill="context-stroke"/></marker></defs>
-            \(background)\(elements)
-          </svg>
-          \(actionHTML)
+          \(content)
+          \(rendererActionHTML(for: plan))
         </figure>
         """
+    }
+
+    private func rendererActionHTML(for plan: RendererEmbedPlan) -> String {
+        guard let actionURL = rendererActionURL(for: plan) else { return "" }
+        return #"<a class="sdw-inline-renderer__action" data-renderer-action="open-window" href="\#(escapeAttribute(actionURL))">Open interactive renderer</a>"#
     }
 
     private func vectorElementHTML(_ element: DocumentVectorScene.Element, markerID: String) -> String {

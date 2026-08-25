@@ -292,10 +292,17 @@ struct RendererAttachmentCoordinatorTests {
             sourceVersionID: SourceVersionID(rawValue: "01JDOMSCROLLVERSION0000001"),
             mimeType: try .init(validating: "application/json"),
             bytes: bytes)
+        let fallbackSource = try RendererEmbeddedContent.Source(
+            sourceID: SourceID(rawValue: "01JDOMSCROLLSOURCE000000002"),
+            sourceVersionID: SourceVersionID(rawValue: "01JDOMSCROLLVERSION0000002"),
+            mimeType: try .init(validating: "image/svg+xml"),
+            bytes: Data("<svg xmlns=\"http://www.w3.org/2000/svg\"><text>Fallback</text></svg>".utf8))
         let markdown = """
         <p style="height:500px">Leading content</p>
 
         ![Drawing](drawing.excalidraw)
+
+        ![Generic image](generic.svg)
 
         <p style="height:500px">Trailing content</p>
         """
@@ -307,9 +314,15 @@ struct RendererAttachmentCoordinatorTests {
                     version: BundledRendererPackages.excalidrawVersion,
                     registrationID: BundledRendererPackages.excalidrawRegistrationID),
                 source: source),
+            "generic.svg": .renderer(
+                rendererReference: BuiltInRendererDescriptors.descriptor(for: .jsonCanvas).reference,
+                source: fallbackSource),
         ])
         let body = MarkdownHTMLRenderer.render(prepared, projection: projection, options: .disabled)
         #expect(body.contains("class=\"sdw-inline-renderer__svg\""))
+        #expect(body.contains("alt=\"Generic image\""))
+        #expect(body.components(separatedBy: "class=\"sdw-inline-renderer sdw-inline-renderer--dom\"").count - 1 == 2)
+        #expect(!body.contains("data-renderer-admitted=\"true\""))
         webView.loadHTMLString(WikiReaderView.documentHTML(body, mermaidLibrary: nil), baseURL: WikiReaderOrigin.url)
         try await Self.waitUntil("inert renderer document") { webView.isLoading == false }
 
@@ -320,8 +333,15 @@ struct RendererAttachmentCoordinatorTests {
         let scrolledY = try await Self.javaScriptDouble(
             "document.querySelector('.sdw-inline-renderer__svg').getBoundingClientRect().y",
             in: webView)
+        let genericImageY = try await Self.javaScriptDouble(
+            "document.querySelector('img[alt=\\\"Generic image\\\"]').getBoundingClientRect().y",
+            in: webView)
 
         #expect(scrolledY < initialY - 100)
+        #expect(genericImageY.isFinite)
+        #expect(try await Self.javaScriptBoolean(
+            "document.querySelectorAll('.sdw-inline-renderer--dom').length === 2",
+            in: webView))
         #expect(try await Self.javaScriptBoolean(
             "document.querySelector('.sdw-inline-renderer[data-renderer-admitted=\\\"true\\\"]') === null",
             in: webView))
