@@ -164,6 +164,79 @@ struct StoreEmissionTests {
         #expect(events.last?.id == page.id.rawValue)
     }
 
+    // MARK: - OKF metadata
+
+    @Test func pageOKFStatusEmitsOneOwningPageUpdate() async throws {
+        let (store, _, recorder) = try makeHarness()
+        let page = try store.createPage(title: "OKF status")
+        let versionID = try #require(try store.pageHeadVersionID(pageID: page.id))
+        try await drain(recorder)
+
+        try store.setPageOKFStatus(versionID: versionID, status: .draft)
+
+        let events = try await awaitEvents(recorder)
+        #expect(events.count == 1)
+        #expect(events[0].kind == .page)
+        #expect(events[0].change == .updated)
+        #expect(events[0].id == page.id.rawValue)
+    }
+
+    @Test func sourceMarkdownOKFStatusEmitsOneOwningSourceUpdate() async throws {
+        let (store, _, recorder) = try makeHarness()
+        let source = try store.addSource(filename: "source.txt", data: Data("raw".utf8))
+        let markdown = try store.appendProcessedMarkdown(
+            sourceID: source.id, content: "processed", origin: .user,
+            note: nil, technique: nil)
+        try await drain(recorder, expected: 2)
+
+        try store.setSourceMarkdownOKFStatus(versionID: markdown.id, status: .stable)
+
+        let events = try await awaitEvents(recorder)
+        #expect(events.count == 1)
+        #expect(events[0].kind == .source)
+        #expect(events[0].change == .updated)
+        #expect(events[0].id == source.id.rawValue)
+    }
+
+    @Test func combinedVerificationAndFreshnessEmitsOnce() async throws {
+        let (store, _, recorder) = try makeHarness()
+        let page = try store.createPage(title: "Combined OKF mutation")
+        let versionID = try #require(try store.pageHeadVersionID(pageID: page.id))
+        try await drain(recorder)
+
+        _ = try store.recordPageOKFVerification(
+            versionID: versionID,
+            verifier: try OKFVerifierIdentity("human:reviewer"),
+            verifiedAt: Date(timeIntervalSince1970: 2_000_000_000),
+            basis: .init(kind: .humanReview),
+            freshnessPolicy: .ttl(seconds: 600, anchor: .recordedVerification))
+
+        let events = try await awaitEvents(recorder)
+        #expect(events.count == 1)
+        #expect(events[0].kind == .page)
+        #expect(events[0].change == .updated)
+        #expect(events[0].id == page.id.rawValue)
+    }
+
+    @Test func invalidOKFEvidenceEmitsNothing() async throws {
+        let (store, _, recorder) = try makeHarness()
+        let page = try store.createPage(title: "Invalid OKF evidence")
+        let versionID = try #require(try store.pageHeadVersionID(pageID: page.id))
+        try await drain(recorder)
+
+        #expect(throws: OKFMetadataError.self) {
+            try store.recordPageOKFVerification(
+                versionID: versionID,
+                verifier: try OKFVerifierIdentity("human:reviewer"),
+                verifiedAt: Date(timeIntervalSince1970: 2_000_000_000),
+                basis: .init(
+                    kind: .sourceChecked,
+                    evidence: [.source(SourceID(rawValue: "missing-source"))]),
+                freshnessPolicy: nil)
+        }
+        await assertNoEventsDelivered(recorder)
+    }
+
     // MARK: - Sources
 
     @Test func addSourceEmitsSourceCreated() async throws {

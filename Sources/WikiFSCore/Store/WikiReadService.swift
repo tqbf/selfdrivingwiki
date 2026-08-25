@@ -84,6 +84,19 @@ public struct WikiReadAccess: ~Copyable {
     public func sourceContent(id: SourceID) throws -> Data {
         try store.sourceContent(id: id)
     }
+
+    public func pageOKFMetadata(
+        versionID: PageVersionID, includeCorrected: Bool = false
+    ) throws -> PageOKFTrustMetadata? {
+        try store.pageOKFMetadata(versionID: versionID, includeCorrected: includeCorrected)
+    }
+
+    public func sourceMarkdownOKFMetadata(
+        versionID: SourceMarkdownVersionID, includeCorrected: Bool = false
+    ) throws -> SourceMarkdownOKFTrustMetadata? {
+        try store.sourceMarkdownOKFMetadata(
+            versionID: versionID, includeCorrected: includeCorrected)
+    }
 }
 
 /// A lifecycle-aware read capability for one wiki database.

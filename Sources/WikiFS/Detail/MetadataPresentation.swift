@@ -28,6 +28,7 @@ enum MetadataSectionID: String, Hashable, Sendable, CaseIterable {
     case extraction
     case usage
     case conversationTotals
+    case trustLifecycle
     case technical
 }
 
@@ -46,6 +47,10 @@ enum MetadataFieldID: Hashable, Sendable {
     case conversationInputTokens, conversationOutputTokens, conversationThoughtTokens
     case conversationCacheReadTokens, conversationCacheWriteTokens, conversationCost
     case compareExtractions
+    case lifecycleStatus, trustTier, staleAfter, freshnessState
+    case verificationActor(OKFVerificationID), verificationDate(OKFVerificationID)
+    case verificationBasis(OKFVerificationID), verificationNote(OKFVerificationID)
+    case verificationEvidence(OKFVerificationID, Int)
 }
 
 struct MetadataRow: Identifiable, Equatable, Sendable {
@@ -101,6 +106,80 @@ struct PageMetadataInput: Sendable {
     let currentVersion: PageVersionSummary?
     let origin: PageOrigin?
     let sources: [MetadataPageSource]
+    let okfMetadata: OKFConceptMetadata
+}
+
+enum OKFMetadataPresentation {
+    static func section(_ metadata: OKFConceptMetadata, now: Date = Date()) -> MetadataSection {
+        var rows: [MetadataRow] = [
+            .init(
+                id: .lifecycleStatus,
+                label: "Lifecycle status",
+                value: .text(metadata.status?.rawValue.capitalized ?? "Not explicitly set"),
+                accessibilityHint: metadata.status == nil ? "No lifecycle status was authored" : nil),
+            .init(
+                id: .trustTier,
+                label: "Trust tier",
+                value: .text(trustLabel(metadata.trustTier)),
+                accessibilityHint: "Derived from active verification actors")
+        ]
+        if let deadline = metadata.staleAfter {
+            rows.append(.init(id: .staleAfter, label: "Stale after", value: .date(deadline), accessibilityHint: nil))
+            rows.append(.init(
+                id: .freshnessState, label: "Freshness",
+                value: .text(metadata.isStale(at: now) == true ? "Stale" : "Fresh"),
+                accessibilityHint: "Evaluated against the persisted deadline"))
+        } else {
+            rows.append(.init(
+                id: .freshnessState, label: "Freshness",
+                value: .text("No deadline set"), accessibilityHint: nil))
+        }
+        for verification in metadata.activeVerifications {
+            rows.append(.init(
+                id: .verificationActor(verification.id), label: "Verified by",
+                value: .text(verification.by.rawValue), accessibilityHint: nil))
+            rows.append(.init(
+                id: .verificationDate(verification.id), label: "Verified at",
+                value: .date(verification.verifiedAt), accessibilityHint: nil))
+            rows.append(.init(
+                id: .verificationBasis(verification.id), label: "Basis",
+                value: .text(basisLabel(verification.basis.kind)), accessibilityHint: nil))
+            for (index, evidence) in verification.basis.evidence.enumerated() {
+                let value: MetadataValue
+                switch evidence {
+                case .source(let sourceID):
+                    value = .link(label: sourceID.rawValue, target: .source(sourceID))
+                case .external(let url):
+                    value = .link(label: url.absoluteString, target: .url(url))
+                }
+                rows.append(.init(
+                    id: .verificationEvidence(verification.id, index), label: "Evidence",
+                    value: value, accessibilityHint: "Open verification evidence"))
+            }
+            if let note = verification.basis.note {
+                rows.append(.init(
+                    id: .verificationNote(verification.id), label: "Verification note",
+                    value: .text(note), accessibilityHint: nil))
+            }
+        }
+        return .init(id: .trustLifecycle, title: "Trust & lifecycle", rows: rows)
+    }
+
+    private static func trustLabel(_ tier: OKFTrustTier) -> String {
+        switch tier {
+        case .unverified: "Unverified"
+        case .machineConfirmed: "Machine confirmed"
+        case .humanReviewed: "Human reviewed"
+        }
+    }
+
+    private static func basisLabel(_ basis: OKFVerificationBasisKind) -> String {
+        switch basis {
+        case .humanReview: "Human review"
+        case .sourceChecked: "Source checked"
+        case .externalRevalidation: "External revalidation"
+        }
+    }
 }
 
 enum PageMetadataProjection {
@@ -145,6 +224,7 @@ enum PageMetadataProjection {
         technical.append(.init(id: .compareVersions, label: "Versions", value: .action(label: "Compare versions", target: .comparePageVersions(input.page.id)), accessibilityHint: "Open page version comparison"))
         var sections = [MetadataSection(id: .summary, title: "Summary", rows: summary)]
         if !sourceRows.isEmpty { sections.append(.init(id: .provenance, title: "Sources", rows: sourceRows)) }
+        sections.append(OKFMetadataPresentation.section(input.okfMetadata))
         sections.append(.init(id: .technical, title: "Technical", rows: technical))
         return .init(subject: .page(input.page.id), sections: sections, emptyState: .none)
     }
@@ -159,6 +239,7 @@ struct SourceMetadataInput: Sendable {
     let markdown: SourceMarkdownVersion?
     let extraction: ExtractionProvenance?
     let alternativeCount: Int
+    let okfMetadata: OKFConceptMetadata
 }
 
 enum SourceMetadataProjection {
@@ -195,6 +276,7 @@ enum SourceMetadataProjection {
                 .init(id: .updated, label: "Updated", value: .date(input.source.updatedAt), accessibilityHint: nil)
             ]),
             .init(id: .extraction, title: "Extraction", rows: extractionRows),
+            OKFMetadataPresentation.section(input.okfMetadata),
             .init(id: .technical, title: "Technical", rows: technical)
         ], emptyState: .none)
     }

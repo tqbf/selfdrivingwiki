@@ -110,6 +110,8 @@ public enum ArgumentParser {
                                               revert a page to version V (W0)
       page info (--title X | --id Y)          print page identity + origin provenance
                                               (HEAD's agent/activity + full edit history)
+      page okf <operation> --version <page-version-id> [options]
+                                              inspect or author exact-version OKF metadata
       log append --kind ingest|query|lint --title X [--note N] [--source <file-id>]
                                               append one dated row to log.md;
                                               --source stamps that file "Processed"
@@ -135,6 +137,13 @@ public enum ArgumentParser {
                                               rename a source's display name
       source refresh (--id X | --name N)      re-fetch a website source via its
                                                provider, appending a new version
+      source okf <operation> --version <source-markdown-version-id> [options]
+                                              inspect or author exact-version OKF metadata
+      okf operations: inspect [--json]; status (--status draft|stable|deprecated | --clear);
+        freshness (--stale-after <ISO-8601> | --ttl <30s|15m|24h|7d> [--anchor generated|verification] [--verification ID] | --clear);
+        verify --by <actor> [--at <ISO-8601>] --basis <kind> [--evidence source:ID|url:URL ...] [--note TEXT] [--ttl DURATION];
+        correct --verification ID --by <actor> [--at <ISO-8601>] [--reason TEXT].
+        Verification/correction timestamps default to command time when --at is omitted.
       admin vacuum-blobs [--apply] [--json]   report (and with --apply, reclaim)
                                                blobs no version row references
       admin vacuum-activities [--apply] [--json]
@@ -245,6 +254,9 @@ public enum ArgumentParser {
     private static func parsePageCommand(_ args: [String]) throws -> Command {
         guard let sub = args.first else { throw Failure.usage("page: missing subcommand") }
         let rest = Array(args.dropFirst())
+        if sub == "okf" {
+            return .page(try parsePageOKFCommand(rest))
+        }
         let options = try Options(rest, booleanFlags: ["--json"])
 
         switch sub {
@@ -306,6 +318,126 @@ public enum ArgumentParser {
         }
     }
 
+    private static func parsePageOKFCommand(_ args: [String]) throws -> PageCommand.Action {
+        let parsed = try parseOKFCommand(args, version: PageVersionID.init(rawValue:))
+        switch parsed {
+        case .inspect(let id, let json): return .okfInspect(versionID: id, json: json)
+        case .status(let id, let status): return .okfStatus(versionID: id, status: status)
+        case .freshness(let id, let input): return .okfFreshness(versionID: id, input: input)
+        case .verify(let id, let input): return .okfVerify(versionID: id, input: input)
+        case .correct(let id, let input): return .okfCorrect(versionID: id, input: input)
+        }
+    }
+
+    private static func parseSourceOKFCommand(_ args: [String]) throws -> SourceCommand.Action {
+        let parsed = try parseOKFCommand(args, version: SourceMarkdownVersionID.init(rawValue:))
+        switch parsed {
+        case .inspect(let id, let json): return .okfInspect(versionID: id, json: json)
+        case .status(let id, let status): return .okfStatus(versionID: id, status: status)
+        case .freshness(let id, let input): return .okfFreshness(versionID: id, input: input)
+        case .verify(let id, let input): return .okfVerify(versionID: id, input: input)
+        case .correct(let id, let input): return .okfCorrect(versionID: id, input: input)
+        }
+    }
+
+    private enum ParsedOKFCommand<VersionID> {
+        case inspect(VersionID, Bool)
+        case status(VersionID, OKFConceptStatus?)
+        case freshness(VersionID, OKFFreshnessInput)
+        case verify(VersionID, OKFVerificationInput)
+        case correct(VersionID, OKFCorrectionInput)
+    }
+
+    private static func parseOKFCommand<VersionID>(
+        _ args: [String], version: (String) -> VersionID
+    ) throws -> ParsedOKFCommand<VersionID> {
+        guard let operation = args.first else { throw Failure.usage("okf: missing operation") }
+        let options = try Options(Array(args.dropFirst()), booleanFlags: ["--json", "--clear"])
+        guard let rawVersion = options.value("--version"), !rawVersion.isEmpty else {
+            throw Failure.usage("okf \(operation): --version is required")
+        }
+        let versionID = version(rawVersion)
+        switch operation {
+        case "inspect":
+            return .inspect(versionID, options.flag("--json"))
+        case "status":
+            if options.flag("--clear") { return .status(versionID, nil) }
+            guard let rawStatus = options.value("--status"),
+                  let status = OKFConceptStatus(rawValue: rawStatus) else {
+                throw Failure.usage("okf status: --status must be draft, stable, or deprecated; use --clear to unset")
+            }
+            return .status(versionID, status)
+        case "freshness":
+            return .freshness(versionID, try parseFreshness(options, allowRecordedVerification: false))
+        case "verify":
+            guard let actorRaw = options.value("--by") else {
+                throw Failure.usage("okf verify: --by is required")
+            }
+            let verifier: OKFVerifierIdentity
+            do { verifier = try OKFVerifierIdentity(actorRaw) }
+            catch { throw Failure.usage(error.localizedDescription) }
+            let verifiedAt = try options.value("--at").map(OKFCommandSupport.parseTimestamp) ?? Date()
+            guard let basisRaw = options.value("--basis"),
+                  let basis = OKFVerificationBasisKind(rawValue: basisRaw) else {
+                throw Failure.usage("okf verify: --basis must be human-review, source-checked, or external-revalidation")
+            }
+            let evidence = try options.values("--evidence").map(OKFCommandSupport.parseEvidence)
+            let freshness: OKFFreshnessInput?
+            if let ttl = options.value("--ttl") {
+                freshness = .ttl(try OKFCommandSupport.parseDuration(ttl), anchor: .recordedVerification)
+            } else { freshness = nil }
+            return .verify(versionID, .init(
+                verifier: verifier, verifiedAt: verifiedAt,
+                basis: .init(kind: basis, evidence: evidence, note: options.value("--note")),
+                freshness: freshness))
+        case "correct":
+            guard let verificationRaw = options.value("--verification"), !verificationRaw.isEmpty else {
+                throw Failure.usage("okf correct: --verification is required")
+            }
+            guard let actorRaw = options.value("--by") else {
+                throw Failure.usage("okf correct: --by is required")
+            }
+            let verifier: OKFVerifierIdentity
+            do { verifier = try OKFVerifierIdentity(actorRaw) }
+            catch { throw Failure.usage(error.localizedDescription) }
+            let correctedAt = try options.value("--at").map(OKFCommandSupport.parseTimestamp) ?? Date()
+            return .correct(versionID, .init(
+                verificationID: .init(rawValue: verificationRaw),
+                verifier: verifier, correctedAt: correctedAt,
+                reason: options.value("--reason").map(OKFVerificationCorrectionReason.init(reason:))))
+        default:
+            throw Failure.usage("okf: unknown operation \(operation.debugDescription)")
+        }
+    }
+
+    private static func parseFreshness(
+        _ options: Options, allowRecordedVerification: Bool
+    ) throws -> OKFFreshnessInput {
+        if options.flag("--clear") { return .clear }
+        if let fixed = options.value("--stale-after") {
+            return .fixed(try OKFCommandSupport.parseTimestamp(fixed))
+        }
+        guard let ttlRaw = options.value("--ttl") else {
+            throw Failure.usage("okf freshness: use --clear, --stale-after <ISO-8601>, or --ttl <duration>")
+        }
+        let duration = try OKFCommandSupport.parseDuration(ttlRaw)
+        let anchorRaw = options.value("--anchor") ?? "generated"
+        let anchor: OKFFreshnessAnchor
+        switch anchorRaw {
+        case "generated": anchor = .generated
+        case "verification":
+            guard let id = options.value("--verification"), !id.isEmpty else {
+                throw Failure.usage("verification-anchored freshness requires --verification <id>")
+            }
+            anchor = .verification(.init(rawValue: id))
+        case "recorded-verification" where allowRecordedVerification:
+            anchor = .recordedVerification
+        default:
+            throw Failure.usage("freshness anchor must be generated or verification")
+        }
+        return .ttl(duration, anchor: anchor)
+    }
+
     private static func parseLogCommand(_ args: [String]) throws -> Command {
         guard let sub = args.first else { throw Failure.usage("log: missing subcommand") }
         guard sub == "append" else {
@@ -329,6 +461,9 @@ public enum ArgumentParser {
     private static func parseSourceCommand(_ args: [String]) throws -> Command {
         guard let sub = args.first else { throw Failure.usage("source: missing subcommand") }
         let rest = Array(args.dropFirst())
+        if sub == "okf" {
+            return .source(try parseSourceOKFCommand(rest))
+        }
         // `--markdown` applies to `cat` and `export`; include it here so the
         // outer parse doesn't reject it as a value flag needing an argument.
         let options = try Options(rest, booleanFlags: ["--json", "--markdown", "--allow-duplicate"])

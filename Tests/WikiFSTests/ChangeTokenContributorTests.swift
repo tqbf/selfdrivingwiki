@@ -33,9 +33,10 @@ struct ChangeTokenContributorTests {
     @Test func contributorOrderMatchesHistoricalLayout() throws {
         let kinds = GRDBWikiStore.tokenContributors.map(\.kind)
         // pages | sources(table) | systemPrompt | log | wikiIndex |
-        // source(derived) | source(graph folds) | bookmark | chat
+        // source(derived) | source(graph folds) | bookmark | chat |
+        // page(OKF metadata across both exact-version target tables).
         #expect(kinds == [.page, .source, .systemPrompt, .log, .wikiIndex,
-                          .source, .source, .bookmark, .chat])
+                          .source, .source, .bookmark, .chat, .page])
     }
 
     /// `ChangeToken.rawString` must reproduce the historical colon-joined
@@ -48,10 +49,9 @@ struct ChangeTokenContributorTests {
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let token = try store.changeToken()
         let expectedHash = SystemPrompt.defaultBody.hashValue & 0x7FFFFFFF
-        // 14 fields: pages(c:0,s:0) sourceTable(c:0,s:0) systemPrompt(<hash>)
-        // log(0) wikiIndex(1) sourceMarkdownVersions(0)
-        // sourceGraph(sv:0,refs:0,act:0) bookmarks(0) chat(c:0,m:0).
-        let expected = "0:0:0:0:\(expectedHash):0:1:0:0:0:0:0:0:0"
+        // The first 14 fields retain their historical positions. Schema v52
+        // appends the neutral OKF projection-revision sum as field 15.
+        let expected = "0:0:0:0:\(expectedHash):0:1:0:0:0:0:0:0:0:0"
         #expect(token.rawString == expected)
     }
 

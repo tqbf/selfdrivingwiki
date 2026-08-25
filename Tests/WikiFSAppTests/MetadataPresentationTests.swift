@@ -14,7 +14,8 @@ struct MetadataPresentationTests {
                 .init(sourceID: .init(rawValue: "z"), displayName: "Zoo", role: .supporting),
                 .init(sourceID: .init(rawValue: "b"), displayName: "alpha", role: .primary),
                 .init(sourceID: .init(rawValue: "a"), displayName: "Alpha", role: .primary)
-            ]))
+            ],
+            okfMetadata: .init()))
         let rows = model.sections.first { $0.id == .provenance }!.rows
         let names = rows.compactMap { row -> String? in
             guard case .link(let label, _) = row.value else { return nil }
@@ -25,7 +26,9 @@ struct MetadataPresentationTests {
 
     @Test func sourceProjectionWithTwoAlternativesIncludesCompareAction() {
         let source = SourceSummary(id: .init(rawValue: "source"), filename: "a.pdf", ext: "pdf", mimeType: "application/pdf", byteSize: 12, createdAt: .distantPast, updatedAt: .distantPast, version: 1)
-        let model = SourceMetadataProjection.make(input: .init(source: source, markdown: nil, extraction: nil, alternativeCount: 2))
+        let model = SourceMetadataProjection.make(input: .init(
+            source: source, markdown: nil, extraction: nil,
+            alternativeCount: 2, okfMetadata: .init()))
         #expect(model.sections.flatMap(\.rows).contains { $0.id == .compareExtractions })
     }
 

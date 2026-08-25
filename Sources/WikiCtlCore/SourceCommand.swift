@@ -47,6 +47,11 @@ public enum SourceCommand {
         case search(query: String, limit: Int)
         case setActive(Selector, versionID: SourceMarkdownVersionID)
         case info(Selector)
+        case okfInspect(versionID: SourceMarkdownVersionID, json: Bool)
+        case okfStatus(versionID: SourceMarkdownVersionID, status: OKFConceptStatus?)
+        case okfFreshness(versionID: SourceMarkdownVersionID, input: OKFFreshnessInput)
+        case okfVerify(versionID: SourceMarkdownVersionID, input: OKFVerificationInput)
+        case okfCorrect(versionID: SourceMarkdownVersionID, input: OKFCorrectionInput)
         case refresh(Selector)
     }
 
@@ -95,6 +100,35 @@ public enum SourceCommand {
             return try setActive(selector, versionID: versionID, in: store)
         case .info(let selector):
             return try info(selector, in: store)
+        case .okfInspect(let versionID, let json):
+            guard let projection = try store.sourceMarkdownOKFMetadata(
+                versionID: versionID, includeCorrected: true) else {
+                throw Failure.message("source Markdown version not found: \(versionID.rawValue)")
+            }
+            return Result(
+                payload: .text(try OKFCommandSupport.format(
+                    ownerID: projection.sourceID.rawValue,
+                    versionID: versionID.rawValue,
+                    metadata: projection.metadata, json: json)),
+                didCommit: false)
+        case .okfStatus(let versionID, let status):
+            try store.setSourceMarkdownOKFStatus(versionID: versionID, status: status)
+            return Result(payload: .text(status.map { "status\t\($0.rawValue)" } ?? "status\tunset"), didCommit: true)
+        case .okfFreshness(let versionID, let input):
+            try store.setSourceMarkdownOKFFreshness(versionID: versionID, policy: try input.policy)
+            return Result(payload: .text("freshness\tupdated"), didCommit: true)
+        case .okfVerify(let versionID, let input):
+            let id = try store.recordSourceMarkdownOKFVerification(
+                versionID: versionID, verifier: input.verifier,
+                verifiedAt: input.verifiedAt, basis: input.basis,
+                freshnessPolicy: try input.freshness?.policy)
+            return Result(payload: .text("verification_id\t\(id.rawValue)"), didCommit: true)
+        case .okfCorrect(let versionID, let input):
+            try store.correctSourceMarkdownOKFVerification(
+                versionID: versionID, verificationID: input.verificationID,
+                correctingVerifier: input.verifier, correctedAt: input.correctedAt,
+                reason: input.reason)
+            return Result(payload: .text("corrected\t\(input.verificationID.rawValue)"), didCommit: true)
         case .refresh:
             // Refresh is async-only — routed via `runRefresh` from `main.swift`.
             // This case is unreachable through the sync `run` path.

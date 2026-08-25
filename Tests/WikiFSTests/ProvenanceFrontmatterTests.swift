@@ -5,6 +5,51 @@ import Foundation
 /// Tests for OKF v0.2 frontmatter generation (#927).
 @Suite struct ProvenanceFrontmatterTests {
 
+    @Test func emitsOrderedPersistedTrustFields() throws {
+        let page = samplePage()
+        let earlier = OKFVerificationEvent(
+            id: OKFVerificationID(rawValue: "01A"),
+            by: try OKFVerifierIdentity("human:alice"),
+            verifiedAt: Date(timeIntervalSince1970: 2_000_000_000),
+            basis: .init(kind: .humanReview))
+        let later = OKFVerificationEvent(
+            id: OKFVerificationID(rawValue: "01B"),
+            by: try OKFVerifierIdentity("checker/1.2"),
+            verifiedAt: Date(timeIntervalSince1970: 2_000_000_100),
+            basis: .init(kind: .sourceChecked))
+        let trust = OKFConceptMetadata(
+            status: .deprecated,
+            staleAfter: Date(timeIntervalSince1970: 2_000_003_600),
+            freshnessPolicy: .fixed(Date(timeIntervalSince1970: 2_000_003_600)),
+            verifications: [later, earlier], projectionRevision: 4)
+        let metadata = PageOKFMetadata(
+            generated: .init(by: .init(rawValue: "human:user"), at: page.updatedAt),
+            trust: trust)
+
+        let markdown = PageMarkdownFormat.fileContent(for: page, metadata: metadata)
+        let verified = try #require(markdown.range(of: "verified:"))
+        let status = try #require(markdown.range(of: "status: deprecated"))
+        let stale = try #require(markdown.range(of: "stale_after: 2033-05-18T04:33:20Z"))
+        #expect(verified.lowerBound < status.lowerBound)
+        #expect(status.lowerBound < stale.lowerBound)
+        #expect(markdown.contains("  - by: \"human:alice\"\n    at: 2033-05-18T03:33:20Z"))
+        #expect(markdown.contains("  - by: \"checker/1.2\"\n    at: 2033-05-18T03:35:00Z"))
+    }
+
+    @Test func correctedVerificationIsNotProjected() throws {
+        let page = samplePage()
+        let corrected = OKFVerificationEvent(
+            id: OKFVerificationID(rawValue: "01A"),
+            by: try OKFVerifierIdentity("human:alice"),
+            verifiedAt: Date(timeIntervalSince1970: 2_000_000_000),
+            basis: .init(kind: .humanReview),
+            removedAt: Date(timeIntervalSince1970: 2_000_001_000))
+        let metadata = PageOKFMetadata(
+            generated: .init(by: .init(rawValue: "human:user"), at: page.updatedAt),
+            trust: .init(verifications: [corrected]))
+        #expect(!PageMarkdownFormat.fileContent(for: page, metadata: metadata).contains("verified:"))
+    }
+
     // MARK: - Page frontmatter
 
     private func samplePage(

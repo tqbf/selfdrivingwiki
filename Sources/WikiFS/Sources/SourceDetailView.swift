@@ -1138,11 +1138,16 @@ struct SourceDetailView: View {
             throw MetadataProjectionError.missingSource(sourceID)
         }
         let history = try store.processedMarkdownHistory(sourceID: sourceID)
+        let markdown = try store.processedMarkdownHead(sourceID: sourceID)
+        let okfMetadata = try markdown.flatMap {
+            try store.sourceMarkdownOKFMetadata(versionID: $0.id, includeCorrected: false)?.metadata
+        } ?? OKFConceptMetadata()
         return SourceMetadataProjection.make(input: .init(
             source: source,
-            markdown: try store.processedMarkdownHead(sourceID: sourceID),
+            markdown: markdown,
             extraction: try store.activeExtractionProvenance(sourceID: sourceID),
-            alternativeCount: history.count))
+            alternativeCount: history.count,
+            okfMetadata: okfMetadata))
     }
 
     nonisolated private static func sourceMetadataModel(sourceID: SourceID, store: WikiStore) throws -> MetadataPanelModel {
@@ -1150,11 +1155,16 @@ struct SourceDetailView: View {
             throw MetadataProjectionError.missingSource(sourceID)
         }
         let history = try store.processedMarkdownHistory(sourceID: sourceID)
+        let markdown = try store.processedMarkdownHead(sourceID: sourceID)
+        let okfMetadata = try markdown.flatMap {
+            try store.sourceMarkdownOKFMetadata(versionID: $0.id, includeCorrected: false)?.metadata
+        } ?? OKFConceptMetadata()
         return SourceMetadataProjection.make(input: .init(
             source: source,
-            markdown: try store.processedMarkdownHead(sourceID: sourceID),
+            markdown: markdown,
             extraction: try store.activeExtractionProvenance(sourceID: sourceID),
-            alternativeCount: history.count))
+            alternativeCount: history.count,
+            okfMetadata: okfMetadata))
     }
 
 

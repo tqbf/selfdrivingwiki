@@ -452,11 +452,15 @@ struct PageDetailView: View {
         }
         let history = try store.pageVersionHistory(pageID: pageID)
         let headID = try store.pageHeadVersionID(pageID: pageID)
+        let okfMetadata = try headID.flatMap {
+            try store.pageOKFMetadata(versionID: $0, includeCorrected: false)?.metadata
+        } ?? OKFConceptMetadata()
         return PageMetadataProjection.make(input: .init(
             page: page,
             currentVersion: history.first { $0.id == headID },
             origin: try store.pageOrigin(pageID: pageID),
-            sources: sources))
+            sources: sources,
+            okfMetadata: okfMetadata))
     }
 
     nonisolated private static func pageMetadataModel(pageID: PageID, store: WikiStore) throws -> MetadataPanelModel {
@@ -470,11 +474,15 @@ struct PageDetailView: View {
         }
         let history = try store.pageVersionHistory(pageID: pageID)
         let headID = try store.pageHeadVersionID(pageID: pageID)
+        let okfMetadata = try headID.flatMap {
+            try store.pageOKFMetadata(versionID: $0, includeCorrected: false)?.metadata
+        } ?? OKFConceptMetadata()
         return PageMetadataProjection.make(input: .init(
             page: page,
             currentVersion: history.first { $0.id == headID },
             origin: try store.pageOrigin(pageID: pageID),
-            sources: sources))
+            sources: sources,
+            okfMetadata: okfMetadata))
     }
 
 
