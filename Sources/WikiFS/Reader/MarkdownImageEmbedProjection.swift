@@ -1,4 +1,5 @@
 import Foundation
+import Markdown
 import WikiFSCore
 import WikiFSTypes
 
@@ -79,9 +80,134 @@ enum DocumentSourceRendererProjection {
     }
 }
 
+/// Resolves only image destinations authored in the current Markdown. File
+/// Provider paths become typed source IDs after their structure and current
+/// source or bookmark facts match exactly.
+enum MarkdownImageSourcePathResolver {
+    static func resolve(
+        markdown: String,
+        sources: [SourceSummary],
+        bookmarkNodes: [BookmarkNode]
+    ) -> [String: SourceID] {
+        let destinations = imageDestinations(in: markdown)
+        guard destinations.isEmpty == false else { return [:] }
+        let sourcesByID = Dictionary(uniqueKeysWithValues: sources.map { ($0.id, $0) })
+        let sourcesByShortID = Dictionary(grouping: sources, by: { FilenameEscaping.shortID($0.id.rawValue) })
+        return destinations.reduce(into: [:]) { result, destination in
+            let decoded = destination.removingPercentEncoding ?? destination
+            if let sourceID = sourceID(
+                for: decoded,
+                sourcesByID: sourcesByID,
+                sourcesByShortID: sourcesByShortID,
+                bookmarkNodes: bookmarkNodes) {
+                result[destination] = sourceID
+            }
+        }
+    }
+
+    private static func imageDestinations(in markdown: String) -> Set<String> {
+        let document = Document(parsing: markdown)
+        var result = Set<String>()
+        func collect(_ markup: Markup) {
+            if let image = markup as? Image, let source = image.source {
+                result.insert(source)
+            }
+            for child in markup.children { collect(child) }
+        }
+        collect(document)
+        return result
+    }
+
+    private static func sourceID(
+        for path: String,
+        sourcesByID: [SourceID: SourceSummary],
+        sourcesByShortID: [String: [SourceSummary]],
+        bookmarkNodes: [BookmarkNode]
+    ) -> SourceID? {
+        guard let components = rootedComponents(for: path) else { return nil }
+        if components.count == 3, components[0] == "sources", components[1] == "by-id" {
+            let rawID = (components[2] as NSString).deletingPathExtension
+            let sourceID = SourceID(rawValue: rawID)
+            guard let source = sourcesByID[sourceID],
+                  components[2] == FilenameEscaping.byIDSourceFilename(sourceID: sourceID, ext: source.ext)
+            else { return nil }
+            return sourceID
+        }
+        if components.count == 3, components[0] == "sources", components[1] == "by-name" {
+            let stem = ((components[2] as NSString).deletingPathExtension as NSString)
+            let delimiter = stem.range(of: "--", options: .backwards)
+            guard delimiter.location != NSNotFound else { return nil }
+            let shortID = stem.substring(from: NSMaxRange(delimiter))
+            let matches = (sourcesByShortID[shortID] ?? []).filter { source in
+                let humanName = source.displayName ?? source.filename
+                return components[2] == FilenameEscaping.byNameSourceFilename(
+                    filename: humanName,
+                    ext: source.ext,
+                    sourceID: source.id)
+            }
+            return matches.count == 1 ? matches[0].id : nil
+        }
+        if components.first == "bookmarks" {
+            return bookmarkSourceID(
+                components: Array(components.dropFirst()),
+                sourcesByID: sourcesByID,
+                nodes: bookmarkNodes)
+        }
+        return nil
+    }
+
+    /// File Provider links can be relative to a projected page directory. Drop
+    /// only a leading relative prefix and keep the rooted path exact.
+    private static func rootedComponents(for path: String) -> [String]? {
+        let components = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard components.isEmpty == false, components[0].isEmpty == false else { return nil }
+        var rootIndex = 0
+        while rootIndex < components.count,
+              components[rootIndex] == "." || components[rootIndex] == ".." {
+            rootIndex += 1
+        }
+        guard rootIndex < components.count,
+              components[rootIndex] == "sources" || components[rootIndex] == "bookmarks"
+        else { return nil }
+        let rooted = Array(components[rootIndex...])
+        guard rooted.allSatisfy({ $0.isEmpty == false && $0 != "." && $0 != ".." }) else { return nil }
+        return rooted
+    }
+
+    private static func bookmarkSourceID(
+        components: [String],
+        sourcesByID: [SourceID: SourceSummary],
+        nodes: [BookmarkNode]
+    ) -> SourceID? {
+        guard let leaf = components.last else { return nil }
+        var parentID: BookmarkID?
+        for folderName in components.dropLast() {
+            let matches = nodes.filter { node in
+                node.parentID == parentID
+                    && node.kind == .folder
+                    && sanitize(node.label ?? "Untitled") == folderName
+            }
+            guard matches.count == 1 else { return nil }
+            parentID = matches[0].id
+        }
+        let matches = nodes.compactMap { node -> SourceID? in
+            guard node.parentID == parentID,
+                  case .source(let sourceID) = node.content,
+                  let source = sourcesByID[sourceID],
+                  sanitize(source.displayName ?? source.filename) == leaf
+            else { return nil }
+            return sourceID
+        }
+        return matches.count == 1 ? matches[0] : nil
+    }
+
+    private static func sanitize(_ value: String) -> String {
+        value.replacingOccurrences(of: "/", with: "-")
+    }
+}
+
 /// Immutable image routing for one Markdown document. It accepts only exact
-/// sibling-map keys already resolved by the source index. Raw image paths never
-/// select a renderer on their own.
+/// sibling-map keys or File Provider paths already resolved to typed source IDs.
 enum MarkdownImageTargetProjection {
     static func build(
         siblingSources: [String: RendererEmbeddedContent.Source],
@@ -135,9 +261,19 @@ enum MarkdownImageTargetProjection {
         guard target.isEmpty == false,
               target.hasPrefix("/") == false,
               target.hasPrefix("#") == false,
-              URLComponents(string: target)?.scheme == nil,
-              target.split(separator: "/").contains("..") == false
+              URLComponents(string: target)?.scheme == nil
         else { return false }
-        return true
+        let components = target.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard components.allSatisfy({ $0.isEmpty == false }) else { return false }
+        guard components.contains("..") else { return true }
+        var rootIndex = 0
+        while rootIndex < components.count,
+              components[rootIndex] == "." || components[rootIndex] == ".." {
+            rootIndex += 1
+        }
+        guard rootIndex < components.count,
+              components[rootIndex] == "sources" || components[rootIndex] == "bookmarks"
+        else { return false }
+        return components[rootIndex...].allSatisfy({ $0 != "." && $0 != ".." })
     }
 }

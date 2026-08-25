@@ -178,9 +178,17 @@ struct DocumentEmbedResolver: Sendable {
         let resolvedSource: DocumentInlineTarget
         switch target {
         case .renderer(let rendererReference, let pinnedSource):
-            let fallback = DocumentEmbedFallback.image(
-                source: "wiki-blob://source/\(pinnedSource.sourceID.rawValue)",
-                altText: altText)
+            let blobTarget = DocumentInlineTarget.blob(pinnedSource.sourceID)
+            let fallback: DocumentEmbedFallback
+            if bytefulMediaKind(mimeType: pinnedSource.mimeType.rawValue) == .image {
+                fallback = .image(
+                    source: inlineImageSource(blobTarget),
+                    altText: altText)
+            } else {
+                fallback = .media(
+                    label: altText.isEmpty ? "Open source" : altText,
+                    target: blobTarget)
+            }
             let plan = RendererEmbedPlan(
                 placeholderID: "sdw-inline-renderer-\(pinnedSource.digest.hex.prefix(16))",
                 embeddingRole: .inlineContent,

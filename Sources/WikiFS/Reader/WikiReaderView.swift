@@ -1555,15 +1555,18 @@ internal struct WikiReaderRep: NSViewRepresentable {
             // before, just lifted to a shared seam (so chat transcripts can
             // render through it too in Phase A.2).
             let context: WikiRenderContext? = store.map { $0.renderContext() }
-            // The rendered source's own sibling map (nil for pages — no sibling
-            // images). Selection-specific, so it stays here, not in the context.
-            var renderedSourceMap: [String: SourceID]? = nil
-            let contentKind: ReaderMarkdown.ContentKind
-            if case .source(let sourceID) = currentSelection {
-                renderedSourceMap = context?.siblingMaps[sourceID]
-                contentKind = .source
+            // Sources use their exact sibling map. Pages resolve only authored
+            // File Provider by-ID, by-name, and bookmark paths to typed sources.
+            let renderedSourceMap = Self.markdownImageSourceMap(
+                markdown: markdown,
+                currentSelection: currentSelection,
+                context: context,
+                sources: store?.sources ?? [],
+                bookmarkNodes: store?.bookmarkNodes ?? [])
+            let contentKind: ReaderMarkdown.ContentKind = if case .source = currentSelection {
+                .source
             } else {
-                contentKind = .document
+                .document
             }
             let rendererActivationAdmission: RendererEmbedActivationAdmission? = {
                 guard webView?.onRendererActivation != nil,
@@ -1732,7 +1735,24 @@ internal struct WikiReaderRep: NSViewRepresentable {
             })
         }
 
-        private static func markdownImageTargets(
+        static func markdownImageSourceMap(
+            markdown: String,
+            currentSelection: WikiSelection?,
+            context: WikiRenderContext?,
+            sources: [SourceSummary],
+            bookmarkNodes: [BookmarkNode]
+        ) -> [String: SourceID]? {
+            if case .source(let sourceID) = currentSelection {
+                return context?.siblingMaps[sourceID]
+            }
+            let resolved = MarkdownImageSourcePathResolver.resolve(
+                markdown: markdown,
+                sources: sources,
+                bookmarkNodes: bookmarkNodes)
+            return resolved.isEmpty ? nil : resolved
+        }
+
+        static func markdownImageTargets(
             siblingSourceMap: [String: SourceID]?,
             store: WikiStore?,
             installedDescriptors: [RendererDescriptor]

@@ -230,13 +230,15 @@ struct DocumentEmbedResolverTests {
             source: "unsupported.excalidraw",
             altText: "Unsupported drawing",
             target: .renderer(rendererReference: exactPlan.rendererReference, source: source))
-        guard case .rendererDOMFallback(_, .inlineContent, let fallbackPlan, .image(let fallbackSource, let altText)) = resolved else {
-            Issue.record("Unsupported trusted Excalidraw input must keep a DOM image fallback")
+        guard case .rendererDOMFallback(
+            _, .inlineContent, let fallbackPlan,
+            .media(let label, .blob(let fallbackSourceID))) = resolved else {
+            Issue.record("Unsupported trusted Excalidraw input must keep a readable DOM source fallback")
             return
         }
         #expect(fallbackPlan.rendererReference == exactPlan.rendererReference)
-        #expect(fallbackSource == "wiki-blob://source/\(sourceID.rawValue)")
-        #expect(altText == "Unsupported drawing")
+        #expect(fallbackSourceID == sourceID)
+        #expect(label == "Unsupported drawing")
 
         let extremeBytes = Data(##"{"type":"excalidraw","version":2,"elements":[{"type":"rectangle","x":1000000,"y":0,"width":1,"height":1,"angle":0,"strokeColor":"#000000","backgroundColor":"transparent","strokeWidth":1,"opacity":100,"roundness":null,"isDeleted":false}]}"##.utf8)
         let extremeSource = try RendererEmbeddedContent.Source(

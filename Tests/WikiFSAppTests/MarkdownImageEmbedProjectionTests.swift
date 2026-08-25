@@ -107,7 +107,8 @@ struct MarkdownImageTargetProjectionTests {
         #expect(html.contains("sdw-inline-renderer"))
         #expect(html.contains("data-renderer-role=\"inlineContent\""))
         #expect(html.contains("System &lt;&amp;&gt;"))
-        #expect(html.contains(#"<img src="wiki-blob://source/01HIMAGEPROJECTION0000000001" alt="System &lt;&amp;&gt;">"#))
+        #expect(html.contains(#"<a href="wiki-blob://source/01HIMAGEPROJECTION0000000001">System &lt;&amp;&gt;</a>"#))
+        #expect(!html.contains("<img"))
         #expect(!html.contains("sdw-renderer-card__row"))
         #expect(!html.contains("sdw-renderer-card__disclosure"))
         #expect(!html.contains("renderer-action://open"))
@@ -207,6 +208,146 @@ struct MarkdownImageTargetProjectionTests {
                 builtInDescriptors: [],
                 enabledInstalledDescriptors: [incompatible]),
             inlineCapableReferences: [incompatible.reference]))
+    }
+
+    @Test("page canonical source image path uses typed renderer DOM output")
+    @MainActor
+    func pageCanonicalSourcePathUsesTypedRendererDOMOutput() throws {
+        let store = try GRDBWikiStore(databaseURL: temporaryDatabaseURL())
+        let bytes = Data(##"{"type":"excalidraw","version":2,"elements":[{"type":"rectangle","x":0,"y":0,"width":80,"height":40,"angle":0,"strokeColor":"#112233","backgroundColor":"#ffffff","strokeWidth":2,"opacity":100,"roundness":null,"isDeleted":false}]}"##.utf8)
+        let source = try store.addSource(
+            filename: "architecture.json",
+            data: bytes,
+            mimeType: "application/json")
+        let model = WikiStoreModel(store: store)
+        model.reloadFromStore()
+        let context = WikiRenderContext.build(from: model)
+        let canonicalPath = "sources/by-id/\(source.id.rawValue).json"
+
+        #expect(WikiReaderRep.Coordinator.markdownImageSourceMap(
+            markdown: "![Drawing](\(canonicalPath))",
+            currentSelection: .page(PageID(rawValue: "01HPAGECANONICALIMAGE000001")),
+            context: context,
+            sources: model.sources,
+            bookmarkNodes: model.bookmarkNodes) == [canonicalPath: source.id])
+        #expect(WikiReaderRep.Coordinator.markdownImageSourceMap(
+            markdown: "![Wrong](sources/by-id/\(source.id.rawValue).png)",
+            currentSelection: .page(PageID(rawValue: "01HPAGECANONICALIMAGE000001")),
+            context: context,
+            sources: model.sources,
+            bookmarkNodes: model.bookmarkNodes) == nil)
+
+        let descriptor = try excalidrawDescriptor(
+            reference: .init(
+                packageID: BundledRendererPackages.excalidrawPackageID,
+                version: BundledRendererPackages.excalidrawVersion,
+                registrationID: BundledRendererPackages.excalidrawRegistrationID),
+            embeddingRoles: [.inlineContent])
+        for authoredPath in [canonicalPath, "../../\(canonicalPath)"] {
+            let markdown = "![Excalidraw architecture](\(authoredPath))"
+            let sourceMap = try #require(WikiReaderRep.Coordinator.markdownImageSourceMap(
+                markdown: markdown,
+                currentSelection: .page(PageID(rawValue: "01HPAGECANONICALIMAGE000001")),
+                context: context,
+                sources: model.sources,
+                bookmarkNodes: model.bookmarkNodes))
+            let targets = WikiReaderRep.Coordinator.markdownImageTargets(
+                siblingSourceMap: sourceMap,
+                store: store,
+                installedDescriptors: [descriptor])
+            let prepared = ReaderMarkdown.preparedDocument(markdown)
+            let html = MarkdownHTMLRenderer.render(
+                prepared,
+                projection: .init(markdownImages: targets),
+                options: .disabled)
+
+            #expect(html.contains("class=\"sdw-inline-renderer__svg\""))
+            #expect(!html.contains("<img src=\"\(authoredPath)\""))
+            #expect(!html.contains("data-renderer-admitted=\"true\""))
+        }
+    }
+
+    @Test("File Provider source paths resolve on demand without a global path map")
+    func fileProviderSourcePathsResolveOnDemand() {
+        let sourceID = SourceID(rawValue: "01HIMAGEPROJECTION0000000001")
+        let source = SourceSummary(
+            id: sourceID,
+            filename: "architecture.json",
+            ext: "json",
+            mimeType: "application/json",
+            byteSize: 100,
+            createdAt: .distantPast,
+            updatedAt: .distantPast,
+            version: 1,
+            displayName: "Excalidraw Architecture")
+        let folderID = BookmarkID(rawValue: "01HBOOKMARKFOLDER0000000001")
+        let rootRefID = BookmarkID(rawValue: "01HBOOKMARKROOTREF000000001")
+        let nestedRefID = BookmarkID(rawValue: "01HBOOKMARKNESTED000000001")
+        let bookmarks = [
+            BookmarkNode(id: folderID, parentID: nil, position: 0, content: .folder(label: "Design")),
+            BookmarkNode(id: rootRefID, parentID: nil, position: 1, content: .source(sourceID)),
+            BookmarkNode(id: nestedRefID, parentID: folderID, position: 0, content: .source(sourceID)),
+        ]
+        let byID = "sources/by-id/\(sourceID.rawValue).json"
+        let byName = "sources/by-name/\(FilenameEscaping.byNameSourceFilename(filename: source.effectiveName, ext: source.ext, sourceID: sourceID))"
+        let encodedByName = byName.replacingOccurrences(of: " ", with: "%20")
+        let rootBookmark = "bookmarks/Excalidraw Architecture"
+        let nestedBookmark = "bookmarks/Design/Excalidraw Architecture"
+        let pageRelativeByID = "../../\(byID)"
+        let pageRelativeBookmark = "../\(nestedBookmark)"
+        let markdown = [
+            byID,
+            byName,
+            encodedByName,
+            rootBookmark,
+            nestedBookmark,
+            pageRelativeByID,
+            pageRelativeBookmark,
+        ]
+        .map { "![Drawing](<\($0)>)" }
+        .joined(separator: "\n")
+
+        let resolved = MarkdownImageSourcePathResolver.resolve(
+            markdown: markdown,
+            sources: [source],
+            bookmarkNodes: bookmarks)
+
+        #expect(resolved[byID] == sourceID)
+        #expect(resolved[byName] == sourceID)
+        #expect(resolved[encodedByName] == sourceID)
+        #expect(resolved[rootBookmark] == sourceID)
+        #expect(resolved[nestedBookmark] == sourceID)
+        #expect(resolved[pageRelativeByID] == sourceID)
+        #expect(resolved[pageRelativeBookmark] == sourceID)
+
+        let rejectedPaths = [
+            "/\(byID)",
+            "folder/../\(byID)",
+            "sources/../by-id/\(sourceID.rawValue).json",
+            "../../other/\(byID)",
+            "../../sources/by-id/../\(sourceID.rawValue).json",
+            "../../\(byID)/",
+        ]
+        for rejectedPath in rejectedPaths {
+            #expect(MarkdownImageSourcePathResolver.resolve(
+                markdown: "![Wrong](<\(rejectedPath)>)",
+                sources: [source],
+                bookmarkNodes: bookmarks).isEmpty)
+        }
+        #expect(MarkdownImageSourcePathResolver.resolve(
+            markdown: "![Wrong](sources/by-id/\(sourceID.rawValue).png)",
+            sources: [source],
+            bookmarkNodes: bookmarks).isEmpty)
+
+        let duplicate = BookmarkNode(
+            id: BookmarkID(rawValue: "01HBOOKMARKDUPLICATE0000001"),
+            parentID: nil,
+            position: 2,
+            content: .source(sourceID))
+        #expect(MarkdownImageSourcePathResolver.resolve(
+            markdown: "![Ambiguous](<\(rootBookmark)>)",
+            sources: [source],
+            bookmarkNodes: bookmarks + [duplicate]).isEmpty)
     }
 
     @Test("source candidate selection excludes media unsupported MIME and page winners")
@@ -313,23 +454,30 @@ struct MarkdownImageTargetProjectionTests {
         #expect(untrustedReadCalls == 0)
     }
 
+    private func temporaryDatabaseURL() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("markdown-image-projection-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent("WikiFS.sqlite")
+    }
+
     private static let jsonCanvasBytes = Data(#"{"nodes":[],"edges":[]}"#.utf8)
     private static let excalidrawBytes = Data(#"{"type":"excalidraw","version":2,"elements":[]}"#.utf8)
 
     private func excalidrawDescriptor(
+        reference: RendererReference? = nil,
         embeddingRoles: Set<RendererEmbeddingRole>,
         minimumProtocolRevision: Int = 1
     ) throws -> RendererDescriptor {
-        let packageID = try RendererPackageID(validating: "org.example.excalidraw")
-        let version = try RendererPackageVersion(validating: "1.0.0")
+        let resolvedReference = try reference ?? RendererReference(
+            packageID: RendererPackageID(validating: "org.example.excalidraw"),
+            version: RendererPackageVersion(validating: "1.0.0"),
+            registrationID: RendererRegistrationID(validating: "excalidraw"))
         let entryAsset = RendererAsset(
             path: try RendererRelativePath(validating: "index.html"),
             digest: try RendererSHA256Digest(hex: String(repeating: "0", count: 64)))
         return try RendererDescriptor(
-            reference: RendererReference(
-                packageID: packageID,
-                version: version,
-                registrationID: try RendererRegistrationID(validating: "excalidraw")),
+            reference: resolvedReference,
             displayName: "Excalidraw",
             implementation: .webPackage(RendererWebEntryPoint(
                 path: try RendererRelativePath(validating: "index.html"))),

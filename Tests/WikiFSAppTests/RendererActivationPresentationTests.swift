@@ -20,6 +20,25 @@ struct RendererActivationPresentationTests {
         #expect(Set([first, second]).count == 1)
     }
 
+    @Test("source activation reads exact pinned bytes for the renderer window")
+    @MainActor
+    func sourceActivationReadsExactPinnedBytes() throws {
+        let store = try GRDBWikiStore(databaseURL: temporaryDatabaseURL())
+        let bytes = Data(#"{"type":"excalidraw","version":2,"elements":[]}"#.utf8)
+        let source = try store.addSource(
+            filename: "architecture.json",
+            data: bytes,
+            mimeType: "application/json")
+        let activeVersion = try store.activeContentVersion(sourceID: source.id)
+        let version = try #require(activeVersion)
+        let payload = try RendererActivationView.authorizedPayload(
+            store: store,
+            input: .source(versionID: version.id))
+
+        #expect(payload.mimeType == "application/json")
+        #expect(payload.bytes == bytes)
+    }
+
     @Test("different content or a different wiki is a different window")
     func differingContentOrWikiSeparatesWindows() throws {
         let base = try Self.presentation()
@@ -31,6 +50,13 @@ struct RendererActivationPresentationTests {
     }
 
     // MARK: Fixtures
+
+    private func temporaryDatabaseURL() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("renderer-activation-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent("WikiFS.sqlite")
+    }
 
     private static let bytes = Data(#"{"type":"excalidraw","version":2,"elements":[]}"#.utf8)
     private static let otherBytes = Data(#"{"type":"excalidraw","version":2,"elements":[],"files":{}}"#.utf8)

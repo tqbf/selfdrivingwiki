@@ -566,33 +566,39 @@ struct RendererActivationView: View {
     }
 
     private var builtInInputs: BuiltInRendererFactoryInputs {
-        let inputBytes: Data?
-        let mermaidDiagramSource: String?
-        switch request.input {
-        case .inlineArtifact(let artifact):
-            inputBytes = artifact.bytes
-            mermaidDiagramSource = String(decoding: artifact.bytes, as: UTF8.self)
-        case .source:
-            inputBytes = nil
-            mermaidDiagramSource = nil
-        case .markdown:
-            inputBytes = nil
-            mermaidDiagramSource = nil
-        }
+        let payload = authorizedPayload()
         return BuiltInRendererFactoryInputs(
-            sourceBytes: inputBytes,
+            sourceBytes: payload?.bytes,
             pdfQuote: nil,
             htmlSource: nil,
             mermaidProjection: nil,
-            mermaidDiagramSource: mermaidDiagramSource,
+            mermaidDiagramSource: payload.map { String(decoding: $0.bytes, as: UTF8.self) },
             mediaTarget: nil,
             jsonCanvasHostAction: JSONCanvasHostActionRouter.handler(for: store))
     }
 
-    private func packageRendererView(for descriptor: RendererDescriptor) -> AnyView? {
-        guard case .inlineArtifact = request.input else {
+    private func authorizedPayload() -> RendererBridgeInputPayload? {
+        do {
+            return try Self.authorizedPayload(
+                store: store.internalStore,
+                input: request.input)
+        } catch {
+            DebugLog.reader("Renderer window could not read its exact authorized input: \(error)")
             return nil
         }
+    }
+
+    static func authorizedPayload(
+        store: any WikiStore,
+        input: RendererBridgeInput
+    ) throws -> RendererBridgeInputPayload {
+        let reader = RendererAuthorizedInputReader(
+            store: store,
+            authorizedInput: input)
+        return try reader.read(input)
+    }
+
+    private func packageRendererView(for descriptor: RendererDescriptor) -> AnyView? {
         let inputReader = RendererAuthorizedInputReader(
             store: store.internalStore,
             authorizedInput: request.input)

@@ -554,7 +554,8 @@ struct MarkdownHTMLRendererTests {
     func rendererBackedImageSyntaxStaysInDOMWithExactAction(useMarkdownVersion: Bool) throws {
         let fixture = try makeImageRendererActivationFixture(useMarkdownVersion: useMarkdownVersion)
         #expect(fixture.html.contains("class=\"sdw-inline-renderer sdw-inline-renderer--dom\""))
-        #expect(fixture.html.contains("<img src=\"wiki-blob://source/"))
+        #expect(fixture.html.contains("<a href=\"wiki-blob://source/"))
+        #expect(!fixture.html.contains("<img"))
         #expect(fixture.html.contains("Open interactive renderer"))
         #expect(!fixture.html.contains("data-renderer-admitted=\"true\""))
         #expect(!fixture.html.contains("id=\"sdw-inline-renderer-"))
