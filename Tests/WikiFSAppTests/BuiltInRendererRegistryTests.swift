@@ -137,6 +137,7 @@ import WikiFSTypes
         #expect(id == .svg)
         #expect(SourceRendererPresentationPlanner.usesMarkdownSourcePresentation(
             for: source,
+            boundedBytes: bytes,
             currentMarkdown: nil))
 
         let xml = String(decoding: bytes, as: UTF8.self)
@@ -160,6 +161,7 @@ import WikiFSTypes
 
             #expect(SourceRendererPresentationPlanner.usesMarkdownSourcePresentation(
                 for: source,
+                boundedBytes: bytes,
                 currentMarkdown: nil))
             #expect(try SourceRendererPresentationPlanner.plannedBuiltInRenderer(
                 for: source,
@@ -259,8 +261,65 @@ import WikiFSTypes
         #expect(SourceRendererPresentationPlanner.standaloneDiagramSource(source))
         #expect(SourceRendererPresentationPlanner.usesMarkdownSourcePresentation(
             for: source,
+            boundedBytes: Data(content.utf8),
             currentMarkdown: nil))
-        #expect(MermaidSourceDetector.codeBlockMarkdown(from: content) == "````\n\(content)\n````")
+        #expect(SourceRendererPresentationPlanner.sourceMarkdown(for: source, content: content)
+            == "````\n\(content)\n````")
+    }
+
+    @Test("UTF-8 source formats use readable inert text")
+    func utf8SourceFormatsUseReadableInertText() {
+        let cases: [(filename: String, mimeType: String?, content: String)] = [
+            ("settings.json", MimeType.json, #"{"enabled":true}"#),
+            ("document.xml", MimeType.xml, "<?xml version=\"1.0\"?><document/>"),
+            ("certificate.pem", "application/x-pem-file", "-----BEGIN CERTIFICATE-----\nYWJj\n-----END CERTIFICATE-----"),
+            ("guide.adoc", "text/asciidoc", "= Guide\n\nReadable source"),
+            ("settings.yaml", "application/yaml", "enabled: true"),
+            ("main.swift", "application/octet-stream", "struct Example { let value = 1 }"),
+            ("README", nil, "extensionless UTF-8 text"),
+        ]
+
+        for value in cases {
+            let bytes = Data(value.content.utf8)
+            let ext = (value.filename as NSString).pathExtension
+            let source = fixtureSource(
+                filename: value.filename,
+                ext: ext,
+                mimeType: value.mimeType,
+                byteSize: bytes.count)
+
+            #expect(SourceRendererPresentationPlanner.sourceText(for: source, bytes: bytes) == value.content)
+            #expect(SourceRendererPresentationPlanner.usesMarkdownSourcePresentation(
+                for: source,
+                boundedBytes: bytes,
+                currentMarkdown: nil))
+            #expect(SourceRendererPresentationPlanner.sourceMarkdown(for: source, content: value.content)
+                == "````\n\(value.content)\n````")
+        }
+    }
+
+    @Test("Binary and invalid text bytes keep the Raw Source fallback")
+    func invalidTextBytesKeepRawSourceFallback() {
+        let source = fixtureSource(
+            filename: "claimed.txt",
+            ext: "txt",
+            mimeType: "text/plain",
+            byteSize: 8)
+        let rejected: [Data?] = [
+            nil,
+            Data(),
+            Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+            Data([0x61, 0x00, 0x62]),
+            Data([0xFF, 0xFE, 0xFD]),
+        ]
+
+        for bytes in rejected {
+            #expect(SourceRendererPresentationPlanner.sourceText(for: source, bytes: bytes) == nil)
+            #expect(!SourceRendererPresentationPlanner.usesMarkdownSourcePresentation(
+                for: source,
+                boundedBytes: bytes,
+                currentMarkdown: nil))
+        }
     }
 
     @Test("JSON Canvas factory returns nil for unavailable and malformed input so the host keeps Source")

@@ -73,6 +73,7 @@ struct RendererPresentationLifecycle: Sendable, Equatable {
             matchingRenderer: matchingRenderer,
             hasPresentableSource: SourceRendererPresentationPlanner.hasPresentableSource(
                 for: source,
+                boundedBytes: boundedBytes,
                 currentMarkdown: currentMarkdown),
             persistedSelection: persistedSelection)
         loadedFacts = LoadedFacts(

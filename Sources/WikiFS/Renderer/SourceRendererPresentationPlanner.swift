@@ -118,17 +118,38 @@ struct SourceRendererPresentationPlanner: Sendable {
         return MermaidSourceDetector.renderableMarkdown(from: markdown)
     }
 
-    /// Makes raw XML inert in the Markdown reader while preserving it as text.
-    nonisolated static func sourceMarkdown(for source: SourceSummary, content: String) -> String {
-        guard MimeType.isXML(source.mimeType) else { return content }
-        return content
-            .split(separator: "\n", omittingEmptySubsequences: false)
-            .map { "    \($0)" }
-            .joined(separator: "\n")
+    /// Returns strict UTF-8 source text only when the canonical bounded detector
+    /// agrees that the complete byte body is textual. Binary signatures and NUL
+    /// bytes therefore fail closed even when metadata claims a text type.
+    nonisolated static func sourceText(for source: SourceSummary, bytes: Data?) -> String? {
+        guard let bytes, !bytes.isEmpty, !bytes.contains(0),
+              let text = String(data: bytes, encoding: .utf8) else { return nil }
+        let detection = ContentTypeDetector.detect(.init(
+            data: bytes,
+            hints: .init(
+                declaredMIME: source.mimeType.map { .init($0, origin: .trustedGenerated) },
+                filenameExtension: source.ext.isEmpty ? nil : source.ext)))
+        guard !detection.evidence.contains(where: { $0.origin == .binarySignature }),
+              detection.evidence.contains(where: {
+                  $0.origin == .utf8Text || $0.origin == .structuredBytes
+              }) else { return nil }
+        return text
     }
 
-    nonisolated static func hasPresentableSource(for source: SourceSummary, currentMarkdown: String?) -> Bool {
-        usesMarkdownSourcePresentation(for: source, currentMarkdown: currentMarkdown)
+    /// Makes raw source bytes inert in the Markdown reader while preserving
+    /// whitespace and punctuation. Native Markdown remains a rendered document.
+    nonisolated static func sourceMarkdown(for source: SourceSummary, content: String) -> String {
+        guard !MimeType.isMarkdown(source.mimeType) else { return content }
+        return MermaidSourceDetector.codeBlockMarkdown(from: content) ?? content
+    }
+
+    nonisolated static func hasPresentableSource(
+        for source: SourceSummary,
+        boundedBytes: Data? = nil,
+        currentMarkdown: String?
+    ) -> Bool {
+        usesMarkdownSourcePresentation(
+            for: source, boundedBytes: boundedBytes, currentMarkdown: currentMarkdown)
     }
 
     /// Whether Source should use the Markdown/reader path instead of the raw
@@ -136,11 +157,10 @@ struct SourceRendererPresentationPlanner: Sendable {
     /// their MIME type is not text-presentable or is NULL.
     nonisolated static func usesMarkdownSourcePresentation(
         for source: SourceSummary,
+        boundedBytes: Data? = nil,
         currentMarkdown: String?
     ) -> Bool {
-        currentMarkdown != nil ||
-            (!isHTMLSource(source) && MimeType.isSourceTextPresentable(source.mimeType)) ||
-            standaloneDiagramSource(source)
+        currentMarkdown != nil || sourceText(for: source, bytes: boundedBytes) != nil
     }
 
     nonisolated static func mediaTarget(for source: SourceSummary, origin: SourceOrigin?) -> EmbedTarget? {
