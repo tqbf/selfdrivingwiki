@@ -28,15 +28,11 @@ else
     exit 1
 fi
 
-# 1b. uv is installed (needed by the shebang)
-if command -v uv &>/dev/null; then
-    pass "uv is in PATH: $(command -v uv)"
-elif [ -x "$HOME/.local/bin/uv" ]; then
-    warn "uv found at ~/.local/bin/uv but not in PATH — shebang will fail"
-    export PATH="$HOME/.local/bin:$PATH"
-    pass "PATH fixed"
+# 1b. mise-managed uv is installed (needed by the shebang)
+if command -v mise &>/dev/null && mise which uv &>/dev/null; then
+    pass "mise-managed uv is available: $(mise which uv)"
 else
-    fail "uv not found — install: curl -LsSf https://astral.sh/uv/install.sh | sh"
+    fail "mise-managed uv not found — install mise, then run: mise install"
     exit 1
 fi
 

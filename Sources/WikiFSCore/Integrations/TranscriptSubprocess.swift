@@ -114,20 +114,18 @@ enum TranscriptSubprocess {
 
     /// Directories prepended to a subprocess PATH so the script shebang
     /// (`env -S uv run --script`) can find `uv`. Mirrors
-    /// `PdfExtractionService.uvSearchPATH` exactly. The bundled uv binary lives
-    /// in the app's `Contents/Helpers` directory (placed there by build.sh) and
-    /// is resolved via `candidateLocations()`.
+    /// `PdfExtractionService.uvSearchPATH` exactly. The mise-managed uv shim is
+    /// available through the repository's mise activation and PATH.
     static var uvSearchPATH: String {
-        let helpersDir = bundledHelpersDirectory().path
-        let localBin = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".local/bin", isDirectory: true).path
-        return "\(helpersDir):\(localBin):/opt/homebrew/bin:/usr/local/bin"
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let currentPath = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        return "\(home)/.local/share/mise/shims:\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin:\(currentPath)"
     }
 
     // MARK: - Script resolution
 
     /// Resolve a named script, mirroring `PdfExtractionService.resolveScript()`
-    /// priority order: bundled Helpers → dev build → executable sibling → repo tools.
+    /// priority order: app-owned Helpers → dev build → executable sibling → repo tools.
     static func resolveScript(named name: String, repoSubdir: String) -> URL? {
         for candidate in candidateLocations(repoSubdir: repoSubdir) {
             let script = candidate.appendingPathComponent(name, isDirectory: false)

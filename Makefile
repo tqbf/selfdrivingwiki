@@ -220,20 +220,25 @@ deps:
 	@echo "  ✓ build.sh present"
 	@echo "→ Prerequisites OK."
 
-# bun is required for the full .app build (bundled into Contents/Helpers for
-# ACP providers), but NOT for `check`/`test` which only call `swift build`/
-# `swift test`. Gate it here as a prereq of build/release only. See #762.
-# Resolution: BUN_INSTALL/bin/bun → ~/.bun/bin/bun → `command -v bun` (PATH).
-bun-check:
-	@BUN_SRC="${BUN_INSTALL:-$$HOME/.bun}/bin/bun"; \
-	if [ ! -x "$$BUN_SRC" ]; then BUN_SRC=$$(command -v bun 2>/dev/null || true); fi; \
-	if [ -z "$$BUN_SRC" ] || [ ! -x "$$BUN_SRC" ]; then \
-	  echo "✗ FATAL: bun not found" >&2; \
-	  echo "    Install it:  curl -fsSL https://bun.sh/install | bash" >&2; \
-	  echo "    Or set BUN_INSTALL to point at your bun binary's directory." >&2; \
+# The app invokes mise-managed runtimes from the user's PATH. The build does
+# not package bun or uv; `mise install` is the repository setup step.
+mise-check:
+	@command -v mise >/dev/null 2>&1 || { \
+	  echo "✗ FATAL: mise not found" >&2; \
+	  echo "    Install mise: https://mise.jdx.dev/getting-started.html" >&2; \
 	  exit 1; \
-	fi
-	@echo "  ✓ bun found"
+	}
+	@mise which bun >/dev/null 2>&1 || { \
+	  echo "✗ FATAL: mise-managed bun is not installed" >&2; \
+	  echo "    Run: mise install" >&2; \
+	  exit 1; \
+	}
+	@mise which uv >/dev/null 2>&1 || { \
+	  echo "✗ FATAL: mise-managed uv is not installed" >&2; \
+  echo "    Run: mise install" >&2; \
+  exit 1; \
+	}
+	@echo "  ✓ mise-managed bun and uv found"
 
 # ---------------------------------------------------------------------------
 # Build (delegates to ./build.sh: swift build + bundle + codesign)
@@ -258,7 +263,7 @@ icon: $(APP_ICON)
 # signing/local.config (a new laptop infers all of it from the Apple account),
 # and GeneratedKeychain.swift is derived from that file. Prerequisites run left
 # to right in a serial make, so the generator sees the repaired config.
-build: signing-preflight deps bun-check $(APP_ICON) prompts version keychain
+build: signing-preflight deps mise-check $(APP_ICON) prompts version keychain
 	SIGN_IDENTITY="$(DEV_IDENTITY)" PROVISION_PROFILE="$(PROVISION_PROFILE)" ./build.sh $(CONFIG)
 
 # Release signs with DIST_IDENTITY (Developer ID Application) so every nested
@@ -267,7 +272,7 @@ build: signing-preflight deps bun-check $(APP_ICON) prompts version keychain
 # hardened runtime + timestamp for notarization. The old code passed
 # DEV_IDENTITY here, which signed release builds with the Apple Development
 # cert → notarytool rejected it and Gatekeeper rejected it on other machines.
-release: deps bun-check $(APP_ICON) prompts version keychain
+release: deps mise-check $(APP_ICON) prompts version keychain
 	SIGN_IDENTITY="$(DIST_IDENTITY)" PROVISION_PROFILE="$(PROVISION_PROFILE)" ./build.sh release
 
 # Compile-only gate — no .app, no signing. CI / agent verification.

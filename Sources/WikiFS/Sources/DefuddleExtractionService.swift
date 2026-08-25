@@ -2,12 +2,12 @@ import AppKit
 import Foundation
 import WikiFSCore
 
-/// Extracts article markdown + metadata from HTML via the bundled `defuddle`
-/// Node script run with the bundled `bun` runtime.
+/// Extracts article markdown + metadata from HTML via the `defuddle`
+/// Node script run with the mise-managed `bun` runtime.
 ///
 /// This is a near-clone of `PdfExtractionService`'s `Process` pattern, but
 /// strictly simpler:
-/// - no uv/Python/venv (bun is always bundled and required by the build),
+/// - no uv/Python/venv (bun is managed by mise and required for this path),
 /// - HTML on stdin (not a temp file path arg),
 /// - sub-second runtime (a 30s timeout is only a safety net),
 /// - best-effort: `extract()` returns nil on ANY failure so the caller can fall
@@ -41,8 +41,9 @@ enum DefuddleExtractionService {
 
     // MARK: - Public
 
-    /// Resolve the bundled bun runtime + the defuddle script.
-    /// Priority for each: bundled → dev build dir → well-known system location.
+    /// Resolve the mise-managed bun runtime + the defuddle script.
+    /// Bun is resolved from the login-shell PATH so the app uses the repository's
+    /// mise-managed version without packaging a runtime in the app bundle.
     /// Returns nil only if EITHER artifact is unresolvable (caller falls back).
     ///
     /// `nonisolated` — pure filesystem checks, no actor state. Called from both
@@ -75,9 +76,8 @@ enum DefuddleExtractionService {
         let process = Process()
         process.executableURL = bun                              // Helpers/bun
         process.arguments = [script.path, "parse", "-j", "-"]    // [defuddle, "parse","-j","-"]
-        // NO PATH augmentation: bun is an absolute executableURL (unlike pdf2md,
-        // whose shebang needs `uv` on PATH). A Finder-launched app has no shell
-        // PATH, but we never go through a shebang here — bun IS the executable.
+        // Bun is resolved to an absolute PATH entry before launch, so no shebang
+        // lookup is needed here. The login-shell PATH is used by resolveBun().
 
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()
@@ -191,22 +191,19 @@ enum DefuddleExtractionService {
 
     // MARK: - Binary resolution
 
-    /// Resolve the bun runtime. `isExecutableFile` — bun is exec'd directly.
+    /// Resolve the mise-managed bun runtime from PATH. `isExecutableFile` — bun
+    /// is exec'd directly after PATH resolution.
     private static nonisolated func resolveBun() -> URL? {
-        let fm = FileManager.default
-        for candidate in candidateHelperDirectories() {
-            let bun = candidate.appendingPathComponent("bun", isDirectory: false)
-            if fm.isExecutableFile(atPath: bun.path) {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let path = "\(home)/.local/share/mise/shims:" + (ProcessInfo.processInfo.environment["PATH"] ?? "")
+        for directory in path.split(separator: ":", omittingEmptySubsequences: true) {
+            let bun = URL(fileURLWithPath: String(directory), isDirectory: true)
+                .appendingPathComponent("bun", isDirectory: false)
+            if FileManager.default.isExecutableFile(atPath: bun.path) {
                 return bun
             }
         }
-        // ~ ~/.bun/bin/bun (dev / `swift run` before `make build`).
-        let homeBun = fm.homeDirectoryForCurrentUser
-            .appendingPathComponent(".bun/bin/bun", isDirectory: false)
-        if fm.isExecutableFile(atPath: homeBun.path) {
-            return homeBun
-        }
-        DebugLog.extraction("[defuddle] resolveBun: bun not found in any candidate location")
+        DebugLog.extraction("[defuddle] resolveBun: mise-managed bun not found on PATH")
         return nil
     }
 

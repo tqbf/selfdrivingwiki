@@ -3100,19 +3100,16 @@ public final class AgentLauncher {
     ///
     /// `Bundle.url(forAuxiliaryExecutable:)` does NOT search `Contents/Helpers/`
     /// (it only looks in `Contents/MacOS/` and `Contents/Resources/`), so this
-    /// is resolved manually via ``HelpersLocation``. Delegating there is what
-    /// makes it XPC-service-aware: the `wikid` daemon (a bundled XPC service,
-    /// #887) has `Bundle.main` = `wikid.xpc`, so resolving Helpers relative to
-    /// `Bundle.main` looked inside the `.xpc` (no bun there) and ACP ingestion
-    /// failed with "bun was not found on your PATH". `HelpersLocation` walks up
-    /// to the enclosing `.app` so the app and the daemon share one Helpers dir.
+    /// is resolved manually via ``HelpersLocation`` for app-owned helpers such
+    /// as `wikictl`. Toolchain runtimes are resolved from the login-shell PATH
+    /// and are not app-bundle resources.
     public static nonisolated func bundledHelperPath(_ name: String) -> String? {
         HelpersLocation.bundledHelperPath(name)
     }
 
     /// A quick readiness probe for an agent provider — checks whether
-    /// `provider.command[0]` is resolvable on the login-shell PATH (or is the
-    /// bundled bun helper). Returns `nil` when ready, or a user-facing message
+    /// `provider.command[0]` is resolvable on the login-shell PATH. Returns
+    /// `nil` when ready, or a user-facing message
     /// explaining what to fix and pointing at Settings → Providers.
     ///
     /// PURE + injectable (the `resolveCommand` closure) so this can be called
@@ -3120,10 +3117,9 @@ public final class AgentLauncher {
     /// subprocess or a login-shell hop. Mirrors
     /// `ACPExtractionClient.resolveProvider`'s `resolveCommand` seam.
     ///
-    /// `bun` is given special treatment: if the bundled bun helper exists
-    /// (`Contents/Helpers/bun`), it is preferred over a PATH lookup — so the
-    /// app works without a system-wide bun install. This matches
-    /// `resolveACPProviderSpawn` and `ACPExtractionClient.resolveCommand`.
+    /// `bun` is resolved from the login-shell PATH like every other provider
+    /// runtime. mise activates the repository-pinned version in that PATH; the
+    /// the app does not package a separate bun binary.
     ///
     /// #440 — replaces the cryptic `"bun: not found"` spawn error with
     /// actionable guidance. The returned message is shown verbatim in the
@@ -3134,9 +3130,6 @@ public final class AgentLauncher {
     ) -> [String]? {
         guard let command = provider.command, let exe = command.first else {
             return nil
-        }
-        if exe == "bun", let bundled = Self.bundledHelperPath("bun") {
-            return [bundled] + Array(command.dropFirst())
         }
         let resolved = PathPreflight.resolve(
             executable: ShellArgv.expandTilde(exe),
@@ -3161,11 +3154,11 @@ public final class AgentLauncher {
             return "Provider ‘\(provider.label)’ has no command configured. Open Settings → Providers to fix it."
         }
         guard resolver(provider) != nil else {
-            // The binary wasn't found on the login-shell PATH (and no bundled
-            // helper matched). Give the user the actionable guidance.
+            // The binary wasn't found on the login-shell PATH. Give the user
+            // actionable guidance.
             var msg = "‘\(exe)’ was not found on your PATH. "
             if exe == "bun" {
-                msg += "Install bun (bun.sh) or configure a different agent provider."
+                msg += "Install mise and run `mise install`, or configure a different agent provider."
             } else {
                 msg += "Install ‘\(exe)’ and make sure it is on your login shell PATH, or configure a different agent provider."
             }
@@ -3177,9 +3170,9 @@ public final class AgentLauncher {
 
     /// Resolve a `.acp` provider's spawn command (PATH-resolved, since the
     /// swift-acp SDK's `launch()` does no PATH lookup itself) + its
-    /// Keychain-backed API key. `bun` prefers the helper bundled in
-    /// `Contents/Helpers/` over a PATH lookup so the app works without a
-    /// system-wide bun install. Sets `preflightError` and returns `nil` on
+    /// Keychain-backed API key. `bun` is resolved from the login-shell PATH,
+    /// where mise activates the repository-pinned version. Sets `preflightError`
+    /// and returns `nil` on
     /// failure — callers must bail out (`isRunning = false` +
     /// `releaseGenerationSlot()`) when this returns `nil`.
     func resolveACPProviderSpawn(

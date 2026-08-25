@@ -41,10 +41,10 @@ uv run --script youtube-transcript dQw4w9WgXcQ --lang es
 
 ## Installation
 
-Requires [uv](https://docs.astral.sh/uv/):
+Requires [mise](https://mise.jdx.dev/) and the repository's pinned `uv`:
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+mise install
 ```
 
 The `youtube-transcript-api` dependency is declared in the PEP 723 inline

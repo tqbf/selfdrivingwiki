@@ -133,24 +133,6 @@ GIT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 GIT_COMMIT_COUNT="$(git rev-list --count HEAD 2>/dev/null || echo 0)"
 BUILD_VERSION="${GIT_COMMIT_COUNT}-${GIT_SHA}"
 
-# ---------------------------------------------------------------------------
-# Up-front prerequisite gate: bun (fail fast BEFORE the Swift compile)
-# ---------------------------------------------------------------------------
-# The bundling section (~L132) copies the resolved bun binary into helpers/,
-# but that runs AFTER `swift build` — without this gate a developer missing
-# bun waits through the full compile before discovering it. See #762.
-# Resolution chain mirrors the bundling logic, with a PATH fallback.
-BUN_SRC="${BUN_INSTALL:-$HOME/.bun}/bin/bun"
-if [ ! -x "${BUN_SRC}" ]; then
-  BUN_SRC="$(command -v bun 2>/dev/null || true)"
-fi
-if [ -z "${BUN_SRC}" ] || [ ! -x "${BUN_SRC}" ]; then
-  echo "✗ FATAL: bun not found" >&2
-  echo "    Install it:  curl -fsSL https://bun.sh/install | bash" >&2
-  echo "    Or set BUN_INSTALL to point at your bun binary's directory." >&2
-  exit 1
-fi
-
 echo "→ swift build -c ${CONFIG}"
 swift build -c "${CONFIG}"
 BIN_DIR="$(swift build -c "${CONFIG}" --show-bin-path)"
@@ -190,41 +172,6 @@ if [ -x "${PODCAST_HELPER_BIN}" ]; then
 else
   echo "  (${PODCAST_HELPER_NAME} not found at ${PODCAST_HELPER_BIN} — Apple Podcasts transcript ingest will be unavailable)"
 fi
-# Bun runtime — bundled so ACP providers (claude-acp via bunx) work without a
-# system-wide install. Resolved up-front (BUN_INSTALL → ~/.bun → PATH) and
-# gated before the Swift compile; see #762. Here we just copy the already-
-# resolved binary into helpers/. REQUIRED: if absent the build fails rather
-# than shipping a broken app that errors at spawn time.
-if [ -x "${BUN_SRC}" ]; then
-  cp "${BUN_SRC}" "${HELPERS_DIR}/bun"
-  echo "  ✓ bundled bun ($(file -b "${BUN_SRC}" | cut -d, -f1))"
-else
-  echo "  ✗ FATAL: bun not found at ${BUN_SRC}" >&2
-  echo "    Install it:  curl -fsSL https://bun.sh/install | bash" >&2
-  echo "    Or set BUN_INSTALL to point at your bun binary's directory." >&2
-  exit 1
-fi
-
-# uv runtime — bundled so pdf2md (a PEP 723 inline script whose shebang is
-# `env -S uv run --script`) works without a system-wide uv install. Same
-# shape as bun: a single static binary (astral-sh/uv). PdfExtractionService
-# prepends this Helpers dir to the subprocess PATH so the bundled uv is found
-# first; the system-uv PATH fallbacks in uvSearchPATH remain as a safety net.
-# REQUIRED: if absent the build fails rather than shipping a broken app that
-# silently degrades PDF extraction to the agent Read tool. See #766.
-UV_SRC="${UV_INSTALL:-$HOME/.local/bin}/uv"
-if [ ! -x "${UV_SRC}" ]; then
-  UV_SRC="$(command -v uv 2>/dev/null || true)"
-fi
-if [ -x "${UV_SRC}" ]; then
-  cp "${UV_SRC}" "${HELPERS_DIR}/uv"
-  echo "  ✓ bundled uv ($(file -b "${UV_SRC}" | cut -d, -f1))"
-else
-  echo "  ✗ FATAL: uv not found" >&2
-  echo "    Install it:  curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
-  echo "    Or set UV_INSTALL to point at your uv binary's directory." >&2
-  exit 1
-fi
 # wikictl is a plain CLI with no Info.plist, so it can't read the App Group id
 # the way the .app/.appex do. Drop a sidecar that WikiIdentifiers reads. It must
 # NOT live in Contents/Helpers (a code location — codesign rejects unsigned
@@ -259,8 +206,9 @@ if [ -f "${PDF2MD_SRC}" ]; then
 else
   echo "  (pdf2md not found at ${PDF2MD_SRC} — skipping; PDF extraction will fall back to agent Read tool)"
 fi
-# Bundle the defuddle readability extractor (Node script run via the bundled
-# bun). Used by DefuddleExtractionService for HTML article markdown+metadata.
+# Bundle the defuddle readability extractor (Node script run via the
+# mise-managed bun at runtime). Used by DefuddleExtractionService for HTML
+# article markdown+metadata.
 if [ -f "${DEFUDDLE_SRC}" ]; then
   cp "${DEFUDDLE_SRC}" "${HELPERS_DIR}/${DEFUDDLE_NAME}"
   cp "${DEFUDDLE_SRC}" "${BUILD_DIR}/${DEFUDDLE_NAME}"
@@ -323,7 +271,7 @@ fi
 # ship next to the binary (MLX's loader finds it via the bundle Resources path).
 if [ ! -d "Resources/all-MiniLM-L6-v2" ] || [ ! -f "Resources/mlx.metallib" ]; then
   echo "  MLX runtime absent — running prepare step (tools/minilm-prepare/download.py) ..."
-  ( cd tools/minilm-prepare && uv run python download.py )
+  ( cd tools/minilm-prepare && mise exec -- uv run python download.py )
 fi
 if [ -d "Resources/all-MiniLM-L6-v2" ]; then
   echo "  Bundling all-MiniLM-L6-v2 ..."
@@ -655,11 +603,11 @@ PLIST
 	<key>com.apple.developer.team-identifier</key>
 	<string>${TEAM_ID}</string>
 	<!-- UN-sandboxed, like the main app. The daemon's core job is spawning
-	     USER-CONFIGURED agent CLIs (claude-acp via the bundled bun, opencode from
+	     USER-CONFIGURED agent CLIs (claude-acp via mise-managed bun, opencode from
 	     Homebrew, custom provider binaries) that live at arbitrary paths anywhere
 	     on the system. App Sandbox confines a process to its own .xpc bundle +
 	     container, so a sandboxed daemon can execute NONE of them (not even the
-	     bundled bun, which lives in the app bundle outside the .xpc) → ingestion
+	     mise-managed bun, which lives outside the app bundle) → ingestion
 	     is impossible. It also can't reach the SHARED App Group container: inside
 	     the sandbox \`homeDirectoryForCurrentUser\` is the sandbox home, so the
 	     literal container path lands in an empty sandbox-local dir with no wikis
@@ -761,16 +709,6 @@ PLIST
     codesign --force --timestamp=none --sign "${IDENTITY}" \
       "${HELPERS_DIR}/${PODCAST_HELPER_NAME}"
   fi
-  # Bun runtime (nested Mach-O) — sign before the outer app so the seal holds.
-  if [ -f "${HELPERS_DIR}/bun" ]; then
-    codesign --force --timestamp=none --sign "${IDENTITY}" \
-      "${HELPERS_DIR}/bun"
-  fi
-  # uv runtime (nested Mach-O) — same inside-out signing as bun.
-  if [ -f "${HELPERS_DIR}/uv" ]; then
-    codesign --force --timestamp=none --sign "${IDENTITY}" \
-      "${HELPERS_DIR}/uv"
-  fi
   echo "→ codesign appex (${IDENTITY})"
   codesign --force --timestamp=none --sign "${IDENTITY}" \
     --entitlements "${EXT_ENTITLEMENTS}" \
@@ -798,9 +736,6 @@ else
   fi
   if [ -f "${HELPERS_DIR}/${PODCAST_HELPER_NAME}" ]; then
     codesign --force --sign - "${HELPERS_DIR}/${PODCAST_HELPER_NAME}"
-  fi
-  if [ -f "${HELPERS_DIR}/uv" ]; then
-    codesign --force --sign - "${HELPERS_DIR}/uv"
   fi
   codesign --force --sign - "${APPEX}"
   codesign --force --sign - "${APP_BUNDLE}"

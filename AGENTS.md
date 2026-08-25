@@ -463,10 +463,10 @@ monotonicity.
 
 **Python / pdf2md** (from `tools/pdf2md`):
 ```
-uv run pytest tests/                                     # unit + fast integration (60, never hangs)
-uv run pytest tests/test_vlm.py -v                       # VLM pipeline (slow, needs real PDF + ~2 GB model)
-uv run ruff check pdf2md tests/                          # lint
-uv run pyright pdf2md tests/                             # type check
+mise exec -- uv run pytest tests/                       # unit + fast integration (60, never hangs)
+mise exec -- uv run pytest tests/test_vlm.py -v         # VLM pipeline (slow, needs real PDF + ~2 GB model)
+mise exec -- uv run ruff check pdf2md tests/            # lint
+mise exec -- uv run pyright pdf2md tests/               # type check
 ```
 
 Python tests are NOT in CI — run them manually when changing pdf2md or PdfExtractionService.

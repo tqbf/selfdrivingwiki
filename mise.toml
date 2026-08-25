@@ -1,0 +1,8 @@
+# Repository toolchain. Install mise, then run `mise install` from the repo root.
+# Keep these versions aligned across local development and CI.
+[tools]
+bun = "1.4.0"
+uv = "0.9.0"
+
+[settings]
+lockfile = true

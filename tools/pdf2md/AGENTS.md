@@ -4,11 +4,13 @@ Python tool for PDF-to-Markdown conversion using docling + granite-docling.
 
 ## Before committing changes
 
+From the repository root, run `mise install`, then:
+
 ```bash
-uv run ruff format pdf2md tests/
-uv run ruff check pdf2md tests/
-uv run pyright pdf2md tests/
-uv run pytest tests/ -v
+mise exec -- uv run ruff format pdf2md tests/
+mise exec -- uv run ruff check pdf2md tests/
+mise exec -- uv run pyright pdf2md tests/
+mise exec -- uv run pytest tests/ -v
 ```
 
 All four must pass with zero errors.

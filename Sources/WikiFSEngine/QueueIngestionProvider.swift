@@ -117,7 +117,7 @@ public protocol QueueIngestionProvider: Sendable {
     ) async throws
 
     /// Quick readiness probe: checks whether the selected agent provider's
-    /// command binary exists on PATH (or is the bundled bun helper). Returns
+    /// command binary exists on PATH (including the mise-managed bun shim). Returns
     /// `nil` when ready, or a user-facing message explaining what to fix and
     /// how. Called before `runIngestion`/`runLint`/`runLintPages` so the user
     /// gets actionable guidance instead of a cryptic spawn error like

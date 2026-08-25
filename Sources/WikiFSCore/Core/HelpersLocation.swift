@@ -61,8 +61,10 @@ public enum HelpersLocation {
 
     /// The enclosing app bundle's `Contents/Helpers` directory.
     ///
-    /// `build.sh` copies every helper (bun, uv, wikictl, …) into the OUTER app's
-    /// `Contents/Helpers`. But when the running process is a nested bundle —
+    /// `build.sh` copies app-owned helpers (wikictl, scripts, …) into the OUTER
+    /// app's `Contents/Helpers`. Toolchain runtimes such as bun and uv are
+    /// managed by mise and are never packaged. When the running process is a
+    /// nested bundle —
     /// notably the `wikid` daemon, now shipped as a bundled XPC service at
     /// `App.app/Contents/XPCServices/wikid.xpc` (#887) — `Bundle.main` is the
     /// `.xpc`, so a naive `Bundle.main.bundleURL/Contents/Helpers` points at

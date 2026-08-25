@@ -17,6 +17,11 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install mise-managed tools
+        uses: jdx/mise-action@v3
+        with:
+          install: true
+          cache: true
       - name: Install SwiftLint
         # Poured from a bottle (prebuilt), so this is seconds, not a source build.
         run: brew install swiftlint
@@ -31,10 +36,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
+      - name: Install mise-managed tools
+        uses: jdx/mise-action@v3
         with:
-          enable-cache: true
+          install: true
+          cache: true
       - name: Validate skill metadata
         run: uv run tools/validate_skills.py
 
@@ -136,10 +142,11 @@ jobs:
         working-directory: tools/pdf2md
     steps:
       - uses: actions/checkout@v4
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
+      - name: Install mise-managed tools
+        uses: jdx/mise-action@v3
         with:
-          enable-cache: true
+          install: true
+          cache: true
       - name: Lint
         run: uv run ruff check pdf2md tests/
       - name: Type check

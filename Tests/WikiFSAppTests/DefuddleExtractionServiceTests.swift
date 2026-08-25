@@ -5,10 +5,10 @@ import Testing
 
 /// Tests for the defuddle HTML extraction service.
 ///
-/// These tests run the REAL bundled bun + defuddle script (no mocks). They
+/// These tests run the REAL mise-managed bun + defuddle script (no mocks). They
 /// **skip gracefully** if `DefuddleExtractionService.resolve()` returns nil
-/// (CI, clean dev before `make build`) — defuddle is opt-in until the script is
-/// bundled via `build.sh`. See `plans/defuddle-extraction.md` §5.
+/// (CI or a clean dev environment before `mise install`) — defuddle is opt-in
+/// when the toolchain is unavailable.
 @Suite(.timeLimit(.minutes(2))) struct DefuddleExtractionServiceTests {
 
     private enum ProcessExitWaitError: Error {
@@ -108,7 +108,7 @@ import Testing
     // MARK: - End-to-end extraction (real subprocess)
 
     @Test func extractsMarkdownAndMetadata() async throws {
-        guard let _ = resolved else { return }  // skip if unbundled
+        guard let _ = resolved else { return }  // skip if mise-managed bun is unavailable
         let html = #"""
         <html><head>
         <title>Sample Article: A Test Page</title>
