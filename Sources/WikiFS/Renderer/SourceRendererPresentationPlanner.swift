@@ -275,7 +275,6 @@ enum SourceDetailPresentationCharacterization {
         case html = "HTML"
         case rendered = "Rendered"
         case media = "Media"
-        case split = "Split"
     }
 
     struct Result: Sendable, Equatable {
@@ -308,13 +307,13 @@ enum SourceDetailPresentationCharacterization {
 
         let tabs: [Presentation]
         if hasMediaPlayer {
-            tabs = hasProcessedMarkdown ? [.reader, .media, .split] : [.reader, .media]
+            tabs = [.reader, .media]
         } else if isPDF && hasProcessedMarkdown {
-            tabs = [.reader, .pdf, .split]
+            tabs = [.reader, .pdf]
         } else if isHTMLSource && (hasProcessedMarkdown || htmlString != nil) {
-            tabs = hasProcessedMarkdown ? [.reader, .html, .split] : [.html]
+            tabs = hasProcessedMarkdown ? [.reader, .html] : [.html]
         } else if mermaidSource {
-            tabs = [.reader, .rendered, .split]
+            tabs = [.reader, .rendered]
         } else {
             tabs = []
         }

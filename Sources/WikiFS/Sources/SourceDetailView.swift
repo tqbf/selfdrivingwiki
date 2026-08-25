@@ -889,11 +889,9 @@ struct SourceDetailView: View {
                             editBuffer = currentMarkdownContent ?? ""
                             isEditing = true
                             // #211: focus the editor even if the user had
-                            // switched to the PDF, HTML, Media, or Rendered
-                            // tab, where the markdown editor isn't rendered.
-                            // Leave Split alone — the editor is already
-                            // visible there. Rendered-only mode needs Source
-                            // so editing keeps its editor input visible.
+                            // switched to a rendering tab, where the markdown
+                            // editor is not visible. Editing needs Source so
+                            // its editor input remains visible.
                             if rendererPresentationLifecycle.state.selection == .rendered {
                                 var lifecycle = rendererPresentationLifecycle
                                 lifecycle.selectSource()
@@ -1371,8 +1369,8 @@ struct SourceDetailView: View {
     private func handleRendererFallback(_ reason: String) {
         DebugLog.tabs("SourceDetailView: renderer fallback (source=\(file.id.rawValue), reason=\(reason))")
         // The host owns the live Source fallback. Do not persist it: an
-        // explicit Rendered or Split selection and its renderer preference
-        // remain available for a later refresh or reopen retry.
+        // explicit renderer selection and its preference remain available for
+        // a later refresh or reopen retry.
     }
 
     // MARK: Markdown reader / editor

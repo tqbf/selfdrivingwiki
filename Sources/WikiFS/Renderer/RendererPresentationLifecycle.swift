@@ -50,11 +50,6 @@ struct RendererPresentationLifecycle: Sendable, Equatable {
         temporarilyUnavailableRenderer = nil
     }
 
-    mutating func selectSplit(_ reference: RendererReference) {
-        state.selectSplit(reference)
-        temporarilyUnavailableRenderer = nil
-    }
-
     mutating func selectRendered(_ reference: RendererReference) {
         state.selectRendered(reference)
         temporarilyUnavailableRenderer = nil
@@ -116,10 +111,8 @@ struct RendererPresentationLifecycle: Sendable, Equatable {
                availableRenderers.contains(unavailable.reference),
                persistedSelection != .source {
                 switch persistedSelection ?? unavailable.selection {
-                case .rendered:
+                case .rendered, .split:
                     state.selectRendered(unavailable.reference)
-                case .split:
-                    state.selectSplit(unavailable.reference)
                 case .source:
                     break
                 }

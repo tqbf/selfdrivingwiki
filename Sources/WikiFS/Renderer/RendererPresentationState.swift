@@ -32,6 +32,9 @@ struct RendererPresentationState: Sendable, Equatable {
         persistedSelection: Selection?
     ) -> Self {
         guard let matchingRenderer else { return Self(sourceID: sourceID) }
+        let persistedSelection = persistedSelection.map { selection in
+            selection == .split ? .rendered : selection
+        }
         let selection = persistedSelection ?? (hasPresentableSource ? .source : .rendered)
         guard selection != .source else { return Self(sourceID: sourceID) }
         return Self(sourceID: sourceID, selection: selection, pinnedRenderer: matchingRenderer)
@@ -45,12 +48,6 @@ struct RendererPresentationState: Sendable, Equatable {
 
     mutating func selectRendered(_ reference: RendererReference) {
         selection = .rendered
-        pinnedRenderer = reference
-        fallbackReason = nil
-    }
-
-    mutating func selectSplit(_ reference: RendererReference) {
-        selection = .split
         pinnedRenderer = reference
         fallbackReason = nil
     }
@@ -72,14 +69,7 @@ struct RendererPresentationState: Sendable, Equatable {
     }
 }
 
-enum RendererPresentationLayout {
-    /// Both panes must fit within `PageEditorMetrics.detailMinWidth` (420pt).
-    static let minimumSourcePaneWidth: CGFloat = 200
-    static let minimumRenderedPaneWidth: CGFloat = 200
-    static let splitDividerAllowance: CGFloat = 20
-
-    static func supportsSplit(detailWidth: CGFloat) -> Bool {
-        detailWidth >= minimumSourcePaneWidth + minimumRenderedPaneWidth + splitDividerAllowance
-    }
+enum RendererHostMetrics {
+    static let minimumFallbackPaneWidth: CGFloat = 200
 }
 #endif

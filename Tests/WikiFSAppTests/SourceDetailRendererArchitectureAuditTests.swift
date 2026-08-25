@@ -97,24 +97,18 @@ import Testing
         #expect(host.contains("shouldApplyDeferredFallback(failedSourceID: failedSourceID, currentState: state)"))
     }
 
-    @Test func rendererShortcutsDoNotOverlapGlobalCommandNumberTabs() throws {
+    @Test func rendererHostUsesOneTabPerAvailableRenderingAndNoSplitControl() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let content = try String(contentsOf: root.appendingPathComponent("Sources/WikiFS/Window/ContentView.swift"), encoding: .utf8)
         let host = try String(contentsOf: root.appendingPathComponent("Sources/WikiFS/Renderer/RendererHostView.swift"), encoding: .utf8)
-        #expect(content.contains("KeyEquivalent(Character(\"\\(i + 1)\")), modifiers: .command"))
-        for shortcut in ["1", "2", "3"] {
-            #expect(host.contains(".keyboardShortcut(\"\(shortcut)\", modifiers: [.command, .option])"))
-            #expect(host.contains(".keyboardShortcut(\"\(shortcut)\", modifiers: .command)") == false)
-        }
-        #expect(host.contains("primaryAction:"))
-    }
 
-    @Test("Renderer host guards Split with the detail-width contract") func rendererHostGuardsSplitWidth() throws {
-        let root = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let host = try String(contentsOf: root.appendingPathComponent("Sources/WikiFS/Renderer/RendererHostView.swift"), encoding: .utf8)
-        #expect(host.contains("RendererPresentationLayout.supportsSplit(detailWidth: PageEditorMetrics.detailMinWidth)"))
+        #expect(host.contains("Picker(\"Rendering\", selection: selectedTab)"))
+        #expect(host.contains(".pickerStyle(.segmented)"))
+        #expect(host.contains("ForEach(descriptors, id: \\.reference)"))
+        #expect(host.contains("Text(descriptor.displayName).tag(Tab.renderer(descriptor.reference))"))
+        #expect(host.contains(".accessibilityLabel(\"Source rendering\")"))
+        #expect(host.contains("Button(\"Split\")") == false)
+        #expect(host.contains("HSplitView") == false)
     }
 }
 #endif
