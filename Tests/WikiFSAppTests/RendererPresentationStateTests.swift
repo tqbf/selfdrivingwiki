@@ -83,7 +83,7 @@ import WikiFSTypes
         #expect(state.fallbackReason == nil)
     }
 
-    @Test("Production lifecycle: an unchanged source refresh preserves its pinned renderer and selected mode")
+    @Test("Production lifecycle: an unchanged source refresh preserves its renderer tab")
     func unchangedRefreshPreservesPinnedRendererAndMode() {
         let source = pdfSource()
         let pdf = BuiltInRendererReference.reference(for: .pdf)
@@ -93,7 +93,6 @@ import WikiFSTypes
             matchingRenderer: pdf,
             currentMarkdown: nil,
             persistedSelection: .rendered)
-        lifecycle.selectSplit(pdf)
 
         lifecycle.refreshLoadedSource(
             source: source,
@@ -102,7 +101,7 @@ import WikiFSTypes
             currentMarkdown: nil,
             persistedSelection: .rendered)
 
-        #expect(lifecycle.state.selection == .split)
+        #expect(lifecycle.state.selection == .rendered)
         #expect(lifecycle.state.pinnedRenderer == pdf)
     }
 
@@ -164,22 +163,17 @@ import WikiFSTypes
         #expect(lifecycle.state.pinnedRenderer == pdf)
     }
 
-    @Test("The detail minimum width admits the production Split layout")
-    func detailMinimumWidthSupportsSplit() {
-        #expect(RendererPresentationLayout.supportsSplit(detailWidth: PageEditorMetrics.detailMinWidth))
-    }
-
-    @Test("A removed pin lets Split choose an available renderer")
-    func unavailablePinDoesNotBlockSplitSelection() {
+    @Test("A legacy Split preference opens the matching renderer tab")
+    func legacySplitPreferenceNormalizesToRendered() {
         let pdf = BuiltInRendererReference.reference(for: .pdf)
-        let html = BuiltInRendererReference.reference(for: .html)
-        var state = RendererPresentationState(sourceID: SourceID(rawValue: "01J00000000000000000000000"))
-        state.selectRendered(pdf)
-        state.keepPinnedRenderer(available: [html])
-        state.selectSplit(html)
+        let state = RendererPresentationState.defaultState(
+            sourceID: SourceID(rawValue: "01J00000000000000000000000"),
+            matchingRenderer: pdf,
+            hasPresentableSource: true,
+            persistedSelection: .split)
 
-        #expect(state.selection == .split)
-        #expect(state.pinnedRenderer == html)
+        #expect(state.selection == .rendered)
+        #expect(state.pinnedRenderer == pdf)
     }
 
     @Test("Fallback reason survives the transition to Source")
@@ -193,26 +187,6 @@ import WikiFSTypes
         #expect(state.fallbackReason == "The selected renderer is unavailable.")
         state.selectSource()
         #expect(state.fallbackReason == nil)
-    }
-
-    @Test("Presentation controls describe the active visual and VoiceOver state")
-    func presentationControlsDescribeActiveVisualAndVoiceOverState() {
-        let source = RendererPresentationControlState(
-            presentation: .source,
-            selectedPresentation: .rendered)
-        let rendered = RendererPresentationControlState(
-            presentation: .rendered,
-            selectedPresentation: .rendered)
-        let split = RendererPresentationControlState(
-            presentation: .split,
-            selectedPresentation: .rendered)
-
-        #expect(source.isSelected == false)
-        #expect(source.accessibilityValue == "Not selected")
-        #expect(rendered.isSelected)
-        #expect(rendered.accessibilityValue == "Selected")
-        #expect(split.isSelected == false)
-        #expect(split.accessibilityValue == "Not selected")
     }
 
     @Test("Fallback waits for explicit renderer selection before recovering")
@@ -231,20 +205,6 @@ import WikiFSTypes
         #expect(state.selection == .rendered)
         #expect(state.pinnedRenderer == pdf)
         #expect(state.fallbackReason == nil)
-    }
-
-    @Test("Split metrics fit the source detail minimum width")
-    func splitMetricsFitDetailMinimumWidth() {
-        #expect(RendererPresentationLayout.supportsSplit(detailWidth: PageEditorMetrics.detailMinWidth))
-    }
-
-    @Test func refreshKeepsThePinnedSplitPresentationWhenRendererRemainsAvailable() {
-        let pdf = BuiltInRendererReference.reference(for: .pdf)
-        var state = RendererPresentationState(sourceID: SourceID(rawValue: "01J00000000000000000000000"))
-        state.selectSplit(pdf)
-        state.keepPinnedRenderer(available: [pdf])
-        #expect(state.selection == .split)
-        #expect(state.pinnedRenderer == pdf)
     }
 
     @Test("Lifecycle: an unextracted PDF resolves Rendered only after its source facts load")
@@ -444,8 +404,8 @@ import WikiFSTypes
         #expect(lifecycle.state.fallbackReason == nil)
     }
 
-    @Test("Lifecycle: transient omission restores Split only with the same exact renderer")
-    func lifecycleSplitRecoveryRejectsRendererSubstitution() {
+    @Test("Lifecycle: transient omission restores a legacy Split preference as Rendered only with the same exact renderer")
+    func lifecycleLegacySplitRecoveryRejectsRendererSubstitution() {
         let source = lifecycleSource(
             filename: "architecture.svg",
             ext: "svg",
@@ -487,7 +447,7 @@ import WikiFSTypes
             boundedBytes: bytes,
             currentMarkdown: nil,
             persistedSelection: .split)
-        #expect(lifecycle.state.selection == .split)
+        #expect(lifecycle.state.selection == .rendered)
         #expect(lifecycle.state.pinnedRenderer == svg)
         #expect(lifecycle.state.fallbackReason == nil)
     }
@@ -509,17 +469,6 @@ import WikiFSTypes
         #expect(lifecycle.state.sourceID == secondSource)
         #expect(lifecycle.state.selection == .source)
         #expect(lifecycle.state.pinnedRenderer == nil)
-    }
-
-    @Test("Split uses the first current descriptor when its pin is stale")
-    @MainActor
-    func splitUsesCurrentDescriptorWhenPinIsStale() {
-        let pdf = BuiltInRendererReference.reference(for: .pdf)
-        let html = BuiltInRendererReference.reference(for: .html)
-
-        #expect(RendererHostView<EmptyView, EmptyView>.splitRendererReference(
-            pinnedRenderer: pdf,
-            availableRendererReferences: [html]) == html)
     }
 
     @Test("Deferred fallback applies only to the source that scheduled it")

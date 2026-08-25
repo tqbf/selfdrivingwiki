@@ -372,7 +372,7 @@ import WikiFSTypes
         #expect(try SourceRendererPresentationPlanner.plannedBuiltInRenderer(for: missing, boundedBytes: nil, currentMarkdown: nil, origin: nil) == nil)
     }
 
-    @Test("Characterization: PDF with markdown keeps Reader/PDF/Split tabs")
+    @Test("PDF with markdown exposes Reader and PDF rendering tabs")
     func characterizesPDFWithMarkdown() {
         let result = SourceDetailPresentationCharacterization.characterize(
             source: fixtureSource(filename: "paper.pdf", ext: "pdf", mimeType: MimeType.pdf, byteSize: 4),
@@ -381,7 +381,7 @@ import WikiFSTypes
             hasProcessedMarkdown: true,
             origin: nil)
         #expect(result.contentArea == .tabbed)
-        #expect(result.tabs == [.reader, .pdf, .split])
+        #expect(result.tabs == [.reader, .pdf])
     }
 
     @Test("Characterization: PDF without markdown renders PDF only")
@@ -396,7 +396,7 @@ import WikiFSTypes
         #expect(result.tabs == [])
     }
 
-    @Test("Characterization: HTML with markdown keeps Reader/HTML/Split tabs")
+    @Test("HTML with markdown exposes Reader and HTML rendering tabs")
     func characterizesHTMLWithMarkdown() {
         let result = SourceDetailPresentationCharacterization.characterize(
             source: fixtureSource(filename: "page.html", ext: "html", mimeType: MimeType.html, byteSize: 14),
@@ -405,7 +405,7 @@ import WikiFSTypes
             hasProcessedMarkdown: true,
             origin: nil)
         #expect(result.contentArea == .tabbed)
-        #expect(result.tabs == [.reader, .html, .split])
+        #expect(result.tabs == [.reader, .html])
     }
 
     @Test("Characterization: HTML without markdown renders HTML only")
@@ -420,7 +420,7 @@ import WikiFSTypes
         #expect(result.tabs == [.html])
     }
 
-    @Test("Characterization: Mermaid keeps Reader/Rendered/Split tabs")
+    @Test("Mermaid exposes Reader and Rendered tabs")
     func characterizesMermaid() {
         let result = SourceDetailPresentationCharacterization.characterize(
             source: fixtureSource(filename: "diagram.mmd", ext: "mmd", mimeType: nil, byteSize: 12),
@@ -429,10 +429,10 @@ import WikiFSTypes
             hasProcessedMarkdown: false,
             origin: nil)
         #expect(result.contentArea == .tabbed)
-        #expect(result.tabs == [.reader, .rendered, .split])
+        #expect(result.tabs == [.reader, .rendered])
     }
 
-    @Test("Characterization: media with transcript keeps Reader/Media/Split tabs")
+    @Test("Media with transcript exposes Reader and Media tabs")
     func characterizesMediaWithTranscript() {
         let result = SourceDetailPresentationCharacterization.characterize(
             source: fixtureSource(filename: "video", ext: "", mimeType: "video/youtube", byteSize: 0),
@@ -441,7 +441,7 @@ import WikiFSTypes
             hasProcessedMarkdown: true,
             origin: fixtureOrigin(provider: .youtube, plan: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", externalIdentity: "dQw4w9WgXcQ"))
         #expect(result.contentArea == .tabbed)
-        #expect(result.tabs == [.reader, .media, .split])
+        #expect(result.tabs == [.reader, .media])
     }
 
     @Test("Characterization: malformed media metadata keeps fallback with no Media tab")
