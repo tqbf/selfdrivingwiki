@@ -1,5 +1,6 @@
 #if os(macOS)
 import Foundation
+import SwiftUI
 import Testing
 import WikiFSCore
 import WikiFSTypes
@@ -123,6 +124,23 @@ import WikiFSTypes
             currentMarkdown: "flowchart LR",
             origin: nil)
         #expect(id == .mermaid)
+    }
+
+    @Test("Mermaid factory prefers standalone diagram source over document projection")
+    @MainActor
+    func mermaidFactoryPrefersStandaloneDiagramSource() {
+        let descriptor = BuiltInRendererDescriptors.descriptor(for: .mermaid)
+        let inputs = BuiltInRendererFactoryInputs(
+            sourceBytes: nil,
+            pdfQuote: nil,
+            htmlSource: nil,
+            mermaidProjection: AnyView(Text("embedded section")),
+            mermaidDiagramSource: "flowchart LR\nA --> B",
+            mediaTarget: nil,
+            jsonCanvasHostAction: { _ in })
+
+        #expect(BuiltInRendererFactoryMap.makeView(for: descriptor, inputs: inputs) != nil)
+        #expect(inputs.mermaidDiagramSource == "flowchart LR\nA --> B")
     }
 
     @Test("Planner maps a complete JSON Canvas document to the native built-in")

@@ -1,12 +1,12 @@
 {
   "revision": 1,
   "packageID": "org.selfdrivingwiki.excalidraw-readonly",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "descriptors": [
     {
       "reference": {
         "packageID": "org.selfdrivingwiki.excalidraw-readonly",
-        "version": "1.0.1",
+        "version": "1.0.2",
         "registrationID": "excalidraw"
       },
       "displayName": "Excalidraw",
