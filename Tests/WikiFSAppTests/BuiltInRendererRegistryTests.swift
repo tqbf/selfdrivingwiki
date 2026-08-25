@@ -1,5 +1,6 @@
 #if os(macOS)
 import Foundation
+import SwiftUI
 import Testing
 import WikiFSCore
 import WikiFSTypes
@@ -114,6 +115,36 @@ import WikiFSTypes
         #expect(SourceRendererPresentationPlanner.htmlSourceString(for: source, bytes: nil) == nil)
     }
 
+    @Test("Planner maps SVG MIME and bytes to the SVG built-in")
+    func plannerMatchesSVG() throws {
+        let bytes = Data("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 10 10\"></svg>".utf8)
+        let source = fixtureSource(
+            filename: "diagram.svg",
+            ext: "svg",
+            mimeType: "image/svg+xml",
+            byteSize: bytes.count)
+
+        let id = try SourceRendererPresentationPlanner.plannedBuiltInRenderer(
+            for: source,
+            boundedBytes: bytes,
+            currentMarkdown: nil,
+            origin: nil)
+
+        #expect(id == .svg)
+    }
+
+    @Test("SVG factory requires source bytes")
+    @MainActor
+    func svgFactoryRequiresSourceBytes() throws {
+        let descriptor = BuiltInRendererDescriptors.descriptor(for: .svg)
+        #expect(BuiltInRendererFactoryMap.makeView(
+            for: descriptor,
+            inputs: try Self.factoryInputs(sourceBytes: Data("<svg/>".utf8))) != nil)
+        #expect(BuiltInRendererFactoryMap.makeView(
+            for: descriptor,
+            inputs: try Self.factoryInputs(sourceBytes: nil)) == nil)
+    }
+
     @Test("Planner maps Mermaid extension/content to the Mermaid built-in")
     func plannerMatchesMermaid() throws {
         let source = fixtureSource(filename: "diagram.mmd", ext: "mmd", mimeType: nil, byteSize: 12)
@@ -123,6 +154,23 @@ import WikiFSTypes
             currentMarkdown: "flowchart LR",
             origin: nil)
         #expect(id == .mermaid)
+    }
+
+    @Test("Mermaid factory prefers standalone diagram source over document projection")
+    @MainActor
+    func mermaidFactoryPrefersStandaloneDiagramSource() {
+        let descriptor = BuiltInRendererDescriptors.descriptor(for: .mermaid)
+        let inputs = BuiltInRendererFactoryInputs(
+            sourceBytes: nil,
+            pdfQuote: nil,
+            htmlSource: nil,
+            mermaidProjection: AnyView(Text("embedded section")),
+            mermaidDiagramSource: "flowchart LR\nA --> B",
+            mediaTarget: nil,
+            jsonCanvasHostAction: { _ in })
+
+        #expect(BuiltInRendererFactoryMap.makeView(for: descriptor, inputs: inputs) != nil)
+        #expect(inputs.mermaidDiagramSource == "flowchart LR\nA --> B")
     }
 
     @Test("Planner maps a complete JSON Canvas document to the native built-in")

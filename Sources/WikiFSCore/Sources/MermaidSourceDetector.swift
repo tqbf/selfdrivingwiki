@@ -40,6 +40,16 @@ public enum MermaidSourceDetector {
         return false
     }
 
+    /// Returns the raw diagram DSL only when the content is a standalone Mermaid
+    /// source. Markdown documents with Mermaid fences keep their document reader.
+    public static func standaloneDiagramSource(from content: String) -> String? {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, MermaidValidator.mermaidBlocks(in: content).isEmpty else {
+            return nil
+        }
+        return trimmed
+    }
+
     /// The mermaid source the "Rendered" tab should draw: when `content` is a
     /// standalone `.mmd` file (no fenced block), wrap the raw text in a
     /// ` ```mermaid ` fence so the reader's render pipeline picks it up; when the

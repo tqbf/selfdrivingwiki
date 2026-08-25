@@ -101,6 +101,25 @@ struct MermaidSourceDetectorTests {
             mimeType: nil, filename: "blank.mmd", content: ""))
     }
 
+    // MARK: - standaloneDiagramSource
+
+    @Test func returnsStandaloneDiagramDSLWithoutReaderWrapper() {
+        let raw = "\nflowchart TD\n    A --> B\n"
+        #expect(MermaidSourceDetector.standaloneDiagramSource(from: raw) == "flowchart TD\n    A --> B")
+    }
+
+    @Test func fencedMarkdownRemainsADocumentProjection() {
+        let markdown = """
+        # Design
+
+        ```mermaid
+        flowchart TD
+          A --> B
+        ```
+        """
+        #expect(MermaidSourceDetector.standaloneDiagramSource(from: markdown) == nil)
+    }
+
     // MARK: - renderableMarkdown
 
     @Test func wrapsStandaloneSourceInFence() {

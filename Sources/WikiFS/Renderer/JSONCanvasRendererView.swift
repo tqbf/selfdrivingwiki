@@ -228,6 +228,11 @@ struct JSONCanvasRendererView: View {
                 .onMoveCommand { handleMoveCommand($0, from: .canvas) }
                 .simultaneousGesture(dragGesture)
                 .simultaneousGesture(magnifyGesture)
+                .diagramScrollZoom { steps in
+                    applyScrollZoom(steps, anchoredAt: .init(
+                        x: geometry.size.width / 2,
+                        y: geometry.size.height / 2))
+                }
                 .accessibilityLabel("JSON Canvas nodes")
                 .accessibilityHint("Use the Up and Down Arrow keys to select a canvas node.")
                 .onAppear {
@@ -318,6 +323,14 @@ struct JSONCanvasRendererView: View {
 
     private static func dragDistance(_ point: JSONCanvasPoint) -> Double {
         (point.x * point.x + point.y * point.y).squareRoot()
+    }
+
+    private func applyScrollZoom(_ steps: Int, anchoredAt point: JSONCanvasPoint) {
+        guard steps != 0 else { return }
+        let factor = pow(ZoomScale.stepFactor, Double(steps))
+        viewport.zoom(by: factor, anchoredAt: point)
+        magnificationBaseline = viewport.scale
+        reportInteraction()
     }
 
     private func selectOutlineEntry(_ entry: JSONCanvasOutlineEntry) {

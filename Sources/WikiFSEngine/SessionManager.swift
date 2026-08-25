@@ -257,7 +257,12 @@ public final class SessionManager {
         } catch {
             if sessionFlights[wikiID]?.token == flight.token {
                 sessionFlights.removeValue(forKey: wikiID)
-                readiness[wikiID] = .failed(String(describing: error))
+                let failure = String(describing: error)
+                readiness[wikiID] = .failed(failure)
+                let dbPath = containerDirectory
+                    .appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false).path
+                openErrors[wikiID] = "Could not open the wiki database at \(dbPath). \(failure)"
+                DebugLog.store("SessionManager: asynchronous wiki session boot failed for \(wikiID.rawValue): \(failure)")
             }
             throw error
         }

@@ -18,6 +18,7 @@ enum BuiltInRendererFactoryMap {
     static let factories: [BuiltInRendererID: Factory] = [
         .pdf: makePDF,
         .html: makeHTML,
+        .svg: makeSVG,
         .mermaid: makeMermaid,
         .media: makeMedia,
         .jsonCanvas: makeJSONCanvas,
@@ -63,6 +64,11 @@ enum BuiltInRendererFactoryMap {
                 }
             }
         })
+    }
+
+    private static func makeSVG(_ inputs: BuiltInRendererFactoryInputs) -> AnyView? {
+        guard let bytes = inputs.sourceBytes, bytes.isEmpty == false else { return nil }
+        return AnyView(SVGRendererView(bytes: bytes))
     }
 
     private static func makeMermaid(_ inputs: BuiltInRendererFactoryInputs) -> AnyView? {

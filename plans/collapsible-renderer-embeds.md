@@ -213,6 +213,18 @@ Serialize the other shared-file ownership in this order: slice 3, then slice 5, 
 9. Commit all repository changes with a Conventional Commit. Push the feature branch and open a PR.
 10. Do not merge, enable auto-merge, enqueue the PR, or change issue state. Report the exact PR head for operator approval.
 
+# Diagram scroll zoom update
+
+The pointer wheel now controls renderer zoom while the pointer is over a diagram. The renderer consumes only unmodified wheel events. Modified wheel events remain available to system and app shortcuts.
+
+- Mermaid SVG uses a bounded 0.5–3.0 viewport transform in an expanded row. The transform keeps the diagram point below the pointer fixed.
+- Generic SVG sources use the built-in inert SVG renderer in Rendered, Split, and separate-window presentations. JavaScript and navigation are disabled, and wheel zoom is bounded to 0.5–3.0.
+- The Mermaid window uses the shared app wheel-step monitor and the same 0.5–3.0 scale bounds.
+- JSON Canvas uses its shared native view in both presentations. Wheel input changes the renderer viewport and keeps the viewport center fixed.
+- Excalidraw uses its shared reviewed package in both presentations. Its existing 0.25–4.0 scale now keeps the diagram point below the pointer fixed.
+- Reader page zoom remains separate. It changes attachment presentation size but does not change renderer viewport state.
+- Trackpad magnification and keyboard zoom controls remain available where they existed before this update.
+
 # Acceptance Criteria
 
 - **AC.1:** Every eligible interactive embed starts as a collapsed line item with a disclosure control, a readable title, and a trailing **Open in Window** action.
