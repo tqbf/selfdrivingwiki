@@ -48,6 +48,12 @@ public enum MimeType {
     /// `application/xhtml+xml`.
     public static let xhtml = "application/xhtml+xml"
 
+    /// `application/xml`.
+    public static let xml = "application/xml"
+
+    /// `image/svg+xml`.
+    public static let svg = "image/svg+xml"
+
     /// `image/jpeg`.
     public static let imageJPEG = "image/jpeg"
 
@@ -77,6 +83,20 @@ public enum MimeType {
     public static func isText(_ mime: String?) -> Bool {
         guard let mime else { return false }
         return mime.lowercased().hasPrefix(textPrefix)
+    }
+
+    /// Whether source bytes can be presented as text without changing ingestion policy.
+    /// XML is textual even when its MIME type is outside `text/*`; SVG remains visually
+    /// renderable while also exposing its XML source.
+    public static func isSourceTextPresentable(_ mime: String?) -> Bool {
+        isText(mime) || isXML(mime)
+    }
+
+    /// Whether `mime` contains XML source that must display as code rather than markup.
+    public static func isXML(_ mime: String?) -> Bool {
+        guard let mime else { return false }
+        let normalized = mime.lowercased()
+        return normalized == "text/xml" || normalized == xml || normalized == svg
     }
 
     /// Whether `mime` is one of the recognized Markdown variants

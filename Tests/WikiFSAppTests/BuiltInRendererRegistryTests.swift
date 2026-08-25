@@ -117,7 +117,11 @@ import WikiFSTypes
 
     @Test("Planner maps SVG MIME and bytes to the SVG built-in")
     func plannerMatchesSVG() throws {
-        let bytes = Data("<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 10 10\"></svg>".utf8)
+        let bytes = Data("""
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">
+          <circle cx="5" cy="5" r="4"/>
+        </svg>
+        """.utf8)
         let source = fixtureSource(
             filename: "diagram.svg",
             ext: "svg",
@@ -131,6 +135,38 @@ import WikiFSTypes
             origin: nil)
 
         #expect(id == .svg)
+        #expect(SourceRendererPresentationPlanner.usesMarkdownSourcePresentation(
+            for: source,
+            currentMarkdown: nil))
+
+        let xml = String(decoding: bytes, as: UTF8.self)
+        let sourceMarkdown = SourceRendererPresentationPlanner.sourceMarkdown(
+            for: source,
+            content: xml)
+        #expect(sourceMarkdown.hasPrefix("    <svg"))
+        #expect(sourceMarkdown.contains("\n      <circle"))
+        #expect(sourceMarkdown.hasSuffix("\n    </svg>"))
+    }
+
+    @Test("Generic XML uses source text presentation without a renderer")
+    func genericXMLUsesSourceTextPresentation() throws {
+        for mimeType in ["application/xml", "text/xml"] {
+            let bytes = Data("<document>Hello</document>".utf8)
+            let source = fixtureSource(
+                filename: "document.xml",
+                ext: "xml",
+                mimeType: mimeType,
+                byteSize: bytes.count)
+
+            #expect(SourceRendererPresentationPlanner.usesMarkdownSourcePresentation(
+                for: source,
+                currentMarkdown: nil))
+            #expect(try SourceRendererPresentationPlanner.plannedBuiltInRenderer(
+                for: source,
+                boundedBytes: bytes,
+                currentMarkdown: nil,
+                origin: nil) == nil)
+        }
     }
 
     @Test("SVG factory requires source bytes")

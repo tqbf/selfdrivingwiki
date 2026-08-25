@@ -134,8 +134,7 @@ struct SourceDetailView: View {
     // MARK: - Computed
 
     private var isMarkdownNative: Bool {
-        if let mime = file.mimeType { return MimeType.isText(mime) }
-        return false
+        MimeType.isSourceTextPresentable(file.mimeType)
     }
 
     /// A PDF quote anchor is consumed only before a markdown extraction exists.
@@ -1426,7 +1425,7 @@ struct SourceDetailView: View {
             // sources never reach here (they hit `binaryFallback`).
             let sourceMarkdown = SourceRendererPresentationPlanner.standaloneDiagramSource(file)
                 ? MermaidSourceDetector.codeBlockMarkdown(from: content) ?? content
-                : content
+                : SourceRendererPresentationPlanner.sourceMarkdown(for: file, content: content)
             WikiReaderView(markdown: sourceMarkdown,
                             currentSelection: store.selection,
                             store: store,

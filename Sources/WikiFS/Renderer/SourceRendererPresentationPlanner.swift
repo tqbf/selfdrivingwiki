@@ -118,6 +118,15 @@ struct SourceRendererPresentationPlanner: Sendable {
         return MermaidSourceDetector.renderableMarkdown(from: markdown)
     }
 
+    /// Makes raw XML inert in the Markdown reader while preserving it as text.
+    nonisolated static func sourceMarkdown(for source: SourceSummary, content: String) -> String {
+        guard MimeType.isXML(source.mimeType) else { return content }
+        return content
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { "    \($0)" }
+            .joined(separator: "\n")
+    }
+
     nonisolated static func hasPresentableSource(for source: SourceSummary, currentMarkdown: String?) -> Bool {
         usesMarkdownSourcePresentation(for: source, currentMarkdown: currentMarkdown)
     }
@@ -130,7 +139,7 @@ struct SourceRendererPresentationPlanner: Sendable {
         currentMarkdown: String?
     ) -> Bool {
         currentMarkdown != nil ||
-            (!isHTMLSource(source) && source.mimeType.map(MimeType.isText) == true) ||
+            (!isHTMLSource(source) && MimeType.isSourceTextPresentable(source.mimeType)) ||
             standaloneDiagramSource(source)
     }
 
@@ -315,7 +324,7 @@ enum SourceDetailPresentationCharacterization {
             contentArea = .tabbed
         } else if isPDF {
             contentArea = .pdfOnly
-        } else if source.mimeType.map(MimeType.isText) == true {
+        } else if MimeType.isSourceTextPresentable(source.mimeType) {
             contentArea = .markdown
         } else {
             contentArea = .binaryFallback
