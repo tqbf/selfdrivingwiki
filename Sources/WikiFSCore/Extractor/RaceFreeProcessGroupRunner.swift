@@ -63,6 +63,7 @@ public enum RaceFreeProcessGroupRunner {
         public let standardInput: Data
         public let stdoutLimit: Int
         public let stderrLimit: Int
+        public let observeStdout: (@Sendable (Data) -> Void)?
 
         public init(
             executableURL: URL,
@@ -71,7 +72,8 @@ public enum RaceFreeProcessGroupRunner {
             currentDirectoryURL: URL? = nil,
             standardInput: Data,
             stdoutLimit: Int,
-            stderrLimit: Int
+            stderrLimit: Int,
+            observeStdout: (@Sendable (Data) -> Void)? = nil
         ) {
             self.executableURL = executableURL
             self.arguments = arguments
@@ -80,6 +82,7 @@ public enum RaceFreeProcessGroupRunner {
             self.standardInput = standardInput
             self.stdoutLimit = stdoutLimit
             self.stderrLimit = stderrLimit
+            self.observeStdout = observeStdout
         }
     }
 
@@ -107,6 +110,7 @@ public final class RaceFreeProcessGroupHandle: @unchecked Sendable {
     private let stderrAccumulator: BoundedProcessAccumulator
     private let stdoutDrainState = ProcessPipeDrainState()
     private let stderrDrainState = ProcessPipeDrainState()
+    private let stdoutObserverQueue = DispatchQueue(label: "RaceFreeProcessGroupRunner.stdout-observer")
     private let exitState = ProcessGroupExitState()
     private let processSource: DispatchSourceProcess
 
@@ -189,15 +193,21 @@ public final class RaceFreeProcessGroupHandle: @unchecked Sendable {
         let stdoutPair = AsyncStream<Data>.makeStream(
             bufferingPolicy: .bufferingNewest(64))
         stdoutChunks = stdoutPair.stream
-        stdoutReader.readabilityHandler = { [stdoutAccumulator, stdoutDrainState] handle in
+        stdoutReader.readabilityHandler = {
+            [stdoutAccumulator, stdoutDrainState, stdoutObserverQueue] handle in
             let data = handle.availableData
             if data.isEmpty {
                 handle.readabilityHandler = nil
                 stdoutPair.continuation.finish()
-                stdoutDrainState.finish()
+                stdoutObserverQueue.async {
+                    stdoutDrainState.finish()
+                }
             } else {
-                stdoutAccumulator.append(data)
-                stdoutPair.continuation.yield(data)
+                stdoutObserverQueue.async {
+                    request.observeStdout?(data)
+                    stdoutAccumulator.append(data)
+                    stdoutPair.continuation.yield(data)
+                }
             }
         }
         stderrReader.readabilityHandler = { [stderrAccumulator, stderrDrainState] handle in

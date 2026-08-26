@@ -23,6 +23,23 @@ struct RaceFreeProcessGroupRunnerTests {
         #expect(String(decoding: frames[1], as: UTF8.self).contains(#""kind":"result""#))
     }
 
+    @Test func stdoutObserverReceivesEveryByteInOrder() async throws {
+        let executable = try fixtureExecutable()
+        let input = Data("{\"version\":1,\"requestID\":\"observe\",\"mode\":\"success\"}\n".utf8)
+        let observed = ObservedBytes()
+        let handle = try RaceFreeProcessGroupRunner.launch(.init(
+            executableURL: executable,
+            environment: ["LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"],
+            standardInput: input,
+            stdoutLimit: 16 * 1024,
+            stderrLimit: 4 * 1024,
+            observeStdout: { observed.append($0) }))
+        let result = try await handle.result(timeout: .seconds(5))
+
+        #expect(observed.data == result.stdout)
+        #expect(result.stdout.isEmpty == false)
+    }
+
     @Test func verifiedGroupTerminationKillsFixtureChild() async throws {
         let executable = try fixtureExecutable()
         let input = Data("{\"version\":1,\"requestID\":\"hold\",\"mode\":\"holdWithChild\"}\n".utf8)
@@ -126,6 +143,17 @@ struct RaceFreeProcessGroupRunnerTests {
         }
         return ProcessIdentityObservation.observe(processID: pid) == nil
     }
+}
+
+private final class ObservedBytes: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = Data()
+
+    func append(_ data: Data) {
+        lock.withLock { storage.append(data) }
+    }
+
+    var data: Data { lock.withLock { storage } }
 }
 
 private struct TestFailure: Error, CustomStringConvertible {

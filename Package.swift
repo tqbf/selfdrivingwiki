@@ -111,6 +111,12 @@ let package = Package(
             path: "Sources/ExtractorProcessFixture",
             swiftSettings: strictSwiftSettings
         ),
+        // Protocol revision-1 fixture for managed extractor process tests.
+        .executableTarget(
+            name: "ManagedExtractorFixture",
+            path: "Sources/ManagedExtractorFixture",
+            swiftSettings: strictSwiftSettings
+        ),
         // Development-only validator for local renderer package authoring. The
         // core owns argument parsing, isolated validation roots, and cleanup;
         // the executable is a thin stdout/stderr process shell.
