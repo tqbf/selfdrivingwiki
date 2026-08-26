@@ -67,6 +67,11 @@ struct ProcessSignalSafetyAuditTests {
                   primitive: .posixSignal):
                 (1, "guarded: injected sendSignal seam, reached only via "
                     + "ProcessSignalSafety.signal on a re-verified direct child"),
+            .init(path: "Sources/WikiFSCore/Extractor/RaceFreeProcessGroupRunner.swift",
+                  primitive: .posixSignal):
+                (4, "guarded: posix_spawn creates a new process group atomically; the runner "
+                    + "observes and verifies the group leader PID, parent PID, and kernel "
+                    + "start time before it signals the negative group ID"),
             .init(path: "Sources/WikiFSCore/Integrations/TranscriptSubprocess.swift",
                   primitive: .posixSignal):
                 (1, "guarded: injected sendSignal seam, reached only via "
@@ -78,6 +83,11 @@ struct ProcessSignalSafetyAuditTests {
                     + "there is no interval in which the PID could be reaped and "
                     + "recycled. A separately captured jobs snapshot cannot authorise "
                     + "a signal, because it only proves ownership at snapshot time"),
+            .init(path: "scripts/test-signed-wikid-extractor.sh",
+                  primitive: .shellSignal):
+                (5, "guarded: the script signals only APP_PID, which is the exact shell child "
+                    + "started by this script; kill -0 is a liveness check, and the EXIT trap "
+                    + "provides cleanup while the shell still owns the child job"),
 
             // --- Owner-terminates-its-own-child, no numeric PID -------------
             // These call terminate() on a Process/client object the same code

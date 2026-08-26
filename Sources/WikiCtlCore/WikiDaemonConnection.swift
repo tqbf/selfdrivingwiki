@@ -25,17 +25,22 @@ public enum DaemonConnectionState: String, Sendable, Equatable {
 /// the XPC error handler, and a timeout can all race — only the first should
 /// resume the continuation. Internal `NSLock` makes it genuinely thread-safe,
 /// justifying `@unchecked Sendable`.
-private final class HealthCheckResumeBox: @unchecked Sendable {
+// NSLock protects the only mutable field and each continuation resumes at most once.
+// swiftlint:disable:next unchecked_sendable
+private final class ContinuationResumeBox: @unchecked Sendable {
     private var resumed = false
     private let lock = NSLock()
 
-    func resume(_ value: Bool, _ continuation: CheckedContinuation<Bool, Never>) {
+    func resume<T, E>(
+        _ result: Result<T, E>,
+        _ continuation: CheckedContinuation<T, E>
+    ) where T: Sendable, E: Error & Sendable {
         lock.lock()
         let shouldResume = !resumed
         resumed = true
         lock.unlock()
         if shouldResume {
-            continuation.resume(returning: value)
+            continuation.resume(with: result)
         }
     }
 }
@@ -124,7 +129,7 @@ public final class WikiDaemonConnection: @unchecked Sendable {
     /// caused the health ping loop and `healthCheckTimeoutParameterIsRespected`
     /// to stall for ~128 s on systems without a daemon (#884).
     public func healthCheck(timeout: TimeInterval = 5) async -> Bool {
-        let box = HealthCheckResumeBox()
+        let box = ContinuationResumeBox()
 
         return await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
             // Timeout — fires if the daemon never responds (no LaunchAgent
@@ -133,7 +138,7 @@ public final class WikiDaemonConnection: @unchecked Sendable {
             let timeoutTask = Task.detached(priority: .userInitiated) {
                 do {
                     try await Task.sleep(for: .seconds(timeout))
-                    box.resume(false, cont)
+                    box.resume(.success(false), cont)
                 } catch is CancellationError {
                     // The health check completed before the timeout fired.
                 } catch {
@@ -143,7 +148,7 @@ public final class WikiDaemonConnection: @unchecked Sendable {
 
             func finish(_ value: Bool) {
                 timeoutTask.cancel()
-                box.resume(value, cont)
+                box.resume(.success(value), cont)
             }
 
             // XPC error handler — fires if the connection is dead/invalidated.
@@ -196,6 +201,50 @@ public final class WikiDaemonConnection: @unchecked Sendable {
     }
 
     // MARK: - Registry
+
+    /// Run the signed production-service extractor boundary probe.
+    public func runSignedExtractorProbe(
+        _ request: SignedWikiDExtractorProbeRequest,
+        timeout: Duration = .seconds(15)
+    ) async throws -> SignedWikiDExtractorProbeReply {
+        let requestData = try JSONEncoder().encode(request)
+        let box = ContinuationResumeBox()
+        let replyData = try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<Data, Error>) in
+            let timeoutTask = Task.detached(priority: .userInitiated) {
+                do {
+                    try await Task.sleep(for: timeout)
+                    box.resume(.failure(WikiDaemonError.connectionFailed), continuation)
+                } catch is CancellationError {
+                    // The XPC reply or error handler completed first.
+                } catch {
+                    DebugLog.store("runSignedExtractorProbe: timeout task failed: \(error)")
+                    box.resume(.failure(WikiDaemonError.connectionFailed), continuation)
+                }
+            }
+            func finish(_ result: Result<Data, Error>) {
+                timeoutTask.cancel()
+                box.resume(result, continuation)
+            }
+            let proxy = connection.remoteObjectProxyWithErrorHandler { error in
+                DebugLog.store("runSignedExtractorProbe: XPC failed: \(error)")
+                finish(.failure(WikiDaemonError.connectionFailed))
+            }
+            guard let daemon = proxy as? WikiDaemonProtocol else {
+                finish(.failure(WikiDaemonError.connectionFailed))
+                return
+            }
+            daemon.runSignedExtractorProbe(request: requestData) { data in
+                finish(.success(data))
+            }
+        }
+        do {
+            return try JSONDecoder().decode(SignedWikiDExtractorProbeReply.self, from: replyData)
+        } catch {
+            DebugLog.store("runSignedExtractorProbe: malformed XPC reply: \(error)")
+            throw WikiDaemonError.unexpectedReply
+        }
+    }
 
     /// List all wikis, MRU-ordered.
     public func listWikis() async throws -> [WikiDescriptor] {

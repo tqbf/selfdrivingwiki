@@ -46,6 +46,11 @@ import Foundation
     /// Returns an empty string if the store is not open or the token is unavailable.
     func changeToken(wikiID: String, reply: @escaping (String) -> Void)
 
+    /// Run the opt-in signed extractor process-boundary probe.
+    /// The daemon uses only its bundled reviewed fixture and App Group files.
+    /// Request and reply values use the versioned JSON envelopes below.
+    func runSignedExtractorProbe(request: Data, reply: @escaping (Data) -> Void)
+
     // MARK: - Workload: event sink registration (Phase 0)
 
     /// Tell the daemon which object to push live workload events to. The app
@@ -153,6 +158,61 @@ import Foundation
     /// without restarting it. `request` is JSON `ChatConfigOptionRequest`;
     /// reply is JSON `{"error": null}`.
     func setChatConfigOption(request: Data, reply: @escaping (Data) -> Void)
+}
+
+public struct SignedWikiDExtractorProbeRequest: Codable, Equatable, Sendable {
+    public static let currentVersion = 1
+
+    public let version: Int
+    public let requestID: String
+
+    public init(version: Int = Self.currentVersion, requestID: String) {
+        self.version = version
+        self.requestID = requestID
+    }
+}
+
+public struct SignedWikiDExtractorProbeReply: Codable, Equatable, Sendable {
+    public static let currentVersion = 1
+
+    public let version: Int
+    public let requestID: String
+    public let reviewedPackageResolved: Bool
+    public let operationDirectoryIsPrivate: Bool
+    public let protocolExchangeSucceeded: Bool
+    public let processGroupTerminated: Bool
+    public let fixtureChildTerminated: Bool
+    public let diagnostics: [String]
+
+    public init(
+        version: Int = Self.currentVersion,
+        requestID: String,
+        reviewedPackageResolved: Bool,
+        operationDirectoryIsPrivate: Bool,
+        protocolExchangeSucceeded: Bool,
+        processGroupTerminated: Bool,
+        fixtureChildTerminated: Bool,
+        diagnostics: [String] = []
+    ) {
+        self.version = version
+        self.requestID = requestID
+        self.reviewedPackageResolved = reviewedPackageResolved
+        self.operationDirectoryIsPrivate = operationDirectoryIsPrivate
+        self.protocolExchangeSucceeded = protocolExchangeSucceeded
+        self.processGroupTerminated = processGroupTerminated
+        self.fixtureChildTerminated = fixtureChildTerminated
+        self.diagnostics = diagnostics
+    }
+
+    public var passed: Bool {
+        version == Self.currentVersion
+            && reviewedPackageResolved
+            && operationDirectoryIsPrivate
+            && protocolExchangeSucceeded
+            && processGroupTerminated
+            && fixtureChildTerminated
+            && diagnostics.isEmpty
+    }
 }
 
 /// The reverse-channel protocol the app implements so the daemon can push

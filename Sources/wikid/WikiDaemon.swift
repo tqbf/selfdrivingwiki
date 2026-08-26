@@ -153,6 +153,126 @@ final class WikiDaemon: @unchecked Sendable {
         #endif
     }
 
+    #if os(macOS)
+    func signedExtractorProbeData(request data: Data) async -> Data {
+        let decoded: SignedWikiDExtractorProbeRequest?
+        do {
+            decoded = try JSONDecoder().decode(SignedWikiDExtractorProbeRequest.self, from: data)
+        } catch {
+            DebugLog.extraction("signed extractor probe rejected malformed request: \(error)")
+            decoded = nil
+        }
+        let requestID = decoded?.requestID.prefix(128).description ?? "invalid"
+        var packageResolved = false
+        var privateDirectory = false
+        var exchangeSucceeded = false
+        var groupTerminated = false
+        var childTerminated = false
+        var diagnostics: [String] = []
+
+        guard let decoded,
+              decoded.version == SignedWikiDExtractorProbeRequest.currentVersion,
+              !decoded.requestID.isEmpty,
+              decoded.requestID.count <= 128 else {
+            diagnostics.append("invalid request")
+            return encodeSignedExtractorProbeReply(
+                requestID: requestID,
+                packageResolved: false,
+                privateDirectory: false,
+                exchangeSucceeded: false,
+                groupTerminated: false,
+                childTerminated: false,
+                diagnostics: diagnostics)
+        }
+
+        let fileManager = FileManager.default
+        let operationDirectory = containerDirectory
+            .appendingPathComponent("extractors/v1/operations/wikid-signed-probe", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            do {
+                try fileManager.removeItem(at: operationDirectory)
+            } catch {
+                DebugLog.extraction("signed extractor probe cleanup failed: \(error.localizedDescription)")
+            }
+        }
+
+        do {
+            guard let packageDirectory = ReviewedExtractorPackageResources.packageDirectory(
+                named: "SignedWikiDExtractorFixture") else {
+                throw SignedExtractorProbeFailure("reviewed fixture package is missing")
+            }
+            let executable = packageDirectory.appendingPathComponent(
+                "bin/extractor-process-fixture", isDirectory: false)
+            guard fileManager.isExecutableFile(atPath: executable.path) else {
+                throw SignedExtractorProbeFailure("reviewed fixture executable is missing")
+            }
+            packageResolved = true
+
+            try fileManager.createDirectory(
+                at: operationDirectory,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700])
+            guard chmod(operationDirectory.path, 0o700) == 0 else {
+                throw SignedExtractorProbeFailure("operation directory mode setup failed")
+            }
+            let attributes = try fileManager.attributesOfItem(atPath: operationDirectory.path)
+            privateDirectory = (attributes[.posixPermissions] as? NSNumber)?.uint16Value == 0o700
+            guard privateDirectory else {
+                throw SignedExtractorProbeFailure("operation directory is not private")
+            }
+
+            let environment = ["LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"]
+            let successInput = try JSONEncoder().encode(
+                SignedExtractorFixtureRequest(requestID: decoded.requestID, mode: "success")) + Data([0x0A])
+            let successHandle = try RaceFreeProcessGroupRunner.launch(.init(
+                executableURL: executable,
+                environment: environment,
+                currentDirectoryURL: operationDirectory,
+                standardInput: successInput,
+                stdoutLimit: 16 * 1024,
+                stderrLimit: 4 * 1024))
+            let success = try await successHandle.result(timeout: .seconds(5))
+            exchangeSucceeded = success.terminationStatus == 0
+                && validateSignedExtractorFrames(success.stdout, requestID: decoded.requestID)
+            guard exchangeSucceeded else {
+                throw SignedExtractorProbeFailure("fixture protocol exchange failed")
+            }
+
+            let holdInput = try JSONEncoder().encode(
+                SignedExtractorFixtureRequest(requestID: decoded.requestID, mode: "holdWithChild")) + Data([0x0A])
+            let holdHandle = try RaceFreeProcessGroupRunner.launch(.init(
+                executableURL: executable,
+                environment: environment,
+                currentDirectoryURL: operationDirectory,
+                standardInput: holdInput,
+                stdoutLimit: 16 * 1024,
+                stderrLimit: 4 * 1024))
+            let childPID = try await signedExtractorChildPID(
+                from: holdHandle.stdoutChunks,
+                requestID: decoded.requestID,
+                timeout: .seconds(5))
+            try await holdHandle.terminateVerifiedGroup()
+            _ = try await holdHandle.result(timeout: .seconds(5))
+            groupTerminated = await signedExtractorProcessIsGone(holdHandle.processID)
+            childTerminated = await signedExtractorProcessIsGone(childPID)
+            if !groupTerminated { diagnostics.append("fixture group leader remained live") }
+            if !childTerminated { diagnostics.append("fixture child remained live") }
+        } catch {
+            diagnostics.append(String(error.localizedDescription.prefix(256)))
+        }
+
+        return encodeSignedExtractorProbeReply(
+            requestID: decoded.requestID,
+            packageResolved: packageResolved,
+            privateDirectory: privateDirectory,
+            exchangeSucceeded: exchangeSucceeded,
+            groupTerminated: groupTerminated,
+            childTerminated: childTerminated,
+            diagnostics: Array(diagnostics.prefix(8)))
+    }
+    #endif
+
     // MARK: - Init
 
     /// Explicit synchronous test and Linux compatibility boundary.
@@ -1277,3 +1397,128 @@ final class WikiDaemon: @unchecked Sendable {
     }
     #endif
 }
+
+#if os(macOS)
+private struct SignedExtractorFixtureRequest: Encodable {
+    let version = 1
+    let requestID: String
+    let mode: String
+}
+
+private struct SignedExtractorFixtureFrame: Decodable {
+    let version: Int
+    let requestID: String
+    let kind: String
+    let childPID: Int32?
+    let success: Bool?
+}
+
+private struct SignedExtractorProbeFailure: LocalizedError {
+    let message: String
+    init(_ message: String) { self.message = message }
+    var errorDescription: String? { message }
+}
+
+private func validateSignedExtractorFrames(_ data: Data, requestID: String) -> Bool {
+    let lines = data.split(separator: 0x0A, omittingEmptySubsequences: true)
+    guard lines.count == 2 else { return false }
+    let progress: SignedExtractorFixtureFrame
+    let result: SignedExtractorFixtureFrame
+    do {
+        progress = try JSONDecoder().decode(SignedExtractorFixtureFrame.self, from: Data(lines[0]))
+        result = try JSONDecoder().decode(SignedExtractorFixtureFrame.self, from: Data(lines[1]))
+    } catch {
+        DebugLog.extraction("signed extractor probe rejected malformed fixture frames: \(error)")
+        return false
+    }
+    return progress.version == 1
+        && progress.requestID == requestID
+        && progress.kind == "progress"
+        && result.version == 1
+        && result.requestID == requestID
+        && result.kind == "result"
+        && result.success == true
+}
+
+private func signedExtractorChildPID(
+    from stream: AsyncStream<Data>,
+    requestID: String,
+    timeout: Duration
+) async throws -> Int32 {
+    try await withThrowingTaskGroup(of: Int32.self) { group in
+        group.addTask {
+            var buffer = Data()
+            for await chunk in stream {
+                buffer.append(chunk)
+                guard let newline = buffer.firstIndex(of: 0x0A) else { continue }
+                let line = Data(buffer[..<newline])
+                let frame: SignedExtractorFixtureFrame
+                do {
+                    frame = try JSONDecoder().decode(SignedExtractorFixtureFrame.self, from: line)
+                } catch {
+                    throw SignedExtractorProbeFailure("fixture child progress frame is malformed")
+                }
+                guard frame.version == 1,
+                      frame.requestID == requestID,
+                      frame.kind == "progress",
+                      let childPID = frame.childPID,
+                      childPID > 1 else {
+                    throw SignedExtractorProbeFailure("fixture child progress frame is invalid")
+                }
+                return childPID
+            }
+            throw SignedExtractorProbeFailure("fixture child progress frame is missing")
+        }
+        group.addTask {
+            try await Task.sleep(for: timeout)
+            throw SignedExtractorProbeFailure("fixture child progress frame timed out")
+        }
+        let first = try await group.next()
+        group.cancelAll()
+        guard let first else {
+            throw SignedExtractorProbeFailure("fixture child progress frame is missing")
+        }
+        return first
+    }
+}
+
+private func signedExtractorProcessIsGone(_ processID: Int32) async -> Bool {
+    guard let positivePID = ProcessSignalSafety.PositivePID(rawValue: processID) else { return true }
+    let clock = ContinuousClock()
+    let deadline = clock.now.advanced(by: .seconds(2))
+    while clock.now < deadline {
+        if ProcessIdentityObservation.observe(processID: positivePID) == nil { return true }
+        do {
+            try await Task.sleep(for: .milliseconds(20))
+        } catch {
+            return false
+        }
+    }
+    return ProcessIdentityObservation.observe(processID: positivePID) == nil
+}
+
+private func encodeSignedExtractorProbeReply(
+    requestID: String,
+    packageResolved: Bool,
+    privateDirectory: Bool,
+    exchangeSucceeded: Bool,
+    groupTerminated: Bool,
+    childTerminated: Bool,
+    diagnostics: [String]
+) -> Data {
+    let reply = SignedWikiDExtractorProbeReply(
+        requestID: requestID,
+        reviewedPackageResolved: packageResolved,
+        operationDirectoryIsPrivate: privateDirectory,
+        protocolExchangeSucceeded: exchangeSucceeded,
+        processGroupTerminated: groupTerminated,
+        fixtureChildTerminated: childTerminated,
+        diagnostics: diagnostics)
+    do {
+        return try JSONEncoder().encode(reply)
+    } catch {
+        DebugLog.extraction("signed extractor probe could not encode its reply: \(error)")
+        return Data()
+    }
+}
+#endif

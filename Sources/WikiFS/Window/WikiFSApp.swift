@@ -347,6 +347,7 @@ struct WikiFSApp: App {
             startStatusItem()
             applyAppKitAppearance()
             connectToDaemon()
+            runSignedWikiDExtractorProbeIfRequested()
         }
 
         // Defense in depth: every startup path can call this because the
@@ -520,6 +521,34 @@ struct WikiFSApp: App {
     }
 
     // MARK: - Daemon transport admission
+
+    @MainActor
+    private func runSignedWikiDExtractorProbeIfRequested() {
+        guard let reportPath = ProcessInfo.processInfo.environment[
+            "WIKIFS_SIGNED_EXTRACTOR_PROBE_REPORT"],
+            !reportPath.isEmpty else { return }
+        let reportURL = URL(fileURLWithPath: reportPath, isDirectory: false)
+        Task { @MainActor in
+            let data: Data
+            do {
+                let connection = try WikiDaemonConnection.connect()
+                defer { connection.invalidate() }
+                let request = SignedWikiDExtractorProbeRequest(
+                    requestID: UUID().uuidString)
+                let reply = try await connection.runSignedExtractorProbe(request)
+                data = try JSONEncoder().encode(reply)
+            } catch {
+                data = Data(#"{"version":1,"requestID":"app-probe","reviewedPackageResolved":false,"operationDirectoryIsPrivate":false,"protocolExchangeSucceeded":false,"processGroupTerminated":false,"fixtureChildTerminated":false,"diagnostics":["app probe failed"]}"#.utf8)
+                DebugLog.extraction("signed extractor app probe failed: \(error.localizedDescription)")
+            }
+            do {
+                try data.write(to: reportURL, options: .atomic)
+            } catch {
+                DebugLog.extraction("signed extractor app probe report failed: \(error.localizedDescription)")
+            }
+            NSApp.terminate(nil)
+        }
+    }
 
     @MainActor
     private func connectToDaemon() {

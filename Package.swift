@@ -105,6 +105,12 @@ let package = Package(
             path: "Sources/DynamicRendererPRSeriesAudit",
             swiftSettings: strictSwiftSettings
         ),
+        // No-dependency process fixture for Phase 0 extractor lifecycle tests.
+        .executableTarget(
+            name: "ExtractorProcessFixture",
+            path: "Sources/ExtractorProcessFixture",
+            swiftSettings: strictSwiftSettings
+        ),
         // Development-only validator for local renderer package authoring. The
         // core owns argument parsing, isolated validation roots, and cleanup;
         // the executable is a thin stdout/stderr process shell.

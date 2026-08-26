@@ -130,6 +130,13 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         }
     }
 
+    func runSignedExtractorProbe(request: Data, reply: @escaping (Data) -> Void) {
+        let sendableReply = SendableDataReply(reply: reply)
+        Task { [daemon] in
+            sendableReply.reply(await daemon.signedExtractorProbeData(request: request))
+        }
+    }
+
     // MARK: - Workload: event sink registration (Phase 0)
 
     func registerEventSink(_ sink: WikiDaemonEventSink) {

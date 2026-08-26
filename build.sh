@@ -140,8 +140,9 @@ APP_BIN="${BIN_DIR}/${APP_TARGET_NAME}"
 EXT_BIN="${BIN_DIR}/${EXT_NAME}"
 CTL_BIN="${BIN_DIR}/${CTL_NAME}"
 DAEMON_BIN="${BIN_DIR}/${DAEMON_NAME}"
+EXTRACTOR_FIXTURE_BIN="${BIN_DIR}/ExtractorProcessFixture"
 PODCAST_HELPER_BIN="${BIN_DIR}/${PODCAST_HELPER_NAME}"
-for b in "${APP_BIN}" "${EXT_BIN}" "${CTL_BIN}" "${DAEMON_BIN}"; do
+for b in "${APP_BIN}" "${EXT_BIN}" "${CTL_BIN}" "${DAEMON_BIN}" "${EXTRACTOR_FIXTURE_BIN}"; do
   [ -x "$b" ] || { echo "✗ built binary missing: $b" >&2; exit 1; }
 done
 
@@ -198,6 +199,22 @@ write_id_sidecar "${BUILD_DIR}"
 # wikid.xpc` so it's sealed into the daemon bundle. (#887 follow-up.)
 mkdir -p "${DAEMON_XPC_CONTENTS}/Resources"
 write_id_sidecar "${DAEMON_XPC_CONTENTS}/Resources"
+# Copy identical reviewed extractor package resources into the app and wikid XPC.
+# The signed feasibility probe resolves only the XPC-owned copy. Future reviewed
+# packages use this same bundle shape.
+EXTRACTOR_PACKAGES_SRC="ExtractorPackages"
+APP_EXTRACTOR_PACKAGES="${RESOURCES_DIR}/ExtractorPackages"
+DAEMON_EXTRACTOR_PACKAGES="${DAEMON_XPC_CONTENTS}/Resources/ExtractorPackages"
+mkdir -p "${APP_EXTRACTOR_PACKAGES}" "${DAEMON_EXTRACTOR_PACKAGES}"
+cp -R "${EXTRACTOR_PACKAGES_SRC}/SignedWikiDExtractorFixture" "${APP_EXTRACTOR_PACKAGES}/"
+cp -R "${EXTRACTOR_PACKAGES_SRC}/SignedWikiDExtractorFixture" "${DAEMON_EXTRACTOR_PACKAGES}/"
+for package_root in \
+  "${APP_EXTRACTOR_PACKAGES}/SignedWikiDExtractorFixture" \
+  "${DAEMON_EXTRACTOR_PACKAGES}/SignedWikiDExtractorFixture"; do
+  mkdir -p "${package_root}/bin"
+  cp "${EXTRACTOR_FIXTURE_BIN}" "${package_root}/bin/extractor-process-fixture"
+  chmod 500 "${package_root}/bin/extractor-process-fixture"
+done
 # Bundle the pdf2md PEP 723 script alongside wikictl so PdfExtractionService
 # can spawn it at ingest time.
 if [ -f "${PDF2MD_SRC}" ]; then
@@ -671,6 +688,11 @@ PLIST
   # embedded provisioning profile + entitlements, the daemon can access the
   # App Group container + shared keychain WITHOUT TCC prompts or AMFI kills.
   # Inside-out: sign wikid.xpc BEFORE the outer app (same as the .appex).
+  echo "→ codesign extractor process fixtures (${IDENTITY})"
+  codesign --force --timestamp=none --sign "${IDENTITY}" \
+    "${APP_EXTRACTOR_PACKAGES}/SignedWikiDExtractorFixture/bin/extractor-process-fixture"
+  codesign --force --timestamp=none --sign "${IDENTITY}" \
+    "${DAEMON_EXTRACTOR_PACKAGES}/SignedWikiDExtractorFixture/bin/extractor-process-fixture"
   echo "→ codesign wikid.xpc (${IDENTITY})"
   if [ "${DAEMON_PROFILE_OK}" = "1" ]; then
     codesign --force --timestamp=none \

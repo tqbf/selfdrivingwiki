@@ -1,0 +1,21 @@
+{
+  "manifestRevision": 1,
+  "packageID": "org.selfdrivingwiki.fixture.signed-wikid-extractor",
+  "version": "1.0.0",
+  "displayName": "Signed wikid Extractor Fixture",
+  "protocolRevision": 1,
+  "entryPoint": "bin/extractor-process-fixture",
+  "launch": {
+    "mode": "direct"
+  },
+  "registrations": [
+    {
+      "id": "fixture",
+      "displayName": "Signed Service Fixture",
+      "kinds": ["pdf", "html"],
+      "mimeTypes": ["application/pdf", "text/html"]
+    }
+  ],
+  "capabilities": [],
+  "files": []
+}
