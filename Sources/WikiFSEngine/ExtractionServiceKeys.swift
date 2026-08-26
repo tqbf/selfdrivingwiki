@@ -35,7 +35,7 @@ public enum ExtractionBackendAdapter: Sendable {
 }
 
 public struct RegisteredExtractionBackend: Sendable {
-    public typealias Factory = @Sendable () async -> ExtractionBackendAdapter
+    public typealias Factory = @Sendable () async throws -> ExtractionBackendAdapter
 
     public let key: ExtractionBackendKey
     private let makeAdapter: Factory
@@ -45,13 +45,85 @@ public struct RegisteredExtractionBackend: Sendable {
         self.makeAdapter = makeAdapter
     }
 
-    public func make() async -> ExtractionBackendAdapter {
-        await makeAdapter()
+    public func make() async throws -> ExtractionBackendAdapter {
+        try await makeAdapter()
     }
 }
 
 public enum ExtractionBackendRegistryError: Error, Equatable, Sendable {
     case duplicateBackend(ExtractionBackendKey)
+    case duplicateAdapter(ExtractionAdapterKey)
+    case batchCollision([ExtractionAdapterKey])
+}
+
+/// Exact registry identity domain. Built-in adapters keep their legacy string
+/// keys behind the `.builtIn` case; installed packages use exact revision and
+/// registration references that cannot collide across versions or lineages.
+public enum ExtractionAdapterKey: Hashable, Sendable, CustomStringConvertible {
+    case builtIn(ExtractionBackendKey)
+    case installed(kind: ExtractionBackendKind, reference: ExtractorReference)
+
+    public var description: String {
+        switch self {
+        case .builtIn(let key):
+            return key.description
+        case .installed(let kind, let reference):
+            return """
+            \(kind.rawValue)/installed/\(reference.revision.packageID.rawValue)/\
+            \(reference.revision.version.rawValue)/\(reference.revision.digest.hex.prefix(12))/\
+            \(reference.registrationID.rawValue)
+            """
+        }
+    }
+
+    public var sortKey: String { description }
+}
+
+/// One resolved installed registration plus its exact key.
+public struct InstalledExtractionMatch: Sendable {
+    public let key: ExtractionAdapterKey
+    public let backend: RegisteredExtractionBackend
+}
+
+/// One entry in an atomic multi-registration batch.
+public struct ExtractionBatchEntry: Sendable {
+    public let key: ExtractionAdapterKey
+    public let backend: RegisteredExtractionBackend
+
+    public init(key: ExtractionAdapterKey, backend: RegisteredExtractionBackend) {
+        self.key = key
+        self.backend = backend
+    }
+}
+
+public struct ExtractionBackendBatchError: Error, Equatable, Sendable {
+    public let collidingKeys: [ExtractionAdapterKey]
+}
+
+/// Token-owned handle over every registration committed by one batch. Disposal
+/// removes exactly those entries; a stale disposal never touches a newer
+/// registration even when keys match.
+public struct ExtractionBackendBatchHandle: Sendable {
+    // Sendability invariant: all fields are immutable after init; the only
+    // shared mutable target is the weak actor reference, and calls into an
+    // actor are safe from any thread. No lock is needed.
+    // swiftlint:disable:next unchecked_sendable
+    private struct Context: @unchecked Sendable {
+        weak var registry: ExtractionBackendRegistry?
+        let token: UUID
+        let keys: [ExtractionAdapterKey]
+    }
+
+    private let context: Context
+
+    fileprivate init(registry: ExtractionBackendRegistry, token: UUID, keys: [ExtractionAdapterKey]) {
+        context = Context(registry: registry, token: token, keys: keys)
+    }
+
+    public func dispose() async {
+        guard let registry = context.registry else { return }
+        await registry.removeBatch(keys: context.keys, token: context.token)
+    }
 }
 
 public struct ExtractionBackendRegistration: Sendable {
@@ -74,37 +146,145 @@ public actor ExtractionBackendRegistry {
         let backend: RegisteredExtractionBackend
     }
 
-    private var registrations: [ExtractionBackendKey: Registration] = [:]
+    private var registrations: [ExtractionAdapterKey: Registration] = [:]
 
     public init() {}
 
+    /// Legacy built-in registration path used by static plugins.
     public func register(
         _ backend: RegisteredExtractionBackend
     ) throws -> ExtractionBackendRegistration {
-        guard registrations[backend.key] == nil else {
-            throw ExtractionBackendRegistryError.duplicateBackend(backend.key)
+        try register(backend, key: .builtIn(backend.key))
+    }
+
+    public func register(
+        _ backend: RegisteredExtractionBackend,
+        key: ExtractionAdapterKey
+    ) throws -> ExtractionBackendRegistration {
+        guard registrations[key] == nil else {
+            throw ExtractionBackendRegistryError.duplicateAdapter(key)
         }
         let token = UUID()
-        registrations[backend.key] = Registration(token: token, backend: backend)
+        registrations[key] = Registration(token: token, backend: backend)
         return ExtractionBackendRegistration { [weak self] in
-            await self?.remove(key: backend.key, token: token)
+            await self?.remove(key: key, token: token)
         }
+    }
+
+    /// Validates every entry (including intra-batch collisions) before any
+    /// mutation, then commits atomically under one shared token.
+    public func registerBatch(
+        _ entries: [ExtractionBatchEntry]
+    ) throws -> ExtractionBackendBatchHandle {
+        var incoming: [ExtractionAdapterKey: RegisteredExtractionBackend] = [:]
+        for entry in entries {
+            guard incoming[entry.key] == nil else {
+                throw ExtractionBackendRegistryError.batchCollision([entry.key])
+            }
+            incoming[entry.key] = entry.backend
+        }
+        let colliding = entries.map(\.key).filter { registrations[$0] != nil }.sorted {
+            $0.sortKey < $1.sortKey
+        }
+        if colliding.isEmpty == false {
+            throw ExtractionBackendRegistryError.batchCollision(colliding)
+        }
+        let token = UUID()
+        for (key, backend) in incoming {
+            registrations[key] = Registration(token: token, backend: backend)
+        }
+        return ExtractionBackendBatchHandle(
+            registry: self,
+            token: token,
+            keys: entries.map(\.key))
+    }
+
+    /// Highest compatible active exact registration for one logical selection:
+    /// semantic version first, then exact revision identity. Install or
+    /// activation order never matters.
+    public func resolveInstalled(
+        _ logical: LogicalExtractorReference,
+        kind: ExtractionBackendKind
+    ) -> InstalledExtractionMatch? {
+        var bestKey: ExtractionAdapterKey?
+        var bestReference: ExtractorReference?
+        var bestBackend: RegisteredExtractionBackend?
+        for (key, registration) in registrations {
+            guard case .installed(let candidateKind, let reference) = key,
+                  candidateKind == kind,
+                  reference.registrationID == logical.registrationID,
+                  reference.revision.packageID == logical.packageID else { continue }
+            if let current = bestReference, reference <= current { continue }
+            bestKey = key
+            bestReference = reference
+            bestBackend = registration.backend
+        }
+        guard let bestKey, let bestBackend else { return nil }
+        return InstalledExtractionMatch(key: bestKey, backend: bestBackend)
+    }
+
+    /// Every active exact installed match for a kind, highest revision first.
+    public func installedMatches(kind: ExtractionBackendKind) -> [InstalledExtractionMatch] {
+        var matches: [(match: InstalledExtractionMatch, reference: ExtractorReference)] = []
+        for (key, registration) in registrations {
+            guard case .installed(let candidateKind, let reference) = key,
+                  candidateKind == kind else { continue }
+            matches.append((
+                match: InstalledExtractionMatch(
+                    key: key,
+                    backend: registration.backend),
+                reference: reference))
+        }
+        return matches
+            .sorted { $0.reference > $1.reference }
+            .map(\.match)
     }
 
     public func resolve(_ key: ExtractionBackendKey) -> RegisteredExtractionBackend? {
+        resolve(.builtIn(key))
+    }
+
+    public func resolve(_ key: ExtractionAdapterKey) -> RegisteredExtractionBackend? {
         registrations[key]?.backend
     }
 
+    /// Legacy view over the built-in namespace only.
     public func keys() -> [ExtractionBackendKey] {
-        registrations.keys.sorted { $0.description < $1.description }
+        registrations.keys.compactMap {
+            if case .builtIn(let key) = $0 { return key }
+            return nil
+        }
+        .sorted { $0.description < $1.description }
     }
 
-    private func remove(key: ExtractionBackendKey, token: UUID) {
+    public func allKeys() -> [ExtractionAdapterKey] {
+        registrations.keys.sorted { $0.sortKey < $1.sortKey }
+    }
+
+    private func remove(key: ExtractionAdapterKey, token: UUID) {
         guard registrations[key]?.token == token else { return }
         registrations.removeValue(forKey: key)
+    }
+
+    fileprivate func removeBatch(keys: [ExtractionAdapterKey], token: UUID) {
+        for key in keys {
+            guard registrations[key]?.token == token else { continue }
+            registrations.removeValue(forKey: key)
+        }
     }
 }
 
 public enum ExtractionServiceKeys {
     public static let backends = ServiceKey<ExtractionBackendRegistry>(label: "wiki.extraction")
+
+    /// Fixed host-owned dependencies for generated package plugins. A manifest
+    /// cannot request anything outside this contract.
+    public static let extractorCatalogReader = ServiceKey<any ExtractorPackageCatalogReading>(
+        label: "wiki.extraction.catalog-reader")
+    public static let managedProcessExecutor = ServiceKey<any ManagedProcessExecuting>(
+        label: "wiki.extraction.process-executor")
+    public static let packageAdmissionChecker = ServiceKey<any ProcessPackageAdmissionChecking>(
+        label: "wiki.extraction.admission-checker")
+    public static let packageStoreLayout = ServiceKey<ExtractorPackageStoreLayout>(
+        label: "wiki.extraction.store-layout")
 }
