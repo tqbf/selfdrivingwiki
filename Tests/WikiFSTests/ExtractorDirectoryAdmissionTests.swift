@@ -153,6 +153,32 @@ struct ExtractorDirectoryAdmissionTests {
         #expect(try mode(snapshot.root.appendingPathComponent("bin/extractor")) == 0o500)
     }
 
+    @Test func operationPackageMaterializationPinsValidatedBytes() throws {
+        let fixture = try makeFixture()
+        let layout = try makeLayout()
+        let admitted = try ExtractorDirectoryValidator.admit(source: fixture.root, layout: layout)
+
+        let operationRoot = uniqueURL("operation")
+        try FileManager.default.createDirectory(
+            at: operationRoot,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700])
+        let target = operationRoot.appendingPathComponent("package", isDirectory: true)
+        let revision = try ExtractorDirectoryValidator.materializeOperationPackage(
+            from: admitted,
+            into: target)
+
+        #expect(revision == admitted.revisionID)
+        #expect(try mode(target) == 0o700)
+        #expect(try mode(target.appendingPathComponent("bin")) == 0o700)
+        #expect(try mode(target.appendingPathComponent("bin/extractor")) == 0o500)
+        #expect(throws: ExtractorDirectoryAdmissionError.preparationFailed) {
+            _ = try ExtractorDirectoryValidator.materializeOperationPackage(
+                from: admitted,
+                into: target)
+        }
+    }
+
     @Test func symlinkedStagingAncestorIsRejected() throws {
         let fixture = try makeFixture()
         let layout = try makeLayout()

@@ -229,6 +229,72 @@ public enum ExtractorDirectoryValidator {
         }
     }
 
+    /// Copies one admitted or revalidated package tree into a fresh private
+    /// operation directory owned by the calling process. The target must not
+    /// exist; its parent must already be an owner-private directory. The copy
+    /// is no-follow and identity-checked at the source, and the result is
+    /// revalidated against normalized modes before returning.
+    public static func materializeOperationPackage(
+        from validated: ValidatedExtractorDirectory,
+        into target: URL
+    ) throws -> ExtractorPackageRevisionID {
+        let parentStatus = try lstat(target.deletingLastPathComponent())
+        guard parentStatus.st_mode & S_IFMT == S_IFDIR,
+              parentStatus.st_uid == getuid() else {
+            throw ExtractorDirectoryAdmissionError.preparationFailed
+        }
+        let createResult = target.lastPathComponent.withCString { name -> Int32 in
+            let parentFD = open(
+                target.deletingLastPathComponent().path,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+            defer { if parentFD >= 0 { close(parentFD) } }
+            guard parentFD >= 0 else { return -1 }
+            return mkdirat(parentFD, name, 0o700)
+        }
+        guard createResult == 0 else {
+            throw ExtractorDirectoryAdmissionError.preparationFailed
+        }
+
+        let sourceURL = validated.root.standardizedFileURL
+        let targetStandardized = target.standardizedFileURL
+        let sourceStatus = try lstat(sourceURL)
+        let sourceFD = sourceURL.path.withCString {
+            open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        }
+        guard sourceFD >= 0 else { throw ExtractorDirectoryAdmissionError.sourceChanged }
+        defer { close(sourceFD) }
+        let openedSource = try status(of: sourceFD)
+        guard sameIdentity(sourceStatus, openedSource),
+              openedSource.st_mode & S_IFMT == S_IFDIR else {
+            throw ExtractorDirectoryAdmissionError.sourceChanged
+        }
+
+        let destinationFD = targetStandardized.path.withCString {
+            open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        }
+        guard destinationFD >= 0 else {
+            throw ExtractorDirectoryAdmissionError.preparationFailed
+        }
+        defer { close(destinationFD) }
+        do {
+            try normalizePrivateDirectory(destinationFD)
+            try copyTree(
+                sourceFD: sourceFD,
+                destinationFD: destinationFD,
+                sourceDevice: openedSource.st_dev,
+                manifest: validated.validated.manifest)
+            try verifyDirectory(sourceFD, matches: openedSource)
+            try verifyPath(targetStandardized, matchesFD: destinationFD)
+            let result = try validate(targetStandardized)
+            try verifyNormalizedModes(targetStandardized, manifest: result.validated.manifest)
+            try verifyPath(targetStandardized, matchesFD: destinationFD)
+            return result.revisionID
+        } catch {
+            if let error = error as? ExtractorDirectoryAdmissionError { throw error }
+            throw ExtractorDirectoryAdmissionError.copyFailed("operation-package")
+        }
+    }
+
     public static func cleanupOperationSessions(
         layout: ExtractorPackageStoreLayout,
         scope: ExtractorOperationCleanupScope

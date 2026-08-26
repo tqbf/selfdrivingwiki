@@ -30,6 +30,52 @@ struct ExtractorProtocolTests {
         #expect(try sequence.finish() == frames.last)
     }
 
+    @Test func articleMetadataRoundTripsAndIsOmittedWhenAbsent() throws {
+        let requestID = ExtractorRequestID()
+        let expectedOutputPath = try outputPath()
+        let metadata = try ExtractorArticleMetadata(
+            title: "Example",
+            author: "Jane Doe",
+            description: "An example article",
+            published: "2026-08-26",
+            wordCount: 321)
+        let populated = try ExtractorResultFrame(
+            requestID: requestID,
+            outputPath: expectedOutputPath,
+            markdownByteCount: 10,
+            articleMetadata: metadata)
+        let roundTrip = try JSONDecoder().decode(
+            ExtractorResultFrame.self,
+            from: JSONEncoder().encode(populated))
+        #expect(roundTrip.articleMetadata == metadata)
+
+        let bare = try ExtractorResultFrame(
+            requestID: requestID,
+            outputPath: expectedOutputPath,
+            markdownByteCount: 1)
+        let bareJSON = String(decoding: try JSONEncoder().encode(bare), as: UTF8.self)
+        #expect(bareJSON.contains("articleMetadata") == false)
+        let bareRoundTrip = try JSONDecoder().decode(
+            ExtractorResultFrame.self,
+            from: JSONEncoder().encode(bare))
+        #expect(bareRoundTrip.articleMetadata == nil)
+    }
+
+    @Test func rejectsInvalidArticleMetadata() throws {
+        #expect(throws: Error.self) {
+            _ = try ExtractorArticleMetadata(title: "")
+        }
+        #expect(throws: Error.self) {
+            _ = try ExtractorArticleMetadata(title: String(repeating: "x", count: 2_048))
+        }
+        #expect(throws: Error.self) {
+            _ = try ExtractorArticleMetadata(wordCount: -1)
+        }
+        #expect(throws: Error.self) {
+            _ = try ExtractorArticleMetadata(wordCount: 10_000_001)
+        }
+    }
+
     @Test func rejectsMismatchedAndExcessProgress() throws {
         let requestID = ExtractorRequestID()
         let expectedOutputPath = try outputPath()

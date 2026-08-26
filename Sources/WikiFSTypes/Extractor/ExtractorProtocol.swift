@@ -150,19 +150,86 @@ public struct ExtractorDiagnosticFrame: Codable, Hashable, Sendable {
     }
 }
 
+/// Optional article facts a package may report beside its Markdown result.
+/// All fields are optional and individually validated; HTML packages use these
+/// to preserve Defuddle-style article metadata end to end.
+public struct ExtractorArticleMetadata: Codable, Hashable, Sendable {
+    private enum CodingKeys: String, CodingKey {
+        case title, author, description, published, wordCount
+    }
+
+    static let maximumTextByteCount = 1_024
+    static let maximumWordCount = 10_000_000
+
+    public let title: String?
+    public let author: String?
+    public let description: String?
+    public let published: String?
+    public let wordCount: Int?
+
+    public init(
+        title: String? = nil,
+        author: String? = nil,
+        description: String? = nil,
+        published: String? = nil,
+        wordCount: Int? = nil
+    ) throws {
+        for value in [title, author, description, published].compactMap({ $0 }) {
+            guard value.isEmpty == false,
+                  value.utf8.count <= Self.maximumTextByteCount,
+                  value.contains("\0") == false else {
+                throw ExtractorValidationError.invalidManifest("article metadata")
+            }
+        }
+        guard wordCount.map({ $0 >= 0 && $0 <= Self.maximumWordCount }) ?? true else {
+            throw ExtractorValidationError.invalidManifest("article metadata")
+        }
+        self.title = title
+        self.author = author
+        self.description = description
+        self.published = published
+        self.wordCount = wordCount
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            title: try Self.optionalString(container, .title),
+            author: try Self.optionalString(container, .author),
+            description: try Self.optionalString(container, .description),
+            published: try Self.optionalString(container, .published),
+            wordCount: try container.decodeIfPresent(Int.self, forKey: .wordCount))
+    }
+
+    private static func optionalString(
+        _ container: KeyedDecodingContainer<CodingKeys>,
+        _ key: CodingKeys
+    ) throws -> String? {
+        guard container.contains(key) else { return nil }
+        return try container.decode(String.self, forKey: key)
+    }
+}
+
 public struct ExtractorResultFrame: Codable, Hashable, Sendable {
     public let requestID: ExtractorRequestID
     public let outputPath: ExtractorRelativePath
     public let markdownByteCount: Int
     public let warnings: [String]
     public let metadata: ExtractorReportedMetadata
+    public let articleMetadata: ExtractorArticleMetadata?
+
+    private enum CodingKeys: String, CodingKey {
+        case requestID, outputPath, markdownByteCount, warnings, metadata
+        case articleMetadata
+    }
 
     public init(
         requestID: ExtractorRequestID,
         outputPath: ExtractorRelativePath,
         markdownByteCount: Int,
         warnings: [String] = [],
-        metadata: ExtractorReportedMetadata = .empty
+        metadata: ExtractorReportedMetadata = .empty,
+        articleMetadata: ExtractorArticleMetadata? = nil
     ) throws {
         guard markdownByteCount >= 0, markdownByteCount <= ExtractorHostLimits.maximumMarkdownOutputByteCount,
               warnings.count <= 128,
@@ -174,6 +241,7 @@ public struct ExtractorResultFrame: Codable, Hashable, Sendable {
         self.markdownByteCount = markdownByteCount
         self.warnings = warnings
         self.metadata = metadata
+        self.articleMetadata = articleMetadata
     }
 
     public init(from decoder: any Decoder) throws {
@@ -183,7 +251,10 @@ public struct ExtractorResultFrame: Codable, Hashable, Sendable {
             outputPath: container.decode(ExtractorRelativePath.self, forKey: .outputPath),
             markdownByteCount: container.decode(Int.self, forKey: .markdownByteCount),
             warnings: container.decodeIfPresent([String].self, forKey: .warnings) ?? [],
-            metadata: container.decodeIfPresent(ExtractorReportedMetadata.self, forKey: .metadata) ?? ExtractorReportedMetadata())
+            metadata: container.decodeIfPresent(ExtractorReportedMetadata.self, forKey: .metadata) ?? ExtractorReportedMetadata(),
+            articleMetadata: try container.decodeIfPresent(
+                ExtractorArticleMetadata.self,
+                forKey: .articleMetadata))
     }
 }
 
