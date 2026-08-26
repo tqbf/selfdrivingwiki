@@ -15,6 +15,7 @@ struct ScopeDiagnosticsSnapshotTests {
         #expect(snapshot.parentContextID == nil)
         #expect(snapshot.lifecycle == .live)
         #expect(snapshot.activeRegistrationCount == 1)
+        #expect(snapshot.retainedComponentRecordCount == 0)
         #expect(snapshot.activeChildCount == 0)
     }
 }

@@ -181,11 +181,16 @@ public struct PluginDefinition: Sendable {
 /// The link-time plugin catalog: plugin id → definition. Populated by each
 /// SwiftPM target's static plugin list; there is no dynamic loading in v1.
 public struct PluginCatalog: Sendable {
+    public static let reservedDynamicIDPrefix = "dynamic:"
+
     private let definitions: [PluginID: PluginDefinition]
 
     public init(_ definitions: [PluginDefinition]) throws {
         var map: [PluginID: PluginDefinition] = [:]
         for definition in definitions {
+            guard definition.id.rawValue.hasPrefix(Self.reservedDynamicIDPrefix) == false else {
+                throw CordisError.reservedPluginID(definition.id)
+            }
             guard map[definition.id] == nil else {
                 throw CordisError.duplicatePlugin(definition.id)
             }
