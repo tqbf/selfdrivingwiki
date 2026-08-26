@@ -19,10 +19,17 @@ private struct Progress: Encodable {
     let message: String?
 }
 
+private struct ArticleMetadata: Encodable {
+    let title: String?
+    let author: String?
+    let wordCount: Int?
+}
+
 private struct Result: Encodable {
     let requestID: UUID
     let outputPath: String
     let markdownByteCount: Int
+    var articleMetadata: ArticleMetadata?
 }
 
 private struct Failure: Encodable {
@@ -85,6 +92,10 @@ case "success", "environment":
     }
     do {
         let outputURL = URL(fileURLWithPath: request.outputPath)
+        try FileManager.default.createDirectory(
+            at: outputURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700])
         try Data(markdown.utf8).write(to: outputURL)
         try write(Frame(
             kind: "progress",
@@ -138,6 +149,35 @@ case "hold":
         exit(3)
     }
     while true { _ = Darwin.pause() }
+case "htmlsuccess":
+    let markdown = "# Hello\n\nWorld.\n"
+    do {
+        let outputURL = URL(fileURLWithPath: request.outputPath)
+        try FileManager.default.createDirectory(
+            at: outputURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700])
+        try Data(markdown.utf8).write(to: outputURL)
+        try write(Frame(
+            kind: "progress",
+            payload: Progress(
+                requestID: request.requestID,
+                completedUnitCount: 1,
+                totalUnitCount: 1,
+                message: "complete")))
+        try write(Frame(
+            kind: "result",
+            payload: Result(
+                requestID: request.requestID,
+                outputPath: request.outputPath,
+                markdownByteCount: markdown.utf8.count,
+                articleMetadata: ArticleMetadata(
+                    title: "Hello",
+                    author: "Jane Doe",
+                    wordCount: 2))))
+    } catch {
+        exit(3)
+    }
 default:
     exit(4)
 }
