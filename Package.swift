@@ -132,6 +132,26 @@ let package = Package(
             path: "Tests/RendererPackageToolTests",
             swiftSettings: strictSwiftSettings
         ),
+        // Development-only validator and protocol fixture checker for local
+        // extractor package authoring. The tool never executes package code.
+        .target(
+            name: "ExtractorPackageToolCore",
+            dependencies: ["WikiFSCore"],
+            path: "Sources/ExtractorPackageToolCore",
+            swiftSettings: strictSwiftSettings
+        ),
+        .executableTarget(
+            name: "extractor-package-tool",
+            dependencies: ["ExtractorPackageToolCore"],
+            path: "Sources/ExtractorPackageTool",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "ExtractorPackageToolTests",
+            dependencies: ["ExtractorPackageToolCore", "WikiFSTypes"],
+            path: "Tests/ExtractorPackageToolTests",
+            swiftSettings: strictSwiftSettings
+        ),
         .testTarget(
             name: "DynamicRendererPRSeriesAuditTests",
             dependencies: ["DynamicRendererPRSeriesAudit"],
