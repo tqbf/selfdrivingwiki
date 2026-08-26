@@ -67,6 +67,8 @@ struct WikiFSApp: App {
     @State private var activityTracker: QueueActivityTracker
     @State private var backgroundIngestCoordinator: BackgroundIngestCoordinator
     @State private var showingLaunchLocationWarning: Bool
+    @State private var optionalRuntimeSetupModel = OptionalRuntimeSetupModel()
+    @State private var showingOptionalRuntimeSetup = false
     @State private var fileProviderSetupWarning: FileProviderSetupWarning?
     @State private var showingFileProviderSetupWarning = false
     /// Issue #881: user-visible error shown when the local `queue.sqlite`
@@ -369,6 +371,8 @@ struct WikiFSApp: App {
         startStatusItem()
         applyAppKitAppearance()
         await localQueueRuntimeController.awaitSettled()
+        optionalRuntimeSetupModel.refresh()
+        showingOptionalRuntimeSetup = !optionalRuntimeSetupModel.isComplete
         connectToDaemon()
     }
 
@@ -557,6 +561,11 @@ struct WikiFSApp: App {
                 chatDaemon: chatDaemonCoordinator,
                 healthMonitor: healthMonitor)
             .preferredColorScheme(appearanceColorScheme)
+            .sheet(isPresented: $showingOptionalRuntimeSetup) {
+                OptionalRuntimeSetupSheet(
+                    model: optionalRuntimeSetupModel,
+                    dismiss: { showingOptionalRuntimeSetup = false })
+            }
             .alert(
                 "Install Self Driving Wiki in Applications",
                 isPresented: $showingLaunchLocationWarning,
