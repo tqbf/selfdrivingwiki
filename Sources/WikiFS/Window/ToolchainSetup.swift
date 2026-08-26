@@ -33,15 +33,38 @@ final class ToolchainSetupModel {
     enum Status: Equatable, Sendable {
         case checking
         case ready(String)
+        case updateRequired(found: String, required: String)
         case missing
         case failed(String)
     }
+
+    private enum Requirement {
+        case exact(String)
+        case minimum(String)
+    }
+
+    private static let requirements: [Tool: Requirement] = [
+        .mise: .minimum("2026.8.0"),
+        .bun: .exact("1.4.0"),
+        .uv: .exact("0.9.0")
+    ]
 
     private(set) var statuses: [Tool: Status] = Dictionary(
         uniqueKeysWithValues: Tool.allCases.map { ($0, .checking) })
     private(set) var isInstalling = false
     private(set) var installOutput: String?
     private(set) var lastError: String?
+
+    private var repositoryDirectory: URL? {
+        var directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+        while directory.path != "/" {
+            if FileManager.default.fileExists(atPath: directory.appendingPathComponent("mise.toml").path) {
+                return directory
+            }
+            directory.deleteLastPathComponent()
+        }
+        return FileManager.default.fileExists(atPath: "/mise.toml") ? directory : nil
+    }
 
     var isReady: Bool {
         Tool.allCases.allSatisfy {
@@ -53,6 +76,13 @@ final class ToolchainSetupModel {
     var hasMissingTools: Bool {
         statuses.values.contains {
             if case .missing = $0 { return true }
+            return false
+        }
+    }
+
+    var hasOutdatedTools: Bool {
+        statuses.values.contains {
+            if case .updateRequired = $0 { return true }
             return false
         }
     }
@@ -69,6 +99,13 @@ final class ToolchainSetupModel {
         lastError = nil
         installOutput = nil
 
+        guard let repositoryDirectory else {
+            lastError = "The repository directory could not be located. Open the app from a checkout containing mise.toml."
+            statuses[.mise] = .failed("Repository not found")
+            statuses[.bun] = .missing
+            statuses[.uv] = .missing
+            return
+        }
         let mise = await locateExecutable(named: "mise")
         guard let mise else {
             statuses[.mise] = .missing
@@ -76,16 +113,19 @@ final class ToolchainSetupModel {
             statuses[.uv] = .missing
             return
         }
-        statuses[.mise] = .ready(mise.path)
+        statuses[.mise] = await versionStatus(for: .mise, executable: mise, directory: repositoryDirectory)
 
-        async let bun = locateManagedTool("bun", using: mise)
-        async let uv = locateManagedTool("uv", using: mise)
-        statuses[.bun] = await status(for: bun)
-        statuses[.uv] = await status(for: uv)
+        async let bun = locateManagedTool("bun", using: mise, directory: repositoryDirectory)
+        async let uv = locateManagedTool("uv", using: mise, directory: repositoryDirectory)
+        statuses[.bun] = await status(for: .bun, path: bun, directory: repositoryDirectory)
+        statuses[.uv] = await status(for: .uv, path: uv, directory: repositoryDirectory)
     }
 
     func installTools() async {
-        guard !isInstalling, let mise = await locateExecutable(named: "mise") else { return }
+        guard !isInstalling,
+              let directory = repositoryDirectory,
+              let mise = await locateExecutable(named: "mise")
+        else { return }
         isInstalling = true
         installOutput = nil
         defer { isInstalling = false }
@@ -94,6 +134,7 @@ final class ToolchainSetupModel {
             executableURL: mise,
             arguments: ["install"],
             environment: processEnvironment,
+            currentDirectoryURL: directory,
             outputMode: .combined)
         do {
             let result = try await AsyncProcessRunner.run(request)
@@ -109,21 +150,73 @@ final class ToolchainSetupModel {
         }
     }
 
-    private func status(for path: URL?) -> Status {
+    private func status(for tool: Tool, path: URL?, directory: URL) async -> Status {
         guard let path else { return .missing }
-        return .ready(path.path)
+        return await versionStatus(for: tool, executable: path, directory: directory)
     }
 
-    private func locateManagedTool(_ name: String, using mise: URL) async -> URL? {
+    private func versionStatus(for tool: Tool, executable: URL, directory: URL) async -> Status {
+        let command: [String]
+        switch tool {
+        case .mise: command = ["--version"]
+        case .bun: command = ["--version"]
+        case .uv: command = ["--version"]
+        }
         let request = AsyncProcessRequest(
-            executableURL: mise,
-            arguments: ["which", name],
+            executableURL: executable,
+            arguments: command,
             environment: processEnvironment,
+            currentDirectoryURL: directory,
             outputMode: .combined)
         do {
             let result = try await AsyncProcessRunner.run(request)
             guard result.terminationStatus == 0,
                   let output = String(data: result.combinedData, encoding: .utf8)
+            else { return .failed("Could not read version") }
+            let found = parseVersion(output)
+            guard let requirement = Self.requirements[tool], let found else {
+                return .failed("Could not read version")
+            }
+            switch requirement {
+            case .exact(let required):
+                return found == required ? .ready(executable.path) : .updateRequired(found: found, required: required)
+            case .minimum(let required):
+                return compareVersions(found, required) >= 0
+                    ? .ready(executable.path)
+                    : .updateRequired(found: found, required: required)
+            }
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    private func parseVersion(_ output: String) -> String? {
+        let pattern = #"\d+(?:\.\d+){1,2}"#
+        return output.range(of: pattern, options: .regularExpression).map { String(output[$0]) }
+    }
+
+    private func compareVersions(_ lhs: String, _ rhs: String) -> Int {
+        let left = lhs.split(separator: ".").map { Int($0) ?? 0 }
+        let right = rhs.split(separator: ".").map { Int($0) ?? 0 }
+        for index in 0..<max(left.count, right.count) {
+            let l = index < left.count ? left[index] : 0
+            let r = index < right.count ? right[index] : 0
+            if l != r { return l < r ? -1 : 1 }
+        }
+        return 0
+    }
+
+    private func locateManagedTool(_ name: String, using mise: URL, directory: URL) async -> URL? {
+        let request = AsyncProcessRequest(
+            executableURL: mise,
+            arguments: ["which", name],
+            environment: processEnvironment,
+            currentDirectoryURL: directory,
+            outputMode: .separate)
+        do {
+            let result = try await AsyncProcessRunner.run(request)
+            guard result.terminationStatus == 0,
+                  let output = String(data: result.stdoutData, encoding: .utf8)
             else { return nil }
             let path = output.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !path.isEmpty else { return nil }
@@ -207,7 +300,7 @@ struct ToolchainSetupSheet: View {
                 .frame(maxHeight: Metrics.outputHeight)
             }
 
-            Text("Install mise, then run `mise install` from the repository directory. The app can run that final step after mise is installed.")
+            Text("Install mise, then run `mise install` from the repository directory. The app can install or update the pinned Bun and uv versions after mise is available. Update mise itself with Homebrew or the official mise installer.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -220,7 +313,7 @@ struct ToolchainSetupSheet: View {
                     Task { await model.refresh() }
                 }
                 if model.statuses[.mise].map(isReadyStatus) == true && !model.isReady {
-                    Button(model.isInstalling ? "Installing…" : "Install Tools") {
+                    Button(model.isInstalling ? "Updating…" : "Install / Update Tools") {
                         Task { await model.installTools() }
                     }
                     .buttonStyle(.borderedProminent)
@@ -244,6 +337,7 @@ struct ToolchainSetupSheet: View {
         let commands = """
         brew install mise
         cd /path/to/selfdrivingwiki
+        mise self-update
         mise install
         """
         NSPasteboard.general.clearContents()
@@ -283,6 +377,9 @@ private struct ToolchainStatusRow: View {
             Label("Ready", systemImage: "checkmark.circle.fill")
                 .foregroundStyle(.green)
                 .help(path)
+        case .updateRequired(let found, let required):
+            Label("Update required (\(found) → \(required))", systemImage: "arrow.up.circle.fill")
+                .foregroundStyle(.orange)
         case .missing:
             Label("Missing", systemImage: "exclamationmark.circle.fill")
                 .foregroundStyle(.orange)
