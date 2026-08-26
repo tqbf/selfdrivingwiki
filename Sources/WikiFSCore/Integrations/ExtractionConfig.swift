@@ -57,6 +57,14 @@ public struct ExtractionConfig: JSONSidecarConfig {
     /// Whisper/Rev.ai backends as future follow-ups.
     public var podcastBackend: PodcastTranscriptionBackend?
 
+    /// Optional version-free PDF extractor selection. When absent, `backend`
+    /// keeps its existing meaning and precedence.
+    public var pdfExtractor: ExtractionBackendReference?
+
+    /// Optional version-free HTML extractor selection. When absent,
+    /// `htmlBackend` keeps its existing meaning and precedence.
+    public var htmlExtractor: ExtractionBackendReference?
+
     /// The config's JSON filename inside the App Group container.
     public static let fileName = "extraction-config.json"
 
@@ -69,7 +77,9 @@ public struct ExtractionConfig: JSONSidecarConfig {
         geminiBaseURLOverride: String? = nil,
         doclingServeEndpoint: String? = nil,
         htmlBackend: HtmlExtractionBackend? = nil,
-        podcastBackend: PodcastTranscriptionBackend? = nil
+        podcastBackend: PodcastTranscriptionBackend? = nil,
+        pdfExtractor: ExtractionBackendReference? = nil,
+        htmlExtractor: ExtractionBackendReference? = nil
     ) {
         self.backend = backend
         self.acpProviderId = acpProviderId
@@ -80,6 +90,8 @@ public struct ExtractionConfig: JSONSidecarConfig {
         self.doclingServeEndpoint = doclingServeEndpoint
         self.htmlBackend = htmlBackend
         self.podcastBackend = podcastBackend
+        self.pdfExtractor = pdfExtractor
+        self.htmlExtractor = htmlExtractor
     }
 
     /// The default model id used everywhere a model isn't explicitly set, so the
@@ -116,6 +128,7 @@ public struct ExtractionConfig: JSONSidecarConfig {
         case geminiModel, geminiBaseURLOverride
         case doclingServeEndpoint
         case htmlBackend, podcastBackend
+        case pdfExtractor, htmlExtractor
     }
 
     public init(from decoder: Decoder) throws {
@@ -140,6 +153,8 @@ public struct ExtractionConfig: JSONSidecarConfig {
         // decode philosophy as `unknownBackendValueDegradesToLocalPdf2md`.
         self.htmlBackend = DebugLog.trying("init(from:) decode htmlBackend") { try c.decode(HtmlExtractionBackend.self, forKey: .htmlBackend) }
         self.podcastBackend = DebugLog.trying("init(from:) decode podcastBackend") { try c.decode(PodcastTranscriptionBackend.self, forKey: .podcastBackend) }
+        self.pdfExtractor = DebugLog.trying("init(from:) decode pdfExtractor") { try c.decode(ExtractionBackendReference.self, forKey: .pdfExtractor) }
+        self.htmlExtractor = DebugLog.trying("init(from:) decode htmlExtractor") { try c.decode(ExtractionBackendReference.self, forKey: .htmlExtractor) }
     }
 
     // MARK: - Persistence (via `JSONSidecarConfig`)

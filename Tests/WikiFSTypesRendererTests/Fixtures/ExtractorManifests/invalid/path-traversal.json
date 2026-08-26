@@ -1,0 +1,13 @@
+{
+  "manifestRevision": 1,
+  "packageID": "org.example.fixture",
+  "version": "1.0.0",
+  "displayName": "Invalid",
+  "protocolRevision": 1,
+  "entryPoint": "../extractor",
+  "launch": { "mode": "direct" },
+  "registrations": [{ "id": "main", "displayName": "Main", "kinds": ["pdf"], "mimeTypes": ["application/pdf"] }],
+  "capabilities": [],
+  "files": [{ "path": "../extractor", "digest": "0000000000000000000000000000000000000000000000000000000000000000" }],
+  "limits": { "maximumInputByteCount": 1, "maximumMarkdownOutputByteCount": 1, "maximumDurationMilliseconds": 1, "maximumProgressEventCount": 1 }
+}
