@@ -221,22 +221,22 @@ deps:
 	@echo "→ Prerequisites OK."
 
 # The app invokes mise-managed runtimes from the user's PATH. The build does
-# not package bun or uv; `mise install` is the repository setup step.
+# not package bun or uv. mise-check installs exact versions from mise.lock.
 mise-check:
 	@command -v mise >/dev/null 2>&1 || { \
 	  echo "✗ FATAL: mise not found" >&2; \
 	  echo "    Install mise: https://mise.jdx.dev/getting-started.html" >&2; \
 	  exit 1; \
 	}
+	@echo "→ Installing repository tools from mise.lock..."
+	@mise install
 	@mise which bun >/dev/null 2>&1 || { \
-	  echo "✗ FATAL: mise-managed bun is not installed" >&2; \
-	  echo "    Run: mise install" >&2; \
+	  echo "✗ FATAL: mise could not resolve Bun after installation" >&2; \
 	  exit 1; \
 	}
 	@mise which uv >/dev/null 2>&1 || { \
-	  echo "✗ FATAL: mise-managed uv is not installed" >&2; \
-  echo "    Run: mise install" >&2; \
-  exit 1; \
+	  echo "✗ FATAL: mise could not resolve uv after installation" >&2; \
+	  exit 1; \
 	}
 	@echo "  ✓ mise-managed bun and uv found"
 
@@ -264,7 +264,7 @@ icon: $(APP_ICON)
 # and GeneratedKeychain.swift is derived from that file. Prerequisites run left
 # to right in a serial make, so the generator sees the repaired config.
 build: signing-preflight deps mise-check $(APP_ICON) prompts version keychain
-	SIGN_IDENTITY="$(DEV_IDENTITY)" PROVISION_PROFILE="$(PROVISION_PROFILE)" ./build.sh $(CONFIG)
+	mise exec -- env SIGN_IDENTITY="$(DEV_IDENTITY)" PROVISION_PROFILE="$(PROVISION_PROFILE)" ./build.sh $(CONFIG)
 
 # Release signs with DIST_IDENTITY (Developer ID Application) so every nested
 # component (app, appex, helpers) carries the distribution cert inside-out
@@ -273,7 +273,7 @@ build: signing-preflight deps mise-check $(APP_ICON) prompts version keychain
 # DEV_IDENTITY here, which signed release builds with the Apple Development
 # cert → notarytool rejected it and Gatekeeper rejected it on other machines.
 release: deps mise-check $(APP_ICON) prompts version keychain
-	SIGN_IDENTITY="$(DIST_IDENTITY)" PROVISION_PROFILE="$(PROVISION_PROFILE)" ./build.sh release
+	mise exec -- env SIGN_IDENTITY="$(DIST_IDENTITY)" PROVISION_PROFILE="$(PROVISION_PROFILE)" ./build.sh release
 
 # Compile-only gate — no .app, no signing. CI / agent verification.
 check: deps prompts version keychain
