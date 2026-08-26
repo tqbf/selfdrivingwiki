@@ -1,0 +1,5 @@
+# Optional integrations. Install these tools only if you use PDF, transcript,
+# Defuddle, or ACP features that depend on them.
+[tools]
+bun = "1.4.0"
+uv = "0.9.0"

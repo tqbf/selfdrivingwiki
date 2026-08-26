@@ -15,7 +15,7 @@ Usage:
     ./pdf2md input.pdf  (if uv is in PATH)
 
 If uv is not installed, download it first:
-    curl -LsSf https://astral.sh/uv/install.sh | sh
+    mise install
 
 Exit codes:
     0   Success

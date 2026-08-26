@@ -220,20 +220,9 @@ deps:
 	@echo "  ✓ build.sh present"
 	@echo "→ Prerequisites OK."
 
-# bun is required for the full .app build (bundled into Contents/Helpers for
-# ACP providers), but NOT for `check`/`test` which only call `swift build`/
-# `swift test`. Gate it here as a prereq of build/release only. See #762.
-# Resolution: BUN_INSTALL/bin/bun → ~/.bun/bin/bun → `command -v bun` (PATH).
-bun-check:
-	@BUN_SRC="${BUN_INSTALL:-$$HOME/.bun}/bin/bun"; \
-	if [ ! -x "$$BUN_SRC" ]; then BUN_SRC=$$(command -v bun 2>/dev/null || true); fi; \
-	if [ -z "$$BUN_SRC" ] || [ ! -x "$$BUN_SRC" ]; then \
-	  echo "✗ FATAL: bun not found" >&2; \
-	  echo "    Install it:  curl -fsSL https://bun.sh/install | bash" >&2; \
-	  echo "    Or set BUN_INSTALL to point at your bun binary's directory." >&2; \
-	  exit 1; \
-	fi
-	@echo "  ✓ bun found"
+# Bun and uv are optional integrations. Build and test targets do not require
+# either runtime; affected features report unavailable and use their fallback.
+#
 
 # ---------------------------------------------------------------------------
 # Build (delegates to ./build.sh: swift build + bundle + codesign)
@@ -258,7 +247,7 @@ icon: $(APP_ICON)
 # signing/local.config (a new laptop infers all of it from the Apple account),
 # and GeneratedKeychain.swift is derived from that file. Prerequisites run left
 # to right in a serial make, so the generator sees the repaired config.
-build: signing-preflight deps bun-check $(APP_ICON) prompts version keychain
+build: signing-preflight deps $(APP_ICON) prompts version keychain
 	SIGN_IDENTITY="$(DEV_IDENTITY)" PROVISION_PROFILE="$(PROVISION_PROFILE)" ./build.sh $(CONFIG)
 
 # Release signs with DIST_IDENTITY (Developer ID Application) so every nested
@@ -267,7 +256,7 @@ build: signing-preflight deps bun-check $(APP_ICON) prompts version keychain
 # hardened runtime + timestamp for notarization. The old code passed
 # DEV_IDENTITY here, which signed release builds with the Apple Development
 # cert → notarytool rejected it and Gatekeeper rejected it on other machines.
-release: deps bun-check $(APP_ICON) prompts version keychain
+release: deps $(APP_ICON) prompts version keychain
 	SIGN_IDENTITY="$(DIST_IDENTITY)" PROVISION_PROFILE="$(PROVISION_PROFILE)" ./build.sh release
 
 # Compile-only gate — no .app, no signing. CI / agent verification.

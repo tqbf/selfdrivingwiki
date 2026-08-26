@@ -62,23 +62,14 @@ public enum PdfExtractionService {
 
     private static nonisolated let processRegistry = ProcessRegistry()
 
-    /// Directories prepended to a subprocess PATH so the `pdf2md` shebang
-    /// (`env -S uv run --script`) can find `uv`. The bundled uv binary lives
-    /// in the app's `Contents/Helpers` directory (placed there by build.sh,
-    /// same location as wikictl/bun) and is resolved at runtime via
-    /// `HelpersLocation.wikictlDirectory`, which finds the signed bundle's
-    /// Helpers dir in production and `build/` in a `swift run` dev launch.
-    /// It goes FIRST so the bundled uv wins over any system uv. The remaining
-    /// entries are a fallback if the bundled uv isn't there for some reason:
-    /// `~/.local/bin` (the official uv installer), `/opt/homebrew/bin`
-    /// (Homebrew on Apple silicon), and `/usr/local/bin` (Homebrew on Intel).
-    /// A Finder-launched app inherits the bare system PATH
-    /// (`/usr/bin:/bin:…`), so these cover every place uv actually lands.
+    /// Directories prepended to a subprocess PATH so the `pdf2md` and transcript
+    /// shebangs (`env -S uv run --script`) can find the mise-managed `uv`.
+    /// Include mise's shims explicitly because a Finder-launched app may inherit
+    /// a minimal PATH even when the user's login shell activates mise.
     public static nonisolated var uvSearchPATH: String {
-        let helpersDir = HelpersLocation.wikictlDirectory
-        let localBin = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".local/bin", isDirectory: true).path
-        return "\(helpersDir):\(localBin):/opt/homebrew/bin:/usr/local/bin"
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let currentPath = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        return "\(home)/.local/share/mise/shims:\(home)/.local/bin:/opt/homebrew/bin:/usr/local/bin:\(currentPath)"
     }
 
     /// Thread-safe byte accumulator for a pipe drained on a background queue.
@@ -531,7 +522,7 @@ public enum PdfExtractionService {
                 let detail = message.trimmingCharacters(in: .whitespacesAndNewlines)
                 let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
                 if detail.contains("uv: command not found") || detail.contains("No such file") {
-                    return "uv is not installed (PATH=\(path)) — PDF will be sent to the agent directly. Install uv: curl -LsSf https://astral.sh/uv/install.sh | sh"
+                    return "mise-managed uv is not installed (PATH=\(path)) — PDF will be sent to the agent directly. Run: mise install"
                 }
                 return "pdf2md exited \(status)\(detail.isEmpty ? "" : ": \(detail)") (PATH=\(path)). PDF will be sent to the agent directly."
             case .emptyOutput:

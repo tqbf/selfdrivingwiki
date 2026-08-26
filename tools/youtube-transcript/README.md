@@ -41,11 +41,7 @@ uv run --script youtube-transcript dQw4w9WgXcQ --lang es
 
 ## Installation
 
-Requires [uv](https://docs.astral.sh/uv/):
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
+Requires [uv](https://docs.astral.sh/uv/). Install it if you want to use this optional integration.
 
 The `youtube-transcript-api` dependency is declared in the PEP 723 inline
 metadata block — `uv` resolves it automatically on first run.

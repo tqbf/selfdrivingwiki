@@ -23,8 +23,7 @@ with a local, deterministic pipeline.
 ./pdf2md input.pdf --json
 ```
 
-**Requirements:** [uv](https://docs.astral.sh/uv/) (installs automatically if
-missing — run `curl -LsSf https://astral.sh/uv/install.sh | sh`).
+**Requirements:** [uv](https://docs.astral.sh/uv/). Install it with your preferred package manager if you want to use this optional integration.
 
 ## Development
 

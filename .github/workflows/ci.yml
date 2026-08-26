@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install uv
+      - name: Install uv for skill validation
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
@@ -136,7 +136,7 @@ jobs:
         working-directory: tools/pdf2md
     steps:
       - uses: actions/checkout@v4
-      - name: Install uv
+      - name: Install uv for Python checks
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true

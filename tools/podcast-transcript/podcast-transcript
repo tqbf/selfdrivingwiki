@@ -22,8 +22,7 @@ Usage:
 For a direct RSS feed URL, the feed is fetched directly (no iTunes Lookup hop),
 and when multiple <item>s exist the most recent (by <pubDate>) is selected.
 
-If uv is not installed, download it first:
-    curl -LsSf https://astral.sh/uv/install.sh | sh
+Install uv first if you want to use this optional integration.
 
 Exit codes:
     0   Success

@@ -9,14 +9,11 @@ Part of [Self Driving Wiki](../..). Replaces the tag-based
 `HTMLToMarkdown.scopeToMainContent` heuristic for the HTML-ingestion path
 (issue #761).
 
-## Why bundle it
+## Runtime
 
-The app already bundles **bun** (a Node-compatible runtime) in
-`Contents/Helpers/bun`, required by the build for ACP providers. So defuddle
-runs fully self-contained via the bundled bun — no system Node, no uv/Python,
-no external runtime dependency. This makes defuddle strictly simpler than
-`pdf2md` (which needs unbundled uv+Python and falls back to the agent when
-absent).
+The app uses the repository's mise-managed **bun** (a Node-compatible runtime)
+from PATH. The runtime is not copied into the app bundle. Defuddle remains
+self-contained as a script, with no system Node or uv/Python dependency.
 
 ## Version
 
@@ -79,7 +76,7 @@ SRC="$(readlink -f ~/.local/bin/defuddle)"
 #    ./frontmatter, ./fetch, ./utils/linkedom-compat, …) — 351 modules,
 #    ~2.45 MB. A plain `cp "$SRC"` does NOT work: cli.js alone is not
 #    self-contained and bun would fail with "Cannot find module './node'".
-~/.bun/bin/bun build "$SRC" --outfile tools/defuddle/defuddle --target=bun
+mise exec -- bun build "$SRC" --outfile tools/defuddle/defuddle --target=bun
 
 # 4. Update the version number in this README and in
 #    Sources/WikiFS/Sources/DefuddleExtractionService.swift comments if needed.
