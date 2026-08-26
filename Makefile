@@ -220,25 +220,9 @@ deps:
 	@echo "  ✓ build.sh present"
 	@echo "→ Prerequisites OK."
 
-# The app invokes mise-managed runtimes from the user's PATH. The build does
-# not package bun or uv. mise-check installs exact versions from mise.lock.
-mise-check:
-	@command -v mise >/dev/null 2>&1 || { \
-	  echo "✗ FATAL: mise not found" >&2; \
-	  echo "    Install mise: https://mise.jdx.dev/getting-started.html" >&2; \
-	  exit 1; \
-	}
-	@echo "→ Installing repository tools from mise.lock..."
-	@mise install
-	@mise which bun >/dev/null 2>&1 || { \
-	  echo "✗ FATAL: mise could not resolve Bun after installation" >&2; \
-	  exit 1; \
-	}
-	@mise which uv >/dev/null 2>&1 || { \
-	  echo "✗ FATAL: mise could not resolve uv after installation" >&2; \
-	  exit 1; \
-	}
-	@echo "  ✓ mise-managed bun and uv found"
+# Bun and uv are optional integrations. Build and test targets do not require
+# either runtime; affected features report unavailable and use their fallback.
+#
 
 # ---------------------------------------------------------------------------
 # Build (delegates to ./build.sh: swift build + bundle + codesign)
@@ -263,8 +247,8 @@ icon: $(APP_ICON)
 # signing/local.config (a new laptop infers all of it from the Apple account),
 # and GeneratedKeychain.swift is derived from that file. Prerequisites run left
 # to right in a serial make, so the generator sees the repaired config.
-build: signing-preflight deps mise-check $(APP_ICON) prompts version keychain
-	mise exec -- env SIGN_IDENTITY="$(DEV_IDENTITY)" PROVISION_PROFILE="$(PROVISION_PROFILE)" ./build.sh $(CONFIG)
+build: signing-preflight deps $(APP_ICON) prompts version keychain
+	SIGN_IDENTITY="$(DEV_IDENTITY)" PROVISION_PROFILE="$(PROVISION_PROFILE)" ./build.sh $(CONFIG)
 
 # Release signs with DIST_IDENTITY (Developer ID Application) so every nested
 # component (app, appex, helpers) carries the distribution cert inside-out
@@ -272,8 +256,8 @@ build: signing-preflight deps mise-check $(APP_ICON) prompts version keychain
 # hardened runtime + timestamp for notarization. The old code passed
 # DEV_IDENTITY here, which signed release builds with the Apple Development
 # cert → notarytool rejected it and Gatekeeper rejected it on other machines.
-release: deps mise-check $(APP_ICON) prompts version keychain
-	mise exec -- env SIGN_IDENTITY="$(DIST_IDENTITY)" PROVISION_PROFILE="$(PROVISION_PROFILE)" ./build.sh release
+release: deps $(APP_ICON) prompts version keychain
+	SIGN_IDENTITY="$(DIST_IDENTITY)" PROVISION_PROFILE="$(PROVISION_PROFILE)" ./build.sh release
 
 # Compile-only gate — no .app, no signing. CI / agent verification.
 check: deps prompts version keychain

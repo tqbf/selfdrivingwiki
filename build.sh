@@ -270,8 +270,12 @@ fi
 # Metal shaders, so the prebuilt version-matched one (fetched by download.py) must
 # ship next to the binary (MLX's loader finds it via the bundle Resources path).
 if [ ! -d "Resources/all-MiniLM-L6-v2" ] || [ ! -f "Resources/mlx.metallib" ]; then
-  echo "  MLX runtime absent — running prepare step (tools/minilm-prepare/download.py) ..."
-  ( cd tools/minilm-prepare && mise exec -- uv run python download.py )
+  if command -v uv >/dev/null 2>&1; then
+    echo "  MLX runtime absent — running prepare step (tools/minilm-prepare/download.py) ..."
+    ( cd tools/minilm-prepare && uv run python download.py )
+  else
+    echo "  (uv not found — skipping optional MLX runtime preparation)"
+  fi
 fi
 if [ -d "Resources/all-MiniLM-L6-v2" ]; then
   echo "  Bundling all-MiniLM-L6-v2 ..."
