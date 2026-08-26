@@ -15,6 +15,7 @@ struct RaceFreeProcessGroupRunnerTests {
             stdoutLimit: 16 * 1024,
             stderrLimit: 4 * 1024))
         let result = try await handle.result(timeout: .seconds(5))
+        #expect(result.terminationCause == .exited(code: 0))
         #expect(result.terminationStatus == 0)
         let frames = result.stdout.split(separator: 0x0A)
         #expect(frames.count == 2)
@@ -33,9 +34,27 @@ struct RaceFreeProcessGroupRunnerTests {
             stderrLimit: 4 * 1024))
         let childPID = try await childPID(from: handle.stdoutChunks)
         try await handle.terminateVerifiedGroup(gracePeriod: .milliseconds(50))
-        _ = try await handle.result(timeout: .seconds(5))
+        let result = try await handle.result(timeout: .seconds(5))
+        #expect(result.terminationCause == .signaled(signal: SIGKILL))
         #expect(await processIsGone(handle.processID))
         #expect(await processIsGone(childPID))
+    }
+
+    @Test func immediateResultCancellationNeverLeavesARegisteredWaiter() async throws {
+        for index in 0 ..< 20 {
+            let executable = try fixtureExecutable()
+            let input = Data("{\"version\":1,\"requestID\":\"cancel-\(index)\",\"mode\":\"holdWithChild\"}\n".utf8)
+            let handle = try RaceFreeProcessGroupRunner.launch(.init(
+                executableURL: executable,
+                environment: ["LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"],
+                standardInput: input,
+                stdoutLimit: 16 * 1024,
+                stderrLimit: 4 * 1024))
+            let wait = Task { try await handle.result(timeout: .seconds(5)) }
+            wait.cancel()
+            await #expect(throws: CancellationError.self) { _ = try await wait.value }
+            #expect(await processIsGone(handle.processID))
+        }
     }
 
     @Test func resultTimeoutKillsFixtureGroup() async throws {

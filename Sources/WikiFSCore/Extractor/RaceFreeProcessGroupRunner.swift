@@ -4,15 +4,27 @@ import WikiFSTypes
 import Darwin
 #endif
 
+public enum ProcessTerminationCause: Sendable, Equatable {
+    case exited(code: Int32)
+    case signaled(signal: Int32)
+}
+
 public struct ProcessGroupExecutionResult: Sendable, Equatable {
-    public let terminationStatus: Int32
+    public let terminationCause: ProcessTerminationCause
     public let stdout: Data
     public let stderr: Data
 
-    public init(terminationStatus: Int32, stdout: Data, stderr: Data) {
-        self.terminationStatus = terminationStatus
+    public init(terminationCause: ProcessTerminationCause, stdout: Data, stderr: Data) {
+        self.terminationCause = terminationCause
         self.stdout = stdout
         self.stderr = stderr
+    }
+
+    public var terminationStatus: Int32 {
+        switch terminationCause {
+        case .exited(let code): code
+        case .signaled(let signal): -signal
+        }
     }
 }
 
@@ -169,7 +181,7 @@ public final class RaceFreeProcessGroupHandle: @unchecked Sendable {
         guard let positivePID = ProcessSignalSafety.PositivePID(rawValue: spawnedPID),
               let identity = ProcessIdentityObservation.observe(processID: positivePID),
               identity.parentProcessID == parentProcessID else {
-            kill(-spawnedPID, SIGKILL)
+            Self.reapUnverifiedChild(spawnedPID)
             throw RaceFreeProcessGroupError.identityUnavailable
         }
         expectedIdentity = identity
@@ -198,6 +210,24 @@ public final class RaceFreeProcessGroupHandle: @unchecked Sendable {
             }
         }
 
+        do {
+            try standardInput.write(contentsOf: request.standardInput)
+            try standardInput.close()
+        } catch {
+            do {
+                try Self.signalVerifiedGroup(
+                    processID: spawnedPID,
+                    expectedIdentity: identity,
+                    parentProcessID: parentProcessID,
+                    signal: SIGKILL)
+                var status: Int32 = 0
+                _ = waitpid(spawnedPID, &status, 0)
+            } catch {
+                DebugLog.extraction("RaceFreeProcessGroupRunner refused stdin failure cleanup for PID \(spawnedPID)")
+            }
+            throw RaceFreeProcessGroupError.pipeFailure(errno)
+        }
+
         processSource = DispatchSource.makeProcessSource(
             identifier: spawnedPID,
             eventMask: .exit,
@@ -209,17 +239,9 @@ public final class RaceFreeProcessGroupHandle: @unchecked Sendable {
                 result = waitpid(spawnedPID, &status, 0)
             } while result < 0 && errno == EINTR
             guard result == spawnedPID else { return }
-            exitState.finish(status: Self.decodeWaitStatus(status))
+            exitState.finish(cause: Self.decodeWaitStatus(status))
         }
         processSource.resume()
-
-        do {
-            try standardInput.write(contentsOf: request.standardInput)
-            try standardInput.close()
-        } catch {
-            kill(-spawnedPID, SIGKILL)
-            throw RaceFreeProcessGroupError.pipeFailure(errno)
-        }
     }
     #endif
 
@@ -244,7 +266,7 @@ public final class RaceFreeProcessGroupHandle: @unchecked Sendable {
         do {
             let clock = ContinuousClock()
             let deadline = clock.now.advanced(by: timeout)
-            let status = try await exitState.wait(timeout: timeout)
+            let terminationCause = try await exitState.wait(timeout: timeout)
             let remaining = clock.now.duration(to: deadline)
             guard remaining > .zero else { throw RaceFreeProcessGroupError.timedOut }
             try await withThrowingTaskGroup(of: Void.self) { group in
@@ -256,62 +278,74 @@ public final class RaceFreeProcessGroupHandle: @unchecked Sendable {
                 throw RaceFreeProcessGroupError.outputLimitExceeded
             }
             return ProcessGroupExecutionResult(
-                terminationStatus: status,
+                terminationCause: terminationCause,
                 stdout: stdoutAccumulator.snapshot,
                 stderr: stderrAccumulator.snapshot)
         } catch {
-            terminateAfterFailure()
+            try await terminateAfterFailure()
             throw error
         }
     }
 
     private func signalVerifiedGroup(_ signal: Int32) throws {
-        try verifyLeader()
-        guard kill(-processID, signal) == 0 || errno == ESRCH else {
-            throw RaceFreeProcessGroupError.identityMismatch
-        }
+        try Self.signalVerifiedGroup(
+            processID: processID,
+            expectedIdentity: expectedIdentity,
+            parentProcessID: parentProcessID,
+            signal: signal)
     }
 
-    private func signalRemainingVerifiedGroup(_ signal: Int32) throws {
-        if let positivePID = ProcessSignalSafety.PositivePID(rawValue: processID),
-           let observed = ProcessIdentityObservation.observe(processID: positivePID) {
-            guard ProcessSignalSafety.verify(
-                processID: positivePID,
-                expectedIdentity: expectedIdentity,
-                expectedParentProcessID: parentProcessID,
-                observedIdentity: observed) == .verified else {
-                throw RaceFreeProcessGroupError.identityMismatch
-            }
-        }
-        guard kill(-processID, signal) == 0 || errno == ESRCH else {
-            throw RaceFreeProcessGroupError.identityMismatch
-        }
-    }
-
-    private func terminateAfterFailure() {
-        do {
-            try signalRemainingVerifiedGroup(SIGKILL)
-        } catch {
-            DebugLog.extraction("RaceFreeProcessGroupRunner refused failure cleanup for PID \(processID): \(error)")
-        }
-    }
-
-    private func verifyLeader() throws {
+    private static func signalVerifiedGroup(
+        processID: Int32,
+        expectedIdentity: ProcessSignalSafety.Identity,
+        parentProcessID: ProcessSignalSafety.PositivePID,
+        signal: Int32
+    ) throws {
         guard let positivePID = ProcessSignalSafety.PositivePID(rawValue: processID),
               ProcessSignalSafety.verify(
                 processID: positivePID,
                 expectedIdentity: expectedIdentity,
                 expectedParentProcessID: parentProcessID,
-                observedIdentity: ProcessIdentityObservation.observe(processID: positivePID)) == .verified
-        else {
+                observedIdentity: ProcessIdentityObservation.observe(processID: positivePID)) == .verified,
+              kill(-processID, signal) == 0 || errno == ESRCH else {
             throw RaceFreeProcessGroupError.identityMismatch
         }
     }
 
-    private static func decodeWaitStatus(_ status: Int32) -> Int32 {
+    private func signalRemainingVerifiedGroup(_ signal: Int32) throws {
+        if exitState.cause != nil { return }
+        guard let positivePID = ProcessSignalSafety.PositivePID(rawValue: processID),
+              let observed = ProcessIdentityObservation.observe(processID: positivePID),
+              ProcessSignalSafety.verify(
+                processID: positivePID,
+                expectedIdentity: expectedIdentity,
+                expectedParentProcessID: parentProcessID,
+                observedIdentity: observed) == .verified else {
+            throw RaceFreeProcessGroupError.identityMismatch
+        }
+        guard kill(-processID, signal) == 0 || errno == ESRCH else {
+            throw RaceFreeProcessGroupError.identityMismatch
+        }
+    }
+
+    private func terminateAfterFailure() async throws {
+        if exitState.cause != nil { return }
+        try await terminateVerifiedGroup()
+        _ = try await exitState.wait(timeout: .seconds(5))
+    }
+
+    private static func reapUnverifiedChild(_ processID: pid_t) {
+        var status: Int32 = 0
+        let result = waitpid(processID, &status, WNOHANG)
+        if result == 0 {
+            DebugLog.extraction("RaceFreeProcessGroupRunner could not verify or signal child PID \(processID)")
+        }
+    }
+
+    private static func decodeWaitStatus(_ status: Int32) -> ProcessTerminationCause {
         let signal = status & 0x7f
-        if signal == 0 { return (status >> 8) & 0xff }
-        return -signal
+        if signal == 0 { return .exited(code: (status >> 8) & 0xff) }
+        return .signaled(signal: signal)
     }
 }
 
@@ -391,12 +425,13 @@ private final class ProcessPipeDrainState: @unchecked Sendable {
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation {
                 (continuation: CheckedContinuation<Void, Error>) in
-                let completed = lock.withLock { () -> Bool in
-                    if finished { return true }
+                let immediate = lock.withLock { () -> Result<Void, Error>? in
+                    if finished { return .success(()) }
+                    if Task.isCancelled { return .failure(CancellationError()) }
                     continuations[id] = continuation
-                    return false
+                    return nil
                 }
-                if completed { continuation.resume() }
+                if let immediate { continuation.resume(with: immediate) }
             }
         } onCancel: {
             let continuation = self.lock.withLock { self.continuations.removeValue(forKey: id) }
@@ -409,24 +444,24 @@ private final class ProcessPipeDrainState: @unchecked Sendable {
 // swiftlint:disable:next unchecked_sendable
 private final class ProcessGroupExitState: @unchecked Sendable {
     private let lock = NSLock()
-    private var innerStatus: Int32?
-    private var continuations: [UUID: CheckedContinuation<Int32, Error>] = [:]
+    private var innerCause: ProcessTerminationCause?
+    private var continuations: [UUID: CheckedContinuation<ProcessTerminationCause, Error>] = [:]
 
-    var status: Int32? { lock.withLock { innerStatus } }
+    var cause: ProcessTerminationCause? { lock.withLock { innerCause } }
 
-    func finish(status: Int32) {
-        let waiting = lock.withLock { () -> [CheckedContinuation<Int32, Error>] in
-            guard innerStatus == nil else { return [] }
-            innerStatus = status
+    func finish(cause: ProcessTerminationCause) {
+        let waiting = lock.withLock { () -> [CheckedContinuation<ProcessTerminationCause, Error>] in
+            guard innerCause == nil else { return [] }
+            innerCause = cause
             defer { continuations.removeAll() }
             return Array(continuations.values)
         }
-        waiting.forEach { $0.resume(returning: status) }
+        waiting.forEach { $0.resume(returning: cause) }
     }
 
-    func wait(timeout: Duration) async throws -> Int32 {
-        if let status { return status }
-        return try await withThrowingTaskGroup(of: Int32.self) { group in
+    func wait(timeout: Duration) async throws -> ProcessTerminationCause {
+        if let cause { return cause }
+        return try await withThrowingTaskGroup(of: ProcessTerminationCause.self) { group in
             group.addTask { [self] in try await waitForExit() }
             group.addTask {
                 try await Task.sleep(for: timeout)
@@ -438,17 +473,18 @@ private final class ProcessGroupExitState: @unchecked Sendable {
         }
     }
 
-    private func waitForExit() async throws -> Int32 {
+    private func waitForExit() async throws -> ProcessTerminationCause {
         let id = UUID()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation {
-                (continuation: CheckedContinuation<Int32, Error>) in
-                let immediate = lock.withLock { () -> Int32? in
-                    if let innerStatus { return innerStatus }
+                (continuation: CheckedContinuation<ProcessTerminationCause, Error>) in
+                let immediate = lock.withLock { () -> Result<ProcessTerminationCause, Error>? in
+                    if let innerCause { return .success(innerCause) }
+                    if Task.isCancelled { return .failure(CancellationError()) }
                     continuations[id] = continuation
                     return nil
                 }
-                if let immediate { continuation.resume(returning: immediate) }
+                if let immediate { continuation.resume(with: immediate) }
             }
         } onCancel: {
             let continuation = self.lock.withLock { self.continuations.removeValue(forKey: id) }
