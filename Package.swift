@@ -321,6 +321,14 @@ let package = Package(
         // forbids Metal on macOS 26). Core reaches the implementation via the
         // injectable EmbeddingService.miniLMFactory seam; the app installs it at
         // launch through EmbedderBootstrap. Mirrors the PDFKit isolation.
+        // App-owned extractor catalog mutation authority. The wikid daemon and
+        // CLI targets do not link this module and can only use the Core reader.
+        .target(
+            name: "WikiFSExtractorStore",
+            dependencies: ["WikiFSCore", "WikiFSTypes", "CRendererPackageMove"],
+            path: "Sources/WikiFSExtractorStore",
+            swiftSettings: strictSwiftSettings
+        ),
         .target(
             name: "WikiFSMLX",
             dependencies: [
@@ -358,6 +366,7 @@ let package = Package(
             dependencies: [
                 "Cordis",
                 "WikiFSCore",
+                "WikiFSExtractorStore",
                 "WikiFSCodeHighlighting",
                 // The XPC contract — the app implements WikiDaemonEventSink
                 // (DaemonQueueEventSink). Empty on Linux; harmless there.
@@ -424,6 +433,14 @@ let package = Package(
             name: "ProviderConfigMutationHelper",
             dependencies: ["WikiFSCore"],
             path: "Sources/ProviderConfigMutationHelper",
+            swiftSettings: strictSwiftSettings
+        ),
+        // Test-only process helper for extractor package store lock and
+        // read-only daemon boundary coverage. It is never bundled.
+        .executableTarget(
+            name: "ExtractorPackageStoreProcessHelper",
+            dependencies: ["WikiFSCore", "WikiFSExtractorStore"],
+            path: "Sources/ExtractorPackageStoreProcessHelper",
             swiftSettings: strictSwiftSettings
         ),
         // wikid — the bundled XPC service (Contents/XPCServices/wikid.xpc). It
@@ -507,7 +524,7 @@ let package = Package(
         // ACP wiring (pure), etc. These run on both macOS and Linux (#754).
         .testTarget(
             name: "WikiFSCoreTests",
-            dependencies: ["Cordis", "CordisLoader", "WikiFSCore", "WikiCtlCore", "ProviderConfigMutationHelper",
+            dependencies: ["Cordis", "CordisLoader", "WikiFSCore", "WikiFSExtractorStore", "WikiCtlCore", "ProviderConfigMutationHelper", "ExtractorPackageStoreProcessHelper",
                            // WikiFSEngine is macOS-only at build time because it
                            // depends on the `ACP` product (macOS-only). On Linux
                            // the test target still builds — the ACP-backed tests

@@ -73,6 +73,38 @@ struct ExtractorPackageCatalogTests {
         }
     }
 
+    @Test func replacementPreservesImmutableDigestReservations() throws {
+        let record = try makeRecord(version: "1.0.0", byte: 1)
+        let installed = try ExtractorPackageCatalog(records: [record])
+        let removed = try installed.replacing(records: [])
+
+        #expect(removed.records.isEmpty)
+        #expect(removed.reservations == [
+            ExtractorPackageReservationRecord(
+                reservation: ExtractorPackageReservation(
+                    packageID: record.revision.packageID,
+                    version: record.revision.version),
+                digest: record.revision.digest)
+        ])
+
+        let conflicting = try makeRecord(version: "1.0.0", byte: 2)
+        #expect(throws: ExtractorPackageCatalogError.conflictingRevision) {
+            _ = try removed.replacing(records: [conflicting])
+        }
+    }
+
+    @Test func duplicateReservationRecordsAreRejected() throws {
+        let record = try makeRecord(version: "1.0.0", byte: 1)
+        let reservation = ExtractorPackageReservationRecord(
+            reservation: ExtractorPackageReservation(
+                packageID: record.revision.packageID,
+                version: record.revision.version),
+            digest: record.revision.digest)
+        #expect(throws: ExtractorPackageCatalogError.duplicateReservation) {
+            _ = try ExtractorPackageCatalog(reservations: [reservation, reservation])
+        }
+    }
+
     @Test func diagnosticRejectsPathsAndExcessText() throws {
         #expect(throws: ExtractorPackageCatalogError.invalidDiagnostic) {
             _ = try ExtractorPackageAdmissionDiagnostic(message: "failed at /private/package")

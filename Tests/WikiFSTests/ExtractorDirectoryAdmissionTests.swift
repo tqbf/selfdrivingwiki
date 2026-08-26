@@ -168,7 +168,7 @@ struct ExtractorDirectoryAdmissionTests {
     @Test func sourceDirectoryMetadataChangeDuringEnumerationIsRejected() throws {
         let fixture = try makeFixture()
         let injected = Mutex(false)
-        ExtractorDirectoryValidator.installSourceEnumerationHookForTesting {
+        ExtractorDirectoryValidator.installSourceEnumerationHookForTesting(source: fixture.root) {
             let mustInject = injected.withLock { value in
                 guard value == false else { return false }
                 value = true
@@ -177,7 +177,11 @@ struct ExtractorDirectoryAdmissionTests {
             guard mustInject else { return }
             guard chmod(fixture.root.path, 0o711) == 0 else { throw POSIXError(.EIO) }
         }
-        defer { ExtractorDirectoryValidator.installSourceEnumerationHookForTesting(nil) }
+        defer {
+            ExtractorDirectoryValidator.installSourceEnumerationHookForTesting(
+                source: fixture.root,
+                nil)
+        }
         #expect(throws: ExtractorDirectoryAdmissionError.sourceChanged) {
             _ = try ExtractorDirectoryValidator.admit(source: fixture.root, layout: makeLayout())
         }
@@ -187,7 +191,7 @@ struct ExtractorDirectoryAdmissionTests {
         let fixture = try makeFixture()
         let layout = try makeLayout()
         let markerName = "substitute-marker"
-        ExtractorDirectoryValidator.installSourceEnumerationHookForTesting {
+        ExtractorDirectoryValidator.installSourceEnumerationHookForTesting(source: fixture.root) {
             let entries = try FileManager.default.contentsOfDirectory(
                 at: layout.stagingRoot,
                 includingPropertiesForKeys: nil)
@@ -200,7 +204,11 @@ struct ExtractorDirectoryAdmissionTests {
             try Data("retain".utf8).write(to: destination.appendingPathComponent(markerName))
             throw ExtractorDirectoryAdmissionError.sourceChanged
         }
-        defer { ExtractorDirectoryValidator.installSourceEnumerationHookForTesting(nil) }
+        defer {
+            ExtractorDirectoryValidator.installSourceEnumerationHookForTesting(
+                source: fixture.root,
+                nil)
+        }
 
         #expect(throws: ExtractorDirectoryAdmissionError.sourceChanged) {
             _ = try ExtractorDirectoryValidator.admit(source: fixture.root, layout: layout)

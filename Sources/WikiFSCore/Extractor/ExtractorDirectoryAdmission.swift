@@ -33,6 +33,11 @@ public enum ExtractorPackageProcessRole: String, Codable, Hashable, Sendable {
     case test
 }
 
+public enum ExtractorOperationCleanupScope: Sendable {
+    case currentSession
+    case staleSessions
+}
+
 public struct ExtractorPackageStoreLayout: Sendable {
     public let appGroupContainerRoot: URL
     public let processRole: ExtractorPackageProcessRole
@@ -71,6 +76,7 @@ public struct ExtractorPackageStoreLayout: Sendable {
 }
 
 public enum ExtractorDirectoryAdmissionError: Error, Equatable, Sendable {
+    case mutationForbidden
     case nonFileURL, sourceNotDirectory, sourceChanged, symlink(String), hardLink(String), specialFile(String)
     case deviceChanged(String), metadataChanged(String), modeChanged(String), collision(String), containment
     case copyFailed(String), preparationFailed, validationFailed, expectedRevisionMismatch, invalidStagingID, limitExceeded
@@ -85,16 +91,25 @@ public struct ValidatedExtractorDirectory: Sendable {
 }
 
 public enum ExtractorDirectoryValidator {
-    private static let sourceEnumerationHook = Mutex<(@Sendable () throws -> Void)?>(nil)
+    private static let sourceEnumerationHooks = Mutex<
+        [String: @Sendable () throws -> Void]
+    >([:])
 
-    /// Serialized tests use this package-only seam to simulate one source-directory change.
+    /// Tests use this package-only seam to simulate one exact source-directory change.
     package static func installSourceEnumerationHookForTesting(
+        source: URL,
         _ hook: (@Sendable () throws -> Void)?
     ) {
-        sourceEnumerationHook.withLock { $0 = hook }
+        let key = source.standardizedFileURL.path
+        sourceEnumerationHooks.withLock { hooks in
+            hooks[key] = hook
+        }
     }
 
     public static func admit(source: URL, layout: ExtractorPackageStoreLayout) throws -> ValidatedExtractorDirectory {
+        guard layout.processRole == .app || layout.processRole == .test else {
+            throw ExtractorDirectoryAdmissionError.mutationForbidden
+        }
         guard source.isFileURL else { throw ExtractorDirectoryAdmissionError.nonFileURL }
         let sourceStatus = try lstat(source)
         guard sourceStatus.st_mode & S_IFMT == S_IFDIR else { throw ExtractorDirectoryAdmissionError.sourceNotDirectory }
@@ -113,7 +128,7 @@ public enum ExtractorDirectoryValidator {
         do {
             let roots = try prepareStoreRoots(layout)
             stagingFD = roots.staging
-            close(roots.packages); close(roots.derived); close(roots.operations)
+            close(roots.root); close(roots.packages); close(roots.derived); close(roots.operations)
             destinationFD = try createDirectory(named: stagingID.rawValue, in: stagingFD)
         } catch {
             throw ExtractorDirectoryAdmissionError.preparationFailed
@@ -122,7 +137,15 @@ public enum ExtractorDirectoryValidator {
 
         do {
             let sourceManifest = try readSourceManifest(directoryFD: sourceFD)
-            try copyTree(sourceFD: sourceFD, destinationFD: destinationFD, sourceDevice: openedSource.st_dev, manifest: sourceManifest)
+            let enumerationHook = sourceEnumerationHooks.withLock {
+                $0[source.standardizedFileURL.path]
+            }
+            try copyTree(
+                sourceFD: sourceFD,
+                destinationFD: destinationFD,
+                sourceDevice: openedSource.st_dev,
+                manifest: sourceManifest,
+                enumerationHook: enumerationHook)
             try verifyDirectory(sourceFD, matches: openedSource)
             try verifyPath(destination, matchesFD: destinationFD)
 
@@ -183,7 +206,7 @@ public enum ExtractorDirectoryValidator {
         let destinationFD: Int32
         do {
             let roots = try prepareStoreRoots(layout)
-            close(roots.packages); close(roots.staging); close(roots.derived)
+            close(roots.root); close(roots.packages); close(roots.staging); close(roots.derived)
             let roleFD = try openOrCreateDirectory(named: layout.processRole.rawValue, in: roots.operations)
             close(roots.operations)
             defer { close(roleFD) }
@@ -206,6 +229,67 @@ public enum ExtractorDirectoryValidator {
         }
     }
 
+    public static func cleanupOperationSessions(
+        layout: ExtractorPackageStoreLayout,
+        scope: ExtractorOperationCleanupScope
+    ) throws {
+        guard let roleDirectory = try openExistingOperationRoleDirectory(layout) else { return }
+        defer { close(roleDirectory) }
+        let currentName = "\(getpid())-\(layout.processSessionID.rawValue)"
+        for name in try directoryEntryNames(roleDirectory) {
+            let mustRemove: Bool
+            switch scope {
+            case .currentSession:
+                mustRemove = name == currentName
+            case .staleSessions:
+                mustRemove = name != currentName && operationSessionIsStale(name)
+            }
+            if mustRemove {
+                try removeStoreTree(named: name, from: roleDirectory)
+            }
+        }
+    }
+
+    private static func openExistingOperationRoleDirectory(
+        _ layout: ExtractorPackageStoreLayout
+    ) throws -> Int32? {
+        let root = layout.appGroupContainerRoot.path.withCString {
+            pointer -> (descriptor: Int32, error: Int32) in
+            let descriptor = open(pointer, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+            return (descriptor, errno)
+        }
+        guard root.descriptor >= 0 else {
+            if root.error == ENOENT { return nil }
+            throw ExtractorDirectoryAdmissionError.preparationFailed
+        }
+        var current = root.descriptor
+        for component in ["extractors", "v1", "operations", layout.processRole.rawValue] {
+            let next = component.withCString {
+                pointer -> (descriptor: Int32, error: Int32) in
+                let descriptor = openat(current, pointer, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+                return (descriptor, errno)
+            }
+            close(current)
+            guard next.descriptor >= 0 else {
+                if next.error == ENOENT { return nil }
+                throw ExtractorDirectoryAdmissionError.preparationFailed
+            }
+            current = next.descriptor
+        }
+        return current
+    }
+
+    private static func operationSessionIsStale(_ name: String) -> Bool {
+        guard let separator = name.firstIndex(of: "-"),
+              let processID = Int32(name[..<separator]),
+              processID > 0 else {
+            return true
+        }
+        if processID == getpid() { return true }
+        if kill(processID, 0) == 0 { return false }
+        return errno != EPERM
+    }
+
     private static func validate(_ root: URL) throws -> ValidatedExtractorDirectory {
         do { return ValidatedExtractorDirectory(validated: try ExtractorManifestValidator.validateStagedDirectory(root), root: root) }
         catch let e as ExtractorManifestValidationError { throw ExtractorDirectoryAdmissionError.manifest(e) }
@@ -220,7 +304,8 @@ public enum ExtractorDirectoryValidator {
         sourceFD: Int32,
         destinationFD: Int32,
         sourceDevice: dev_t,
-        manifest: ExtractorManifest
+        manifest: ExtractorManifest,
+        enumerationHook: (@Sendable () throws -> Void)? = nil
     ) throws {
         var accounting = CopyAccounting()
         try copyDirectory(
@@ -229,6 +314,7 @@ public enum ExtractorDirectoryValidator {
             relativePrefix: "",
             sourceDevice: sourceDevice,
             manifest: manifest,
+            enumerationHook: enumerationHook,
             accounting: &accounting)
         guard fchmod(destinationFD, 0o700) == 0 else { throw ExtractorDirectoryAdmissionError.modeChanged("package") }
     }
@@ -239,6 +325,7 @@ public enum ExtractorDirectoryValidator {
         relativePrefix: String,
         sourceDevice: dev_t,
         manifest: ExtractorManifest,
+        enumerationHook: (@Sendable () throws -> Void)?,
         accounting: inout CopyAccounting
     ) throws {
         let directoryBefore = try status(of: sourceFD)
@@ -246,8 +333,7 @@ public enum ExtractorDirectoryValidator {
             throw ExtractorDirectoryAdmissionError.sourceChanged
         }
         let names = try directoryEntryNames(sourceFD)
-        let enumerationHook = sourceEnumerationHook.withLock { $0 }
-        try enumerationHook?()
+        if relativePrefix.isEmpty { try enumerationHook?() }
         for name in names {
             guard name != ".", name != "..", name.contains("/") == false else {
                 throw ExtractorDirectoryAdmissionError.copyFailed("path")
@@ -274,7 +360,14 @@ public enum ExtractorDirectoryValidator {
                 guard sameIdentity(before, opened) else { throw ExtractorDirectoryAdmissionError.sourceChanged }
                 let childDestination = try createDirectory(named: name, in: destinationFD)
                 defer { close(childDestination) }
-                try copyDirectory(sourceFD: childSource, destinationFD: childDestination, relativePrefix: relativeValue, sourceDevice: sourceDevice, manifest: manifest, accounting: &accounting)
+                try copyDirectory(
+                    sourceFD: childSource,
+                    destinationFD: childDestination,
+                    relativePrefix: relativeValue,
+                    sourceDevice: sourceDevice,
+                    manifest: manifest,
+                    enumerationHook: enumerationHook,
+                    accounting: &accounting)
                 try verifyDirectory(childSource, matches: opened)
             case S_IFREG:
                 guard before.st_nlink == 1 else { throw ExtractorDirectoryAdmissionError.hardLink(relativePath.rawValue) }
@@ -495,7 +588,107 @@ public enum ExtractorDirectoryValidator {
         return URL(fileURLWithPath: String(cString: resolved), isDirectory: true)
     }
 
-    private static func prepareStoreRoots(_ layout: ExtractorPackageStoreLayout) throws -> (packages: Int32, staging: Int32, derived: Int32, operations: Int32) {
+    public static func openStoreAuthority(_ layout: ExtractorPackageStoreLayout) throws -> Int32 {
+        try FileManager.default.createDirectory(
+            at: layout.appGroupContainerRoot,
+            withIntermediateDirectories: true)
+        let authorityURL = try canonicalURL(layout.appGroupContainerRoot)
+        let pathStatus = try lstat(authorityURL)
+        let descriptor = authorityURL.path.withCString {
+            open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        }
+        guard descriptor >= 0 else { throw ExtractorDirectoryAdmissionError.preparationFailed }
+        do {
+            let opened = try status(of: descriptor)
+            guard sameIdentity(pathStatus, opened),
+                  opened.st_mode & S_IFMT == S_IFDIR else {
+                throw ExtractorDirectoryAdmissionError.preparationFailed
+            }
+            return descriptor
+        } catch {
+            close(descriptor)
+            throw error
+        }
+    }
+
+    public static func storeDirectoryEntryNames(_ descriptor: Int32) throws -> [String] {
+        try directoryEntryNames(descriptor)
+    }
+
+    public static func removeEmptyStoreDirectory(
+        named name: String,
+        from parentFD: Int32
+    ) throws -> Bool {
+        let before = try status(at: parentFD, name: name, noFollow: true)
+        guard before.st_mode & S_IFMT == S_IFDIR,
+              before.st_uid == getuid() else {
+            throw ExtractorDirectoryAdmissionError.preparationFailed
+        }
+        let descriptor = name.withCString {
+            openat(parentFD, $0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        }
+        guard descriptor >= 0 else { throw ExtractorDirectoryAdmissionError.preparationFailed }
+        defer { close(descriptor) }
+        let opened = try status(of: descriptor)
+        guard sameIdentity(before, opened), opened.st_mode & S_IFMT == S_IFDIR else {
+            throw ExtractorDirectoryAdmissionError.preparationFailed
+        }
+        guard try directoryEntryNames(descriptor).isEmpty else { return false }
+        let current = try status(at: parentFD, name: name, noFollow: true)
+        guard sameIdentity(opened, current) else {
+            throw ExtractorDirectoryAdmissionError.preparationFailed
+        }
+        let result = name.withCString { unlinkat(parentFD, $0, AT_REMOVEDIR) }
+        if result == 0 { return true }
+        if errno == ENOTEMPTY || errno == EEXIST { return false }
+        throw ExtractorDirectoryAdmissionError.preparationFailed
+    }
+
+    public static func removeStoreTree(
+        named name: String,
+        from parentFD: Int32
+    ) throws {
+        let before = try status(at: parentFD, name: name, noFollow: true)
+        guard before.st_mode & S_IFMT == S_IFDIR,
+              before.st_uid == getuid() else {
+            throw ExtractorDirectoryAdmissionError.preparationFailed
+        }
+        let descriptor = name.withCString {
+            openat(parentFD, $0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        }
+        guard descriptor >= 0 else { throw ExtractorDirectoryAdmissionError.preparationFailed }
+        defer { close(descriptor) }
+        let opened = try status(of: descriptor)
+        guard sameIdentity(before, opened), opened.st_mode & S_IFMT == S_IFDIR else {
+            throw ExtractorDirectoryAdmissionError.preparationFailed
+        }
+        for child in try directoryEntryNames(descriptor) {
+            let childStatus = try status(at: descriptor, name: child, noFollow: true)
+            switch childStatus.st_mode & S_IFMT {
+            case S_IFDIR:
+                try removeStoreTree(named: child, from: descriptor)
+            case S_IFREG:
+                guard childStatus.st_uid == getuid(), childStatus.st_nlink == 1 else {
+                    throw ExtractorDirectoryAdmissionError.preparationFailed
+                }
+                guard child.withCString({ unlinkat(descriptor, $0, 0) }) == 0 else {
+                    throw ExtractorDirectoryAdmissionError.preparationFailed
+                }
+            default:
+                throw ExtractorDirectoryAdmissionError.preparationFailed
+            }
+        }
+        let after = try status(of: descriptor)
+        let entry = try status(at: parentFD, name: name, noFollow: true)
+        guard sameIdentity(opened, after), sameIdentity(opened, entry) else {
+            throw ExtractorDirectoryAdmissionError.preparationFailed
+        }
+        guard name.withCString({ unlinkat(parentFD, $0, AT_REMOVEDIR) }) == 0 else {
+            throw ExtractorDirectoryAdmissionError.preparationFailed
+        }
+    }
+
+    public static func prepareStoreRoots(_ layout: ExtractorPackageStoreLayout) throws -> (root: Int32, packages: Int32, staging: Int32, derived: Int32, operations: Int32) {
         try FileManager.default.createDirectory(at: layout.appGroupContainerRoot, withIntermediateDirectories: true)
         let authorityURL = try canonicalURL(layout.appGroupContainerRoot)
         let authorityPathStatus = try lstat(authorityURL)
@@ -511,7 +704,11 @@ public enum ExtractorDirectoryValidator {
         let authorityBaseline = try status(of: authorityFD)
         let root = try openOrCreateDirectory(named: "v1", in: extractors)
         defer { close(root) }
-        try verifyDirectory(authorityFD, matches: authorityBaseline)
+        let authorityAfter = try status(of: authorityFD)
+        guard sameIdentity(authorityBaseline, authorityAfter),
+              authorityAfter.st_mode & S_IFMT == S_IFDIR else {
+            throw ExtractorDirectoryAdmissionError.sourceChanged
+        }
         let packages = try openOrCreateDirectory(named: "packages", in: root)
         do {
             let staging = try openOrCreateDirectory(named: "staging", in: root)
@@ -519,7 +716,12 @@ public enum ExtractorDirectoryValidator {
             let operations = try openOrCreateDirectory(named: "operations", in: root)
             let rootBaseline = try status(of: root)
             try verifyDirectory(root, matches: rootBaseline)
-            return (packages, staging, derived, operations)
+            let retainedRoot = dup(root)
+            guard retainedRoot >= 0 else {
+                close(packages); close(staging); close(derived); close(operations)
+                throw ExtractorDirectoryAdmissionError.preparationFailed
+            }
+            return (retainedRoot, packages, staging, derived, operations)
         } catch { close(packages); throw error }
     }
     private static func lstat(_ u: URL) throws -> stat { var s = stat(); guard DarwinOrGlibc.lstat(u.path, &s) == 0 else { throw ExtractorDirectoryAdmissionError.copyFailed(u.lastPathComponent) }; return s }

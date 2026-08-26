@@ -111,25 +111,36 @@ public struct ExtractorPackageCatalogRecord: Codable, Hashable, Sendable, Compar
 
 /// Versioned machine-scoped catalog. Readers observe one complete generation.
 public struct ExtractorPackageCatalog: Codable, Hashable, Sendable {
-    private enum CodingKeys: String, CodingKey { case schemaVersion, generation, records }
+    private enum CodingKeys: String, CodingKey { case schemaVersion, generation, records, reservations }
 
     public static let currentSchemaVersion = 1
 
     public let schemaVersion: Int
     public let generation: UInt64
     public let records: [ExtractorPackageCatalogRecord]
+    public let reservations: [ExtractorPackageReservationRecord]
 
     public init(
         schemaVersion: Int = Self.currentSchemaVersion,
         generation: UInt64 = 0,
-        records: [ExtractorPackageCatalogRecord] = []
+        records: [ExtractorPackageCatalogRecord] = [],
+        reservations: [ExtractorPackageReservationRecord] = []
     ) throws {
         guard schemaVersion == Self.currentSchemaVersion else {
             throw ExtractorPackageCatalogError.unsupportedSchemaVersion
         }
         let records = records.sorted()
         var revisions: Set<ExtractorPackageRevisionID> = []
-        var reservations: [ExtractorPackageReservation: ExtractorPackageDigest] = [:]
+        var reservationDigests: [ExtractorPackageReservation: ExtractorPackageDigest] = [:]
+        for reservationRecord in reservations {
+            if let digest = reservationDigests[reservationRecord.reservation] {
+                guard digest == reservationRecord.digest else {
+                    throw ExtractorPackageCatalogError.conflictingRevision
+                }
+                throw ExtractorPackageCatalogError.duplicateReservation
+            }
+            reservationDigests[reservationRecord.reservation] = reservationRecord.digest
+        }
         for record in records {
             guard revisions.insert(record.revision).inserted else {
                 throw ExtractorPackageCatalogError.duplicateRevision
@@ -137,14 +148,17 @@ public struct ExtractorPackageCatalog: Codable, Hashable, Sendable {
             let reservation = ExtractorPackageReservation(
                 packageID: record.revision.packageID,
                 version: record.revision.version)
-            if let digest = reservations[reservation], digest != record.revision.digest {
+            if let digest = reservationDigests[reservation], digest != record.revision.digest {
                 throw ExtractorPackageCatalogError.conflictingRevision
             }
-            reservations[reservation] = record.revision.digest
+            reservationDigests[reservation] = record.revision.digest
         }
         self.schemaVersion = schemaVersion
         self.generation = generation
         self.records = records
+        self.reservations = reservationDigests.map {
+            ExtractorPackageReservationRecord(reservation: $0.key, digest: $0.value)
+        }.sorted()
     }
 
     public init(from decoder: any Decoder) throws {
@@ -152,19 +166,41 @@ public struct ExtractorPackageCatalog: Codable, Hashable, Sendable {
         try self.init(
             schemaVersion: container.decode(Int.self, forKey: .schemaVersion),
             generation: container.decode(UInt64.self, forKey: .generation),
-            records: container.decode([ExtractorPackageCatalogRecord].self, forKey: .records))
+            records: container.decode([ExtractorPackageCatalogRecord].self, forKey: .records),
+            reservations: container.decodeIfPresent(
+                [ExtractorPackageReservationRecord].self,
+                forKey: .reservations) ?? [])
     }
 
     public func replacing(records: [ExtractorPackageCatalogRecord]) throws -> Self {
         guard generation < UInt64.max else {
             throw ExtractorPackageCatalogError.generationOverflow
         }
-        return try Self(generation: generation + 1, records: records)
+        return try Self(
+            generation: generation + 1,
+            records: records,
+            reservations: reservations)
+    }
+}
+
+/// Durable digest reservation for one package and version identity.
+public struct ExtractorPackageReservationRecord: Codable, Hashable, Sendable, Comparable {
+    public let reservation: ExtractorPackageReservation
+    public let digest: ExtractorPackageDigest
+
+    public init(reservation: ExtractorPackageReservation, digest: ExtractorPackageDigest) {
+        self.reservation = reservation
+        self.digest = digest
+    }
+
+    public static func < (lhs: Self, rhs: Self) -> Bool {
+        if lhs.reservation != rhs.reservation { return lhs.reservation < rhs.reservation }
+        return lhs.digest < rhs.digest
     }
 }
 
 /// Package and version reservation. The exact revision also contains a digest.
-public struct ExtractorPackageReservation: Hashable, Sendable {
+public struct ExtractorPackageReservation: Codable, Hashable, Sendable, Comparable {
     public let packageID: ExtractorPackageID
     public let version: ExtractorPackageVersion
 
@@ -172,11 +208,17 @@ public struct ExtractorPackageReservation: Hashable, Sendable {
         self.packageID = packageID
         self.version = version
     }
+
+    public static func < (lhs: Self, rhs: Self) -> Bool {
+        if lhs.packageID != rhs.packageID { return lhs.packageID < rhs.packageID }
+        return lhs.version < rhs.version
+    }
 }
 
 public enum ExtractorPackageCatalogError: Error, Equatable, Sendable {
     case unsupportedSchemaVersion
     case duplicateRevision
+    case duplicateReservation
     case conflictingRevision
     case invalidRecord
     case invalidDiagnostic
