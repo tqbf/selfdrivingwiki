@@ -18,7 +18,7 @@ Options:
     --timestamps       Include [mm:ss] timestamps in markdown output
 
 If uv is not installed, download it first:
-    mise install
+    # Install uv first if you want to use this optional integration.
 
 Exit codes:
     0   Success

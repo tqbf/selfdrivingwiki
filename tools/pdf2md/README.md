@@ -23,8 +23,7 @@ with a local, deterministic pipeline.
 ./pdf2md input.pdf --json
 ```
 
-**Requirements:** [mise](https://mise.jdx.dev/) with the repository tools installed.
-From the repository root, run `mise install`; this installs the pinned `uv` version.
+**Requirements:** [uv](https://docs.astral.sh/uv/). Install it with your preferred package manager if you want to use this optional integration.
 
 ## Development
 

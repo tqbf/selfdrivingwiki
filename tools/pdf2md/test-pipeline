@@ -28,11 +28,11 @@ else
     exit 1
 fi
 
-# 1b. mise-managed uv is installed (needed by the shebang)
-if command -v mise &>/dev/null && mise which uv &>/dev/null; then
-    pass "mise-managed uv is available: $(mise which uv)"
+# 1b. uv is installed (needed by the shebang)
+if command -v uv &>/dev/null; then
+    pass "uv is in PATH: $(command -v uv)"
 else
-    fail "mise-managed uv not found — install mise, then run: mise install"
+    fail "uv not found — install it to use the optional PDF integration"
     exit 1
 fi
 
