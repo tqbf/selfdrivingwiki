@@ -240,6 +240,18 @@ public actor ExtractionBackendRegistry {
             .map(\.match)
     }
 
+    /// True when any active exact installation of this revision exists in
+    /// either the PDF or HTML namespace. This is the admission authority for
+    /// prepared operations: batch cleanup removes membership, so stale plugin
+    /// definitions cannot admit removed code.
+    public func containsRevision(_ revision: ExtractorPackageRevisionID) async -> Bool {
+        for key in registrations.keys {
+            guard case .installed(_, let reference) = key else { continue }
+            if reference.revision == revision { return true }
+        }
+        return false
+    }
+
     public func resolve(_ key: ExtractionBackendKey) -> RegisteredExtractionBackend? {
         resolve(.builtIn(key))
     }
