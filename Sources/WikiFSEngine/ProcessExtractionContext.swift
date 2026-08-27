@@ -37,6 +37,9 @@ public struct ProcessExtractionContext: Sendable {
     public let host: DynamicPluginHost
     public let reconciler: ExtractorPackagePluginReconciler
     public let layout: ExtractorPackageStoreLayout
+    /// Retained for the process lifetime so local and cross-process catalog
+    /// wakes reach this context's reconciler. Wakes are hints only.
+    private let wakeObserver: ExtractorCatalogWakeObserver
 
     /// Assembles a fresh process context. Only this path may supply the five
     /// fixed services; consumers must use `cordisContext.require` equivalents
@@ -84,12 +87,25 @@ public struct ProcessExtractionContext: Sendable {
             host: host,
             catalogReader: ExtractorPackageCatalogReader(layout: layout),
             layout: layout)
+        // The observer holds only the reconciler, so a wake can never carry a
+        // generation, a package payload, or another process's lifecycle state.
+        let wakeObserver = ExtractorCatalogWakeObserver { [reconciler] in
+            _ = await reconciler.reconcileNow()
+        }
         return ProcessExtractionContext(
             cordisContext: cordisContext,
             registry: registry,
             host: host,
             reconciler: reconciler,
-            layout: layout)
+            layout: layout,
+            wakeObserver: wakeObserver)
+    }
+
+    /// Applies one wake through the process coalescer and awaits the pass.
+    /// Production wakes arrive asynchronously; this is the deterministic entry
+    /// point for settings refresh and tests.
+    public func receiveCatalogWake() async {
+        await wakeObserver.receiveWake()
     }
 
     /// Applies the current durable generation. Cross-process wakes arrive here
@@ -111,6 +127,9 @@ public struct ProcessExtractionContext: Sendable {
     /// Disposes the process-local Cordis graph. Cordis owns idempotence, so a
     /// repeated shutdown is safe and does not rerun consumed cleanup effects.
     public func shutdown() async {
+        // Close the wake path first so a late hint cannot start a
+        // reconciliation pass against a disposing graph.
+        await wakeObserver.stop()
         do {
             try await cordisContext.dispose()
         } catch {

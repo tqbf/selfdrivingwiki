@@ -66,17 +66,38 @@ public struct FileExtractorCatalogIndexWriter: ExtractorCatalogIndexWriting, Sen
     }
 }
 
+/// Records whether a catalog mutation published a new generation.
+///
+/// A published generation must wake readers even when a later step of the same
+/// operation throws. Package removal, for example, publishes the emptied
+/// catalog before it deletes payload bytes; if that deletion fails, the
+/// durable generation is still live and every process must still observe it.
+// Sendability invariant: one Bool, read and written only under one lock.
+// swiftlint:disable:next unchecked_sendable
+final class ExtractorCatalogPublicationFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var published = false
+
+    var didPublish: Bool { lock.withLock { published } }
+
+    func markPublished() {
+        lock.withLock { published = true }
+    }
+}
+
 public actor ExtractorPackageCatalogWriter {
     private let layout: ExtractorPackageStoreLayout
     private let coordinator: ExtractorPackageStoreCoordinator
     private let indexWriter: any ExtractorCatalogIndexWriting
     private let payloadRemover: any ExtractorPackagePayloadRemoving
+    private let postWake: @Sendable () -> Void
 
     public init(
         appGroupContainerRoot: URL,
         coordinator: ExtractorPackageStoreCoordinator? = nil,
         indexWriter: any ExtractorCatalogIndexWriting = FileExtractorCatalogIndexWriter(),
-        payloadRemover: any ExtractorPackagePayloadRemoving = FileExtractorPackagePayloadRemover()
+        payloadRemover: any ExtractorPackagePayloadRemoving = FileExtractorPackagePayloadRemover(),
+        postWake: @escaping @Sendable () -> Void = { DarwinNotifier.postExtractorCatalogChange() }
     ) throws {
         let layout = try ExtractorPackageStoreLayout(
             appGroupContainerRoot: appGroupContainerRoot,
@@ -85,13 +106,15 @@ public actor ExtractorPackageCatalogWriter {
         self.coordinator = coordinator ?? ExtractorPackageStoreCoordinator(layout: layout)
         self.indexWriter = indexWriter
         self.payloadRemover = payloadRemover
+        self.postWake = postWake
     }
 
     public static func testing(
         layout: ExtractorPackageStoreLayout,
         coordinator: ExtractorPackageStoreCoordinator? = nil,
         indexWriter: any ExtractorCatalogIndexWriting = FileExtractorCatalogIndexWriter(),
-        payloadRemover: any ExtractorPackagePayloadRemoving = FileExtractorPackagePayloadRemover()
+        payloadRemover: any ExtractorPackagePayloadRemoving = FileExtractorPackagePayloadRemover(),
+        postWake: @escaping @Sendable () -> Void = { DarwinNotifier.postExtractorCatalogChange() }
     ) throws -> Self {
         guard layout.processRole == .app || layout.processRole == .test else {
             throw ExtractorPackageStoreError.mutationForbidden
@@ -100,7 +123,34 @@ public actor ExtractorPackageCatalogWriter {
             appGroupContainerRoot: layout.appGroupContainerRoot,
             coordinator: coordinator,
             indexWriter: indexWriter,
-            payloadRemover: payloadRemover)
+            payloadRemover: payloadRemover,
+            postWake: postWake)
+    }
+
+    /// Signals observers after every lock is released, so a woken reader in
+    /// this or another process always finds a complete published generation.
+    /// Wakes are hints, so a duplicate wake is harmless and a publication must
+    /// never go unannounced.
+    private func announce(_ flag: ExtractorCatalogPublicationFlag) {
+        guard flag.didPublish else { return }
+        NotificationCenter.default.post(name: .extractorPackageCatalogDidChange, object: nil)
+        postWake()
+    }
+
+    /// Runs one exclusive catalog mutation and announces any generation it
+    /// published, including when the operation throws after publication.
+    private func mutating(
+        _ body: @escaping @Sendable (ExtractorCatalogPublicationFlag) throws -> ExtractorPackageCatalog
+    ) async throws -> ExtractorPackageCatalog {
+        let flag = ExtractorCatalogPublicationFlag()
+        do {
+            let catalog = try await coordinator.withExclusiveAccess { try body(flag) }
+            announce(flag)
+            return catalog
+        } catch {
+            announce(flag)
+            throw error
+        }
     }
 
     public func read() throws -> ExtractorPackageCatalog {
@@ -112,8 +162,13 @@ public actor ExtractorPackageCatalogWriter {
         installedAt: RFC3339Timestamp
     ) async throws -> ExtractorPackageCatalog {
         let staged = try ExtractorDirectoryValidator.admit(source: source, layout: layout)
-        return try await coordinator.withExclusiveAccess { [layout, indexWriter] in
-            try installStaged(staged, layout: layout, installedAt: installedAt, indexWriter: indexWriter)
+        return try await mutating { [layout, indexWriter] flag in
+            try installStaged(
+                staged,
+                layout: layout,
+                installedAt: installedAt,
+                indexWriter: indexWriter,
+                flag: flag)
         }
     }
 
@@ -121,16 +176,21 @@ public actor ExtractorPackageCatalogWriter {
         revision: ExtractorPackageRevisionID,
         expectedGeneration: UInt64? = nil
     ) async throws -> ExtractorPackageCatalog {
-        try await coordinator.withExclusiveAccess { [layout, indexWriter, payloadRemover] in
+        return try await mutating { [layout, indexWriter, payloadRemover] flag in
             let roots = try ExtractorDirectoryValidator.prepareStoreRoots(layout)
             defer { closeStoreRoots(roots) }
             let current = try ExtractorPackageCatalogReader.readCatalog(directoryFD: roots.derived)
             if let expectedGeneration, current.generation != expectedGeneration {
                 throw ExtractorPackageStoreError.staleGeneration
             }
-            guard current.records.contains(where: { $0.revision == revision }) else { return current }
+            guard current.records.contains(where: { $0.revision == revision }) else {
+                return current
+            }
             let next = try current.replacing(records: current.records.filter { $0.revision != revision })
             try publish(next, directoryFD: roots.derived, writer: indexWriter)
+            // Membership is now durably gone. Every reader must learn this even
+            // if the payload cleanup below fails.
+            flag.markPublished()
             let packageIDDirectory = try openStoreDirectory(
                 named: revision.packageID.rawValue,
                 parentFD: roots.packages)
@@ -160,8 +220,8 @@ public actor ExtractorPackageCatalogWriter {
     }
 
     public func recover() async throws -> ExtractorPackageCatalog {
-        try await coordinator.withExclusiveAccess { [layout, indexWriter] in
-            try recoverStore(layout: layout, indexWriter: indexWriter)
+        try await mutating { [layout, indexWriter] flag in
+            try recoverStore(layout: layout, indexWriter: indexWriter, flag: flag)
         }
     }
 
@@ -169,7 +229,7 @@ public actor ExtractorPackageCatalogWriter {
         expectedGeneration: UInt64,
         records: [ExtractorPackageCatalogRecord]
     ) async throws -> ExtractorPackageCatalog {
-        try await coordinator.withExclusiveAccess { [layout, indexWriter] in
+        return try await mutating { [layout, indexWriter] flag in
             let roots = try ExtractorDirectoryValidator.prepareStoreRoots(layout)
             defer { closeStoreRoots(roots) }
             let current = try ExtractorPackageCatalogReader.readCatalog(directoryFD: roots.derived)
@@ -178,6 +238,7 @@ public actor ExtractorPackageCatalogWriter {
             }
             let next = try current.replacing(records: records)
             try publish(next, directoryFD: roots.derived, writer: indexWriter)
+            flag.markPublished()
             return next
         }
     }
@@ -187,7 +248,8 @@ private func installStaged(
     _ staged: ValidatedExtractorDirectory,
     layout: ExtractorPackageStoreLayout,
     installedAt: RFC3339Timestamp,
-    indexWriter: any ExtractorCatalogIndexWriting
+    indexWriter: any ExtractorCatalogIndexWriting,
+    flag: ExtractorCatalogPublicationFlag
 ) throws -> ExtractorPackageCatalog {
     let roots = try ExtractorDirectoryValidator.prepareStoreRoots(layout)
     defer { closeStoreRoots(roots) }
@@ -245,12 +307,14 @@ private func installStaged(
         installedAt: installedAt)
     let next = try current.replacing(records: current.records + [record])
     try publish(next, directoryFD: roots.derived, writer: indexWriter)
+    flag.markPublished()
     return next
 }
 
 private func recoverStore(
     layout: ExtractorPackageStoreLayout,
-    indexWriter: any ExtractorCatalogIndexWriting
+    indexWriter: any ExtractorCatalogIndexWriting,
+    flag: ExtractorCatalogPublicationFlag
 ) throws -> ExtractorPackageCatalog {
     let roots = try ExtractorDirectoryValidator.prepareStoreRoots(layout)
     defer { closeStoreRoots(roots) }
@@ -321,6 +385,8 @@ private func recoverStore(
     } else {
         next = try current.replacing(records: desiredRecords)
         try publish(next, directoryFD: roots.derived, writer: indexWriter)
+        // Published before the payload cleanup below, which can throw.
+        flag.markPublished()
     }
 
     for item in cleanup {

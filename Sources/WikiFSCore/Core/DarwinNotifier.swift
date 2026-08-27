@@ -41,6 +41,15 @@ public enum DarwinNotifier {
         #endif
     }
 
+    /// Posts the stable, payload-free notification for a published extractor
+    /// package catalog generation. Consumers reread the authoritative catalog
+    /// to learn the generation; the wake never carries package data.
+    public static func postExtractorCatalogChange() {
+        #if os(macOS)
+        post(name: ExtractorCatalogChangeNotification.darwinName)
+        #endif
+    }
+
     #if os(macOS)
     private static func post(name rawName: String) {
         let center = CFNotificationCenterGetDarwinNotifyCenter()

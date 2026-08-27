@@ -426,6 +426,12 @@ enum GeneratedPluginFixtures {
         let revision: ExtractorPackageRevisionID
         let manifest: ExtractorManifest
 
+        /// The validated source directory the fixture was imported from. It
+        /// stays on disk so tests can re-import the exact same revision.
+        var sourcePackageRoot: URL {
+            root.appendingPathComponent("source-package", isDirectory: true)
+        }
+
         static func install() async throws -> InstalledEnvironment {
             let root = FileManager.default.temporaryDirectory
                 .appendingPathComponent("generated-plugin-\(UUID().uuidString)", isDirectory: true)
