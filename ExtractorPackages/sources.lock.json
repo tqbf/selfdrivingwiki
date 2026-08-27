@@ -1,0 +1,8 @@
+{
+  "comment": "Digests of the sources the reviewed packages are generated from. Regenerate with scripts/sync-extractor-packages.sh.",
+  "defuddleLibraryVersion": "0.19.1",
+  "sources": {
+    "tools/defuddle/extractor-protocol.js": "09bb21528839e125b6ee9de3a6ad192fe595d097d9454623f3f9dc27755d6781",
+    "tools/pdf2md/pdf2md": "0ec600ec2acd6a8c9073e9a11ba0310c35c76eefaf9cfdd12b9dd80945a30943"
+  }
+}

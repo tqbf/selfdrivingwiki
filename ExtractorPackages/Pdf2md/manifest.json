@@ -1,0 +1,49 @@
+{
+  "capabilities": [
+    "model-download",
+    "network",
+    "shared-runtime-cache"
+  ],
+  "displayName": "Local pdf2md",
+  "entryPoint": "bin/pdf2md-extractor",
+  "files": [
+    {
+      "digest": "0ec600ec2acd6a8c9073e9a11ba0310c35c76eefaf9cfdd12b9dd80945a30943",
+      "path": "bin/pdf2md"
+    },
+    {
+      "digest": "bc885f38a9bfe65fa6b167da3f66f91cc97357e5a82d4a93d7f5184b4fee2b3f",
+      "path": "bin/pdf2md-extractor"
+    }
+  ],
+  "launch": {
+    "arguments": [
+      "run",
+      "--script"
+    ],
+    "command": "uv",
+    "mode": "runtime"
+  },
+  "limits": {
+    "maximumDurationMilliseconds": 1800000,
+    "maximumInputByteCount": 134217728,
+    "maximumMarkdownOutputByteCount": 33554432,
+    "maximumProgressEventCount": 1024
+  },
+  "manifestRevision": 1,
+  "packageID": "org.selfdrivingwiki.pdf2md",
+  "protocolRevision": 1,
+  "registrations": [
+    {
+      "displayName": "pdf2md Document",
+      "id": "document",
+      "kinds": [
+        "pdf"
+      ],
+      "mimeTypes": [
+        "application/pdf"
+      ]
+    }
+  ],
+  "version": "1.0.0"
+}

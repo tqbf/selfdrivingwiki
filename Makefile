@@ -247,7 +247,7 @@ icon: $(APP_ICON)
 # signing/local.config (a new laptop infers all of it from the Apple account),
 # and GeneratedKeychain.swift is derived from that file. Prerequisites run left
 # to right in a serial make, so the generator sees the repaired config.
-build: signing-preflight deps $(APP_ICON) prompts version keychain
+build: signing-preflight deps $(APP_ICON) prompts version keychain extractor-packages
 	SIGN_IDENTITY="$(DEV_IDENTITY)" PROVISION_PROFILE="$(PROVISION_PROFILE)" ./build.sh $(CONFIG)
 
 # Release signs with DIST_IDENTITY (Developer ID Application) so every nested
@@ -256,21 +256,33 @@ build: signing-preflight deps $(APP_ICON) prompts version keychain
 # hardened runtime + timestamp for notarization. The old code passed
 # DEV_IDENTITY here, which signed release builds with the Apple Development
 # cert → notarytool rejected it and Gatekeeper rejected it on other machines.
-release: deps $(APP_ICON) prompts version keychain
+release: deps $(APP_ICON) prompts version keychain extractor-packages
 	SIGN_IDENTITY="$(DIST_IDENTITY)" PROVISION_PROFILE="$(PROVISION_PROFILE)" ./build.sh release
 
 # Compile-only gate — no .app, no signing. CI / agent verification.
-check: deps prompts version keychain
+check: deps prompts version keychain extractor-packages
 	swift build -c $(CONFIG)
 	@echo "✓ compiles ($(CONFIG))"
 
 check-cordis:
 	@./scripts/check-cordis-boundaries
 
+# Reviewed extractor packages are build inputs: the app and the wikid XPC
+# service both receive ExtractorPackages/, and the machine catalog records the
+# exact digest of every declared file. The gate fails when a source under
+# tools/ changed without regeneration. It deliberately does NOT regenerate,
+# because that would ship bytes nobody reviewed; run the sync target and
+# review the result instead.
+extractor-packages:
+	@./scripts/sync-extractor-packages.sh --check
+
+extractor-packages-sync:
+	@./scripts/sync-extractor-packages.sh
+
 # Compile-only gate in RELEASE mode — no .app, no signing. Faster runtime
 # than `check` at the cost of slower compile; use for performance testing or
 # when you want the code path optimized. (issue #520)
-check-release: deps prompts version keychain
+check-release: deps prompts version keychain extractor-packages
 	swift build -c release
 	@echo "✓ compiles (release)"
 
@@ -290,7 +302,7 @@ check-release: deps prompts version keychain
 # `ProcessSignalSafety` for the product-side rule and
 # `scripts/test-with-watchdog.sh` for the timeout path. If a helper is orphaned,
 # reap it by hand; a broad matcher must fail closed rather than pick a stranger.
-test: deps prompts version keychain
+test: deps prompts version keychain extractor-packages
 	swift test --parallel --num-workers $(SWIFT_TEST_NUM_WORKERS)
 	@echo "✓ tests pass"
 
@@ -517,6 +529,8 @@ hooks:
 # loaded at runtime via Bundle.module (see PromptLoader.swift). The resource
 # copies ARE committed (they are build inputs), unlike the former
 # code-generated GeneratedPrompts.swift.
+.PHONY: extractor-packages extractor-packages-sync
+
 .PHONY: prompts
 prompts:
 	@rm -f Sources/WikiFSCore/GeneratedPrompts.swift
