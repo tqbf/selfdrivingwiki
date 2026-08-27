@@ -91,24 +91,28 @@ public actor ExtractorPackagePluginReconciler {
     private let host: DynamicPluginHost
     private let catalogReader: any ExtractorPackageCatalogReading
     private let layout: ExtractorPackageStoreLayout
+    private let sourceLocator: any ExtractorPackageSourceLocating
     private var lastAppliedGeneration: UInt64?
     private var retainedFailures: [ExtractorPackageReconciliationFailure] = []
 
     init(
         host: DynamicPluginHost,
         catalogReader: any ExtractorPackageCatalogReading,
-        layout: ExtractorPackageStoreLayout
+        layout: ExtractorPackageStoreLayout,
+        sourceLocator: (any ExtractorPackageSourceLocating)? = nil
     ) {
         self.host = host
         self.catalogReader = catalogReader
         self.layout = layout
+        self.sourceLocator = sourceLocator
+            ?? InstalledExtractorPackageSourceLocator(layout: layout)
     }
 
     /// Builds all definitions first so no lifecycle mutation happens when any
     /// manifest contradicts its catalog record.
     static func buildDesiredDefinitions(
         records: [ExtractorPackageCatalogRecord],
-        layout: ExtractorPackageStoreLayout
+        sourceLocator: any ExtractorPackageSourceLocating
     ) -> (
         definitions: [TrustedDynamicPluginDefinition],
         failures: [ExtractorPackageReconciliationFailure]
@@ -120,11 +124,10 @@ public actor ExtractorPackagePluginReconciler {
             do {
                 // Full secure revalidation of exact installed bytes; also
                 // guarantees manifest identity matches the catalog record.
+                let source = sourceLocator.location(for: record.revision)
                 let validated = try ExtractorDirectoryValidator.revalidate(
-                    root: layout.packageURL(
-                        record.revision.packageID,
-                        version: record.revision.version),
-                    within: layout.packagesRoot,
+                    root: source.root,
+                    within: source.containingRoot,
                     expectedRevision: record.revision)
                 let definition = try ExtractorPackagePluginDefinitionFactory.trustedDefinition(
                     revision: record.revision,
@@ -157,7 +160,7 @@ public actor ExtractorPackagePluginReconciler {
 
         let built = Self.buildDesiredDefinitions(
             records: catalog.records,
-            layout: layout)
+            sourceLocator: sourceLocator)
         retainEach(built.failures)
 
         do {

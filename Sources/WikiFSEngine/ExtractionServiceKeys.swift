@@ -299,4 +299,9 @@ public enum ExtractionServiceKeys {
         label: "wiki.extraction.admission-checker")
     public static let packageStoreLayout = ServiceKey<ExtractorPackageStoreLayout>(
         label: "wiki.extraction.store-layout")
+    /// Resolves the exact bytes of one revision for this process. Installed
+    /// revisions resolve to the store; reviewed bundled revisions resolve to
+    /// the process-owned admitted copy.
+    public static let packageSourceLocator = ServiceKey<any ExtractorPackageSourceLocating>(
+        label: "wiki.extraction.package-source-locator")
 }

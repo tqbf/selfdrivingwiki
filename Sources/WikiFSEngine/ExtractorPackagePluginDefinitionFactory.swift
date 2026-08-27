@@ -36,7 +36,7 @@ public enum ExtractorPackagePluginDefinitionFactory {
     public static func fingerprint(
         for manifest: ExtractorManifest,
         revision: ExtractorPackageRevisionID,
-        dependencyContractVersion: Int = 1
+        dependencyContractVersion: Int = 2
     ) throws -> DynamicPluginDefinitionFingerprint {
         try validate(manifest)
         let registrationDescription = manifest.registrations
@@ -85,6 +85,7 @@ public enum ExtractorPackagePluginDefinitionFactory {
             ServiceDependency(ExtractionServiceKeys.managedProcessExecutor),
             ServiceDependency(ExtractionServiceKeys.packageAdmissionChecker),
             ServiceDependency(ExtractionServiceKeys.packageStoreLayout),
+            ServiceDependency(ExtractionServiceKeys.packageSourceLocator),
         ]
         let fingerprint = try self.fingerprint(for: manifest, revision: revision)
         let id = DynamicPluginDefinitionID("extractor-package/" + Self.identityDigest(
@@ -124,6 +125,7 @@ public enum ExtractorPackagePluginDefinitionFactory {
                 ServiceDependency(ExtractionServiceKeys.managedProcessExecutor),
                 ServiceDependency(ExtractionServiceKeys.packageAdmissionChecker),
                 ServiceDependency(ExtractionServiceKeys.packageStoreLayout),
+                ServiceDependency(ExtractionServiceKeys.packageSourceLocator),
             ]
         ) { activation in
             let registry = try await activation.require(ExtractionServiceKeys.backends)
@@ -141,11 +143,14 @@ public enum ExtractorPackagePluginDefinitionFactory {
             let executor = try await activation.require(ExtractionServiceKeys.managedProcessExecutor)
             let admissionChecker = try await activation.require(
                 ExtractionServiceKeys.packageAdmissionChecker)
+            let sourceLocator = try await activation.require(
+                ExtractionServiceKeys.packageSourceLocator)
             let provider = ProcessExtractorProvider(
                 layout: layout,
                 catalogReader: catalogReader,
                 executor: executor,
-                admission: admissionChecker)
+                admission: admissionChecker,
+                sourceLocator: sourceLocator)
 
             // Build every registration factory before mutating the registry.
             var entries: [ExtractionBatchEntry] = []

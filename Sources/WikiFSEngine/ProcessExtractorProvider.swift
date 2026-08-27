@@ -94,17 +94,21 @@ public struct ProcessExtractorProvider: Sendable {
     let catalogReader: any ExtractorPackageCatalogReading
     let executor: any ManagedProcessExecuting
     let admission: any ProcessPackageAdmissionChecking
+    let sourceLocator: any ExtractorPackageSourceLocating
 
     public init(
         layout: ExtractorPackageStoreLayout,
         catalogReader: any ExtractorPackageCatalogReading,
         executor: any ManagedProcessExecuting,
-        admission: any ProcessPackageAdmissionChecking
+        admission: any ProcessPackageAdmissionChecking,
+        sourceLocator: (any ExtractorPackageSourceLocating)? = nil
     ) {
         self.layout = layout
         self.catalogReader = catalogReader
         self.executor = executor
         self.admission = admission
+        self.sourceLocator = sourceLocator
+            ?? InstalledExtractorPackageSourceLocator(layout: layout)
     }
 
     /// Convenience initializer for closure-backed admission checks.
@@ -176,13 +180,12 @@ public struct ProcessExtractorProvider: Sendable {
         }
 
         let registration = try Self.registration(manifest: manifest, kind: kind)
-        let installedRoot = layout.packageURL(
-            revision.packageID,
-            version: revision.version)
+        let source = sourceLocator.location(for: revision)
         let snapshot = try ExtractorDirectoryValidator.snapshot(
-            installedRoot: installedRoot,
+            installedRoot: source.root,
             expectedRevision: revision,
-            layout: layout)
+            layout: layout,
+            sourceContainingRoot: source.containingRoot)
 
         let operationRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("extractor-operation-\(UUID().uuidString)", isDirectory: true)

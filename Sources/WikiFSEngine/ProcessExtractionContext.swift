@@ -47,7 +47,8 @@ public struct ProcessExtractionContext: Sendable {
     public static func assemble(
         appGroupContainerRoot: URL,
         admissionOverride: (any ProcessPackageAdmissionChecking)? = nil,
-        executor: any ManagedProcessExecuting = ManagedExtractorProcessExecutor()
+        executor: any ManagedProcessExecuting = ManagedExtractorProcessExecutor(),
+        reviewedPackageRoot: URL? = nil
     ) async throws -> ProcessExtractionContext {
         let layout = try ExtractorPackageStoreLayout(
             appGroupContainerRoot: appGroupContainerRoot,
@@ -55,27 +56,53 @@ public struct ProcessExtractionContext: Sendable {
         return try await assemble(
             layout: layout,
             admissionOverride: admissionOverride,
-            executor: executor)
+            executor: executor,
+            reviewedPackageRoot: reviewedPackageRoot)
     }
 
     /// Test-visible variant accepting an explicit role-scoped layout.
     public static func assemble(
         layout: ExtractorPackageStoreLayout,
         admissionOverride: (any ProcessPackageAdmissionChecking)? = nil,
-        executor: any ManagedProcessExecuting = ManagedExtractorProcessExecutor()
+        executor: any ManagedProcessExecuting = ManagedExtractorProcessExecutor(),
+        reviewedPackageRoot: URL? = nil,
+        reviewedPackages: [ReviewedExtractorPackage] = ReviewedExtractorPackages.all
     ) async throws -> ProcessExtractionContext {
         let cordisContext = CordisContext()
         let registry = ExtractionBackendRegistry()
+        let durableReader = ExtractorPackageCatalogReader(layout: layout)
+
+        // Reviewed packages are admitted into this process's own operation
+        // root, so the application and the daemon can both run them before the
+        // application publishes them. This writes nothing shared.
+        let overlay = ReviewedExtractorPackageOverlay.resolve(
+            layout: layout,
+            explicitRoot: reviewedPackageRoot,
+            packages: reviewedPackages)
+        for notice in overlay.diagnostics {
+            DebugLog.extraction("extractor overlay: \(notice)")
+        }
+        let catalogReader = ReviewedOverlayCatalogReader(
+            durable: durableReader,
+            overlay: overlay)
+        let sourceLocator = ReviewedOverlaySourceLocator(
+            layout: layout,
+            overlay: overlay,
+            durable: durableReader)
+
         try await cordisContext.supply(ExtractionServiceKeys.backends, value: registry)
         try await cordisContext.supply(
             ExtractionServiceKeys.extractorCatalogReader,
-            value: ExtractorPackageCatalogReader(layout: layout))
+            value: catalogReader)
         try await cordisContext.supply(
             ExtractionServiceKeys.managedProcessExecutor,
             value: executor)
         try await cordisContext.supply(
             ExtractionServiceKeys.packageStoreLayout,
             value: layout)
+        try await cordisContext.supply(
+            ExtractionServiceKeys.packageSourceLocator,
+            value: sourceLocator)
 
         let host = DynamicPluginHost(context: cordisContext)
         let admission = admissionOverride ?? RegistryMembershipAdmission(registry: registry)
@@ -85,8 +112,9 @@ public struct ProcessExtractionContext: Sendable {
 
         let reconciler = ExtractorPackagePluginReconciler(
             host: host,
-            catalogReader: ExtractorPackageCatalogReader(layout: layout),
-            layout: layout)
+            catalogReader: catalogReader,
+            layout: layout,
+            sourceLocator: sourceLocator)
         // The observer holds only the reconciler, so a wake can never carry a
         // generation, a package payload, or another process's lifecycle state.
         let wakeObserver = ExtractorCatalogWakeObserver(scopeRoot: layout.root) { [reconciler] in

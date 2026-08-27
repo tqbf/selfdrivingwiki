@@ -225,7 +225,7 @@ struct ExtractorGeneratedPluginTests {
         #expect(first.fingerprint == second.fingerprint)
         #expect(first.plugin.hasConfigSchema == false)
         #expect(first.declaredWorkCount == 1)
-        #expect(first.plugin.dependencies.count == 5)
+        #expect(first.plugin.dependencies.count == 6)
     }
 
     @Test func fingerprintChangesWhenRegistrationsChange() throws {
@@ -321,7 +321,7 @@ struct ExtractorGeneratedPluginTests {
             Issue.record("Expected waiting outcome, got \(waiting)")
             return
         }
-        #expect(missing.count == 5)
+        #expect(missing.count == 6)
 
         try await environment.supplyAll()
         let inspection = try #require(await host.inspect(trusted.id))
@@ -505,6 +505,9 @@ enum GeneratedPluginFixtures {
             try await context.supply(
                 ExtractionServiceKeys.packageStoreLayout,
                 value: layout)
+            try await context.supply(
+                ExtractionServiceKeys.packageSourceLocator,
+                value: InstalledExtractorPackageSourceLocator(layout: layout))
         }
 
         func cleanup() {

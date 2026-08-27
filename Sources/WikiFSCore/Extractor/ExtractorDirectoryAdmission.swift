@@ -185,14 +185,101 @@ public enum ExtractorDirectoryValidator {
         return result
     }
 
-    public static func snapshot(
-        installedRoot: URL,
+    /// Admits one reviewed package that ships inside the application bundle or
+    /// the daemon service bundle.
+    ///
+    /// A bundled source carries checkout or installer permissions, not the
+    /// normalized store modes, so it cannot be revalidated in place. This copies
+    /// it securely into the calling process's own operation root, normalizes it,
+    /// validates it, and then checks the result against the compiled expected
+    /// revision. A bundled revision whose bytes do not produce that exact
+    /// revision is rejected.
+    ///
+    /// Every process role may call this. It writes only inside the process-owned
+    /// operation directory. It never writes shared staging, the package root, or
+    /// the catalog, so it does not make the daemon a catalog writer.
+    public static func admitReviewedBundle(
+        source: URL,
         expectedRevision: ExtractorPackageRevisionID,
         layout: ExtractorPackageStoreLayout
     ) throws -> ValidatedExtractorDirectory {
+        guard source.isFileURL else { throw ExtractorDirectoryAdmissionError.nonFileURL }
+        let sourceStatus = try lstat(source)
+        guard sourceStatus.st_mode & S_IFMT == S_IFDIR else {
+            throw ExtractorDirectoryAdmissionError.sourceNotDirectory
+        }
+        let sourceFD = source.path.withCString { open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW) }
+        guard sourceFD >= 0 else { throw ExtractorDirectoryAdmissionError.sourceChanged }
+        defer { close(sourceFD) }
+        let openedSource = try status(of: sourceFD)
+        guard sameIdentity(sourceStatus, openedSource), openedSource.st_mode & S_IFMT == S_IFDIR else {
+            throw ExtractorDirectoryAdmissionError.sourceChanged
+        }
+
+        let id = ExtractorOperationID()
+        let destination = layout.operationURL(id)
+        let processRootFD: Int32
+        let destinationFD: Int32
+        do {
+            let roots = try prepareStoreRoots(layout)
+            close(roots.root); close(roots.packages); close(roots.staging); close(roots.derived)
+            let roleFD = try openOrCreateDirectory(named: layout.processRole.rawValue, in: roots.operations)
+            close(roots.operations)
+            defer { close(roleFD) }
+            let processName = "\(getpid())-\(layout.processSessionID.rawValue)"
+            processRootFD = try openOrCreateDirectory(named: processName, in: roleFD)
+            destinationFD = try createDirectory(named: id.rawValue, in: processRootFD)
+        } catch { throw ExtractorDirectoryAdmissionError.preparationFailed }
+        defer { close(destinationFD); close(processRootFD) }
+
+        do {
+            let sourceManifest = try readSourceManifest(directoryFD: sourceFD)
+            try copyTree(
+                sourceFD: sourceFD,
+                destinationFD: destinationFD,
+                sourceDevice: openedSource.st_dev,
+                manifest: sourceManifest)
+            try verifyDirectory(sourceFD, matches: openedSource)
+            try verifyPath(destination, matchesFD: destinationFD)
+
+            let copiedManifest: ValidatedExtractorManifest
+            do {
+                copiedManifest = try ExtractorManifestValidator.validateStagedDirectory(destination)
+                guard copiedManifest.manifest == sourceManifest else {
+                    throw ExtractorDirectoryAdmissionError.sourceChanged
+                }
+            } catch let error as ExtractorManifestValidationError {
+                throw ExtractorDirectoryAdmissionError.manifest(error)
+            }
+            try verifyPath(destination, matchesFD: destinationFD)
+            let result = try revalidate(
+                root: destination,
+                within: layout.processOperationsRoot,
+                expectedRevision: expectedRevision)
+            try verifyPath(destination, matchesFD: destinationFD)
+            try verifyDirectory(sourceFD, matches: openedSource)
+            return result
+        } catch {
+            // Process startup recovery removes failed operation trees before
+            // this process admits new work.
+            if let error = error as? ExtractorDirectoryAdmissionError { throw error }
+            throw ExtractorDirectoryAdmissionError.copyFailed("reviewed")
+        }
+    }
+
+    /// - Parameter sourceContainingRoot: the root the source must sit beneath.
+    ///   Installed revisions use the package root. A reviewed bundled revision
+    ///   already admitted into this process's operation root passes that root
+    ///   instead, because bundled bytes are never installed by a reader process.
+    public static func snapshot(
+        installedRoot: URL,
+        expectedRevision: ExtractorPackageRevisionID,
+        layout: ExtractorPackageStoreLayout,
+        sourceContainingRoot: URL? = nil
+    ) throws -> ValidatedExtractorDirectory {
         let installed = try revalidate(
             root: installedRoot,
-            within: layout.packagesRoot,
+            within: sourceContainingRoot ?? layout.packagesRoot,
             expectedRevision: expectedRevision)
         let id = ExtractorOperationID()
         let destination = layout.operationURL(id)
