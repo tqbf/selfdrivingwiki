@@ -35,13 +35,13 @@ public enum ReviewedExtractorPackages {
         directoryName: "Defuddle",
         packageID: "org.selfdrivingwiki.defuddle",
         version: "0.19.1",
-        digest: "f9a604600c27f9eed186e2137c2d14d7fc74950b5370f8d7d9f404e5e28419f8")
+        digest: "81513cfd85dad9ce4bfc4dc2732ef9caa099d75ce5e62ae5384362453048baf2")
 
     public static let pdf2md = make(
         directoryName: "Pdf2md",
         packageID: "org.selfdrivingwiki.pdf2md",
         version: "1.0.0",
-        digest: "8cd4d7f211792544ec2128f5588db077f240d508a805963aac4bb81e69d89586")
+        digest: "126a7d20f2381e90f8d44811b73ee933a43c948f1bbcb53e45b413fcceff3079")
 
     public static let all: [ReviewedExtractorPackage] = [defuddle, pdf2md]
 

@@ -62,6 +62,10 @@ sha256() {
 DEFUDDLE_SOURCE_DIGEST="$(sha256 "$DEFUDDLE_SOURCE")"
 PDF2MD_SOURCE_DIGEST="$(sha256 "$PDF2MD_SOURCE")"
 
+npm_defuddle_root() {
+  printf '%s/.local/lib/node_modules/defuddle' "$HOME"
+}
+
 DEFUDDLE_VERSION="$(node -e 'process.stdout.write(require(process.env.HOME + "/.local/lib/node_modules/defuddle/package.json").version)' 2>/dev/null || true)"
 if [[ -z "$DEFUDDLE_VERSION" ]] && [[ -f "${PACKAGES_DIR}/Defuddle/manifest.json" ]]; then
   DEFUDDLE_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "${PACKAGES_DIR}/Defuddle/manifest.json")"
@@ -83,11 +87,31 @@ build_defuddle_bundle() {
   rm -rf "$BUILD_DIR"
 }
 
+write_defuddle_provenance() {
+  local target="$1"
+  local version="$2"
+  local library_license
+  library_license="$(npm_defuddle_root)/LICENSE"
+  [ -f "$library_license" ] || { echo "missing Defuddle library license at $library_license" >&2; exit 1; }
+  cp "$library_license" "${target}/LICENSE"
+  cat > "${target}/PROVENANCE.md" <<EOF
+# Reviewed package provenance
+
+- Package: org.selfdrivingwiki.defuddle
+- Version: ${version}
+- Upstream library: defuddle ${version} (MIT, see LICENSE)
+- Entry point: generated from tools/defuddle/extractor-protocol.js
+- Bundle: \`mise exec -- bun build\` against the pinned library
+- Regenerate: scripts/sync-extractor-packages.sh
+- Drift gate: ExtractorPackages/sources.lock.json records source digests
+EOF
+}
+
 write_defuddle_manifest() {
-  python3 - "$1" "$DEFUDDLE_VERSION" "$2" <<'PY'
+  python3 - "$1" "$DEFUDDLE_VERSION" "$2" "$3" "$4" <<'PY'
 import json, sys
 
-path, version, digest = sys.argv[1], sys.argv[2], sys.argv[3]
+path, version, digest, license_digest, provenance_digest = sys.argv[1:6]
 manifest = {
     "manifestRevision": 1,
     "packageID": "org.selfdrivingwiki.defuddle",
@@ -106,7 +130,11 @@ manifest = {
     ],
     # Local HTML extraction reads only the operation input file.
     "capabilities": [],
-    "files": [{"path": "bin/defuddle-extractor.js", "digest": digest}],
+    "files": [
+        {"path": "LICENSE", "digest": license_digest},
+        {"path": "PROVENANCE.md", "digest": provenance_digest},
+        {"path": "bin/defuddle-extractor.js", "digest": digest},
+    ],
     "limits": {
         "maximumInputByteCount": 33554432,
         "maximumMarkdownOutputByteCount": 33554432,
@@ -182,14 +210,27 @@ with open(destination, "w", encoding="utf-8") as handle:
     handle.write(body)
 PY
 
-  local script_digest entry_digest
+  cat > "${target}/PROVENANCE.md" <<'EOF'
+# Reviewed package provenance
+
+- Package: org.selfdrivingwiki.pdf2md
+- Version: 1.0.0
+- Source: tools/pdf2md/pdf2md in this repository
+- Entry point: bin/pdf2md-extractor, generated from the same source
+- Dependencies: the PEP 723 block of the entry point is copied from the script
+- Regenerate: scripts/sync-extractor-packages.sh
+- Drift gate: ExtractorPackages/sources.lock.json records source digests
+EOF
+
+  local script_digest entry_digest provenance_digest
   script_digest="$(sha256 "${target}/bin/pdf2md")"
   entry_digest="$(sha256 "${target}/bin/pdf2md-extractor")"
+  provenance_digest="$(sha256 "${target}/PROVENANCE.md")"
 
-  python3 - "${target}/manifest.json" "$script_digest" "$entry_digest" <<'PY'
+  python3 - "${target}/manifest.json" "$script_digest" "$entry_digest" "$provenance_digest" <<'PY'
 import json, sys
 
-path, script_digest, entry_digest = sys.argv[1], sys.argv[2], sys.argv[3]
+path, script_digest, entry_digest, provenance_digest = sys.argv[1:5]
 manifest = {
     "manifestRevision": 1,
     "packageID": "org.selfdrivingwiki.pdf2md",
@@ -209,6 +250,7 @@ manifest = {
     # uv resolves dependencies and docling downloads its model on first use.
     "capabilities": ["model-download", "network", "shared-runtime-cache"],
     "files": [
+        {"path": "PROVENANCE.md", "digest": provenance_digest},
         {"path": "bin/pdf2md", "digest": script_digest},
         {"path": "bin/pdf2md-extractor", "digest": entry_digest},
     ],
@@ -263,9 +305,12 @@ if [[ "$MODE" == "sync" ]]; then
     echo "       run: npm install -g defuddle" >&2
     exit 1
   fi
+  write_defuddle_provenance "${PACKAGES_DIR}/Defuddle" "$DEFUDDLE_VERSION"
   write_defuddle_manifest \
     "${PACKAGES_DIR}/Defuddle/manifest.json" \
-    "$(sha256 "${PACKAGES_DIR}/Defuddle/bin/defuddle-extractor.js")"
+    "$(sha256 "${PACKAGES_DIR}/Defuddle/bin/defuddle-extractor.js")" \
+    "$(sha256 "${PACKAGES_DIR}/Defuddle/LICENSE")" \
+    "$(sha256 "${PACKAGES_DIR}/Defuddle/PROVENANCE.md")"
 
   rm -rf "${PACKAGES_DIR}/Pdf2md"
   generate_pdf2md_package "${PACKAGES_DIR}/Pdf2md"
