@@ -224,6 +224,10 @@ public struct DynamicPluginReconcileReport: Equatable, Sendable {
 
 /// Hosts trusted in-memory definitions without loading package code into the Swift process.
 public actor DynamicPluginHost {
+    /// Set only by tests through `setStopAdmittedObserverForTesting`.
+    /// Production composition never installs an observer.
+    private var stopAdmittedObserver: (@Sendable (DynamicPluginDefinitionID) -> Void)?
+
     private final class RunRecord {
         let id: DynamicPluginRunID
         var componentID: ComponentID?
@@ -459,9 +463,20 @@ public actor DynamicPluginHost {
         return await outcome(for: settled, record: record, run: run)
     }
 
+    /// Test-only observation seam. It fires on the host's own executor at the
+    /// exact moment a stop request is admitted, before any suspension. A test
+    /// that must observe a transient `.stopping` state awaits this instead of
+    /// depending on when an unstructured stop task happens to be scheduled.
+    internal func setStopAdmittedObserverForTesting(
+        _ observer: @escaping @Sendable (DynamicPluginDefinitionID) -> Void
+    ) {
+        stopAdmittedObserver = observer
+    }
+
     public func stop(_ id: DynamicPluginDefinitionID) async {
         guard let record = records[id] else { return }
         if let barrier = record.disposalBarrier {
+            stopAdmittedObserver?(id)
             let result = await barrier.task.value
             finishDisposal(
                 id: id,
@@ -472,12 +487,16 @@ public actor DynamicPluginHost {
         }
         guard let run = record.current else {
             if record.lifecycle != .undefined { record.lifecycle = .stopped }
+            stopAdmittedObserver?(id)
             return
         }
 
         record.current = nil
         record.lifecycle = .stopping
         run.lifecycle = .stopping
+        // Admission is complete and observable: the record now reads
+        // `.stopping`, and nothing below can move it back to `.starting`.
+        stopAdmittedObserver?(id)
         guard let handle = run.handle else {
             run.stopRequested = true
             record.current = run

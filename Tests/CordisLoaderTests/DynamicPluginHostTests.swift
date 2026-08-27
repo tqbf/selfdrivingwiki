@@ -1,5 +1,5 @@
 import Cordis
-import CordisLoader
+@testable import CordisLoader
 import Foundation
 import Testing
 
@@ -120,11 +120,17 @@ struct DynamicPluginHostTests {
 
         let runTask = Task { try await host.run(trusted.id) }
         await registrationGate.waitForArrival()
+        // `run` reports `lifecycleBusy` for `.starting` as well as `.stopping`,
+        // so it cannot prove a stop reached the host. Await stop admission
+        // directly instead of assuming the stop tasks were scheduled first.
+        let stopAdmitted = DynamicHostGate()
+        await host.setStopAdmittedObserverForTesting { _ in stopAdmitted.signalArrival() }
         let firstStop = Task { await host.stop(trusted.id) }
         let secondStop = Task { await host.stop(trusted.id) }
         await #expect(throws: DynamicPluginHostError.lifecycleBusy(trusted.id)) {
             _ = try await host.run(trusted.id)
         }
+        await stopAdmitted.waitForArrival()
         let stopping = try #require(await host.inspect(trusted.id))
         #expect(stopping.lifecycle == .stopping)
         #expect(stopping.currentComponentID != nil)
@@ -241,10 +247,16 @@ struct DynamicPluginHostTests {
 
         let failedRun = Task { try await host.run(trusted.id) }
         await cleanupGate.waitForArrival()
+        // The rollback is parked in its cleanup effect, so the record still
+        // reads `.starting` and `run` would report `lifecycleBusy` even if no
+        // stop had been admitted. Await admission before asserting the state.
+        let stopAdmitted = DynamicHostGate()
+        await host.setStopAdmittedObserverForTesting { _ in stopAdmitted.signalArrival() }
         let joinedStop = Task { await host.stop(trusted.id) }
         await #expect(throws: DynamicPluginHostError.lifecycleBusy(trusted.id)) {
             _ = try await host.run(trusted.id)
         }
+        await stopAdmitted.waitForArrival()
         let nonAdmitting = try #require(await host.inspect(trusted.id))
         #expect(nonAdmitting.lifecycle == .stopping || nonAdmitting.lifecycle == .stopped)
         #expect(nonAdmitting.currentRunID == nil)
@@ -626,6 +638,13 @@ private actor DynamicHostGate {
         arrivalContinuation.finish()
         var iterator = openStream.makeAsyncIterator()
         _ = await iterator.next()
+    }
+
+    /// Records an arrival without blocking the caller. Used by observation
+    /// seams that must not suspend the operation they report on.
+    nonisolated func signalArrival() {
+        arrivalContinuation.yield()
+        arrivalContinuation.finish()
     }
 
     func waitForArrival() async {
