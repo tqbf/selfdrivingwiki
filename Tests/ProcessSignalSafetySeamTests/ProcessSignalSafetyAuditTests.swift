@@ -69,9 +69,12 @@ struct ProcessSignalSafetyAuditTests {
                     + "ProcessSignalSafety.signal on a re-verified direct child"),
             .init(path: "Sources/WikiFSCore/Extractor/RaceFreeProcessGroupRunner.swift",
                   primitive: .posixSignal):
-                (4, "guarded: posix_spawn creates a new process group atomically; the runner "
-                    + "observes and verifies the group leader PID, parent PID, and kernel "
-                    + "start time before it signals the negative group ID"),
+                (2, "guarded: posix_spawn creates a new process group atomically; both "
+                    + "sites re-observe and verify the group leader PID, parent PID, and "
+                    + "kernel start time immediately before signalling the negative group "
+                    + "ID, and treat ESRCH as an already-reaped group. One site sends the "
+                    + "initial TERM, the other sends KILL to the same re-verified group "
+                    + "after the grace period"),
             .init(path: "Sources/WikiFSCore/Integrations/TranscriptSubprocess.swift",
                   primitive: .posixSignal):
                 (1, "guarded: injected sendSignal seam, reached only via "
@@ -110,6 +113,13 @@ struct ProcessSignalSafetyAuditTests {
             .init(path: "Sources/WikiFSEngine/ACPBackend.swift",
                   primitive: .posixSignal):
                 (1, "kill(pid, 0) is a liveness probe and delivers no signal"),
+            .init(path: "Sources/WikiFSCore/Extractor/ExtractorDirectoryAdmission.swift",
+                  primitive: .posixSignal):
+                (1, "kill(pid, 0) is a liveness probe and delivers no signal. It only "
+                    + "decides whether an operation-session directory belongs to a dead "
+                    + "process before cleanup; the current process is excluded first, and "
+                    + "an EPERM result is treated as still-live so a PID owned by another "
+                    + "user can never make a live session look stale"),
 
             .init(path: "scripts/paseo-archive-cleanup.sh", primitive: .shellSignal):
                 (2, "WEAK, pre-existing: operator-run agent-archive cleanup. Selects "
