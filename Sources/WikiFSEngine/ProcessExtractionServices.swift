@@ -57,9 +57,38 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
             builtInBatch: batch)
     }
 
+    /// The logical reference of the reviewed pdf2md package registration. The
+    /// legacy `localPdf2md` selection maps to this lineage when it is active.
+    public static let reviewedPDFLogical = reviewedLogical(
+        package: ReviewedExtractorPackages.pdf2md, registration: "document")
+
+    /// The logical reference of the reviewed Defuddle package registration. The
+    /// legacy `defuddle` selection maps to this lineage when it is active.
+    public static let reviewedHTMLLogical = reviewedLogical(
+        package: ReviewedExtractorPackages.defuddle, registration: "article")
+
+    private static func reviewedLogical(
+        package: ReviewedExtractorPackage,
+        registration: String
+    ) -> LogicalExtractorReference {
+        guard let registrationID = ExtractorRegistrationID(rawValue: registration) else {
+            preconditionFailure("Invalid reviewed registration ID: \(registration)")
+        }
+        return LogicalExtractorReference(
+            packageID: package.packageID,
+            registrationID: registrationID)
+    }
+
     public func prepare(backendOverride: ExtractionBackend?) async throws -> ExtractionPreparation {
         let configuration = try input.readConfiguration()
-        let key = try await pdfKey(configuration: configuration, override: backendOverride)
+        var key = try await pdfKey(configuration: configuration, override: backendOverride)
+        if case .builtIn(let builtIn) = key,
+           builtIn == ExtractionBackendKey(kind: .pdf, backendID: ExtractionBackend.localPdf2md.rawValue) {
+            key = await reviewedKey(
+                legacyKey: builtIn,
+                logical: Self.reviewedPDFLogical,
+                kind: .pdf)
+        }
         let adapter = try await makeAdapter(for: key)
         guard case .pdf(let preparation) = adapter else {
             throw ExtractionServicesError.unavailable
@@ -73,7 +102,7 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
         backendOverride: HtmlExtractionBackend? = nil
     ) async throws -> any HtmlMarkdownExtractor {
         let configuration = try input.readConfiguration()
-        let key: ExtractionAdapterKey
+        var key: ExtractionAdapterKey
         if let backendOverride {
             key = .builtIn(ExtractionBackendKey(
                 kind: .html,
@@ -101,6 +130,16 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
             key = .builtIn(ExtractionBackendKey(
                 kind: .html,
                 backendID: HtmlExtractionBackend.tagBased.rawValue))
+        }
+
+        // Map the legacy Defuddle selection to the reviewed package lineage
+        // when it is active. The tag-based fallback is never mapped.
+        if case .builtIn(let builtIn) = key,
+           builtIn == ExtractionBackendKey(kind: .html, backendID: HtmlExtractionBackend.defuddle.rawValue) {
+            key = await reviewedKey(
+                legacyKey: builtIn,
+                logical: Self.reviewedHTMLLogical,
+                kind: .html)
         }
 
         do {
@@ -158,6 +197,24 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
                 kind: .pdf,
                 backendID: ExtractionBackend.localPdf2md.rawValue))
         }
+    }
+
+    /// Maps one legacy built-in selection to the reviewed package lineage when
+    /// that lineage is active.
+    ///
+    /// The mapping targets the reviewed lineage by identity, never the resolved
+    /// logical selection, so a third-party package with a similar registration
+    /// cannot capture the default or the fallback path. When the lineage is not
+    /// active the legacy built-in adapter serves the selection unchanged.
+    private func reviewedKey(
+        legacyKey: ExtractionBackendKey,
+        logical: LogicalExtractorReference,
+        kind: ExtractionBackendKind
+    ) async -> ExtractionAdapterKey {
+        if let match = await registry.resolveInstalled(logical, kind: kind) {
+            return match.key
+        }
+        return .builtIn(legacyKey)
     }
 
     private func makeAdapter(

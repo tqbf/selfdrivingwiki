@@ -290,7 +290,11 @@ final class AppProcessPluginCatalog {
                             await MainActor.run { LocalDefuddleExtractor() }
                         },
                         packageContainerDirectory: containerDirectory,
-                        packageProcessRole: .app),
+                        packageProcessRole: .app,
+                        bootstrapReviewedPackages: {
+                            await ReviewedExtractorBootstrap.publishBundledPackages(
+                                appGroupContainerRoot: containerDirectory)
+                        }),
                     queueAssembly: {
                         await MainActor.run { queueController.start() }
                         await queueController.awaitSettled()

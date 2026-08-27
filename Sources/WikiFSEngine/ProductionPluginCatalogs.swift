@@ -85,6 +85,11 @@ public struct ExtractionProcessInput: Sendable {
     public let makeHTMLExtractor: @Sendable () async -> any HtmlMarkdownExtractor
     public let packageContainerDirectory: URL
     public let packageProcessRole: ExtractorPackageProcessRole
+    /// App-only hook that publishes the reviewed bundled revisions into the
+    /// durable machine store before the first reconciliation. The daemon and
+    /// the CLI pass nil: only the app is a catalog writer. A failed bootstrap
+    /// keeps the bundled revisions in use through the reviewed overlay.
+    public let bootstrapReviewedPackages: (@Sendable () async -> Void)?
 
     public init(
         services: MutableExtractionServices,
@@ -95,7 +100,8 @@ public struct ExtractionProcessInput: Sendable {
         makeLocalExtractor: @escaping ExtractionPluginFactory.LocalExtractor,
         makeHTMLExtractor: @escaping @Sendable () async -> any HtmlMarkdownExtractor = { TagBasedHtmlExtractor() },
         packageContainerDirectory: URL? = nil,
-        packageProcessRole: ExtractorPackageProcessRole = .app
+        packageProcessRole: ExtractorPackageProcessRole = .app,
+        bootstrapReviewedPackages: (@Sendable () async -> Void)? = nil
     ) {
         self.services = services
         self.readConfiguration = readConfiguration
@@ -106,6 +112,7 @@ public struct ExtractionProcessInput: Sendable {
         self.makeHTMLExtractor = makeHTMLExtractor
         self.packageContainerDirectory = packageContainerDirectory ?? FileManager.default.temporaryDirectory
         self.packageProcessRole = packageProcessRole
+        self.bootstrapReviewedPackages = bootstrapReviewedPackages
     }
 }
 
@@ -899,6 +906,9 @@ public enum ProcessRuntimePlugins {
                 // One process-wide adapter authority. Wiki sessions inherit
                 // this instance; opening more wikis never creates more
                 // registries or package activations.
+                if let bootstrapReviewed = input.bootstrapReviewedPackages {
+                    await bootstrapReviewed()
+                }
                 let packageLayout = try ExtractorPackageStoreLayout(
                     appGroupContainerRoot: input.packageContainerDirectory,
                     processRole: input.packageProcessRole)
