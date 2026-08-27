@@ -107,4 +107,14 @@ public struct ProcessExtractionContext: Sendable {
     ) {
         await reconciler.observation()
     }
+
+    /// Disposes the process-local Cordis graph. Cordis owns idempotence, so a
+    /// repeated shutdown is safe and does not rerun consumed cleanup effects.
+    public func shutdown() async {
+        do {
+            try await cordisContext.dispose()
+        } catch {
+            DebugLog.extraction("Process extraction context shutdown failed")
+        }
+    }
 }

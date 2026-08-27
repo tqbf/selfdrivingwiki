@@ -84,6 +84,36 @@ struct ProcessExtractionContextTests {
         #expect(observationA.hostedPlugins.count == 1)
         #expect(observationB.hostedPlugins.count == 1)
     }
+
+    @Test func shutdownRemovesBuiltInAndInstalledRegistrations() async throws {
+        let environment = try await GeneratedPluginFixtures.InstalledEnvironment.install()
+        defer { environment.cleanup() }
+
+        let context = try await ProcessExtractionContext.assemble(layout: environment.layout)
+        let input = ExtractionProcessInput(
+            services: MutableExtractionServices(),
+            readConfiguration: { ExtractionConfig() },
+            readCredential: { _ in nil },
+            resolveACP: { _ in nil },
+            httpFetcher: FakeHTTPFetcher(responses: []),
+            makeLocalExtractor: { ContextProbeExtractor() },
+            packageContainerDirectory: environment.root,
+            packageProcessRole: .test)
+        let services = try await ProcessExtractionServices.assemble(context: context, input: input)
+        _ = await context.reconcileNow()
+
+        let builtInKey = ExtractionBackendKey(
+            kind: .pdf,
+            backendID: ExtractionBackend.localPdf2md.rawValue)
+        #expect(await context.registry.resolve(builtInKey) != nil)
+        #expect(await context.registry.containsRevision(environment.revision))
+
+        await services.shutdown()
+
+        #expect(await context.registry.resolve(builtInKey) == nil)
+        #expect(await context.registry.containsRevision(environment.revision) == false)
+        #expect(await context.registry.allKeys().isEmpty)
+    }
 }
 
 private struct ContextProbeExtractor: MarkdownExtractor {

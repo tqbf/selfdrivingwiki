@@ -27,6 +27,12 @@ public struct ProcessRuntimeLease<Service: Sendable>: Sendable {
 public enum ProcessServiceKeys {
     public static let agentProvider = ServiceKey<any AgentProviderServices>(label: "process.agent-provider")
     public static let extraction = ServiceKey<any ExtractionServices>(label: "process.extraction")
+    /// The process-owned registry inherited by every wiki profile.
+    public static let extractionBackends = ServiceKey<ExtractionBackendRegistry>(label: "process.extraction-backends")
+    /// The retained process extraction graph. The registry key above is the
+    /// consumer seam, while this key keeps the reconciler and host alive until
+    /// process shutdown.
+    public static let extractionContext = ServiceKey<ProcessExtractionContext>(label: "process.extraction-context")
     public static let queue = ServiceKey<any QueueEngineClient>(label: "process.queue")
     public static let transport = ServiceKey<DaemonTransportServices>(label: "process.transport")
     public static let renderer = ServiceKey<any RendererServices>(label: "process.renderer")
@@ -76,6 +82,9 @@ public struct ExtractionProcessInput: Sendable {
     public let resolveACP: ExtractionPluginFactory.ACPResolver
     public let httpFetcher: any HTTPRequestFetcher
     public let makeLocalExtractor: ExtractionPluginFactory.LocalExtractor
+    public let makeHTMLExtractor: @Sendable () async -> any HtmlMarkdownExtractor
+    public let packageContainerDirectory: URL
+    public let packageProcessRole: ExtractorPackageProcessRole
 
     public init(
         services: MutableExtractionServices,
@@ -83,7 +92,10 @@ public struct ExtractionProcessInput: Sendable {
         readCredential: @escaping ExtractionPluginFactory.CredentialReader,
         resolveACP: @escaping ExtractionPluginFactory.ACPResolver,
         httpFetcher: any HTTPRequestFetcher,
-        makeLocalExtractor: @escaping ExtractionPluginFactory.LocalExtractor
+        makeLocalExtractor: @escaping ExtractionPluginFactory.LocalExtractor,
+        makeHTMLExtractor: @escaping @Sendable () async -> any HtmlMarkdownExtractor = { TagBasedHtmlExtractor() },
+        packageContainerDirectory: URL? = nil,
+        packageProcessRole: ExtractorPackageProcessRole = .app
     ) {
         self.services = services
         self.readConfiguration = readConfiguration
@@ -91,6 +103,9 @@ public struct ExtractionProcessInput: Sendable {
         self.resolveACP = resolveACP
         self.httpFetcher = httpFetcher
         self.makeLocalExtractor = makeLocalExtractor
+        self.makeHTMLExtractor = makeHTMLExtractor
+        self.packageContainerDirectory = packageContainerDirectory ?? FileManager.default.temporaryDirectory
+        self.packageProcessRole = packageProcessRole
     }
 }
 
@@ -483,7 +498,11 @@ public actor DaemonProcessProfileOwner {
                             acpCredentialStore: acpCredentialStore)
                     },
                     httpFetcher: URLSessionRequestFetcher(),
-                    makeLocalExtractor: makeLocalExtractor)),
+                    makeLocalExtractor: makeLocalExtractor,
+                    makeHTMLExtractor: { TagBasedHtmlExtractor() },
+                    packageContainerDirectory: containerDirectory,
+                    packageProcessRole: .daemon)
+            ),
             makeEmbeddings: {
                 ProcessRuntimeLease(
                     service: .unavailable(identifier: "unavailable-daemon"),
@@ -672,11 +691,20 @@ public struct AppServices: Sendable {
     public let searchFactory: PerWikiSearchFactory
 
     internal static func resolve(from profile: BootedProfile) async throws -> AppServices {
-        AppServices(
+        let extractionBackends: ExtractionBackendRegistry
+        if let inherited = try await profile.context.find(ProcessServiceKeys.extractionBackends) {
+            extractionBackends = inherited
+        } else {
+            // Keep the legacy lookup for profiles that do not yet mount the
+            // process extraction graph. Production process profiles always use
+            // the inherited process registry above.
+            extractionBackends = try await profile.context.require(ExtractionServiceKeys.backends)
+        }
+        return AppServices(
             lifetime: ProfileLifetime(profile: profile),
             store: try await profile.context.require(StoreServiceKeys.store),
             readService: try await profile.context.require(StoreServiceKeys.readService),
-            extractionBackends: try await profile.context.require(ExtractionServiceKeys.backends),
+            extractionBackends: extractionBackends,
             searchProviders: try await profile.context.require(SearchServiceKeys.providers),
             launcherFactory: try await profile.context.require(LauncherServiceKeys.factory),
             searchFactory: try await profile.context.require(PerWikiRuntimeServiceKeys.searchFactory))
@@ -764,6 +792,7 @@ public enum ProcessRuntimePlugins {
     public static let inputsID = PluginID("process.inputs")
     public static let agentProviderID = PluginID("process.agent-provider")
     public static let extractionID = PluginID("process.extraction")
+    public static let extractionBackendsID = PluginID("process.extraction-backends")
     public static let queueID = PluginID("process.queue")
     public static let transportID = PluginID("process.transport")
     public static let rendererID = PluginID("process.renderer")
@@ -852,25 +881,45 @@ public enum ProcessRuntimePlugins {
     private static let extractionDefinition = PluginDefinition(
         id: extractionID,
         dependencies: [ServiceDependency(ProcessServiceKeys.compositionInputs)],
-        provisions: [ServiceDependency(ProcessServiceKeys.extraction)]
+        provisions: [
+            ServiceDependency(ProcessServiceKeys.extraction),
+            ServiceDependency(ProcessServiceKeys.extractionBackends),
+            ServiceDependency(ProcessServiceKeys.extractionContext),
+        ]
     ) {
         try ComponentDefinition(
             label: extractionID.rawValue,
             dependencies: [ServiceDependency(ProcessServiceKeys.compositionInputs)],
-            provisions: [ServiceDependency(ProcessServiceKeys.extraction)]) { activation in
+            provisions: [
+                ServiceDependency(ProcessServiceKeys.extraction),
+                ServiceDependency(ProcessServiceKeys.extractionBackends),
+                ServiceDependency(ProcessServiceKeys.extractionContext),
+            ]) { activation in
                 let input = try await activation.require(ProcessServiceKeys.compositionInputs).extraction
+                // One process-wide adapter authority. Wiki sessions inherit
+                // this instance; opening more wikis never creates more
+                // registries or package activations.
+                let packageLayout = try ExtractorPackageStoreLayout(
+                    appGroupContainerRoot: input.packageContainerDirectory,
+                    processRole: input.packageProcessRole)
+                let extractionContext = try await ProcessExtractionContext.assemble(
+                    layout: packageLayout,
+                    executor: ManagedExtractorProcessExecutor())
+                _ = await extractionContext.reconcileNow()
+                _ = try await activation.supply(
+                    ProcessServiceKeys.extractionBackends,
+                    value: extractionContext.registry)
+                _ = try await activation.supply(
+                    ProcessServiceKeys.extractionContext,
+                    value: extractionContext)
                 let installation = MutableExtractionServices.Installation()
-                let handle = try await ExtractionRuntimeFactory(
-                    readConfiguration: input.readConfiguration,
-                    readCredential: input.readCredential,
-                    resolveACP: input.resolveACP,
-                    httpFetcher: input.httpFetcher,
-                    makeLocalExtractor: input.makeLocalExtractor)
-                    .assemble()
-                await input.services.install(handle.services, for: installation)
+                let services = try await ProcessExtractionServices.assemble(
+                    context: extractionContext,
+                    input: input)
+                await input.services.install(services, for: installation)
                 _ = try await activation.effect { _ in
                     await input.services.invalidate(installation)
-                    try await handle.dispose()
+                    await services.shutdown()
                 }
                 _ = try await activation.supply(ProcessServiceKeys.extraction, value: input.services)
             }

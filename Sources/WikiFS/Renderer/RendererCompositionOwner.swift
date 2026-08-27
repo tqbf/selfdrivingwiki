@@ -285,7 +285,12 @@ final class AppProcessPluginCatalog {
                         httpFetcher: URLSessionRequestFetcher(),
                         makeLocalExtractor: {
                             await MainActor.run { LocalPdf2MarkdownExtractor() }
-                        }),
+                        },
+                        makeHTMLExtractor: {
+                            await MainActor.run { LocalDefuddleExtractor() }
+                        },
+                        packageContainerDirectory: containerDirectory,
+                        packageProcessRole: .app),
                     queueAssembly: {
                         await MainActor.run { queueController.start() }
                         await queueController.awaitSettled()
