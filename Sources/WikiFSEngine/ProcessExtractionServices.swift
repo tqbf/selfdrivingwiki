@@ -1,6 +1,25 @@
 import Foundation
 import WikiFSCore
 
+#if os(macOS)
+/// Adapts the process extraction graph to the composition owner's lease shape,
+/// so a consumer that owns an asynchronous startup facade resolves the same
+/// single registry as every other consumer in its process.
+public struct ProcessExtractionRuntimeHandle: ExtractionRuntimeOwning {
+    public nonisolated let services: any ExtractionServices
+    private let owned: ProcessExtractionServices
+
+    public init(_ services: ProcessExtractionServices) {
+        owned = services
+        self.services = services
+    }
+
+    public func dispose() async throws {
+        await owned.shutdown()
+    }
+}
+#endif
+
 /// The process extraction facade. It resolves every built-in and installed
 /// adapter through the one process registry, while the package context keeps
 /// generated package plugins alive for the process lifetime.

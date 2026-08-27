@@ -291,9 +291,12 @@ final class WikiDaemon: @unchecked Sendable {
         self.legacyAgentProviderServices = providerServices
         let extractionCredentialStore = KeychainExtractionCredentialStore()
         let acpCredentialStore = KeychainACPCredentialStore()
+        // This compatibility boundary resolves the same process extraction
+        // graph production uses, so no target builds a second backend resolver.
         let extractionOwner = ExtractionCompositionOwner(
             assemble: extractionAssembly ?? {
-                try await ExtractionRuntimeFactory(
+                let input = ExtractionProcessInput(
+                    services: MutableExtractionServices(),
                     readConfiguration: { ExtractionConfig.load(from: containerDirectory) },
                     readCredential: { extractionCredentialStore.secret($0) },
                     resolveACP: { configuration in
@@ -303,8 +306,16 @@ final class WikiDaemon: @unchecked Sendable {
                             acpCredentialStore: acpCredentialStore)
                     },
                     httpFetcher: URLSessionRequestFetcher(),
-                    makeLocalExtractor: { await MainActor.run { LocalPdf2MarkdownExtractor() } })
-                    .assemble()
+                    makeLocalExtractor: { await MainActor.run { LocalPdf2MarkdownExtractor() } },
+                    packageContainerDirectory: containerDirectory,
+                    packageProcessRole: .daemon)
+                let context = try await ProcessExtractionContext.assemble(
+                    layout: try ExtractorPackageStoreLayout(
+                        appGroupContainerRoot: containerDirectory,
+                        processRole: .daemon))
+                _ = await context.reconcileNow()
+                return ProcessExtractionRuntimeHandle(
+                    try await ProcessExtractionServices.assemble(context: context, input: input))
             })
         self.legacyExtractionCompositionOwner = extractionOwner
         Task { await extractionOwner.start() }
