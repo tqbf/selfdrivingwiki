@@ -89,7 +89,7 @@ public struct ProcessExtractionContext: Sendable {
             layout: layout)
         // The observer holds only the reconciler, so a wake can never carry a
         // generation, a package payload, or another process's lifecycle state.
-        let wakeObserver = ExtractorCatalogWakeObserver { [reconciler] in
+        let wakeObserver = ExtractorCatalogWakeObserver(scopeRoot: layout.root) { [reconciler] in
             _ = await reconciler.reconcileNow()
         }
         return ProcessExtractionContext(

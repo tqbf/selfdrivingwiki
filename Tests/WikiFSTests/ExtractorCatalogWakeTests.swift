@@ -68,9 +68,32 @@ struct ExtractorCatalogWakeTests {
         #expect(counter.value == 0)
     }
 
+    /// One process can hold contexts over different stores, and a publication
+    /// to one store must not reconcile the other. Without this scoping every
+    /// context in the process reacts to every other context's publication.
+    @Test func publicationWakesOnlyTheContextWatchingThatStore() async throws {
+        let watched = try await GeneratedPluginFixtures.InstalledEnvironment.install()
+        defer { watched.cleanup() }
+        let other = try await GeneratedPluginFixtures.InstalledEnvironment.install()
+        defer { other.cleanup() }
+
+        let observer = ExtractorCatalogWakeObserver(scopeRoot: watched.layout.root) {}
+        defer { Task { await observer.stop() } }
+
+        // Notification delivery is synchronous, so the accepted count is
+        // settled the moment each publication returns.
+        let otherWriter = try ExtractorPackageCatalogWriter.testing(layout: other.layout)
+        _ = try await otherWriter.replaceCatalog(expectedGeneration: 1, records: [])
+        #expect(observer.acceptedWakeCount == 0)
+
+        let watchedWriter = try ExtractorPackageCatalogWriter.testing(layout: watched.layout)
+        _ = try await watchedWriter.replaceCatalog(expectedGeneration: 1, records: [])
+        #expect(observer.acceptedWakeCount == 1)
+    }
+
     @Test func stoppedObserverAcceptsNoFurtherPasses() async throws {
         let passes = PassCounter()
-        let observer = ExtractorCatalogWakeObserver { _ = await passes.record() }
+        let observer = ExtractorCatalogWakeObserver(scopeRoot: nil) { _ = await passes.record() }
 
         await observer.receiveWake()
         #expect(await passes.count == 1)

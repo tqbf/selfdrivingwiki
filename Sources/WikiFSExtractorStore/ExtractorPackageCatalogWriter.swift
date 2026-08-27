@@ -133,7 +133,13 @@ public actor ExtractorPackageCatalogWriter {
     /// never go unannounced.
     private func announce(_ flag: ExtractorCatalogPublicationFlag) {
         guard flag.didPublish else { return }
-        NotificationCenter.default.post(name: .extractorPackageCatalogDidChange, object: nil)
+        // The in-process notification carries the store root so a context
+        // watching a different store is not woken. The Darwin notification
+        // stays payload-free: it crosses processes, where every reader must
+        // reread its own authoritative catalog anyway.
+        NotificationCenter.default.post(
+            name: .extractorPackageCatalogDidChange,
+            object: layout.root.standardizedFileURL)
         postWake()
     }
 

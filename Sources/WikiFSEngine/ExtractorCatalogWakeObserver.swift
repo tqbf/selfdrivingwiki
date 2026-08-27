@@ -83,19 +83,28 @@ actor ExtractorCatalogWakeCoalescer {
 // swiftlint:disable:next unchecked_sendable
 final class ExtractorCatalogWakeObserver: @unchecked Sendable {
     private let coalescer: ExtractorCatalogWakeCoalescer
+    private let scopeRoot: URL?
     private let tokenLock = NSLock()
     private var localToken: NSObjectProtocol?
     private var darwinRegistration: Unmanaged<ExtractorCatalogWakeObserver>?
+    private var acceptedWakes = 0
 
-    init(reconcile: @escaping @Sendable () async -> Void) {
+    /// - Parameter scopeRoot: the store this context reads. An in-process
+    ///   notification for a different store is ignored, so two contexts over
+    ///   two stores in one process never wake each other. A nil root accepts
+    ///   every notification.
+    init(scopeRoot: URL?, reconcile: @escaping @Sendable () async -> Void) {
+        self.scopeRoot = scopeRoot?.standardizedFileURL
         coalescer = ExtractorCatalogWakeCoalescer(reconcile: reconcile)
         // Assigned before the object escapes, so no other thread can observe it.
         localToken = NotificationCenter.default.addObserver(
             forName: .extractorPackageCatalogDidChange,
             object: nil,
             queue: nil
-        ) { [weak self] _ in
-            self?.scheduleWake()
+        ) { [weak self] notification in
+            guard let self, self.accepts(notification) else { return }
+            self.noteAcceptedWake()
+            self.scheduleWake()
         }
         #if os(macOS)
         // Retained, not unretained: the Darwin center holds a raw pointer it
@@ -118,6 +127,23 @@ final class ExtractorCatalogWakeObserver: @unchecked Sendable {
             nil,
             .deliverImmediately)
         #endif
+    }
+
+    /// Counts notifications this observer accepted for its own store.
+    /// Notification delivery is synchronous, so a test can assert the scoping
+    /// decision without waiting on the pass it schedules.
+    var acceptedWakeCount: Int { tokenLock.withLock { acceptedWakes } }
+
+    private func noteAcceptedWake() {
+        tokenLock.withLock { acceptedWakes += 1 }
+    }
+
+    /// A posted store root that is not this observer's store is another
+    /// context's publication. An unscoped notification is always accepted.
+    private func accepts(_ notification: Notification) -> Bool {
+        guard let scopeRoot else { return true }
+        guard let posted = notification.object as? URL else { return true }
+        return posted.standardizedFileURL == scopeRoot
     }
 
     /// Fire-and-forget delivery for notification callbacks. It never blocks the
