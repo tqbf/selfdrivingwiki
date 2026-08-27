@@ -1,8 +1,15 @@
-# Dynamic extractor packages: Phase 4a
+---
+timestamp: 2026-08-26T151500Z
+title: Dynamic extractor packages Phase 4a managed process executor
+branch: feature/dynamic-extractor-packages
+status: complete
+---
+
+# Dynamic extractor packages Phase 4a managed process executor
+
+## Progress
 
 Phase 4a adds the managed extractor process executor.
-
-## Delivered
 
 - `ManagedExtractorProcessExecutor` runs one exact validated revision through protocol revision 1.
 - Direct launch resolves the entry point inside the package snapshot. Runtime launch resolves one host-owned immutable search list to an absolute executable and never relies on child PATH lookup.
@@ -14,7 +21,7 @@ Phase 4a adds the managed extractor process executor.
 - Failures are typed: launch, missing runtime, identity change, malformed protocol, sequence violation, timeout, cancellation, output limit, and nonzero or signaled termination.
 - Process cleanup reuses the hardened race-free runner path: verified identity before every group signal, TERM then grace then KILL, and awaited reaping on timeout and failure.
 
-## Runner hardening (committed separately as 80a24254)
+### Runner hardening (committed separately as 80a24254)
 
 - Group signals now fail closed when child identity cannot be observed.
 - Timeout and failure cleanup perform verified escalation and await reap completion.

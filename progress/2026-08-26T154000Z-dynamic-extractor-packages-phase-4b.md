@@ -1,8 +1,15 @@
-# Dynamic extractor packages: Phase 4b
+---
+timestamp: 2026-08-26T154000Z
+title: Dynamic extractor packages Phase 4b process-backed adapter
+branch: feature/dynamic-extractor-packages
+status: complete
+---
+
+# Dynamic extractor packages Phase 4b process-backed adapter
+
+## Progress
 
 Phase 4b adds the process-backed extractor adapter between installed packages and existing extraction surfaces.
-
-## Delivered
 
 - `ProcessExtractorProvider` prepares one exact revision after rechecking admission twice around the authoritative catalog read.
 - Preparation pins a validated snapshot into a private operation directory (`input`, `output`, `home`, `tmp`, `cache`, `package`) using the secure materialization primitive from 256e1083.

@@ -1,8 +1,15 @@
-# Dynamic extractor packages: Phase 3c
+---
+timestamp: 2026-08-26T174500Z
+title: Dynamic extractor packages Phase 3c package authoring tool
+branch: feature/dynamic-extractor-packages
+status: complete
+---
+
+# Dynamic extractor packages Phase 3c package authoring tool
+
+## Progress
 
 Phase 3c adds the extractor package authoring tool.
-
-## Delivered
 
 - `ExtractorPackageToolCore` provides typed command parsing, validation output, and failures.
 - `extractor-package-tool validate <package-folder>` validates one local package in an isolated temporary store.

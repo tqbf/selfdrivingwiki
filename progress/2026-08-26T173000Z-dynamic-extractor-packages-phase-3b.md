@@ -1,8 +1,15 @@
-# Dynamic extractor packages: Phase 3b
+---
+timestamp: 2026-08-26T173000Z
+title: Dynamic extractor packages Phase 3b durable machine catalog
+branch: feature/dynamic-extractor-packages
+status: complete
+---
+
+# Dynamic extractor packages Phase 3b durable machine catalog
+
+## Progress
 
 Phase 3b adds the durable machine catalog and the app-only package writer.
-
-## Delivered
 
 - `WikiFSCore` provides a read-only catalog reader and process-safe store coordinator.
 - `WikiFSExtractorStore` contains the app-owned catalog writer. The daemon and CLI do not link this target.

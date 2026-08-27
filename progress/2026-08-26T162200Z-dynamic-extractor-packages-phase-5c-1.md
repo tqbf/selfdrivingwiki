@@ -1,8 +1,15 @@
-# Dynamic extractor packages: Phase 5c (slice 1)
+---
+timestamp: 2026-08-26T162200Z
+title: Dynamic extractor packages Phase 5c slice 1 process extraction context
+branch: feature/dynamic-extractor-packages
+status: complete
+---
+
+# Dynamic extractor packages Phase 5c slice 1 process extraction context
+
+## Progress
 
 This slice introduces the single process-scoped extraction context that per-wiki consumers will resolve in slice 2.
-
-## Delivered
 
 - `ProcessExtractionContext` assembles one Cordis context, one `ExtractionBackendRegistry`, one `DynamicPluginHost`, one reconciler, and one catalog reader per app or daemon process, supplying the five fixed services exactly once.
 - The fixed-service supply is structurally guarded: any competing supply of an already-provided key fails with Cordis `duplicateSupply`, so no consumer path can introduce a second registry or executor inside a process.

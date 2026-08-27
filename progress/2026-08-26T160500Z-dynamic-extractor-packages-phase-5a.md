@@ -1,8 +1,15 @@
-# Dynamic extractor packages: Phase 5a
+---
+timestamp: 2026-08-26T160500Z
+title: Dynamic extractor packages Phase 5a generated plugin factory
+branch: feature/dynamic-extractor-packages
+status: complete
+---
+
+# Dynamic extractor packages Phase 5a generated plugin factory
+
+## Progress
 
 Phase 5a adds typed registry identity, atomic batch registration, and the host-generated plugin definition factory for installed extractor packages.
-
-## Delivered
 
 - `ExtractionAdapterKey` gives the registry a typed identity domain: built-in adapters keep legacy string keys behind `.builtIn`; installed adapters use exact revision-plus-registration references that cannot collide across versions or lineages.
 - `ExtractionBackendRegistry.registerBatch` validates every entry, including intra-batch collisions, before any mutation, then commits atomically under one shared token. The returned handle removes exactly its own entries; repeated or stale disposal is a no-op even when an exact key was re-registered since.

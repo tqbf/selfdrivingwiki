@@ -1,8 +1,15 @@
-# Dynamic extractor packages: Phase 5b
+---
+timestamp: 2026-08-26T161200Z
+title: Dynamic extractor packages Phase 5b catalog reconciler
+branch: feature/dynamic-extractor-packages
+status: complete
+---
+
+# Dynamic extractor packages Phase 5b catalog reconciler
+
+## Progress
 
 Phase 5b adds the catalog reconciler that maps durable machine generations onto the process-local dynamic plugin host.
-
-## Delivered
 
 - `ExtractorPackagePluginReconciler` reads an authoritative catalog generation and applies it through one `host.reconcile(desired:)` call that already owns define, run, observe-waiting, and undefine ordering.
 - Unchanged generations short-circuit; `force:` repairs after drift without touching live components.
