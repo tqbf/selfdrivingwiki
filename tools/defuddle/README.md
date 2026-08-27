@@ -26,6 +26,40 @@ self-contained as a script, with no system Node or uv/Python dependency.
   resolves and inlines all of them so the resulting file is genuinely
   self-contained and runs directly under bun with no `node_modules`.
 
+## Extractor package entry point
+
+`tools/defuddle/extractor-protocol.js` is the reviewed extractor package
+entry point. It speaks extractor protocol revision 1: it reads one JSON
+request from standard input, writes progress frames, writes Markdown to the
+requested output path, and ends with exactly one result or failure frame.
+
+It calls the Defuddle library directly through the public `defuddle/node`
+export. It does not run the Defuddle command line as a second process.
+
+Two behaviors are load-bearing and must survive an update:
+
+1. It requests `separateMarkdown`, which is what `parse -j` requests. The
+   result then keeps `contentMarkdown` separate from `content`, and the entry
+   point prefers `contentMarkdown`.
+2. A page with no article body still returns residual markup such as
+   `<body></body>` with `wordCount` 0. The entry point reports that page as a
+   failure so the host falls back to built-in tag-based extraction. A plain
+   empty-string check is not enough.
+
+`Defuddle()` accepts an HTML string, which upstream marks deprecated for a
+future major version. When the pinned library is updated, check whether the
+entry point must build a `Document` instead.
+
+Build the bundle with the same procedure as the command line:
+
+```sh
+mise exec -- bun build tools/defuddle/extractor-protocol.js \
+  --outfile <package>/bin/defuddle-extractor.js --target=bun
+```
+
+The bundle resolves against the globally installed `defuddle` package, so run
+the update procedure below first.
+
 ## Usage (how the app invokes it)
 
 ```sh
