@@ -27,6 +27,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import re
 import sys
@@ -66,8 +67,7 @@ def _import_docling():
         )
     except ImportError:
         print(
-            "Error: docling is not available. "
-            "Run: uv run --script pdf2md --help",
+            "Error: docling is not available. Run: uv run --script pdf2md --help",
             file=sys.stderr,
         )
         sys.exit(3)
@@ -87,6 +87,7 @@ def _get_nlp():
     global _nlp
     if _nlp is None:
         import spacy
+
         _nlp = spacy.load("en_core_web_sm", disable=["ner", "lemmatizer"])
     return _nlp
 
@@ -160,8 +161,12 @@ def _clean(text: str) -> str:
 
 
 def _build_vlm_converter(
-    vlm_model_specs, InputFormat, VlmPipelineOptions,
-    DocumentConverter, PdfFormatOption, VlmPipeline,
+    vlm_model_specs,
+    InputFormat,
+    VlmPipelineOptions,
+    DocumentConverter,
+    PdfFormatOption,
+    VlmPipeline,
 ):
     return DocumentConverter(
         format_options={
@@ -176,8 +181,12 @@ def _build_vlm_converter(
 
 
 def _build_standard_converter(
-    InputFormat, PdfPipelineOptions, TableFormerMode,
-    DocumentConverter, PdfFormatOption, StandardPdfPipeline,
+    InputFormat,
+    PdfPipelineOptions,
+    TableFormerMode,
+    DocumentConverter,
+    PdfFormatOption,
+    StandardPdfPipeline,
 ):
     pipeline_options = PdfPipelineOptions()
     pipeline_options.do_ocr = True
@@ -200,9 +209,16 @@ def _build_standard_converter(
 def convert_pdf(pdf_path: Path, pipeline: str) -> str:
     """Convert a PDF to Markdown.  Raises ValueError on empty output."""
     (
-        vlm_model_specs, InputFormat, PdfPipelineOptions, TableFormerMode,
-        VlmPipelineOptions, DocumentConverter, PdfFormatOption,
-        StandardPdfPipeline, VlmPipeline, DocItemLabel,
+        vlm_model_specs,
+        InputFormat,
+        PdfPipelineOptions,
+        TableFormerMode,
+        VlmPipelineOptions,
+        DocumentConverter,
+        PdfFormatOption,
+        StandardPdfPipeline,
+        VlmPipeline,
+        DocItemLabel,
     ) = _import_docling()
 
     excluded = {DocItemLabel.FOOTNOTE, DocItemLabel.PAGE_HEADER, DocItemLabel.PAGE_FOOTER}
@@ -210,13 +226,21 @@ def convert_pdf(pdf_path: Path, pipeline: str) -> str:
 
     if pipeline == "vlm":
         converter = _build_vlm_converter(
-            vlm_model_specs, InputFormat, VlmPipelineOptions,
-            DocumentConverter, PdfFormatOption, VlmPipeline,
+            vlm_model_specs,
+            InputFormat,
+            VlmPipelineOptions,
+            DocumentConverter,
+            PdfFormatOption,
+            VlmPipeline,
         )
     else:
         converter = _build_standard_converter(
-            InputFormat, PdfPipelineOptions, TableFormerMode,
-            DocumentConverter, PdfFormatOption, StandardPdfPipeline,
+            InputFormat,
+            PdfPipelineOptions,
+            TableFormerMode,
+            DocumentConverter,
+            PdfFormatOption,
+            StandardPdfPipeline,
         )
 
     result = converter.convert(pdf_path)
@@ -229,6 +253,164 @@ def convert_pdf(pdf_path: Path, pipeline: str) -> str:
     return text
 
 
+# ── Extractor protocol mode ──────────────────────────────────────────────
+#
+# The host runs this script as an extractor package. It writes one JSON
+# request on standard input and closes it, then reads JSON Lines frames from
+# standard output. Standard output carries protocol frames ONLY; every other
+# message goes to standard error.
+
+PROTOCOL_REVISION = 1
+PROTOCOL_KIND = "pdf"
+
+
+def _model_name(pipeline: str) -> str | None:
+    """The model the pipeline actually runs, or None when it uses no model."""
+    return "granite-docling-mlx" if pipeline == "vlm" else None
+
+
+@beartype
+def build_protocol_frame(kind: str, payload: dict) -> dict:
+    """One protocol envelope. The host rejects any other shape."""
+    return {"kind": kind, "payload": payload}
+
+
+def _emit(frame: dict, stream) -> None:
+    stream.write(json.dumps(frame, separators=(",", ":")))
+    stream.write("\n")
+    stream.flush()
+
+
+@beartype
+def _progress(request_id: str, completed: int, total: int, message: str) -> dict:
+    return build_protocol_frame(
+        "progress",
+        {
+            "requestID": request_id,
+            "completedUnitCount": completed,
+            "totalUnitCount": total,
+            "message": message,
+        },
+    )
+
+
+@beartype
+def _failure(request_id: str, cause: str, message: str) -> dict:
+    return build_protocol_frame(
+        "failure",
+        {
+            "requestID": request_id,
+            "cause": cause,
+            "message": message[:4096],
+        },
+    )
+
+
+@beartype
+def run_extractor_protocol(
+    request_text: str,
+    out_stream=None,
+    log_stream=None,
+) -> int:
+    """Serve one extractor request.
+
+    Returns the process exit code. A refused or failed request still exits 0
+    when a failure frame was emitted, because the frame is the report.
+    """
+    out_stream = sys.stdout if out_stream is None else out_stream
+    log_stream = sys.stderr if log_stream is None else log_stream
+
+    try:
+        request = json.loads(request_text)
+    except (ValueError, TypeError):
+        # No request ID is known, so no frame can be attributed. Exit nonzero
+        # and let the host report a malformed protocol.
+        print("Error: malformed extractor request", file=log_stream)
+        return 2
+
+    request_id = request.get("requestID")
+    if not isinstance(request_id, str) or not request_id:
+        print("Error: extractor request has no request ID", file=log_stream)
+        return 2
+
+    output_path = request.get("outputPath")
+    input_path = request.get("inputPath")
+
+    if request.get("protocolRevision") != PROTOCOL_REVISION:
+        _emit(_failure(request_id, "invalid-request", "unsupported protocol revision"), out_stream)
+        return 0
+    if request.get("kind") != PROTOCOL_KIND:
+        _emit(
+            _failure(request_id, "unsupported-input", "this package extracts PDF only"), out_stream
+        )
+        return 0
+    if not isinstance(input_path, str) or not isinstance(output_path, str):
+        _emit(
+            _failure(request_id, "invalid-request", "request has no input or output path"),
+            out_stream,
+        )
+        return 0
+
+    source = Path(input_path)
+    if not source.exists():
+        _emit(_failure(request_id, "invalid-request", "input file is missing"), out_stream)
+        return 0
+
+    pipeline = "vlm"
+    _emit(_progress(request_id, 0, 2, "preparing"), out_stream)
+
+    try:
+        # docling and its model stack write to stdout. Redirect it so the
+        # frame stream stays valid JSON Lines.
+        with contextlib.redirect_stdout(log_stream):
+            text = convert_pdf(source.resolve(), pipeline)
+    except ValueError as error:
+        _emit(_failure(request_id, "extraction-failure", str(error)), out_stream)
+        return 0
+    except SystemExit:
+        # `_import_docling` exits when docling is absent. Report it as a
+        # missing runtime so the host keeps its reviewed fallback.
+        _emit(_failure(request_id, "missing-runtime", "docling is not available"), out_stream)
+        return 0
+    except Exception as error:  # noqa: BLE001 - reported as a typed frame
+        _emit(
+            _failure(request_id, "extraction-failure", f"unable to parse PDF: {error}"), out_stream
+        )
+        return 0
+
+    _emit(_progress(request_id, 1, 2, "writing markdown"), out_stream)
+
+    try:
+        destination = Path(output_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(text, encoding="utf-8")
+    except OSError as error:
+        _emit(
+            _failure(request_id, "extraction-failure", f"unable to write markdown: {error}"),
+            out_stream,
+        )
+        return 0
+
+    metadata = {"toolName": "pdf2md"}
+    model = _model_name(pipeline)
+    if model is not None:
+        metadata["modelName"] = model
+
+    _emit(
+        build_protocol_frame(
+            "result",
+            {
+                "requestID": request_id,
+                "outputPath": output_path,
+                "markdownByteCount": len(text.encode("utf-8")),
+                "metadata": metadata,
+            },
+        ),
+        out_stream,
+    )
+    return 0
+
+
 # ── CLI ──────────────────────────────────────────────────────────────────
 
 
@@ -237,17 +419,28 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Convert a PDF to Markdown using docling + granite-docling."
     )
-    parser.add_argument("input", type=Path, help="Path to the PDF file")
+    parser.add_argument("input", type=Path, nargs="?", help="Path to the PDF file")
     parser.add_argument(
-        "--output", "-o", type=Path, default=None,
+        "--extractor-protocol",
+        action="store_true",
+        help="Serve one extractor protocol request on stdin/stdout (host use)",
+    )
+    parser.add_argument(
+        "--output",
+        "-o",
+        type=Path,
+        default=None,
         help="Write markdown to file (default: stdout)",
     )
     parser.add_argument(
-        "--pipeline", choices=("vlm", "standard"), default="vlm",
+        "--pipeline",
+        choices=("vlm", "standard"),
+        default="vlm",
         help="Pipeline: vlm (GRANITEDOCLING_MLX, best quality) or standard (faster)",
     )
     parser.add_argument(
-        "--json", action="store_true",
+        "--json",
+        action="store_true",
         help="Output JSON with metadata instead of raw markdown",
     )
     return parser
@@ -256,6 +449,13 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if args.extractor_protocol:
+        # The host writes one request and closes standard input.
+        sys.exit(run_extractor_protocol(sys.stdin.read()))
+
+    if args.input is None:
+        parser.error("the following arguments are required: input")
 
     if not args.input.exists():
         print(f"Error: file not found: {args.input}", file=sys.stderr)
@@ -279,12 +479,15 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
     if args.json:
-        json.dump({
-            "input": str(args.input),
-            "pipeline": args.pipeline,
-            "char_count": len(text),
-            "line_count": text.count("\n") + 1,
-        }, sys.stdout)
+        json.dump(
+            {
+                "input": str(args.input),
+                "pipeline": args.pipeline,
+                "char_count": len(text),
+                "line_count": text.count("\n") + 1,
+            },
+            sys.stdout,
+        )
         sys.stdout.write("\n")
     elif args.output:
         args.output.write_text(text, encoding="utf-8")
