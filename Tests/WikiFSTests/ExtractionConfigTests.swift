@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import WikiFSCore
+import WikiFSTypes
 
 /// `ExtractionConfig` load/save round-trip, defaulting, and resilient decode
 /// — mirrors `ZoteroConfigTests`'s temp-directory pattern.
@@ -209,5 +210,98 @@ struct ExtractionConfigTests {
         #expect(loaded.acpProviderId == "claude-acp")
         #expect(loaded.htmlBackend == .defuddle)
         #expect(loaded.podcastBackend == .appleTranscript)
+    }
+
+    @Test func logicalExtractorFieldsAreAbsentInLegacyConfig() throws {
+        let config = try JSONDecoder().decode(ExtractionConfig.self, from: Data(#"{"backend":"anthropic"}"#.utf8))
+        #expect(config.pdfExtractor == nil)
+        #expect(config.htmlExtractor == nil)
+    }
+
+    @Test func builtInAndInstalledExtractorSelectionsRoundTrip() throws {
+        let logical = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.example.html"),
+            registrationID: try ExtractorRegistrationID(validating: "article"))
+        let config = ExtractionConfig(
+            backend: .gemini,
+            htmlBackend: .tagBased,
+            pdfExtractor: .builtIn(.pdf(.localPdf2md)),
+            htmlExtractor: .installed(logical))
+        let data = try JSONEncoder().encode(config)
+        let decoded = try JSONDecoder().decode(ExtractionConfig.self, from: data)
+        #expect(decoded == config)
+        #expect(decoded.backend == .gemini)
+        #expect(decoded.htmlBackend == .tagBased)
+    }
+
+    @Test func malformedLogicalExtractorSelectionDegradesToNil() throws {
+        let data = Data(#"{"backend":"anthropic","pdfExtractor":{"kind":"future"}}"#.utf8)
+        let decoded = try JSONDecoder().decode(ExtractionConfig.self, from: data)
+        #expect(decoded.backend == .anthropic)
+        #expect(decoded.pdfExtractor == nil)
+    }
+
+    @Test func legacyAndExplicitBuiltInSelectionsKeepTheirPrecedence() {
+        let legacy = ExtractionConfig(backend: .anthropic, htmlBackend: .defuddle)
+        #expect(ExtractorSelectionResolver.resolvePDF(configuration: legacy, activeRegistrations: []).selection == .pdfBuiltIn(.anthropic))
+        #expect(ExtractorSelectionResolver.resolveHTML(configuration: legacy, activeRegistrations: []).selection == .htmlBuiltIn(.defuddle))
+
+        let explicit = ExtractionConfig(
+            backend: .gemini,
+            htmlBackend: .defuddle,
+            pdfExtractor: .builtIn(.pdf(.doclingServe)),
+            htmlExtractor: .builtIn(.html(.tagBased)))
+        #expect(ExtractorSelectionResolver.resolvePDF(configuration: explicit, activeRegistrations: []).selection == .pdfBuiltIn(.doclingServe))
+        #expect(ExtractorSelectionResolver.resolveHTML(configuration: explicit, activeRegistrations: []).selection == .htmlBuiltIn(.tagBased))
+    }
+
+    @Test func installedSelectionRanksBySemanticVersionThenExactRevision() throws {
+        let logical = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.example.pdf"),
+            registrationID: try ExtractorRegistrationID(validating: "main"))
+        let low = try activeRegistration(logical: logical, version: "1.9.0", digestByte: 9, kinds: [.pdf])
+        let prerelease = try activeRegistration(logical: logical, version: "2.0.0-beta.1", digestByte: 10, kinds: [.pdf])
+        let highA = try activeRegistration(logical: logical, version: "2.0.0", digestByte: 1, kinds: [.pdf])
+        let highB = try activeRegistration(logical: logical, version: "2.0.0+other", digestByte: 2, kinds: [.pdf])
+        let config = ExtractionConfig(backend: .gemini, pdfExtractor: .installed(logical))
+        let decision = ExtractorSelectionResolver.resolvePDF(
+            configuration: config,
+            activeRegistrations: [highA, prerelease, low, highB])
+        #expect(decision.selection == .installed(kind: .pdf, reference: highB.reference))
+        #expect(decision.diagnostic == nil)
+    }
+
+    @Test func unavailableInstalledSelectionUsesFixedFallbackAndPreservesChoice() throws {
+        let logical = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.example.missing"),
+            registrationID: try ExtractorRegistrationID(validating: "main"))
+        let htmlOnly = try activeRegistration(logical: logical, version: "9.0.0", digestByte: 9, kinds: [.html])
+        let pdfConfig = ExtractionConfig(backend: .gemini, pdfExtractor: .installed(logical))
+        let pdf = ExtractorSelectionResolver.resolvePDF(configuration: pdfConfig, activeRegistrations: [htmlOnly])
+        #expect(pdf.selection == .pdfBuiltIn(.localPdf2md))
+        #expect(pdf.diagnostic == .unavailableInstalled(logical))
+        #expect(pdfConfig.pdfExtractor == .installed(logical))
+
+        let htmlConfig = ExtractionConfig(htmlBackend: .defuddle, htmlExtractor: .installed(logical))
+        let html = ExtractorSelectionResolver.resolveHTML(configuration: htmlConfig, activeRegistrations: [])
+        #expect(html.selection == .htmlBuiltIn(.tagBased))
+        #expect(html.diagnostic == .unavailableInstalled(logical))
+        #expect(htmlConfig.htmlExtractor == .installed(logical))
+    }
+
+    private func activeRegistration(
+        logical: LogicalExtractorReference,
+        version: String,
+        digestByte: UInt8,
+        kinds: Set<ExtractorKind>
+    ) throws -> ActiveExtractorRegistration {
+        let revision = ExtractorPackageRevisionID(
+            packageID: logical.packageID,
+            version: try ExtractorPackageVersion(validating: version),
+            digest: try ExtractorPackageDigest(bytes: Array(repeating: digestByte, count: ExtractorPackageDigest.byteCount)))
+        return ActiveExtractorRegistration(
+            reference: ExtractorReference(revision: revision, registrationID: logical.registrationID),
+            kinds: kinds,
+            protocolRevision: .v1)
     }
 }

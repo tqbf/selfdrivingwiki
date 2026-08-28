@@ -283,8 +283,11 @@ final class AppProcessPluginCatalog {
                                 acpCredentialStore: acpCredentialStore)
                         },
                         httpFetcher: URLSessionRequestFetcher(),
-                        makeLocalExtractor: {
-                            await MainActor.run { LocalPdf2MarkdownExtractor() }
+                        packageContainerDirectory: containerDirectory,
+                        packageProcessRole: .app,
+                        bootstrapReviewedPackages: {
+                            await ReviewedExtractorBootstrap.publishBundledPackages(
+                                appGroupContainerRoot: containerDirectory)
                         }),
                     queueAssembly: {
                         await MainActor.run { queueController.start() }
@@ -341,12 +344,13 @@ final class AppProcessPluginCatalog {
     /// the app-target injected catalog boundary rather than `WikiFSApp.init`.
     func makeSettingsLauncher(extractionCoordinator: ExtractionCoordinator) -> AgentLauncher {
         let gate = GenerationGate(laneLimits: [.ingest: 1, .interactive: 3])
-        let launcher = AgentLauncher(
+        // No pdf2md script-path resolver: the settings launcher never spawns a
+        // legacy pdf2md subprocess, so the seatbelt emits no PDF2MD_SCRIPT
+        // deny rule (extraction runs through reviewed package plugins).
+        return AgentLauncher(
             generationGate: gate,
             extractionCoordinator: extractionCoordinator,
             providerServices: providerServices)
-        launcher.pdf2mdScriptPathResolver = { PdfExtractionService.resolveScript()?.path }
-        return launcher
     }
 }
 

@@ -111,8 +111,12 @@ public final class SessionManager {
     /// The App Group container directory holding every `<ulid>.sqlite`.
     public let containerDirectory: URL
 
-    /// Resolves the bundled `pdf2md` script path for the agent seatbelt.
-    /// The app passes a closure delegating to `PdfExtractionService.resolveScript()`.
+    /// Resolves a legacy `pdf2md` script path for the agent seatbelt deny rule.
+    /// Production no longer injects this: extraction runs through the
+    /// registry's reviewed package plugins and there is no legacy subprocess
+    /// path to deny, so the default `{ nil }` applies everywhere. Kept (with
+    /// tests' explicit `{ nil }` still accepted) until the compatibility
+    /// adapter is deleted in the Phase 9 cleanup.
     public let pdf2mdScriptPathResolver: () -> String?
 
     /// Receives per-turn interactive (Ask/Edit chat) usage deltas from each
@@ -158,7 +162,7 @@ public final class SessionManager {
         extractionProvider: any QueueExtractionProvider,
         searchRuntimeRegistry: SearchRuntimeRegistry = SearchRuntimeRegistry(),
         providerServices: any AgentProviderServices = UnavailableAgentProviderServices(),
-        pdf2mdScriptPathResolver: @escaping () -> String?,
+        pdf2mdScriptPathResolver: @escaping () -> String? = { nil },
         htmlMarkdownExtractorFactory: @escaping @MainActor () -> (any HtmlMarkdownExtractor)? = { nil },
         htmlBackendResolver: @escaping @MainActor () -> HtmlExtractionBackend? = { nil },
         podcastBackendResolver: @escaping @MainActor () -> PodcastTranscriptionBackend? = { nil },

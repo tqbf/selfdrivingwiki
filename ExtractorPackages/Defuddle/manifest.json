@@ -1,0 +1,45 @@
+{
+  "capabilities": [],
+  "displayName": "Defuddle Article Extractor",
+  "entryPoint": "bin/defuddle-extractor.js",
+  "files": [
+    {
+      "digest": "c63e6774d9c9da3de01428e0809080c4758de3636c8e9e6fe51525c9ab4cd092",
+      "path": "LICENSE"
+    },
+    {
+      "digest": "52db516b0ca3487155dc3db092bf1bed31248d0dc22fed5d0e599695ed962d34",
+      "path": "PROVENANCE.md"
+    },
+    {
+      "digest": "49f12a2b7139546c4222aef052382194be27a6875bb84c7ff6e68442c25e00f6",
+      "path": "bin/defuddle-extractor.js"
+    }
+  ],
+  "launch": {
+    "command": "bun",
+    "mode": "runtime"
+  },
+  "limits": {
+    "maximumDurationMilliseconds": 120000,
+    "maximumInputByteCount": 33554432,
+    "maximumMarkdownOutputByteCount": 33554432,
+    "maximumProgressEventCount": 64
+  },
+  "manifestRevision": 1,
+  "packageID": "org.selfdrivingwiki.defuddle",
+  "protocolRevision": 1,
+  "registrations": [
+    {
+      "displayName": "Defuddle Article",
+      "id": "article",
+      "kinds": [
+        "html"
+      ],
+      "mimeTypes": [
+        "text/html"
+      ]
+    }
+  ],
+  "version": "0.19.1"
+}

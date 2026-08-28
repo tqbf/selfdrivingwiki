@@ -30,6 +30,7 @@ public struct ScopeDiagnosticsSnapshot: Sendable, Equatable {
     public let lifecycle: ScopeLifecycleState
     public let activeChildCount: Int
     public let activeRegistrationCount: Int
+    public let retainedComponentRecordCount: Int
 
     internal init(
         contextID: ContextID,
@@ -38,7 +39,8 @@ public struct ScopeDiagnosticsSnapshot: Sendable, Equatable {
         parentDescriptor: ScopeDescriptor?,
         lifecycle: ScopeLifecycleState,
         activeChildCount: Int,
-        activeRegistrationCount: Int
+        activeRegistrationCount: Int,
+        retainedComponentRecordCount: Int
     ) {
         self.contextID = contextID
         self.parentContextID = parentContextID
@@ -47,6 +49,7 @@ public struct ScopeDiagnosticsSnapshot: Sendable, Equatable {
         self.lifecycle = lifecycle
         self.activeChildCount = activeChildCount
         self.activeRegistrationCount = activeRegistrationCount
+        self.retainedComponentRecordCount = retainedComponentRecordCount
     }
 }
 

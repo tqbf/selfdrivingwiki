@@ -130,6 +130,13 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         }
     }
 
+    func runSignedExtractorProbe(request: Data, reply: @escaping (Data) -> Void) {
+        let sendableReply = SendableDataReply(reply: reply)
+        Task { [daemon] in
+            sendableReply.reply(await daemon.signedExtractorProbeData(request: request))
+        }
+    }
+
     // MARK: - Workload: event sink registration (Phase 0)
 
     func registerEventSink(_ sink: WikiDaemonEventSink) {
@@ -668,10 +675,19 @@ wikid: resolved appGroup=\(WikiIdentifiers.appGroupID) \
 source=\(WikiIdentifiers.appGroupIDSource.rawValue) \
 container=\(containerDirectory.path)
 """)
+do {
+    let extractorLayout = try ExtractorPackageStoreLayout(
+        appGroupContainerRoot: containerDirectory,
+        processRole: .daemon)
+    try ExtractorDirectoryValidator.cleanupOperationSessions(
+        layout: extractorLayout,
+        scope: .staleSessions)
+} catch {
+    DebugLog.extraction("wikid: stale extractor operation cleanup failed: \(error)")
+}
 
 let profileOwner = try DaemonProcessProfileOwner.production(
-    containerDirectory: containerDirectory,
-    makeLocalExtractor: { await MainActor.run { LocalPdf2MarkdownExtractor() } })
+    containerDirectory: containerDirectory)
 let daemon = WikiDaemon(
     containerDirectory: containerDirectory,
     profileOwner: profileOwner,
@@ -776,6 +792,16 @@ if let argPath = CommandLine.arguments.dropFirst().first(where: { !$0.hasPrefix(
         DebugLog.store("wikid: failed to create default data directory \(defaultDir.path): \(error)")
     }
     containerDirectory = defaultDir
+}
+do {
+    let extractorLayout = try ExtractorPackageStoreLayout(
+        appGroupContainerRoot: containerDirectory,
+        processRole: .daemon)
+    try ExtractorDirectoryValidator.cleanupOperationSessions(
+        layout: extractorLayout,
+        scope: .staleSessions)
+} catch {
+    DebugLog.extraction("wikid: stale extractor operation cleanup failed: \(error)")
 }
 
 let daemon = WikiDaemon(

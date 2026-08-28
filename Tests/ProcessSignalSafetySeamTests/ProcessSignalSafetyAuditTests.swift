@@ -67,6 +67,14 @@ struct ProcessSignalSafetyAuditTests {
                   primitive: .posixSignal):
                 (1, "guarded: injected sendSignal seam, reached only via "
                     + "ProcessSignalSafety.signal on a re-verified direct child"),
+            .init(path: "Sources/WikiFSCore/Extractor/RaceFreeProcessGroupRunner.swift",
+                  primitive: .posixSignal):
+                (2, "guarded: posix_spawn creates a new process group atomically; both "
+                    + "sites re-observe and verify the group leader PID, parent PID, and "
+                    + "kernel start time immediately before signalling the negative group "
+                    + "ID, and treat ESRCH as an already-reaped group. One site sends the "
+                    + "initial TERM, the other sends KILL to the same re-verified group "
+                    + "after the grace period"),
             .init(path: "Sources/WikiFSCore/Integrations/TranscriptSubprocess.swift",
                   primitive: .posixSignal):
                 (1, "guarded: injected sendSignal seam, reached only via "
@@ -78,6 +86,11 @@ struct ProcessSignalSafetyAuditTests {
                     + "there is no interval in which the PID could be reaped and "
                     + "recycled. A separately captured jobs snapshot cannot authorise "
                     + "a signal, because it only proves ownership at snapshot time"),
+            .init(path: "scripts/test-signed-wikid-extractor.sh",
+                  primitive: .shellSignal):
+                (5, "guarded: the script signals only APP_PID, which is the exact shell child "
+                    + "started by this script; kill -0 is a liveness check, and the EXIT trap "
+                    + "provides cleanup while the shell still owns the child job"),
 
             // --- Owner-terminates-its-own-child, no numeric PID -------------
             // These call terminate() on a Process/client object the same code
@@ -86,9 +99,6 @@ struct ProcessSignalSafetyAuditTests {
             .init(path: "Sources/WikiFSEngine/PdfExtractionService.swift",
                   primitive: .processTermination):
                 (3, "owns the Process object it terminates and rejects invalid process IDs"),
-            .init(path: "Sources/WikiFS/Sources/DefuddleExtractionService.swift",
-                  primitive: .processTermination):
-                (2, "owns the Process object it terminates and rejects invalid process IDs"),
             .init(path: "Sources/WikiFSEngine/ACPBackend.swift",
                   primitive: .processTermination):
                 (3, "terminates a held ACP client object, not a PID"),
@@ -100,6 +110,13 @@ struct ProcessSignalSafetyAuditTests {
             .init(path: "Sources/WikiFSEngine/ACPBackend.swift",
                   primitive: .posixSignal):
                 (1, "kill(pid, 0) is a liveness probe and delivers no signal"),
+            .init(path: "Sources/WikiFSCore/Extractor/ExtractorDirectoryAdmission.swift",
+                  primitive: .posixSignal):
+                (1, "kill(pid, 0) is a liveness probe and delivers no signal. It only "
+                    + "decides whether an operation-session directory belongs to a dead "
+                    + "process before cleanup; the current process is excluded first, and "
+                    + "an EPERM result is treated as still-live so a PID owned by another "
+                    + "user can never make a live session look stale"),
 
             .init(path: "scripts/paseo-archive-cleanup.sh", primitive: .shellSignal):
                 (2, "WEAK, pre-existing: operator-run agent-archive cleanup. Selects "
@@ -241,7 +258,6 @@ struct ProcessSignalSafetyAuditTests {
         let expectedGuardCounts = [
             "Sources/WikiFSCore/Core/AsyncProcessRunner.swift": 1,
             "Sources/WikiFSEngine/PdfExtractionService.swift": 3,
-            "Sources/WikiFS/Sources/DefuddleExtractionService.swift": 2,
         ]
 
         for (relativePath, expectedCount) in expectedGuardCounts {

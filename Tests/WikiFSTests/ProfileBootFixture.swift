@@ -42,7 +42,6 @@ enum ProfileBootFixture {
         return try AppPluginCatalog.build(
             factories: AppPluginCatalogFactories(
                 base: baseFactories,
-                makeDefuddleExtractor: { ProfileHTMLExtractor() },
                 makeDaemonTransport: { fixtureTransportServices() }),
             additionalDefinitions: additionalDefinitions)
     }
@@ -70,8 +69,7 @@ enum ProfileBootFixture {
                 readConfiguration: { ExtractionConfig() },
                 readCredential: { _ in nil },
                 resolveACP: { _ in nil },
-                httpFetcher: FakeHTTPFetcher(responses: []),
-                makeLocalExtractor: { ProfilePDFExtractor() }),
+                httpFetcher: FakeHTTPFetcher(responses: [])),
             queueAssembly: queueAssembly,
             transportAssembly: transportAssembly,
             rendererAssembly: rendererAssembly)
@@ -145,7 +143,9 @@ enum ProfileBootFixture {
             Entry(id: EntryID("tools"), plugin: ToolsPlugin.id),
             Entry(id: EntryID("system-prompt"), plugin: SystemPromptPlugin.id),
             Entry(id: EntryID("agent-loop"), plugin: AgentLoopPlugin.id),
-            Entry(id: EntryID("extraction"), plugin: ExtractionPlugin.id),
+            // Extraction backends resolve from the inherited process graph
+            // (ProcessRuntimePlugins.extractionID); wiki profiles never mount
+            // their own registry.
             Entry(id: EntryID("search"), plugin: SearchPlugin.id),
             Entry(id: EntryID("renderers"), plugin: RenderersPlugin.id),
             Entry(id: EntryID("transport"), plugin: TransportPlugin.id),
@@ -181,8 +181,7 @@ enum ProfileBootFixture {
 
     private static var baseFactories: BasePluginCatalogFactories {
         BasePluginCatalogFactories(
-            agentProviderServices: UnavailableAgentProviderServices(),
-            makePDFExtractor: { ProfilePDFExtractor() })
+            agentProviderServices: UnavailableAgentProviderServices())
     }
 
     private static var launcherFactoryDefinition: PluginDefinition {

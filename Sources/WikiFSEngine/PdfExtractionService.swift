@@ -9,6 +9,13 @@ import WikiFSCore
 /// in PATH to bootstrap its own Python + dependencies on first run.
 /// If `uv` is not installed, the subprocess fails and the caller falls back
 /// to passing the raw PDF to the agent.
+///
+/// TEST-ONLY PENDING REMOVAL (dynamic-extractor-packages Phase 6.16): no
+/// production caller remains — extraction runs through the
+/// `ExtractionBackendRegistry` reviewed package plugins, and no production
+/// code injects `PdfExtractionService.resolveScript()` anymore. This type is
+/// retained for `PdfExtractionServiceTests` and related process-safety
+/// fixtures until the Phase 9 compatibility-adapter cleanup deletes it.
 @MainActor
 public enum PdfExtractionService {
     /// Process registry — non-isolated so termination handlers (which fire on

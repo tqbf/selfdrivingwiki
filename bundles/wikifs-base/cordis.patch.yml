@@ -26,12 +26,6 @@ entries:
   - id: runtime-services
     plugin: wiki.runtime-services
     config: { _scope: wiki, wikiID: "${WIKI_ID}", containerDirectory: "${WIKI_HOME}" }
-  - id: extraction
-    plugin: wiki.extraction
-    config: { _scope: wiki }
-  - id: pdf2md
-    plugin: wiki.extraction.pdf2md
-    config: { _scope: wiki }
   - id: search
     plugin: wiki.search
     config: { _scope: wiki }

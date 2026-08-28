@@ -227,15 +227,12 @@ public enum HTMLToMarkdown {
 /// The `HtmlMarkdownExtractor` conformer that wraps `HTMLToMarkdown.convert`.
 ///
 /// Issue #799 PR2: this is the always-available backend for the "Extract" button
-/// and the "Re-extract with" menu on HTML sources. The defuddle backend
-/// (`LocalDefuddleExtractor` in `Sources/WikiFS/Sources/DefuddleExtractionService.swift`)
-/// produces higher-quality article markdown when its bundled binary is present;
-/// when it's missing (CI, clean dev before `make build`), or when the user
-/// explicitly picks the tag-based backend from the Re-extract menu, this
-/// conformer is the engine.
+/// and the "Re-extract with" menu on HTML sources. The reviewed Defuddle
+/// package may replace it when its runtime is available. This conformer remains
+/// the fixed fallback for missing or failed package extraction.
 ///
-/// Struct (not enum) to satisfy instance-protocol conformance — mirrors the
-/// `LocalDefuddleExtractor` shape. Delegates to `HTMLToMarkdown.convert(_:)`
+/// Struct (not enum) to satisfy instance-protocol conformance. It delegates to
+/// `HTMLToMarkdown.convert(_:)`
 /// (which already scopes to main content, strips `<script>/<style>/<nav>`,
 /// decodes entities, and extracts the `<title>`). The title carries through to
 /// `HtmlExtractionResult.title` so the filename stem + provenance chip stay

@@ -1,4 +1,5 @@
 import Foundation
+import WikiFSTypes
 
 /// A closed local extraction tool. Provider-backed backends remain represented
 /// by `ExtractionBackend` so a tool version can never be presented as a model.
@@ -15,11 +16,29 @@ public enum ExtractionTool: String, Codable, CaseIterable, Sendable {
     case transcript
 }
 
+/// Exact identity of one installed extractor package revision, as persisted in
+/// an extraction activity plan.
+///
+/// Exact package identity and protocol metadata for one extraction.
+///
+/// The payload uses the validated identity types at the persistence boundary.
+/// JSON still contains their stable scalar representations through their
+/// `Codable` implementations. A package version is never presented as a model
+/// version.
+public typealias ExtractionInstalledPackageProducer = ExtractorPackageExecutionProvenance
+
+/// Cross-target provenance exposed by a process-backed HTML extractor without
+/// importing the engine module into the core store target.
+public protocol ProcessPackageProvenanceProviding: Sendable {
+    var packageProvenance: ExtractorPackageExecutionProvenance { get }
+}
+
 /// The producer recovered from immutable markdown-version provenance.
 public enum ExtractionProducer: Equatable, Sendable {
     case backend(ExtractionBackend)
     case tool(ExtractionTool)
     case legacy(rawTechnique: String?)
+    case installedPackage(ExtractionInstalledPackageProducer)
 }
 
 /// Typed read projection over a source markdown version and its existing PROV
@@ -69,6 +88,7 @@ public enum AppendDerivedMarkdownError: Error, Equatable, Sendable {
     case modelRequiresProviderBackedProducer
     case providerFieldsUnsupportedForLocalTool
     case toolVersionUnsupportedForBackend
+    case invalidInstalledPackageProducer
     case foreignSourceVersion(SourceVersionID)
     case missingSource(SourceID)
 }

@@ -5506,7 +5506,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             }
 
             let rows = try Row.fetchAll(db, sql: """
-            SELECT \(Self.smvSelectColumns), a.name, a.version
+            SELECT \(Self.smvSelectColumns), a.name, a.version, act.plan AS plan
             FROM source_markdown_versions smv
             \(Self.smvBlobJoin)
             LEFT JOIN activities act ON act.id = smv.activity_id
@@ -5520,11 +5520,27 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
                 // this query (smvSelectColumns has no `name`/`version` col).
                 let agentName: String = (row["name"] as String?) ?? "unknown"
                 let modelVersion: String? = row["version"]
+                let package: ExtractionInstalledPackageProducer?
+                if let activityPlan: String? = row["plan"], let activityPlan {
+                    do {
+                        package = try ExtractionActivityPlanCodec.decode(activityPlan).producer.flatMap {
+                            if case .installedPackage(let value) = $0 { return value }
+                            return nil
+                        }
+                    } catch {
+                        DebugLog.store(
+                            "GRDBWikiStore.processedMarkdownAlternatives: invalid activity plan for markdown version \(version.id.rawValue): \(error)")
+                        package = nil
+                    }
+                } else {
+                    package = nil
+                }
                 return ExtractionAlternative(
                     version: version,
                     backendDisplayName: ExtractionAlternative.backendDisplayName(agentName: agentName),
                     agentName: agentName,
                     modelVersion: modelVersion,
+                    package: package,
                     charCount: version.content.count,
                     isActive: headID.map { $0 == version.id } ?? false
                 )
@@ -5662,6 +5678,21 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         return version
     }
 
+    /// Append one package-backed result with its exact revision and registration.
+    /// The tagged activity plan is authoritative. Legacy normalized columns keep
+    /// the package name and digest without presenting them as a model.
+    public func appendInstalledPackageMarkdown(
+        sourceID: SourceID, content: String,
+        package: ExtractionInstalledPackageProducer,
+        toolVersion: String? = nil, sourceVersionID: SourceVersionID? = nil,
+        note: String? = nil
+    ) throws -> SourceMarkdownVersion {
+        try appendDerivedMarkdown(
+            sourceID: sourceID, content: content, origin: .extraction,
+            producer: .installedPackage(package), providerID: nil, modelID: nil,
+            toolVersion: toolVersion, sourceVersionID: sourceVersionID, note: note)
+    }
+
     /// `db:`-taking HEAD read for use inside `mutate` (cannot call the public
     /// `processedMarkdownHead` — it re-enters `dbWriter.read` and deadlocks).
 
@@ -5748,7 +5779,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         case .backend:
             modelID = modelVersion.map(ModelID.init(rawValue:))
             toolVersion = nil
-        case .tool, .legacy:
+        case .tool, .legacy, .installedPackage:
             modelID = nil
             toolVersion = modelVersion
         }
@@ -10374,6 +10405,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             name = rawTechnique ?? ExtractionBackend.legacyAgentName
             version = nil
             externalRef = nil
+        case .installedPackage(let package):
+            name = "extractor-package:\(package.packageID)"
+            version = package.version
+            externalRef = package.digest
         }
         if let id = try String.fetchOne(
             db,
@@ -10416,6 +10451,19 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             if providerID != nil || modelID != nil {
                 throw AppendDerivedMarkdownError.providerFieldsUnsupportedForLocalTool
             }
+        case .installedPackage(let package):
+            if providerID != nil {
+                throw AppendDerivedMarkdownError.providerFieldsUnsupportedForLocalTool
+            }
+            guard package.packageID.isEmpty == false,
+                  package.version.isEmpty == false,
+                  package.digest.isEmpty == false,
+                  package.registrationID.rawValue.isEmpty == false,
+                  package.protocolRevision.rawValue > 0 else {
+                throw AppendDerivedMarkdownError.invalidInstalledPackageProducer
+            }
+            // The package may report model metadata. It is not a provider model
+            // and therefore does not use `modelID`.
         }
     }
 
@@ -10425,6 +10473,7 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         case .backend(let backend): return backend.rawValue
         case .tool(let tool): return tool.rawValue
         case .legacy(let rawTechnique): return rawTechnique
+        case .installedPackage(let package): return "extractor-package:\(package.packageID)"
         }
     }
 
@@ -11880,6 +11929,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         if case .backend = producer { isBackend = true } else { isBackend = false }
         let isTool: Bool
         if case .tool = producer { isTool = true } else { isTool = false }
+        let isInstalledPackage: Bool
+        if case .installedPackage = producer { isInstalledPackage = true } else { isInstalledPackage = false }
         let createdAt: Double = row["created_at"]
         let sourceVersion: String? = row["source_version_id"]
         return ExtractionProvenance(
@@ -11894,7 +11945,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             providerID: isBackend ? (plan?.providerID ?? providerRaw.map(ProviderID.init(rawValue:))) : nil,
             modelID: isBackend && origin == .extraction
                 ? (plan?.modelID ?? agentVersion.map(ModelID.init(rawValue:))) : nil,
-            toolVersion: isTool ? (plan?.toolVersion ?? agentVersion) : nil,
+            toolVersion: isTool || isInstalledPackage
+                ? (plan?.toolVersion ?? agentVersion) : nil,
             createdAt: Date(timeIntervalSince1970: createdAt),
             sourceVersionID: plan?.sourceVersionID ?? sourceVersion.map(SourceVersionID.init(rawValue:))
         )

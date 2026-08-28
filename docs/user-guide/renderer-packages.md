@@ -93,3 +93,9 @@ Revision 1 package bytes and hashes remain unchanged. The app grants only the ap
 The manifest role is one admission requirement. MIME matching, capabilities, byte limits, digests, exact versions, package state, and runtime resources must also pass.
 
 Repository agents and developers must use the [`renderer-package-maintainer`](../skills/renderer-package-maintainer/SKILL.md) workflow. They must validate a package before a user imports it.
+
+## Extractor packages are a separate system
+
+Renderer packages add read-only views for page content. [Extractor packages](extractor-packages.md) convert PDF and HTML sources to Markdown at ingestion.
+
+The two systems do not share an execution or security model. They use different manifest formats, different validation rules, and different catalogs. A renderer manifest is not an extractor manifest, and no package can act as both.

@@ -1,0 +1,39 @@
+{
+  "capabilities": [],
+  "displayName": "Fixture PDF Extractor",
+  "entryPoint": "bin/extractor",
+  "files": [
+    {
+      "digest": "0000000000000000000000000000000000000000000000000000000000000000",
+      "path": "bin/extractor"
+    }
+  ],
+  "launch": {
+    "mode": "direct"
+  },
+  "limits": {
+    "maximumDurationMilliseconds": 30000,
+    "maximumInputByteCount": 1048576,
+    "maximumMarkdownOutputByteCount": 2097152,
+    "maximumProgressEventCount": 100
+  },
+  "manifestRevision": 1,
+  "packageID": "org.example.fixture-pdf",
+  "protocolRevision": 1,
+  "registrations": [
+    {
+      "displayName": "Fixture PDF",
+      "filenameExtensions": [
+        "pdf"
+      ],
+      "id": "main",
+      "kinds": [
+        "pdf"
+      ],
+      "mimeTypes": [
+        "application/pdf"
+      ]
+    }
+  ],
+  "version": "1.0.0"
+}

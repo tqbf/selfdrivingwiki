@@ -14,7 +14,6 @@ struct ExtractionPluginBootTests {
         let configuration = ExtractionConfig()
         let entries = [
             Entry(id: EntryID("extraction"), plugin: ExtractionPlugin.id),
-            Entry(id: EntryID("pdf2md"), plugin: Pdf2mdExtractionPlugin.id),
             Entry(id: EntryID("acp"), plugin: ACPExtractionPlugin.id),
             Entry(
                 id: EntryID("anthropic"),
@@ -42,11 +41,9 @@ struct ExtractionPluginBootTests {
         let booted = try await CordisBoot.boot(CordisBoot.Options(
             catalog: try PluginCatalog([
                 ExtractionPlugin.definition,
-                Pdf2mdExtractionPlugin.definition { FixturePDFExtractor() },
                 ACPExtractionPlugin.definition(
                     configuration: configuration,
-                    resolve: { _ in FixturePDFExtractor() },
-                    fallback: { FixturePDFExtractor() }),
+                    resolve: { _ in FixturePDFExtractor() }),
                 AnthropicExtractionPlugin.definition(readCredential: { _ in nil }, fetcher: http),
                 GeminiExtractionPlugin.definition(readCredential: { _ in nil }, fetcher: http),
                 DoclingExtractionPlugin.definition(readCredential: { _ in nil }, fetcher: http),
@@ -65,14 +62,13 @@ struct ExtractionPluginBootTests {
             DefuddleExtractionPlugin.key,
             DoclingExtractionPlugin.key,
             GeminiExtractionPlugin.key,
-            Pdf2mdExtractionPlugin.key,
             RSSPodcastTranscriptPlugin.key,
             YouTubeTranscriptPlugin.key,
         ].sorted { $0.description < $1.description })
 
         try await booted.tree.update(to: entries.filter { $0.id != EntryID("gemini") })
         #expect(await registry.resolve(GeminiExtractionPlugin.key) == nil)
-        #expect(await registry.resolve(Pdf2mdExtractionPlugin.key) != nil)
+        #expect(await registry.resolve(ACPExtractionPlugin.key) != nil)
 
         try await booted.shutdown()
     }

@@ -42,9 +42,10 @@ struct SourceDetailView: View {
     /// against each other) and to mirror this file's id into `extractingSourceIDs`
     /// so the sidebar row labels it "Extracting…".
     let launcher: AgentLauncher
-    /// Resolves the selected extraction backend (local pdf2md / Claude / Docling
-    /// Serve) for the standalone Extract button.
+    /// Resolves the selected extraction backend for the standalone Extract
+    /// button.
     let extractionCoordinator: ExtractionCoordinator
+    /// Resolves reviewed HTML package adapters for this process.
     let queueEngine: any QueueEngineClient
     let extractionProvider: any QueueExtractionProvider
     let fileProvider: FileProviderFacade
@@ -1468,18 +1469,30 @@ struct SourceDetailView: View {
     /// `seedPdfMarkdown` — generalizing the queue is a deferred sub-project
     /// per the parent plan's "Out of scope" section). Dispatches to
     /// `WikiStoreModel.extractHtml(for:backend:)`, which reads the source's
-    /// HTML bytes, runs the chosen extractor (defuddle or
-    /// `TagBasedHtmlExtractor`), and writes the result via
+    /// HTML bytes, resolves the reviewed package extractor, and writes the
+    /// result via
     /// `appendProcessedMarkdown` (same write path as `enrichWithDefuddle`).
-    /// Uses the configured `store.htmlBackend` if set; otherwise defaults to
-    /// `.defuddle` (which degrades to tag-based when the binary is missing).
+    /// Uses the configured `store.htmlBackend` if set. Otherwise it uses
+    /// `.defuddle`, with tag-based fallback when the package is unavailable.
     private func runHtmlExtraction() async {
         isExtracting = true
         defer {
             isExtracting = false
         }
         let backend = store.htmlBackend ?? .defuddle
-        if let head = await store.extractHtml(for: file.id, backend: backend) {
+        let extractor: (any HtmlMarkdownExtractor)?
+        do {
+            extractor = try await extractionCoordinator.prepareHTML(backendOverride: backend)
+        } catch {
+            DebugLog.extraction(
+                "HTML extractor preparation failed; using tag-based fallback")
+            extractor = nil
+        }
+        if let head = await store.extractHtml(
+            for: file.id,
+            backend: backend,
+            extractor: extractor)
+        {
             headVersion = head
         }
     }
@@ -1674,7 +1687,7 @@ struct SourceDetailView: View {
                               || isThisFileExtracting
                               || tracker.isSlotBusyForOtherSource(file.id))
                 } else {
-                    ForEach(ExtractionBackend.allCases, id: \.self) { backend in
+                    ForEach(ExtractionBackend.userSelectableCases, id: \.self) { backend in
                         Button(backend.displayName) {
                             Task {
                                 await runReExtraction(with: backend)

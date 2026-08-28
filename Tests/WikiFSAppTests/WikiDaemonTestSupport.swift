@@ -32,8 +32,7 @@ extension WikiDaemon {
         registryPersistence: DaemonRegistryPersistence = DaemonRegistryPersistence()
     ) async throws -> WikiDaemon {
         let owner = try DaemonProcessProfileOwner.production(
-            containerDirectory: containerDirectory,
-            makeLocalExtractor: { await MainActor.run { UnavailablePdf2MarkdownExtractor() } })
+            containerDirectory: containerDirectory)
         let daemon = WikiDaemon(
             containerDirectory: containerDirectory,
             profileOwner: owner,

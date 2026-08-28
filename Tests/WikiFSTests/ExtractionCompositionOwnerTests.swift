@@ -113,6 +113,12 @@ private struct RecordingExtractionServices: ExtractionServices {
             backend: backendOverride ?? .localPdf2md,
             modelVersion: nil)
     }
+
+    func prepareHTML(
+        backendOverride: HtmlExtractionBackend?
+    ) async throws -> any HtmlMarkdownExtractor {
+        TagBasedHtmlExtractor()
+    }
 }
 
 private struct RecordingExtractor: MarkdownExtractor {

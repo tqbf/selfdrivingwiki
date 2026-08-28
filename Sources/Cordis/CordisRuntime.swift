@@ -149,6 +149,7 @@ internal actor CordisRuntime {
         guard let context = contexts[contextID] else {
             throw CordisError.disposedContext(contextID)
         }
+        let scopedComponentCount = components.values.count { $0.contextID == contextID }
         let activeComponentCount = components.values.count {
             $0.contextID == contextID && $0.state.kind != .disposed
         }
@@ -164,7 +165,8 @@ internal actor CordisRuntime {
             parentDescriptor: context.parentID.flatMap { contexts[$0]?.descriptor },
             lifecycle: context.lifecycle.scopeState,
             activeChildCount: context.childIDs.count,
-            activeRegistrationCount: activeRegistrationCount)
+            activeRegistrationCount: activeRegistrationCount,
+            retainedComponentRecordCount: scopedComponentCount)
     }
 
     private func validate(descriptor: ScopeDescriptor?, parentID: ContextID) throws {

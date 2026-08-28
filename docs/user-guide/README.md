@@ -18,3 +18,4 @@ Use this guide to learn the Self Driving Wiki interface and its main workflows.
 ## Settings and extensions
 
 - [Renderer packages](renderer-packages.md)
+- [Extractor packages](extractor-packages.md)

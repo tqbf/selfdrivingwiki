@@ -68,4 +68,48 @@ struct ExtractionActivityPlanCodecTests {
         let decoded = try ExtractionActivityPlanCodec.decode(ExtractionActivityPlanCodec.encode(value))
         #expect(decoded.producer == .tool(.bytelessOEmbedSynthetic))
     }
+
+    @Test func installedPackageRoundTripsExactIdentityAndReportedMetadata() throws {
+        let package = ExtractionInstalledPackageProducer(
+            revision: ExtractorPackageRevisionID(
+                packageID: try ExtractorPackageID(validating: "org.example.extractor"),
+                version: try ExtractorPackageVersion(validating: "2.3.4"),
+                digest: try ExtractorPackageDigest(hex: String(repeating: "ab", count: 32))),
+            registrationID: try ExtractorRegistrationID(validating: "document"),
+            protocolRevision: .v1,
+            reportedMetadata: try ExtractorReportedMetadata(
+                toolName: "example", toolVersion: "4.5", modelName: "model"))
+        let value = ExtractionActivityPlan(
+            producer: .installedPackage(package), origin: .extraction,
+            toolVersion: "4.5", note: "package extraction")
+        let decoded = try ExtractionActivityPlanCodec.decode(
+            ExtractionActivityPlanCodec.encode(value))
+        #expect(decoded.producer == .installedPackage(package))
+        #expect(decoded.toolVersion == "4.5")
+        #expect(decoded.note == "package extraction")
+    }
+
+    @Test func unknownProducerKindPreservesEveryValidOuterField() throws {
+        let json = #"{"version":1,"producer":{"kind":"future-package","payload":{"x":1}},"origin":"extraction","providerID":"provider","modelID":"model","toolVersion":"tool-1","sourceVersionID":"source-v1","note":"keep me"}"#
+        let decoded = try ExtractionActivityPlanCodec.decode(json)
+        #expect(decoded.producer == nil)
+        #expect(decoded.origin == .extraction)
+        #expect(decoded.providerID == ProviderID(rawValue: "provider"))
+        #expect(decoded.modelID == ModelID(rawValue: "model"))
+        #expect(decoded.toolVersion == "tool-1")
+        #expect(decoded.sourceVersionID == SourceVersionID(rawValue: "source-v1"))
+        #expect(decoded.note == "keep me")
+    }
+
+    @Test func malformedInstalledPackagePreservesEveryValidOuterField() throws {
+        let json = #"{"version":1,"producer":{"kind":"installedPackage","installedPackage":{"revision":{"packageID":"bad"}}},"origin":"extraction","providerID":"provider","modelID":"model","toolVersion":"tool-1","sourceVersionID":"source-v1","note":"keep me"}"#
+        let decoded = try ExtractionActivityPlanCodec.decode(json)
+        #expect(decoded.producer == nil)
+        #expect(decoded.origin == .extraction)
+        #expect(decoded.providerID == ProviderID(rawValue: "provider"))
+        #expect(decoded.modelID == ModelID(rawValue: "model"))
+        #expect(decoded.toolVersion == "tool-1")
+        #expect(decoded.sourceVersionID == SourceVersionID(rawValue: "source-v1"))
+        #expect(decoded.note == "keep me")
+    }
 }

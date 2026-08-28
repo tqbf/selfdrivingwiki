@@ -23,6 +23,9 @@ public struct ExtractionAlternative: Identifiable, Hashable, Sendable {
     public let modelVersion: String?
     /// Character count of the resolved body (`version.content.count`).
     public let charCount: Int
+    /// Exact package identity when this alternative came from an installed
+    /// extractor package. Package versions are not model versions.
+    public let package: ExtractionInstalledPackageProducer?
     /// `true` when this version is the source's active HEAD (ref→else-MAX).
     public let isActive: Bool
 
@@ -33,6 +36,7 @@ public struct ExtractionAlternative: Identifiable, Hashable, Sendable {
         backendDisplayName: String,
         agentName: String,
         modelVersion: String?,
+        package: ExtractionInstalledPackageProducer? = nil,
         charCount: Int,
         isActive: Bool
     ) {
@@ -40,6 +44,7 @@ public struct ExtractionAlternative: Identifiable, Hashable, Sendable {
         self.backendDisplayName = backendDisplayName
         self.agentName = agentName
         self.modelVersion = modelVersion
+        self.package = package
         self.charCount = charCount
         self.isActive = isActive
     }

@@ -15,7 +15,7 @@ import WikiFSEngine
 /// `@unchecked Sendable` (all stored properties are immutable `let`s of
 /// `Sendable` types). It hops to the main actor only when reading
 /// `ExtractionCoordinator` state.
-final class DaemonQueueExtractionProvider: QueueExtractionProvider {
+final class DaemonQueueExtractionProvider: InstalledPackageExtractionPersisting {
     private let extractionServices: any ExtractionServices
     private let storeResolver: @Sendable (WikiID) -> GRDBWikiStore?
 
@@ -113,7 +113,8 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
             pdfData: bytes,
             filename: source.filename,
             backend: preparation.backend,
-            modelVersion: preparation.modelVersion
+            modelVersion: preparation.modelVersion,
+            packageProvenance: preparation.packageProvenance
         )
     }
 
@@ -125,6 +126,43 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
         modelVersion: String?,
         technique: String?
     ) async throws {
+        try await persistExtractionImpl(
+            wikiID: wikiID,
+            sourceID: sourceID,
+            markdown: markdown,
+            backend: backend,
+            modelVersion: modelVersion,
+            technique: technique,
+            packageProvenance: nil)
+    }
+
+    func persistInstalledPackageExtraction(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        markdown: String,
+        backend: ExtractionBackend,
+        modelVersion: String?,
+        packageProvenance: ExtractionInstalledPackageProducer?
+    ) async throws {
+        try await persistExtractionImpl(
+            wikiID: wikiID,
+            sourceID: sourceID,
+            markdown: markdown,
+            backend: backend,
+            modelVersion: modelVersion,
+            technique: nil,
+            packageProvenance: packageProvenance)
+    }
+
+    private func persistExtractionImpl(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        markdown: String,
+        backend: ExtractionBackend,
+        modelVersion: String?,
+        technique: String?,
+        packageProvenance: ExtractionInstalledPackageProducer?
+    ) async throws {
         guard let store = storeResolver(wikiID) else {
             DebugLog.extraction("DaemonQueueExtractionProvider: persistExtraction — no store for wikiID=\(wikiID.rawValue)")
             return
@@ -135,6 +173,12 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
                     sourceID: sourceID, content: markdown, origin: .transcript,
                     producer: .tool(Self.transcriptTool(for: technique)), providerID: nil,
                     modelID: nil, toolVersion: nil, sourceVersionID: nil, note: nil)
+            })
+        } else if let packageProvenance {
+            _ = DebugLog.trying("appendInstalledPackageMarkdown", operation: {
+                try store.appendInstalledPackageMarkdown(
+                    sourceID: sourceID, content: markdown, package: packageProvenance,
+                    toolVersion: modelVersion, sourceVersionID: nil, note: nil)
             })
         } else {
             _ = DebugLog.trying("recordMarkdownExtraction", operation: {

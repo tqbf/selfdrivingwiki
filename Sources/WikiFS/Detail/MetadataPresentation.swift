@@ -287,6 +287,7 @@ enum SourceMetadataProjection {
         case .backend(let backend): return backend.rawValue
         case .tool(let tool): return tool.rawValue
         case .legacy(let rawTechnique): return rawTechnique
+        case .installedPackage(let package): return package.packageID
         }
     }
 }

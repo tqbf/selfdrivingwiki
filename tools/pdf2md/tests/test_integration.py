@@ -49,9 +49,7 @@ class TestCLIStdout:
         _pdf2md.main(argv=[str(minimal_pdf)])
         stdout_content = capsys.readouterr().out
 
-        assert stdout_content == file_content, (
-            "stdout and --output must produce identical markdown"
-        )
+        assert stdout_content == file_content, "stdout and --output must produce identical markdown"
 
     def test_json_to_stdout(self, minimal_pdf, capsys):
         """--json writes metadata to stdout (no markdown)."""

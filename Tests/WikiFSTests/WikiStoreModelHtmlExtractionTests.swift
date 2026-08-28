@@ -11,9 +11,8 @@ import Testing
 /// AC.13 from `plans/extraction-framework-pr3.md`:
 /// - AC.5: tag-based extraction stamps the matching technique
 ///   (`"html-to-markdown"`) and produces non-empty markdown.
-/// - AC.6: defuddle extraction without an injected `htmlMarkdownExtractor`
-///   degrades to tag-based (same fallback semantics as
-///   `FormatMaterializer.enrich` at ingest) rather than silently returning nil.
+/// - AC.6: Defuddle extraction without a reviewed package degrades to
+///   tag-based extraction rather than silently returning nil.
 /// - AC.7: re-extraction appends a coexisting alternative
 ///   (`appendProcessedMarkdown` always appends — first version is HEAD by the
 ///   default-active rule, later versions ride as alternatives until nominated).
@@ -104,29 +103,18 @@ struct WikiStoreModelHtmlExtractionTests {
         #expect(headFromStore?.id == head.id)
     }
 
-    // MARK: - AC.6 — defuddle fallback when no extractor is injected
+    // MARK: - AC.6 — Defuddle fallback when the reviewed package is unavailable
 
-    @Test func extractHtmlWithDefuddleDegradesToTagBasedWhenExtractorNotInjected() async throws {
-        // No `htmlMarkdownExtractor` injection — the model's `nil` represents
-        // CI / clean dev before `make build` (where the AppKit-coupled
-        // `LocalDefuddleExtractor` in the WikiFS app target can't be linked).
-        // The defuddle branch must degrade to tag-based (same fallback
-        // semantics as `FormatMaterializer.enrich`) rather than silently
-        // returning nil — so the user always gets a markdown version on Extract.
+    @Test func extractHtmlWithDefuddleDegradesToTagBasedWhenPackageUnavailable() async throws {
         let (store, model, sourceID) = try modelWithHTMLSource()
-        #expect(model.htmlMarkdownExtractor == nil,
-               "test precondition: no extractor injected")
 
         let version = await model.extractHtml(for: sourceID, backend: .defuddle)
 
         let head = try #require(version)
         #expect(head.origin == .extraction)
-        // Degrade-to-tag-based: the defuddle path failed (no extractor) and
-        // the call fell through to `TagBasedHtmlExtractor`, which stamps
-        // "html-to-markdown" — NOT "defuddle".
         #expect(head.technique == "html-to-markdown")
         #expect(!head.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-        _ = store  // silence unused-binding warning
+        _ = store
     }
 
     // MARK: - AC.7 — re-extract appends a coexisting alternative

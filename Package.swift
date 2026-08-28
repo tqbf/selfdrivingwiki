@@ -105,6 +105,18 @@ let package = Package(
             path: "Sources/DynamicRendererPRSeriesAudit",
             swiftSettings: strictSwiftSettings
         ),
+        // No-dependency process fixture for Phase 0 extractor lifecycle tests.
+        .executableTarget(
+            name: "ExtractorProcessFixture",
+            path: "Sources/ExtractorProcessFixture",
+            swiftSettings: strictSwiftSettings
+        ),
+        // Protocol revision-1 fixture for managed extractor process tests.
+        .executableTarget(
+            name: "ManagedExtractorFixture",
+            path: "Sources/ManagedExtractorFixture",
+            swiftSettings: strictSwiftSettings
+        ),
         // Development-only validator for local renderer package authoring. The
         // core owns argument parsing, isolated validation roots, and cleanup;
         // the executable is a thin stdout/stderr process shell.
@@ -124,6 +136,26 @@ let package = Package(
             name: "RendererPackageToolTests",
             dependencies: ["RendererPackageToolCore", "RendererPackageTool"],
             path: "Tests/RendererPackageToolTests",
+            swiftSettings: strictSwiftSettings
+        ),
+        // Development-only validator and protocol fixture checker for local
+        // extractor package authoring. The tool never executes package code.
+        .target(
+            name: "ExtractorPackageToolCore",
+            dependencies: ["WikiFSCore"],
+            path: "Sources/ExtractorPackageToolCore",
+            swiftSettings: strictSwiftSettings
+        ),
+        .executableTarget(
+            name: "extractor-package-tool",
+            dependencies: ["ExtractorPackageToolCore"],
+            path: "Sources/ExtractorPackageTool",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "ExtractorPackageToolTests",
+            dependencies: ["ExtractorPackageToolCore", "WikiFSTypes"],
+            path: "Tests/ExtractorPackageToolTests",
             swiftSettings: strictSwiftSettings
         ),
         .testTarget(
@@ -315,6 +347,14 @@ let package = Package(
         // forbids Metal on macOS 26). Core reaches the implementation via the
         // injectable EmbeddingService.miniLMFactory seam; the app installs it at
         // launch through EmbedderBootstrap. Mirrors the PDFKit isolation.
+        // App-owned extractor catalog mutation authority. The wikid daemon and
+        // CLI targets do not link this module and can only use the Core reader.
+        .target(
+            name: "WikiFSExtractorStore",
+            dependencies: ["WikiFSCore", "WikiFSTypes", "CRendererPackageMove"],
+            path: "Sources/WikiFSExtractorStore",
+            swiftSettings: strictSwiftSettings
+        ),
         .target(
             name: "WikiFSMLX",
             dependencies: [
@@ -352,6 +392,7 @@ let package = Package(
             dependencies: [
                 "Cordis",
                 "WikiFSCore",
+                "WikiFSExtractorStore",
                 "WikiFSCodeHighlighting",
                 // The XPC contract — the app implements WikiDaemonEventSink
                 // (DaemonQueueEventSink). Empty on Linux; harmless there.
@@ -418,6 +459,14 @@ let package = Package(
             name: "ProviderConfigMutationHelper",
             dependencies: ["WikiFSCore"],
             path: "Sources/ProviderConfigMutationHelper",
+            swiftSettings: strictSwiftSettings
+        ),
+        // Test-only process helper for extractor package store lock and
+        // read-only daemon boundary coverage. It is never bundled.
+        .executableTarget(
+            name: "ExtractorPackageStoreProcessHelper",
+            dependencies: ["WikiFSCore", "WikiFSExtractorStore"],
+            path: "Sources/ExtractorPackageStoreProcessHelper",
             swiftSettings: strictSwiftSettings
         ),
         // wikid — the bundled XPC service (Contents/XPCServices/wikid.xpc). It
@@ -501,7 +550,7 @@ let package = Package(
         // ACP wiring (pure), etc. These run on both macOS and Linux (#754).
         .testTarget(
             name: "WikiFSCoreTests",
-            dependencies: ["Cordis", "CordisLoader", "WikiFSCore", "WikiCtlCore", "ProviderConfigMutationHelper",
+            dependencies: ["Cordis", "CordisLoader", "WikiFSCore", "WikiFSExtractorStore", "WikiCtlCore", "ProviderConfigMutationHelper", "ExtractorPackageStoreProcessHelper",
                            // WikiFSEngine is macOS-only at build time because it
                            // depends on the `ACP` product (macOS-only). On Linux
                            // the test target still builds — the ACP-backed tests
@@ -530,6 +579,7 @@ let package = Package(
             name: "WikiFSTypesRendererTests",
             dependencies: ["WikiFSTypes"],
             path: "Tests/WikiFSTypesRendererTests",
+            resources: [.copy("Fixtures")],
             swiftSettings: strictSwiftSettings
         ),
         // Signal-target validation tests compile against the pure validation

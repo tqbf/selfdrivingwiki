@@ -136,6 +136,16 @@ struct CordisSourcePolicyTests {
             // Process-owned runtime invariant composition. This file keeps
             // diagnostic child contexts private from application facades.
             "Sources/WikiFSEngine/RuntimeInvariantCoordinator.swift",
+            // Extractor package composition boundary. These three files are the
+            // only place a validated package revision becomes a host-generated
+            // Cordis plugin: the factory builds trusted definitions from
+            // manifest data, the reconciler maps durable catalog generations
+            // onto the dynamic host, and the process context owns the one
+            // registry, host, and executor per process. Package code never
+            // reaches these files and never receives a context.
+            "Sources/WikiFSEngine/ExtractorPackagePluginDefinitionFactory.swift",
+            "Sources/WikiFSEngine/ExtractorPackagePluginReconciler.swift",
+            "Sources/WikiFSEngine/ProcessExtractionContext.swift",
             "Sources/WikiCtlCore/CLITantivyLegResolver.swift",
             "Sources/WikiCtlCore/CLIPluginCatalog.swift",
             // Phase 5a diagnostic composition boundary: resolves loader data

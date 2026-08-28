@@ -9,6 +9,11 @@ public enum ExtractionRuntimeFactoryError: Error, Equatable, Sendable {
     case assemblyAndCleanupFailed(assembly: CordisFailure, cleanup: CordisFailure)
 }
 
+/// Test-only compatibility assembly for legacy callers. Production profiles use
+/// `ProcessExtractionContext` and `ProcessExtractionServices` instead.
+///
+/// The source audit in `ExtractionBackendAuthorityAuditTests` prevents shipping
+/// targets from constructing this compatibility assembly.
 public struct ExtractionRuntimeFactory: Sendable {
     public typealias BackendResolver = ExtractionRuntime.BackendResolver
 
@@ -17,7 +22,6 @@ public struct ExtractionRuntimeFactory: Sendable {
         case credentialReader
         case acpResolver
         case httpFetcher
-        case localExtractorFactory
         case backendResolver
         case runtime
         case services
@@ -32,8 +36,6 @@ public struct ExtractionRuntimeFactory: Sendable {
             label: "extraction.acp-resolver")
         static let httpFetcher = ServiceKey<any HTTPRequestFetcher>(
             label: "extraction.http-fetcher")
-        static let localExtractorFactory = ServiceKey<ExtractionPluginFactory.LocalExtractor>(
-            label: "extraction.local-extractor-factory")
         static let backendResolver = ServiceKey<BackendResolver>(
             label: "extraction.backend-resolver")
         static let runtime = ServiceKey<ExtractionRuntime>(
@@ -46,20 +48,16 @@ public struct ExtractionRuntimeFactory: Sendable {
     public let readCredential: ExtractionPluginFactory.CredentialReader
     public let resolveACP: ExtractionPluginFactory.ACPResolver
     public let httpFetcher: any HTTPRequestFetcher
-    public let makeLocalExtractor: ExtractionPluginFactory.LocalExtractor
-
     public init(
         readConfiguration: @escaping ExtractionRuntime.ConfigurationReader,
         readCredential: @escaping ExtractionPluginFactory.CredentialReader,
         resolveACP: @escaping ExtractionPluginFactory.ACPResolver,
-        httpFetcher: any HTTPRequestFetcher,
-        makeLocalExtractor: @escaping ExtractionPluginFactory.LocalExtractor
+        httpFetcher: any HTTPRequestFetcher
     ) {
         self.readConfiguration = readConfiguration
         self.readCredential = readCredential
         self.resolveACP = resolveACP
         self.httpFetcher = httpFetcher
-        self.makeLocalExtractor = makeLocalExtractor
     }
 
     public func assemble() async throws -> ExtractionRuntimeHandle {
@@ -142,14 +140,6 @@ public struct ExtractionRuntimeFactory: Sendable {
                 provisions: [ServiceDependency(Keys.httpFetcher)]) { activation in
                     _ = try await activation.supply(Keys.httpFetcher, value: httpFetcher)
                 }
-        case .localExtractorFactory:
-            return try ComponentDefinition(
-                label: component.rawValue,
-                provisions: [ServiceDependency(Keys.localExtractorFactory)]) { activation in
-                    _ = try await activation.supply(
-                        Keys.localExtractorFactory,
-                        value: makeLocalExtractor)
-                }
         case .backendResolver:
             return try ComponentDefinition(
                 label: component.rawValue,
@@ -157,30 +147,22 @@ public struct ExtractionRuntimeFactory: Sendable {
                     ServiceDependency(Keys.credentialReader),
                     ServiceDependency(Keys.acpResolver),
                     ServiceDependency(Keys.httpFetcher),
-                    ServiceDependency(Keys.localExtractorFactory),
                 ],
                 provisions: [ServiceDependency(Keys.backendResolver)]) { activation in
                     let readCredential = try await activation.require(Keys.credentialReader)
                     let resolveACP = try await activation.require(Keys.acpResolver)
                     let fetcher = try await activation.require(Keys.httpFetcher)
-                    let makeLocalExtractor = try await activation.require(Keys.localExtractorFactory)
                     let resolver: BackendResolver = { configuration, backend in
                         switch backend {
                         case .localPdf2md:
-                            return ExtractionPreparation(
-                                extractor: await makeLocalExtractor(),
-                                backend: backend,
-                                modelVersion: nil)
+                            throw ExtractionServicesError.unavailable
                         case .acp:
-                            if let extractor = resolveACP(configuration) {
-                                return ExtractionPreparation(
-                                    extractor: extractor,
-                                    backend: backend,
-                                    modelVersion: nil)
+                            guard let extractor = resolveACP(configuration) else {
+                                DebugLog.config("ExtractionRuntime: .acp backend has no provider")
+                                throw ExtractionServicesError.unavailable
                             }
-                            DebugLog.config("ExtractionRuntime: .acp backend but no provider resolvable — falling back to local pdf2md")
                             return ExtractionPreparation(
-                                extractor: await makeLocalExtractor(),
+                                extractor: extractor,
                                 backend: backend,
                                 modelVersion: nil)
                         case .anthropic:

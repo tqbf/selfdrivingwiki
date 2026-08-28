@@ -91,5 +91,6 @@ public enum CordisError: Error, Equatable, Sendable {
     case eventModeMismatch(EventDescriptor)
     case unknownListener(ListenerID)
     case duplicatePlugin(PluginID)
+    case reservedPluginID(PluginID)
     case invalidConfig(pluginID: PluginID, entryID: String?, issues: [ConfigIssue])
 }
