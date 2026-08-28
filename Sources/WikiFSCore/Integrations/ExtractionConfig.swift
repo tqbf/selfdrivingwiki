@@ -69,12 +69,13 @@ public struct ExtractionConfig: JSONSidecarConfig {
     /// (`ExtractorRouteID` = kind + normalized MIME). A record for a canonical
     /// route takes precedence over the matching legacy `pdfExtractor` /
     /// `htmlExtractor` field; legacy fields remain the fallback when the record
-    /// is absent, so pre-route config files resolve exactly as before. Writes
-    /// through `setExtractorSelection(_:for:)` dual-write the matching legacy
-    /// field, keeping old readers truthful. Persisted as a deterministically
-    /// sorted array (never a string-keyed dictionary); a missing key decodes to
-    /// an empty list.
-    public var routeExtractors: [ExtractorRouteSelectionRecord]
+    /// is absent, so pre-route config files resolve exactly as before.
+    /// Mutation flows only through `setExtractorSelection(_:for:)` (and the
+    /// normalizing initializer/decoder), keeping the array sorted and
+    /// duplicate-free at all times. Persisted as a deterministically sorted
+    /// array (never a string-keyed dictionary); a missing key decodes to an
+    /// empty list.
+    public private(set) var routeExtractors: [ExtractorRouteSelectionRecord]
 
     /// The config's JSON filename inside the App Group container.
     public static let fileName = "extraction-config.json"
@@ -237,9 +238,10 @@ public struct ExtractionConfig: JSONSidecarConfig {
     /// Resilient route-record decode, matching the config's degrade-don't-throw
     /// philosophy: a missing key decodes to an empty list, a wholly malformed
     /// array degrades to empty through the logged decode seam, a malformed
-    /// single record is dropped with one logged diagnostic, and duplicate route
-    /// records are resolved deterministically (canonically-greatest record wins,
-    /// independent of file order) with one bounded diagnostic.
+    /// single record is skipped so later valid records still decode, and
+    /// duplicate route records are resolved deterministically
+    /// (canonically-greatest record wins, independent of file order) with one
+    /// bounded diagnostic.
     private static func decodedRouteRecords(
         from container: KeyedDecodingContainer<CodingKeys>
     ) -> [ExtractorRouteSelectionRecord] {
@@ -248,15 +250,19 @@ public struct ExtractionConfig: JSONSidecarConfig {
             return []
         }
         var records: [ExtractorRouteSelectionRecord] = []
-        // A conforming coder advances an unkeyed container even when a decode
-        // throws, so each failed record is dropped and iteration continues.
-        // Bound consecutive failures anyway: a nonconforming coder that leaves
-        // the index in place must degrade to a truncated decode, never hang.
+        // A decoder is not required to advance an unkeyed container when a
+        // decode throws — Foundation's JSONDecoder leaves the index in place —
+        // so each failed record is explicitly consumed before continuing.
+        // Bound consecutive failures anyway: a coder that cannot even consume
+        // an arbitrary JSON value must degrade to a truncated decode, never hang.
         var consecutiveFailures = 0
         while array.isAtEnd == false {
             let countBefore = records.count
             if let record = DebugLog.trying("init(from:) decode routeExtractors record", operation: { try array.decode(ExtractorRouteSelectionRecord.self) }) {
                 records.append(record)
+            } else if DebugLog.trying("init(from:) consume malformed routeExtractors record", operation: { try array.decode(AnyJSONValue.self) }) != nil {
+                consecutiveFailures = 0
+                continue
             }
             if records.count == countBefore {
                 consecutiveFailures += 1
@@ -283,5 +289,32 @@ public struct ExtractionConfig: JSONSidecarConfig {
     /// decode to `JSONSidecarConfig.load(from:)` and supplies the default config.
     public static func load(from directory: URL) -> ExtractionConfig {
         load(from: directory) ?? ExtractionConfig()
+    }
+}
+
+/// A `Decodable` that accepts any JSON value. Used only to consume a malformed
+/// array element so decoding can continue past it — a failed decode does not
+/// advance an unkeyed container's index. Each `try?` here is one attempt of
+/// the type ladder, not error swallowing: the final fallback rethrows.
+private struct AnyJSONValue: Decodable {
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() { return }
+        // The type ladder below intentionally ignores each failed attempt: an
+        // unmatched type is expected while probing for the value's shape, and
+        // the final fallback rethrows. Ignoring here is genuinely correct.
+        // swiftlint:disable:next silent_try_optional
+        if (try? container.decode([AnyJSONValue].self)) != nil { return }
+        // swiftlint:disable:next silent_try_optional
+        if (try? container.decode([String: AnyJSONValue].self)) != nil { return }
+        // swiftlint:disable:next silent_try_optional
+        if (try? container.decode(String.self)) != nil { return }
+        // swiftlint:disable:next silent_try_optional
+        if (try? container.decode(Double.self)) != nil { return }
+        // swiftlint:disable:next silent_try_optional
+        if (try? container.decode(Bool.self)) != nil { return }
+        throw DecodingError.dataCorrupted(.init(
+            codingPath: container.codingPath,
+            debugDescription: "unsupported JSON value"))
     }
 }

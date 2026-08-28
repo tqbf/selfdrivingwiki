@@ -448,6 +448,39 @@ struct ExtractionConfigTests {
         #expect(malformedRecord.extractorSelection(for: .canonicalPDF) == .builtIn(.pdf(.acp)))
     }
 
+    /// A malformed record must not swallow later valid records: Foundation's
+    /// JSONDecoder leaves an unkeyed container's index in place after a failed
+    /// decode, so the decode seam consumes the bad element and continues.
+    @Test func malformedRecordDoesNotTruncateLaterValidRecords() throws {
+        let builtInRecord = #"""
+        {"route":{"kind":"pdf","mimeType":"application/pdf"},"extractor":{"kind":"builtIn","builtIn":{"kind":"pdf","backend":"acp"}}}
+        """#
+        let htmlRecord = #"""
+        {"route":{"kind":"html","mimeType":"text/html"},"extractor":{"kind":"builtIn","builtIn":{"kind":"html","backend":"tagBased"}}}
+        """#
+        let malformed = #"{"route":{"kind":"pdf","mimeType":"bogus"}}"#
+
+        // Malformed record first.
+        let badFirst = try JSONDecoder().decode(
+            ExtractionConfig.self,
+            from: Data(#"{"backend":"gemini","routeExtractors":[\#(malformed),\#(builtInRecord),\#(htmlRecord)]}"#.utf8))
+        #expect(badFirst.routeExtractors.count == 2)
+        #expect(badFirst.extractorSelection(for: .canonicalPDF) == .builtIn(.pdf(.acp)))
+        #expect(badFirst.extractorSelection(for: .canonicalHTML) == .builtIn(.html(.tagBased)))
+
+        // Malformed record in the middle.
+        let badMiddle = try JSONDecoder().decode(
+            ExtractionConfig.self,
+            from: Data(#"{"backend":"gemini","routeExtractors":[\#(builtInRecord),\#(malformed),\#(htmlRecord)]}"#.utf8))
+        #expect(badMiddle == badFirst)
+
+        // Multiple malformed records still terminate.
+        let allBad = try JSONDecoder().decode(
+            ExtractionConfig.self,
+            from: Data(#"{"backend":"gemini","routeExtractors":[\#(malformed),\#(malformed)]}"#.utf8))
+        #expect(allBad.routeExtractors.isEmpty)
+    }
+
     /// AC.4: PDF/HTML resolution produces the same decision whether a selection
     /// is expressed as a legacy reference field or an equivalent route record,
     /// and a route record overrides a conflicting legacy field. Unavailable
