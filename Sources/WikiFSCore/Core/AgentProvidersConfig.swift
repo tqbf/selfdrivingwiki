@@ -177,7 +177,11 @@ private actor AgentProvidersConfigInProcessGate {
 /// **Secrets:** the API key for an ACP provider lives in the Keychain via
 /// `ACPCredentialStore`, keyed by provider `id` — it is NEVER in this JSON file.
 /// This mirrors the existing `ACPAgentConfig` (plain prefs) +
-/// `KeychainACPCredentialStore` (secret) split.
+/// `KeychainACPCredentialStore` (secret) split. #1159 extends this to the
+/// provider's `env` map: known API-key variables are stripped at decode and
+/// at every write boundary (`ProviderSecretEnvironmentVariable`), migrate to
+/// Keychain via `AgentProviderCredentialMigrator`, and resolve into spawn
+/// hints only in the trusted host (see `plans/credential-service.md`).
 ///
 /// **Per-provider model discovery (#329):** two extra secrets-free caches live
 /// here so the chat-composer model picker can list each provider's models and
@@ -344,11 +348,18 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
     /// - At most one `isDefault`: the FIRST one keeps it, the rest are
     ///   demoted.
     /// - If none is default, the FIRST ENABLED provider is promoted.
+    /// - Known secret environment variables (`ProviderSecretEnvironmentVariable`)
+    ///   are stripped from every provider's `env` (#1159): this is the decode
+    ///   + value-mutation funnel, so a legacy plaintext key in the file can
+    ///   never resurface as in-memory state that a later save would persist.
+    ///   The one-shot `AgentProviderCredentialMigrator` moves legacy values
+    ///   into Keychain at app launch.
     static func normalized(_ providers: [AgentProvider]) -> [AgentProvider] {
         if providers.isEmpty {
             return [.claudeAcpDefault]
         }
-        var list = providers
+        let stripped = ProviderSecretEnvironment.strippingSecrets(from: providers).providers
+        var list = stripped
         // Single-default: keep the first `isDefault == true`, demote the rest.
         var sawDefault = false
         list = list.map { p in
@@ -913,11 +924,22 @@ public struct AgentProvidersConfig: JSONSidecarConfig {
 
     /// Writes the JSON payload without emitting notifications. This is the store
     /// seam; application code must use `AgentProvidersConfigStore` instead.
+    ///
+    /// #1159 write boundary: known secret environment variables are stripped
+    /// immediately before encoding, so an in-memory mutation that smuggled a
+    /// plaintext API key into `provider.env` still cannot reach the disk.
+    /// Only the stripped KEY NAMES are logged — never values.
     public func writeAtomically(to directory: URL) throws {
+        let scrubbed = ProviderSecretEnvironment.strippingSecrets(from: providers)
+        for name in scrubbed.strippedKeyNames {
+            DebugLog.store(
+                "AgentProvidersConfig: stripped plaintext secret from sidecar at write: \(name)")
+        }
+        let payload = scrubbed.providers.isEmpty ? self : replacingProviders(scrubbed.providers)
         let url = directory.appendingPathComponent(Self.fileName, isDirectory: false)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        let data = try encoder.encode(self)
+        let data = try encoder.encode(payload)
         try data.write(to: url, options: .atomic)
     }
 

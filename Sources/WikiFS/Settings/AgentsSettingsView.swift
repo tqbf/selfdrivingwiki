@@ -382,6 +382,9 @@ private struct ProviderDetailPane: View {
     @Binding var config: AgentProvidersConfig
     let containerDirectory: URL
     let providerServices: any AgentProviderServices
+    /// UI-safe credential authority (#1159): describe + write only — no API
+    /// here can return a stored secret value.
+    let credentials: any CredentialDescribing & CredentialWriting
 
     @State private var label: String
     @State private var commandText: String
@@ -393,6 +396,14 @@ private struct ProviderDetailPane: View {
     @State private var isAvailable: Bool = false
     @State private var modelRefreshState: ModelRefreshState = .idle
     @State private var modelRefreshTask: Task<Void, Never>?
+    /// Write-only credential drafts (#1159), keyed by known secret variable.
+    /// Never preloaded from the credential service.
+    @State private var credentialDrafts: [ProviderSecretEnvironmentVariable: String] = [:]
+    /// Which known secret variables have a stored value (CredentialDescribing).
+    @State private var configuredSecrets: Set<ProviderSecretEnvironmentVariable> = []
+    /// Known secret keys the env editor rejected on the last commit. Names
+    /// only — never values.
+    @State private var rejectedSecretKeys: [String] = []
 
     /// The probe's lifecycle state. Equatable so SwiftUI skips body re-renders
     /// when the state hasn't changed.
@@ -407,12 +418,14 @@ private struct ProviderDetailPane: View {
         provider: AgentProvider,
         config: Binding<AgentProvidersConfig>,
         containerDirectory: URL,
-        providerServices: any AgentProviderServices
+        providerServices: any AgentProviderServices,
+        credentials: (any CredentialDescribing & CredentialWriting)? = nil
     ) {
         self.provider = provider
         self._config = config
         self.containerDirectory = containerDirectory
         self.providerServices = providerServices
+        self.credentials = credentials ?? KeychainCredentialService()
         self._label = State(initialValue: provider.label)
         self._commandText = State(initialValue: provider.command.map(ShellWords.join) ?? "")
         self._envText = State(initialValue: EnvVarText.seed(for: provider))
@@ -427,8 +440,23 @@ private struct ProviderDetailPane: View {
             .padding(.bottom, 20)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .onAppear { refreshAvailability() }
+        .onAppear {
+            refreshAvailability()
+            refreshConfiguredSecrets()
+        }
         .onDisappear { cancelModelRefresh() }
+    }
+
+    private func refreshConfiguredSecrets() {
+        var configured: Set<ProviderSecretEnvironmentVariable> = []
+        for variable in ProviderSecretEnvironmentVariable.allCases {
+            guard let reference = CredentialReference.providerSecret(
+                providerID: provider.id, variable: variable) else { continue }
+            if credentials.describe(reference).isConfigured {
+                configured.insert(variable)
+            }
+        }
+        configuredSecrets = configured
     }
 
     // MARK: - Header
@@ -496,8 +524,94 @@ private struct ProviderDetailPane: View {
             }
 
             environmentSection
+            providerCredentialsSection
         }
         .formStyle(.grouped)
+    }
+
+    // MARK: - Provider credentials (#1159)
+
+    /// One write-only row per known secret environment variable. The field
+    /// never preloads a stored value; saving is explicit; removal is explicit;
+    /// the configured state comes from `CredentialDescribing` (no value).
+    @ViewBuilder
+    private var providerCredentialsSection: some View {
+        Section {
+            ForEach(ProviderSecretEnvironmentVariable.allCases, id: \.self) { variable in
+                credentialRow(variable)
+            }
+        } header: {
+            Text("Credentials")
+        } footer: {
+            Text("API keys live in your Keychain — never in the JSON config or the Environment list above. Enter a key and press Save; press Remove to delete the stored key. Rotation takes effect the next time this provider launches.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func credentialRow(
+        _ variable: ProviderSecretEnvironmentVariable
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text(variable.rawValue)
+                    .font(.caption)
+                    .fontWeight(.medium)
+                if configuredSecrets.contains(variable) {
+                    Label("Configured", systemImage: "checkmark.seal")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("agents.credentials.\(variable.rawValue).status")
+                } else {
+                    Text("Not configured")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("agents.credentials.\(variable.rawValue).status")
+                }
+                Spacer()
+                Button("Save") { saveCredential(variable) }
+                    .disabled(CredentialValue.normalized(credentialDrafts[variable]) == nil)
+                    .accessibilityIdentifier("agents.credentials.\(variable.rawValue).save")
+                Button("Remove", role: .destructive) { removeCredential(variable) }
+                    .disabled(!configuredSecrets.contains(variable))
+                    .accessibilityIdentifier("agents.credentials.\(variable.rawValue).remove")
+            }
+            SecureField(
+                "Enter \(variable.rawValue)",
+                text: Binding(
+                    get: { credentialDrafts[variable] ?? "" },
+                    set: { credentialDrafts[variable] = $0 }),
+                prompt: Text(configuredSecrets.contains(variable)
+                             ? "Configured — enter a new value to replace"
+                             : "Enter value"))
+                .font(.system(.body, design: .monospaced))
+                .accessibilityIdentifier("agents.credentials.\(variable.rawValue).field")
+        }
+    }
+
+    /// Explicit write through the UI-safe authority, then clear the draft and
+    /// refresh the configured state.
+    private func saveCredential(_ variable: ProviderSecretEnvironmentVariable) {
+        guard let value = CredentialValue.normalized(credentialDrafts[variable]),
+              let reference = CredentialReference.providerSecret(
+                  providerID: provider.id, variable: variable)
+        else { return }
+        DebugLog.trying("set provider credential \(variable.rawValue)", operation: {
+            try credentials.set(value, for: reference)
+        })
+        credentialDrafts[variable] = ""
+        refreshConfiguredSecrets()
+    }
+
+    /// Explicit removal — a blank untouched field never deletes anything.
+    private func removeCredential(_ variable: ProviderSecretEnvironmentVariable) {
+        guard let reference = CredentialReference.providerSecret(
+            providerID: provider.id, variable: variable) else { return }
+        DebugLog.trying("remove provider credential \(variable.rawValue)", operation: {
+            try credentials.unset(reference)
+        })
+        credentialDrafts[variable] = ""
+        refreshConfiguredSecrets()
     }
 
     /// The provider's default model — used unless an operation pins a different
@@ -570,9 +684,15 @@ private struct ProviderDetailPane: View {
             Text("Environment")
         } footer: {
             VStack(alignment: .leading, spacing: 4) {
-                Text("One KEY=value per line — paste a block of variables directly. Lines starting with # are ignored. Values are used literally: surrounding \"quotes\" are removed, but $VAR references are not expanded. Non-secret configuration only (stored in plain JSON).")
+                Text("One KEY=value per line — paste a block of variables directly. Lines starting with # are ignored. Values are used literally: surrounding \"quotes\" are removed, but $VAR references are not expanded. Non-secret configuration only (stored in plain JSON). API keys belong in the Credentials section below, not here.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if !rejectedSecretKeys.isEmpty {
+                    Text("Ignored secret key\(rejectedSecretKeys.count == 1 ? "" : "s") \(rejectedSecretKeys.joined(separator: ", ")) — store API keys in the Credentials section instead.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .accessibilityIdentifier("agents.env.rejectedSecrets")
+                }
                 if !malformed.isEmpty {
                     Text("Ignoring \(malformed.count) line\(malformed.count == 1 ? "" : "s") without a KEY=value: \(malformed.joined(separator: ", "))")
                         .font(.caption)
@@ -588,11 +708,19 @@ private struct ProviderDetailPane: View {
     /// back into `config.providers` (preserving `enabled`/`isDefault`, which the
     /// toggle and "Make Default" own), then persist. Called on every field
     /// change — the sidecar is tiny and written atomically.
+    ///
+    /// #1159 rejection boundary: known secret variables typed into the
+    /// Environment editor are dropped here (and named in the footer) — they
+    /// can only be stored through the Credentials controls.
     private func commitProviderConfig() {
         guard let idx = config.providers.firstIndex(where: { $0.id == provider.id }) else { return }
         let existing = config.providers[idx]
         let cleanLabel = label.trimmingCharacters(in: .whitespaces)
-        let env = EnvVarText.parse(envText)
+        let parsed = EnvVarText.parse(envText)
+        rejectedSecretKeys = parsed.keys
+            .filter(ProviderSecretEnvironmentVariable.isKnownSecret)
+            .sorted()
+        let env = ProviderSecretEnvironment.strippingSecrets(from: parsed)
         let command = ShellWords.split(commandText)
         var providers = config.providers
         providers[idx] = AgentProvider(

@@ -49,10 +49,21 @@ public struct ACPKeychainError: Error, Equatable {
 /// The production `ACPCredentialStore`: generic-password Keychain items under
 /// a shared `service` + account. The legacy single-key API uses a fixed account;
 /// the per-provider API (#324) namespaces by provider id so each ACP provider
-/// keeps its own secret. `KeychainSecretStore` (the shared helper this delegates
-/// to) writes items to the DataProtection keychain under a shared
-/// `keychain-access-groups` access group so the un-sandboxed `wikid` daemon can
-/// read them — see `plans/keychain-sharing.md`.
+/// keeps its own secret.
+///
+/// Issue #1159: this store is now a THIN ADAPTER over the shared
+/// `KeychainCredentialService` — it translates its per-domain API into typed
+/// `CredentialReference` values (`.acpAgent()` / `.acpProvider(_:)`) and maps
+/// service errors back to this store's historical `ACPKeychainError` shape.
+/// The physical locations are unchanged: the location catalog maps those
+/// references to the exact `org.sockpuppet.WikiFS.acp` accounts this store
+/// always used, so existing secrets are read and written in place with no
+/// copy (AC.3, plans/credential-service.md).
+///
+/// Provider ids that cannot form a valid reference label (arbitrary
+/// user-chosen ids with characters outside the credential grammar) keep the
+/// legacy direct `KeychainSecretStore` path — the exact pre-service behavior —
+/// so no existing secret is orphaned by the grammar.
 public struct KeychainACPCredentialStore: ACPCredentialStore {
     private static let service = "org.sockpuppet.WikiFS.acp"
     private static let account = "acp-agent-api-key"
@@ -60,35 +71,77 @@ public struct KeychainACPCredentialStore: ACPCredentialStore {
     public init() {}
 
     public func apiKey() -> String? {
-        KeychainSecretStore.read(service: Self.service, account: Self.account)
+        Self.read(reference: .acpAgent())
     }
 
     public func setAPIKey(_ value: String?) throws {
-        try KeychainSecretStore.write(
-            service: Self.service, account: Self.account, value: value,
-            error: { operation, status in
-                ACPKeychainError(operation: "\(operation)(\(Self.account))", status: status)
-            })
+        try Self.write(
+            CredentialValue.normalized(value), reference: .acpAgent(),
+            errorAccount: Self.account)
     }
 
     // MARK: - Per-provider (#324)
 
     public func apiKey(forProvider id: String) -> String? {
-        KeychainSecretStore.read(service: Self.service, account: Self.providerAccount(id))
+        guard let reference = CredentialReference.acpProvider(ProviderID(rawValue: id)) else {
+            // Provider id outside the credential grammar: legacy direct path,
+            // preserving the physical `acp-provider:<id>` account exactly.
+            return KeychainSecretStore.read(
+                service: Self.service, account: Self.providerAccount(id))
+        }
+        return Self.read(reference: reference)
     }
 
     public func setAPIKey(_ value: String?, forProvider id: String) throws {
         let account = Self.providerAccount(id)
-        try KeychainSecretStore.write(
-            service: Self.service, account: account, value: value,
-            error: { operation, status in
-                ACPKeychainError(operation: "\(operation)(\(account))", status: status)
-            })
+        guard let reference = CredentialReference.acpProvider(ProviderID(rawValue: id)) else {
+            try KeychainSecretStore.write(
+                service: Self.service, account: account, value: value,
+                error: { operation, status in
+                    ACPKeychainError(operation: "\(operation)(\(account))", status: status)
+                })
+            return
+        }
+        try Self.write(
+            CredentialValue.normalized(value), reference: reference,
+            errorAccount: account)
     }
 
     /// Namespace a per-provider account so each provider's key is isolated.
     private static func providerAccount(_ id: String) -> String {
         "acp-provider:\(id)"
+    }
+
+    /// Shared read: resolve through the service; preserve the historical
+    /// "missing OR failed = nil" optional contract with a bounded, value-free
+    /// diagnostic for real Keychain failures (Risk 4, plans/credential-service.md).
+    private static func read(reference: CredentialReference) -> String? {
+        do {
+            return try KeychainCredentialService().resolve(reference).value
+        } catch CredentialStoreError.notConfigured {
+            return nil
+        } catch {
+            DebugLog.config(
+                "ACP credential read failed for \(reference.rawValue): \(error)")
+            return nil
+        }
+    }
+
+    /// Shared write: normalize through `CredentialValue` (whitespace-only =
+    /// unset), then map the typed service error back to `ACPKeychainError`.
+    private static func write(
+        _ value: String?, reference: CredentialReference, errorAccount: String
+    ) throws {
+        do {
+            try KeychainCredentialService().set(value, for: reference)
+        } catch let error as CredentialStoreError {
+            switch error {
+            case .writeFailed(let operation, let status):
+                throw ACPKeychainError(operation: "\(operation)(\(errorAccount))", status: status)
+            default:
+                throw ACPKeychainError(operation: "write(\(errorAccount))", status: -1)
+            }
+        }
     }
 }
 #endif // os(macOS)

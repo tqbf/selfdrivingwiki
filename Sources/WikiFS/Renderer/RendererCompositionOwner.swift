@@ -262,6 +262,11 @@ final class AppProcessPluginCatalog {
                         readCredential: { providerID in
                             KeychainACPCredentialStore().apiKey(forProvider: providerID.rawValue)
                         },
+                        readSpawnSecrets: { providerID in
+                            ProviderSecretEnvironment.resolvedSpawnSecrets(
+                                for: providerID,
+                                resolving: KeychainCredentialService())
+                        },
                         resolvePermissionPolicy: { operation in
                             let key: String
                             switch operation {

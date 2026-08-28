@@ -30,6 +30,14 @@ public struct AgentProvider: Codable, Equatable, Sendable, Identifiable {
     public var command: [String]?
 
     /// Extra environment merged into the spawn (after app-owned keys).
+    ///
+    /// #1159: NON-SECRET configuration only. Known API-key variables
+    /// (`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY` — see
+    /// `ProviderSecretEnvironmentVariable`) are stripped at decode, at the
+    /// write boundary, and rejected by the Settings editor. They live in the
+    /// Keychain under provider-scoped `CredentialReference.providerSecret`
+    /// references and are resolved into spawn hints by the trusted host at
+    /// preparation time. See `plans/credential-service.md`.
     public var env: [String: String]
 
     /// Whether the provider appears in the active set. The launcher only ever

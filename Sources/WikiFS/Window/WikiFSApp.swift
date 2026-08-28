@@ -163,6 +163,24 @@ struct WikiFSApp: App {
         // (tests / fresh clones) and idempotent in production. See
         // plans/keychain-sharing.md.
         KeychainSecretStore.migrateLegacyItemsToDataProtection()
+        // One-shot (#1159): move legacy plaintext provider API keys out of
+        // `agent-providers.json` into the shared credential service (Keychain).
+        // App-owned: runs under the sidecar store's cross-process lock, never
+        // deletes a sidecar value before Keychain holds it, and preserves
+        // plaintext when Keychain already holds a DIFFERENT value (bounded
+        // conflict). Idempotent — see plans/credential-service.md.
+        let providerConfigStore = AgentProvidersConfigStore(directory: directory)
+        Task.detached(priority: .utility) {
+            let report = await AgentProviderCredentialMigrator.migrateIfNeeded(
+                directory: directory,
+                store: providerConfigStore,
+                credentials: KeychainCredentialService())
+            if !report.isClean {
+                let conflicts = report.conflicts + report.failures + report.unmappable
+                DebugLog.config(
+                    "Provider credential migration needs attention for \(conflicts.count) entr(y/ies); plaintext preserved.")
+            }
+        }
         containerDirectory = directory
         // Populate wikis BEFORE handing the registry to @State so SwiftUI's
         // first render sees a non-empty list.  activateNow: false means

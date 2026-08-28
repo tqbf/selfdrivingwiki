@@ -10,6 +10,11 @@ import WikiFSCore
 /// (PATH, HOME) are NOT listed because the app already injects/manages those
 /// (`ACPBackend.buildAgentEnv` owns WIKI_DB / WIKICTL / PATH).
 ///
+/// #1159: API-key variables are NO LONGER suggested here. Known secret
+/// variables (`ProviderSecretEnvironmentVariable`) are rejected by the env-var
+/// editor and surface through the provider credential controls instead — an
+/// env hint must never invite plaintext secret entry.
+///
 /// PURE + Sendable so it is unit-testable without rendering.
 struct EnvVarHints {
 
@@ -23,38 +28,30 @@ struct EnvVarHints {
     /// when there are no known hints (the editor renders no hint line). The
     /// provider id follows `AgentProvider.id` / `KnownACPAgent.id` — e.g.
     /// "claude-acp", "gemini", "hermes", "codex", "custom".
+    ///
+    /// Every returned key is guaranteed non-secret: the factory filters out
+    /// `ProviderSecretEnvironmentVariable` names so a future edit cannot
+    /// re-introduce an API-key suggestion by accident.
     static func hints(forProviderID id: String) -> [Hint]? {
+        let suggestions: [Hint]?
         switch id {
         case "claude-acp":
-            return [
+            suggestions = [
                 .init(key: "CLAUDE_CODE_EXECUTABLE",
                       description: "Path to the `claude` binary when it is not on PATH."),
-                .init(key: "ANTHROPIC_API_KEY",
-                      description: "Anthropic API key."),
             ]
         case "gemini":
-            return [
-                .init(key: "GEMINI_API_KEY",
-                      description: "Google AI API key."),
+            suggestions = [
                 .init(key: "GOOGLE_GENAI_USE_VERTEXAI",
                       description: "Set to \"1\" to use Vertex AI instead of the Gemini API."),
             ]
         case "codex":
-            return [
+            suggestions = [
                 .init(key: "CODEX_PATH",
                       description: "Path to the `codex` binary when it is not on PATH."),
-                .init(key: "OPENAI_API_KEY",
-                      description: "OpenAI API key."),
-            ]
-        case "opencode":
-            return [
-                .init(key: "OPENAI_API_KEY",
-                      description: "OpenAI API key."),
-                .init(key: "ANTHROPIC_API_KEY",
-                      description: "Anthropic API key."),
             ]
         case "goose":
-            return [
+            suggestions = [
                 .init(key: "GOOSE_PROVIDER",
                       description: "The model provider Goose should use (e.g. \"anthropic\", \"openai\")."),
                 .init(key: "GOOSE_MODEL",
@@ -64,10 +61,12 @@ struct EnvVarHints {
              "codewhale", "kilo":
             // Known catalogs with no app-specific env hints yet — return nil so
             // the editor shows the generic guidance line instead.
-            return nil
+            suggestions = nil
         default:
             // Custom / unknown provider ids: no provider-specific hints.
-            return nil
+            suggestions = nil
         }
+        // Contract: hints never suggest a known secret variable.
+        return suggestions?.filter { !ProviderSecretEnvironmentVariable.isKnownSecret($0.key) }
     }
 }

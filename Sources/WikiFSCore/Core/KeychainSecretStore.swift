@@ -50,6 +50,15 @@ public enum KeychainSecretStore {
              useDP: useDataProtectionKeychain, accessGroup: accessGroup)
     }
 
+    /// Throwing read for the credential service (`CredentialResolving`): an
+    /// absent item returns `nil`; any OTHER `OSStatus` throws so the caller can
+    /// distinguish "no secret" from "Keychain refused". A present-but-empty
+    /// item is treated as absent (the service never resolves an empty value).
+    static func readOrThrow(service: String, account: String) throws -> String? {
+        try readOrThrow(service: service, account: account,
+                        useDP: useDataProtectionKeychain, accessGroup: accessGroup)
+    }
+
     /// Write (set or delete) a generic-password secret. On a non-success
     /// `OSStatus` the failing `(operation, status)` is passed to `error` and
     /// whatever it throws propagates; a delete of a missing item is a no-op
@@ -67,6 +76,31 @@ public enum KeychainSecretStore {
     }
 
     // MARK: - Internal primitive (parameterized for the migration + tests)
+
+    /// Throwing read primitive (parameterized keychain context, mirroring
+    /// `read`). `errSecItemNotFound` → `nil`; any other status throws
+    /// `CredentialStoreError.readFailed` with the status — value-free.
+    static func readOrThrow(
+        service: String, account: String,
+        useDP: Bool, accessGroup: String
+    ) throws -> String? {
+        var query = baseQuery(service: service, account: account,
+                              useDP: useDP, accessGroup: accessGroup)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else {
+            throw CredentialStoreError.readFailed(operation: "read", status: status)
+        }
+        guard let data = item as? Data else { return nil }
+        // An empty (or non-UTF8) item is absence, not a value: `resolve` never
+        // returns an empty secret.
+        guard let value = String(data: data, encoding: .utf8),
+              !value.isEmpty else { return nil }
+        return value
+    }
 
     /// Read a generic-password secret from a specific keychain context. The
     /// `useDP`/`accessGroup` knobs let the migration read the LEGACY file

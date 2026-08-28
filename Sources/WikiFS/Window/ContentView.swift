@@ -225,7 +225,9 @@ struct ContentView: View {
 
     private var isZoteroConfigured: Bool {
         ZoteroConfig.load(from: zoteroContainerDirectory).isConfigured
-            && KeychainZoteroCredentialStore().apiKey() != nil
+            // #1159: presence check goes through the UI-safe describing
+            // authority — no value is read here.
+            && KeychainCredentialService().describe(.zoteroAPIKey()).isConfigured
     }
 
     /// The active wiki's configured home page, if any (issue #280). `nil` hides

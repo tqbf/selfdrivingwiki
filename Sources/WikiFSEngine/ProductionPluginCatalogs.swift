@@ -46,6 +46,10 @@ public struct AgentProviderProcessInput: Sendable {
     public let readConfiguration: AgentProviderRuntime.ConfigurationReader
     public let resolveCommand: AgentProviderRuntime.CommandResolver
     public let readCredential: AgentProviderRuntime.CredentialReader
+    /// #1159: resolves the selected provider's known secret env variables
+    /// from the shared credential service at preparation time. Defaults to an
+    /// empty map (no spawn secrets).
+    public let readSpawnSecrets: AgentProviderRuntime.SpawnSecretReader
     public let resolvePermissionPolicy: AgentProviderRuntime.PermissionPolicyResolver
     public let makeBackend: AgentProviderRuntime.BackendFactory
     public let probeCatalog: AgentProviderRuntime.CatalogProbe
@@ -55,6 +59,7 @@ public struct AgentProviderProcessInput: Sendable {
         readConfiguration: @escaping AgentProviderRuntime.ConfigurationReader,
         resolveCommand: @escaping AgentProviderRuntime.CommandResolver,
         readCredential: @escaping AgentProviderRuntime.CredentialReader,
+        readSpawnSecrets: @escaping AgentProviderRuntime.SpawnSecretReader = { _ in [:] },
         resolvePermissionPolicy: @escaping AgentProviderRuntime.PermissionPolicyResolver,
         makeBackend: @escaping AgentProviderRuntime.BackendFactory = { policy, budget, ceiling in
             AgentBackendFactory.makeBackend(policy: policy, budget: budget, turnCeilingTimeout: ceiling)
@@ -68,6 +73,7 @@ public struct AgentProviderProcessInput: Sendable {
         self.readConfiguration = readConfiguration
         self.resolveCommand = resolveCommand
         self.readCredential = readCredential
+        self.readSpawnSecrets = readSpawnSecrets
         self.resolvePermissionPolicy = resolvePermissionPolicy
         self.makeBackend = makeBackend
         self.probeCatalog = probeCatalog
@@ -487,6 +493,11 @@ public actor DaemonProcessProfileOwner {
                     readCredential: { providerID in
                         KeychainACPCredentialStore().apiKey(forProvider: providerID.rawValue)
                     },
+                    readSpawnSecrets: { providerID in
+                        ProviderSecretEnvironment.resolvedSpawnSecrets(
+                            for: providerID,
+                            resolving: KeychainCredentialService())
+                    },
                     resolvePermissionPolicy: { _ in .bypass }),
                 extraction: ExtractionProcessInput(
                     services: extractionServices,
@@ -863,6 +874,7 @@ public enum ProcessRuntimePlugins {
                     readConfiguration: input.readConfiguration,
                     resolveCommand: input.resolveCommand,
                     readCredential: input.readCredential,
+                    readSpawnSecrets: input.readSpawnSecrets,
                     resolvePermissionPolicy: input.resolvePermissionPolicy,
                     makeBackend: input.makeBackend,
                     probeCatalog: input.probeCatalog)
