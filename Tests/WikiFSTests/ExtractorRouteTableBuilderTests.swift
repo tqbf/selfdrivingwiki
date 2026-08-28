@@ -190,7 +190,7 @@ struct ExtractorRouteTableBuilderTests {
         let waiting = ExtractorRouteTableBuilder.build(ExtractorRouteTableBuilder.Input(
             configuration: config,
             registrations: [],
-            activationFailures: [],
+            failedPackageIDs: [],
             waitingRevisionIDs: [ExtractorPackageRevisionID(
                 packageID: try ExtractorPackageID(validating: "org.example.pending"),
                 version: try ExtractorPackageVersion(validating: "1.0.0"),
@@ -200,13 +200,26 @@ struct ExtractorRouteTableBuilderTests {
         let failed = ExtractorRouteTableBuilder.build(ExtractorRouteTableBuilder.Input(
             configuration: config,
             registrations: [],
-            activationFailures: [ExtractorPackageReconciliationFailure(
-                revision: ExtractorPackageRevisionID(
-                    packageID: try ExtractorPackageID(validating: "org.example.pending"),
-                    version: try ExtractorPackageVersion(validating: "1.0.0"),
-                    digest: try ExtractorPackageDigest(hex: digest(8))),
-                message: "activation refused")]))
+            failedPackageIDs: ["org.example.pending"],
+            waitingRevisionIDs: []))
         #expect(failed.first?.status == .failedActivation)
+    }
+
+    /// A stale saved installed selection stays selectable in its row's picker:
+    /// the builder inserts one unavailable choice carrying the saved reference.
+    @Test func staleSelectionRemainsSelectableAsUnavailableChoice() throws {
+        let logical = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.example.gone"),
+            registrationID: try ExtractorRegistrationID(validating: "main"))
+        var config = ExtractionConfig(backend: .acp)
+        config.setExtractorSelection(.installed(logical), for: .canonicalPDF)
+        let pdf = ExtractorRouteTableBuilder.build(ExtractorRouteTableBuilder.Input(
+            configuration: config,
+            registrations: [])).first { $0.route == .canonicalPDF }
+        let stale = pdf?.choices.first { $0.category == .unavailable }
+        #expect(stale?.reference == .installed(logical))
+        #expect(stale?.displayName == "org.example.gone")
+        #expect(pdf?.choices.contains { $0.category == .installedPackage } == false)
     }
 
     // MARK: - AC.9: current choice matrix

@@ -28,20 +28,21 @@ public enum ExtractorRouteTableBuilder {
     public struct Input: Sendable {
         public let configuration: ExtractionConfig
         public let registrations: [ExtractorRouteRegistrationSnapshot]
-        /// Retained reconciler failures — the "failed to activate" signal.
-        public let activationFailures: [ExtractorPackageReconciliationFailure]
+        /// Package IDs with a retained reconciler activation failure — the
+        /// "failed to activate" signal, matched at package granularity.
+        public let failedPackageIDs: Set<String>
         /// Exact revisions with a hosted definition waiting for activation.
         public let waitingRevisionIDs: Set<ExtractorPackageRevisionID>
 
         public init(
             configuration: ExtractionConfig,
             registrations: [ExtractorRouteRegistrationSnapshot],
-            activationFailures: [ExtractorPackageReconciliationFailure] = [],
+            failedPackageIDs: Set<String> = [],
             waitingRevisionIDs: Set<ExtractorPackageRevisionID> = []
         ) {
             self.configuration = configuration
             self.registrations = registrations
-            self.activationFailures = activationFailures
+            self.failedPackageIDs = failedPackageIDs
             self.waitingRevisionIDs = waitingRevisionIDs
         }
     }
@@ -87,8 +88,8 @@ public enum ExtractorRouteTableBuilder {
         activeRegistrations: [ActiveExtractorRegistration]
     ) -> ExtractorRouteSettingsRow {
         let descriptor = descriptor(for: route, input: input)
-        let choices = buildChoices(route: route, input: input)
         let savedSelection = input.configuration.extractorSelection(for: route)
+        let choices = buildChoices(route: route, input: input, savedSelection: savedSelection)
         let decision = ExtractorSelectionResolver.resolve(
             route,
             configuration: input.configuration,
@@ -111,7 +112,11 @@ public enum ExtractorRouteTableBuilder {
             ?? ExtractorRouteHostCatalog.fallbackDescriptor(for: route)
     }
 
-    private static func buildChoices(route: ExtractorRouteID, input: Input) -> [ExtractorRouteChoice] {
+    private static func buildChoices(
+        route: ExtractorRouteID,
+        input: Input,
+        savedSelection: ExtractionBackendReference?
+    ) -> [ExtractorRouteChoice] {
         let hostChoices = ExtractorRouteHostCatalog.choices(for: route)
         let packages = packageChoices(route: route, input: input)
         // Installed packages slot directly after the reviewed package (mirroring
@@ -120,6 +125,20 @@ public enum ExtractorRouteTableBuilder {
         var choices = hostChoices
         let insertIndex = choices.lastIndex { $0.category == .reviewedPackage }.map { $0 + 1 } ?? 0
         choices.insert(contentsOf: packages, at: insertIndex)
+        // A saved installed selection with no active registration stays
+        // selectable so the picker keeps showing it (the status column reports
+        // the fallback). Every other saved value is already represented.
+        if case .installed(let logical)? = savedSelection,
+           choices.contains(where: { $0.reference == .installed(logical) }) == false {
+            let staleIndex = choices.lastIndex { $0.category == .reviewedPackage }.map { $0 + 1 } ?? 0
+            choices.insert(
+                ExtractorRouteChoice(
+                    route: route,
+                    reference: .installed(logical),
+                    displayName: logical.packageID.rawValue,
+                    category: .unavailable),
+                at: staleIndex)
+        }
         return choices
     }
 
@@ -176,7 +195,7 @@ public enum ExtractorRouteTableBuilder {
         if input.waitingRevisionIDs.contains(where: { $0.packageID == logical.packageID }) {
             return .waitingForHostService
         }
-        if input.activationFailures.contains(where: { $0.packageID == logical.packageID.rawValue }) {
+        if input.failedPackageIDs.contains(logical.packageID.rawValue) {
             return .failedActivation
         }
         return .usingFallback(description: fallbackDescription(route: route, input: input))

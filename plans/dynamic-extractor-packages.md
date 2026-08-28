@@ -215,7 +215,7 @@ Union rules:
 
 - Host descriptors seed the canonical PDF and HTML rows, so both stay visible with zero packages installed.
 - Every active exact registration contributes rows for its declared (kind, MIME) pairs. A future registration can add a row without another Settings layout change, but execution adapters for new kinds remain separate work.
-- Saved records seed their route even when nothing active backs it. A stale installed selection stays selected; the row reports what actually resolves.
+- Saved records seed their route even when nothing active backs it. A stale installed selection stays selected and selectable (one unavailable choice in its picker); the row reports what actually resolves.
 
 Ordering and deduplication:
 
