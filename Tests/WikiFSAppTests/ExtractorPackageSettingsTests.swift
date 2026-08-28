@@ -400,6 +400,12 @@ struct ExtractorPackageSettingsTests {
         #expect(viewSource.contains("ExtractorSettingsSelectionMapping.writePDF"))
         #expect(viewSource.contains("ExtractorSettingsSelectionMapping.writeHTML"))
 
+        // The ACP provider picker stores a String. Every provider tag must use
+        // the raw String value rather than the typed ProviderID wrapper.
+        #expect(viewSource.contains("selection: $acpProviderSelection"))
+        #expect(viewSource.contains("Text(provider.label).tag(provider.id.rawValue)"))
+        #expect(viewSource.contains("Text(provider.label).tag(provider.id)\n") == false)
+
         // Part 1 regression guard: no production target wires
         // `PdfExtractionService` anymore. The type itself remains for tests.
         for path in [

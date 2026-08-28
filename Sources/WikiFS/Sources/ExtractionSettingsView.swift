@@ -517,7 +517,7 @@ struct ExtractionSettingsView: View {
             Picker("Provider", selection: $acpProviderSelection) {
                 Text("Default (use app's default provider)").tag("")
                 ForEach(launcher.providersConfig().enabledProviders, id: \.id) { provider in
-                    Text(provider.label).tag(provider.id)
+                    Text(provider.label).tag(provider.id.rawValue)
                 }
             }
             .onChange(of: acpProviderSelection) { persistAll() }
