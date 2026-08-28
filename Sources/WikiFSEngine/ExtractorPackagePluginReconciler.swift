@@ -94,6 +94,10 @@ public actor ExtractorPackagePluginReconciler {
     private let sourceLocator: any ExtractorPackageSourceLocating
     private var lastAppliedGeneration: UInt64?
     private var retainedFailures: [ExtractorPackageReconciliationFailure] = []
+    /// Maps each desired dynamic definition to its exact revision so
+    /// inspection can report lifecycle state in package terms (Settings
+    /// route statuses). Rebuilt on every applied reconcile.
+    private var revisionIDsByDefinitionID: [DynamicPluginDefinitionID: ExtractorPackageRevisionID] = [:]
 
     init(
         host: DynamicPluginHost,
@@ -115,10 +119,12 @@ public actor ExtractorPackagePluginReconciler {
         sourceLocator: any ExtractorPackageSourceLocating
     ) -> (
         definitions: [TrustedDynamicPluginDefinition],
-        failures: [ExtractorPackageReconciliationFailure]
+        failures: [ExtractorPackageReconciliationFailure],
+        revisionIDsByDefinitionID: [DynamicPluginDefinitionID: ExtractorPackageRevisionID]
     ) {
         var definitions: [TrustedDynamicPluginDefinition] = []
         var failures: [ExtractorPackageReconciliationFailure] = []
+        var revisionIDsByDefinitionID: [DynamicPluginDefinitionID: ExtractorPackageRevisionID] = [:]
         definitions.reserveCapacity(records.count)
         for record in records.sorted() {
             do {
@@ -133,13 +139,14 @@ public actor ExtractorPackagePluginReconciler {
                     revision: record.revision,
                     manifest: validated.validated.manifest)
                 definitions.append(definition)
+                revisionIDsByDefinitionID[definition.id] = record.revision
             } catch {
                 failures.append(ExtractorPackageReconciliationFailure(
                     revision: record.revision,
                     message: Self.failureMessage(error)))
             }
         }
-        return (definitions, failures)
+        return (definitions, failures, revisionIDsByDefinitionID)
     }
 
     /// Applies the authoritative catalog generation. Unchanged generations are
@@ -162,6 +169,7 @@ public actor ExtractorPackagePluginReconciler {
             records: catalog.records,
             sourceLocator: sourceLocator)
         retainEach(built.failures)
+        revisionIDsByDefinitionID = built.revisionIDsByDefinitionID
 
         do {
             let report = try await host.reconcile(desired: built.definitions)
@@ -187,16 +195,24 @@ public actor ExtractorPackagePluginReconciler {
     }
 
     /// Inspection snapshot for settings UI and diagnostics: what the durable
-    /// catalog said versus what this process graph currently holds.
+    /// catalog said versus what this process graph currently holds, plus the
+    /// exact revisions whose hosted definitions are waiting for activation.
     public func observation() async -> (
         appliedGeneration: UInt64?,
         hostedPlugins: [DynamicPluginInspection],
-        retainedFailures: [ExtractorPackageReconciliationFailure]
+        retainedFailures: [ExtractorPackageReconciliationFailure],
+        waitingRevisionIDs: Set<ExtractorPackageRevisionID>
     ) {
-        (
+        let hostedPlugins = await host.inspectAll()
+        let waitingRevisionIDs = Set(
+            hostedPlugins
+                .filter { $0.lifecycle == .waiting }
+                .compactMap { revisionIDsByDefinitionID[$0.definitionID] })
+        return (
             lastAppliedGeneration,
-            await host.inspectAll(),
-            retainedFailures
+            hostedPlugins,
+            retainedFailures,
+            waitingRevisionIDs
         )
     }
 

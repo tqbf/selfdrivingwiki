@@ -30,6 +30,18 @@ public enum ExtractorPackagePluginDefinitionFactory {
         PluginID("dynamic:extractor-package/" + Self.identityDigest(revision, protocolRevision: nil))
     }
 
+    /// The dynamic definition identity for one exact revision under one
+    /// protocol revision. Public so lifecycle observers can map a hosted
+    /// definition back to its revision (reconciler inspection → Settings).
+    public static func definitionID(
+        revision: ExtractorPackageRevisionID,
+        protocolRevision: ExtractorProtocolRevision
+    ) -> DynamicPluginDefinitionID {
+        DynamicPluginDefinitionID("extractor-package/" + Self.identityDigest(
+            revision,
+            protocolRevision: protocolRevision.rawValue))
+    }
+
     /// Immutable fingerprint over everything this definition's behavior
     /// depends on: exact revision, supported protocol, normalized
     /// registrations, and the fixed dependency contract version.
@@ -88,9 +100,7 @@ public enum ExtractorPackagePluginDefinitionFactory {
             ServiceDependency(ExtractionServiceKeys.packageSourceLocator),
         ]
         let fingerprint = try self.fingerprint(for: manifest, revision: revision)
-        let id = DynamicPluginDefinitionID("extractor-package/" + Self.identityDigest(
-            revision,
-            protocolRevision: manifest.protocolRevision.rawValue))
+        let id = Self.definitionID(revision: revision, protocolRevision: manifest.protocolRevision)
         let capturedRevision = revision
         let capturedManifest = manifest
         let plugin = PluginDefinition(
@@ -158,6 +168,15 @@ public enum ExtractorPackagePluginDefinitionFactory {
             var entries: [ExtractionBatchEntry] = []
             entries.reserveCapacity(manifest.registrations.count)
             for registration in manifest.registrations.sorted() {
+                // Manifest-derived presentation metadata rides with the
+                // registration so Settings can project routes without
+                // re-reading the package.
+                let presentation = ExtractorRegistrationPresentation(
+                    displayName: registration.displayName,
+                    packageName: manifest.displayName,
+                    kinds: registration.kinds,
+                    mimeTypes: registration.mimeTypes,
+                    filenameExtensions: registration.filenameExtensions)
                 let kinds = registration.kinds
                     .sorted { $0.rawValue < $1.rawValue }
                 for kind in kinds {
@@ -176,7 +195,8 @@ public enum ExtractorPackagePluginDefinitionFactory {
                                     revision: revision,
                                     manifest: manifest)
                                 return ExtractionBackendAdapter.pdf(preparation)
-                            }))
+                            },
+                            presentation: presentation))
                     case .html:
                         entries.append(ExtractionBatchEntry(
                             key: .installed(kind: backendKind, reference: reference),
@@ -185,7 +205,8 @@ public enum ExtractorPackagePluginDefinitionFactory {
                                     revision: revision,
                                     manifest: manifest)
                                 return ExtractionBackendAdapter.html(html)
-                            }))
+                            },
+                            presentation: presentation))
                     }
                 }
             }
