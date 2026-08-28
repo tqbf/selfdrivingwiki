@@ -94,6 +94,10 @@ public actor ExtractorPackagePluginReconciler {
     private let sourceLocator: any ExtractorPackageSourceLocating
     private var lastAppliedGeneration: UInt64?
     private var retainedFailures: [ExtractorPackageReconciliationFailure] = []
+    /// Maps each desired dynamic definition to its exact revision so
+    /// inspection can report lifecycle state in package terms (Settings
+    /// route statuses). Rebuilt on every applied reconcile.
+    private var revisionIDsByDefinitionID: [DynamicPluginDefinitionID: ExtractorPackageRevisionID] = [:]
 
     init(
         host: DynamicPluginHost,
@@ -115,10 +119,12 @@ public actor ExtractorPackagePluginReconciler {
         sourceLocator: any ExtractorPackageSourceLocating
     ) -> (
         definitions: [TrustedDynamicPluginDefinition],
-        failures: [ExtractorPackageReconciliationFailure]
+        failures: [ExtractorPackageReconciliationFailure],
+        revisionIDsByDefinitionID: [DynamicPluginDefinitionID: ExtractorPackageRevisionID]
     ) {
         var definitions: [TrustedDynamicPluginDefinition] = []
         var failures: [ExtractorPackageReconciliationFailure] = []
+        var revisionIDsByDefinitionID: [DynamicPluginDefinitionID: ExtractorPackageRevisionID] = [:]
         definitions.reserveCapacity(records.count)
         for record in records.sorted() {
             do {
@@ -133,13 +139,14 @@ public actor ExtractorPackagePluginReconciler {
                     revision: record.revision,
                     manifest: validated.validated.manifest)
                 definitions.append(definition)
+                revisionIDsByDefinitionID[definition.id] = record.revision
             } catch {
                 failures.append(ExtractorPackageReconciliationFailure(
                     revision: record.revision,
                     message: Self.failureMessage(error)))
             }
         }
-        return (definitions, failures)
+        return (definitions, failures, revisionIDsByDefinitionID)
     }
 
     /// Applies the authoritative catalog generation. Unchanged generations are
@@ -165,15 +172,24 @@ public actor ExtractorPackagePluginReconciler {
 
         do {
             let report = try await host.reconcile(desired: built.definitions)
+            // Commit the observation map only after the host accepted the
+            // generation: a rejected reconcile keeps the prior graph, so its
+            // definition → revision metadata must stay paired with it.
+            revisionIDsByDefinitionID = built.revisionIDsByDefinitionID
             lastAppliedGeneration = catalog.generation
             retainNotices(for: report.operationFailures)
+            // Host activation failures carry real revisions through the
+            // desired map and are retained so the Settings observation path
+            // can report the failed-to-activate lifecycle state.
+            let activationFailures = activateFailures(from: report)
+            retainEach(activationFailures)
             return ExtractorPackageReconciliationReport(
                 observedGeneration: catalog.generation,
                 appliedGeneration: catalog.generation,
                 skippedAsUnchanged: false,
                 registeredDefinitionIDs: Array(report.outcomes.keys).sorted { $0.rawValue < $1.rawValue },
                 removedCount: report.removedDefinitionIDs.count,
-                failedPackages: built.failures + activateFailures(from: report))
+                failedPackages: built.failures + activationFailures)
         } catch {
             retain("host reconcile rejected generation \(catalog.generation)")
             return ExtractorPackageReconciliationReport(
@@ -187,16 +203,24 @@ public actor ExtractorPackagePluginReconciler {
     }
 
     /// Inspection snapshot for settings UI and diagnostics: what the durable
-    /// catalog said versus what this process graph currently holds.
+    /// catalog said versus what this process graph currently holds, plus the
+    /// exact revisions whose hosted definitions are waiting for activation.
     public func observation() async -> (
         appliedGeneration: UInt64?,
         hostedPlugins: [DynamicPluginInspection],
-        retainedFailures: [ExtractorPackageReconciliationFailure]
+        retainedFailures: [ExtractorPackageReconciliationFailure],
+        waitingRevisionIDs: Set<ExtractorPackageRevisionID>
     ) {
-        (
+        let hostedPlugins = await host.inspectAll()
+        let waitingRevisionIDs = Set(
+            hostedPlugins
+                .filter { $0.lifecycle == .waiting }
+                .compactMap { revisionIDsByDefinitionID[$0.definitionID] })
+        return (
             lastAppliedGeneration,
-            await host.inspectAll(),
-            retainedFailures
+            hostedPlugins,
+            retainedFailures,
+            waitingRevisionIDs
         )
     }
 
@@ -229,8 +253,11 @@ public actor ExtractorPackagePluginReconciler {
     ) -> [ExtractorPackageReconciliationFailure] {
         report.outcomes.compactMap { id, outcome in
             guard case .failed(_, _, let phase, let failure) = outcome else { return nil }
+            // Real revision when the desired map knows this definition; the
+            // placeholder keeps the redaction contract for unknown IDs.
+            let revision = revisionIDsByDefinitionID[id] ?? .placeholderForDiagnostic
             return ExtractorPackageReconciliationFailure(
-                revision: .placeholderForDiagnostic,
+                revision: revision,
                 message: "\(Self.shortDefinitionID(id)): phase=\(phase.rawValue) \(failure.message)")
         }
     }

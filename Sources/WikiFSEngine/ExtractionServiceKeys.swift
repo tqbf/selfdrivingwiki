@@ -89,10 +89,55 @@ public struct InstalledExtractionMatch: Sendable {
 public struct ExtractionBatchEntry: Sendable {
     public let key: ExtractionAdapterKey
     public let backend: RegisteredExtractionBackend
+    /// Manifest-derived presentation metadata for the registration this entry
+    /// belongs to (display name, declared kinds, MIME types, filename
+    /// extensions). Sourced from the validated manifest by the trusted
+    /// definition factory — never inferred from package or registration IDs.
+    /// Built-in registrations carry `nil`.
+    public let presentation: ExtractorRegistrationPresentation?
 
     public init(key: ExtractionAdapterKey, backend: RegisteredExtractionBackend) {
+        self.init(key: key, backend: backend, presentation: nil)
+    }
+
+    public init(
+        key: ExtractionAdapterKey,
+        backend: RegisteredExtractionBackend,
+        presentation: ExtractorRegistrationPresentation?
+    ) {
         self.key = key
         self.backend = backend
+        self.presentation = presentation
+    }
+}
+
+/// Manifest-derived presentation metadata for one installed registration:
+/// what the Settings route table needs to offer a package as a route choice
+/// without inspecting package payloads or paths.
+public struct ExtractorRegistrationPresentation: Hashable, Sendable {
+    /// User-facing registration name from the validated manifest.
+    public let displayName: String
+    /// The package's user-facing name from the validated manifest.
+    public let packageName: String
+    /// Declared operation kinds (already validated to the supported subset).
+    public let kinds: Set<ExtractorKind>
+    /// Declared input MIME types — the route dimension.
+    public let mimeTypes: Set<ExtractorMIMEType>
+    /// Declared filename extensions — matching hints only, never route identity.
+    public let filenameExtensions: Set<ExtractorFileExtension>
+
+    public init(
+        displayName: String,
+        packageName: String,
+        kinds: Set<ExtractorKind>,
+        mimeTypes: Set<ExtractorMIMEType>,
+        filenameExtensions: Set<ExtractorFileExtension>
+    ) {
+        self.displayName = displayName
+        self.packageName = packageName
+        self.kinds = kinds
+        self.mimeTypes = mimeTypes
+        self.filenameExtensions = filenameExtensions
     }
 }
 
@@ -144,6 +189,7 @@ public actor ExtractionBackendRegistry {
     private struct Registration: Sendable {
         let token: UUID
         let backend: RegisteredExtractionBackend
+        let presentation: ExtractorRegistrationPresentation?
     }
 
     private var registrations: [ExtractionAdapterKey: Registration] = [:]
@@ -165,7 +211,7 @@ public actor ExtractionBackendRegistry {
             throw ExtractionBackendRegistryError.duplicateAdapter(key)
         }
         let token = UUID()
-        registrations[key] = Registration(token: token, backend: backend)
+        registrations[key] = Registration(token: token, backend: backend, presentation: nil)
         return ExtractionBackendRegistration { [weak self] in
             await self?.remove(key: key, token: token)
         }
@@ -176,12 +222,12 @@ public actor ExtractionBackendRegistry {
     public func registerBatch(
         _ entries: [ExtractionBatchEntry]
     ) throws -> ExtractionBackendBatchHandle {
-        var incoming: [ExtractionAdapterKey: RegisteredExtractionBackend] = [:]
+        var incoming: [ExtractionAdapterKey: ExtractionBatchEntry] = [:]
         for entry in entries {
             guard incoming[entry.key] == nil else {
                 throw ExtractionBackendRegistryError.batchCollision([entry.key])
             }
-            incoming[entry.key] = entry.backend
+            incoming[entry.key] = entry
         }
         let colliding = entries.map(\.key).filter { registrations[$0] != nil }.sorted {
             $0.sortKey < $1.sortKey
@@ -190,8 +236,11 @@ public actor ExtractionBackendRegistry {
             throw ExtractionBackendRegistryError.batchCollision(colliding)
         }
         let token = UUID()
-        for (key, backend) in incoming {
-            registrations[key] = Registration(token: token, backend: backend)
+        for (key, entry) in incoming {
+            registrations[key] = Registration(
+                token: token,
+                backend: entry.backend,
+                presentation: entry.presentation)
         }
         return ExtractionBackendBatchHandle(
             registry: self,
@@ -345,6 +394,32 @@ public extension ExtractionBackendRegistry {
             }
         }
         return rows.sorted { $0.id < $1.id }
+    }
+
+    /// Route presentation snapshot: one entry per active exact registration
+    /// carrying its manifest-derived presentation metadata. Multiple exact
+    /// versions of one logical registration each appear; the route table
+    /// builder deduplicates them into logical choices. Registrations without
+    /// presentation metadata (built-ins) never appear here. Deterministic:
+    /// sorted by exact reference.
+    func installedRegistrationSnapshots() async -> [ExtractorRouteRegistrationSnapshot] {
+        var byReference: [ExtractorReference: ExtractorRegistrationPresentation] = [:]
+        for (key, registration) in registrations {
+            guard case .installed(_, let reference) = key,
+                  let presentation = registration.presentation else { continue }
+            byReference[reference] = presentation
+        }
+        return byReference
+            .sorted { $0.key < $1.key }
+            .map { reference, presentation in
+                ExtractorRouteRegistrationSnapshot(
+                    reference: reference,
+                    displayName: presentation.displayName,
+                    packageName: presentation.packageName,
+                    kinds: presentation.kinds,
+                    mimeTypes: presentation.mimeTypes,
+                    filenameExtensions: presentation.filenameExtensions)
+            }
     }
 }
 

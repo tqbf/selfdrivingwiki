@@ -147,7 +147,8 @@ public struct ProcessExtractionContext: Sendable {
     public func observationSnapshot() async -> (
         appliedGeneration: UInt64?,
         hostedPlugins: [DynamicPluginInspection],
-        retainedFailures: [ExtractorPackageReconciliationFailure]
+        retainedFailures: [ExtractorPackageReconciliationFailure],
+        waitingRevisionIDs: Set<ExtractorPackageRevisionID>
     ) {
         await reconciler.observation()
     }

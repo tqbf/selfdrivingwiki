@@ -124,6 +124,60 @@ struct ExtractionBackendRegistryBatchTests {
         #expect(await registry.resolveInstalled(logical, kind: .html) != nil)
     }
 
+    // MARK: - Route presentation snapshots
+
+    @Test func presentationSnapshotsCarryManifestMetadataAndDropWithDisposal() async throws {
+        let registry = ExtractionBackendRegistry()
+        let lowReference = try reference(
+            packageID: "org.example.route",
+            version: "1.0.0",
+            digestHex: String(repeating: "1", count: 64))
+        let highReference = try reference(
+            packageID: "org.example.route",
+            version: "2.0.0",
+            digestHex: String(repeating: "2", count: 64))
+        let pdfMIME = try ExtractorMIMEType(validating: "application/pdf")
+        let pdfExtension = try #require(ExtractorFileExtension(rawValue: "pdf"))
+        let presentation = ExtractorRegistrationPresentation(
+            displayName: "Main",
+            packageName: "Route Package",
+            kinds: [.pdf, .html],
+            mimeTypes: [pdfMIME],
+            filenameExtensions: [pdfExtension])
+        let batch = try await registry.registerBatch([
+            ExtractionBatchEntry(
+                key: .installed(kind: .pdf, reference: lowReference),
+                backend: makeStubBackend(),
+                presentation: presentation),
+            ExtractionBatchEntry(
+                key: .installed(kind: .pdf, reference: highReference),
+                backend: makeStubBackend(),
+                presentation: presentation),
+            ExtractionBatchEntry(
+                key: .installed(kind: .html, reference: highReference),
+                backend: makeStubBackend(),
+                presentation: presentation),
+            ExtractionBatchEntry(
+                key: .builtIn(ExtractionBackendKey(kind: .pdf, backendID: "legacy")),
+                backend: makeStubBackend()),
+        ])
+
+        var snapshots = await registry.installedRegistrationSnapshots()
+        // One snapshot per exact registration reference — the same registration
+        // registered in the PDF and HTML namespaces collapses onto its single
+        // reference. Built-ins never appear.
+        #expect(snapshots.count == 2)
+        #expect(snapshots.map(\.reference) == [lowReference, highReference])
+        #expect(snapshots.allSatisfy { $0.displayName == "Main" && $0.packageName == "Route Package" })
+        #expect(snapshots.allSatisfy { $0.kinds == [.pdf, .html] })
+        #expect(snapshots.allSatisfy { $0.mimeTypes == [pdfMIME] })
+        #expect(snapshots.allSatisfy { $0.filenameExtensions == [pdfExtension] })
+
+        await batch.dispose()
+        snapshots = await registry.installedRegistrationSnapshots()
+        #expect(snapshots.isEmpty)
+    }
+
     // MARK: - Helpers
 
     private func makeBuiltInBackend(id: String) -> RegisteredExtractionBackend {
@@ -190,7 +244,7 @@ struct ExtractionBackendRegistryBatchTests {
     }
 }
 
-private struct StubMarkdownExtractor: MarkdownExtractor {
+struct StubMarkdownExtractor: MarkdownExtractor {
     var displayName: String { "stub" }
     func readiness() async -> ExtractionReadiness { .ready }
     func convert(
@@ -200,7 +254,7 @@ private struct StubMarkdownExtractor: MarkdownExtractor {
     ) async throws -> String { "" }
 }
 
-private struct StubHTMLExtractor: HtmlMarkdownExtractor {
+struct StubHTMLExtractor: HtmlMarkdownExtractor {
     func extract(html: String) async -> HtmlExtractionResult? { nil }
 }
 
