@@ -99,6 +99,16 @@ public struct ProcessExtractorProvider: Sendable {
     let sourceLocator: any ExtractorPackageSourceLocating
     let sharedRuntimeCacheRoot: URL?
     let sharedModelCacheRoot: URL?
+    /// Host-owned per-operation credential resolution (#1159). Nil for hosts
+    /// that never prepare credential-declaring packages (or in tests); a
+    /// credential-declaring revision 2 package prepared WITHOUT a resolver
+    /// fails closed (its required requirements block).
+    let operationCredentials: (any ExtractorOperationCredentialResolving)?
+    /// Host-owned non-secret operation configuration (e.g. the Docling
+    /// endpoint + timeout). Called per execute; values ride the public
+    /// operation-configuration file, never the credential file.
+    let operationConfiguration:
+        (@Sendable (ExtractorPackageRevisionID) -> ExtractorOperationConfiguration?)?
 
     /// The cache roots are host-owned. A package can use them only when its
     /// manifest declares the matching capability.
@@ -109,7 +119,9 @@ public struct ProcessExtractorProvider: Sendable {
         admission: any ProcessPackageAdmissionChecking,
         sourceLocator: (any ExtractorPackageSourceLocating)? = nil,
         sharedRuntimeCacheRoot: URL? = nil,
-        sharedModelCacheRoot: URL? = nil
+        sharedModelCacheRoot: URL? = nil,
+        operationCredentials: (any ExtractorOperationCredentialResolving)? = nil,
+        operationConfiguration: (@Sendable (ExtractorPackageRevisionID) -> ExtractorOperationConfiguration?)? = nil
     ) {
         self.layout = layout
         self.catalogReader = catalogReader
@@ -119,6 +131,8 @@ public struct ProcessExtractorProvider: Sendable {
             ?? InstalledExtractorPackageSourceLocator(layout: layout)
         self.sharedRuntimeCacheRoot = sharedRuntimeCacheRoot
         self.sharedModelCacheRoot = sharedModelCacheRoot
+        self.operationCredentials = operationCredentials
+        self.operationConfiguration = operationConfiguration
     }
 
     /// Convenience initializer for closure-backed admission checks.
@@ -259,10 +273,13 @@ public struct ProcessExtractorProvider: Sendable {
             sharedModelCacheRoot: modelCacheRoot,
             revision: revision,
             manifest: manifest,
+            registration: registration,
             registrationID: registration.id,
             protocolRevision: manifest.protocolRevision,
             mimeTypes: registration.mimeTypes.sorted().map(\.rawValue),
             executor: executor,
+            operationCredentials: operationCredentials,
+            operationConfiguration: operationConfiguration,
             runtimeSearchPolicy: .standard)
     }
 
@@ -295,6 +312,9 @@ public struct ProcessExtractorProvider: Sendable {
 public final class PreparedProcessOperation: Sendable {
     public let revision: ExtractorPackageRevisionID
     public let manifest: ExtractorManifest
+    /// The SELECTED registration for the prepared kind — its declared
+    /// requirements drive per-execute credential resolution (#1159).
+    public let registration: ExtractorRegistration
     public let registrationID: ExtractorRegistrationID
     public let protocolRevision: ExtractorProtocolRevision
 
@@ -307,6 +327,9 @@ public final class PreparedProcessOperation: Sendable {
     let sharedModelCacheRoot: URL?
     let mimeTypes: [String]
     let executor: any ManagedProcessExecuting
+    let operationCredentials: (any ExtractorOperationCredentialResolving)?
+    let operationConfiguration:
+        (@Sendable (ExtractorPackageRevisionID) -> ExtractorOperationConfiguration?)?
     let runtimeSearchPolicy: ExtractorRuntimeSearchPolicy
 
     init(
@@ -319,10 +342,13 @@ public final class PreparedProcessOperation: Sendable {
         sharedModelCacheRoot: URL?,
         revision: ExtractorPackageRevisionID,
         manifest: ExtractorManifest,
+        registration: ExtractorRegistration,
         registrationID: ExtractorRegistrationID,
         protocolRevision: ExtractorProtocolRevision,
         mimeTypes: [String],
         executor: any ManagedProcessExecuting,
+        operationCredentials: (any ExtractorOperationCredentialResolving)?,
+        operationConfiguration: (@Sendable (ExtractorPackageRevisionID) -> ExtractorOperationConfiguration?)?,
         runtimeSearchPolicy: ExtractorRuntimeSearchPolicy
     ) {
         self.directoryRoot = directoryRoot
@@ -334,10 +360,13 @@ public final class PreparedProcessOperation: Sendable {
         self.sharedModelCacheRoot = sharedModelCacheRoot
         self.revision = revision
         self.manifest = manifest
+        self.registration = registration
         self.registrationID = registrationID
         self.protocolRevision = protocolRevision
         self.mimeTypes = mimeTypes
         self.executor = executor
+        self.operationCredentials = operationCredentials
+        self.operationConfiguration = operationConfiguration
         self.runtimeSearchPolicy = runtimeSearchPolicy
     }
 
@@ -362,6 +391,19 @@ public final class PreparedProcessOperation: Sendable {
 
     /// Runs exactly one one-shot conversion against the pinned snapshot and
     /// returns the terminal result frame plus its verified Markdown text.
+    ///
+    /// # Operation credentials (#1159)
+    /// For a revision 2 registration that DECLARES credential requirements
+    /// with a host resolver wired, EVERY execute call re-resolves current
+    /// state (admission, catalog membership, authorization, values) — so
+    /// rotation, revocation, removal, and reinstall affect the next call
+    /// without restart (AC.11). Resolved values are materialized into one
+    /// request-scoped owner-read-only file inside the private operation root;
+    /// the request carries only the RELATIVE path. The credential file and
+    /// its request subdirectory are deleted on EVERY terminal path after
+    /// materialization (AC.14), and every package-controlled string is
+    /// redacted through the request's values before it can reach diagnostics
+    /// or UI (AC.15).
     func execute(
         kind: ExtractorKind,
         input: Data,
@@ -379,59 +421,241 @@ public final class PreparedProcessOperation: Sendable {
             ? self.sharedModelCacheRoot
             : nil
 
-        let inputURL = directoryRoot.appendingPathComponent(inputPath)
-        try FileManager.default.createDirectory(
-            at: inputURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700])
-        try input.write(to: inputURL, options: [.atomic])
-
-        let fallbackMIMEType = kind == .pdf ? "application/pdf" : "text/html"
-        let request = try ExtractorProtocolRequest(
-            requestID: ExtractorRequestID(),
-            protocolRevision: manifest.protocolRevision,
-            kind: kind,
-            mimeType: ExtractorMIMEType(validating: mimeType(defaulting: fallbackMIMEType)),
-            originalFilename: filename,
-            inputPath: ExtractorRelativePath(validating: inputPath),
-            outputPath: ExtractorRelativePath(validating: outputPath),
-            deadlineMillisecondsSince1970: Int64(Date().timeIntervalSince1970 * 1_000)
-                + max(Int64(manifest.limits.maximumDurationMilliseconds), 1))
-
-        let managedRequest = ManagedExtractorProcessRequest(
-            revision: revision,
-            manifest: manifest,
-            protocolRequest: request,
-            paths: ManagedExtractorProcessPaths(
-                operationRoot: directoryRoot,
-                packageRoot: packageRoot,
-                homeRoot: homeRoot,
-                temporaryRoot: temporaryRoot,
-                privateCacheRoot: cacheRoot,
-                sharedRuntimeCacheRoot: runtimeCacheRoot,
-                sharedModelCacheRoot: modelCacheRoot))
-        let outcome = try await executor.execute(managedRequest) { frame in
-            if case .progress(let progress) = frame, let message = progress.message {
-                onProgress?(message + "\n")
+        // ---- Operation input preparation (revision 2 + declared requirements)
+        let declaresRequirements = manifest.protocolRevision == .v2
+            && registration.credentialRequirements.isEmpty == false
+        var resolvedValues: [ExtractorCredentialRequirementID: String] = [:]
+        var configuration: ExtractorOperationConfiguration?
+        var credentialFilePath: ExtractorRelativePath?
+        var configurationFilePath: ExtractorRelativePath?
+        var credentialSubdirectory: URL?
+        var configurationSubdirectory: URL?
+        if declaresRequirements {
+            guard let resolver = operationCredentials else {
+                // Fail closed: a required requirement cannot be satisfied
+                // without the trusted host resolution service.
+                throw ProcessPackageError(
+                    message: ExtractorOperationCredentialError.resolutionUnavailable.description)
+            }
+            resolvedValues = try await resolver.resolveOperationCredentials(
+                revision: revision, manifest: manifest, registration: registration)
+            // AC.10 defense in depth: a REQUIRED requirement with no
+            // resolved value blocks the launch with a bounded typed state,
+            // regardless of resolver behavior.
+            for requirement in registration.credentialRequirements
+            where requirement.isOptional == false {
+                if CredentialValue.normalized(resolvedValues[requirement.id]) == nil {
+                    throw ProcessPackageError(
+                        message: ExtractorOperationCredentialError
+                            .requiredCredentialUnavailable(
+                                requirementID: requirement.id.rawValue)
+                            .description)
+                }
             }
         }
+        if manifest.protocolRevision == .v2 {
+            configuration = operationConfiguration?(revision)
+        }
 
-        switch outcome.terminalFrame {
-        case .result(let frame):
-            let outputURL = directoryRoot.appendingPathComponent(outputPath)
-            let data = try Data(contentsOf: outputURL, options: [.mappedIfSafe])
-            guard data.count == frame.markdownByteCount else {
-                throw ProcessPackageRunError.declaredSizeMismatch
+        // The redactor covers every resolved value for THIS request; it is
+        // constructed even when empty so call sites stay uniform.
+        let redactor = ExtractorSecretRedactor(
+            values: Array(resolvedValues.values))
+
+        // Materialize the private credential file AFTER resolution. From this
+        // point every terminal path must clean it up (defer below).
+        if declaresRequirements {
+            let envelope = try ExtractorCredentialInputEnvelope(
+                requirements: registration.credentialRequirements,
+                resolvedValues: resolvedValues)
+            let subdirectory = directoryRoot
+                .appendingPathComponent("credentials/\(name)", isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: subdirectory, withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700])
+            credentialSubdirectory = subdirectory
+            let fileURL = subdirectory.appendingPathComponent("input.json")
+            let data = try JSONEncoder().encode(envelope)
+            try Self.writeOwnerReadOnlyFile(data, at: fileURL)
+            credentialFilePath = try ExtractorRelativePath(
+                validating: "credentials/\(name)/input.json")
+        }
+        if let configuration {
+            let subdirectory = directoryRoot
+                .appendingPathComponent("config/\(name)", isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: subdirectory, withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700])
+            configurationSubdirectory = subdirectory
+            let fileURL = subdirectory.appendingPathComponent("operation.json")
+            try JSONEncoder().encode(configuration).write(to: fileURL, options: [.atomic])
+            configurationFilePath = try ExtractorRelativePath(
+                validating: "config/\(name)/operation.json")
+        }
+
+        // Immutable snapshots of the request paths for the @Sendable body.
+        let requestCredentialPath = credentialFilePath
+        let requestConfigurationPath = configurationFilePath
+        return try await runManaged(
+            redactor: redactor,
+            credentialSubdirectory: credentialSubdirectory,
+            configurationSubdirectory: configurationSubdirectory,
+            onProgress: onProgress
+        ) {
+            let inputURL = self.directoryRoot.appendingPathComponent(inputPath)
+            try FileManager.default.createDirectory(
+                at: inputURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700])
+            try input.write(to: inputURL, options: [.atomic])
+
+            let fallbackMIMEType = kind == .pdf ? "application/pdf" : "text/html"
+            let request = try ExtractorProtocolRequest(
+                requestID: ExtractorRequestID(),
+                protocolRevision: self.manifest.protocolRevision,
+                kind: kind,
+                mimeType: ExtractorMIMEType(validating: self.mimeType(defaulting: fallbackMIMEType)),
+                originalFilename: filename,
+                inputPath: ExtractorRelativePath(validating: inputPath),
+                outputPath: ExtractorRelativePath(validating: outputPath),
+                deadlineMillisecondsSince1970: Int64(Date().timeIntervalSince1970 * 1_000)
+                    + max(Int64(self.manifest.limits.maximumDurationMilliseconds), 1),
+                credentialFilePath: requestCredentialPath,
+                operationConfigurationPath: requestConfigurationPath)
+
+            let managedRequest = ManagedExtractorProcessRequest(
+                revision: self.revision,
+                manifest: self.manifest,
+                protocolRequest: request,
+                paths: ManagedExtractorProcessPaths(
+                    operationRoot: self.directoryRoot,
+                    packageRoot: self.packageRoot,
+                    homeRoot: self.homeRoot,
+                    temporaryRoot: self.temporaryRoot,
+                    privateCacheRoot: self.cacheRoot,
+                    sharedRuntimeCacheRoot: runtimeCacheRoot,
+                    sharedModelCacheRoot: modelCacheRoot))
+            let outcome = try await self.executor.execute(managedRequest) { [redactor] (frame: ExtractorProtocolFrame) in
+                if case .progress(let progress) = frame, let message = progress.message {
+                    // Package-controlled progress text is redacted before it
+                    // can reach host diagnostics or UI (AC.15).
+                    onProgress?(redactor.redact(message) + "\n")
+                }
             }
-            guard let markdown = String(data: data, encoding: .utf8) else {
-                throw ProcessPackageRunError.invalidOutputEncoding
+
+            switch outcome.terminalFrame {
+            case .result(let frame):
+                let outputURL = self.directoryRoot.appendingPathComponent(outputPath)
+                let data = try Data(contentsOf: outputURL, options: [.mappedIfSafe])
+                guard data.count == frame.markdownByteCount else {
+                    throw ProcessPackageRunError.declaredSizeMismatch
+                }
+                guard let markdown = String(data: data, encoding: .utf8) else {
+                    throw ProcessPackageRunError.invalidOutputEncoding
+                }
+                return ProcessPackageExecutionOutcome(frame: frame, markdown: markdown)
+            case .failure(let frame):
+                // Terminal failure frames are package-controlled: redact the
+                // message AND warnings before mapping into a user error.
+                throw ProcessPackageError(
+                    message: redactor.redact(
+                        ProcessPackageFailureMapper.terminalMessage(frame)))
+            case .progress, .diagnostic:
+                throw ProcessPackageRunError.missingTerminalFrame
             }
-            return ProcessPackageExecutionOutcome(frame: frame, markdown: markdown)
-        case .failure(let frame):
-            throw ProcessPackageError(
-                message: ProcessPackageFailureMapper.terminalMessage(frame))
-        case .progress, .diagnostic:
-            throw ProcessPackageRunError.missingTerminalFrame
+        }
+    }
+
+    /// Shared terminal-path wrapper: catches every thrown error AFTER the
+    /// credential file was materialized, deletes the request-scoped
+    /// credential + configuration subdirectories (AC.14), and rethrows a
+    /// redacted error. On success the cleanup runs too. When a child process
+    /// did launch, the executor has already terminated and reaped the process
+    /// group before this point (Risk 8 ordering).
+    fileprivate func runManaged(
+        redactor: ExtractorSecretRedactor,
+        credentialSubdirectory: URL?,
+        configurationSubdirectory: URL?,
+        onProgress: (@Sendable (String) -> Void)?,
+        _ body: @Sendable () async throws -> ProcessPackageExecutionOutcome
+    ) async throws -> ProcessPackageExecutionOutcome {
+        defer {
+            for subdirectory in [credentialSubdirectory, configurationSubdirectory].compactMap({ $0 }) {
+                do {
+                    try FileManager.default.removeItem(at: subdirectory)
+                } catch {
+                    // Value-free diagnostic; the operation-root deinitializer
+                    // remains the final safety net.
+                    DebugLog.extraction(
+                        "Extractor request input cleanup failed (deferred to operation root cleanup).")
+                }
+            }
+        }
+        do {
+            return try await body()
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch ManagedExtractorProcessError.cancellation {
+            throw CancellationError()
+        } catch {
+            // Every other failure maps through the redactor so a secret that
+            // reached stderr, a frame, or a launch error cannot escape.
+            throw ProcessPackageError(message: redactor.redactedMessage(error))
+        }
+    }
+
+    /// Creates a regular owner-read-only (0400) file at `url`. The file is
+    /// created O_EXCL (never through an existing symlink), written fully,
+    /// then verified: regular file, owner UID, link count 1, mode 0400, and
+    /// containment within its own request subdirectory (plan steps 16-17).
+    static func writeOwnerReadOnlyFile(_ data: Data, at url: URL) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700])
+        // Refuse to overwrite anything that already exists (a planted symlink
+        // at the target must never be written through).
+        guard FileManager.default.fileExists(atPath: url.path) == false else {
+            throw ExtractorDirectoryAdmissionError.preparationFailed
+        }
+        let fd = url.path.withCString {
+            open($0, O_WRONLY | O_CREAT | O_EXCL, 0o400)
+        }
+        guard fd >= 0 else {
+            throw ExtractorDirectoryAdmissionError.preparationFailed
+        }
+        defer { close(fd) }
+        let result: Int = data.withUnsafeBytes { raw in
+            guard var pointer = raw.baseAddress else { return -1 }
+            var remaining = raw.count
+            var total = 0
+            while remaining > 0 {
+                let written = write(fd, pointer, remaining)
+                if written <= 0 { return -1 }
+                total += written
+                pointer += written
+                remaining -= written
+            }
+            return total
+        }
+        guard result == data.count else {
+            throw ExtractorDirectoryAdmissionError.preparationFailed
+        }
+        try verifyOwnerReadOnlyFile(at: url)
+    }
+
+    /// Post-write verification: regular file, owner UID, link count 1, mode
+    /// 0400, and containment within the operation directory layout.
+    static func verifyOwnerReadOnlyFile(at url: URL) throws {
+        var status = stat()
+        guard lstat(url.path, &status) == 0 else {
+            throw ExtractorDirectoryAdmissionError.preparationFailed
+        }
+        guard status.st_mode & S_IFMT == S_IFREG,
+              status.st_uid == getuid(),
+              status.st_nlink == 1,
+              status.st_mode & 0o777 == 0o400 else {
+            throw ExtractorDirectoryAdmissionError.preparationFailed
         }
     }
 }

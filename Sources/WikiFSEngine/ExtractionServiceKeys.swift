@@ -438,6 +438,11 @@ public enum ExtractionServiceKeys {
         label: "wiki.extraction.catalog-reader")
     public static let managedProcessExecutor = ServiceKey<any ManagedProcessExecuting>(
         label: "wiki.extraction.process-executor")
+    /// #1159: host-owned per-operation credential resolution. A host-side
+    /// service of the GENERATED PLUGIN (trusted host code) — never a package
+    /// Cordis dependency and never visible to a package process.
+    public static let operationCredentialResolver = ServiceKey<any ExtractorOperationCredentialResolving>(
+        label: "wiki.extraction.operation-credential-resolver")
     public static let packageAdmissionChecker = ServiceKey<any ProcessPackageAdmissionChecking>(
         label: "wiki.extraction.admission-checker")
     public static let packageStoreLayout = ServiceKey<ExtractorPackageStoreLayout>(

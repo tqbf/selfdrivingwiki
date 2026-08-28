@@ -110,6 +110,22 @@ public struct ProcessExtractionContext: Sendable {
             ExtractionServiceKeys.packageAdmissionChecker,
             value: admission)
 
+        // Host-owned operation-credential resolution (#1159). Both the app
+        // and the daemon resolve the shared binding independently in their
+        // own processes; the resolver is never exposed to a package process
+        // (it stays a host-side Cordis service of the GENERATED PLUGIN, not
+        // of the package).
+        let operationCredentialResolver = ExtractorOperationCredentialResolver(
+            admission: admission,
+            catalogReader: catalogReader,
+            authorizationReader: ExtractorCredentialAuthorizationReader(
+                layout: ExtractorCredentialAuthorizationStoreLayout(
+                    appGroupContainerRoot: layout.appGroupContainerRoot)),
+            credentials: KeychainCredentialService())
+        try await cordisContext.supply(
+            ExtractionServiceKeys.operationCredentialResolver,
+            value: operationCredentialResolver)
+
         let reconciler = ExtractorPackagePluginReconciler(
             host: host,
             catalogReader: catalogReader,

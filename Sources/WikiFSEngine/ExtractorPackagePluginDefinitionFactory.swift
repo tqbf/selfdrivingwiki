@@ -136,6 +136,7 @@ public enum ExtractorPackagePluginDefinitionFactory {
                 ServiceDependency(ExtractionServiceKeys.packageAdmissionChecker),
                 ServiceDependency(ExtractionServiceKeys.packageStoreLayout),
                 ServiceDependency(ExtractionServiceKeys.packageSourceLocator),
+                ServiceDependency(ExtractionServiceKeys.operationCredentialResolver),
             ]
         ) { activation in
             let registry = try await activation.require(ExtractionServiceKeys.backends)
@@ -155,6 +156,8 @@ public enum ExtractorPackagePluginDefinitionFactory {
                 ExtractionServiceKeys.packageAdmissionChecker)
             let sourceLocator = try await activation.require(
                 ExtractionServiceKeys.packageSourceLocator)
+            let operationCredentialResolver = try await activation.require(
+                ExtractionServiceKeys.operationCredentialResolver)
             let provider = ProcessExtractorProvider(
                 layout: layout,
                 catalogReader: catalogReader,
@@ -162,7 +165,8 @@ public enum ExtractorPackagePluginDefinitionFactory {
                 admission: admissionChecker,
                 sourceLocator: sourceLocator,
                 sharedRuntimeCacheRoot: layout.root.appendingPathComponent("runtime-cache", isDirectory: true),
-                sharedModelCacheRoot: layout.root.appendingPathComponent("model-cache", isDirectory: true))
+                sharedModelCacheRoot: layout.root.appendingPathComponent("model-cache", isDirectory: true),
+                operationCredentials: operationCredentialResolver)
 
             // Build every registration factory before mutating the registry.
             var entries: [ExtractionBatchEntry] = []
