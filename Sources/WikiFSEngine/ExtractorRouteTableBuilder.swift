@@ -112,8 +112,14 @@ public enum ExtractorRouteTableBuilder {
     }
 
     private static func buildChoices(route: ExtractorRouteID, input: Input) -> [ExtractorRouteChoice] {
-        var choices = ExtractorRouteHostCatalog.choices(for: route)
-        choices.append(contentsOf: packageChoices(route: route, input: input))
+        let hostChoices = ExtractorRouteHostCatalog.choices(for: route)
+        let packages = packageChoices(route: route, input: input)
+        // Installed packages slot directly after the reviewed package (mirroring
+        // the long-standing picker order), before connected services and
+        // built-ins. HTML's prompt choice stays first.
+        var choices = hostChoices
+        let insertIndex = choices.lastIndex { $0.category == .reviewedPackage }.map { $0 + 1 } ?? 0
+        choices.insert(contentsOf: packages, at: insertIndex)
         return choices
     }
 

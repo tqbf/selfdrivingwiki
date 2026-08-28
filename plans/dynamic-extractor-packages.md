@@ -207,6 +207,25 @@ Dual-write compatibility. A write through `setExtractorSelection(_:for:)` to a c
 
 Decode resilience. A missing key decodes to an empty list. A malformed record is dropped through the logged decode seam. Duplicate records for one route resolve deterministically: the canonically-greatest record wins, independent of file order, with one bounded diagnostic.
 
+## Route presentation: registration-driven rows
+
+The Settings route table is a pure projection. `ExtractorRouteTableBuilder` builds one row per route from a union of three inputs: host-owned descriptors, active exact registration snapshots, and saved selections. No input re-reads a package manifest or directory — the registry projects each active exact registration's manifest-derived presentation (display name, kinds, MIME types, filename extensions) captured when the trusted definition factory built its batch entries.
+
+Union rules:
+
+- Host descriptors seed the canonical PDF and HTML rows, so both stay visible with zero packages installed.
+- Every active exact registration contributes rows for its declared (kind, MIME) pairs. A future registration can add a row without another Settings layout change, but execution adapters for new kinds remain separate work.
+- Saved records seed their route even when nothing active backs it. A stale installed selection stays selected; the row reports what actually resolves.
+
+Ordering and deduplication:
+
+- Rows sort by host order (PDF, then HTML) first, then by typed route order (kind raw value, then MIME raw value).
+- Multiple exact versions of one logical registration deduplicate into one choice showing the highest active revision; the package lifecycle rows below the table keep every exact version for inspection and removal.
+- Choices order like the pickers they replace: prompt (HTML), reviewed package, installed packages by package ID, connected services, built-ins.
+- The reviewed packages attach only to their canonical routes; direct Anthropic and Gemini API choices never appear.
+
+Statuses: available; using a named fixed fallback when a saved installed selection is unavailable; waiting for host service when the selected package has a waiting definition; failed activation when the reconciler retained a failure for it.
+
 ## Phase 2: Add the trusted dynamic Cordis plugin host
 
 1. Keep `PluginCatalog` immutable and link-time. Do not add dynamic module loading to it.
