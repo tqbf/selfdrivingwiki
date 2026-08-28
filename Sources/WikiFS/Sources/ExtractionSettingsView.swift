@@ -40,6 +40,15 @@ struct ExtractionSettingsView: View {
     /// Removes one exact revision from the extractor store. Same app-only rule
     /// as `importPackage`. Nil hides the Remove buttons.
     let removePackage: (@Sendable (ExtractorPackageRevisionID) async -> ExtractorPackageMutationOutcome)?
+    /// Grants (or re-grants) one requirement's credential binding. App-only:
+    /// nil hides the Authorize/Change controls (headless + daemon views are
+    /// read-only). Returns a redacted outcome; the confirmation copy states
+    /// the inheritance rule (plan step 22).
+    let authorizeRequirement: (@Sendable (ExtractorCredentialRequirementSummary) async -> ExtractorPackageMutationOutcome)?
+    /// Revokes one requirement's grant. The record stays attached to its
+    /// lineage; a reinstall shows (and may revoke) the stale grant. Nil hides
+    /// the Revoke control.
+    let revokeRequirement: (@Sendable (ExtractorCredentialRequirementSummary) async -> ExtractorPackageMutationOutcome)?
 
     // Route table rows built from the PR 2 projection: host descriptors, the
     // package model's registration snapshots, and saved selections. Rebuilt
@@ -64,6 +73,11 @@ struct ExtractionSettingsView: View {
     @State private var packageModel: ExtractorPackageSettingsModel
     @State private var showingImportPicker = false
     @State private var removalCandidate: ExtractorPackageSettingsRow?
+    /// Pending authorization confirmation (#1159). Non-nil shows the
+    /// explicit confirmation with the inheritance rule.
+    @State private var authorizationCandidate: ExtractorCredentialRequirementSummary?
+    /// Pending revocation confirmation.
+    @State private var revocationCandidate: ExtractorCredentialRequirementSummary?
 
     private enum TestPhase: Equatable {
         case idle
@@ -79,6 +93,8 @@ struct ExtractionSettingsView: View {
         verifyDoclingConnection: (@Sendable (_ endpoint: String) async -> String?)? = nil,
         fetcher: any HTTPRequestFetcher = URLSessionRequestFetcher(),
         packageSnapshot: (@Sendable () async -> ExtractorPackageSettingsSnapshot)? = nil,
+        authorizeRequirement: (@Sendable (ExtractorCredentialRequirementSummary) async -> ExtractorPackageMutationOutcome)? = nil,
+        revokeRequirement: (@Sendable (ExtractorCredentialRequirementSummary) async -> ExtractorPackageMutationOutcome)? = nil,
         importPackage: (@Sendable (URL) async -> ExtractorPackageMutationOutcome)? = nil,
         removePackage: (@Sendable (ExtractorPackageRevisionID) async -> ExtractorPackageMutationOutcome)? = nil
     ) {
@@ -93,6 +109,8 @@ struct ExtractionSettingsView: View {
         self.packageSnapshot = packageSnapshot
         self.importPackage = importPackage
         self.removePackage = removePackage
+        self.authorizeRequirement = authorizeRequirement
+        self.revokeRequirement = revokeRequirement
 
         // Seed the drafts once, at construction — so there's no onAppear race
         // where an `.onChange` fires before the loaded values are in place.
@@ -150,6 +168,13 @@ struct ExtractionSettingsView: View {
             if packageSnapshot != nil {
                 installedPackagesSection
             }
+
+            // Credential requirements (#1159): per-declaration authorization
+            // state and explicit Authorize / Change Credential / Revoke
+            // actions. Hidden when no snapshot loader was wired.
+            if packageSnapshot != nil {
+                credentialRequirementsSection
+            }
         }
         .formStyle(.grouped)
         .frame(minWidth: Metrics.width, minHeight: Metrics.height)
@@ -184,6 +209,21 @@ struct ExtractionSettingsView: View {
             } message: { row in
                 Text("Remove \(row.packageID) \(row.version) from this Mac? Its registrations fall back to the built-in backends. A default selection that points at this package keeps falling back until you change it.")
             }
+        // Authorization confirmation (#1159): states the inheritance rule
+        // BEFORE approval — a future revision of the same package keeps the
+        // grant only while the requirement contract stays unchanged.
+        .modifier(AuthorizationConfirmationModifier(
+            candidate: $authorizationCandidate,
+            authorize: authorizeRequirement) { outcome in
+                await handleMutationOutcome(outcome)
+            })
+        // Revocation confirmation: explicit, destructive; the grant record
+        // stays attached to the lineage (never transferred).
+        .modifier(RevocationConfirmationModifier(
+            candidate: $revocationCandidate,
+            revoke: revokeRequirement) { outcome in
+                await handleMutationOutcome(outcome)
+            })
         .onChange(of: showingImportPicker) { _, isPresented in
             guard isPresented else { return }
             let panel = ExtractorSettingsPackagePicker.makePanel()
@@ -566,6 +606,132 @@ struct ExtractionSettingsView: View {
         case .html: "HTML"
         default: kind.rawValue
         }
+    }
+
+    // MARK: - Credential requirements (#1159)
+
+    /// The inheritance rule, stated BEFORE approval (plan step 22 / AC.16).
+    static func authorizationConfirmationMessage(
+        _ summary: ExtractorCredentialRequirementSummary
+    ) -> String {
+        "Allow \(summary.packageName) to use \(summary.label) — \(summary.purpose) Authorization follows future revisions of this package only while this requirement's label, purpose, optionality, and registration stay unchanged; a changed requirement asks you to authorize again."
+    }
+
+    @ViewBuilder
+    private var credentialRequirementsSection: some View {
+        Section {
+            if packageModel.snapshot.credentialRequirements.isEmpty {
+                Text("No extractor package on this Mac requests a credential.")
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier(RequirementAccessibility.emptyState)
+            } else {
+                ForEach(packageModel.snapshot.credentialRequirements) { summary in
+                    requirementRow(summary)
+                }
+            }
+        } header: {
+            Text("Package Credentials")
+        } footer: {
+            Text("Extractor packages declare the credentials they need. Nothing is granted until you authorize it here, and a package only ever receives the credentials you authorized for it. Credentials live in your Keychain; their values are never shown.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func requirementRow(
+        _ summary: ExtractorCredentialRequirementSummary
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(summary.label)
+                    .fontWeight(.medium)
+                Spacer()
+                authorizationStateLabel(summary)
+            }
+            Text(summary.purpose)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                Text("\(summary.packageName) — \(summary.isOptional ? "optional" : "required")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if authorizeRequirement != nil {
+                    Button(summary.authorizationState == .changedContract
+                           ? "Re-authorize…"
+                           : "Authorize…") {
+                        authorizationCandidate = summary
+                    }
+                    .accessibilityIdentifier("\(RequirementAccessibility.authorizePrefix).\(summary.id)")
+                    .accessibilityLabel("Authorize \(summary.label) for \(summary.packageName)")
+                }
+                if authorizeRequirement != nil, summary.authorizationState == .authorized {
+                    Button("Change Credential…") {
+                        authorizationCandidate = summary
+                    }
+                    .accessibilityIdentifier("\(RequirementAccessibility.changePrefix).\(summary.id)")
+                    .accessibilityLabel("Change the credential for \(summary.label)")
+                }
+                if revokeRequirement != nil, summary.authorizationState == .authorized {
+                    Button("Revoke…", role: .destructive) {
+                        revocationCandidate = summary
+                    }
+                    .accessibilityIdentifier("\(RequirementAccessibility.revokePrefix).\(summary.id)")
+                    .accessibilityLabel("Revoke \(summary.label) authorization for \(summary.packageName)")
+                }
+            }
+        }
+        .padding(.vertical, 2)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("\(RequirementAccessibility.rowPrefix).\(summary.id)")
+    }
+
+    @ViewBuilder
+    private func authorizationStateLabel(
+        _ summary: ExtractorCredentialRequirementSummary
+    ) -> some View {
+        switch summary.authorizationState {
+        case .authorized:
+            Label("Authorized", systemImage: "checkmark.seal")
+                .foregroundStyle(.green)
+                .font(.caption)
+        case .needsAuthorization:
+            Text("Needs authorization")
+                .foregroundStyle(.orange)
+                .font(.caption)
+        case .changedContract:
+            Text("Changed — re-authorization needed")
+                .foregroundStyle(.orange)
+                .font(.caption)
+        }
+        if summary.isConfigured == false {
+            Text(summary.sourceName == "" ? "Missing credential" : "\(summary.sourceName): not set")
+                .foregroundStyle(.orange)
+                .font(.caption)
+                .accessibilityIdentifier("\(RequirementAccessibility.missingPrefix).\(summary.id)")
+        }
+    }
+
+    /// Stable accessibility identifiers for requirement rows and controls,
+    /// derived from package + registration + requirement identities.
+    private enum RequirementAccessibility {
+        static let emptyState = "extraction.credentials.empty"
+        static let rowPrefix = "extraction.credentials.row"
+        static let authorizePrefix = "extraction.credentials.authorize"
+        static let changePrefix = "extraction.credentials.change"
+        static let revokePrefix = "extraction.credentials.revoke"
+        static let missingPrefix = "extraction.credentials.missing"
+    }
+
+    /// Shared post-mutation handling for the authorization dialogs: surface a
+    /// redacted failure, then refresh the snapshot so authorization states
+    /// update immediately.
+    private func handleMutationOutcome(_ outcome: ExtractorPackageMutationOutcome?) async {
+        if let outcome, case .failed(let message) = outcome {
+            packageModel.reportFailure(message)
+        }
+        await packageModel.refresh()
     }
 
     /// The executable-code disclosure shown before any local import.
@@ -954,8 +1120,55 @@ struct ExtractorPackageSettingsSnapshot: Sendable, Equatable {
     var appliedGeneration: UInt64?
     var registrationSnapshots: [ExtractorRouteRegistrationSnapshot] = []
     var waitingRevisionIDs: Set<ExtractorPackageRevisionID> = []
+    /// Credential requirement summaries (#1159): presentation values only —
+    /// label, purpose, optionality, configured/missing state, source, and
+    /// authorization state. No secret values, no Keychain locations, no
+    /// package paths, no resolver.
+    var credentialRequirements: [ExtractorCredentialRequirementSummary] = []
 
     static let empty = ExtractorPackageSettingsSnapshot()
+}
+
+/// One declared credential requirement as presented in Installed Extractor
+/// Packages (#1159, plan steps 20-24). Identity fields are package- and
+/// requirement-derived so rows and controls have stable accessibility
+/// identifiers.
+struct ExtractorCredentialRequirementSummary: Identifiable, Hashable, Sendable {
+    enum AuthorizationState: Hashable, Sendable {
+        /// A grant exists and matches the declared contract fingerprint.
+        case authorized
+        /// No grant for this lineage + requirement.
+        case needsAuthorization
+        /// A grant exists but the contract fingerprint changed — the user
+        /// must re-authorize (AC.16).
+        case changedContract
+    }
+
+    let packageID: String
+    let packageName: String
+    let packageVersion: String
+    let registrationID: String
+    let requirementID: String
+    let label: String
+    let purpose: String
+    let isOptional: Bool
+    let isConfigured: Bool
+    let sourceName: String
+    let authorizationState: AuthorizationState
+    /// The declared registration scope (sorted, non-secret) — the same parts
+    /// the authorization writer pins into the contract fingerprint.
+    let kinds: [String]
+    let mimeTypes: [String]
+
+    var id: String { "\(packageID)/\(registrationID)/\(requirementID)" }
+
+    var authorizationStateText: String {
+        switch authorizationState {
+        case .authorized: return "Authorized"
+        case .needsAuthorization: return "Needs authorization"
+        case .changedContract: return "Changed — re-authorization needed"
+        }
+    }
 }
 
 /// One failed package, copied out of the reconciler's public failure struct so
@@ -981,6 +1194,67 @@ struct ExtractorPackageFailureSummary: Identifiable, Hashable, Sendable {
 enum ExtractorPackageMutationOutcome: Sendable, Equatable {
     case succeeded(String?)
     case failed(String)
+}
+
+/// The Authorize / Re-authorize / Change Credential confirmation (#1159).
+/// Its message states the inheritance rule BEFORE approval: a future
+/// revision of the same package keeps the grant only while the requirement
+/// contract stays unchanged.
+struct AuthorizationConfirmationModifier: ViewModifier {
+    @Binding var candidate: ExtractorCredentialRequirementSummary?
+    let authorize: (@Sendable (ExtractorCredentialRequirementSummary) async -> ExtractorPackageMutationOutcome)?
+    let onOutcome: (ExtractorPackageMutationOutcome?) async -> Void
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog(
+            "Authorize credential use?",
+            isPresented: Binding(
+                get: { candidate != nil },
+                set: { if !$0 { candidate = nil } }),
+            titleVisibility: .visible,
+            presenting: candidate) { summary in
+                Button("Authorize") {
+                    candidate = nil
+                    Task {
+                        let outcome = await authorize?(summary)
+                        await onOutcome(outcome)
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { summary in
+                Text(ExtractionSettingsView.authorizationConfirmationMessage(summary))
+            }
+    }
+}
+
+/// The Revoke confirmation (#1159): explicit and destructive for the GRANT —
+/// the stored credential itself is never deleted, and the record stays
+/// attached to its package lineage.
+struct RevocationConfirmationModifier: ViewModifier {
+    @Binding var candidate: ExtractorCredentialRequirementSummary?
+    let revoke: (@Sendable (ExtractorCredentialRequirementSummary) async -> ExtractorPackageMutationOutcome)?
+    let onOutcome: (ExtractorPackageMutationOutcome?) async -> Void
+
+    func body(content: Content) -> some View {
+        content.confirmationDialog(
+            "Revoke credential authorization?",
+            isPresented: Binding(
+                get: { candidate != nil },
+                set: { if !$0 { candidate = nil } }),
+            titleVisibility: .visible,
+            presenting: candidate) { summary in
+                Button("Revoke", role: .destructive) {
+                    candidate = nil
+                    Task {
+                        let outcome = await revoke?(summary)
+                        await onOutcome(outcome)
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { summary in
+                Text("Revoke \(summary.packageName)'s use of \(summary.label)? The package will not receive this credential until you authorize it again. The stored credential itself is not deleted.")
+            }
+    }
 }
 
 /// Fixed, path-free diagnostics for package mutations. Errors from the store
@@ -1112,6 +1386,12 @@ final class ExtractorPackageSettingsModel {
     private(set) var hasLoaded = false
     private(set) var lastError: String?
     private(set) var lastDiagnostic: String?
+
+    /// Surfaces a redacted failure from an app-owned authorization mutation
+    /// (#1159) through the same diagnostics path as import/remove.
+    func reportFailure(_ message: String) {
+        lastError = message
+    }
 
     static let checkingMessage = "Checking installed extractor packages…"
     static let importingMessage = "Validating and installing package…"

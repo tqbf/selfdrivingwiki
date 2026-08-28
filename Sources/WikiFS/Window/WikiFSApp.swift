@@ -809,10 +809,74 @@ struct WikiFSApp: App {
                                     digestPrefix: $0.digestPrefix,
                                     message: $0.message)
                             }
-                            snapshot.appliedGeneration = observation.appliedGeneration
+                             snapshot.appliedGeneration = observation.appliedGeneration
                             snapshot.waitingRevisionIDs = observation.waitingRevisionIDs
                         }
+                        // Credential requirement summaries (#1159): pure
+                        // composition over the registration projections, the
+                        // durable authorization snapshot, and UI-safe
+                        // descriptions. App + daemon read the same file;
+                        // only this app wiring can mutate it (below).
+                        snapshot.credentialRequirements = ExtractorCredentialSettingsSupport.summaries(
+                            registrationSnapshots: snapshot.registrationSnapshots,
+                            authorizationSnapshot: ExtractorCredentialAuthorizationReader(
+                                layout: ExtractorCredentialAuthorizationStoreLayout(
+                                    appGroupContainerRoot: containerDirectory)).snapshot(),
+                            credentials: KeychainCredentialService())
                         return snapshot
+                    },
+                    // App-only authorization mutation (AC.9): only this
+                    // wiring constructs the writer (the role gate rejects
+                    // daemon/CLI construction). Grant pins the exact
+                    // requirement fingerprint; revoke keeps the record's
+                    // lineage identity for reinstall visibility.
+                    authorizeRequirement: { summary in
+                        do {
+                            let writer = try ExtractorCredentialAuthorizationWriter(
+                                layout: ExtractorCredentialAuthorizationStoreLayout(
+                                    appGroupContainerRoot: containerDirectory),
+                                processRole: .app)
+                            guard let reference = ExtractorCredentialSettingsSupport
+                                .bindingReference(for: summary)
+                            else {
+                                return .failed("This requirement could not be authorized.")
+                            }
+                            let requirement = try ExtractorCredentialRequirement(
+                                id: ExtractorCredentialRequirementID(
+                                    validating: summary.requirementID),
+                                kind: .secret,
+                                isOptional: summary.isOptional,
+                                label: summary.label,
+                                purpose: summary.purpose)
+                            _ = try await writer.grant(
+                                packageID: ExtractorPackageID(
+                                    validating: summary.packageID),
+                                registrationID: ExtractorRegistrationID(
+                                    validating: summary.registrationID),
+                                kinds: summary.kinds,
+                                mimeTypes: summary.mimeTypes,
+                                requirement: requirement,
+                                credentialReference: reference)
+                            return .succeeded(nil)
+                        } catch {
+                            return .failed(ExtractorPackageMutationMessage.describe(error))
+                        }
+                    },
+                    revokeRequirement: { summary in
+                        do {
+                            let writer = try ExtractorCredentialAuthorizationWriter(
+                                layout: ExtractorCredentialAuthorizationStoreLayout(
+                                    appGroupContainerRoot: containerDirectory),
+                                processRole: .app)
+                            _ = try await writer.revoke(
+                                packageID: ExtractorPackageID(
+                                    validating: summary.packageID),
+                                requirementID: ExtractorCredentialRequirementID(
+                                    validating: summary.requirementID))
+                            return .succeeded(nil)
+                        } catch {
+                            return .failed(ExtractorPackageMutationMessage.describe(error))
+                        }
                     },
                     // Package mutation is app-only: the catalog writer rejects
                     // non-app roles, and only this Settings wiring constructs
