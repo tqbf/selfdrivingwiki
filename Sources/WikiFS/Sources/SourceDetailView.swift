@@ -1687,7 +1687,7 @@ struct SourceDetailView: View {
                               || isThisFileExtracting
                               || tracker.isSlotBusyForOtherSource(file.id))
                 } else {
-                    ForEach(ExtractionBackend.allCases, id: \.self) { backend in
+                    ForEach(ExtractionBackend.userSelectableCases, id: \.self) { backend in
                         Button(backend.displayName) {
                             Task {
                                 await runReExtraction(with: backend)

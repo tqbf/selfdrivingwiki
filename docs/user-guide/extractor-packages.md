@@ -28,7 +28,7 @@ Open **Settings** → **Extraction** and use the **Default Extractors** section.
 
 - **Reviewed package** identifies bundled, validated packages such as pdf2md and Defuddle.
 - **Installed package** identifies a package imported on this Mac.
-- **Connected service** identifies a host-managed adapter such as ACP, Claude, Gemini, or Docling Serve.
+- **Connected service** identifies a host-managed adapter such as ACP Provider or Docling Serve. Select Claude, Gemini, or another configured agent inside ACP Provider.
 - **Built in** identifies code that runs in the host, such as tag-based HTML extraction.
 
 A package selection does not pin a version. The app uses the highest compatible active revision of that package lineage. If the selected package is missing, failed, or incompatible, the picker keeps the unavailable selection visible and the app uses the fixed fallback: reviewed pdf2md for PDF or built-in tag-based extraction for HTML. The app never selects another third-party package silently.

@@ -84,13 +84,33 @@ struct ExtractorPackageSettingsTests {
     func hostSelectionsWriteBothCompatibilityDomains() {
         var config = ExtractionConfig()
 
-        ExtractorSettingsSelectionMapping.writePDF(.host(.gemini), into: &config)
+        ExtractorSettingsSelectionMapping.writePDF(.host(.acp), into: &config)
         ExtractorSettingsSelectionMapping.writeHTML(.host(.tagBased), into: &config)
 
-        #expect(config.backend == .gemini)
-        #expect(config.pdfExtractor == .builtIn(.pdf(.gemini)))
+        #expect(config.backend == .acp)
+        #expect(config.pdfExtractor == .builtIn(.pdf(.acp)))
         #expect(config.htmlBackend == .tagBased)
         #expect(config.htmlExtractor == .builtIn(.html(.tagBased)))
+    }
+
+    @Test("new UI surfaces exclude direct API backends")
+    func userSelectableBackendsUseACP() {
+        #expect(ExtractionBackend.userSelectableCases == [.localPdf2md, .acp, .doclingServe])
+        #expect(ExtractionBackend.allCases.contains(.anthropic))
+        #expect(ExtractionBackend.allCases.contains(.gemini))
+    }
+
+    @Test("legacy direct API selections migrate to their ACP providers")
+    func directAPISelectionsMapToACP() {
+        var anthropic = ExtractionConfig()
+        anthropic.backend = .anthropic
+        var gemini = ExtractionConfig()
+        gemini.pdfExtractor = .builtIn(.pdf(.gemini))
+
+        #expect(ExtractorSettingsSelectionMapping.pdfSelection(from: anthropic) == .host(.acp))
+        #expect(ExtractorSettingsSelectionMapping.acpProviderSelection(from: anthropic) == "claude-acp")
+        #expect(ExtractorSettingsSelectionMapping.pdfSelection(from: gemini) == .host(.acp))
+        #expect(ExtractorSettingsSelectionMapping.acpProviderSelection(from: gemini) == "gemini")
     }
 
     @Test("reviewed package selections write reviewed logical identities")
@@ -399,6 +419,16 @@ struct ExtractorPackageSettingsTests {
         #expect(viewSource.contains("Built-in default") == false)
         #expect(viewSource.contains("ExtractorSettingsSelectionMapping.writePDF"))
         #expect(viewSource.contains("ExtractorSettingsSelectionMapping.writeHTML"))
+        #expect(viewSource.contains("extractorOption(\"Claude\"") == false)
+        #expect(viewSource.contains("extractorOption(\"Gemini\"") == false)
+        #expect(viewSource.contains("Claude (Anthropic API)") == false)
+        #expect(viewSource.contains("Gemini (Google AI)") == false)
+        let sourceDetailSource = try String(
+            contentsOf: repositoryRoot.appendingPathComponent(
+                "Sources/WikiFS/Sources/SourceDetailView.swift"),
+            encoding: .utf8)
+        #expect(sourceDetailSource.contains("ForEach(ExtractionBackend.userSelectableCases"))
+        #expect(sourceDetailSource.contains("ForEach(ExtractionBackend.allCases") == false)
 
         // The ACP provider picker stores a String. Every provider tag must use
         // the raw String value rather than the typed ProviderID wrapper.

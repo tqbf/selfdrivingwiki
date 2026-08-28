@@ -74,7 +74,16 @@ public enum ExtractionBackend: String, Sendable, CaseIterable, Codable {
     /// A self-hosted Docling Serve HTTP service.
     case doclingServe
 
-    /// A short label for the Settings picker.
+    /// Backends that a user can choose in current UI surfaces. Direct
+    /// Anthropic and Gemini API cases remain decodable for old configuration,
+    /// queue, and provenance records, but new work uses their ACP providers.
+    public static let userSelectableCases: [ExtractionBackend] = [
+        .localPdf2md,
+        .acp,
+        .doclingServe,
+    ]
+
+    /// A short label for compatibility and inspection surfaces.
     public var displayName: String {
         switch self {
         case .localPdf2md: return "Local pdf2md"
