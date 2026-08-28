@@ -65,6 +65,18 @@ public struct ExtractionConfig: JSONSidecarConfig {
     /// `htmlBackend` keeps its existing meaning and precedence.
     public var htmlExtractor: ExtractionBackendReference?
 
+    /// Route-indexed selections, one record per typed extraction route
+    /// (`ExtractorRouteID` = kind + normalized MIME). A record for a canonical
+    /// route takes precedence over the matching legacy `pdfExtractor` /
+    /// `htmlExtractor` field; legacy fields remain the fallback when the record
+    /// is absent, so pre-route config files resolve exactly as before.
+    /// Mutation flows only through `setExtractorSelection(_:for:)` (and the
+    /// normalizing initializer/decoder), keeping the array sorted and
+    /// duplicate-free at all times. Persisted as a deterministically sorted
+    /// array (never a string-keyed dictionary); a missing key decodes to an
+    /// empty list.
+    public private(set) var routeExtractors: [ExtractorRouteSelectionRecord]
+
     /// The config's JSON filename inside the App Group container.
     public static let fileName = "extraction-config.json"
 
@@ -79,7 +91,8 @@ public struct ExtractionConfig: JSONSidecarConfig {
         htmlBackend: HtmlExtractionBackend? = nil,
         podcastBackend: PodcastTranscriptionBackend? = nil,
         pdfExtractor: ExtractionBackendReference? = nil,
-        htmlExtractor: ExtractionBackendReference? = nil
+        htmlExtractor: ExtractionBackendReference? = nil,
+        routeExtractors: [ExtractorRouteSelectionRecord] = []
     ) {
         self.backend = backend
         self.acpProviderId = acpProviderId
@@ -92,11 +105,17 @@ public struct ExtractionConfig: JSONSidecarConfig {
         self.podcastBackend = podcastBackend
         self.pdfExtractor = pdfExtractor
         self.htmlExtractor = htmlExtractor
+        self.routeExtractors = routeExtractors.normalizedForPersistence().records
     }
 
     /// The default model id used everywhere a model isn't explicitly set, so the
     /// literal lives in one place.
     public static let defaultAnthropicModel = "claude-sonnet-4-6"
+
+    /// Decode-resilience bound: how many consecutive malformed route records a
+    /// decode tolerates before assuming the coder is not advancing the array
+    /// index and truncating (see `decodedRouteRecords`).
+    static let maximumConsecutiveRouteDecodeFailures = 8
 
     public static let defaultGeminiModel = "gemini-3.5-flash"
 
@@ -129,6 +148,7 @@ public struct ExtractionConfig: JSONSidecarConfig {
         case doclingServeEndpoint
         case htmlBackend, podcastBackend
         case pdfExtractor, htmlExtractor
+        case routeExtractors
     }
 
     public init(from decoder: Decoder) throws {
@@ -155,6 +175,110 @@ public struct ExtractionConfig: JSONSidecarConfig {
         self.podcastBackend = DebugLog.trying("init(from:) decode podcastBackend") { try c.decode(PodcastTranscriptionBackend.self, forKey: .podcastBackend) }
         self.pdfExtractor = DebugLog.trying("init(from:) decode pdfExtractor") { try c.decode(ExtractionBackendReference.self, forKey: .pdfExtractor) }
         self.htmlExtractor = DebugLog.trying("init(from:) decode htmlExtractor") { try c.decode(ExtractionBackendReference.self, forKey: .htmlExtractor) }
+        self.routeExtractors = Self.decodedRouteRecords(from: c)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        // Explicit encode so the persisted byte shape stays identical to the
+        // synthesized form (encodeIfPresent for optionals) while route records
+        // are always written in deterministic route order.
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(backend, forKey: .backend)
+        try c.encodeIfPresent(acpProviderId, forKey: .acpProviderId)
+        try c.encode(anthropicModel, forKey: .anthropicModel)
+        try c.encodeIfPresent(anthropicBaseURLOverride, forKey: .anthropicBaseURLOverride)
+        try c.encode(geminiModel, forKey: .geminiModel)
+        try c.encodeIfPresent(geminiBaseURLOverride, forKey: .geminiBaseURLOverride)
+        try c.encodeIfPresent(doclingServeEndpoint, forKey: .doclingServeEndpoint)
+        try c.encodeIfPresent(htmlBackend, forKey: .htmlBackend)
+        try c.encodeIfPresent(podcastBackend, forKey: .podcastBackend)
+        try c.encodeIfPresent(pdfExtractor, forKey: .pdfExtractor)
+        try c.encodeIfPresent(htmlExtractor, forKey: .htmlExtractor)
+        try c.encode(routeExtractors.sorted(), forKey: .routeExtractors)
+    }
+
+    // MARK: - Route selections
+
+    /// The effective version-free selection for one route, applying the
+    /// persistence precedence: an exact `routeExtractors` record first, then the
+    /// matching legacy reference field for a canonical route (`pdfExtractor` /
+    /// `htmlExtractor`), then no selection. The older `backend` / `htmlBackend`
+    /// fields are the layer below this one — the resolver falls through to them
+    /// exactly as it did before route records existed.
+    public func extractorSelection(for route: ExtractorRouteID) -> ExtractionBackendReference? {
+        if let record = routeExtractors.first(where: { $0.route == route }) { return record.extractor }
+        if route == .canonicalPDF { return pdfExtractor }
+        if route == .canonicalHTML { return htmlExtractor }
+        return nil
+    }
+
+    /// Insert, replace, or remove (`nil`) the selection for one route.
+    ///
+    /// Dual-write compatibility: a canonical-route write also updates the
+    /// matching legacy reference field (`pdfExtractor` / `htmlExtractor`) so old
+    /// builds reading those fields resolve the same selection. The older
+    /// `backend` / `htmlBackend` fields stay owned by the Settings mapping
+    /// (`writePDF` / `writeHTML`), which keeps them truthful when a selection is
+    /// expressed through them. Unrelated route records are preserved; removal
+    /// drops only this route's record and clears the legacy reference, letting
+    /// the legacy fallback layer apply again.
+    public mutating func setExtractorSelection(_ extractor: ExtractionBackendReference?, for route: ExtractorRouteID) {
+        routeExtractors.removeAll { $0.route == route }
+        if let extractor {
+            routeExtractors.append(ExtractorRouteSelectionRecord(route: route, extractor: extractor))
+            routeExtractors.sort()
+        }
+        if route == .canonicalPDF {
+            pdfExtractor = extractor
+        } else if route == .canonicalHTML {
+            htmlExtractor = extractor
+        }
+    }
+
+    /// Resilient route-record decode, matching the config's degrade-don't-throw
+    /// philosophy: a missing key decodes to an empty list, a wholly malformed
+    /// array degrades to empty through the logged decode seam, a malformed
+    /// single record is skipped so later valid records still decode, and
+    /// duplicate route records are resolved deterministically
+    /// (canonically-greatest record wins, independent of file order) with one
+    /// bounded diagnostic.
+    private static func decodedRouteRecords(
+        from container: KeyedDecodingContainer<CodingKeys>
+    ) -> [ExtractorRouteSelectionRecord] {
+        guard container.contains(.routeExtractors) else { return [] }
+        guard var array = DebugLog.trying("init(from:) decode routeExtractors", operation: { try container.nestedUnkeyedContainer(forKey: .routeExtractors) }) else {
+            return []
+        }
+        var records: [ExtractorRouteSelectionRecord] = []
+        // A decoder is not required to advance an unkeyed container when a
+        // decode throws — Foundation's JSONDecoder leaves the index in place —
+        // so each failed record is explicitly consumed before continuing.
+        // Bound consecutive failures anyway: a coder that cannot even consume
+        // an arbitrary JSON value must degrade to a truncated decode, never hang.
+        var consecutiveFailures = 0
+        while array.isAtEnd == false {
+            let countBefore = records.count
+            if let record = DebugLog.trying("init(from:) decode routeExtractors record", operation: { try array.decode(ExtractorRouteSelectionRecord.self) }) {
+                records.append(record)
+            } else if DebugLog.trying("init(from:) consume malformed routeExtractors record", operation: { try array.decode(AnyJSONValue.self) }) != nil {
+                consecutiveFailures = 0
+                continue
+            }
+            if records.count == countBefore {
+                consecutiveFailures += 1
+                if consecutiveFailures > Self.maximumConsecutiveRouteDecodeFailures {
+                    DebugLog.config("ExtractionConfig: routeExtractors decode stalled after \(consecutiveFailures) malformed records; truncating the remainder")
+                    break
+                }
+            } else {
+                consecutiveFailures = 0
+            }
+        }
+        let normalized = records.normalizedForPersistence()
+        if normalized.droppedDuplicates > 0 {
+            DebugLog.config("ExtractionConfig: resolved \(normalized.droppedDuplicates) duplicate route selection record(s); kept the canonically-greatest record per route")
+        }
+        return normalized.records
     }
 
     // MARK: - Persistence (via `JSONSidecarConfig`)
@@ -165,5 +289,32 @@ public struct ExtractionConfig: JSONSidecarConfig {
     /// decode to `JSONSidecarConfig.load(from:)` and supplies the default config.
     public static func load(from directory: URL) -> ExtractionConfig {
         load(from: directory) ?? ExtractionConfig()
+    }
+}
+
+/// A `Decodable` that accepts any JSON value. Used only to consume a malformed
+/// array element so decoding can continue past it — a failed decode does not
+/// advance an unkeyed container's index. Each `try?` here is one attempt of
+/// the type ladder, not error swallowing: the final fallback rethrows.
+private struct AnyJSONValue: Decodable {
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() { return }
+        // The type ladder below intentionally ignores each failed attempt: an
+        // unmatched type is expected while probing for the value's shape, and
+        // the final fallback rethrows. Ignoring here is genuinely correct.
+        // swiftlint:disable:next silent_try_optional
+        if (try? container.decode([AnyJSONValue].self)) != nil { return }
+        // swiftlint:disable:next silent_try_optional
+        if (try? container.decode([String: AnyJSONValue].self)) != nil { return }
+        // swiftlint:disable:next silent_try_optional
+        if (try? container.decode(String.self)) != nil { return }
+        // swiftlint:disable:next silent_try_optional
+        if (try? container.decode(Double.self)) != nil { return }
+        // swiftlint:disable:next silent_try_optional
+        if (try? container.decode(Bool.self)) != nil { return }
+        throw DecodingError.dataCorrupted(.init(
+            codingPath: container.codingPath,
+            debugDescription: "unsupported JSON value"))
     }
 }
