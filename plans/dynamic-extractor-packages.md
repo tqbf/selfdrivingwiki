@@ -187,6 +187,26 @@ Primary touch points include:
 31. Keep reviewed local pdf2md as the PDF fallback and built-in tag-based extraction as the HTML fallback.
 32. Keep an unavailable logical selection saved. Report one redacted diagnostic and use the documented fallback. Never select another third-party package silently.
 
+## Route selections: typed MIME routes
+
+The Settings routing table needs a stable identity for one default-extraction route. Route identity is a typed pair, `ExtractorRouteID`: an `ExtractorKind` plus a normalized `ExtractorMIMEType`. The type keeps three namespaces distinct — a route is not an extractor kind, not a backend kind, and not a raw MIME string. MIME is authoritative. Filename extensions stay registration matching hints and never enter the persisted route.
+
+The current canonical routes are PDF (`application/pdf`) and HTML (`text/html`). Route identity admits other kind-plus-MIME pairs, and the UI can display them, but execution adapters for new kinds stay separate work. This stack changes no execution path.
+
+`ExtractionConfig.routeExtractors` stores one `ExtractorRouteSelectionRecord` per route as a deterministically sorted array. A string-keyed JSON dictionary was rejected: an array keeps the persisted order canonical and makes duplicate route keys in hand-edited files representable and resolvable.
+
+Precedence for a route:
+
+1. An exact `routeExtractors` record.
+2. For a canonical route, the matching legacy field (`pdfExtractor` or `htmlExtractor`).
+3. No selection.
+
+Below both layers, `backend` and `htmlBackend` keep their existing meaning. A config file without `routeExtractors` resolves exactly as before.
+
+Dual-write compatibility. A write through `setExtractorSelection(_:for:)` to a canonical route also updates the matching legacy reference field, so old builds reading `pdfExtractor` or `htmlExtractor` see the same selection. Removal clears the record and the legacy reference, so the legacy fallback applies again. The Settings mapping (`writePDF` / `writeHTML`) keeps owning `backend` and `htmlBackend`.
+
+Decode resilience. A missing key decodes to an empty list. A malformed record is dropped through the logged decode seam. Duplicate records for one route resolve deterministically: the canonically-greatest record wins, independent of file order, with one bounded diagnostic.
+
 ## Phase 2: Add the trusted dynamic Cordis plugin host
 
 1. Keep `PluginCatalog` immutable and link-time. Do not add dynamic module loading to it.

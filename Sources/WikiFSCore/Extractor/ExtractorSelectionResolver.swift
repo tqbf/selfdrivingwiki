@@ -43,11 +43,27 @@ public struct ExtractionSelectionDecision: Hashable, Sendable {
 
 /// Applies the version-free selection precedence without changing the persisted configuration.
 public enum ExtractorSelectionResolver {
+    /// Route-aware selection entry. Resolves one route through the same
+    /// precedence as the per-kind entry points; returns `nil` for routes without
+    /// a host execution path (a future registration's MIME type has no resolver
+    /// until an execution adapter exists).
+    public static func resolve(
+        _ route: ExtractorRouteID,
+        configuration: ExtractionConfig,
+        activeRegistrations: [ActiveExtractorRegistration]
+    ) -> ExtractionSelectionDecision? {
+        if route == .canonicalPDF { return resolvePDF(configuration: configuration, activeRegistrations: activeRegistrations) }
+        if route == .canonicalHTML { return resolveHTML(configuration: configuration, activeRegistrations: activeRegistrations) }
+        return nil
+    }
+
     public static func resolvePDF(
         configuration: ExtractionConfig,
         activeRegistrations: [ActiveExtractorRegistration]
     ) -> ExtractionSelectionDecision {
-        guard let logicalSelection = configuration.pdfExtractor else {
+        // Route-aware: an exact route record participates first; with no
+        // records this is exactly the pre-route `pdfExtractor ?? backend` rule.
+        guard let logicalSelection = configuration.extractorSelection(for: .canonicalPDF) else {
             return ExtractionSelectionDecision(selection: .pdfBuiltIn(configuration.backend))
         }
         switch logicalSelection {
@@ -73,7 +89,10 @@ public enum ExtractorSelectionResolver {
         configuration: ExtractionConfig,
         activeRegistrations: [ActiveExtractorRegistration]
     ) -> ExtractionSelectionDecision {
-        guard let logicalSelection = configuration.htmlExtractor else {
+        // Route-aware: an exact route record participates first; with no
+        // records this is exactly the pre-route `htmlExtractor ?? htmlBackend`
+        // (or prompt) rule.
+        guard let logicalSelection = configuration.extractorSelection(for: .canonicalHTML) else {
             guard let legacy = configuration.htmlBackend else {
                 return ExtractionSelectionDecision(selection: .noHTMLSelection)
             }

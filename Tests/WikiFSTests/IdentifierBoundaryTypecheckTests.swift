@@ -71,6 +71,16 @@ struct IdentifierBoundaryTypecheckTests {
             ]
         ),
         BatchFixture(
+            name: "negative-extractor-route-batch.swift",
+            cases: [
+                .init(label: "extractorKindIsRejectedByRouteAPI", batchFixture: "negative-extractor-route-batch.swift", expectedDiagnostic: "cannot convert value of type 'ExtractorKind' to expected argument type 'ExtractorRouteID'"),
+                .init(label: "mimeTypeIsRejectedByRouteAPI", batchFixture: "negative-extractor-route-batch.swift", expectedDiagnostic: "cannot convert value of type 'ExtractorMIMEType' to expected argument type 'ExtractorRouteID'"),
+                .init(label: "stringIsRejectedByRouteAPI", batchFixture: "negative-extractor-route-batch.swift", expectedDiagnostic: "cannot convert value of type 'String' to expected argument type 'ExtractorRouteID'"),
+                .init(label: "routeIsRejectedByKindAPI", batchFixture: "negative-extractor-route-batch.swift", expectedDiagnostic: "cannot convert value of type 'ExtractorRouteID' to expected argument type 'ExtractorKind'"),
+                .init(label: "extractorKindIsRejectedByMIMEAPI", batchFixture: "negative-extractor-route-batch.swift", expectedDiagnostic: "cannot convert value of type 'ExtractorKind' to expected argument type 'ExtractorMIMEType'"),
+            ]
+        ),
+        BatchFixture(
             name: "negative-read-access-batch.swift",
             cases: [
                 .init(label: "readAccessCannotEscape", batchFixture: "negative-read-access-batch.swift", expectedDiagnostic: "requires that 'WikiReadAccess' conform to 'Copyable'"),
@@ -101,7 +111,10 @@ struct IdentifierBoundaryTypecheckTests {
         "chatIDIsRejectedByPageAPI",
         "chatIDIsRejectedByProcessedMarkdownVersionAPI",
         "chatIDIsRejectedBySourceAPI",
+        "extractorKindIsRejectedByMIMEAPI",
+        "extractorKindIsRejectedByRouteAPI",
         "markdownVersionIDIsRejectedBySourceVersionAPI",
+        "mimeTypeIsRejectedByRouteAPI",
         "pageIDIsRejectedByChatAPI",
         "pageIDIsRejectedByChatTurnAPI",
         "pageIDIsRejectedByLauncherChatAPI",
@@ -118,6 +131,7 @@ struct IdentifierBoundaryTypecheckTests {
         "readAccessCannotEscape",
         "readAccessCannotExposeStore",
         "readAccessCannotWrite",
+        "routeIsRejectedByKindAPI",
         "sourceIDIsRejectedByChatAPI",
         "sourceIDIsRejectedByPageAPI",
         "sourceIDIsRejectedByProcessedMarkdownVersionAPI",
@@ -129,6 +143,7 @@ struct IdentifierBoundaryTypecheckTests {
         "sourceVersionIDIsRejectedBySourceAPI",
         "stringIsRejectedByChatCommandAPI",
         "stringIsRejectedByLauncherChatAPI",
+        "stringIsRejectedByRouteAPI",
     ]
 
     private enum ProcessExitWaitError: Error {
