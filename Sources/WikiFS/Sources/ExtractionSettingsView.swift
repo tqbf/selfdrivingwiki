@@ -96,15 +96,18 @@ struct ExtractionSettingsView: View {
         Form {
             Section {
                 extractorRouteTable
-
-                // Transcripts are a different operation domain (host adapters,
-                // not the package protocol), so the picker stays outside the
-                // route table — the sub-header keeps the two visually grouped.
-                Label("Transcripts", systemImage: "mic")
-                    .font(.callout.weight(.medium))
+            } header: {
+                Text("Default Extractors")
+            } footer: {
+                Text("Reviewed packages run outside the app through the extractor protocol. Installed packages are local additions. Connected services use host-managed providers.")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
+            }
 
+            // Transcripts are a different operation domain (host adapters,
+            // not the package protocol), so the picker is its own section at
+            // the same level as the extractor routes.
+            Section {
                 Picker("Podcast Transcript", selection: podcastBackendBinding) {
                     Text("Prompt me when transcribing").tag(nil as PodcastTranscriptionBackend?)
                     ForEach(PodcastTranscriptionBackend.allCases, id: \.self) { backend in
@@ -114,9 +117,9 @@ struct ExtractionSettingsView: View {
                 .onChange(of: draftPodcastBackend) { persistAll() }
                 .accessibilityLabel("Default podcast transcript extractor")
             } header: {
-                Text("Default Extractors")
+                Text("Transcripts")
             } footer: {
-                Text("Reviewed packages run outside the app through the extractor protocol. Installed packages are local additions. Connected services use host-managed providers. Podcast transcripts are not package-backed in protocol revision 1.")
+                Text("Podcast transcripts are not package-backed in protocol revision 1.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
