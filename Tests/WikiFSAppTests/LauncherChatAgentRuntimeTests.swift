@@ -45,7 +45,7 @@ struct LauncherChatAgentRuntimeTests {
         let chat = try store.createChat(kind: .edit, title: "Prepared start")
         let coordinator = ExtractionCoordinator(
             containerDirectory: directory,
-            localExtractorFactory: { UnavailablePdf2MarkdownExtractor() })
+            localExtractorFactory: { LauncherStubExtractor() })
         let gate = GenerationGate(laneLimits: [.ingest: 1, .interactive: 1])
         let launcherPair = makeTestLauncherPair(
             extractionCoordinator: coordinator,
@@ -234,7 +234,7 @@ struct LauncherChatAgentRuntimeTests {
         let coordinator = await MainActor.run {
             ExtractionCoordinator(
                 containerDirectory: directory,
-                localExtractorFactory: { UnavailablePdf2MarkdownExtractor() }
+                localExtractorFactory: { LauncherStubExtractor() }
             )
         }
         let gate = await MainActor.run {
@@ -370,6 +370,20 @@ private actor SuspendingLiveEventSink {
 
     var events: [AgentEvent] { recordedEvents }
 }
+private struct LauncherStubExtractor: MarkdownExtractor {
+    var displayName: String { "launcher-stub" }
+
+    func readiness() async -> ExtractionReadiness { .ready }
+
+    func convert(
+        pdfData: Data,
+        filename: String,
+        onProgress: (@Sendable (String) -> Void)?
+    ) async throws -> String {
+        "stub"
+    }
+}
+
 private final class LockedInt: @unchecked Sendable {
     private let lock = NSLock()
     private var storedValue = 0

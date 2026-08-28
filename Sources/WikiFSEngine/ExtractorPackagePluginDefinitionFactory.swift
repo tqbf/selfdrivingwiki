@@ -150,7 +150,9 @@ public enum ExtractorPackagePluginDefinitionFactory {
                 catalogReader: catalogReader,
                 executor: executor,
                 admission: admissionChecker,
-                sourceLocator: sourceLocator)
+                sourceLocator: sourceLocator,
+                sharedRuntimeCacheRoot: layout.root.appendingPathComponent("runtime-cache", isDirectory: true),
+                sharedModelCacheRoot: layout.root.appendingPathComponent("model-cache", isDirectory: true))
 
             // Build every registration factory before mutating the registry.
             var entries: [ExtractionBatchEntry] = []

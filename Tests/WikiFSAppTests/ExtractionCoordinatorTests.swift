@@ -38,7 +38,7 @@ struct ExtractionCoordinatorTests {
             containerDirectory: dir,
             credentialStore: InMemoryExtractionCredentialStore(seeds: seeds),
             fetcher: FakeHTTPFetcher(body: "x"),
-            localExtractorFactory: { LocalPdf2MarkdownExtractor() })
+            localExtractorFactory: { CoordinatorStubExtractor() })
     }
 
     // MARK: - Backend resolution
@@ -46,7 +46,7 @@ struct ExtractionCoordinatorTests {
     @Test func defaultsToLocalPdf2md() async throws {
         let coord = try makeCoordinator(dir: tempDirectory())
         #expect((try await coord.prepare()).backend == .localPdf2md)
-        #expect((try await coord.prepare()).extractor is LocalPdf2MarkdownExtractor)
+        #expect((try await coord.prepare()).extractor is CoordinatorStubExtractor)
     }
 
     @Test func resolvesAnthropicBackend() async throws {
@@ -145,9 +145,9 @@ struct ExtractionCoordinatorTests {
             containerDirectory: dir,
             credentialStore: InMemoryExtractionCredentialStore(),
             fetcher: FakeHTTPFetcher(body: "x"),
-            localExtractorFactory: { LocalPdf2MarkdownExtractor() })
+            localExtractorFactory: { CoordinatorStubExtractor() })
         #expect((try await coord.prepare()).backend == .localPdf2md)
-        #expect((try await coord.prepare()).extractor is LocalPdf2MarkdownExtractor)
+        #expect((try await coord.prepare()).extractor is CoordinatorStubExtractor)
     }
 
     // MARK: - ACP backend
@@ -173,10 +173,24 @@ struct ExtractionCoordinatorTests {
             credentialStore: InMemoryExtractionCredentialStore(),
             acpCredentialStore: InMemoryACPCredentialStore(),
             fetcher: FakeHTTPFetcher(body: "x"),
-            localExtractorFactory: { LocalPdf2MarkdownExtractor() })
+            localExtractorFactory: { CoordinatorStubExtractor() })
         #expect((try await coord.prepare()).backend == .acp)
-        // Falls back to local because the command can't be resolved on PATH.
-        #expect((try await coord.prepare()).extractor is LocalPdf2MarkdownExtractor)
+        // Falls back to local because the command cannot be resolved on PATH.
+        #expect((try await coord.prepare()).extractor is CoordinatorStubExtractor)
+    }
+}
+
+private struct CoordinatorStubExtractor: MarkdownExtractor {
+    var displayName: String { "coordinator-stub" }
+
+    func readiness() async -> ExtractionReadiness { .ready }
+
+    func convert(
+        pdfData: Data,
+        filename: String,
+        onProgress: (@Sendable (String) -> Void)?
+    ) async throws -> String {
+        "stub"
     }
 }
 #endif

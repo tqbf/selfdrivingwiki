@@ -10,7 +10,6 @@ import WikiFSCore
 public enum ExtractionPluginFactory {
     public typealias CredentialReader = @Sendable (ExtractionSecret) -> String?
     public typealias ACPResolver = @Sendable (ExtractionConfig) -> (any MarkdownExtractor)?
-    public typealias LocalExtractor = @Sendable () async -> any MarkdownExtractor
 }
 
 /// One process-scoped service and the cleanup that owns its concrete runtime.
@@ -81,8 +80,6 @@ public struct ExtractionProcessInput: Sendable {
     public let readCredential: ExtractionPluginFactory.CredentialReader
     public let resolveACP: ExtractionPluginFactory.ACPResolver
     public let httpFetcher: any HTTPRequestFetcher
-    public let makeLocalExtractor: ExtractionPluginFactory.LocalExtractor
-    public let makeHTMLExtractor: @Sendable () async -> any HtmlMarkdownExtractor
     public let packageContainerDirectory: URL
     public let packageProcessRole: ExtractorPackageProcessRole
     /// App-only hook that publishes the reviewed bundled revisions into the
@@ -97,8 +94,6 @@ public struct ExtractionProcessInput: Sendable {
         readCredential: @escaping ExtractionPluginFactory.CredentialReader,
         resolveACP: @escaping ExtractionPluginFactory.ACPResolver,
         httpFetcher: any HTTPRequestFetcher,
-        makeLocalExtractor: @escaping ExtractionPluginFactory.LocalExtractor,
-        makeHTMLExtractor: @escaping @Sendable () async -> any HtmlMarkdownExtractor = { TagBasedHtmlExtractor() },
         packageContainerDirectory: URL? = nil,
         packageProcessRole: ExtractorPackageProcessRole = .app,
         bootstrapReviewedPackages: (@Sendable () async -> Void)? = nil
@@ -108,8 +103,6 @@ public struct ExtractionProcessInput: Sendable {
         self.readCredential = readCredential
         self.resolveACP = resolveACP
         self.httpFetcher = httpFetcher
-        self.makeLocalExtractor = makeLocalExtractor
-        self.makeHTMLExtractor = makeHTMLExtractor
         self.packageContainerDirectory = packageContainerDirectory ?? FileManager.default.temporaryDirectory
         self.packageProcessRole = packageProcessRole
         self.bootstrapReviewedPackages = bootstrapReviewedPackages
@@ -167,31 +160,23 @@ public struct ProcessPluginCatalogFactories: Sendable {
 
 public struct BasePluginCatalogFactories: Sendable {
     public let agentProviderServices: any AgentProviderServices
-    public let makePDFExtractor: ExtractionPluginFactory.LocalExtractor
 
-    public init(
-        agentProviderServices: any AgentProviderServices,
-        makePDFExtractor: @escaping ExtractionPluginFactory.LocalExtractor
-    ) {
+    public init(agentProviderServices: any AgentProviderServices) {
         self.agentProviderServices = agentProviderServices
-        self.makePDFExtractor = makePDFExtractor
     }
 }
 
 public struct AppPluginCatalogFactories: Sendable {
     public let base: BasePluginCatalogFactories
-    public let makeDefuddleExtractor: @Sendable () async -> any HtmlMarkdownExtractor
     public let makeDaemonTransport: RegisteredTransportProvider.Factory
     public let makeTantivyRuntime: SearchRuntimeFactory.Factory
 
     public init(
         base: BasePluginCatalogFactories,
-        makeDefuddleExtractor: @escaping @Sendable () async -> any HtmlMarkdownExtractor,
         makeDaemonTransport: @escaping RegisteredTransportProvider.Factory,
         makeTantivyRuntime: @escaping SearchRuntimeFactory.Factory = SearchRuntimeCompositionFactory.runtimeFactory
     ) {
         self.base = base
-        self.makeDefuddleExtractor = makeDefuddleExtractor
         self.makeDaemonTransport = makeDaemonTransport
         self.makeTantivyRuntime = makeTantivyRuntime
     }
@@ -209,6 +194,14 @@ public struct DaemonPluginCatalogFactories: Sendable {
 public struct AppProcessServices: Sendable {
     public let agentProvider: any AgentProviderServices
     public let extraction: any ExtractionServices
+    /// The process-scoped extraction adapter registry. The Settings package
+    /// lifecycle list reads installed exact registrations from it.
+    public let extractionBackends: ExtractionBackendRegistry
+    /// The process package-extraction context when the extraction plugin booted
+    /// one. The Settings package lifecycle uses it for reconciliation
+    /// observation and deterministic post-mutation wakes. nil is legal: the
+    /// context is optional at resolution, and consumers degrade to read-only.
+    public let extractionContext: ProcessExtractionContext?
     public let queue: any QueueEngineClient
     public let transport: DaemonTransportServices
     public let renderer: any RendererServices
@@ -217,6 +210,8 @@ public struct AppProcessServices: Sendable {
         AppProcessServices(
             agentProvider: try await profile.context.require(ProcessServiceKeys.agentProvider),
             extraction: try await profile.context.require(ProcessServiceKeys.extraction),
+            extractionBackends: try await profile.context.require(ProcessServiceKeys.extractionBackends),
+            extractionContext: try await profile.context.find(ProcessServiceKeys.extractionContext),
             queue: try await profile.context.require(ProcessServiceKeys.queue),
             transport: try await profile.context.require(ProcessServiceKeys.transport),
             renderer: try await profile.context.require(ProcessServiceKeys.renderer))
@@ -471,8 +466,7 @@ public actor DaemonProcessProfileOwner {
     }
 
     public static func production(
-        containerDirectory: URL,
-        makeLocalExtractor: @escaping ExtractionPluginFactory.LocalExtractor
+        containerDirectory: URL
     ) throws -> DaemonProcessProfileOwner {
         let providerServices = MutableAgentProviderServices()
         let extractionServices = MutableExtractionServices()
@@ -505,8 +499,6 @@ public actor DaemonProcessProfileOwner {
                             acpCredentialStore: acpCredentialStore)
                     },
                     httpFetcher: URLSessionRequestFetcher(),
-                    makeLocalExtractor: makeLocalExtractor,
-                    makeHTMLExtractor: { TagBasedHtmlExtractor() },
                     packageContainerDirectory: containerDirectory,
                     packageProcessRole: .daemon)
             ),
@@ -517,8 +509,7 @@ public actor DaemonProcessProfileOwner {
             })
         let processCatalog = try ProcessPluginCatalog.build(factories: processFactories)
         let childCatalog = try DaemonPluginCatalog.build(factories: .init(base: .init(
-            agentProviderServices: providerServices,
-            makePDFExtractor: makeLocalExtractor)))
+            agentProviderServices: providerServices)))
         return DaemonProcessProfileOwner(
             boot: {
                 try await CordisBoot.boot(.init(
@@ -989,7 +980,6 @@ public enum AppPluginCatalog {
     ) throws -> PluginCatalog {
         var definitions = baseDefinitions(factories.base)
         definitions.append(contentsOf: [
-            DefuddleExtractionPlugin.definition(makeExtractor: factories.makeDefuddleExtractor),
             RendererServicesPlugin.definition,
             DaemonTransportPlugin.definition(makeServices: factories.makeDaemonTransport),
             URLFetchIntegrationPlugin.definition,
@@ -1040,7 +1030,6 @@ private func baseDefinitions(_ factories: BasePluginCatalogFactories) -> [Plugin
         SystemPromptPlugin.definition,
         AgentLoopPlugin.definition,
         ExtractionPlugin.definition,
-        Pdf2mdExtractionPlugin.definition(makeExtractor: factories.makePDFExtractor),
         SearchPlugin.definition,
         EmbeddingsSearchPlugin.definition,
         RenderersPlugin.definition,

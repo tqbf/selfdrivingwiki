@@ -689,10 +689,7 @@ struct DaemonChatHostTests {
         ))
         try wikiRegistry.save(to: dir)
         let coordinator = await MainActor.run {
-            ExtractionCoordinator(
-                containerDirectory: dir,
-                localExtractorFactory: { UnavailablePdf2MarkdownExtractor() }
-            )
+            ExtractionCoordinator(services: UnavailableExtractionServices())
         }
         let gate = await MainActor.run {
             GenerationGate(laneLimits: [.ingest: 1, .interactive: 1])

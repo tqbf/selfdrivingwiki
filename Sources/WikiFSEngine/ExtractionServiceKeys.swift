@@ -286,6 +286,68 @@ public actor ExtractionBackendRegistry {
     }
 }
 
+/// One installed (exact) extraction package registration as shown in
+/// Settings → Extraction. A read-only lifecycle surface: the registry's active
+/// exact registrations presented with user-facing terms. Built-in adapters are
+/// not rows — the backend picker owns those.
+public struct ExtractorPackageSettingsRow: Identifiable, Hashable, Sendable {
+    public let kind: ExtractionBackendKind
+    public let packageID: String
+    public let version: String
+    /// First 12 hex characters of the pinned revision digest — enough to
+    /// identify the exact bytes without exposing a full path or payload.
+    public let digestPrefix: String
+    public let registrationID: String
+    /// The exact installed revision. Removal targets revisions (the catalog's
+    /// lifecycle granularity), not registrations.
+    public let revision: ExtractorPackageRevisionID
+
+    public init(
+        kind: ExtractionBackendKind,
+        packageID: String,
+        version: String,
+        digestPrefix: String,
+        registrationID: String,
+        revision: ExtractorPackageRevisionID
+    ) {
+        self.kind = kind
+        self.packageID = packageID
+        self.version = version
+        self.digestPrefix = digestPrefix
+        self.registrationID = registrationID
+        self.revision = revision
+    }
+
+    public var id: String {
+        "\(kind.rawValue)/\(packageID)/\(version)/\(digestPrefix)/\(registrationID)"
+    }
+}
+
+public extension ExtractionBackendRegistry {
+    /// Snapshot of every active installed (exact) PDF and HTML registration,
+    /// highest revision first within a deterministic package sort. Transcript
+    /// kinds are out of scope for revision 1. A package that stopped being
+    /// admitted (removed, failed activation) simply stops appearing.
+    func installedPackageRows() async -> [ExtractorPackageSettingsRow] {
+        var rows: [ExtractorPackageSettingsRow] = []
+        for kind in [ExtractionBackendKind.pdf, .html] {
+            // Actor-isolated by default (extension of an actor), so the sync
+            // registry read needs no hop.
+            for match in installedMatches(kind: kind) {
+                guard case .installed(_, let reference) = match.key else { continue }
+                rows.append(ExtractorPackageSettingsRow(
+                    kind: kind,
+                    packageID: reference.revision.packageID.rawValue,
+                    version: reference.revision.version.rawValue,
+                    digestPrefix: String(reference.revision.digest.hex.prefix(12)),
+                    registrationID: reference.registrationID.rawValue,
+                    revision: reference.revision))
+            }
+        }
+        return rows.sorted { $0.id < $1.id }
+    }
+}
+
 public enum ExtractionServiceKeys {
     public static let backends = ServiceKey<ExtractionBackendRegistry>(label: "wiki.extraction")
 

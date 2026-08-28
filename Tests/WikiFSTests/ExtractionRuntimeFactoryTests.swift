@@ -9,11 +9,12 @@ import Testing
 struct ExtractionRuntimeFactoryTests {
     @Test("shuffled registration builds a ready runtime")
     func shuffledRegistrationBuildsReadyRuntime() async throws {
-        let handle = try await makeAssembly().assemble(
-            registrationOrder: ExtractionRuntimeFactory.Component.allCases.shuffled())
+        let handle = try await makeAssembly(
+            state: ExtractionRuntimeTestState(configuration: ExtractionConfig(backend: .acp)))
+            .assemble(registrationOrder: ExtractionRuntimeFactory.Component.allCases.shuffled())
         let preparation = try await handle.services.prepare()
 
-        #expect(preparation.backend == .localPdf2md)
+        #expect(preparation.backend == .acp)
         #expect(preparation.extractor.displayName == "local-1")
         try await handle.dispose()
     }
@@ -71,9 +72,9 @@ struct ExtractionRuntimeFactoryTests {
         try await handle.dispose()
     }
 
-    @Test("each preparation constructs a distinct local extractor")
+    @Test("each preparation constructs a distinct ACP extractor")
     func concurrentPreparationsReturnDistinctExtractorInstances() async throws {
-        let state = ExtractionRuntimeTestState(configuration: ExtractionConfig())
+        let state = ExtractionRuntimeTestState(configuration: ExtractionConfig(backend: .acp))
         let handle = try await makeAssembly(state: state).assemble()
 
         async let first = handle.services.prepare()
@@ -106,7 +107,6 @@ struct ExtractionRuntimeFactoryTests {
             "extraction.credential-reader",
             "extraction.acp-resolver",
             "extraction.http-fetcher",
-            "extraction.local-extractor-factory",
             "extraction.backend-resolver",
             "extraction.runtime",
             "extraction.services",
@@ -127,11 +127,11 @@ struct ExtractionRuntimeFactoryTests {
         ExtractionRuntimeFactory(
             readConfiguration: { state.configuration },
             readCredential: { _ in "test-secret" },
-            resolveACP: { _ in nil },
-            httpFetcher: ExtractionRuntimeHTTPFetcher(),
-            makeLocalExtractor: {
-                ExtractionRuntimeExtractor(name: state.nextExtractorName())
-            })
+            resolveACP: { configuration in
+                guard configuration.backend == .acp else { return nil }
+                return ExtractionRuntimeExtractor(name: state.nextExtractorName())
+            },
+            httpFetcher: ExtractionRuntimeHTTPFetcher())
     }
 }
 

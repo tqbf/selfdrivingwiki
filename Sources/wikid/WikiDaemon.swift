@@ -306,7 +306,6 @@ final class WikiDaemon: @unchecked Sendable {
                             acpCredentialStore: acpCredentialStore)
                     },
                     httpFetcher: URLSessionRequestFetcher(),
-                    makeLocalExtractor: { await MainActor.run { LocalPdf2MarkdownExtractor() } },
                     packageContainerDirectory: containerDirectory,
                     packageProcessRole: .daemon)
                 let context = try await ProcessExtractionContext.assemble(

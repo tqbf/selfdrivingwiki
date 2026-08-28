@@ -37,13 +37,10 @@ public struct HtmlExtractionResult: Sendable {
     }
 }
 
-/// Injectable HTML→Markdown extractor (defuddle by default). The protocol lives
-/// in `WikiFSMarkdown` so the always-available conformer (`TagBasedHtmlExtractor`
-/// in `HTMLToMarkdown.swift`) can sit alongside `HTMLToMarkdown`. The
-/// AppKit-coupled defuddle conformer (`LocalDefuddleExtractor` in
-/// `Sources/WikiFS/Sources/DefuddleExtractionService.swift`) lives in the WikiFS
-/// app target and is injected via a factory closure at app wiring time —
-/// mirroring the `MarkdownExtractor` / `LocalPdf2MarkdownExtractor` pattern.
+/// The protocol lives in `WikiFSMarkdown` so the always-available conformer
+/// (`TagBasedHtmlExtractor` in `HTMLToMarkdown.swift`) can sit alongside
+/// `HTMLToMarkdown`. Reviewed package adapters conform to this protocol in
+/// `WikiFSEngine` and run in a separate managed process.
 public protocol HtmlMarkdownExtractor: Sendable {
     /// Extract article markdown + metadata from HTML. Best-effort: returns nil
     /// on any failure (binary missing, SPA/empty body, bad JSON) so the caller

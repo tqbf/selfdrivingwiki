@@ -520,6 +520,15 @@ public protocol WikiStore: Sendable {
         toolVersion: String?, sourceVersionID: SourceVersionID?, note: String?
     ) throws -> SourceMarkdownVersion
 
+    /// Append one package-backed result with exact immutable package identity.
+    /// This compatibility overload keeps package metadata in the tagged plan.
+    @discardableResult
+    func appendInstalledPackageMarkdown(
+        sourceID: SourceID, content: String,
+        package: ExtractionInstalledPackageProducer,
+        toolVersion: String?, sourceVersionID: SourceVersionID?, note: String?
+    ) throws -> SourceMarkdownVersion
+
     /// Revert to an older version by appending a NEW version whose content
     /// copies the target. History is preserved; HEAD = the new revert version.
     @discardableResult

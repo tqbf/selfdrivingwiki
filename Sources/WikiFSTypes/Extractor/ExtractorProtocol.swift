@@ -57,6 +57,28 @@ public struct ExtractorProtocolRequest: Codable, Hashable, Sendable {
     }
 }
 
+public struct ExtractorPackageExecutionProvenance: Codable, Hashable, Sendable {
+    public let revision: ExtractorPackageRevisionID
+    public var packageID: String { revision.packageID.rawValue }
+    public var version: String { revision.version.rawValue }
+    public var digest: String { revision.digest.hex }
+    public let registrationID: ExtractorRegistrationID
+    public let protocolRevision: ExtractorProtocolRevision
+    public let reportedMetadata: ExtractorReportedMetadata
+
+    public init(
+        revision: ExtractorPackageRevisionID,
+        registrationID: ExtractorRegistrationID,
+        protocolRevision: ExtractorProtocolRevision,
+        reportedMetadata: ExtractorReportedMetadata = .empty
+    ) {
+        self.revision = revision
+        self.registrationID = registrationID
+        self.protocolRevision = protocolRevision
+        self.reportedMetadata = reportedMetadata
+    }
+}
+
 public struct ExtractorReportedMetadata: Codable, Hashable, Sendable {
     public static let empty = ExtractorReportedMetadata(
         validatedToolName: nil,

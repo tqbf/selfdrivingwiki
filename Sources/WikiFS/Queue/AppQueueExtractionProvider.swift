@@ -74,7 +74,7 @@ final class SessionLookupBox: @unchecked Sendable {
 /// the main actor for each call. The actual `convert()` runs off-main inside
 /// the worker (the `MarkdownExtractor` is `Sendable`).
 @MainActor
-final class AppQueueExtractionProvider: QueueExtractionProvider {
+final class AppQueueExtractionProvider: InstalledPackageExtractionPersisting {
     private let extractionServices: any ExtractionServices
     private let sessionBox: SessionLookupBox
 
@@ -174,7 +174,8 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
             pdfData: bytes,
             filename: source.filename,
             backend: preparation.backend,
-            modelVersion: preparation.modelVersion
+            modelVersion: preparation.modelVersion,
+            packageProvenance: preparation.packageProvenance
         )
     }
 
@@ -201,6 +202,38 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
                 backend: backend,
                 modelVersion: modelVersion
             )
+        }
+    }
+
+    func persistInstalledPackageExtraction(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        markdown: String,
+        backend: ExtractionBackend,
+        modelVersion: String?,
+        packageProvenance: ExtractionInstalledPackageProducer?
+    ) async throws {
+        guard let packageProvenance else {
+            try await persistExtraction(
+                wikiID: wikiID,
+                sourceID: sourceID,
+                markdown: markdown,
+                backend: backend,
+                modelVersion: modelVersion,
+                technique: nil)
+            return
+        }
+        guard let store = sessionBox.resolve(wikiID: wikiID) else {
+            DebugLog.extraction("AppQueueExtractionProvider: persistExtraction — no session for wikiID=\(wikiID)")
+            return
+        }
+        do {
+            _ = try store.internalStore.appendInstalledPackageMarkdown(
+                sourceID: sourceID, content: markdown, package: packageProvenance,
+                toolVersion: modelVersion, sourceVersionID: nil, note: nil)
+        } catch {
+            DebugLog.store("AppQueueExtractionProvider: package provenance write failed (source=\(sourceID.rawValue)): \(error)")
+            throw error
         }
     }
 }

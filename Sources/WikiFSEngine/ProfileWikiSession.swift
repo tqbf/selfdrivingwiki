@@ -84,9 +84,8 @@ public final class ProfileWikiSession: WikiSessionProtocol {
     /// share across sessions.
     public let agentLauncher: AgentLauncher
 
-    /// Shared, app-wide extraction backend resolver (local pdf2md / Claude /
-    /// Docling Serve). Passed in from the app; carries no per-wiki state, so
-    /// one instance serves every session.
+    /// Shared, app-wide extraction backend resolver. Passed in from the app
+    /// process, so one instance serves every session.
     public let extractionCoordinator: ExtractionCoordinator
 
     /// Shared, app-wide queue engine. One instance serves every session —
@@ -180,7 +179,6 @@ public final class ProfileWikiSession: WikiSessionProtocol {
         extractionCoordinator: ExtractionCoordinator,
         queueEngine: any QueueEngineClient,
         extractionProvider: any QueueExtractionProvider,
-        htmlMarkdownExtractor: (any HtmlMarkdownExtractor)? = nil,
         htmlBackend: HtmlExtractionBackend? = nil,
         podcastBackend: PodcastTranscriptionBackend? = nil,
         profileLifetime: ProfileLifetime
@@ -205,7 +203,6 @@ public final class ProfileWikiSession: WikiSessionProtocol {
 
         // UI adaptation only: the child profile has already constructed all
         // per-wiki domain services before this observable facade is initialized.
-        store.htmlMarkdownExtractor = htmlMarkdownExtractor
         store.htmlBackend = htmlBackend
         store.podcastBackend = podcastBackend
     }
@@ -235,7 +232,6 @@ public final class ProfileWikiSession: WikiSessionProtocol {
         extractionCoordinator: ExtractionCoordinator,
         queueEngine: any QueueEngineClient,
         extractionProvider: any QueueExtractionProvider,
-        htmlMarkdownExtractor: (any HtmlMarkdownExtractor)? = nil,
         htmlBackend: HtmlExtractionBackend? = nil,
         podcastBackend: PodcastTranscriptionBackend? = nil
     ) {
@@ -256,7 +252,6 @@ public final class ProfileWikiSession: WikiSessionProtocol {
             sessionDescriptor.homePageID = homeID
         }
         self.descriptor = sessionDescriptor
-        store.htmlMarkdownExtractor = htmlMarkdownExtractor
         store.htmlBackend = htmlBackend
         store.podcastBackend = podcastBackend
     }

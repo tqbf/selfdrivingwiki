@@ -42,7 +42,6 @@ enum ProfileBootFixture {
         return try AppPluginCatalog.build(
             factories: AppPluginCatalogFactories(
                 base: baseFactories,
-                makeDefuddleExtractor: { ProfileHTMLExtractor() },
                 makeDaemonTransport: { fixtureTransportServices() }),
             additionalDefinitions: additionalDefinitions)
     }
@@ -70,8 +69,7 @@ enum ProfileBootFixture {
                 readConfiguration: { ExtractionConfig() },
                 readCredential: { _ in nil },
                 resolveACP: { _ in nil },
-                httpFetcher: FakeHTTPFetcher(responses: []),
-                makeLocalExtractor: { ProfilePDFExtractor() }),
+                httpFetcher: FakeHTTPFetcher(responses: [])),
             queueAssembly: queueAssembly,
             transportAssembly: transportAssembly,
             rendererAssembly: rendererAssembly)
@@ -183,8 +181,7 @@ enum ProfileBootFixture {
 
     private static var baseFactories: BasePluginCatalogFactories {
         BasePluginCatalogFactories(
-            agentProviderServices: UnavailableAgentProviderServices(),
-            makePDFExtractor: { ProfilePDFExtractor() })
+            agentProviderServices: UnavailableAgentProviderServices())
     }
 
     private static var launcherFactoryDefinition: PluginDefinition {

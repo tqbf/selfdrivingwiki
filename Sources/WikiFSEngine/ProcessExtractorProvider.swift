@@ -83,6 +83,8 @@ struct ProcessPackageError: Error, LocalizedError {
 internal struct ProcessPackageExecutionOutcome: Sendable {
     let frame: ExtractorResultFrame
     let markdown: String
+
+    var reportedMetadata: ExtractorReportedMetadata { frame.metadata }
 }
 
 /// Builds process-backed extraction adapters for one exact validated package
@@ -95,13 +97,19 @@ public struct ProcessExtractorProvider: Sendable {
     let executor: any ManagedProcessExecuting
     let admission: any ProcessPackageAdmissionChecking
     let sourceLocator: any ExtractorPackageSourceLocating
+    let sharedRuntimeCacheRoot: URL?
+    let sharedModelCacheRoot: URL?
 
+    /// The cache roots are host-owned. A package can use them only when its
+    /// manifest declares the matching capability.
     public init(
         layout: ExtractorPackageStoreLayout,
         catalogReader: any ExtractorPackageCatalogReading,
         executor: any ManagedProcessExecuting,
         admission: any ProcessPackageAdmissionChecking,
-        sourceLocator: (any ExtractorPackageSourceLocating)? = nil
+        sourceLocator: (any ExtractorPackageSourceLocating)? = nil,
+        sharedRuntimeCacheRoot: URL? = nil,
+        sharedModelCacheRoot: URL? = nil
     ) {
         self.layout = layout
         self.catalogReader = catalogReader
@@ -109,6 +117,8 @@ public struct ProcessExtractorProvider: Sendable {
         self.admission = admission
         self.sourceLocator = sourceLocator
             ?? InstalledExtractorPackageSourceLocator(layout: layout)
+        self.sharedRuntimeCacheRoot = sharedRuntimeCacheRoot
+        self.sharedModelCacheRoot = sharedModelCacheRoot
     }
 
     /// Convenience initializer for closure-backed admission checks.
@@ -137,7 +147,11 @@ public struct ProcessExtractorProvider: Sendable {
             // provenance; the activity plan producer carries exact identity.
             backend: .localPdf2md,
             modelVersion: nil,
-            technique: "package:\(revision.packageID.rawValue)")
+            technique: "package:\(revision.packageID.rawValue)",
+            packageProvenance: Self.packageProvenance(
+                revision: revision,
+                manifest: manifest,
+                registrationID: operation.registrationID))
     }
 
     public func prepareHTML(
@@ -147,6 +161,19 @@ public struct ProcessExtractorProvider: Sendable {
         let operation = try await prepareOperation(
             kind: .html, revision: revision, manifest: manifest)
         return ProcessPackageHTMLExtractor(operation: operation)
+    }
+
+    public static func packageProvenance(
+        revision: ExtractorPackageRevisionID,
+        manifest: ExtractorManifest,
+        registrationID: ExtractorRegistrationID,
+        reportedMetadata: ExtractorReportedMetadata = .empty
+    ) -> ExtractionInstalledPackageProducer {
+        ExtractionInstalledPackageProducer(
+            revision: revision,
+            registrationID: registrationID,
+            protocolRevision: manifest.protocolRevision,
+            reportedMetadata: reportedMetadata)
     }
 
     func prepareOperation(
@@ -187,8 +214,7 @@ public struct ProcessExtractorProvider: Sendable {
             layout: layout,
             sourceContainingRoot: source.containingRoot)
 
-        let operationRoot = FileManager.default.temporaryDirectory
-            .appendingPathComponent("extractor-operation-\(UUID().uuidString)", isDirectory: true)
+        let operationRoot = layout.operationURL(ExtractorOperationID())
         try FileManager.default.createDirectory(
             at: operationRoot,
             withIntermediateDirectories: false,
@@ -198,6 +224,21 @@ public struct ProcessExtractorProvider: Sendable {
                 at: operationRoot.appendingPathComponent(subdirectory, isDirectory: true),
                 withIntermediateDirectories: false,
                 attributes: [.posixPermissions: 0o700])
+        }
+        let runtimeCacheRoot = manifest.capabilities.contains(.sharedRuntimeCache)
+            ? self.sharedRuntimeCacheRoot
+            : nil
+        let modelCacheRoot = manifest.capabilities.contains(.modelDownload)
+            ? self.sharedModelCacheRoot
+            : nil
+        for sharedRoot in [runtimeCacheRoot, modelCacheRoot].compactMap({ $0 }) {
+            try FileManager.default.createDirectory(
+                at: sharedRoot,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700])
+            guard try Self.isOwnerPrivateDirectory(sharedRoot) else {
+                throw ExtractorDirectoryAdmissionError.preparationFailed
+            }
         }
         let materializedRevision = try ExtractorDirectoryValidator.materializeOperationPackage(
             from: snapshot,
@@ -214,12 +255,25 @@ public struct ProcessExtractorProvider: Sendable {
             homeRoot: operationRoot.appendingPathComponent("home", isDirectory: true),
             temporaryRoot: operationRoot.appendingPathComponent("tmp", isDirectory: true),
             cacheRoot: operationRoot.appendingPathComponent("cache", isDirectory: true),
+            sharedRuntimeCacheRoot: runtimeCacheRoot,
+            sharedModelCacheRoot: modelCacheRoot,
             revision: revision,
             manifest: manifest,
             registrationID: registration.id,
+            protocolRevision: manifest.protocolRevision,
             mimeTypes: registration.mimeTypes.sorted().map(\.rawValue),
             executor: executor,
             runtimeSearchPolicy: .standard)
+    }
+
+    private static func isOwnerPrivateDirectory(_ url: URL) throws -> Bool {
+        var status = stat()
+        guard lstat(url.path, &status) == 0 else {
+            throw ExtractorDirectoryAdmissionError.preparationFailed
+        }
+        return status.st_mode & S_IFMT == S_IFDIR
+            && status.st_uid == getuid()
+            && status.st_mode & 0o7777 == 0o700
     }
 
     static func registration(
@@ -242,12 +296,15 @@ public final class PreparedProcessOperation: Sendable {
     public let revision: ExtractorPackageRevisionID
     public let manifest: ExtractorManifest
     public let registrationID: ExtractorRegistrationID
+    public let protocolRevision: ExtractorProtocolRevision
 
     let directoryRoot: URL
     let packageRoot: URL
     let homeRoot: URL
     let temporaryRoot: URL
     let cacheRoot: URL
+    let sharedRuntimeCacheRoot: URL?
+    let sharedModelCacheRoot: URL?
     let mimeTypes: [String]
     let executor: any ManagedProcessExecuting
     let runtimeSearchPolicy: ExtractorRuntimeSearchPolicy
@@ -258,9 +315,12 @@ public final class PreparedProcessOperation: Sendable {
         homeRoot: URL,
         temporaryRoot: URL,
         cacheRoot: URL,
+        sharedRuntimeCacheRoot: URL?,
+        sharedModelCacheRoot: URL?,
         revision: ExtractorPackageRevisionID,
         manifest: ExtractorManifest,
         registrationID: ExtractorRegistrationID,
+        protocolRevision: ExtractorProtocolRevision,
         mimeTypes: [String],
         executor: any ManagedProcessExecuting,
         runtimeSearchPolicy: ExtractorRuntimeSearchPolicy
@@ -270,9 +330,12 @@ public final class PreparedProcessOperation: Sendable {
         self.homeRoot = homeRoot
         self.temporaryRoot = temporaryRoot
         self.cacheRoot = cacheRoot
+        self.sharedRuntimeCacheRoot = sharedRuntimeCacheRoot
+        self.sharedModelCacheRoot = sharedModelCacheRoot
         self.revision = revision
         self.manifest = manifest
         self.registrationID = registrationID
+        self.protocolRevision = protocolRevision
         self.mimeTypes = mimeTypes
         self.executor = executor
         self.runtimeSearchPolicy = runtimeSearchPolicy
@@ -285,7 +348,7 @@ public final class PreparedProcessOperation: Sendable {
             }
         } catch {
             DebugLog.extraction(
-                "Extractor operation cleanup failed for \(revision.digest.hex.prefix(12)): \(error)")
+                "Extractor operation cleanup failed for digest \(revision.digest.hex.prefix(12))")
         }
     }
 
@@ -309,6 +372,12 @@ public final class PreparedProcessOperation: Sendable {
         let name = requestID.uuidString.lowercased()
         let inputPath = "input/\(name)/source"
         let outputPath = "output/\(name)/result.md"
+        let runtimeCacheRoot = manifest.capabilities.contains(.sharedRuntimeCache)
+            ? self.sharedRuntimeCacheRoot
+            : nil
+        let modelCacheRoot = manifest.capabilities.contains(.modelDownload)
+            ? self.sharedModelCacheRoot
+            : nil
 
         let inputURL = directoryRoot.appendingPathComponent(inputPath)
         try FileManager.default.createDirectory(
@@ -338,7 +407,9 @@ public final class PreparedProcessOperation: Sendable {
                 packageRoot: packageRoot,
                 homeRoot: homeRoot,
                 temporaryRoot: temporaryRoot,
-                privateCacheRoot: cacheRoot))
+                privateCacheRoot: cacheRoot,
+                sharedRuntimeCacheRoot: runtimeCacheRoot,
+                sharedModelCacheRoot: modelCacheRoot))
         let outcome = try await executor.execute(managedRequest) { frame in
             if case .progress(let progress) = frame, let message = progress.message {
                 onProgress?(message + "\n")
@@ -365,8 +436,14 @@ public final class PreparedProcessOperation: Sendable {
     }
 }
 
-public struct ProcessPackagePDFExtractor: MarkdownExtractor {
+public struct ProcessPackagePDFExtractor: MarkdownExtractor, ProcessPackageProvenanceProviding {
     public var displayName: String { operation.manifest.displayName }
+    public var packageProvenance: ExtractorPackageExecutionProvenance {
+        ExtractorPackageExecutionProvenance(
+            revision: operation.revision,
+            registrationID: operation.registrationID,
+            protocolRevision: operation.protocolRevision)
+    }
 
     let operation: PreparedProcessOperation
 
@@ -402,6 +479,10 @@ public struct ProcessPackagePDFExtractor: MarkdownExtractor {
                 filename: filename,
                 onProgress: onProgress)
             return outcome.markdown
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch ManagedExtractorProcessError.cancellation {
+            throw CancellationError()
         } catch {
             throw ProcessPackageError(message: ProcessPackageFailureMapper.message(error))
         }
@@ -427,8 +508,14 @@ public struct ProcessPackagePDFExtractor: MarkdownExtractor {
     }
 }
 
-public struct ProcessPackageHTMLExtractor: HtmlMarkdownExtractor {
+public struct ProcessPackageHTMLExtractor: HtmlMarkdownExtractor, ProcessPackageProvenanceProviding {
     public var displayName: String { operation.manifest.displayName }
+    public var packageProvenance: ExtractorPackageExecutionProvenance {
+        ExtractorPackageExecutionProvenance(
+            revision: operation.revision,
+            registrationID: operation.registrationID,
+            protocolRevision: operation.protocolRevision)
+    }
 
     let operation: PreparedProcessOperation
 
@@ -450,6 +537,9 @@ public struct ProcessPackageHTMLExtractor: HtmlMarkdownExtractor {
                 description: outcome.frame.articleMetadata?.description,
                 published: outcome.frame.articleMetadata?.published,
                 wordCount: outcome.frame.articleMetadata?.wordCount)
+        } catch is CancellationError {
+            DebugLog.extraction("Package HTML extraction was cancelled")
+            return nil
         } catch {
             DebugLog.extraction(
                 "Package HTML extraction fell back: \(ProcessPackageFailureMapper.message(error))")

@@ -96,7 +96,6 @@ struct ProcessExtractionContextTests {
             readCredential: { _ in nil },
             resolveACP: { _ in nil },
             httpFetcher: FakeHTTPFetcher(responses: []),
-            makeLocalExtractor: { ContextProbeExtractor() },
             packageContainerDirectory: environment.root,
             packageProcessRole: .test)
         let services = try await ProcessExtractionServices.assemble(context: context, input: input)
@@ -104,7 +103,7 @@ struct ProcessExtractionContextTests {
 
         let builtInKey = ExtractionBackendKey(
             kind: .pdf,
-            backendID: ExtractionBackend.localPdf2md.rawValue)
+            backendID: ExtractionBackend.acp.rawValue)
         #expect(await context.registry.resolve(builtInKey) != nil)
         #expect(await context.registry.containsRevision(environment.revision))
 

@@ -57,37 +57,17 @@ public enum ExtractionPlugin {
     }
 }
 
-public enum Pdf2mdExtractionPlugin {
-    public static let id = PluginID("wiki.extraction.pdf2md")
-    public static let key = ExtractionBackendKey(kind: .pdf, backendID: ExtractionBackend.localPdf2md.rawValue)
-
-    public static func definition(
-        makeExtractor: @escaping ExtractionPluginFactory.LocalExtractor
-    ) -> PluginDefinition {
-        adapterDefinition(id: id, label: "Local pdf2md extraction", key: key) {
-            .pdf(ExtractionPreparation(
-                extractor: await makeExtractor(),
-                backend: .localPdf2md,
-                modelVersion: nil))
-        }
-    }
-}
-
 public enum ACPExtractionPlugin {
     public static let id = PluginID("wiki.extraction.acp")
     public static let key = ExtractionBackendKey(kind: .pdf, backendID: ExtractionBackend.acp.rawValue)
 
     public static func definition(
         configuration: ExtractionConfig,
-        resolve: @escaping ExtractionPluginFactory.ACPResolver,
-        fallback: @escaping ExtractionPluginFactory.LocalExtractor
+        resolve: @escaping ExtractionPluginFactory.ACPResolver
     ) -> PluginDefinition {
         adapterDefinition(id: id, label: "ACP extraction", key: key) {
-            let extractor: any MarkdownExtractor
-            if let resolved = resolve(configuration) {
-                extractor = resolved
-            } else {
-                extractor = await fallback()
+            guard let extractor = resolve(configuration) else {
+                throw ExtractionServicesError.unavailable
             }
             return .pdf(ExtractionPreparation(
                 extractor: extractor,

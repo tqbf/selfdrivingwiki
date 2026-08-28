@@ -69,7 +69,6 @@ public struct ExtractorPackageStoreLayout: Sendable {
             .appendingPathComponent(processRole.rawValue, isDirectory: true)
             .appendingPathComponent("\(getpid())-\(processSessionID.rawValue)", isDirectory: true)
     }
-    public var lockURL: URL { root.appendingPathComponent("store.lock") }
     public func packageURL(_ id: ExtractorPackageID, version: ExtractorPackageVersion) -> URL { packagesRoot.appendingPathComponent(id.rawValue).appendingPathComponent(version.rawValue) }
     public func stagingURL(_ id: ExtractorStagingID) -> URL { stagingRoot.appendingPathComponent(id.rawValue, isDirectory: true) }
     public func operationURL(_ id: ExtractorOperationID) -> URL { processOperationsRoot.appendingPathComponent(id.rawValue, isDirectory: true) }

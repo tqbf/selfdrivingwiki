@@ -29,9 +29,10 @@ struct ReviewedLegacySelectionMappingTests {
         await services.shutdown()
     }
 
-    /// Without an active reviewed lineage, the legacy built-in adapter serves
-    /// the same selection unchanged.
-    @Test func defaultPDFSelectionUsesTheLegacyAdapterWithoutThePackage() async throws {
+    /// Without the reviewed package, the retired in-process PDF adapter is not
+    /// available. The caller can surface the setup failure and use its fixed
+    /// non-recursive fallback.
+    @Test func defaultPDFSelectionIsUnavailableWithoutTheReviewedPackage() async throws {
         let environment = try Environment.make()
         defer { environment.cleanup() }
 
@@ -42,9 +43,12 @@ struct ReviewedLegacySelectionMappingTests {
         let services = try await ProcessExtractionServices.assemble(
             context: context, input: environment.input())
 
-        let preparation = try await services.prepare(backendOverride: nil)
-        #expect(preparation.technique == nil)
-        #expect(preparation.backend == .localPdf2md)
+        do {
+            _ = try await services.prepare(backendOverride: nil)
+            Issue.record("retired local PDF adapter remained available")
+        } catch let error as ExtractionServicesError {
+            #expect(error == .unavailable)
+        }
         await services.shutdown()
     }
 
@@ -57,7 +61,16 @@ struct ReviewedLegacySelectionMappingTests {
         let context = try await ProcessExtractionContext.assemble(
             layout: environment.layout,
             reviewedPackageRoot: Environment.reviewedPackagesRoot)
-        _ = await context.reconcileNow()
+        let report = await context.reconcileNow()
+        #expect(report.failedPackages.isEmpty)
+        #expect(await context.registry.installedMatches(kind: .html).count == 1)
+        let htmlMatch = try #require(await context.registry.resolveInstalled(
+            ProcessExtractionServices.reviewedHTMLLogical, kind: .html))
+        do {
+            _ = try await htmlMatch.backend.make()
+        } catch {
+            Issue.record("HTML package factory failed: \\(error)")
+        }
         let services = try await ProcessExtractionServices.assemble(
             context: context, input: environment.input(htmlBackend: .defuddle))
 
@@ -90,8 +103,8 @@ struct ReviewedLegacySelectionMappingTests {
         await services.shutdown()
     }
 
-    /// A third-party installed package must not capture the default path even
-    /// when it is active: the mapping targets the reviewed lineage only.
+    /// A third-party installed package cannot capture the default PDF path.
+    /// The default requires the reviewed package lineage by exact identity.
     @Test func thirdPartyInstalledPackageCannotCaptureTheDefaultSelection() async throws {
         let environment = try Environment.make()
         defer { environment.cleanup() }
@@ -101,13 +114,14 @@ struct ReviewedLegacySelectionMappingTests {
             reviewedPackageRoot: environment.root)
         _ = await context.reconcileNow()
 
-        // Register a third-party installed adapter directly in the registry.
         let thirdPartyRevision = try ExtractorPackageRevisionID(
             packageID: try ExtractorPackageID(validating: "org.example.thirdparty"),
             version: try ExtractorPackageVersion(validating: "9.9.9"),
             digest: ExtractorPackageDigest(
                 bytes: Array(repeating: 0xAB, count: 32)))
-        let reference = ExtractorReference(revision: thirdPartyRevision, registrationID: try ExtractorRegistrationID(validating: "main"))
+        let reference = ExtractorReference(
+            revision: thirdPartyRevision,
+            registrationID: try ExtractorRegistrationID(validating: "main"))
         let key = ExtractionAdapterKey.installed(kind: .pdf, reference: reference)
         _ = try await context.registry.register(
             RegisteredExtractionBackend(
@@ -122,9 +136,12 @@ struct ReviewedLegacySelectionMappingTests {
 
         let services = try await ProcessExtractionServices.assemble(
             context: context, input: environment.input())
-        let preparation = try await services.prepare(backendOverride: nil)
-        #expect(preparation.technique == nil)
-        #expect(preparation.backend == .localPdf2md)
+        do {
+            _ = try await services.prepare(backendOverride: nil)
+            Issue.record("third-party package captured the default PDF selection")
+        } catch let error as ExtractionServicesError {
+            #expect(error == .unavailable)
+        }
         await services.shutdown()
     }
 
@@ -178,8 +195,6 @@ struct ReviewedLegacySelectionMappingTests {
                 readCredential: { _ in nil },
                 resolveACP: { _ in nil },
                 httpFetcher: FakeHTTPFetcher(responses: []),
-                makeLocalExtractor: { ProbeExtractor() },
-                makeHTMLExtractor: { LocalProbeHTMLExtractor() },
                 packageContainerDirectory: root,
                 packageProcessRole: .test)
         }

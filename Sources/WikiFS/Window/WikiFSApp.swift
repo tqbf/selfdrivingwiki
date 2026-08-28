@@ -1,5 +1,6 @@
 import SwiftUI
 import WikiFSEngine
+import WikiFSExtractorStore
 import WikiFSCore
 import WikiCtlCore
 import WikiDaemonContract
@@ -240,9 +241,7 @@ struct WikiFSApp: App {
             do {
                 return try AppPluginCatalog.build(factories: AppPluginCatalogFactories(
                     base: BasePluginCatalogFactories(
-                        agentProviderServices: providerServices,
-                        makePDFExtractor: { await MainActor.run { LocalPdf2MarkdownExtractor() } }),
-                    makeDefuddleExtractor: { await MainActor.run { LocalDefuddleExtractor() } },
+                        agentProviderServices: providerServices),
                     makeDaemonTransport: { transportOwner.services }))
             } catch {
                 preconditionFailure("App profile catalog construction failed: \(error)")
@@ -255,8 +254,6 @@ struct WikiFSApp: App {
             extractionProvider: extractionProvider,
             searchRuntimeRegistry: searchRuntimeRegistry,
             providerServices: providerServices,
-            pdf2mdScriptPathResolver: { PdfExtractionService.resolveScript()?.path },
-            htmlMarkdownExtractorFactory: { LocalDefuddleExtractor() },
             htmlBackendResolver: { ExtractionConfig.load(from: directory).htmlBackend },
             podcastBackendResolver: { ExtractionConfig.load(from: directory).podcastBackend },
             interactiveUsageRecorder: { [weak activityTracker] usage in
@@ -273,8 +270,6 @@ struct WikiFSApp: App {
                     catalog: appCatalog,
                     extractionProvider: extractionProvider,
                     searchRuntimeRegistry: searchRuntimeRegistry,
-                    pdf2mdScriptPathResolver: { PdfExtractionService.resolveScript()?.path },
-                    htmlMarkdownExtractorFactory: { LocalDefuddleExtractor() },
                     htmlBackendResolver: { ExtractionConfig.load(from: directory).htmlBackend },
                     podcastBackendResolver: { ExtractionConfig.load(from: directory).podcastBackend },
                     interactiveUsageRecorder: { usage in
@@ -775,7 +770,62 @@ struct WikiFSApp: App {
                 ZoteroSettingsView(containerDirectory: containerDirectory)
                     .tag(SettingsTab.zotero)
                     .tabItem { Label("Zotero", systemImage: "books.vertical") }
-                ExtractionSettingsView(containerDirectory: containerDirectory, launcher: settingsLauncher)
+                ExtractionSettingsView(
+                    containerDirectory: containerDirectory,
+                    launcher: settingsLauncher,
+                    packageSnapshot: { [processProfileOwner] in
+                        guard let services = await processProfileOwner.services else {
+                            return ExtractorPackageSettingsSnapshot.empty
+                        }
+                        var snapshot = ExtractorPackageSettingsSnapshot(
+                            rows: await services.extractionBackends.installedPackageRows())
+                        if let context = services.extractionContext {
+                            let observation = await context.observationSnapshot()
+                            snapshot.failedPackages = observation.retainedFailures.map {
+                                ExtractorPackageFailureSummary(
+                                    packageID: $0.packageID,
+                                    version: $0.version,
+                                    digestPrefix: $0.digestPrefix,
+                                    message: $0.message)
+                            }
+                            snapshot.appliedGeneration = observation.appliedGeneration
+                        }
+                        return snapshot
+                    },
+                    // Package mutation is app-only: the catalog writer rejects
+                    // non-app roles, and only this Settings wiring constructs
+                    // one. A published generation wakes every process
+                    // reconciler through the catalog notifications; the
+                    // deterministic wake below just removes the latency so the
+                    // refreshed rows reflect the new generation.
+                    importPackage: { [weak processProfileOwner] directory in
+                        do {
+                            let writer = try ExtractorPackageCatalogWriter(
+                                appGroupContainerRoot: containerDirectory)
+                            _ = try await writer.importDirectory(
+                                directory,
+                                installedAt: RFC3339Timestamp(date: Date()))
+                            if let services = await processProfileOwner?.services {
+                                await services.extractionContext?.receiveCatalogWake()
+                            }
+                            return .succeeded(nil)
+                        } catch {
+                            return .failed(ExtractorPackageMutationMessage.describe(error))
+                        }
+                    },
+                    removePackage: { [weak processProfileOwner] revision in
+                        do {
+                            let writer = try ExtractorPackageCatalogWriter(
+                                appGroupContainerRoot: containerDirectory)
+                            _ = try await writer.remove(revision: revision)
+                            if let services = await processProfileOwner?.services {
+                                await services.extractionContext?.receiveCatalogWake()
+                            }
+                            return .succeeded(nil)
+                        } catch {
+                            return .failed(ExtractorPackageMutationMessage.describe(error))
+                        }
+                    })
                     .tag(SettingsTab.extraction)
                     .tabItem { Label("Extraction", systemImage: "doc.viewfinder") }
                 AgentsSettingsView(

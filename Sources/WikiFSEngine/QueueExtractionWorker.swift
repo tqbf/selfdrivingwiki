@@ -161,15 +161,25 @@ struct QueueExtractionWorker: QueueWorker {
             }
         }
 
-        // Persist (main-actor hop in the app impl). Carries backend +
-        // modelVersion for PROV tracking.
-        try await provider.persistExtraction(
-            wikiID: item.wikiID,
-            sourceID: sourceID,
-            markdown: markdown,
-            backend: resolved.backend,
-            modelVersion: resolved.modelVersion,
-            technique: resolved.technique
-        )
+        // Persist (main-actor hop in the app impl). Legacy providers retain
+        // their original contract. Package-aware providers use the typed seam.
+        if let packageProvider = provider as? any InstalledPackageExtractionPersisting,
+           resolved.packageProvenance != nil {
+            try await packageProvider.persistInstalledPackageExtraction(
+                wikiID: item.wikiID,
+                sourceID: sourceID,
+                markdown: markdown,
+                backend: resolved.backend,
+                modelVersion: resolved.modelVersion,
+                packageProvenance: resolved.packageProvenance)
+        } else {
+            try await provider.persistExtraction(
+                wikiID: item.wikiID,
+                sourceID: sourceID,
+                markdown: markdown,
+                backend: resolved.backend,
+                modelVersion: resolved.modelVersion,
+                technique: resolved.technique)
+        }
     }
 }

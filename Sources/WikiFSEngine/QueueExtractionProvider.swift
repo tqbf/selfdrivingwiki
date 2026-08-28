@@ -41,6 +41,9 @@ public struct ExtractionResolution: Sendable {
     public let filename: String
     public let backend: ExtractionBackend
     public let modelVersion: String?
+    /// Exact package provenance for a process-backed extraction. Built-in and
+    /// transcript resolutions leave this nil and keep legacy fields unchanged.
+    public let packageProvenance: ExtractionInstalledPackageProducer?
 
     /// Non-nil when this is a transcript extraction: no local bytes, the
     /// markdown comes from a network/subprocess fetch. When non-nil,
@@ -58,13 +61,15 @@ public struct ExtractionResolution: Sendable {
         pdfData: Data,
         filename: String,
         backend: ExtractionBackend,
-        modelVersion: String? = nil
+        modelVersion: String? = nil,
+        packageProvenance: ExtractionInstalledPackageProducer? = nil
     ) {
         self.extractor = extractor
         self.pdfData = pdfData
         self.filename = filename
         self.backend = backend
         self.modelVersion = modelVersion
+        self.packageProvenance = packageProvenance
         self.transcriptFetch = nil
         self.technique = nil
     }
@@ -82,6 +87,7 @@ public struct ExtractionResolution: Sendable {
         self.filename = filename
         self.backend = backend
         self.modelVersion = nil
+        self.packageProvenance = nil
         self.transcriptFetch = transcriptFetch
         self.technique = technique
     }
@@ -106,9 +112,9 @@ public protocol QueueExtractionProvider: Sendable {
         backendOverride: ExtractionBackend?
     ) async throws -> ExtractionResolution?
 
-    /// Persist extracted markdown into the store. Carries `backend` +
-    /// `modelVersion` for PROV tracking (`source_markdown_versions` origin,
-    /// `agents.name`).
+    /// Persist extracted markdown into the store. Carries the legacy `backend`
+    /// and `modelVersion` fields for compatibility, plus optional exact package
+    /// provenance for installed extractors.
     ///
     /// When `technique` is non-nil, this is a transcript extraction (YouTube
     /// captions, podcast feed) — the provider writes it as a `.transcript`
@@ -122,6 +128,19 @@ public protocol QueueExtractionProvider: Sendable {
         backend: ExtractionBackend,
         modelVersion: String?,
         technique: String?
+    ) async throws
+}
+
+/// Optional exact provenance support for providers that persist installed
+/// package results. Legacy queue providers keep their original protocol shape.
+public protocol InstalledPackageExtractionPersisting: QueueExtractionProvider {
+    func persistInstalledPackageExtraction(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        markdown: String,
+        backend: ExtractionBackend,
+        modelVersion: String?,
+        packageProvenance: ExtractionInstalledPackageProducer?
     ) async throws
 }
 

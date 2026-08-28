@@ -9,17 +9,22 @@ public struct ExtractionPreparation: Sendable {
     public let backend: ExtractionBackend
     public let modelVersion: String?
     public let technique: String?
+    /// Exact package provenance for an installed process-backed extractor.
+    /// Built-in and transcript preparations leave this nil.
+    public let packageProvenance: ExtractionInstalledPackageProducer?
 
     public init(
         extractor: any MarkdownExtractor,
         backend: ExtractionBackend,
         modelVersion: String?,
-        technique: String? = nil
+        technique: String? = nil,
+        packageProvenance: ExtractionInstalledPackageProducer? = nil
     ) {
         self.extractor = extractor
         self.backend = backend
         self.modelVersion = modelVersion
         self.technique = technique
+        self.packageProvenance = packageProvenance
     }
 }
 
@@ -38,11 +43,24 @@ public enum ExtractionServicesError: Error, Equatable, Sendable, LocalizedError 
 /// extractor built from one frozen configuration and credential snapshot.
 public protocol ExtractionServices: Sendable {
     func prepare(backendOverride: ExtractionBackend?) async throws -> ExtractionPreparation
+    func prepareHTML(
+        backendOverride: HtmlExtractionBackend?
+    ) async throws -> any HtmlMarkdownExtractor
 }
 
 public extension ExtractionServices {
     func prepare() async throws -> ExtractionPreparation {
         try await prepare(backendOverride: nil)
+    }
+
+    func prepareHTML() async throws -> any HtmlMarkdownExtractor {
+        try await prepareHTML(backendOverride: nil)
+    }
+
+    func prepareHTML(
+        backendOverride: HtmlExtractionBackend?
+    ) async throws -> any HtmlMarkdownExtractor {
+        throw ExtractionServicesError.unavailable
     }
 }
 
@@ -50,6 +68,12 @@ public struct UnavailableExtractionServices: ExtractionServices {
     public init() {}
 
     public func prepare(backendOverride: ExtractionBackend?) async throws -> ExtractionPreparation {
+        throw ExtractionServicesError.unavailable
+    }
+
+    public func prepareHTML(
+        backendOverride: HtmlExtractionBackend?
+    ) async throws -> any HtmlMarkdownExtractor {
         throw ExtractionServicesError.unavailable
     }
 }
@@ -118,6 +142,12 @@ public actor ExtractionRuntime: ExtractionServices {
         let preparation = try await resolveBackend(configuration, effectiveBackend)
         guard !disposed else { throw ExtractionServicesError.unavailable }
         return preparation
+    }
+
+    public func prepareHTML(
+        backendOverride: HtmlExtractionBackend?
+    ) async throws -> any HtmlMarkdownExtractor {
+        throw ExtractionServicesError.unavailable
     }
 
     public func dispose() {
@@ -236,6 +266,12 @@ public final class ExtractionCoordinator {
         backendOverride: ExtractionBackend? = nil
     ) async throws -> ExtractionPreparation {
         try await services.prepare(backendOverride: backendOverride)
+    }
+
+    public func prepareHTML(
+        backendOverride: HtmlExtractionBackend? = nil
+    ) async throws -> any HtmlMarkdownExtractor {
+        try await services.prepareHTML(backendOverride: backendOverride)
     }
 }
 #endif

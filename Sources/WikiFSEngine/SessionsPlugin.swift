@@ -76,7 +76,6 @@ extension ProfileWikiSession {
         providerServices: any AgentProviderServices = UnavailableAgentProviderServices(),
         makeStore: (URL) throws -> any WikiStore = { try StoreBackend.current.makeStore(databaseURL: $0) },
         pdf2mdScriptPathResolver: @escaping () -> String? = { nil },
-        htmlMarkdownExtractorFactory: @escaping @MainActor () -> (any HtmlMarkdownExtractor)? = { nil },
         htmlBackendResolver: @escaping @MainActor () -> HtmlExtractionBackend? = { nil },
         podcastBackendResolver: @escaping @MainActor () -> PodcastTranscriptionBackend? = { nil },
         interactiveUsageRecorder: @escaping @MainActor (SessionUsage) -> Void = { _ in }
@@ -113,7 +112,6 @@ extension ProfileWikiSession {
             extractionCoordinator: extractionCoordinator,
             queueEngine: queueEngine,
             extractionProvider: extractionProvider,
-            htmlMarkdownExtractor: htmlMarkdownExtractorFactory(),
             htmlBackend: htmlBackendResolver(),
             podcastBackend: podcastBackendResolver())
     }
@@ -131,7 +129,6 @@ extension AppProcessProfileOwner {
         extractionProvider: any QueueExtractionProvider,
         searchRuntimeRegistry: SearchRuntimeRegistry = SearchRuntimeRegistry(),
         pdf2mdScriptPathResolver: @escaping () -> String? = { nil },
-        htmlMarkdownExtractorFactory: @escaping @MainActor () -> (any HtmlMarkdownExtractor)? = { nil },
         htmlBackendResolver: @escaping @MainActor () -> HtmlExtractionBackend? = { nil },
         podcastBackendResolver: @escaping @MainActor () -> PodcastTranscriptionBackend? = { nil },
         interactiveUsageRecorder: @escaping (@MainActor (SessionUsage) -> Void) = { _ in }
@@ -161,7 +158,6 @@ extension AppProcessProfileOwner {
             extractionCoordinator: ExtractionCoordinator(services: processServices.extraction),
             queueEngine: processServices.queue,
             extractionProvider: extractionProvider,
-            htmlMarkdownExtractor: htmlMarkdownExtractorFactory(),
             htmlBackend: htmlBackendResolver(),
             podcastBackend: podcastBackendResolver(),
             profileLifetime: childServices.lifetime)
@@ -245,7 +241,10 @@ public enum PerWikiRuntimePlugin {
                         extractionCoordinator: ExtractionCoordinator(services: extractionServices),
                         providerServices: providerServices,
                         agentLoopService: agentLoopService)
-                    launcher.pdf2mdScriptPathResolver = { PdfExtractionService.resolveScript()?.path }
+                    // No pdf2md script-path resolver here: production launches
+                    // no legacy pdf2md subprocess for the agent seatbelt to
+                    // deny (extraction runs through the registry's reviewed
+                    // package plugins). The launcher default `{ nil }` stands.
                     return LauncherPair(gate: gate, launcher: launcher)
                 }
                 let changeStreamFactory = await MainActor.run {

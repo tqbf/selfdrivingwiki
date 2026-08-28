@@ -46,8 +46,7 @@ struct ProcessPluginDependencyTests {
                 readConfiguration: fixtureInputs.extraction.readConfiguration,
                 readCredential: fixtureInputs.extraction.readCredential,
                 resolveACP: fixtureInputs.extraction.resolveACP,
-                httpFetcher: fixtureInputs.extraction.httpFetcher,
-                makeLocalExtractor: fixtureInputs.extraction.makeLocalExtractor))
+                httpFetcher: fixtureInputs.extraction.httpFetcher))
         let factories = ProcessPluginCatalogFactories(
             compositionInputs: inputs,
             makeEmbeddings: {

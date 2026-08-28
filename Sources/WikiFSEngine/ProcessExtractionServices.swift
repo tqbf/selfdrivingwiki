@@ -84,8 +84,7 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
         var key = try await pdfKey(configuration: configuration, override: backendOverride)
         if case .builtIn(let builtIn) = key,
            builtIn == ExtractionBackendKey(kind: .pdf, backendID: ExtractionBackend.localPdf2md.rawValue) {
-            key = await reviewedKey(
-                legacyKey: builtIn,
+            key = try await reviewedKey(
                 logical: Self.reviewedPDFLogical,
                 kind: .pdf)
         }
@@ -99,7 +98,7 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
     /// Resolves an HTML adapter through the same exact registry used by PDF
     /// extraction. The default remains the always-available tag-based adapter.
     public func prepareHTML(
-        backendOverride: HtmlExtractionBackend? = nil
+        backendOverride: HtmlExtractionBackend?
     ) async throws -> any HtmlMarkdownExtractor {
         let configuration = try input.readConfiguration()
         var key: ExtractionAdapterKey
@@ -132,14 +131,21 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
                 backendID: HtmlExtractionBackend.tagBased.rawValue))
         }
 
-        // Map the legacy Defuddle selection to the reviewed package lineage
-        // when it is active. The tag-based fallback is never mapped.
+        // Map the legacy Defuddle selection to the reviewed package lineage.
+        // The tag-based fallback is never mapped.
         if case .builtIn(let builtIn) = key,
            builtIn == ExtractionBackendKey(kind: .html, backendID: HtmlExtractionBackend.defuddle.rawValue) {
-            key = await reviewedKey(
-                legacyKey: builtIn,
-                logical: Self.reviewedHTMLLogical,
-                kind: .html)
+            do {
+                key = try await reviewedKey(
+                    logical: Self.reviewedHTMLLogical,
+                    kind: .html)
+            } catch {
+                DebugLog.extraction(
+                    "Reviewed Defuddle extractor is unavailable; using tag-based fallback")
+                key = .builtIn(ExtractionBackendKey(
+                    kind: .html,
+                    backendID: HtmlExtractionBackend.tagBased.rawValue))
+            }
         }
 
         do {
@@ -192,29 +198,24 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
                 return match.key
             }
             DebugLog.extraction(
-                "Configured installed PDF extractor is unavailable; using local fallback")
-            return .builtIn(ExtractionBackendKey(
-                kind: .pdf,
-                backendID: ExtractionBackend.localPdf2md.rawValue))
+                "Configured installed PDF extractor is unavailable; using the reviewed pdf2md fallback")
+            return try await reviewedKey(
+                logical: Self.reviewedPDFLogical,
+                kind: .pdf)
         }
     }
 
-    /// Maps one legacy built-in selection to the reviewed package lineage when
-    /// that lineage is active.
-    ///
-    /// The mapping targets the reviewed lineage by identity, never the resolved
-    /// logical selection, so a third-party package with a similar registration
-    /// cannot capture the default or the fallback path. When the lineage is not
-    /// active the legacy built-in adapter serves the selection unchanged.
+    /// Resolves a reviewed package lineage by identity. A missing reviewed
+    /// registration is a configuration error, not permission to restore a
+    /// retired in-process extractor.
     private func reviewedKey(
-        legacyKey: ExtractionBackendKey,
         logical: LogicalExtractorReference,
         kind: ExtractionBackendKind
-    ) async -> ExtractionAdapterKey {
-        if let match = await registry.resolveInstalled(logical, kind: kind) {
-            return match.key
+    ) async throws -> ExtractionAdapterKey {
+        guard let match = await registry.resolveInstalled(logical, kind: kind) else {
+            throw ExtractionServicesError.unavailable
         }
-        return .builtIn(legacyKey)
+        return match.key
     }
 
     private func makeAdapter(
@@ -229,32 +230,21 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
     private static func builtInEntries(
         input: ExtractionProcessInput
     ) -> [ExtractionBatchEntry] {
-        let localKey = ExtractionBackendKey(kind: .pdf, backendID: ExtractionBackend.localPdf2md.rawValue)
         let acpKey = ExtractionBackendKey(kind: .pdf, backendID: ExtractionBackend.acp.rawValue)
         let anthropicKey = ExtractionBackendKey(kind: .pdf, backendID: ExtractionBackend.anthropic.rawValue)
         let geminiKey = ExtractionBackendKey(kind: .pdf, backendID: ExtractionBackend.gemini.rawValue)
         let doclingKey = ExtractionBackendKey(kind: .pdf, backendID: ExtractionBackend.doclingServe.rawValue)
-        let defuddleKey = ExtractionBackendKey(kind: .html, backendID: HtmlExtractionBackend.defuddle.rawValue)
         let tagBasedKey = ExtractionBackendKey(kind: .html, backendID: HtmlExtractionBackend.tagBased.rawValue)
 
         return [
             ExtractionBatchEntry(
-                key: .builtIn(localKey),
-                backend: RegisteredExtractionBackend(key: localKey) {
-                    .pdf(ExtractionPreparation(
-                        extractor: await input.makeLocalExtractor(),
-                        backend: .localPdf2md,
-                        modelVersion: nil))
-                }),
-            ExtractionBatchEntry(
                 key: .builtIn(acpKey),
                 backend: RegisteredExtractionBackend(key: acpKey) {
                     let configuration = try input.readConfiguration()
-                    let extractor: any MarkdownExtractor
-                    if let resolved = input.resolveACP(configuration) {
-                        extractor = resolved
-                    } else {
-                        extractor = await input.makeLocalExtractor()
+                    guard let extractor = input.resolveACP(configuration) else {
+                        DebugLog.config(
+                            "ExtractionServices: .acp backend has no provider; using the reviewed pdf2md package fallback")
+                        throw ExtractionServicesError.unavailable
                     }
                     return .pdf(ExtractionPreparation(
                         extractor: extractor,
@@ -304,11 +294,6 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
                             fetcher: input.httpFetcher),
                         backend: .doclingServe,
                         modelVersion: nil))
-                }),
-            ExtractionBatchEntry(
-                key: .builtIn(defuddleKey),
-                backend: RegisteredExtractionBackend(key: defuddleKey) {
-                    .html(await input.makeHTMLExtractor())
                 }),
             ExtractionBatchEntry(
                 key: .builtIn(tagBasedKey),

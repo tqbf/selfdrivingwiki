@@ -48,6 +48,49 @@ struct ProcessExtractorProviderTests {
         #expect(failure == nil)
     }
 
+    @Test func preparedSnapshotSurvivesRemovalAndFuturePreparationFails() async throws {
+        let environment = try await InstalledFixtureEnvironment.install()
+        defer { environment.cleanup() }
+
+        let preparation = try await environment.provider.preparePDF(
+            revision: environment.revision,
+            manifest: environment.manifest)
+        let pinnedProvenance = try #require(preparation.packageProvenance)
+
+        let writer = try ExtractorPackageCatalogWriter.testing(layout: environment.layout)
+        _ = try await writer.replaceCatalog(expectedGeneration: 1, records: [])
+
+        let markdown = try await preparation.extractor.convert(
+            pdfData: Data("success".utf8),
+            filename: "prepared-before-removal.pdf",
+            onProgress: nil)
+        #expect(markdown == "# Fixture\n")
+        #expect(preparation.packageProvenance == pinnedProvenance)
+
+        await #expect(throws: ProcessPackagePreparationError.unknownRevision) {
+            _ = try await environment.provider.preparePDF(
+                revision: environment.revision,
+                manifest: environment.manifest)
+        }
+    }
+
+    @Test func pdfConversionPreservesCancellationIdentity() async throws {
+        let environment = try await InstalledFixtureEnvironment.install(
+            executor: CancellingManagedProcessExecutor())
+        defer { environment.cleanup() }
+
+        let preparation = try await environment.provider.preparePDF(
+            revision: environment.revision,
+            manifest: environment.manifest)
+
+        await #expect(throws: CancellationError.self) {
+            _ = try await preparation.extractor.convert(
+                pdfData: Data("success".utf8),
+                filename: "cancelled.pdf",
+                onProgress: nil)
+        }
+    }
+
     @Test func preparationRejectionsAreTyped() async throws {
         let environment = try await InstalledFixtureEnvironment.install()
         defer { environment.cleanup() }
@@ -135,6 +178,15 @@ struct ProcessExtractorProviderTests {
     }
 }
 
+private struct CancellingManagedProcessExecutor: ManagedProcessExecuting {
+    func execute(
+        _ operation: ManagedExtractorProcessRequest,
+        onFrame: @escaping @Sendable (ExtractorProtocolFrame) -> Void
+    ) async throws -> ManagedExtractorProcessResult {
+        throw ManagedExtractorProcessError.cancellation
+    }
+}
+
 final class ProgressRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [String] = []
@@ -160,7 +212,9 @@ private final class InstalledFixtureEnvironment: @unchecked Sendable {
         case missingFixtureExecutable
     }
 
-    static func install() async throws -> InstalledFixtureEnvironment {
+    static func install(
+        executor: any ManagedProcessExecuting = ManagedExtractorProcessExecutor()
+    ) async throws -> InstalledFixtureEnvironment {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("process-provider-\(UUID().uuidString)", isDirectory: true)
         let layout = try ExtractorPackageStoreLayout(
@@ -204,7 +258,7 @@ private final class InstalledFixtureEnvironment: @unchecked Sendable {
             provider: ProcessExtractorProvider(
                 layout: layout,
                 catalogReader: ExtractorPackageCatalogReader(layout: layout),
-                executor: ManagedExtractorProcessExecutor(),
+                executor: executor,
                 admitted: { _ in true }),
             revision: record.revision,
             manifest: manifest)

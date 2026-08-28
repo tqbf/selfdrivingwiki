@@ -99,9 +99,6 @@ struct ProcessSignalSafetyAuditTests {
             .init(path: "Sources/WikiFSEngine/PdfExtractionService.swift",
                   primitive: .processTermination):
                 (3, "owns the Process object it terminates and rejects invalid process IDs"),
-            .init(path: "Sources/WikiFS/Sources/DefuddleExtractionService.swift",
-                  primitive: .processTermination):
-                (2, "owns the Process object it terminates and rejects invalid process IDs"),
             .init(path: "Sources/WikiFSEngine/ACPBackend.swift",
                   primitive: .processTermination):
                 (3, "terminates a held ACP client object, not a PID"),
@@ -261,7 +258,6 @@ struct ProcessSignalSafetyAuditTests {
         let expectedGuardCounts = [
             "Sources/WikiFSCore/Core/AsyncProcessRunner.swift": 1,
             "Sources/WikiFSEngine/PdfExtractionService.swift": 3,
-            "Sources/WikiFS/Sources/DefuddleExtractionService.swift": 2,
         ]
 
         for (relativePath, expectedCount) in expectedGuardCounts {

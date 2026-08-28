@@ -687,8 +687,7 @@ do {
 }
 
 let profileOwner = try DaemonProcessProfileOwner.production(
-    containerDirectory: containerDirectory,
-    makeLocalExtractor: { await MainActor.run { LocalPdf2MarkdownExtractor() } })
+    containerDirectory: containerDirectory)
 let daemon = WikiDaemon(
     containerDirectory: containerDirectory,
     profileOwner: profileOwner,

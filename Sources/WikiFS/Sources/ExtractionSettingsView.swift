@@ -1,6 +1,8 @@
+import AppKit
 import SwiftUI
 import WikiFSEngine
 import WikiFSCore
+import WikiFSTypes
 
 /// Settings for PDF→Markdown extraction — the second Settings scene tab. Picks
 /// the backend (Local pdf2md / Claude / Gemini / Docling Serve) and configures
@@ -19,6 +21,18 @@ struct ExtractionSettingsView: View {
     let fetcher: any HTTPRequestFetcher
     /// Provides the enabled-provider list for the ACP backend picker.
     let launcher: AgentLauncher
+    /// Loads the installed-package lifecycle snapshot (active registrations +
+    /// failed activations + applied generation) from the process extraction
+    /// context. Nil (tests, headless hosts) hides the package section entirely —
+    /// the app process wires the context in.
+    let packageSnapshot: (@Sendable () async -> ExtractorPackageSettingsSnapshot)?
+    /// Installs one local package directory into the extractor store. App-only:
+    /// the catalog writer rejects non-app roles, and only the app wiring
+    /// supplies this closure. Nil hides the import affordance (read-only view).
+    let importPackage: (@Sendable (URL) async -> ExtractorPackageMutationOutcome)?
+    /// Removes one exact revision from the extractor store. Same app-only rule
+    /// as `importPackage`. Nil hides the Remove buttons.
+    let removePackage: (@Sendable (ExtractorPackageRevisionID) async -> ExtractorPackageMutationOutcome)?
 
     // Drafts initialized from config + Keychain in `init`; every change is
     // written straight back by `persistAll()`.
@@ -40,6 +54,14 @@ struct ExtractionSettingsView: View {
     // `ExtractionConfig` in `init`, written back in `writeConfig`.
     @State private var draftHtmlBackend: HtmlExtractionBackend?
     @State private var draftPodcastBackend: PodcastTranscriptionBackend?
+    // Version-free logical package selections (dynamic-extractor-packages
+    // Phase 7). nil = the built-in backend pickers above keep their meaning.
+    @State private var pdfExtractorSelection: ExtractionBackendReference?
+    @State private var htmlExtractorSelection: ExtractionBackendReference?
+    // Installed-package lifecycle (dynamic-extractor-packages Phase 7).
+    @State private var packageModel: ExtractorPackageSettingsModel
+    @State private var showingImportPicker = false
+    @State private var removalCandidate: ExtractorPackageSettingsRow?
 
     private enum TestPhase: Equatable {
         case idle
@@ -52,12 +74,18 @@ struct ExtractionSettingsView: View {
         containerDirectory: URL,
         launcher: AgentLauncher,
         credentialStore: any ExtractionCredentialStore = KeychainExtractionCredentialStore(),
-        fetcher: any HTTPRequestFetcher = URLSessionRequestFetcher()
+        fetcher: any HTTPRequestFetcher = URLSessionRequestFetcher(),
+        packageSnapshot: (@Sendable () async -> ExtractorPackageSettingsSnapshot)? = nil,
+        importPackage: (@Sendable (URL) async -> ExtractorPackageMutationOutcome)? = nil,
+        removePackage: (@Sendable (ExtractorPackageRevisionID) async -> ExtractorPackageMutationOutcome)? = nil
     ) {
         self.containerDirectory = containerDirectory
         self.launcher = launcher
         self.credentialStore = credentialStore
         self.fetcher = fetcher
+        self.packageSnapshot = packageSnapshot
+        self.importPackage = importPackage
+        self.removePackage = removePackage
 
         // Seed the drafts once, at construction — so there's no onAppear race
         // where an `.onChange` fires before the loaded values are in place.
@@ -74,6 +102,12 @@ struct ExtractionSettingsView: View {
         _doclingTokenText = State(initialValue: credentialStore.secret(.doclingServeToken) ?? "")
         _draftHtmlBackend = State(initialValue: config.htmlBackend)
         _draftPodcastBackend = State(initialValue: config.podcastBackend)
+        _pdfExtractorSelection = State(initialValue: config.pdfExtractor)
+        _htmlExtractorSelection = State(initialValue: config.htmlExtractor)
+        _packageModel = State(initialValue: ExtractorPackageSettingsModel(
+            loadSnapshot: packageSnapshot,
+            importPackage: importPackage,
+            removePackage: removePackage))
     }
 
     var body: some View {
@@ -132,9 +166,20 @@ struct ExtractionSettingsView: View {
 
             // Only the selected backend's config — swap in place on change.
             backendConfigSection
+
+            // Installed extractor-package lifecycle (Phase 7): read-only list
+            // of exact registry admissions with progressive disclosure, plus
+            // app-only import/removal. Hidden when no snapshot loader was
+            // wired (tests, headless hosts).
+            if packageSnapshot != nil {
+                installedPackagesSection
+            }
         }
         .formStyle(.grouped)
         .frame(minWidth: Metrics.width, minHeight: Metrics.height)
+        // Async model mutations stay on the main actor; the load closure hops
+        // to the process registry off-main and returns a value snapshot.
+        .task { await packageModel.refresh() }
         .alert("Couldn't Connect to Claude", isPresented: anthropicErrorBinding,
                presenting: anthropicErrorMessage) { _ in
             Button("OK", role: .cancel) {}
@@ -153,6 +198,50 @@ struct ExtractionSettingsView: View {
         } message: { message in
             Text(message)
         }
+        .confirmationDialog(
+            "Remove extractor package?",
+            isPresented: Binding(
+                get: { removalCandidate != nil },
+                set: { if !$0 { removalCandidate = nil } }),
+            titleVisibility: .visible,
+            presenting: removalCandidate) { row in
+                Button("Remove Package", role: .destructive) {
+                    removalCandidate = nil
+                    Task { await packageModel.remove(row) }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { row in
+                Text("Remove \(row.packageID) \(row.version) from this Mac? Its registrations fall back to the built-in backends. A default selection that points at this package keeps falling back until you change it.")
+            }
+        .onChange(of: showingImportPicker) { _, isPresented in
+            guard isPresented else { return }
+            let panel = ExtractorSettingsPackagePicker.makePanel()
+            panel.begin { response in
+                showingImportPicker = false
+                guard response == .OK else { return }
+                do {
+                    let directory = try ExtractorSettingsPackagePicker.selectedDirectory(from: panel)
+                    Task { await packageModel.importPackage(from: directory) }
+                } catch {
+                    packageModel.reportImportSelectionError()
+                }
+            }
+        }
+        .onChange(of: packageModel.isBusy) { _, isBusy in
+            if isBusy, let message = packageModel.busyMessage {
+                announceAccessibility(message)
+            }
+        }
+        .onChange(of: packageModel.lastError) { _, error in
+            if let error {
+                announceAccessibility("Extractor package operation failed. \(error)")
+            }
+        }
+        .onChange(of: packageModel.lastDiagnostic) { _, diagnostic in
+            if let diagnostic {
+                announceAccessibility(diagnostic)
+            }
+        }
     }
 
     // MARK: - Selected-backend config section
@@ -165,6 +254,262 @@ struct ExtractionSettingsView: View {
         case .gemini: geminiSection
         case .doclingServe: doclingSection
         }
+    }
+
+    // MARK: - Installed extractor packages (Phase 7)
+
+    /// Lifecycle list of the process registry's installed exact registrations,
+    /// packages that failed to activate, app-only import + removal, and the
+    /// per-kind default package selection persisted into `ExtractionConfig`.
+    /// Each control carries a stable accessibility identifier, an accessible
+    /// name, and a state value (Phase 7.10); the contract test asserts these
+    /// strings exist.
+    @ViewBuilder private var installedPackagesSection: some View {
+        Section {
+            Button {
+                Task { await packageModel.refresh() }
+            } label: {
+                Label("Refresh", systemImage: "arrow.clockwise")
+            }
+            .disabled(packageModel.isBusy)
+            .accessibilityIdentifier(PackageAccessibility.refreshButton)
+            .accessibilityLabel("Refresh installed extractor packages")
+
+            if packageModel.canImport {
+                DisclosureGroup {
+                    importDisclosureContent
+                } label: {
+                    Text(ExtractorSettingsPackagePicker.disclosureTitle)
+                }
+                .accessibilityIdentifier(PackageAccessibility.importDisclosure)
+                .accessibilityLabel("Advanced local extractor package import")
+            }
+
+            if packageModel.isBusy {
+                ProgressView(packageModel.busyMessage ?? ExtractorPackageSettingsModel.checkingMessage)
+                    .controlSize(.small)
+                    .accessibilityIdentifier(PackageAccessibility.progress)
+                    .accessibilityLabel(packageModel.busyMessage ?? "Working on extractor packages")
+                    .accessibilityAddTraits(.updatesFrequently)
+            }
+
+            if packageModel.snapshot.rows.isEmpty && packageModel.snapshot.failedPackages.isEmpty {
+                Text(packageModel.hasLoaded
+                    ? "No extractor packages are installed on this Mac."
+                    : "Checking installed extractor packages…")
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier(PackageAccessibility.emptyState)
+            } else {
+                ForEach(packageModel.snapshot.rows) { row in
+                    packageRow(row)
+                }
+                ForEach(packageModel.snapshot.failedPackages) { failure in
+                    failedPackageRow(failure)
+                }
+            }
+
+            selectionControls
+
+            if let diagnostic = packageModel.lastDiagnostic {
+                Label(diagnostic, systemImage: "checkmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier(PackageAccessibility.diagnostic)
+            }
+            if let error = packageModel.lastError {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .accessibilityIdentifier(PackageAccessibility.error)
+                    .accessibilityLabel("Extractor package operation failed. \(error)")
+            }
+        } header: {
+            Text("Installed Extractor Packages")
+        } footer: {
+            Text("Exact validated revisions available to this Mac, per kind. Removing a package falls back to the built-in backends.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// The import disclosure's body: the local-directory contract, the
+    /// executable-code trust warning, and the import button. Local directories
+    /// only — the panel refuses files, and the boundary revalidates every
+    /// accepted selection.
+    @ViewBuilder private var importDisclosureContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(ExtractorSettingsPackagePicker.localImportSourceMessage)
+            Text(ExtractorSettingsPackagePicker.localImportStorageMessage)
+            Text(ExtractorSettingsPackagePicker.localImportAfterMessage)
+            Text(ExtractorSettingsPackagePicker.filesUnsupportedMessage)
+            Label(Self.trustWarningMessage, systemImage: "exclamationmark.triangle")
+                .foregroundStyle(.orange)
+                .accessibilityIdentifier(PackageAccessibility.trustWarning)
+                .accessibilityLabel("Executable code warning. \(Self.trustWarningMessage)")
+            Button(ExtractorSettingsPackagePicker.importButtonTitle, systemImage: "square.and.arrow.down") {
+                showingImportPicker = true
+            }
+            .disabled(packageModel.isBusy)
+            .accessibilityIdentifier(PackageAccessibility.importButton)
+            .accessibilityLabel("Import a local extractor package folder")
+        }
+        .font(.caption)
+    }
+
+    @ViewBuilder private func packageRow(_ row: ExtractorPackageSettingsRow) -> some View {
+        DisclosureGroup {
+            LabeledContent("Kind", value: kindDisplayName(row.kind))
+                .font(.caption)
+            LabeledContent("Digest", value: row.digestPrefix)
+                .font(.caption)
+                .accessibilityIdentifier("\(PackageAccessibility.digestPrefix).\(row.id)")
+            LabeledContent("Registration", value: row.registrationID)
+                .font(.caption)
+                .accessibilityIdentifier("\(PackageAccessibility.registrationPrefix).\(row.id)")
+            if packageModel.canRemove {
+                HStack {
+                    Spacer()
+                    Button("Remove Package…", role: .destructive) {
+                        removalCandidate = row
+                    }
+                    .disabled(packageModel.isBusy)
+                    .accessibilityIdentifier("\(PackageAccessibility.removePrefix).\(row.id)")
+                    .accessibilityLabel("Remove \(row.packageID), version \(row.version)")
+                }
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(row.packageID)
+                Text("version \(row.version), \(kindDisplayName(row.kind))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityIdentifier("\(PackageAccessibility.rowPrefix).\(row.id)")
+        .accessibilityLabel("\(row.packageID), version \(row.version), for \(kindDisplayName(row.kind))")
+        .accessibilityValue("Active")
+    }
+
+    /// A catalog revision whose activation failed in this process. It occupies
+    /// the store but resolved to no backend, so it shows its redacted failure
+    /// message and a "Not ready" state instead of an Active row.
+    @ViewBuilder private func failedPackageRow(_ failure: ExtractorPackageFailureSummary) -> some View {
+        DisclosureGroup {
+            Text(failure.message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .accessibilityIdentifier("\(PackageAccessibility.failureMessagePrefix).\(failure.id)")
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(failure.packageID)
+                Text("version \(failure.version), not ready")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityIdentifier("\(PackageAccessibility.failurePrefix).\(failure.id)")
+        .accessibilityLabel("\(failure.packageID), version \(failure.version), failed to activate")
+        .accessibilityValue("Not ready")
+    }
+
+    /// Version-free default package selections. nil (Built-in default) keeps
+    /// the classic backend pickers' meaning; picking a package writes its
+    /// logical reference into `ExtractionConfig.pdfExtractor`/`htmlExtractor`
+    /// via the same auto-save path as every other field.
+    @ViewBuilder private var selectionControls: some View {
+        Picker("PDF Extractor", selection: $pdfExtractorSelection) {
+            Text("Built-in default").tag(nil as ExtractionBackendReference?)
+            staleSelectionOption(for: .pdf, selection: pdfExtractorSelection)
+            ForEach(choices(for: .pdf)) { choice in
+                Text(choice.label).tag(ExtractionBackendReference.installed(choice.logical) as ExtractionBackendReference?)
+            }
+        }
+        .onChange(of: pdfExtractorSelection) { persistAll() }
+        .accessibilityIdentifier(PackageAccessibility.pdfSelection)
+        .accessibilityLabel("Default PDF extractor package")
+
+        Picker("HTML Extractor", selection: $htmlExtractorSelection) {
+            Text("Built-in default").tag(nil as ExtractionBackendReference?)
+            staleSelectionOption(for: .html, selection: htmlExtractorSelection)
+            ForEach(choices(for: .html)) { choice in
+                Text(choice.label).tag(ExtractionBackendReference.installed(choice.logical) as ExtractionBackendReference?)
+            }
+        }
+        .onChange(of: htmlExtractorSelection) { persistAll() }
+        .accessibilityIdentifier(PackageAccessibility.htmlSelection)
+        .accessibilityLabel("Default HTML extractor package")
+    }
+
+    @ViewBuilder
+    private func staleSelectionOption(
+        for kind: ExtractionBackendKind,
+        selection: ExtractionBackendReference?
+    ) -> some View {
+        if let selection,
+           case .installed(let logical) = selection,
+           choices(for: kind).contains(where: { $0.logical == logical }) == false {
+            Text("\(logical.packageID.rawValue) — \(logical.registrationID.rawValue) (not installed)")
+                .tag(selection)
+                .accessibilityIdentifier("\(PackageAccessibility.staleSelection).\(kind.rawValue)")
+                .accessibilityValue("Not installed. Built-in fallback is active")
+        }
+    }
+
+    /// Unique installed logical references for one kind, built from the active
+    /// registration rows. Identity is package + registration (version-free);
+    /// the resolver picks the highest compatible exact revision at run time.
+    private func choices(for kind: ExtractionBackendKind) -> [ExtractorPackageChoice] {
+        var seen: Set<String> = []
+        var result: [ExtractorPackageChoice] = []
+        for row in packageModel.snapshot.rows where row.kind == kind {
+            guard let packageID = ExtractorPackageID(rawValue: row.packageID),
+                  let registrationID = ExtractorRegistrationID(rawValue: row.registrationID)
+            else { continue }
+            let key = "\(row.packageID)/\(row.registrationID)"
+            guard seen.insert(key).inserted else { continue }
+            result.append(ExtractorPackageChoice(
+                logical: LogicalExtractorReference(
+                    packageID: packageID,
+                    registrationID: registrationID),
+                packageID: row.packageID,
+                registrationID: row.registrationID))
+        }
+        return result
+    }
+
+    private func kindDisplayName(_ kind: ExtractionBackendKind) -> String {
+        switch kind {
+        case .pdf: "PDF"
+        case .html: "HTML"
+        default: kind.rawValue
+        }
+    }
+
+    /// The executable-code disclosure shown before any local import.
+    static let trustWarningMessage = "Extractor packages contain executable code that runs with this app's permissions on your user account. Import only packages you trust. Cordis lifecycle and capability controls do not create a security sandbox."
+
+    /// Stable accessibility identifiers for the package lifecycle controls.
+    /// Row/digest/registration/remove/failure identifiers append the row's
+    /// `id` so each exact revision has a unique, derivable identifier.
+    private enum PackageAccessibility {
+        static let refreshButton = "extraction.packages.refresh"
+        static let emptyState = "extraction.packages.empty"
+        static let rowPrefix = "extraction.packages.row"
+        static let digestPrefix = "extraction.packages.digest"
+        static let registrationPrefix = "extraction.packages.registration"
+        static let importDisclosure = "extraction.packages.import.disclosure"
+        static let importButton = "extraction.packages.import.button"
+        static let trustWarning = "extraction.packages.import.trust"
+        static let removePrefix = "extraction.packages.remove"
+        static let failurePrefix = "extraction.packages.failure"
+        static let failureMessagePrefix = "extraction.packages.failure.message"
+        static let pdfSelection = "extraction.packages.selection.pdf"
+        static let htmlSelection = "extraction.packages.selection.html"
+        static let staleSelection = "extraction.packages.selection.stale"
+        static let progress = "extraction.packages.progress"
+        static let diagnostic = "extraction.packages.diagnostic"
+        static let error = "extraction.packages.error"
     }
 
     // MARK: - ACP Provider section
@@ -335,6 +680,8 @@ struct ExtractionSettingsView: View {
         config.doclingServeEndpoint = endpoint.isEmpty ? nil : endpoint
         config.htmlBackend = draftHtmlBackend
         config.podcastBackend = draftPodcastBackend
+        config.pdfExtractor = pdfExtractorSelection
+        config.htmlExtractor = htmlExtractorSelection
     }
 
     // MARK: - Test Connection (per backend). Drafts are already persisted by
@@ -395,11 +742,267 @@ struct ExtractionSettingsView: View {
         }
     }
 
+    private func announceAccessibility(_ message: String) {
+        NSAccessibility.post(
+            element: NSApp as Any,
+            notification: .announcementRequested,
+            userInfo: [.announcement: message])
+    }
+
     private enum Metrics {
         static let width: CGFloat = 460
         /// A fixed height tall enough for the multi-line footers and so that
         /// switching backends (sections of different heights) doesn't resize
         /// the window. A short section just leaves space below it.
         static let height: CGFloat = 420
+    }
+}
+
+// MARK: - Package lifecycle value types (Settings → Extraction)
+
+/// Value snapshot of the installed-package lifecycle as presented by Settings:
+/// the process registry's active exact registrations, catalog revisions whose
+/// activation failed in this process (bounded, redacted reconciler
+/// diagnostics), and the generation the reconciler last applied.
+struct ExtractorPackageSettingsSnapshot: Sendable, Equatable {
+    var rows: [ExtractorPackageSettingsRow] = []
+    var failedPackages: [ExtractorPackageFailureSummary] = []
+    var appliedGeneration: UInt64?
+
+    static let empty = ExtractorPackageSettingsSnapshot()
+}
+
+/// One failed package, copied out of the reconciler's public failure struct so
+/// the Settings surface depends on its own value type, not a live report.
+struct ExtractorPackageFailureSummary: Identifiable, Hashable, Sendable {
+    let packageID: String
+    let version: String
+    let digestPrefix: String
+    let message: String
+
+    init(packageID: String, version: String, digestPrefix: String, message: String) {
+        self.packageID = packageID
+        self.version = version
+        self.digestPrefix = digestPrefix
+        self.message = message
+    }
+
+    var id: String { "\(packageID)/\(version)/\(digestPrefix)" }
+}
+
+/// One installed logical (version-free) reference offered in the default
+/// extractor pickers. `logical` is the persisted value; the rest is labeling.
+struct ExtractorPackageChoice: Identifiable, Hashable, Sendable {
+    let logical: LogicalExtractorReference
+    let packageID: String
+    let registrationID: String
+
+    var id: String { "\(packageID)/\(registrationID)" }
+    var label: String { "\(packageID) — \(registrationID)" }
+}
+
+/// Result of an app-only package mutation, already reduced to user-facing
+/// strings so the closure seam carries no throwing errors across the UI.
+enum ExtractorPackageMutationOutcome: Sendable, Equatable {
+    case succeeded(String?)
+    case failed(String)
+}
+
+/// Fixed, path-free diagnostics for package mutations. Errors from the store
+/// and admission layers are enumerated so no incidental detail (paths,
+/// environment, errno strings) can leak into the UI.
+enum ExtractorPackageMutationMessage {
+    static func describe(_ error: Error) -> String {
+        switch error as? ExtractorPackageStoreError {
+        case .mutationForbidden:
+            return "Extractor packages can only be changed from the app."
+        case .lockTimedOut:
+            return "The extractor store was busy. Try again in a moment."
+        case .staleGeneration:
+            return "The extractor store changed during the operation. Try again."
+        case .conflictingRevision, .packageRootAlreadyExists:
+            return "A different revision of this package already occupies its place in the store."
+        case .packageMissing:
+            return "The package is no longer present in the extractor store."
+        case .packageRemovalFailed:
+            return "The package was removed from the catalog but its files could not be fully cleaned up."
+        case .recoveryFailed:
+            return "Extractor store recovery failed."
+        case .corruptCatalog, .catalogTooLarge:
+            return "The extractor catalog could not be read."
+        case .filesystemFailure:
+            return "The extractor store could not be updated on disk."
+        case .none:
+            break
+        }
+        switch error as? ExtractorDirectoryAdmissionError {
+        case .nonFileURL, .sourceNotDirectory:
+            return "Select one local extractor package folder."
+        case .sourceChanged, .symlink, .hardLink, .specialFile, .deviceChanged,
+             .metadataChanged, .modeChanged, .containment:
+            return "The package folder changed or is unsafe to import."
+        case .collision, .copyFailed, .preparationFailed, .validationFailed,
+             .expectedRevisionMismatch, .invalidStagingID, .limitExceeded:
+            return "The package failed validation and was not installed."
+        case .manifest:
+            return "The package manifest failed validation."
+        case .mutationForbidden:
+            return "Extractor packages can only be changed from the app."
+        case .none:
+            return "The extractor package operation failed. See Console for details."
+        }
+    }
+}
+
+/// The local-only package-directory contract used by Extraction settings,
+/// mirroring `RendererSettingsPackagePicker`. AppKit's panel configuration is
+/// only the first safeguard: every accepted selection is revalidated at this
+/// boundary so files, archives, and multiple URLs cannot enter the import
+/// workflow through another call path.
+@MainActor
+enum ExtractorSettingsPackagePicker {
+    static let disclosureTitle = "Advanced Local Package Import"
+    static let importButtonTitle = "Import Extractor Package…"
+    static let localImportSourceMessage = "Select one local extractor package folder as an import source."
+    static let localImportStorageMessage = "Self Driving Wiki validates and copies it into the extractor store on this Mac."
+    static let localImportAfterMessage = "The selected source folder is not used after import."
+    static let filesUnsupportedMessage = "Files and archives are not supported."
+    static let selectionErrorMessage = "Select one local extractor package folder as an import source. Self Driving Wiki validates and copies it. Files and archives are not supported."
+
+    static func makePanel() -> NSOpenPanel {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = false
+        panel.prompt = importButtonTitle
+        panel.title = importButtonTitle
+        panel.message = selectionErrorMessage
+        return panel
+    }
+
+    static func validatedDirectory(from selection: [URL]) throws -> URL {
+        guard selection.count == 1, let url = selection.first else {
+            throw PickerSelectionError.expectedOneDirectory
+        }
+        guard !isArchive(url), isDirectory(url) else {
+            throw PickerSelectionError.fileOrArchiveNotSupported
+        }
+        return url
+    }
+
+    static func selectedDirectory(from panel: NSOpenPanel) throws -> URL {
+        try validatedDirectory(from: panel.urls)
+    }
+
+    enum PickerSelectionError: Error, Equatable {
+        case expectedOneDirectory
+        case fileOrArchiveNotSupported
+    }
+
+    private static func isDirectory(_ url: URL) -> Bool {
+        do {
+            return try url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true
+        } catch {
+            DebugLog.extraction("Extractor package picker could not inspect the selected URL.")
+            return false
+        }
+    }
+
+    private static func isArchive(_ url: URL) -> Bool {
+        switch url.pathExtension.lowercased() {
+        case "zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar":
+            true
+        default:
+            false
+        }
+    }
+}
+
+/// Loads, mutates, and holds the installed extractor-package lifecycle for the
+/// Settings section. All mutations run on the main actor (Phase 7.12); the
+/// closures hop to the process registry/context off-main and return value
+/// snapshots and outcomes. No SwiftUI state is written from a representable
+/// update — refreshes happen from `.task` and user actions.
+@MainActor
+@Observable
+final class ExtractorPackageSettingsModel {
+    private let loadSnapshot: (@Sendable () async -> ExtractorPackageSettingsSnapshot)?
+    private let importAction: (@Sendable (URL) async -> ExtractorPackageMutationOutcome)?
+    private let removeAction: (@Sendable (ExtractorPackageRevisionID) async -> ExtractorPackageMutationOutcome)?
+
+    private(set) var snapshot = ExtractorPackageSettingsSnapshot.empty
+    private(set) var isBusy = false
+    private(set) var busyMessage: String?
+    private(set) var hasLoaded = false
+    private(set) var lastError: String?
+    private(set) var lastDiagnostic: String?
+
+    static let checkingMessage = "Checking installed extractor packages…"
+    static let importingMessage = "Validating and installing package…"
+    static let removingMessage = "Removing package…"
+
+    init(
+        loadSnapshot: (@Sendable () async -> ExtractorPackageSettingsSnapshot)?,
+        importPackage: (@Sendable (URL) async -> ExtractorPackageMutationOutcome)? = nil,
+        removePackage: (@Sendable (ExtractorPackageRevisionID) async -> ExtractorPackageMutationOutcome)? = nil
+    ) {
+        self.loadSnapshot = loadSnapshot
+        self.importAction = importPackage
+        self.removeAction = removePackage
+    }
+
+    /// Import/removal are read-only-hidden when the app wiring did not supply
+    /// the app-only mutation closures.
+    var canImport: Bool { importAction != nil }
+    var canRemove: Bool { removeAction != nil }
+
+    func refresh() async {
+        guard let loadSnapshot, !isBusy else { return }
+        isBusy = true
+        busyMessage = Self.checkingMessage
+        snapshot = await loadSnapshot()
+        hasLoaded = true
+        isBusy = false
+        busyMessage = nil
+    }
+
+    func importPackage(from directory: URL) async {
+        guard let importAction, !isBusy else { return }
+        isBusy = true
+        busyMessage = Self.importingMessage
+        lastError = nil
+        lastDiagnostic = nil
+        let outcome = await importAction(directory)
+        apply(outcome, successDiagnostic: "Extractor package installed.")
+        isBusy = false
+        busyMessage = nil
+        await refresh()
+    }
+
+    func remove(_ row: ExtractorPackageSettingsRow) async {
+        guard let removeAction, !isBusy else { return }
+        isBusy = true
+        busyMessage = Self.removingMessage
+        lastError = nil
+        lastDiagnostic = nil
+        let outcome = await removeAction(row.revision)
+        apply(outcome, successDiagnostic: "Removed \(row.packageID) \(row.version).")
+        isBusy = false
+        busyMessage = nil
+        await refresh()
+    }
+
+    func reportImportSelectionError() {
+        lastError = ExtractorSettingsPackagePicker.selectionErrorMessage
+    }
+
+    private func apply(_ outcome: ExtractorPackageMutationOutcome, successDiagnostic: String) {
+        switch outcome {
+        case .succeeded(let diagnostic):
+            lastDiagnostic = diagnostic ?? successDiagnostic
+        case .failed(let message):
+            lastError = message
+        }
     }
 }
