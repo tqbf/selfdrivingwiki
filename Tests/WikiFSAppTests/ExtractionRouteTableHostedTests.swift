@@ -114,27 +114,63 @@ struct ExtractionRouteTableHostedTests {
 
     // MARK: - AC.10: the table renders and scrolls internally
 
+    private func containsDescendant(_ view: NSView, _ predicate: (NSView) -> Bool) -> Bool {
+        if predicate(view) { return true }
+        return view.subviews.contains { containsDescendant($0, predicate) }
+    }
+
+    private func firstTableView(_ window: NSWindow) -> NSTableView? {
+        guard let content = window.contentView else { return nil }
+        var result: NSTableView?
+        func walk(_ view: NSView) {
+            if result == nil, let table = view as? NSTableView { result = table }
+            for subview in view.subviews { walk(subview) }
+        }
+        walk(content)
+        return result
+    }
+
     @Test("the route table mounts, loads its snapshot, and scrolls internally")
     func rendersRouteTableWithoutCrash() async throws {
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        defer { lease.release() }
         let dir = try tempDirectory("route-table-render")
-        let view = makeView(directory: dir, snapshot: snapshot())
+        // A real registration whose MIME is outside the host routes: the table
+        // then holds three rows (PDF, HTML, and the registration-derived epub
+        // route). Row views only exist after the async snapshot load rebuilds
+        // routeRows, so the wait below observes the actual load instead of the
+        // initial layout.
+        let view = makeView(directory: dir, snapshot: snapshot(registrations: [
+            ExtractorRouteRegistrationSnapshot(
+                reference: ExtractorReference(
+                    revision: ExtractorPackageRevisionID(
+                        packageID: try ExtractorPackageID(validating: "org.example.pdf"),
+                        version: try ExtractorPackageVersion(validating: "1.0.0"),
+                        digest: try ExtractorPackageDigest(hex: String(repeating: "3", count: 64))),
+                    registrationID: try ExtractorRegistrationID(validating: "pdf")),
+                displayName: "PDF Package",
+                packageName: "PDF Package",
+                kinds: [.pdf],
+                mimeTypes: [try ExtractorMIMEType(validating: "application/epub+zip")],
+                filenameExtensions: []),
+        ]))
         let window = mount(view)
+
         try await waitUntil {
-            (window.contentView?.bounds.width ?? 0) > 0
+            self.firstTableView(window)?.numberOfRows == 3
         }
         // The hosted hierarchy contains a native table (row views) inside a
         // clip view — the scrollable, window-bounded layout.
-        func contains(_ view: NSView, _ type: (NSView) -> Bool) -> Bool {
-            if type(view) { return true }
-            return view.subviews.contains { contains($0, type) }
-        }
         let content = try #require(window.contentView)
-        #expect(contains(content) { $0 is NSClipView })
-        #expect(contains(content) { $0 is NSTableRowView } || contains(content) { $0 is NSTableView })
+        #expect(containsDescendant(content) { $0 is NSClipView })
+        let table = try #require(firstTableView(window))
+        #expect(table.numberOfRows == 3)
     }
 
     @Test("the table keeps a constrained height at the Settings minimum size")
-    func tableUsesConstrainedScrollableLayout() throws {
+    func tableUsesConstrainedScrollableLayout() async throws {
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        defer { lease.release() }
         let dir = try tempDirectory("route-table-scroll")
         let view = makeView(directory: dir, snapshot: snapshot())
         let window = mount(view)
@@ -143,12 +179,8 @@ struct ExtractionRouteTableHostedTests {
         // The hosting hierarchy contains a clip view (the table's internal
         // scroll viewport); the Settings form itself carries the fixed
         // minimum frame, so row growth scrolls instead of resizing.
-        func hasClipView(_ view: NSView) -> Bool {
-            if view is NSClipView { return true }
-            return view.subviews.contains { hasClipView($0) }
-        }
-        #expect(hasClipView(content))
-        #expect(window.contentView?.bounds.height ?? 0 > 0)
+        #expect(containsDescendant(content) { $0 is NSClipView })
+        #expect((window.contentView?.bounds.height ?? 0) > 0)
 
         // The height comes from a named metric, not a magic literal.
         let source = try sourceView()
