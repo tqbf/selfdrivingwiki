@@ -34,17 +34,21 @@ struct ExtractionSettingsView: View {
     /// as `importPackage`. Nil hides the Remove buttons.
     let removePackage: (@Sendable (ExtractorPackageRevisionID) async -> ExtractorPackageMutationOutcome)?
 
-    // Drafts initialized from config + Keychain in `init`; every change is
-    // written straight back by `persistAll()`.
-    @State private var pdfExtractorSelection: PDFExtractorSettingsSelection
+    // Route table rows built from the PR 2 projection: host descriptors, the
+    // package model's registration snapshots, and saved selections. Rebuilt
+    // after config writes and package-snapshot refreshes.
+    @State private var routeRows: [ExtractorRouteSettingsRow] = []
+    /// One route-scoped, typed selection per table row (`row.id`). The picker
+    /// binding writes through `ExtractorRouteSettingsMapping`, which keeps the
+    /// legacy compatibility fields truthful while persisting the route record.
+    @State private var routeSelections: [String: ExtractorRouteSettingsSelection] = [:]
     @State private var acpProviderSelection: String
     @State private var doclingEndpointText: String
     @State private var doclingTokenText: String
     @State private var doclingTest = TestPhase.idle
-    // Issue #799 PR1: HTML + Podcast backend drafts (optional — nil = no
-    // default yet, user is prompted to pick on first extraction). Seeded from
+    // Issue #799 PR1: Podcast backend draft (optional — nil = no default yet,
+    // user is prompted to pick on first transcription). Seeded from
     // `ExtractionConfig` in `init`, written back in `writeConfig`.
-    @State private var htmlExtractorSelection: HTMLExtractorSettingsSelection
     @State private var draftPodcastBackend: PodcastTranscriptionBackend?
     // Installed-package lifecycle (dynamic-extractor-packages Phase 7).
     @State private var packageModel: ExtractorPackageSettingsModel
@@ -78,11 +82,9 @@ struct ExtractionSettingsView: View {
         // Seed the drafts once, at construction — so there's no onAppear race
         // where an `.onChange` fires before the loaded values are in place.
         let config = ExtractionConfig.load(from: containerDirectory)
-        _pdfExtractorSelection = State(initialValue: ExtractorSettingsSelectionMapping.pdfSelection(from: config))
         _acpProviderSelection = State(initialValue: ExtractorSettingsSelectionMapping.acpProviderSelection(from: config))
         _doclingEndpointText = State(initialValue: config.doclingServeEndpoint ?? "")
         _doclingTokenText = State(initialValue: credentialStore.secret(.doclingServeToken) ?? "")
-        _htmlExtractorSelection = State(initialValue: ExtractorSettingsSelectionMapping.htmlSelection(from: config))
         _draftPodcastBackend = State(initialValue: config.podcastBackend)
         _packageModel = State(initialValue: ExtractorPackageSettingsModel(
             loadSnapshot: packageSnapshot,
@@ -93,8 +95,7 @@ struct ExtractionSettingsView: View {
     var body: some View {
         Form {
             Section {
-                unifiedPDFExtractorPicker
-                unifiedHTMLExtractorPicker
+                extractorRouteTable
 
                 Picker("Podcast Transcript", selection: podcastBackendBinding) {
                     Text("Prompt me when transcribing").tag(nil as PodcastTranscriptionBackend?)
@@ -128,7 +129,13 @@ struct ExtractionSettingsView: View {
         .frame(minWidth: Metrics.width, minHeight: Metrics.height)
         // Async model mutations stay on the main actor; the load closure hops
         // to the process registry off-main and returns a value snapshot.
-        .task { await packageModel.refresh() }
+        .task {
+            await packageModel.refresh()
+            rebuildRouteRows()
+        }
+        .onChange(of: packageModel.snapshot) { _, _ in
+            rebuildRouteRows()
+        }
         .alert("Couldn't Connect to Docling Serve", isPresented: doclingErrorBinding,
                presenting: doclingErrorMessage) { _ in
             Button("OK", role: .cancel) {}
@@ -181,90 +188,193 @@ struct ExtractionSettingsView: View {
         }
     }
 
-    // MARK: - Unified extractor selection
+    // MARK: - Extractor route table
 
-    private var unifiedPDFExtractorPicker: some View {
-        Picker("PDF", selection: $pdfExtractorSelection) {
-            extractorOption("pdf2md", source: "Reviewed package")
-                .tag(PDFExtractorSettingsSelection.reviewedPdf2md)
-            ForEach(pdfPackageChoices) { choice in
-                extractorOption(choice.packageID, source: "Installed package")
-                    .tag(PDFExtractorSettingsSelection.installed(choice.logical))
+    /// The native, registration-driven route table: one row per extraction
+    /// route (Format), a pop-up of compatible choices (Default extractor), and
+    /// the live status. The fixed height keeps the Settings window bounded —
+    /// the table scrolls internally when registrations add routes.
+    private var extractorRouteTable: some View {
+        Table(routeRows) {
+            TableColumn("Format") { (row: ExtractorRouteSettingsRow) in
+                Label(row.descriptor.displayName, systemImage: row.descriptor.systemImage ?? "doc")
+                    // Technical MIME identity lives in help text, not a column.
+                    .help("MIME type: \(row.route.mimeType.rawValue)")
             }
-            stalePDFSelectionOption
-            Divider()
-            extractorOption("ACP Provider", source: "Connected service")
-                .tag(PDFExtractorSettingsSelection.host(.acp))
-            extractorOption("Docling Serve", source: "Connected service")
-                .tag(PDFExtractorSettingsSelection.host(.doclingServe))
-        }
-        .onChange(of: pdfExtractorSelection) { _, _ in persistAll() }
-        .accessibilityIdentifier(PackageAccessibility.pdfSelection)
-        .accessibilityLabel("Default PDF extractor")
-    }
-
-    private var unifiedHTMLExtractorPicker: some View {
-        Picker("HTML", selection: $htmlExtractorSelection) {
-            Text("Prompt me when extracting")
-                .tag(HTMLExtractorSettingsSelection.prompt)
-            extractorOption("Defuddle", source: "Reviewed package")
-                .tag(HTMLExtractorSettingsSelection.reviewedDefuddle)
-            ForEach(htmlPackageChoices) { choice in
-                extractorOption(choice.packageID, source: "Installed package")
-                    .tag(HTMLExtractorSettingsSelection.installed(choice.logical))
+            .width(min: 90, ideal: 120)
+            TableColumn("Default extractor") { (row: ExtractorRouteSettingsRow) in
+                routePicker(row)
             }
-            staleHTMLSelectionOption
-            Divider()
-            extractorOption("Tag-based", source: "Built in")
-                .tag(HTMLExtractorSettingsSelection.host(.tagBased))
+            .width(min: 220, ideal: 280)
+            TableColumn("Status") { (row: ExtractorRouteSettingsRow) in
+                statusLabel(row)
+            }
         }
-        .onChange(of: htmlExtractorSelection) { _, _ in persistAll() }
-        .accessibilityIdentifier(PackageAccessibility.htmlSelection)
-        .accessibilityLabel("Default HTML extractor")
+        .frame(height: Metrics.routeTableHeight)
+        .accessibilityIdentifier(RouteAccessibility.table)
+        .accessibilityLabel("Default extractor routes")
     }
 
-    private func extractorOption(_ name: String, source: String) -> Text {
-        Text("\(name) — \(source)")
+    /// One row's pop-up. Tags are the typed `ExtractorRouteSettingsSelection`
+    /// values — no sentinel strings; the binding writes through the mapping
+    /// that dual-writes the legacy compatibility fields.
+    private func routePicker(_ row: ExtractorRouteSettingsRow) -> some View {
+        Picker(selection: selectionBinding(row)) {
+            ForEach(row.choices) { choice in
+                Text(Self.optionLabel(choice)).tag(Self.selection(for: choice))
+            }
+        } label: {
+            EmptyView()
+        }
+        .labelsHidden()
+        .frame(maxWidth: 260)
+        .accessibilityIdentifier("\(RouteAccessibility.pickerPrefix).\(Self.accessibilityKey(row.route))")
+        .accessibilityLabel("Default extractor for \(row.descriptor.displayName)")
+        .accessibilityValue(accessibilityValue(row))
     }
 
-    @ViewBuilder private var stalePDFSelectionOption: some View {
-        if packageModel.hasLoaded,
-           case .installed(let logical) = pdfExtractorSelection,
-           pdfPackageChoices.contains(where: { $0.logical == logical }) == false {
-            Text("\(logical.packageID.rawValue) — Not installed")
-                .tag(pdfExtractorSelection)
-                .accessibilityIdentifier("\(PackageAccessibility.staleSelection).pdf")
-                .accessibilityValue("Not installed. Reviewed pdf2md fallback is active")
+    private func selectionBinding(_ row: ExtractorRouteSettingsRow) -> Binding<ExtractorRouteSettingsSelection> {
+        Binding(
+            get: {
+                routeSelections[row.id] ?? ExtractorRouteSettingsMapping.selection(
+                    route: row.route, config: ExtractionConfig.load(from: containerDirectory), row: row)
+            },
+            set: { writeRouteSelection($0, for: row) })
+    }
+
+    /// Status cell + spoken/label text. The vocabulary is fixed: Available,
+    /// Using fallback, Not installed, Waiting for host service, Failed to
+    /// activate. The fallback description (what is actually being used) rides
+    /// in help text and the accessibility value.
+    /// Maps one table choice to its typed selection value — the picker tag.
+    static func selection(for choice: ExtractorRouteChoice) -> ExtractorRouteSettingsSelection {
+        switch choice.category {
+        case .prompt:
+            return .prompt
+        case .reviewedPackage:
+            return choice.reference == .installed(ProcessExtractionServices.reviewedPDFLogical)
+                ? .reviewedPdf2md
+                : .reviewedDefuddle
+        case .installedPackage:
+            if case .installed(let logical) = choice.reference { return .installed(logical) }
+            return .prompt
+        case .unavailable:
+            if case .installed(let logical) = choice.reference { return .unavailableInstalled(logical) }
+            return .prompt
+        case .connectedService:
+            if case .builtIn(.pdf(let backend)) = choice.reference { return .connectedService(backend) }
+            return .prompt
+        case .builtIn:
+            return .builtInTagBased
         }
     }
 
-    @ViewBuilder private var staleHTMLSelectionOption: some View {
-        if packageModel.hasLoaded,
-           case .installed(let logical) = htmlExtractorSelection,
-           htmlPackageChoices.contains(where: { $0.logical == logical }) == false {
-            Text("\(logical.packageID.rawValue) — Not installed")
-                .tag(htmlExtractorSelection)
-                .accessibilityIdentifier("\(PackageAccessibility.staleSelection).html")
-                .accessibilityValue("Not installed. Tag-based fallback is active")
+    @ViewBuilder
+    private func statusLabel(_ row: ExtractorRouteSettingsRow) -> some View {
+        switch row.status {
+        case .available:
+            Text("Available")
+                .foregroundStyle(.secondary)
+        case .usingFallback(let description):
+            Label("Using fallback", systemImage: "arrow.triangle.swap")
+                .foregroundStyle(.orange)
+                .help(description)
+        case .notInstalled:
+            Text("Not installed")
+                .foregroundStyle(.orange)
+        case .waitingForHostService:
+            Label("Waiting for host service", systemImage: "clock")
+                .foregroundStyle(.orange)
+        case .failedActivation:
+            Label("Failed to activate", systemImage: "exclamationmark.triangle")
+                .foregroundStyle(.red)
         }
     }
 
-    private var pdfPackageChoices: [ExtractorPackageChoice] {
-        choices(for: .pdf).filter { $0.logical != ProcessExtractionServices.reviewedPDFLogical }
+    private func accessibilityValue(_ row: ExtractorRouteSettingsRow) -> String {
+        let selectedName: String
+        if let selection = routeSelections[row.id],
+           let choice = row.choices.first(where: { Self.selection(for: $0) == selection }) {
+            selectedName = choice.displayName
+        } else {
+            selectedName = "No default"
+        }
+        return "\(selectedName), \(Self.statusText(row.status))"
     }
 
-    private var htmlPackageChoices: [ExtractorPackageChoice] {
-        choices(for: .html).filter { $0.logical != ProcessExtractionServices.reviewedHTMLLogical }
+    /// The picker's option caption, matching the pickers this table replaced:
+    /// "name — source".
+    static func optionLabel(_ choice: ExtractorRouteChoice) -> String {
+        "\(choice.displayName) — \(sourceName(choice.category))"
+    }
+
+    static func sourceName(_ category: ExtractorRouteSourceCategory) -> String {
+        switch category {
+        case .reviewedPackage: "Reviewed package"
+        case .installedPackage: "Installed package"
+        case .connectedService: "Connected service"
+        case .builtIn: "Built in"
+        case .prompt: "Prompt"
+        case .unavailable: "Not installed"
+        }
+    }
+
+    static func statusText(_ status: ExtractorRouteStatus) -> String {
+        switch status {
+        case .available: "Available"
+        case .usingFallback: "Using fallback"
+        case .notInstalled: "Not installed"
+        case .waitingForHostService: "Waiting for host service"
+        case .failedActivation: "Failed to activate"
+        }
+    }
+
+    /// Rebuilds the rows and the derived per-route selections from the current
+    /// config plus the package model's projection snapshot.
+    private func rebuildRouteRows() {
+        let config = ExtractionConfig.load(from: containerDirectory)
+        routeRows = ExtractorRouteTableBuilder.build(.init(
+            configuration: config,
+            registrations: packageModel.snapshot.registrationSnapshots,
+            failedPackageIDs: Set(packageModel.snapshot.failedPackages.map(\.packageID)),
+            waitingRevisionIDs: packageModel.snapshot.waitingRevisionIDs))
+        var selections: [String: ExtractorRouteSettingsSelection] = [:]
+        for row in routeRows {
+            selections[row.id] = ExtractorRouteSettingsMapping.selection(
+                route: row.route, config: config, row: row)
+        }
+        routeSelections = selections
+    }
+
+    /// Persists one route picker change: the mapping keeps the legacy
+    /// compatibility fields truthful, `setExtractorSelection` writes the typed
+    /// route record, and the auto-save contract persists immediately.
+    private func writeRouteSelection(_ selection: ExtractorRouteSettingsSelection, for row: ExtractorRouteSettingsRow) {
+        var config = ExtractionConfig.load(from: containerDirectory)
+        ExtractorRouteSettingsMapping.write(selection, route: row.route, into: &config)
+        DebugLog.trying("save extraction config", operation: { try config.save(to: containerDirectory) })
+        rebuildRouteRows()
+    }
+
+    /// Stable, derivable accessibility key for a route: kind plus MIME with
+    /// the separator flattened ("pdf-application-pdf", "html-text-html").
+    static func accessibilityKey(_ route: ExtractorRouteID) -> String {
+        "\(route.kind.rawValue)-\(route.mimeType.rawValue.replacing("/", with: "-"))"
+    }
+
+    private enum RouteAccessibility {
+        static let table = "extraction.routes.table"
+        static let pickerPrefix = "extraction.routes.picker"
+        static let statusPrefix = "extraction.routes.status"
     }
 
     // MARK: - Selected service configuration
 
     @ViewBuilder private var backendConfigSection: some View {
-        switch pdfExtractorSelection {
-        case .host(.acp): acpSection
-        case .host(.doclingServe): doclingSection
-        case .host(.anthropic), .host(.gemini), .host(.localPdf2md), .reviewedPdf2md, .installed:
-            EmptyView()
+        switch routeSelections[ExtractorRouteID.canonicalPDF.description] {
+        case .connectedService(.acp): acpSection
+        case .connectedService(.doclingServe): doclingSection
+        default: EmptyView()
         }
     }
 
@@ -423,28 +533,6 @@ struct ExtractionSettingsView: View {
         .accessibilityValue("Not ready")
     }
 
-    /// Unique installed logical references for one kind, built from the active
-    /// registration rows. Identity is package + registration (version-free);
-    /// the resolver picks the highest compatible exact revision at run time.
-    private func choices(for kind: ExtractionBackendKind) -> [ExtractorPackageChoice] {
-        var seen: Set<String> = []
-        var result: [ExtractorPackageChoice] = []
-        for row in packageModel.snapshot.rows where row.kind == kind {
-            guard let packageID = ExtractorPackageID(rawValue: row.packageID),
-                  let registrationID = ExtractorRegistrationID(rawValue: row.registrationID)
-            else { continue }
-            let key = "\(row.packageID)/\(row.registrationID)"
-            guard seen.insert(key).inserted else { continue }
-            result.append(ExtractorPackageChoice(
-                logical: LogicalExtractorReference(
-                    packageID: packageID,
-                    registrationID: registrationID),
-                packageID: row.packageID,
-                registrationID: row.registrationID))
-        }
-        return result
-    }
-
     private func kindDisplayName(_ kind: ExtractionBackendKind) -> String {
         switch kind {
         case .pdf: "PDF"
@@ -471,9 +559,6 @@ struct ExtractionSettingsView: View {
         static let removePrefix = "extraction.packages.remove"
         static let failurePrefix = "extraction.packages.failure"
         static let failureMessagePrefix = "extraction.packages.failure.message"
-        static let pdfSelection = "extraction.packages.selection.pdf"
-        static let htmlSelection = "extraction.packages.selection.html"
-        static let staleSelection = "extraction.packages.selection.stale"
         static let progress = "extraction.packages.progress"
         static let diagnostic = "extraction.packages.diagnostic"
         static let error = "extraction.packages.error"
@@ -564,13 +649,13 @@ struct ExtractionSettingsView: View {
         DebugLog.trying("set Docling token", operation: { try credentialStore.setSecret(doclingTokenText.isEmpty ? nil : doclingTokenText, .doclingServeToken) })
     }
 
-    /// Write every non-secret draft into `config`.
+    /// Write every non-secret draft into `config`. The route selections are
+    /// not here — each table picker writes through
+    /// `ExtractorRouteSettingsMapping.write` the moment it changes.
     private func writeConfig(into config: inout ExtractionConfig) {
-        ExtractorSettingsSelectionMapping.writePDF(pdfExtractorSelection, into: &config)
         config.acpProviderId = acpProviderSelection.isEmpty ? nil : acpProviderSelection
         let endpoint = doclingEndpointText.trimmingCharacters(in: .whitespacesAndNewlines)
         config.doclingServeEndpoint = endpoint.isEmpty ? nil : endpoint
-        ExtractorSettingsSelectionMapping.writeHTML(htmlExtractorSelection, into: &config)
         config.podcastBackend = draftPodcastBackend
     }
 
@@ -604,40 +689,160 @@ struct ExtractionSettingsView: View {
         /// switching backends (sections of different heights) doesn't resize
         /// the window. A short section just leaves space below it.
         static let height: CGFloat = 420
+        /// The route table's fixed height: both canonical rows plus room for a
+        /// few registration-derived rows, with internal scrolling beyond that
+        /// so the Settings window never grows without bound.
+        static let routeTableHeight: CGFloat = 132
     }
 }
 
-// MARK: - Unified extractor selection
+// MARK: - Route-scoped extractor selection
 
-enum PDFExtractorSettingsSelection: Hashable, Sendable {
-    case reviewedPdf2md
-    case installed(LogicalExtractorReference)
-    case host(ExtractionBackend)
-}
-
-enum HTMLExtractorSettingsSelection: Hashable, Sendable {
+/// One route-scoped default-extractor selection. Replaces the separate
+/// per-kind PDF and HTML settings enums: the route is the identity, the
+/// associated values stay typed (`LogicalExtractorReference`,
+/// `ExtractionBackend`), and no sentinel strings exist for prompt,
+/// unavailable, or default state.
+enum ExtractorRouteSettingsSelection: Hashable, Sendable {
+    /// HTML only: no default — the user is prompted per extraction.
     case prompt
+    case reviewedPdf2md
     case reviewedDefuddle
     case installed(LogicalExtractorReference)
-    case host(HtmlExtractionBackend)
+    /// A saved installed selection whose package is no longer active.
+    case unavailableInstalled(LogicalExtractorReference)
+    /// PDF only: ACP or Docling Serve.
+    case connectedService(ExtractionBackend)
+    /// HTML only: the built-in tag-based extractor.
+    case builtInTagBased
 }
 
+/// Maps between `ExtractionConfig` (route records + legacy fields) and the
+/// route-scoped view selection, and writes a table pick through both layers:
+/// the legacy `backend` / `htmlBackend` / `pdfExtractor` / `htmlExtractor`
+/// fields stay truthful for old builds while `setExtractorSelection` persists
+/// the typed route record.
+enum ExtractorRouteSettingsMapping {
+    /// The view selection for one route, applying the same display semantics
+    /// the fixed pickers used (a legacy `localPdf2md` backend displays as the
+    /// reviewed package; direct API backends display as ACP).
+    static func selection(
+        route: ExtractorRouteID,
+        config: ExtractionConfig,
+        row: ExtractorRouteSettingsRow
+    ) -> ExtractorRouteSettingsSelection {
+        let saved = config.extractorSelection(for: route)
+        if route == .canonicalPDF {
+            switch saved {
+            case .installed(let logical):
+                return logical == ProcessExtractionServices.reviewedPDFLogical
+                    ? .reviewedPdf2md
+                    : installedSelection(logical, row: row)
+            case .builtIn(.pdf(let backend)):
+                return visiblePDFSelection(for: backend)
+            case .builtIn(.html), .none:
+                return visiblePDFSelection(for: config.backend)
+            }
+        }
+        if route == .canonicalHTML {
+            switch saved {
+            case .installed(let logical):
+                return logical == ProcessExtractionServices.reviewedHTMLLogical
+                    ? .reviewedDefuddle
+                    : installedSelection(logical, row: row)
+            case .builtIn(.html(let backend)):
+                return backend == .defuddle ? .reviewedDefuddle : .builtInTagBased
+            case .builtIn(.pdf), .none:
+                guard let legacy = config.htmlBackend else { return .prompt }
+                return legacy == .defuddle ? .reviewedDefuddle : .builtInTagBased
+            }
+        }
+        // Future registration-derived routes carry package choices only.
+        switch saved {
+        case .installed(let logical):
+            return installedSelection(logical, row: row)
+        default:
+            return .prompt
+        }
+    }
+
+    private static func installedSelection(
+        _ logical: LogicalExtractorReference,
+        row: ExtractorRouteSettingsRow
+    ) -> ExtractorRouteSettingsSelection {
+        row.choices.contains { $0.category == .installedPackage && $0.reference == .installed(logical) }
+            ? .installed(logical)
+            : .unavailableInstalled(logical)
+    }
+
+    private static func visiblePDFSelection(for backend: ExtractionBackend) -> ExtractorRouteSettingsSelection {
+        switch backend {
+        case .localPdf2md:
+            return .reviewedPdf2md
+        case .anthropic, .gemini, .acp:
+            return .connectedService(.acp)
+        case .doclingServe:
+            return .connectedService(.doclingServe)
+        }
+    }
+
+    /// Persists one table pick. The legacy mapping mirrors the old
+    /// `writePDF` / `writeHTML` semantics exactly; `setExtractorSelection`
+    /// then dual-writes the route record and the matching legacy reference
+    /// field.
+    static func write(
+        _ selection: ExtractorRouteSettingsSelection,
+        route: ExtractorRouteID,
+        into config: inout ExtractionConfig
+    ) {
+        let reference: ExtractionBackendReference?
+        if route == .canonicalPDF {
+            switch selection {
+            case .reviewedPdf2md:
+                config.backend = .localPdf2md
+                reference = .installed(ProcessExtractionServices.reviewedPDFLogical)
+            case .installed(let logical), .unavailableInstalled(let logical):
+                reference = .installed(logical)
+            case .connectedService(let backend):
+                config.backend = backend
+                reference = .builtIn(.pdf(backend))
+            case .prompt, .reviewedDefuddle, .builtInTagBased:
+                return
+            }
+        } else if route == .canonicalHTML {
+            switch selection {
+            case .prompt:
+                config.htmlBackend = nil
+                reference = nil
+            case .reviewedDefuddle:
+                config.htmlBackend = .defuddle
+                reference = .installed(ProcessExtractionServices.reviewedHTMLLogical)
+            case .installed(let logical), .unavailableInstalled(let logical):
+                reference = .installed(logical)
+            case .builtInTagBased:
+                config.htmlBackend = .tagBased
+                reference = .builtIn(.html(.tagBased))
+            case .reviewedPdf2md, .connectedService:
+                return
+            }
+        } else {
+            switch selection {
+            case .installed(let logical), .unavailableInstalled(let logical):
+                reference = .installed(logical)
+            default:
+                return
+            }
+        }
+        config.setExtractorSelection(reference, for: route)
+    }
+}
+
+/// The ACP-provider draft mapping, retained from the former
+/// `ExtractorSettingsSelectionMapping`: the provider picker keeps its String
+/// draft, and the legacy direct-API provider defaults still resolve.
 enum ExtractorSettingsSelectionMapping {
     static let claudeACPProviderID = ProviderID(rawValue: "claude-acp")
     static let geminiACPProviderID = ProviderID(rawValue: "gemini")
-
-    static func pdfSelection(from config: ExtractionConfig) -> PDFExtractorSettingsSelection {
-        switch config.pdfExtractor {
-        case .installed(let logical):
-            return logical == ProcessExtractionServices.reviewedPDFLogical
-                ? .reviewedPdf2md
-                : .installed(logical)
-        case .builtIn(.pdf(let backend)):
-            return visiblePDFSelection(for: backend)
-        case .builtIn(.html), .none:
-            return visiblePDFSelection(for: config.backend)
-        }
-    }
 
     static func acpProviderSelection(from config: ExtractionConfig) -> String {
         switch effectivePDFBackend(from: config) {
@@ -650,71 +855,11 @@ enum ExtractorSettingsSelectionMapping {
         }
     }
 
-    private static func visiblePDFSelection(for backend: ExtractionBackend) -> PDFExtractorSettingsSelection {
-        switch backend {
-        case .localPdf2md:
-            return .reviewedPdf2md
-        case .anthropic, .gemini:
-            return .host(.acp)
-        case .acp, .doclingServe:
-            return .host(backend)
-        }
-    }
-
     private static func effectivePDFBackend(from config: ExtractionConfig) -> ExtractionBackend {
         if case .builtIn(.pdf(let backend)) = config.pdfExtractor {
             return backend
         }
         return config.backend
-    }
-
-    static func htmlSelection(from config: ExtractionConfig) -> HTMLExtractorSettingsSelection {
-        switch config.htmlExtractor {
-        case .installed(let logical):
-            return logical == ProcessExtractionServices.reviewedHTMLLogical
-                ? .reviewedDefuddle
-                : .installed(logical)
-        case .builtIn(.html(let backend)):
-            return backend == .defuddle ? .reviewedDefuddle : .host(backend)
-        case .builtIn(.pdf), .none:
-            guard let backend = config.htmlBackend else { return .prompt }
-            return backend == .defuddle ? .reviewedDefuddle : .host(backend)
-        }
-    }
-
-    static func writePDF(
-        _ selection: PDFExtractorSettingsSelection,
-        into config: inout ExtractionConfig
-    ) {
-        switch selection {
-        case .reviewedPdf2md:
-            config.backend = .localPdf2md
-            config.pdfExtractor = .installed(ProcessExtractionServices.reviewedPDFLogical)
-        case .installed(let logical):
-            config.pdfExtractor = .installed(logical)
-        case .host(let backend):
-            config.backend = backend
-            config.pdfExtractor = .builtIn(.pdf(backend))
-        }
-    }
-
-    static func writeHTML(
-        _ selection: HTMLExtractorSettingsSelection,
-        into config: inout ExtractionConfig
-    ) {
-        switch selection {
-        case .prompt:
-            config.htmlBackend = nil
-            config.htmlExtractor = nil
-        case .reviewedDefuddle:
-            config.htmlBackend = .defuddle
-            config.htmlExtractor = .installed(ProcessExtractionServices.reviewedHTMLLogical)
-        case .installed(let logical):
-            config.htmlExtractor = .installed(logical)
-        case .host(let backend):
-            config.htmlBackend = backend
-            config.htmlExtractor = .builtIn(.html(backend))
-        }
     }
 }
 
@@ -723,11 +868,15 @@ enum ExtractorSettingsSelectionMapping {
 /// Value snapshot of the installed-package lifecycle as presented by Settings:
 /// the process registry's active exact registrations, catalog revisions whose
 /// activation failed in this process (bounded, redacted reconciler
-/// diagnostics), and the generation the reconciler last applied.
+/// diagnostics), the generation the reconciler last applied, and the
+/// route-presentation projection (registration snapshots + waiting revisions)
+/// the route table builder consumes.
 struct ExtractorPackageSettingsSnapshot: Sendable, Equatable {
     var rows: [ExtractorPackageSettingsRow] = []
     var failedPackages: [ExtractorPackageFailureSummary] = []
     var appliedGeneration: UInt64?
+    var registrationSnapshots: [ExtractorRouteRegistrationSnapshot] = []
+    var waitingRevisionIDs: Set<ExtractorPackageRevisionID> = []
 
     static let empty = ExtractorPackageSettingsSnapshot()
 }
@@ -748,17 +897,6 @@ struct ExtractorPackageFailureSummary: Identifiable, Hashable, Sendable {
     }
 
     var id: String { "\(packageID)/\(version)/\(digestPrefix)" }
-}
-
-/// One installed logical (version-free) reference offered in the default
-/// extractor pickers. `logical` is the persisted value; the rest is labeling.
-struct ExtractorPackageChoice: Identifiable, Hashable, Sendable {
-    let logical: LogicalExtractorReference
-    let packageID: String
-    let registrationID: String
-
-    var id: String { "\(packageID)/\(registrationID)" }
-    var label: String { "\(packageID) — \(registrationID)" }
 }
 
 /// Result of an app-only package mutation, already reduced to user-facing

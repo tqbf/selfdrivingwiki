@@ -779,6 +779,9 @@ struct WikiFSApp: App {
                         }
                         var snapshot = ExtractorPackageSettingsSnapshot(
                             rows: await services.extractionBackends.installedPackageRows())
+                        // Route presentation projection: exact registration
+                        // metadata for the route table builder.
+                        snapshot.registrationSnapshots = await services.extractionBackends.installedRegistrationSnapshots()
                         if let context = services.extractionContext {
                             let observation = await context.observationSnapshot()
                             snapshot.failedPackages = observation.retainedFailures.map {
@@ -789,6 +792,7 @@ struct WikiFSApp: App {
                                     message: $0.message)
                             }
                             snapshot.appliedGeneration = observation.appliedGeneration
+                            snapshot.waitingRevisionIDs = observation.waitingRevisionIDs
                         }
                         return snapshot
                     },
