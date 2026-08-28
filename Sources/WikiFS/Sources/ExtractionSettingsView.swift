@@ -4,9 +4,9 @@ import WikiFSEngine
 import WikiFSCore
 import WikiFSTypes
 
-/// Settings for PDF→Markdown extraction — the second Settings scene tab. Picks
-/// the backend (Local pdf2md / Claude / Gemini / Docling Serve) and configures
-/// the selected backend's credentials + endpoint. Mirrors `ZoteroSettingsView`
+/// Settings for source extraction. Unified PDF and HTML extractor pickers list
+/// reviewed packages, installed packages, built-in adapters, and connected
+/// services without exposing the legacy backend/package precedence. Mirrors `ZoteroSettingsView`
 /// for structure (secrets in Keychain, non-secret prefs in `ExtractionConfig`)
 /// but **auto-saves on change** instead of an explicit Save button: every edit
 /// persists immediately, so closing the window can never drop a just-typed value
@@ -36,7 +36,7 @@ struct ExtractionSettingsView: View {
 
     // Drafts initialized from config + Keychain in `init`; every change is
     // written straight back by `persistAll()`.
-    @State private var draftBackend: ExtractionBackend
+    @State private var pdfExtractorSelection: PDFExtractorSettingsSelection
     @State private var acpProviderSelection: String
     @State private var anthropicKeyText: String
     @State private var modelText: String
@@ -52,12 +52,8 @@ struct ExtractionSettingsView: View {
     // Issue #799 PR1: HTML + Podcast backend drafts (optional — nil = no
     // default yet, user is prompted to pick on first extraction). Seeded from
     // `ExtractionConfig` in `init`, written back in `writeConfig`.
-    @State private var draftHtmlBackend: HtmlExtractionBackend?
+    @State private var htmlExtractorSelection: HTMLExtractorSettingsSelection
     @State private var draftPodcastBackend: PodcastTranscriptionBackend?
-    // Version-free logical package selections (dynamic-extractor-packages
-    // Phase 7). nil = the built-in backend pickers above keep their meaning.
-    @State private var pdfExtractorSelection: ExtractionBackendReference?
-    @State private var htmlExtractorSelection: ExtractionBackendReference?
     // Installed-package lifecycle (dynamic-extractor-packages Phase 7).
     @State private var packageModel: ExtractorPackageSettingsModel
     @State private var showingImportPicker = false
@@ -90,7 +86,7 @@ struct ExtractionSettingsView: View {
         // Seed the drafts once, at construction — so there's no onAppear race
         // where an `.onChange` fires before the loaded values are in place.
         let config = ExtractionConfig.load(from: containerDirectory)
-        _draftBackend = State(initialValue: config.backend)
+        _pdfExtractorSelection = State(initialValue: ExtractorSettingsSelectionMapping.pdfSelection(from: config))
         _acpProviderSelection = State(initialValue: config.acpProviderId ?? "")
         _anthropicKeyText = State(initialValue: credentialStore.secret(.anthropicAPIKey) ?? "")
         _modelText = State(initialValue: config.anthropicModel == ExtractionConfig.defaultAnthropicModel ? "" : config.anthropicModel)
@@ -100,10 +96,8 @@ struct ExtractionSettingsView: View {
         _geminiBaseURLText = State(initialValue: config.geminiBaseURLOverride ?? "")
         _doclingEndpointText = State(initialValue: config.doclingServeEndpoint ?? "")
         _doclingTokenText = State(initialValue: credentialStore.secret(.doclingServeToken) ?? "")
-        _draftHtmlBackend = State(initialValue: config.htmlBackend)
+        _htmlExtractorSelection = State(initialValue: ExtractorSettingsSelectionMapping.htmlSelection(from: config))
         _draftPodcastBackend = State(initialValue: config.podcastBackend)
-        _pdfExtractorSelection = State(initialValue: config.pdfExtractor)
-        _htmlExtractorSelection = State(initialValue: config.htmlExtractor)
         _packageModel = State(initialValue: ExtractorPackageSettingsModel(
             loadSnapshot: packageSnapshot,
             importPackage: importPackage,
@@ -113,58 +107,27 @@ struct ExtractionSettingsView: View {
     var body: some View {
         Form {
             Section {
-                Picker("Backend", selection: $draftBackend) {
-                    ForEach(ExtractionBackend.allCases, id: \.self) { backend in
-                        Text(backend.displayName).tag(backend)
-                    }
-                }
-                .onChange(of: draftBackend) { persistAll() }
-            } header: {
-                Text("PDF Extraction")
-            } footer: {
-                Text(draftBackend.helpText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+                unifiedPDFExtractorPicker
+                unifiedHTMLExtractorPicker
 
-            // Issue #799 PR1: HTML + Podcast backend pickers. These are
-            // scaffolding only — the trigger UI (PR2) and the removal of
-            // auto-extraction at ingest (PR3) land in later PRs. The user
-            // picks a default here so the eventual trigger has a backend
-            // to run without prompting each time; nil = "prompt me".
-            Section {
-                Picker("Backend", selection: htmlBackendBinding) {
-                    Text("Prompt me when extracting").tag(nil as HtmlExtractionBackend?)
-                    ForEach(HtmlExtractionBackend.allCases, id: \.self) { backend in
-                        Text(backend.displayName).tag(backend as HtmlExtractionBackend?)
-                    }
-                }
-                .onChange(of: draftHtmlBackend) { persistAll() }
-            } header: {
-                Text("HTML Extraction")
-            } footer: {
-                Text("The backend to use when extracting an HTML source to markdown. Defuddle runs the bundled article-extraction binary; tag-based is built-in and always available but lower fidelity. Extraction still runs automatically at ingest for now (PR3 removes that).")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Section {
-                Picker("Backend", selection: podcastBackendBinding) {
+                Picker("Podcast Transcript", selection: podcastBackendBinding) {
                     Text("Prompt me when transcribing").tag(nil as PodcastTranscriptionBackend?)
                     ForEach(PodcastTranscriptionBackend.allCases, id: \.self) { backend in
                         Text(backend.displayName).tag(backend as PodcastTranscriptionBackend?)
                     }
                 }
                 .onChange(of: draftPodcastBackend) { persistAll() }
+                .accessibilityLabel("Default podcast transcript extractor")
             } header: {
-                Text("Podcast Transcription")
+                Text("Default Extractors")
             } footer: {
-                Text("The backend to use when transcribing a podcast episode. Apple Podcasts transcript fetches the transcript over the network (requires the bundled signing helper — disabled in app-store builds). Transcription still runs automatically at ingest for now (PR4 removes that).")
+                Text("Reviewed packages run outside the app through the extractor protocol. Installed packages are local additions. Connected services use host-managed providers. Podcast transcripts are not package-backed in protocol revision 1.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
-            // Only the selected backend's config — swap in place on change.
+            // Only a selected host service needs configuration here. Package
+            // readiness and lifecycle belong to the package management section.
             backendConfigSection
 
             // Installed extractor-package lifecycle (Phase 7): read-only list
@@ -244,15 +207,95 @@ struct ExtractionSettingsView: View {
         }
     }
 
-    // MARK: - Selected-backend config section
+    // MARK: - Unified extractor selection
+
+    private var unifiedPDFExtractorPicker: some View {
+        Picker("PDF", selection: $pdfExtractorSelection) {
+            extractorOption("pdf2md", source: "Reviewed package")
+                .tag(PDFExtractorSettingsSelection.reviewedPdf2md)
+            ForEach(pdfPackageChoices) { choice in
+                extractorOption(choice.packageID, source: "Installed package")
+                    .tag(PDFExtractorSettingsSelection.installed(choice.logical))
+            }
+            stalePDFSelectionOption
+            Divider()
+            extractorOption("ACP Provider", source: "Connected service")
+                .tag(PDFExtractorSettingsSelection.host(.acp))
+            extractorOption("Claude", source: "Connected service")
+                .tag(PDFExtractorSettingsSelection.host(.anthropic))
+            extractorOption("Gemini", source: "Connected service")
+                .tag(PDFExtractorSettingsSelection.host(.gemini))
+            extractorOption("Docling Serve", source: "Connected service")
+                .tag(PDFExtractorSettingsSelection.host(.doclingServe))
+        }
+        .onChange(of: pdfExtractorSelection) { _, _ in persistAll() }
+        .accessibilityIdentifier(PackageAccessibility.pdfSelection)
+        .accessibilityLabel("Default PDF extractor")
+    }
+
+    private var unifiedHTMLExtractorPicker: some View {
+        Picker("HTML", selection: $htmlExtractorSelection) {
+            Text("Prompt me when extracting")
+                .tag(HTMLExtractorSettingsSelection.prompt)
+            extractorOption("Defuddle", source: "Reviewed package")
+                .tag(HTMLExtractorSettingsSelection.reviewedDefuddle)
+            ForEach(htmlPackageChoices) { choice in
+                extractorOption(choice.packageID, source: "Installed package")
+                    .tag(HTMLExtractorSettingsSelection.installed(choice.logical))
+            }
+            staleHTMLSelectionOption
+            Divider()
+            extractorOption("Tag-based", source: "Built in")
+                .tag(HTMLExtractorSettingsSelection.host(.tagBased))
+        }
+        .onChange(of: htmlExtractorSelection) { _, _ in persistAll() }
+        .accessibilityIdentifier(PackageAccessibility.htmlSelection)
+        .accessibilityLabel("Default HTML extractor")
+    }
+
+    private func extractorOption(_ name: String, source: String) -> Text {
+        Text("\(name) — \(source)")
+    }
+
+    @ViewBuilder private var stalePDFSelectionOption: some View {
+        if packageModel.hasLoaded,
+           case .installed(let logical) = pdfExtractorSelection,
+           pdfPackageChoices.contains(where: { $0.logical == logical }) == false {
+            Text("\(logical.packageID.rawValue) — Not installed")
+                .tag(pdfExtractorSelection)
+                .accessibilityIdentifier("\(PackageAccessibility.staleSelection).pdf")
+                .accessibilityValue("Not installed. Reviewed pdf2md fallback is active")
+        }
+    }
+
+    @ViewBuilder private var staleHTMLSelectionOption: some View {
+        if packageModel.hasLoaded,
+           case .installed(let logical) = htmlExtractorSelection,
+           htmlPackageChoices.contains(where: { $0.logical == logical }) == false {
+            Text("\(logical.packageID.rawValue) — Not installed")
+                .tag(htmlExtractorSelection)
+                .accessibilityIdentifier("\(PackageAccessibility.staleSelection).html")
+                .accessibilityValue("Not installed. Tag-based fallback is active")
+        }
+    }
+
+    private var pdfPackageChoices: [ExtractorPackageChoice] {
+        choices(for: .pdf).filter { $0.logical != ProcessExtractionServices.reviewedPDFLogical }
+    }
+
+    private var htmlPackageChoices: [ExtractorPackageChoice] {
+        choices(for: .html).filter { $0.logical != ProcessExtractionServices.reviewedHTMLLogical }
+    }
+
+    // MARK: - Selected service configuration
 
     @ViewBuilder private var backendConfigSection: some View {
-        switch draftBackend {
-        case .localPdf2md: EmptyView()
-        case .acp: acpSection
-        case .anthropic: claudeSection
-        case .gemini: geminiSection
-        case .doclingServe: doclingSection
+        switch pdfExtractorSelection {
+        case .host(.acp): acpSection
+        case .host(.anthropic): claudeSection
+        case .host(.gemini): geminiSection
+        case .host(.doclingServe): doclingSection
+        case .host(.localPdf2md), .reviewedPdf2md, .installed: EmptyView()
         }
     }
 
@@ -308,8 +351,6 @@ struct ExtractionSettingsView: View {
                 }
             }
 
-            selectionControls
-
             if let diagnostic = packageModel.lastDiagnostic {
                 Label(diagnostic, systemImage: "checkmark.circle")
                     .font(.caption)
@@ -326,7 +367,7 @@ struct ExtractionSettingsView: View {
         } header: {
             Text("Installed Extractor Packages")
         } footer: {
-            Text("Exact validated revisions available to this Mac, per kind. Removing a package falls back to the built-in backends.")
+            Text("Manage exact validated package revisions available on this Mac. Choose defaults in the Default Extractors section above.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -413,49 +454,6 @@ struct ExtractionSettingsView: View {
         .accessibilityValue("Not ready")
     }
 
-    /// Version-free default package selections. nil (Built-in default) keeps
-    /// the classic backend pickers' meaning; picking a package writes its
-    /// logical reference into `ExtractionConfig.pdfExtractor`/`htmlExtractor`
-    /// via the same auto-save path as every other field.
-    @ViewBuilder private var selectionControls: some View {
-        Picker("PDF Extractor", selection: $pdfExtractorSelection) {
-            Text("Built-in default").tag(nil as ExtractionBackendReference?)
-            staleSelectionOption(for: .pdf, selection: pdfExtractorSelection)
-            ForEach(choices(for: .pdf)) { choice in
-                Text(choice.label).tag(ExtractionBackendReference.installed(choice.logical) as ExtractionBackendReference?)
-            }
-        }
-        .onChange(of: pdfExtractorSelection) { persistAll() }
-        .accessibilityIdentifier(PackageAccessibility.pdfSelection)
-        .accessibilityLabel("Default PDF extractor package")
-
-        Picker("HTML Extractor", selection: $htmlExtractorSelection) {
-            Text("Built-in default").tag(nil as ExtractionBackendReference?)
-            staleSelectionOption(for: .html, selection: htmlExtractorSelection)
-            ForEach(choices(for: .html)) { choice in
-                Text(choice.label).tag(ExtractionBackendReference.installed(choice.logical) as ExtractionBackendReference?)
-            }
-        }
-        .onChange(of: htmlExtractorSelection) { persistAll() }
-        .accessibilityIdentifier(PackageAccessibility.htmlSelection)
-        .accessibilityLabel("Default HTML extractor package")
-    }
-
-    @ViewBuilder
-    private func staleSelectionOption(
-        for kind: ExtractionBackendKind,
-        selection: ExtractionBackendReference?
-    ) -> some View {
-        if let selection,
-           case .installed(let logical) = selection,
-           choices(for: kind).contains(where: { $0.logical == logical }) == false {
-            Text("\(logical.packageID.rawValue) — \(logical.registrationID.rawValue) (not installed)")
-                .tag(selection)
-                .accessibilityIdentifier("\(PackageAccessibility.staleSelection).\(kind.rawValue)")
-                .accessibilityValue("Not installed. Built-in fallback is active")
-        }
-    }
-
     /// Unique installed logical references for one kind, built from the active
     /// registration rows. Identity is package + registration (version-free);
     /// the resolver picks the highest compatible exact revision at run time.
@@ -487,7 +485,7 @@ struct ExtractionSettingsView: View {
     }
 
     /// The executable-code disclosure shown before any local import.
-    static let trustWarningMessage = "Extractor packages contain executable code that runs with this app's permissions on your user account. Import only packages you trust. Cordis lifecycle and capability controls do not create a security sandbox."
+    static let trustWarningMessage = "Extractor packages contain executable code that runs with this app's permissions on your user account. Import only packages you trust. The app's lifecycle and capability controls do not create a security sandbox."
 
     /// Stable accessibility identifiers for the package lifecycle controls.
     /// Row/digest/registration/remove/failure identifiers append the row's
@@ -632,17 +630,6 @@ struct ExtractionSettingsView: View {
         if case .failed(let m) = doclingTest { return m }; return nil
     }
 
-    /// `Picker`'s `selection:` can't bind directly to `@State var x: T?` when
-    /// the option set includes a "no default" nil tag — wrap it so SwiftUI gets
-    /// a plain `Binding<HtmlExtractionBackend?>` it can read/write. Writing
-    /// through the binding updates `draftHtmlBackend`, which `.onChange` watches
-    /// to trigger `persistAll()` — same auto-save flow as every other field.
-    private var htmlBackendBinding: Binding<HtmlExtractionBackend?> {
-        Binding(
-            get: { draftHtmlBackend },
-            set: { draftHtmlBackend = $0 })
-    }
-
     private var podcastBackendBinding: Binding<PodcastTranscriptionBackend?> {
         Binding(
             get: { draftPodcastBackend },
@@ -666,7 +653,7 @@ struct ExtractionSettingsView: View {
 
     /// Write every non-secret draft into `config`.
     private func writeConfig(into config: inout ExtractionConfig) {
-        config.backend = draftBackend
+        ExtractorSettingsSelectionMapping.writePDF(pdfExtractorSelection, into: &config)
         config.acpProviderId = acpProviderSelection.isEmpty ? nil : acpProviderSelection
         let model = modelText.trimmingCharacters(in: .whitespacesAndNewlines)
         config.anthropicModel = model.isEmpty ? ExtractionConfig.defaultAnthropicModel : model
@@ -678,10 +665,8 @@ struct ExtractionSettingsView: View {
         config.geminiBaseURLOverride = geminiBase.isEmpty ? nil : geminiBase
         let endpoint = doclingEndpointText.trimmingCharacters(in: .whitespacesAndNewlines)
         config.doclingServeEndpoint = endpoint.isEmpty ? nil : endpoint
-        config.htmlBackend = draftHtmlBackend
+        ExtractorSettingsSelectionMapping.writeHTML(htmlExtractorSelection, into: &config)
         config.podcastBackend = draftPodcastBackend
-        config.pdfExtractor = pdfExtractorSelection
-        config.htmlExtractor = htmlExtractorSelection
     }
 
     // MARK: - Test Connection (per backend). Drafts are already persisted by
@@ -755,6 +740,85 @@ struct ExtractionSettingsView: View {
         /// switching backends (sections of different heights) doesn't resize
         /// the window. A short section just leaves space below it.
         static let height: CGFloat = 420
+    }
+}
+
+// MARK: - Unified extractor selection
+
+enum PDFExtractorSettingsSelection: Hashable, Sendable {
+    case reviewedPdf2md
+    case installed(LogicalExtractorReference)
+    case host(ExtractionBackend)
+}
+
+enum HTMLExtractorSettingsSelection: Hashable, Sendable {
+    case prompt
+    case reviewedDefuddle
+    case installed(LogicalExtractorReference)
+    case host(HtmlExtractionBackend)
+}
+
+enum ExtractorSettingsSelectionMapping {
+    static func pdfSelection(from config: ExtractionConfig) -> PDFExtractorSettingsSelection {
+        switch config.pdfExtractor {
+        case .installed(let logical):
+            return logical == ProcessExtractionServices.reviewedPDFLogical
+                ? .reviewedPdf2md
+                : .installed(logical)
+        case .builtIn(.pdf(let backend)):
+            return backend == .localPdf2md ? .reviewedPdf2md : .host(backend)
+        case .builtIn(.html), .none:
+            return config.backend == .localPdf2md ? .reviewedPdf2md : .host(config.backend)
+        }
+    }
+
+    static func htmlSelection(from config: ExtractionConfig) -> HTMLExtractorSettingsSelection {
+        switch config.htmlExtractor {
+        case .installed(let logical):
+            return logical == ProcessExtractionServices.reviewedHTMLLogical
+                ? .reviewedDefuddle
+                : .installed(logical)
+        case .builtIn(.html(let backend)):
+            return backend == .defuddle ? .reviewedDefuddle : .host(backend)
+        case .builtIn(.pdf), .none:
+            guard let backend = config.htmlBackend else { return .prompt }
+            return backend == .defuddle ? .reviewedDefuddle : .host(backend)
+        }
+    }
+
+    static func writePDF(
+        _ selection: PDFExtractorSettingsSelection,
+        into config: inout ExtractionConfig
+    ) {
+        switch selection {
+        case .reviewedPdf2md:
+            config.backend = .localPdf2md
+            config.pdfExtractor = .installed(ProcessExtractionServices.reviewedPDFLogical)
+        case .installed(let logical):
+            config.pdfExtractor = .installed(logical)
+        case .host(let backend):
+            config.backend = backend
+            config.pdfExtractor = .builtIn(.pdf(backend))
+        }
+    }
+
+    static func writeHTML(
+        _ selection: HTMLExtractorSettingsSelection,
+        into config: inout ExtractionConfig
+    ) {
+        switch selection {
+        case .prompt:
+            config.htmlBackend = nil
+            config.htmlExtractor = nil
+        case .reviewedDefuddle:
+            config.htmlBackend = .defuddle
+            config.htmlExtractor = .installed(ProcessExtractionServices.reviewedHTMLLogical)
+        case .installed(let logical):
+            config.htmlExtractor = .installed(logical)
+        case .host(let backend):
+            config.htmlBackend = backend
+            config.htmlExtractor = .builtIn(.html(backend))
+        }
     }
 }
 

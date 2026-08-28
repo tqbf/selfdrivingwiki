@@ -24,15 +24,20 @@ The capability list in a manifest (network, shared caches, model download) is a 
 
 ## Selection and fallback
 
-Extraction settings let you choose the PDF and HTML extractors. A selection can name a built-in backend or an installed package. The rules:
+Open **Settings** → **Extraction** and use the **Default Extractors** section. The PDF and HTML pickers list all compatible choices in one place:
 
-- A package selection does not pin a version. The app uses the highest compatible active revision of that package lineage.
-- If the selected package is missing, failed, or incompatible, the app keeps your selection and uses the built-in fallback: the local pdf2md backend for PDF, or built-in tag-based extraction for HTML. The app records one diagnostic. It never silently selects a different third-party package.
-- Older package versions stay available while a newer version is installed, so a failed upgrade does not remove a working version.
+- **Reviewed package** identifies bundled, validated packages such as pdf2md and Defuddle.
+- **Installed package** identifies a package imported on this Mac.
+- **Connected service** identifies a host-managed adapter such as ACP, Claude, Gemini, or Docling Serve.
+- **Built in** identifies code that runs in the host, such as tag-based HTML extraction.
+
+A package selection does not pin a version. The app uses the highest compatible active revision of that package lineage. If the selected package is missing, failed, or incompatible, the picker keeps the unavailable selection visible and the app uses the fixed fallback: reviewed pdf2md for PDF or built-in tag-based extraction for HTML. The app never selects another third-party package silently.
+
+Older package versions stay available while a newer version is installed, so a failed upgrade does not remove a working version.
 
 ## Installed packages in Settings
 
-Open **Settings** → **Extraction** and look for **Installed Extractor Packages**. The list shows every exact revision this Mac can run, per format. Expand a row to see its version, digest prefix, and registration name.
+Use **Installed Extractor Packages** to manage exact revisions. This section does not contain another default picker. Expand a row to see its version, digest prefix, and registration name.
 
 Use **Refresh** after you install, update, or remove a runtime such as Bun or uv. The list reads the live process state, so a row appears only when its package has activated in this process.
 

@@ -6,7 +6,7 @@ Run this test on macOS with VoiceOver enabled. Use a test App Group and a dispos
 2. Select the Extraction tab.
 3. Move focus to `Advanced Local Package Import`.
 4. Confirm that VoiceOver reads the executable-code warning.
-5. Confirm that VoiceOver reads that Cordis lifecycle and capability controls do not create a security sandbox.
+5. Confirm that VoiceOver reads that the app's lifecycle and capability controls do not create a security sandbox.
 6. Open the import disclosure.
 7. Activate `Import Extractor Package`.
 8. Choose one local package directory.

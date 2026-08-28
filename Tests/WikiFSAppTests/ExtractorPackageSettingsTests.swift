@@ -68,6 +68,90 @@ struct ExtractorPackageSettingsTests {
         #expect(rows.isEmpty)
     }
 
+    // MARK: - Unified extractor selection mapping
+
+    @Test("legacy reviewed selections appear as reviewed packages")
+    func legacyReviewedSelectionsMapToPackages() {
+        var config = ExtractionConfig()
+        config.backend = .localPdf2md
+        config.htmlBackend = .defuddle
+
+        #expect(ExtractorSettingsSelectionMapping.pdfSelection(from: config) == .reviewedPdf2md)
+        #expect(ExtractorSettingsSelectionMapping.htmlSelection(from: config) == .reviewedDefuddle)
+    }
+
+    @Test("host service selections keep legacy fields truthful")
+    func hostSelectionsWriteBothCompatibilityDomains() {
+        var config = ExtractionConfig()
+
+        ExtractorSettingsSelectionMapping.writePDF(.host(.gemini), into: &config)
+        ExtractorSettingsSelectionMapping.writeHTML(.host(.tagBased), into: &config)
+
+        #expect(config.backend == .gemini)
+        #expect(config.pdfExtractor == .builtIn(.pdf(.gemini)))
+        #expect(config.htmlBackend == .tagBased)
+        #expect(config.htmlExtractor == .builtIn(.html(.tagBased)))
+    }
+
+    @Test("reviewed package selections write reviewed logical identities")
+    func reviewedSelectionsWriteLogicalPackageReferences() {
+        var config = ExtractionConfig()
+
+        ExtractorSettingsSelectionMapping.writePDF(.reviewedPdf2md, into: &config)
+        ExtractorSettingsSelectionMapping.writeHTML(.reviewedDefuddle, into: &config)
+
+        #expect(config.backend == .localPdf2md)
+        #expect(config.pdfExtractor == .installed(ProcessExtractionServices.reviewedPDFLogical))
+        #expect(config.htmlBackend == .defuddle)
+        #expect(config.htmlExtractor == .installed(ProcessExtractionServices.reviewedHTMLLogical))
+    }
+
+    @Test("installed selections preserve legacy fallback fields")
+    func installedSelectionsPreserveFallbacks() throws {
+        let pdf = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.example.pdf"),
+            registrationID: try ExtractorRegistrationID(validating: "document"))
+        let html = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.example.html"),
+            registrationID: try ExtractorRegistrationID(validating: "article"))
+        var config = ExtractionConfig()
+        config.backend = .anthropic
+        config.htmlBackend = .tagBased
+
+        ExtractorSettingsSelectionMapping.writePDF(.installed(pdf), into: &config)
+        ExtractorSettingsSelectionMapping.writeHTML(.installed(html), into: &config)
+
+        #expect(config.backend == .anthropic)
+        #expect(config.pdfExtractor == .installed(pdf))
+        #expect(config.htmlBackend == .tagBased)
+        #expect(config.htmlExtractor == .installed(html))
+    }
+
+    @Test("HTML prompt clears both compatibility fields")
+    func htmlPromptClearsSelection() {
+        var config = ExtractionConfig()
+        config.htmlBackend = .defuddle
+        config.htmlExtractor = .installed(ProcessExtractionServices.reviewedHTMLLogical)
+
+        ExtractorSettingsSelectionMapping.writeHTML(.prompt, into: &config)
+
+        #expect(config.htmlBackend == nil)
+        #expect(config.htmlExtractor == nil)
+        #expect(ExtractorSettingsSelectionMapping.htmlSelection(from: config) == .prompt)
+    }
+
+    @Test("wrong-kind persisted references defer to legacy fields")
+    func wrongKindReferencesUseCompatibilityFields() {
+        var config = ExtractionConfig()
+        config.backend = .doclingServe
+        config.pdfExtractor = .builtIn(.html(.tagBased))
+        config.htmlBackend = .tagBased
+        config.htmlExtractor = .builtIn(.pdf(.anthropic))
+
+        #expect(ExtractorSettingsSelectionMapping.pdfSelection(from: config) == .host(.doclingServe))
+        #expect(ExtractorSettingsSelectionMapping.htmlSelection(from: config) == .host(.tagBased))
+    }
+
     // MARK: - Settings model
 
     @Test("settings model refresh loads rows and flips hasLoaded")
@@ -307,9 +391,14 @@ struct ExtractorPackageSettingsTests {
         #expect(viewSource.contains("Extractor packages contain executable code"))
         #expect(viewSource.contains("Remove Package…"))
 
-        // Logical selection persists into the existing config fields.
-        #expect(viewSource.contains("config.pdfExtractor = pdfExtractorSelection"))
-        #expect(viewSource.contains("config.htmlExtractor = htmlExtractorSelection"))
+        // One package-first picker per kind maps into both compatibility domains.
+        #expect(viewSource.contains("Default Extractors"))
+        #expect(viewSource.contains("Reviewed package"))
+        #expect(viewSource.contains("Installed package"))
+        #expect(viewSource.contains("Connected service"))
+        #expect(viewSource.contains("Built-in default") == false)
+        #expect(viewSource.contains("ExtractorSettingsSelectionMapping.writePDF"))
+        #expect(viewSource.contains("ExtractorSettingsSelectionMapping.writeHTML"))
 
         // Part 1 regression guard: no production target wires
         // `PdfExtractionService` anymore. The type itself remains for tests.
