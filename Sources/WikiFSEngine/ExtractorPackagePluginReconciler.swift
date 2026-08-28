@@ -169,19 +169,27 @@ public actor ExtractorPackagePluginReconciler {
             records: catalog.records,
             sourceLocator: sourceLocator)
         retainEach(built.failures)
-        revisionIDsByDefinitionID = built.revisionIDsByDefinitionID
 
         do {
             let report = try await host.reconcile(desired: built.definitions)
+            // Commit the observation map only after the host accepted the
+            // generation: a rejected reconcile keeps the prior graph, so its
+            // definition → revision metadata must stay paired with it.
+            revisionIDsByDefinitionID = built.revisionIDsByDefinitionID
             lastAppliedGeneration = catalog.generation
             retainNotices(for: report.operationFailures)
+            // Host activation failures carry real revisions through the
+            // desired map and are retained so the Settings observation path
+            // can report the failed-to-activate lifecycle state.
+            let activationFailures = activateFailures(from: report)
+            retainEach(activationFailures)
             return ExtractorPackageReconciliationReport(
                 observedGeneration: catalog.generation,
                 appliedGeneration: catalog.generation,
                 skippedAsUnchanged: false,
                 registeredDefinitionIDs: Array(report.outcomes.keys).sorted { $0.rawValue < $1.rawValue },
                 removedCount: report.removedDefinitionIDs.count,
-                failedPackages: built.failures + activateFailures(from: report))
+                failedPackages: built.failures + activationFailures)
         } catch {
             retain("host reconcile rejected generation \(catalog.generation)")
             return ExtractorPackageReconciliationReport(
@@ -245,8 +253,11 @@ public actor ExtractorPackagePluginReconciler {
     ) -> [ExtractorPackageReconciliationFailure] {
         report.outcomes.compactMap { id, outcome in
             guard case .failed(_, _, let phase, let failure) = outcome else { return nil }
+            // Real revision when the desired map knows this definition; the
+            // placeholder keeps the redaction contract for unknown IDs.
+            let revision = revisionIDsByDefinitionID[id] ?? .placeholderForDiagnostic
             return ExtractorPackageReconciliationFailure(
-                revision: .placeholderForDiagnostic,
+                revision: revision,
                 message: "\(Self.shortDefinitionID(id)): phase=\(phase.rawValue) \(failure.message)")
         }
     }
