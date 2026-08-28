@@ -97,6 +97,14 @@ struct ExtractionSettingsView: View {
             Section {
                 extractorRouteTable
 
+                // Transcripts are a different operation domain (host adapters,
+                // not the package protocol), so the picker stays outside the
+                // route table — the sub-header keeps the two visually grouped.
+                Label("Transcripts", systemImage: "mic")
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+
                 Picker("Podcast Transcript", selection: podcastBackendBinding) {
                     Text("Prompt me when transcribing").tag(nil as PodcastTranscriptionBackend?)
                     ForEach(PodcastTranscriptionBackend.allCases, id: \.self) { backend in

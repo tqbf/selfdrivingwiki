@@ -233,9 +233,11 @@ struct ExtractionRouteTableHostedTests {
         #expect(source.contains("Text(\"\\(row.route.mimeType.rawValue)\")") == false)
 
         // The podcast picker is a separate control wired to the podcast
-        // binding, outside the route table.
+        // binding, outside the route table, visually grouped by the
+        // Transcripts sub-header.
         #expect(source.contains("podcastBackendBinding"))
         #expect(source.contains("Picker(\"Podcast Transcript\", selection: podcastBackendBinding)"))
+        #expect(source.contains("Label(\"Transcripts\", systemImage: \"mic\")"))
     }
 
     /// A stale installed selection keeps the row's fallback active: the write
