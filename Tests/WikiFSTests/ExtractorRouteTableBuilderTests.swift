@@ -222,6 +222,36 @@ struct ExtractorRouteTableBuilderTests {
         #expect(pdf?.choices.contains { $0.category == .installedPackage } == false)
     }
 
+    /// A logical registration active for the KIND but not the route's MIME
+    /// must not resolve on that route: it stays an unavailable stale choice,
+    /// and the row reports the fixed fallback instead of Available.
+    @Test func incompatibleMIMERegistrationDoesNotResolveOnRoute() throws {
+        let logical = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.example.mime"),
+            registrationID: try ExtractorRegistrationID(validating: "main"))
+        var config = ExtractionConfig(backend: .acp)
+        config.setExtractorSelection(.installed(logical), for: .canonicalPDF)
+        let rows = ExtractorRouteTableBuilder.build(ExtractorRouteTableBuilder.Input(
+            configuration: config,
+            registrations: [
+                // Same kind (pdf), same logical identity, but a different MIME.
+                try snapshot(
+                    packageID: "org.example.mime",
+                    version: "1.0.0",
+                    digestHex: digest(12),
+                    displayName: "Mime Package",
+                    kinds: [.pdf],
+                    mimeTypes: ["application/epub+zip"]),
+            ]))
+        let pdf = try #require(rows.first { $0.route == .canonicalPDF })
+        #expect(pdf.choices.contains { $0.category == .installedPackage } == false)
+        #expect(pdf.savedSelection == .installed(logical))
+        #expect(pdf.resolvedSelection == .pdfBuiltIn(.localPdf2md))
+        #expect(pdf.status == .usingFallback(description: "Bundled pdf2md extraction"))
+        // The package does contribute its own epub route row.
+        #expect(rows.contains { $0.route.mimeType.rawValue == "application/epub+zip" })
+    }
+
     // MARK: - AC.9: current choice matrix
 
     @Test func currentRouteChoiceMatrix() throws {

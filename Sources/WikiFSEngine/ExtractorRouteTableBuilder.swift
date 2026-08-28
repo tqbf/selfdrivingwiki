@@ -49,9 +49,8 @@ public enum ExtractorRouteTableBuilder {
 
     public static func build(_ input: Input) -> [ExtractorRouteSettingsRow] {
         let routes = descriptors(for: input).map(\.route)
-        let activeRegistrations = activeResolverRegistrations(input.registrations)
         return routes.map { route in
-            buildRow(route: route, input: input, activeRegistrations: activeRegistrations)
+            buildRow(route: route, input: input)
         }
     }
 
@@ -84,16 +83,19 @@ public enum ExtractorRouteTableBuilder {
 
     private static func buildRow(
         route: ExtractorRouteID,
-        input: Input,
-        activeRegistrations: [ActiveExtractorRegistration]
+        input: Input
     ) -> ExtractorRouteSettingsRow {
         let descriptor = descriptor(for: route, input: input)
         let savedSelection = input.configuration.extractorSelection(for: route)
         let choices = buildChoices(route: route, input: input, savedSelection: savedSelection)
+        // Resolver compatibility is route-scoped: only registrations declaring
+        // BOTH the route's kind and MIME participate, so a package that is
+        // active for the kind but not this MIME cannot resolve (or report
+        // Available) on this route.
         let decision = ExtractorSelectionResolver.resolve(
             route,
             configuration: input.configuration,
-            activeRegistrations: activeRegistrations)
+            activeRegistrations: activeResolverRegistrations(route: route, input: input))
         let status = buildStatus(
             route: route,
             input: input,
@@ -208,14 +210,17 @@ public enum ExtractorRouteTableBuilder {
     // MARK: - Resolver inputs
 
     private static func activeResolverRegistrations(
-        _ snapshots: [ExtractorRouteRegistrationSnapshot]
+        route: ExtractorRouteID,
+        input: Input
     ) -> [ActiveExtractorRegistration] {
-        snapshots.map { snapshot in
-            ActiveExtractorRegistration(
-                reference: snapshot.reference,
-                kinds: snapshot.kinds,
-                protocolRevision: .v1)
-        }
+        input.registrations
+            .filter { $0.kinds.contains(route.kind) && $0.mimeTypes.contains(route.mimeType) }
+            .map { snapshot in
+                ActiveExtractorRegistration(
+                    reference: snapshot.reference,
+                    kinds: snapshot.kinds,
+                    protocolRevision: .v1)
+            }
     }
 
     private static func exactSummary(_ revision: ExtractorPackageRevisionID) -> String {
