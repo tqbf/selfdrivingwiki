@@ -24,14 +24,15 @@ The capability list in a manifest (network, shared caches, model download) is a 
 
 ## Selection and fallback
 
-Open **Settings** → **Extraction** and use the **Default Extractors** section. The PDF and HTML pickers list all compatible choices in one place:
+Open **Settings** → **Extraction** and use the **Default Extractors** section. The section shows a table with one row per extraction route. The current routes are PDF and HTML. A registration can add a row for a new format without another app update, although formats outside PDF and HTML have no extraction adapter yet.
 
-- **Reviewed package** identifies bundled, validated packages such as pdf2md and Defuddle.
-- **Installed package** identifies a package imported on this Mac.
-- **Connected service** identifies a host-managed adapter such as ACP Provider or Docling Serve. Select Claude, Gemini, or another configured agent inside ACP Provider.
-- **Built in** identifies code that runs in the host, such as tag-based HTML extraction.
+Each row has three columns:
 
-A package selection does not pin a version. The app uses the highest compatible active revision of that package lineage. If the selected package is missing, failed, or incompatible, the picker keeps the unavailable selection visible and the app uses the fixed fallback: reviewed pdf2md for PDF or built-in tag-based extraction for HTML. The app never selects another third-party package silently.
+- **Format** shows the route name, such as PDF or HTML. The technical MIME type is in the help text.
+- **Default extractor** is a pop-up that lists the compatible choices for that row: reviewed packages, installed packages, connected services, and built-in extractors. HTML also offers a no-default prompt choice. The labels match the older pickers: **Reviewed package**, **Installed package**, **Connected service**, and **Built in**.
+- **Status** shows **Available**, **Using fallback**, **Not installed**, **Waiting for host service**, or **Failed to activate**. When the status is **Using fallback**, the help text names the fallback that actually runs.
+
+A package selection does not pin a version. The app uses the highest compatible active revision of that package lineage. If the selected package is missing, failed, or incompatible, the pop-up keeps the unavailable selection selected and the app uses the fixed fallback: reviewed pdf2md for PDF or built-in tag-based extraction for HTML. The app never selects another third-party package silently.
 
 Older package versions stay available while a newer version is installed, so a failed upgrade does not remove a working version.
 

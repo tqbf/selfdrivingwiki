@@ -68,7 +68,20 @@ struct ExtractorPackageSettingsTests {
         #expect(rows.isEmpty)
     }
 
-    // MARK: - Unified extractor selection mapping
+    // MARK: - Route-scoped extractor selection mapping
+
+    /// Derives the view selection for one canonical route from a config,
+    /// using the real builder output for the row context.
+    private func routeSelection(
+        _ route: ExtractorRouteID,
+        from config: ExtractionConfig
+    ) -> ExtractorRouteSettingsSelection {
+        let row = ExtractorRouteTableBuilder.build(.init(
+            configuration: config,
+            registrations: []))
+            .first { $0.route == route }!
+        return ExtractorRouteSettingsMapping.selection(route: route, config: config, row: row)
+    }
 
     @Test("legacy reviewed selections appear as reviewed packages")
     func legacyReviewedSelectionsMapToPackages() {
@@ -76,16 +89,16 @@ struct ExtractorPackageSettingsTests {
         config.backend = .localPdf2md
         config.htmlBackend = .defuddle
 
-        #expect(ExtractorSettingsSelectionMapping.pdfSelection(from: config) == .reviewedPdf2md)
-        #expect(ExtractorSettingsSelectionMapping.htmlSelection(from: config) == .reviewedDefuddle)
+        #expect(routeSelection(.canonicalPDF, from: config) == .reviewedPdf2md)
+        #expect(routeSelection(.canonicalHTML, from: config) == .reviewedDefuddle)
     }
 
     @Test("host service selections keep legacy fields truthful")
     func hostSelectionsWriteBothCompatibilityDomains() {
         var config = ExtractionConfig()
 
-        ExtractorSettingsSelectionMapping.writePDF(.host(.acp), into: &config)
-        ExtractorSettingsSelectionMapping.writeHTML(.host(.tagBased), into: &config)
+        ExtractorRouteSettingsMapping.write(.connectedService(.acp), route: .canonicalPDF, into: &config)
+        ExtractorRouteSettingsMapping.write(.builtInTagBased, route: .canonicalHTML, into: &config)
 
         #expect(config.backend == .acp)
         #expect(config.pdfExtractor == .builtIn(.pdf(.acp)))
@@ -101,15 +114,15 @@ struct ExtractorPackageSettingsTests {
     }
 
     @Test("legacy direct API selections migrate to their ACP providers")
-    func directAPISelectionsMapToACP() {
+    func directAPISelectionsMapToACP() throws {
         var anthropic = ExtractionConfig()
         anthropic.backend = .anthropic
         var gemini = ExtractionConfig()
         gemini.pdfExtractor = .builtIn(.pdf(.gemini))
 
-        #expect(ExtractorSettingsSelectionMapping.pdfSelection(from: anthropic) == .host(.acp))
+        #expect(routeSelection(.canonicalPDF, from: anthropic) == .connectedService(.acp))
         #expect(ExtractorSettingsSelectionMapping.acpProviderSelection(from: anthropic) == "claude-acp")
-        #expect(ExtractorSettingsSelectionMapping.pdfSelection(from: gemini) == .host(.acp))
+        #expect(routeSelection(.canonicalPDF, from: gemini) == .connectedService(.acp))
         #expect(ExtractorSettingsSelectionMapping.acpProviderSelection(from: gemini) == "gemini")
     }
 
@@ -117,13 +130,16 @@ struct ExtractorPackageSettingsTests {
     func reviewedSelectionsWriteLogicalPackageReferences() {
         var config = ExtractionConfig()
 
-        ExtractorSettingsSelectionMapping.writePDF(.reviewedPdf2md, into: &config)
-        ExtractorSettingsSelectionMapping.writeHTML(.reviewedDefuddle, into: &config)
+        ExtractorRouteSettingsMapping.write(.reviewedPdf2md, route: .canonicalPDF, into: &config)
+        ExtractorRouteSettingsMapping.write(.reviewedDefuddle, route: .canonicalHTML, into: &config)
 
         #expect(config.backend == .localPdf2md)
         #expect(config.pdfExtractor == .installed(ProcessExtractionServices.reviewedPDFLogical))
         #expect(config.htmlBackend == .defuddle)
         #expect(config.htmlExtractor == .installed(ProcessExtractionServices.reviewedHTMLLogical))
+        // The canonical route records dual-write with the legacy fields.
+        #expect(config.extractorSelection(for: .canonicalPDF) == .installed(ProcessExtractionServices.reviewedPDFLogical))
+        #expect(config.extractorSelection(for: .canonicalHTML) == .installed(ProcessExtractionServices.reviewedHTMLLogical))
     }
 
     @Test("installed selections preserve legacy fallback fields")
@@ -138,8 +154,8 @@ struct ExtractorPackageSettingsTests {
         config.backend = .anthropic
         config.htmlBackend = .tagBased
 
-        ExtractorSettingsSelectionMapping.writePDF(.installed(pdf), into: &config)
-        ExtractorSettingsSelectionMapping.writeHTML(.installed(html), into: &config)
+        ExtractorRouteSettingsMapping.write(.installed(pdf), route: .canonicalPDF, into: &config)
+        ExtractorRouteSettingsMapping.write(.installed(html), route: .canonicalHTML, into: &config)
 
         #expect(config.backend == .anthropic)
         #expect(config.pdfExtractor == .installed(pdf))
@@ -153,11 +169,11 @@ struct ExtractorPackageSettingsTests {
         config.htmlBackend = .defuddle
         config.htmlExtractor = .installed(ProcessExtractionServices.reviewedHTMLLogical)
 
-        ExtractorSettingsSelectionMapping.writeHTML(.prompt, into: &config)
+        ExtractorRouteSettingsMapping.write(.prompt, route: .canonicalHTML, into: &config)
 
         #expect(config.htmlBackend == nil)
         #expect(config.htmlExtractor == nil)
-        #expect(ExtractorSettingsSelectionMapping.htmlSelection(from: config) == .prompt)
+        #expect(config.extractorSelection(for: .canonicalHTML) == nil)
     }
 
     @Test("wrong-kind persisted references defer to legacy fields")
@@ -168,8 +184,8 @@ struct ExtractorPackageSettingsTests {
         config.htmlBackend = .tagBased
         config.htmlExtractor = .builtIn(.pdf(.anthropic))
 
-        #expect(ExtractorSettingsSelectionMapping.pdfSelection(from: config) == .host(.doclingServe))
-        #expect(ExtractorSettingsSelectionMapping.htmlSelection(from: config) == .host(.tagBased))
+        #expect(routeSelection(.canonicalPDF, from: config) == .connectedService(.doclingServe))
+        #expect(routeSelection(.canonicalHTML, from: config) == .builtInTagBased)
     }
 
     // MARK: - Settings model
@@ -396,9 +412,9 @@ struct ExtractorPackageSettingsTests {
         #expect(viewSource.contains("extraction.packages.remove"))
         #expect(viewSource.contains("extraction.packages.failure"))
         #expect(viewSource.contains("extraction.packages.failure.message"))
-        #expect(viewSource.contains("extraction.packages.selection.pdf"))
-        #expect(viewSource.contains("extraction.packages.selection.html"))
-        #expect(viewSource.contains("extraction.packages.progress"))
+        #expect(viewSource.contains("extraction.routes.table"))
+        #expect(viewSource.contains("extraction.routes.picker"))
+        #expect(viewSource.contains("progress"))
         #expect(viewSource.contains("extraction.packages.diagnostic"))
         #expect(viewSource.contains("extraction.packages.error"))
         #expect(viewSource.contains(".accessibilityValue(\"Not ready\")"))
@@ -417,8 +433,8 @@ struct ExtractorPackageSettingsTests {
         #expect(viewSource.contains("Installed package"))
         #expect(viewSource.contains("Connected service"))
         #expect(viewSource.contains("Built-in default") == false)
-        #expect(viewSource.contains("ExtractorSettingsSelectionMapping.writePDF"))
-        #expect(viewSource.contains("ExtractorSettingsSelectionMapping.writeHTML"))
+        #expect(viewSource.contains("ExtractorRouteSettingsMapping.write"))
+        #expect(viewSource.contains("Table(routeRows)"))
         #expect(viewSource.contains("extractorOption(\"Claude\"") == false)
         #expect(viewSource.contains("extractorOption(\"Gemini\"") == false)
         #expect(viewSource.contains("Claude (Anthropic API)") == false)
