@@ -3,6 +3,12 @@ import Foundation
 // pattern: Functional Core
 
 public struct ExtractorProtocolRequest: Codable, Hashable, Sendable {
+    private enum CodingKeys: String, CodingKey {
+        case requestID, protocolRevision, kind, mimeType, originalFilename
+        case inputTransport, inputPath, outputPath, deadlineMillisecondsSince1970
+        case credentialFilePath, operationConfigurationPath
+    }
+
     public let requestID: ExtractorRequestID
     public let protocolRevision: ExtractorProtocolRevision
     public let kind: ExtractorKind
@@ -12,6 +18,14 @@ public struct ExtractorProtocolRequest: Codable, Hashable, Sendable {
     public let inputPath: ExtractorRelativePath
     public let outputPath: ExtractorRelativePath
     public let deadlineMillisecondsSince1970: Int64
+    /// Protocol revision 2 only: RELATIVE path (inside the private operation
+    /// root) of the request-scoped credential input file. The request carries
+    /// a path only — never a value. A revision 1 request must be nil.
+    public let credentialFilePath: ExtractorRelativePath?
+    /// Protocol revision 2 only: relative path of the non-secret public
+    /// operation-configuration file (e.g. endpoint + timeout). Nil for
+    /// revision 1.
+    public let operationConfigurationPath: ExtractorRelativePath?
 
     public init(
         requestID: ExtractorRequestID,
@@ -22,7 +36,9 @@ public struct ExtractorProtocolRequest: Codable, Hashable, Sendable {
         inputTransport: ExtractorInputTransport = .operationFile,
         inputPath: ExtractorRelativePath,
         outputPath: ExtractorRelativePath,
-        deadlineMillisecondsSince1970: Int64
+        deadlineMillisecondsSince1970: Int64,
+        credentialFilePath: ExtractorRelativePath? = nil,
+        operationConfigurationPath: ExtractorRelativePath? = nil
     ) throws {
         guard originalFilename.isEmpty == false,
               originalFilename.utf8.count <= 1_024,
@@ -31,6 +47,13 @@ public struct ExtractorProtocolRequest: Codable, Hashable, Sendable {
         }
         guard inputPath != outputPath else { throw ExtractorValidationError.invalidManifest("input and output paths match") }
         guard deadlineMillisecondsSince1970 > 0 else { throw ExtractorValidationError.invalidManifest("deadline") }
+        // A revision 1 request can neither declare nor receive credentials:
+        // operation input paths must be absent.
+        if protocolRevision == .v1,
+           credentialFilePath != nil || operationConfigurationPath != nil {
+            throw ExtractorValidationError.invalidManifest(
+                "credential input requires protocol revision 2")
+        }
         self.requestID = requestID
         self.protocolRevision = protocolRevision
         self.kind = kind
@@ -40,20 +63,116 @@ public struct ExtractorProtocolRequest: Codable, Hashable, Sendable {
         self.inputPath = inputPath
         self.outputPath = outputPath
         self.deadlineMillisecondsSince1970 = deadlineMillisecondsSince1970
+        self.credentialFilePath = credentialFilePath
+        self.operationConfigurationPath = operationConfigurationPath
     }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let revision = try container.decode(
+            ExtractorProtocolRevision.self, forKey: .protocolRevision)
+        // Revision 1 requests must not carry operation input paths: a v1
+        // package can neither declare nor receive credentials.
+        if revision == .v1,
+           container.contains(.credentialFilePath)
+               || container.contains(.operationConfigurationPath) {
+            throw ExtractorValidationError.invalidManifest(
+                "credential input requires protocol revision 2")
+        }
         try self.init(
             requestID: container.decode(ExtractorRequestID.self, forKey: .requestID),
-            protocolRevision: container.decode(ExtractorProtocolRevision.self, forKey: .protocolRevision),
+            protocolRevision: revision,
             kind: container.decode(ExtractorKind.self, forKey: .kind),
             mimeType: container.decode(ExtractorMIMEType.self, forKey: .mimeType),
             originalFilename: container.decode(String.self, forKey: .originalFilename),
             inputTransport: container.decode(ExtractorInputTransport.self, forKey: .inputTransport),
             inputPath: container.decode(ExtractorRelativePath.self, forKey: .inputPath),
             outputPath: container.decode(ExtractorRelativePath.self, forKey: .outputPath),
-            deadlineMillisecondsSince1970: container.decode(Int64.self, forKey: .deadlineMillisecondsSince1970))
+            deadlineMillisecondsSince1970: container.decode(Int64.self, forKey: .deadlineMillisecondsSince1970),
+            credentialFilePath: container.decodeIfPresent(
+                ExtractorRelativePath.self, forKey: .credentialFilePath),
+            operationConfigurationPath: container.decodeIfPresent(
+                ExtractorRelativePath.self, forKey: .operationConfigurationPath))
+    }
+}
+
+// MARK: - Operation input envelopes (protocol revision 2)
+
+/// The PRIVATE credential input envelope written to the request-scoped
+/// credential file. Keyed by requirement ID; carries only the selected
+/// registration's resolved NON-EMPTY values. Values live in this file for the
+/// duration of one request and are deleted on every terminal path.
+public struct ExtractorCredentialInputEnvelope: Codable, Hashable, Sendable {
+    private enum CodingKeys: String, CodingKey, CaseIterable { case credentials }
+
+    public static let maximumEntryCount = 8
+
+    /// Requirement-ID raw values -> resolved secret values.
+    public let credentials: [String: String]
+
+    /// Host-owned construction: entries must be declared requirement IDs and
+    /// non-empty values. There is no public memberwise initializer, so a
+    /// caller cannot smuggle arbitrary key/value pairs past validation.
+    public init(
+        requirements: [ExtractorCredentialRequirement],
+        resolvedValues: [ExtractorCredentialRequirementID: String]
+    ) throws {
+        guard resolvedValues.count <= Self.maximumEntryCount else {
+            throw ExtractorValidationError.invalidManifest("credential envelope size")
+        }
+        var encoded: [String: String] = [:]
+        for requirement in requirements {
+            guard let value = resolvedValues[requirement.id] else { continue }
+            guard CredentialValue.normalized(value) != nil else { continue }
+            encoded[requirement.id.rawValue] = value
+        }
+        self.credentials = encoded
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.credentials = try container.decode([String: String].self, forKey: .credentials)
+    }
+}
+
+/// The PUBLIC, non-secret operation-configuration envelope (protocol
+/// revision 2). Its closed field set is the construction seam: endpoint and
+/// timeout are the only representable fields, so a secret cannot be encoded
+/// even by mistake. Values arrive from typed host settings.
+public struct ExtractorOperationConfiguration: Codable, Hashable, Sendable {
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case endpoint, timeoutMilliseconds
+    }
+
+    public static let maximumEndpointByteCount = 2_048
+    public static let maximumTimeoutMilliseconds = ExtractorHostLimits.maximumDurationMilliseconds
+
+    public let endpoint: String?
+    public let timeoutMilliseconds: Int?
+
+    public init(endpoint: String?, timeoutMilliseconds: Int?) throws {
+        if let endpoint {
+            guard endpoint.isEmpty == false,
+                  endpoint.utf8.count <= Self.maximumEndpointByteCount,
+                  endpoint.contains("\0") == false else {
+                throw ExtractorValidationError.invalidManifest("operation endpoint")
+            }
+        }
+        if let timeoutMilliseconds {
+            guard timeoutMilliseconds > 0,
+                  timeoutMilliseconds <= Self.maximumTimeoutMilliseconds else {
+                throw ExtractorValidationError.limitExceedsHostPolicy("operation timeout")
+            }
+        }
+        self.endpoint = endpoint
+        self.timeoutMilliseconds = timeoutMilliseconds
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            endpoint: container.decodeIfPresent(String.self, forKey: .endpoint),
+            timeoutMilliseconds: container.decodeIfPresent(Int.self, forKey: .timeoutMilliseconds))
     }
 }
 

@@ -375,7 +375,9 @@ struct ExtractorGeneratedPluginTests {
             Issue.record("Expected waiting outcome, got \(waiting)")
             return
         }
-        #expect(missing.count == 6)
+        // Seven fixed host dependencies (the six original services plus the
+        // #1159 operation-credential resolver).
+        #expect(missing.count == 7)
 
         try await environment.supplyAll()
         let inspection = try #require(await host.inspect(trusted.id))
@@ -562,6 +564,15 @@ enum GeneratedPluginFixtures {
             try await context.supply(
                 ExtractionServiceKeys.packageSourceLocator,
                 value: InstalledExtractorPackageSourceLocator(layout: layout))
+            try await context.supply(
+                ExtractionServiceKeys.operationCredentialResolver,
+                value: ExtractorOperationCredentialResolver(
+                    admission: AlwaysAdmitted(),
+                    catalogReader: ExtractorPackageCatalogReader(layout: layout),
+                    authorizationReader: ExtractorCredentialAuthorizationReader(
+                        layout: ExtractorCredentialAuthorizationStoreLayout(
+                            appGroupContainerRoot: layout.appGroupContainerRoot)),
+                    credentials: KeychainCredentialService()))
         }
 
         func cleanup() {

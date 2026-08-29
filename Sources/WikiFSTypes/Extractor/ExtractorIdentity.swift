@@ -248,7 +248,15 @@ public struct ExtractorRequestID: RawRepresentable, Codable, Hashable, Sendable 
 public struct ExtractorProtocolRevision: RawRepresentable, Codable, Hashable, Sendable, Comparable {
     public let rawValue: Int
     public static let v1 = Self(validatedRawValue: 1)
-    public init?(rawValue: Int) { guard rawValue == 1 else { return nil }; self.rawValue = rawValue }
+    /// Revision 2 adds optional request paths for a private credential input
+    /// file and a non-secret public operation-configuration file. Revision 1
+    /// requests keep their exact old shape and can neither declare nor
+    /// receive credentials.
+    public static let v2 = Self(validatedRawValue: 2)
+    public init?(rawValue: Int) {
+        guard rawValue == 1 || rawValue == 2 else { return nil }
+        self.rawValue = rawValue
+    }
     private init(validatedRawValue: Int) { self.rawValue = validatedRawValue }
     public init(from decoder: any Decoder) throws {
         let rawValue = try Int(from: decoder)
