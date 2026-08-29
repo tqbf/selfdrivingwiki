@@ -52,6 +52,13 @@ public struct QueueExtractionWorkerFactory: QueueWorkerFactory {
                 sourceID: sourceID,
                 backendOverride: override
             )
+        } catch let error as ExtractionServicesError {
+            // An unavailable explicit extractor selection is an actionable
+            // per-item failure, never an indefinite stay in .queued. Hand the
+            // item a neutral capacity bucket so dispatch claims it and the
+            // worker surfaces the typed error through the normal failed path.
+            DebugLog.store("QueueExtractionWorker.resolveExtraction blocked: \(error)")
+            return ProviderID(rawValue: "blocked-extraction")
         } catch {
             DebugLog.store("QueueExtractionWorker.resolveExtraction: \(error)")
             return nil

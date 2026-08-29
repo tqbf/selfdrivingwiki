@@ -8,8 +8,10 @@ import WikiFSCore
 /// registry. Settings consumes this snapshot to build route choices without
 /// inspecting package payloads, paths, or manifests.
 public struct ExtractorRouteRegistrationSnapshot: Hashable, Sendable {
-    /// The exact active registration (revision + registration ID).
+    /// The exact package registration (revision + registration ID).
     public let reference: ExtractorReference
+    /// The package source used for picker presentation.
+    public let sourceCategory: ExtractorRouteSourceCategory
     /// User-facing registration name from the validated manifest.
     public let displayName: String
     /// User-facing package name from the validated manifest.
@@ -25,6 +27,7 @@ public struct ExtractorRouteRegistrationSnapshot: Hashable, Sendable {
 
     public init(
         reference: ExtractorReference,
+        sourceCategory: ExtractorRouteSourceCategory = .installedPackage,
         displayName: String,
         packageName: String,
         kinds: Set<ExtractorKind>,
@@ -33,6 +36,7 @@ public struct ExtractorRouteRegistrationSnapshot: Hashable, Sendable {
         credentialRequirements: [ExtractorCredentialRequirement] = []
     ) {
         self.reference = reference
+        self.sourceCategory = sourceCategory
         self.displayName = displayName
         self.packageName = packageName
         self.kinds = kinds
@@ -53,19 +57,16 @@ public enum ExtractorRouteSourceCategory: String, Hashable, Sendable, CaseIterab
     case unavailable
 }
 
-/// One host-owned route presentation: what the format column shows and what
-/// the fixed fallback for that route is.
+/// One host-owned route presentation for the format column.
 public struct ExtractorRouteDescriptor: Hashable, Sendable {
     public let route: ExtractorRouteID
     public let displayName: String
     public let systemImage: String?
-    public let fallbackDescription: String
 
-    public init(route: ExtractorRouteID, displayName: String, systemImage: String?, fallbackDescription: String) {
+    public init(route: ExtractorRouteID, displayName: String, systemImage: String?) {
         self.route = route
         self.displayName = displayName
         self.systemImage = systemImage
-        self.fallbackDescription = fallbackDescription
     }
 }
 
@@ -107,19 +108,24 @@ public struct ExtractorRouteChoice: Hashable, Sendable, Identifiable {
     }
 }
 
-/// What the status column reports for a route row.
+public enum ExtractorRouteSetupReason: Hashable, Sendable {
+    case missingACPProvider
+    case unavailableACPProvider
+    case invalidDoclingEndpoint
+    case missingDoclingCredential
+    case unauthorizedDoclingCredential
+    case doclingConnectionFailed
+}
+
+/// Engine-owned lifecycle health for one route. App configuration facts can
+/// refine this value in the recovery presenter.
 public enum ExtractorRouteStatus: Hashable, Sendable {
-    /// The resolved selection is usable right now.
-    case available
-    /// A saved installed selection is unavailable and a fixed fallback is active.
-    case usingFallback(description: String)
-    /// A saved installed selection has no active registration and no recorded
-    /// activation failure or waiting run.
-    case notInstalled
-    /// The selected package is admitted but its host service has not activated it.
-    case waitingForHostService
-    /// The selected package's activation failed in this process.
-    case failedActivation
+    case ready
+    case needsSetup(ExtractorRouteSetupReason)
+    case packageNotInstalled
+    case waitingForHostActivation
+    case activationFailed(message: String?)
+    case unavailableSelection
 }
 
 /// One route row in the Settings extractor route table: descriptor, the saved
@@ -152,22 +158,19 @@ public struct ExtractorRouteSettingsRow: Hashable, Sendable, Identifiable {
     public var id: String { descriptor.route.description }
 }
 
-/// Host-owned route descriptors and built-in/connected choices for the two
-/// canonical routes. Future registrations can add routes and package choices,
-/// but the host's own choices are fixed here — reviewed packages included.
+/// Host-owned route descriptors and non-package choices for the two canonical
+/// routes. Package choices come from validated catalog records.
 public enum ExtractorRouteHostCatalog {
     /// Canonical routes in host display order (PDF first, then HTML).
     public static let descriptors: [ExtractorRouteDescriptor] = [
         ExtractorRouteDescriptor(
             route: .canonicalPDF,
             displayName: "PDF",
-            systemImage: "doc.richtext",
-            fallbackDescription: "Bundled pdf2md extraction"),
+            systemImage: "doc.richtext"),
         ExtractorRouteDescriptor(
             route: .canonicalHTML,
             displayName: "HTML",
-            systemImage: "safari",
-            fallbackDescription: "Tag-based text extraction"),
+            systemImage: "safari"),
     ]
 
     /// The host's fixed choices for one route. Only the canonical routes have
@@ -178,18 +181,8 @@ public enum ExtractorRouteHostCatalog {
             return [
                 ExtractorRouteChoice(
                     route: route,
-                    reference: .installed(ProcessExtractionServices.reviewedPDFLogical),
-                    displayName: "pdf2md",
-                    category: .reviewedPackage),
-                ExtractorRouteChoice(
-                    route: route,
                     reference: .builtIn(.pdf(.acp)),
                     displayName: "ACP Provider",
-                    category: .connectedService),
-                ExtractorRouteChoice(
-                    route: route,
-                    reference: .builtIn(.pdf(.doclingServe)),
-                    displayName: "Docling Serve",
                     category: .connectedService),
             ]
         }
@@ -202,11 +195,6 @@ public enum ExtractorRouteHostCatalog {
                     category: .prompt),
                 ExtractorRouteChoice(
                     route: route,
-                    reference: .installed(ProcessExtractionServices.reviewedHTMLLogical),
-                    displayName: "Defuddle",
-                    category: .reviewedPackage),
-                ExtractorRouteChoice(
-                    route: route,
                     reference: .builtIn(.html(.tagBased)),
                     displayName: "Tag-based",
                     category: .builtIn),
@@ -215,14 +203,11 @@ public enum ExtractorRouteHostCatalog {
         return []
     }
 
-    /// Stable fallback label for a route without a host descriptor — derived
-    /// from the normalized MIME type alone. Future-facing: no current
-    /// registration produces a route outside the host catalog.
-    public static func fallbackDescriptor(for route: ExtractorRouteID) -> ExtractorRouteDescriptor {
+    /// Stable descriptor for a route without host-owned presentation metadata.
+    public static func genericDescriptor(for route: ExtractorRouteID) -> ExtractorRouteDescriptor {
         ExtractorRouteDescriptor(
             route: route,
             displayName: route.mimeType.rawValue,
-            systemImage: nil,
-            fallbackDescription: "No built-in fallback for this format")
+            systemImage: nil)
     }
 }

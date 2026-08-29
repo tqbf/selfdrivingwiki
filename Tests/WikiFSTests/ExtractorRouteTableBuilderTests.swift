@@ -24,6 +24,7 @@ struct ExtractorRouteTableBuilderTests {
         registrationID: String = "main",
         displayName: String,
         packageName: String = "Example Package",
+        sourceCategory: ExtractorRouteSourceCategory = .installedPackage,
         kinds: Set<ExtractorKind>,
         mimeTypes: [String],
         extensions: Set<String> = []
@@ -35,6 +36,7 @@ struct ExtractorRouteTableBuilderTests {
                     version: ExtractorPackageVersion(validating: version),
                     digest: ExtractorPackageDigest(hex: digestHex)),
                 registrationID: ExtractorRegistrationID(validating: registrationID)),
+            sourceCategory: sourceCategory,
             displayName: displayName,
             packageName: packageName,
             kinds: kinds,
@@ -98,7 +100,7 @@ struct ExtractorRouteTableBuilderTests {
         #expect(first.dropFirst(2).map(\.route) == first.dropFirst(2).map(\.route).sorted())
     }
 
-    @Test func unknownMIMEUsesStableFallbackLabel() throws {
+    @Test func unknownMIMEUsesStableGenericLabel() throws {
         let input = ExtractorRouteTableBuilder.Input(
             configuration: ExtractionConfig(backend: .acp),
             registrations: [
@@ -156,9 +158,31 @@ struct ExtractorRouteTableBuilderTests {
         #expect(packageChoices[0].exactSummary?.hasPrefix("2.0.0 · \(digest(6).prefix(12))") == true)
     }
 
-    // MARK: - AC.8: stale selections stay visible with fallback status
+    @Test func activeReviewedPackageAppearsOnceFromCatalogProjection() throws {
+        let reviewed = try snapshot(
+            packageID: ProcessExtractionServices.reviewedPDFLogical.packageID.rawValue,
+            version: "1.0.0",
+            digestHex: digest(16),
+            registrationID: ProcessExtractionServices.reviewedPDFLogical.registrationID.rawValue,
+            displayName: "pdf2md",
+            sourceCategory: .reviewedPackage,
+            kinds: [.pdf],
+            mimeTypes: ["application/pdf"])
+        let rows = ExtractorRouteTableBuilder.build(.init(
+            configuration: ExtractionConfig(backend: .acp),
+            registrations: [reviewed],
+            availableRegistrations: [reviewed]))
+        let pdf = try #require(rows.first { $0.route == .canonicalPDF })
+        let matches = pdf.choices.filter {
+            $0.reference == .installed(ProcessExtractionServices.reviewedPDFLogical)
+        }
+        #expect(matches.count == 1)
+        #expect(matches.first?.category == .reviewedPackage)
+    }
 
-    @Test func staleInstalledSelectionRemainsVisibleWithFallback() throws {
+    // MARK: - AC.8: stale selections stay visible and blocked
+
+    @Test func staleSelectionIsPreservedAndUnavailable() throws {
         let logical = LogicalExtractorReference(
             packageID: try ExtractorPackageID(validating: "org.example.gone"),
             registrationID: try ExtractorRegistrationID(validating: "main"))
@@ -173,11 +197,11 @@ struct ExtractorRouteTableBuilderTests {
         // The saved choices remain selected and visible…
         #expect(pdf?.savedSelection == .installed(logical))
         #expect(html?.savedSelection == .installed(logical))
-        // …while the fixed fallbacks are what resolve.
-        #expect(pdf?.resolvedSelection == .pdfBuiltIn(.localPdf2md))
-        #expect(html?.resolvedSelection == .htmlBuiltIn(.tagBased))
-        #expect(pdf?.status == .usingFallback(description: "Bundled pdf2md extraction"))
-        #expect(html?.status == .usingFallback(description: "Tag-based text extraction"))
+        // The unavailable identity remains resolved and both routes are blocked.
+        #expect(pdf?.resolvedSelection == .unavailableInstalled(kind: .pdf, reference: logical))
+        #expect(html?.resolvedSelection == .unavailableInstalled(kind: .html, reference: logical))
+        #expect(pdf?.status == .packageNotInstalled)
+        #expect(html?.status == .packageNotInstalled)
     }
 
     @Test func waitingAndFailedSelectionsReportLifecycleStatus() throws {
@@ -190,19 +214,22 @@ struct ExtractorRouteTableBuilderTests {
         let waiting = ExtractorRouteTableBuilder.build(ExtractorRouteTableBuilder.Input(
             configuration: config,
             registrations: [],
-            failedPackageIDs: [],
+            installedRevisionIDs: [],
             waitingRevisionIDs: [ExtractorPackageRevisionID(
                 packageID: try ExtractorPackageID(validating: "org.example.pending"),
                 version: try ExtractorPackageVersion(validating: "1.0.0"),
                 digest: try ExtractorPackageDigest(hex: digest(7)))]))
-        #expect(waiting.first?.status == .waitingForHostService)
+        #expect(waiting.first?.status == .waitingForHostActivation)
 
-        let failed = ExtractorRouteTableBuilder.build(ExtractorRouteTableBuilder.Input(
+        let presentButUnavailable = ExtractorRouteTableBuilder.build(ExtractorRouteTableBuilder.Input(
             configuration: config,
             registrations: [],
-            failedPackageIDs: ["org.example.pending"],
+            installedRevisionIDs: [ExtractorPackageRevisionID(
+                packageID: try ExtractorPackageID(validating: "org.example.pending"),
+                version: try ExtractorPackageVersion(validating: "1.0.0"),
+                digest: try ExtractorPackageDigest(hex: digest(7)))],
             waitingRevisionIDs: []))
-        #expect(failed.first?.status == .failedActivation)
+        #expect(presentButUnavailable.first?.status == .unavailableSelection)
     }
 
     /// A stale saved installed selection stays selectable in its row's picker:
@@ -223,8 +250,8 @@ struct ExtractorRouteTableBuilderTests {
     }
 
     /// A logical registration active for the KIND but not the route's MIME
-    /// must not resolve on that route: it stays an unavailable stale choice,
-    /// and the row reports the fixed fallback instead of Available.
+    /// must not resolve on that route. It stays an unavailable stale choice,
+    /// and the row reports an unavailable selection.
     @Test func incompatibleMIMERegistrationDoesNotResolveOnRoute() throws {
         let logical = LogicalExtractorReference(
             packageID: try ExtractorPackageID(validating: "org.example.mime"),
@@ -246,8 +273,8 @@ struct ExtractorRouteTableBuilderTests {
         let pdf = try #require(rows.first { $0.route == .canonicalPDF })
         #expect(pdf.choices.contains { $0.category == .installedPackage } == false)
         #expect(pdf.savedSelection == .installed(logical))
-        #expect(pdf.resolvedSelection == .pdfBuiltIn(.localPdf2md))
-        #expect(pdf.status == .usingFallback(description: "Bundled pdf2md extraction"))
+        #expect(pdf.resolvedSelection == .unavailableInstalled(kind: .pdf, reference: logical))
+        #expect(pdf.status == .packageNotInstalled)
         // The package does contribute its own epub route row.
         #expect(rows.contains { $0.route.mimeType.rawValue == "application/epub+zip" })
     }
@@ -255,36 +282,68 @@ struct ExtractorRouteTableBuilderTests {
     // MARK: - AC.9: current choice matrix
 
     @Test func currentRouteChoiceMatrix() throws {
+        let active = [
+            try snapshot(
+                packageID: "org.example.pdf",
+                version: "1.0.0",
+                digestHex: digest(9),
+                registrationID: "pdfmain",
+                displayName: "PDF Package",
+                kinds: [.pdf],
+                mimeTypes: ["application/pdf"]),
+            try snapshot(
+                packageID: "org.example.html",
+                version: "1.0.0",
+                digestHex: digest(10),
+                registrationID: "htmlmain",
+                displayName: "HTML Package",
+                kinds: [.html],
+                mimeTypes: ["text/html"]),
+        ]
+        let available = active + [
+            try snapshot(
+                packageID: ProcessExtractionServices.reviewedPDFLogical.packageID.rawValue,
+                version: "1.0.0",
+                digestHex: digest(13),
+                registrationID: ProcessExtractionServices.reviewedPDFLogical.registrationID.rawValue,
+                displayName: "pdf2md",
+                sourceCategory: .reviewedPackage,
+                kinds: [.pdf],
+                mimeTypes: ["application/pdf"]),
+            try snapshot(
+                packageID: ProcessExtractionServices.reviewedDoclingLogical.packageID.rawValue,
+                version: "1.0.0",
+                digestHex: digest(14),
+                registrationID: ProcessExtractionServices.reviewedDoclingLogical.registrationID.rawValue,
+                displayName: "Docling Serve",
+                sourceCategory: .reviewedPackage,
+                kinds: [.pdf],
+                mimeTypes: ["application/pdf"]),
+            try snapshot(
+                packageID: ProcessExtractionServices.reviewedHTMLLogical.packageID.rawValue,
+                version: "1.0.0",
+                digestHex: digest(15),
+                registrationID: ProcessExtractionServices.reviewedHTMLLogical.registrationID.rawValue,
+                displayName: "Defuddle",
+                sourceCategory: .reviewedPackage,
+                kinds: [.html],
+                mimeTypes: ["text/html"]),
+        ]
         let input = ExtractorRouteTableBuilder.Input(
             configuration: ExtractionConfig(backend: .acp),
-            registrations: [
-                try snapshot(
-                    packageID: "org.example.pdf",
-                    version: "1.0.0",
-                    digestHex: digest(9),
-                    registrationID: "pdfmain",
-                    displayName: "PDF Package",
-                    kinds: [.pdf],
-                    mimeTypes: ["application/pdf"]),
-                try snapshot(
-                    packageID: "org.example.html",
-                    version: "1.0.0",
-                    digestHex: digest(10),
-                    registrationID: "htmlmain",
-                    displayName: "HTML Package",
-                    kinds: [.html],
-                    mimeTypes: ["text/html"]),
-            ])
+            registrations: active,
+            availableRegistrations: available)
         let rows = ExtractorRouteTableBuilder.build(input)
         let pdf = rows.first { $0.route == .canonicalPDF }
         let html = rows.first { $0.route == .canonicalHTML }
 
-        // PDF: reviewed pdf2md, installed PDF packages, ACP, Docling — in that order.
+        // PDF: reviewed packages and installed packages sort by package ID,
+        // followed by the host-owned ACP service.
         #expect(pdf?.choices.map { "\($0.displayName)|\($0.category.rawValue)" } == [
+            "Docling Serve|reviewed-package",
             "pdf2md|reviewed-package",
             "PDF Package|installed-package",
             "ACP Provider|connected-service",
-            "Docling Serve|connected-service",
         ])
         // HTML: prompt, reviewed Defuddle, installed HTML packages, tag-based.
         #expect(html?.choices.map { "\($0.displayName)|\($0.category.rawValue)" } == [

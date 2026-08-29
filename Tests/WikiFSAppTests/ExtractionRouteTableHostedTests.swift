@@ -165,6 +165,74 @@ struct ExtractionRouteTableHostedTests {
         #expect(table.numberOfRows == 3)
     }
 
+    @Test("a non-ready route status dialog mounts with recovery controls")
+    func nonReadyStatusOpensRecoverySheet() async throws {
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        defer { lease.release() }
+        let presentation = ExtractorRouteRecoveryPresentation(
+            route: .canonicalPDF,
+            extractorName: "Missing Extractor",
+            status: .packageNotInstalled,
+            shortStatusLabel: "Not installed",
+            systemImage: "shippingbox",
+            title: "Missing Extractor is not installed",
+            summary: "The saved package selection is not present on this Mac.",
+            impact: ExtractorRouteRecoveryPresenter.blockedImpact,
+            primaryAction: .refreshStatus,
+            secondaryActions: [.chooseAnotherExtractor, .copyDiagnostics],
+            accessibilityText: "PDF, Missing Extractor, Not installed. Show status details.",
+            diagnosticCategory: .packageNotInstalled,
+            diagnosticReport: "Extractor Status Diagnostic\nStatus: package-not-installed",
+            authorizationRequirement: nil)
+        let controller = NSHostingController(rootView: ExtractionSettingsView.ExtractorStatusDialog(
+            presentation: presentation,
+            inProgressAction: nil,
+            onAction: { _ in }))
+        let window = NSWindow(contentViewController: controller)
+        window.setContentSize(NSSize(width: 520, height: 420))
+        window.layoutIfNeeded()
+        controller.view.layoutSubtreeIfNeeded()
+        window.orderFrontRegardless()
+        let content = try #require(window.contentView)
+        #expect(content.fittingSize.width > 0)
+        #expect(content.fittingSize.height > 0)
+    }
+
+    @Test("a package credential configuration dialog mounts")
+    func packageCredentialConfigurationDialogMounts() async throws {
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        defer { lease.release() }
+        let requirement = ExtractorCredentialRequirementSummary(
+            packageID: "org.example.extractor",
+            packageName: "Example Extractor",
+            packageVersion: "1.0.0",
+            registrationID: "main",
+            requirementID: "api-token",
+            label: "API token",
+            purpose: "Authenticates requests.",
+            isOptional: false,
+            isConfigured: true,
+            sourceName: "Keychain",
+            authorizationState: .needsAuthorization,
+            kinds: ["pdf"],
+            mimeTypes: ["application/pdf"])
+        let controller = NSHostingController(
+            rootView: ExtractionSettingsView.PackageConfigurationDialog(
+                title: "Example Extractor",
+                requirements: [requirement],
+                authorizeRequirement: { _ in .succeeded(nil) },
+                revokeRequirement: { _ in .succeeded(nil) },
+                onCredentialMutation: { _ in }))
+        let window = NSWindow(contentViewController: controller)
+        window.setContentSize(NSSize(width: 460, height: 380))
+        window.layoutIfNeeded()
+        controller.view.layoutSubtreeIfNeeded()
+        window.orderFrontRegardless()
+        let content = try #require(window.contentView)
+        #expect(content.fittingSize.width > 0)
+        #expect(content.fittingSize.height > 0)
+    }
+
     @Test("the table keeps a constrained height at the Settings minimum size")
     func tableUsesConstrainedScrollableLayout() async throws {
         let lease = await HostedAppKitTestGate.shared.acquire()
@@ -208,12 +276,30 @@ struct ExtractionRouteTableHostedTests {
         #expect(source.contains("Default extractor routes"))
         #expect(source.contains("accessibilityKey("))
 
-        // Fixed status vocabulary.
-        #expect(source.contains("\"Available\""))
-        #expect(source.contains("\"Using fallback\""))
+        // Fixed compact status vocabulary and actionable detail controls.
+        #expect(source.contains("\"Ready\""))
+        #expect(source.contains("\"Needs setup\""))
         #expect(source.contains("\"Not installed\""))
-        #expect(source.contains("\"Waiting for host service\""))
-        #expect(source.contains("\"Failed to activate\""))
+        #expect(source.contains("\"Starting\""))
+        #expect(source.contains("\"Failed\""))
+        #expect(source.contains("extraction.routes.status"))
+        #expect(source.contains("Show status details"))
+        #expect(source.contains("ExtractorStatusDialog("))
+        #expect(source.contains("Technical Details"))
+        #expect(source.contains("Configure…"))
+        #expect(source.contains("Authorize Credential…"))
+        #expect(source.contains("Test Connection"))
+        #expect(source.contains("Retry Activation"))
+        #expect(source.contains("Refresh Status"))
+        #expect(source.contains("Choose Another Extractor…"))
+        #expect(source.contains("Copy Diagnostics"))
+        #expect(source.contains("retryActivation?()"))
+        #expect(source.contains("focusedRoutePicker = route"))
+        #expect(source.contains("copyDiagnostics(presentation.diagnosticReport)"))
+        #expect(source.contains("extraction.status.action"))
+        #expect(source.contains("extraction.status.technical-details"))
+        #expect(source.contains("extraction.status.done"))
+        #expect(source.contains("Report a Bug") == false)
 
         // The picker writes through the dual-write mapping with auto-save; no
         // synchronous state write from a representable update path.
@@ -222,9 +308,15 @@ struct ExtractionRouteTableHostedTests {
         #expect(source.contains("NSViewRepresentable") == false)
 
         // ACP and Docling configuration follows the PDF route selection only.
-        #expect(source.contains("switch routeSelections[ExtractorRouteID.canonicalPDF.description]"))
-        #expect(source.contains("case .connectedService(.acp): acpSection"))
-        #expect(source.contains("case .connectedService(.doclingServe): doclingSection"))
+        // #1159: the Configure… button lives IN the route table (a per-row
+        // Configuration column) and opens a dialog (macos-design progressive
+        // disclosure) rather than inline sections.
+        #expect(source.contains("switch routeSelections[row.id]"))
+        #expect(source.contains("TableColumn(\"Configuration\")"))
+        #expect(source.contains("Button(\"Configure…\")"))
+        #expect(source.contains(".sheet(item: $serviceConfigurationDialog)"))
+        #expect(source.contains("ACPConfigurationDialog("))
+        #expect(source.contains("DoclingConfigurationDialog("))
 
         // Technical MIME identity stays out of the primary columns (help text).
         #expect(source.contains("MIME type: \\(row.route.mimeType.rawValue)"))
@@ -237,11 +329,35 @@ struct ExtractionRouteTableHostedTests {
         #expect(source.contains("Text(\"Transcripts\")"))
     }
 
-    /// A stale installed selection keeps the row's fallback active: the write
-    /// path persists the typed reference and the fixed fallback still resolves
-    /// through the production resolver (persisted-file round trip).
-    @Test("a stale installed selection persists and still resolves to the fallback")
-    func staleSelectionShowsFallbackStatus() async throws {
+    @Test("picker options show only extractor names")
+    func pickerOptionsHideImplementationCategories() throws {
+        let route = ExtractorRouteID.canonicalPDF
+        let logical = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.example.extractor"),
+            registrationID: try ExtractorRegistrationID(validating: "main"))
+        let cases: [(ExtractorRouteSourceCategory, ExtractionBackendReference?, String)] = [
+            (.reviewedPackage, .installed(logical), "Reviewed Extractor"),
+            (.installedPackage, .installed(logical), "Installed Extractor"),
+            (.connectedService, .builtIn(.pdf(.acp)), "ACP Provider"),
+            (.builtIn, .builtIn(.html(.tagBased)), "Tag-based"),
+            (.prompt, nil, "No default (ask each time)"),
+            (.unavailable, .installed(logical), "Missing Extractor"),
+        ]
+
+        for (category, reference, name) in cases {
+            let choice = ExtractorRouteChoice(
+                route: route,
+                reference: reference,
+                displayName: name,
+                category: category)
+            #expect(ExtractionSettingsView.optionLabel(choice) == name)
+        }
+    }
+
+    /// A stale installed selection stays selected and blocks the route after a
+    /// persisted-file round trip.
+    @Test("a stale installed selection persists and remains unavailable")
+    func staleSelectionRemainsUnavailable() async throws {
         let dir = try tempDirectory("route-table-stale")
         let logical = LogicalExtractorReference(
             packageID: try ExtractorPackageID(validating: "org.example.gone"),
@@ -256,16 +372,237 @@ struct ExtractionRouteTableHostedTests {
         #expect(reloaded.extractorSelection(for: .canonicalPDF) == .installed(logical))
         #expect(reloaded.pdfExtractor == .installed(logical))
         let decision = ExtractorSelectionResolver.resolvePDF(configuration: reloaded, activeRegistrations: [])
-        #expect(decision.selection == .pdfBuiltIn(.localPdf2md))
+        #expect(decision.selection == .unavailableInstalled(kind: .pdf, reference: logical))
         #expect(decision.diagnostic == .unavailableInstalled(logical))
 
-        // And the mounted view's builder reports the fallback status for it.
+        // The route table preserves the blocked state.
         let rows = ExtractorRouteTableBuilder.build(.init(
             configuration: reloaded,
             registrations: []))
         let pdf = rows.first { $0.route == .canonicalPDF }
-        #expect(pdf?.status == .usingFallback(description: "Bundled pdf2md extraction"))
+        #expect(pdf?.status == .packageNotInstalled)
         #expect(pdf?.savedSelection == .installed(logical))
     }
 }
+
+@Suite("Extractor route recovery presenter")
+struct ExtractorRouteRecoveryPresenterTests {
+    private func logical(_ packageID: String = "org.example.extractor") throws -> LogicalExtractorReference {
+        LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: packageID),
+            registrationID: try ExtractorRegistrationID(validating: "main"))
+    }
+
+    private func row(
+        selection: ExtractionBackendReference?,
+        status: ExtractorRouteStatus,
+        route: ExtractorRouteID = .canonicalPDF,
+        exactSummary: String? = nil
+    ) -> ExtractorRouteSettingsRow {
+        ExtractorRouteSettingsRow(
+            descriptor: ExtractorRouteDescriptor(
+                route: route,
+                displayName: route == .canonicalPDF ? "PDF" : "HTML",
+                systemImage: "doc"),
+            savedSelection: selection,
+            resolvedSelection: nil,
+            choices: [ExtractorRouteChoice(
+                route: route,
+                reference: selection,
+                displayName: "Example Extractor",
+                category: selection == nil ? .prompt : .installedPackage,
+                exactSummary: exactSummary)],
+            status: status)
+    }
+
+    private func requirement(
+        logical: LogicalExtractorReference,
+        configured: Bool,
+        authorization: ExtractorCredentialRequirementSummary.AuthorizationState
+    ) -> ExtractorCredentialRequirementSummary {
+        ExtractorCredentialRequirementSummary(
+            packageID: logical.packageID.rawValue,
+            packageName: "Docling Serve",
+            packageVersion: "1.0.0",
+            registrationID: logical.registrationID.rawValue,
+            requirementID: "token",
+            label: "API token",
+            purpose: "Connect to Docling Serve",
+            isOptional: false,
+            isConfigured: configured,
+            sourceName: "Docling token",
+            authorizationState: authorization,
+            kinds: ["pdf"],
+            mimeTypes: ["application/pdf"])
+    }
+
+    @Test func compactVocabularyContainsNoFallbackOrDoesntWork() throws {
+        let states: [ExtractorRouteStatus] = [
+            .ready,
+            .needsSetup(.missingACPProvider),
+            .packageNotInstalled,
+            .waitingForHostActivation,
+            .activationFailed(message: nil),
+            .unavailableSelection,
+        ]
+        let labels = states.map {
+            ExtractorRouteRecoveryPresenter.present(
+                row: row(selection: .installed(try! logical()), status: $0),
+                extractorName: "Example",
+                facts: .init()).shortStatusLabel
+        }
+        #expect(Set(labels) == ["Ready", "Needs setup", "Not installed", "Starting", "Failed"])
+        let combined = labels.joined(separator: " ").lowercased()
+        #expect(combined.contains("fallback") == false)
+        #expect(combined.contains("doesn't work") == false)
+    }
+
+    @Test func needsSetupMatrix() throws {
+        let acp = row(selection: .builtIn(.pdf(.acp)), status: .ready)
+        var facts = ExtractorRouteRecoveryFacts()
+        let missingProvider = ExtractorRouteRecoveryPresenter.present(
+            row: acp, extractorName: "ACP Provider", facts: facts)
+        #expect(missingProvider.status == .needsSetup(.missingACPProvider))
+        #expect(missingProvider.primaryAction == .configure)
+
+        facts.acpProviderID = "missing-provider"
+        let unavailableProvider = ExtractorRouteRecoveryPresenter.present(
+            row: acp, extractorName: "ACP Provider", facts: facts)
+        #expect(unavailableProvider.status == .needsSetup(.unavailableACPProvider))
+
+        let doclingLogical = ProcessExtractionServices.reviewedDoclingLogical
+        let docling = row(selection: .installed(doclingLogical), status: .ready)
+        var doclingFacts = ExtractorRouteRecoveryFacts()
+        let missingEndpoint = ExtractorRouteRecoveryPresenter.present(
+            row: docling, extractorName: "Docling Serve", facts: doclingFacts)
+        #expect(missingEndpoint.status == .needsSetup(.invalidDoclingEndpoint))
+
+        doclingFacts.doclingEndpoint = "https://docling.example.test/convert"
+        let missingCredential = ExtractorRouteRecoveryPresenter.present(
+            row: docling, extractorName: "Docling Serve", facts: doclingFacts)
+        #expect(missingCredential.status == .needsSetup(.missingDoclingCredential))
+
+        doclingFacts.doclingCredentialConfigured = true
+        doclingFacts.credentialRequirements = [requirement(
+            logical: doclingLogical,
+            configured: true,
+            authorization: .needsAuthorization)]
+        let unauthorized = ExtractorRouteRecoveryPresenter.present(
+            row: docling, extractorName: "Docling Serve", facts: doclingFacts)
+        #expect(unauthorized.status == .needsSetup(.unauthorizedDoclingCredential))
+        #expect(unauthorized.primaryAction == .authorizeCredential)
+
+        doclingFacts.credentialRequirements = []
+        doclingFacts.connectionTest = .failed
+        doclingFacts.connectionFailureMessage = "Connection refused"
+        let failedTest = ExtractorRouteRecoveryPresenter.present(
+            row: docling, extractorName: "Docling Serve", facts: doclingFacts)
+        #expect(failedTest.status == .needsSetup(.doclingConnectionFailed))
+        #expect(failedTest.primaryAction == .testConnection)
+    }
+
+    @Test func packageLifecycleMatrixUsesNewestApplicableFailure() throws {
+        let selected = try logical()
+        let selectedRow = row(selection: .installed(selected), status: .packageNotInstalled)
+        let missing = ExtractorRouteRecoveryPresenter.present(
+            row: selectedRow, extractorName: "Example", facts: .init())
+        #expect(missing.shortStatusLabel == "Not installed")
+        #expect(missing.actions == [.refreshStatus, .chooseAnotherExtractor, .copyDiagnostics])
+
+        let waiting = ExtractorRouteRecoveryPresenter.present(
+            row: row(selection: .installed(selected), status: .waitingForHostActivation),
+            extractorName: "Example",
+            facts: .init())
+        #expect(waiting.shortStatusLabel == "Starting")
+        #expect(waiting.primaryAction == .retryActivation)
+
+        var facts = ExtractorRouteRecoveryFacts()
+        facts.retainedFailures = [
+            ExtractorPackageFailureSummary(
+                packageID: selected.packageID.rawValue,
+                version: "1.0.0",
+                digestPrefix: "111111111111",
+                message: "old failure"),
+            ExtractorPackageFailureSummary(
+                packageID: "org.example.other",
+                version: "9.0.0",
+                digestPrefix: "999999999999",
+                message: "other failure"),
+            ExtractorPackageFailureSummary(
+                packageID: selected.packageID.rawValue,
+                version: "2.0.0",
+                digestPrefix: "222222222222",
+                message: "new failure"),
+        ]
+        let failed = ExtractorRouteRecoveryPresenter.present(
+            row: selectedRow, extractorName: "Example", facts: facts)
+        #expect(failed.status == .activationFailed(message: "new failure"))
+        #expect(failed.diagnosticReport.contains("Version: 2.0.0"))
+        #expect(failed.diagnosticReport.contains("new failure"))
+        #expect(failed.diagnosticReport.contains("old failure") == false)
+    }
+}
+
+@Suite("Extractor route diagnostics")
+struct ExtractorRouteDiagnosticReportTests {
+    @Test func endpointOriginRemovesUserInfoPathQueryAndFragment() {
+        let origin = ExtractorRouteDiagnosticReport.endpointOrigin(
+            "https://user:password@Docling.Example:8443/private/convert?token=SECRET#fragment")
+        #expect(origin == "https://docling.example:8443")
+    }
+
+    @Test func secretCanaryNeverEntersReport() throws {
+        let secret = "CANARY_SECRET_VALUE"
+        let privatePath = "/Users/alice/private/operation-file.pdf"
+        let logical = ProcessExtractionServices.reviewedDoclingLogical
+        let row = ExtractorRouteSettingsRow(
+            descriptor: ExtractorRouteDescriptor(
+                route: .canonicalPDF, displayName: "PDF", systemImage: "doc"),
+            savedSelection: .installed(logical),
+            resolvedSelection: .unavailableInstalled(kind: .pdf, reference: logical),
+            choices: [ExtractorRouteChoice(
+                route: .canonicalPDF,
+                reference: .installed(logical),
+                displayName: "Docling Serve",
+                category: .reviewedPackage)],
+            status: .unavailableSelection)
+        var facts = ExtractorRouteRecoveryFacts()
+        facts.doclingEndpoint = "https://user:\(secret)@docling.example\(privatePath)?token=\(secret)"
+        facts.doclingCredentialConfigured = true
+        facts.connectionFailureMessage = "Authorization: Bearer \(secret) at \(privatePath)"
+        facts.appVersion = "1.2.3"
+        facts.appBuild = "456"
+        facts.macOSVersion = "Version 26.0"
+        let presentation = ExtractorRouteRecoveryPresenter.present(
+            row: row, extractorName: "Docling Serve", facts: facts)
+        for canary in [secret, privatePath, "Authorization:", "Bearer", "operation-file.pdf", "?token="] {
+            #expect(presentation.diagnosticReport.contains(canary) == false)
+        }
+        #expect(presentation.diagnosticReport.contains("https://docling.example"))
+    }
+
+    @Test func copyTextMatchesPreview() throws {
+        let logical = try LogicalExtractorReference(
+            packageID: ExtractorPackageID(validating: "org.example.missing"),
+            registrationID: ExtractorRegistrationID(validating: "main"))
+        let row = ExtractorRouteSettingsRow(
+            descriptor: ExtractorRouteDescriptor(
+                route: .canonicalPDF, displayName: "PDF", systemImage: "doc"),
+            savedSelection: .installed(logical),
+            resolvedSelection: .unavailableInstalled(kind: .pdf, reference: logical),
+            choices: [],
+            status: .packageNotInstalled)
+        let first = ExtractorRouteRecoveryPresenter.present(
+            row: row, extractorName: "Missing Extractor", facts: .init())
+        let second = ExtractorRouteRecoveryPresenter.present(
+            row: row, extractorName: "Missing Extractor", facts: .init())
+        // Copy Diagnostics hands out the same value the Technical Details
+        // preview renders: the report must be deterministic, populated, and
+        // within the named bound.
+        #expect(first.diagnosticReport == second.diagnosticReport)
+        #expect(first.diagnosticReport.isEmpty == false)
+        #expect(first.diagnosticReport.count <= ExtractorRouteDiagnosticReport.maximumReportLength)
+    }
+}
+
 #endif

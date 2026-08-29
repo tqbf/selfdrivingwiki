@@ -3443,9 +3443,10 @@ public final class WikiStoreModel {
     /// (`"defuddle"` vs `"html-to-markdown"`) and the version id, surfaced
     /// in the alternatives UI.
     ///
-    /// The process extraction facade resolves the selected adapter. On any
-    /// package failure, the call degrades to `TagBasedHtmlExtractor`.
-    /// `backend == .tagBased` skips the package path entirely.
+    /// The process extraction facade resolves the selected adapter, and that
+    /// adapter runs alone. A failed selection returns nil; nothing substitutes
+    /// another extractor. Without an injected adapter, only an explicit
+    /// `.tagBased` request runs the built-in tag extractor.
     ///
     /// - Returns: the new `SourceMarkdownVersion`, or nil if the source's
     ///   bytes couldn't be read, the extractor returned empty markdown, or
@@ -3811,25 +3812,30 @@ public final class WikiStoreModel {
         }
     }
 
-    /// Pure dispatch from a `HtmlExtractionBackend` value to a concrete
+    /// Pure dispatch from the caller's resolved extractor to a concrete
     /// extractor call. Returns `(markdown, techniqueTag)` so the caller can
     /// stamp the right technique on the processed-markdown version row
     /// (the technique is how the alternatives UI surfaces the producer).
-    /// The process extraction facade supplies the reviewed HTML adapter. On
-    /// failure, this method falls back to `TagBasedHtmlExtractor`.
+    /// The caller injects exactly the adapter its route selection resolved,
+    /// and that adapter runs alone. A failed selected adapter returns empty
+    /// markdown for the caller to treat as a failure; this method never
+    /// substitutes another extractor. Without an injected adapter, only an
+    /// explicit `.tagBased` request runs the built-in tag extractor.
     private static func extractHtml(
         html: String,
         backend: HtmlExtractionBackend,
         using injectedExtractor: (any HtmlMarkdownExtractor)?
     ) async -> (markdown: String, technique: String) {
-        let tagBased = TagBasedHtmlExtractor()
-        if backend == .defuddle,
-           let injected = injectedExtractor,
-           let result = await injected.extract(html: html),
-           !result.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return (result.markdown, Self.defuddleTechnique)
+        let selectedTechnique = backend == .defuddle ? Self.defuddleTechnique : Self.htmlToMarkdownTechnique
+        if let injected = injectedExtractor {
+            guard let result = await injected.extract(html: html),
+                  !result.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return ("", selectedTechnique)
+            }
+            return (result.markdown, selectedTechnique)
         }
-        if let result = await tagBased.extract(html: html),
+        guard backend == .tagBased else { return ("", selectedTechnique) }
+        if let result = await TagBasedHtmlExtractor().extract(html: html),
            !result.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return (result.markdown, Self.htmlToMarkdownTechnique)
         }

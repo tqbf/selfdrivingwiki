@@ -269,11 +269,11 @@ struct FailingWriteCredentialService: CredentialDescribing, CredentialWriting,
     var maximumDescribeBatchSize: Int { 64 }
 
     func set(_ value: String?, for reference: CredentialReference) throws {
-        throw CredentialStoreError.writeFailed(operation: "add", status: -25299)
+        throw CredentialStoreError.writeFailed(status: -25299)
     }
 
     func unset(_ reference: CredentialReference) throws {
-        throw CredentialStoreError.writeFailed(operation: "delete", status: -25299)
+        throw CredentialStoreError.writeFailed(status: -25299)
     }
 
     func resolve(_ reference: CredentialReference) throws -> ResolvedCredential {

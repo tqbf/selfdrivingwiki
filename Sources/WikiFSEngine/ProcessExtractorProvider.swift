@@ -155,11 +155,16 @@ public struct ProcessExtractorProvider: Sendable {
     ) async throws -> ExtractionPreparation {
         let operation = try await prepareOperation(
             kind: .pdf, revision: revision, manifest: manifest)
+        // Backend tag (#1159, plan step 11): the reviewed Docling Serve
+        // lineage pairs with `.doclingServe` — never the interim
+        // `.localPdf2md` tag that predates typed package provenance.
+        let backendTag: ExtractionBackend =
+            revision.packageID == ReviewedExtractorPackages.doclingServe.packageID
+            ? .doclingServe
+            : .localPdf2md
         return ExtractionPreparation(
             extractor: ProcessPackagePDFExtractor(operation: operation),
-            // Interim compatibility tag until Phase 5 installs typed package
-            // provenance; the activity plan producer carries exact identity.
-            backend: .localPdf2md,
+            backend: backendTag,
             modelVersion: nil,
             technique: "package:\(revision.packageID.rawValue)",
             packageProvenance: Self.packageProvenance(
@@ -233,7 +238,11 @@ public struct ProcessExtractorProvider: Sendable {
             at: operationRoot,
             withIntermediateDirectories: false,
             attributes: [.posixPermissions: 0o700])
-        for subdirectory in ["input", "output", "home", "tmp", "cache"] {
+        for subdirectory in ["input", "output", "home", "tmp", "cache",
+                             "credentials", "config"] {
+            // `credentials` and `config` are pre-created owner-private so a
+            // request-scoped subdirectory's parent never inherits umask
+            // defaults (security review L-12).
             try FileManager.default.createDirectory(
                 at: operationRoot.appendingPathComponent(subdirectory, isDirectory: true),
                 withIntermediateDirectories: false,
@@ -278,6 +287,18 @@ public struct ProcessExtractorProvider: Sendable {
             protocolRevision: manifest.protocolRevision,
             mimeTypes: registration.mimeTypes.sorted().map(\.rawValue),
             executor: executor,
+            launchGate: { [admission, catalogReader, revision] in
+                // Final launch-seam TOCTOU gate (PR 3 review HIGH-1): the
+                // request snapshot is immutable by the time this runs; a
+                // removal/revocation here applies to the NEXT execute.
+                guard await admission.isAdmitted(revision) else {
+                    throw ExtractorOperationCredentialError.packageNotAdmitted
+                }
+                let catalog = try catalogReader.read()
+                guard catalog.records.contains(where: { $0.revision == revision }) else {
+                    throw ExtractorOperationCredentialError.unknownRevision
+                }
+            },
             operationCredentials: operationCredentials,
             operationConfiguration: operationConfiguration,
             runtimeSearchPolicy: .standard)
@@ -327,6 +348,11 @@ public final class PreparedProcessOperation: Sendable {
     let sharedModelCacheRoot: URL?
     let mimeTypes: [String]
     let executor: any ManagedProcessExecuting
+    /// Final launch-seam TOCTOU gate (PR 3 review HIGH-1): rechecks
+    /// admission + exact-revision catalog membership immediately before
+    /// `executor.execute`, AFTER the request snapshot is immutable. Nil for
+    /// tests.
+    let launchGate: (@Sendable () async throws -> Void)?
     let operationCredentials: (any ExtractorOperationCredentialResolving)?
     let operationConfiguration:
         (@Sendable (ExtractorPackageRevisionID) -> ExtractorOperationConfiguration?)?
@@ -347,6 +373,7 @@ public final class PreparedProcessOperation: Sendable {
         protocolRevision: ExtractorProtocolRevision,
         mimeTypes: [String],
         executor: any ManagedProcessExecuting,
+        launchGate: (@Sendable () async throws -> Void)?,
         operationCredentials: (any ExtractorOperationCredentialResolving)?,
         operationConfiguration: (@Sendable (ExtractorPackageRevisionID) -> ExtractorOperationConfiguration?)?,
         runtimeSearchPolicy: ExtractorRuntimeSearchPolicy
@@ -365,6 +392,7 @@ public final class PreparedProcessOperation: Sendable {
         self.protocolRevision = protocolRevision
         self.mimeTypes = mimeTypes
         self.executor = executor
+        self.launchGate = launchGate
         self.operationCredentials = operationCredentials
         self.operationConfiguration = operationConfiguration
         self.runtimeSearchPolicy = runtimeSearchPolicy
@@ -462,8 +490,12 @@ public final class PreparedProcessOperation: Sendable {
         let redactor = ExtractorSecretRedactor(
             values: Array(resolvedValues.values))
 
-        // Materialize the private credential file AFTER resolution. From this
-        // point every terminal path must clean it up (defer below).
+        // Materialize the private credential file AFTER resolution. The
+        // cleanup defer arms IMMEDIATELY after the file exists so every
+        // terminal path — including a throw in the configuration block below
+        // — deletes it (AC.14, security review MEDIUM-7). It fires when this
+        // function exits, i.e. after the managed run has terminated and
+        // reaped any child process group.
         if declaresRequirements {
             let envelope = try ExtractorCredentialInputEnvelope(
                 requirements: registration.credentialRequirements,
@@ -479,6 +511,23 @@ public final class PreparedProcessOperation: Sendable {
             try Self.writeOwnerReadOnlyFile(data, at: fileURL)
             credentialFilePath = try ExtractorRelativePath(
                 validating: "credentials/\(name)/input.json")
+        }
+        // AC.14 structural guarantee: armed the moment the credential file
+        // exists, so a throw anywhere later — including the configuration
+        // block below — still deletes it. Fires on success, every error, and
+        // cancellation.
+        defer {
+            for subdirectory in [credentialSubdirectory, configurationSubdirectory]
+            .compactMap({ $0 }) {
+                do {
+                    try FileManager.default.removeItem(at: subdirectory)
+                } catch {
+                    // Value-free diagnostic; the operation-root deinitializer
+                    // remains the final safety net.
+                    DebugLog.extraction(
+                        "Extractor request input cleanup failed (deferred to operation root cleanup).")
+                }
+            }
         }
         if let configuration {
             let subdirectory = directoryRoot
@@ -498,8 +547,6 @@ public final class PreparedProcessOperation: Sendable {
         let requestConfigurationPath = configurationFilePath
         return try await runManaged(
             redactor: redactor,
-            credentialSubdirectory: credentialSubdirectory,
-            configurationSubdirectory: configurationSubdirectory,
             onProgress: onProgress
         ) {
             let inputURL = self.directoryRoot.appendingPathComponent(inputPath)
@@ -535,6 +582,13 @@ public final class PreparedProcessOperation: Sendable {
                     privateCacheRoot: self.cacheRoot,
                     sharedRuntimeCacheRoot: runtimeCacheRoot,
                     sharedModelCacheRoot: modelCacheRoot))
+            // Final launch-seam gate: the LAST thing before spawn, after the
+            // request snapshot is fully constructed (PR 3 review HIGH-1).
+            // Revision-1 prepared operations never re-consult admission
+            // (their pinned-snapshot semantics are preserved).
+            if declaresRequirements, let launchGate = self.launchGate {
+                try await launchGate()
+            }
             let outcome = try await self.executor.execute(managedRequest) { [redactor] (frame: ExtractorProtocolFrame) in
                 if case .progress(let progress) = frame, let message = progress.message {
                     // Package-controlled progress text is redacted before it
@@ -553,10 +607,18 @@ public final class PreparedProcessOperation: Sendable {
                 guard let markdown = String(data: data, encoding: .utf8) else {
                     throw ProcessPackageRunError.invalidOutputEncoding
                 }
-                return ProcessPackageExecutionOutcome(frame: frame, markdown: markdown)
+                // Result-frame article metadata is package-controlled text
+                // that becomes a persisted source filename and reaches the
+                // wiki DB and File Provider — it passes through the redactor
+                // like every other package-controlled string (MEDIUM-5).
+                return ProcessPackageExecutionOutcome(
+                    frame: try Self.redactedResultFrame(frame, redactor: redactor),
+                    markdown: markdown)
             case .failure(let frame):
                 // Terminal failure frames are package-controlled: redact the
-                // message AND warnings before mapping into a user error.
+                // message before mapping into a user error (warnings are not
+                // consumed anywhere, but they are dropped here to keep the
+                // contract explicit).
                 throw ProcessPackageError(
                     message: redactor.redact(
                         ProcessPackageFailureMapper.terminalMessage(frame)))
@@ -566,31 +628,16 @@ public final class PreparedProcessOperation: Sendable {
         }
     }
 
-    /// Shared terminal-path wrapper: catches every thrown error AFTER the
-    /// credential file was materialized, deletes the request-scoped
-    /// credential + configuration subdirectories (AC.14), and rethrows a
-    /// redacted error. On success the cleanup runs too. When a child process
-    /// did launch, the executor has already terminated and reaped the process
-    /// group before this point (Risk 8 ordering).
+    /// Shared terminal-path wrapper: maps every thrown error through the
+    /// request's redactor so a secret that reached stderr, a frame, or a
+    /// launch error cannot escape. Cleanup of request-scoped files is owned
+    /// by `execute`'s defer, which arms the moment the credential file exists
+    /// and therefore covers this entire region.
     fileprivate func runManaged(
         redactor: ExtractorSecretRedactor,
-        credentialSubdirectory: URL?,
-        configurationSubdirectory: URL?,
         onProgress: (@Sendable (String) -> Void)?,
         _ body: @Sendable () async throws -> ProcessPackageExecutionOutcome
     ) async throws -> ProcessPackageExecutionOutcome {
-        defer {
-            for subdirectory in [credentialSubdirectory, configurationSubdirectory].compactMap({ $0 }) {
-                do {
-                    try FileManager.default.removeItem(at: subdirectory)
-                } catch {
-                    // Value-free diagnostic; the operation-root deinitializer
-                    // remains the final safety net.
-                    DebugLog.extraction(
-                        "Extractor request input cleanup failed (deferred to operation root cleanup).")
-                }
-            }
-        }
         do {
             return try await body()
         } catch is CancellationError {
@@ -602,6 +649,43 @@ public final class PreparedProcessOperation: Sendable {
             // reached stderr, a frame, or a launch error cannot escape.
             throw ProcessPackageError(message: redactor.redactedMessage(error))
         }
+    }
+
+    /// Result frames carry package-controlled article metadata (title,
+    /// author, description, published), warnings, and reported tool/model
+    /// strings. Every text field passes through the request's redactor before
+    /// the frame leaves the execution boundary (PR 3 review HIGH-3).
+    ///
+    /// The Markdown OUTPUT is deliberately NOT redacted: it is the extraction
+    /// product the user asked for, and the child legitimately holds the
+    /// values. That is a documented policy exception, not an oversight — a
+    /// package echoing a secret into its result corrupts its own output.
+    static func redactedResultFrame(
+        _ frame: ExtractorResultFrame,
+        redactor: ExtractorSecretRedactor
+    ) throws -> ExtractorResultFrame {
+        let metadata = frame.articleMetadata
+        let redactedMetadata = try metadata.map { article in
+            try ExtractorArticleMetadata(
+                title: article.title.map(redactor.redact),
+                author: article.author.map(redactor.redact),
+                description: article.description.map(redactor.redact),
+                published: article.published.map(redactor.redact),
+                wordCount: article.wordCount)
+        }
+        let reported = frame.metadata
+        let redactedReported = try ExtractorReportedMetadata(
+            toolName: reported.toolName.map(redactor.redact),
+            toolVersion: reported.toolVersion.map(redactor.redact),
+            modelName: reported.modelName.map(redactor.redact),
+            modelVersion: reported.modelVersion.map(redactor.redact))
+        return try ExtractorResultFrame(
+            requestID: frame.requestID,
+            outputPath: frame.outputPath,
+            markdownByteCount: frame.markdownByteCount,
+            warnings: frame.warnings.map(redactor.redact),
+            metadata: redactedReported,
+            articleMetadata: redactedMetadata)
     }
 
     /// Creates a regular owner-read-only (0400) file at `url`. The file is
@@ -641,20 +725,28 @@ public final class PreparedProcessOperation: Sendable {
         guard result == data.count else {
             throw ExtractorDirectoryAdmissionError.preparationFailed
         }
-        try verifyOwnerReadOnlyFile(at: url)
+        try verifyOwnerReadOnlyFile(fd: fd, at: url)
     }
 
-    /// Post-write verification: regular file, owner UID, link count 1, mode
-    /// 0400, and containment within the operation directory layout.
-    static func verifyOwnerReadOnlyFile(at url: URL) throws {
-        var status = stat()
-        guard lstat(url.path, &status) == 0 else {
+    /// Post-write verification, bound to the OPENED inode: fstat of the
+    /// descriptor we wrote through and lstat of the path must name the SAME
+    /// device+inode, so a concurrent same-UID process renaming or replacing
+    /// the path during the write fails verification instead of silently
+    /// approving a different file. Regular file, owner UID, link count 1,
+    /// mode 0400 (PR 3 review HIGH-4).
+    static func verifyOwnerReadOnlyFile(fd: Int32, at url: URL) throws {
+        var viaFD = stat()
+        var viaPath = stat()
+        guard fstat(fd, &viaFD) == 0,
+              lstat(url.path, &viaPath) == 0 else {
             throw ExtractorDirectoryAdmissionError.preparationFailed
         }
-        guard status.st_mode & S_IFMT == S_IFREG,
-              status.st_uid == getuid(),
-              status.st_nlink == 1,
-              status.st_mode & 0o777 == 0o400 else {
+        guard viaFD.st_dev == viaPath.st_dev,
+              viaFD.st_ino == viaPath.st_ino,
+              viaFD.st_mode & S_IFMT == S_IFREG,
+              viaFD.st_uid == getuid(),
+              viaFD.st_nlink == 1,
+              viaFD.st_mode & 0o777 == 0o400 else {
             throw ExtractorDirectoryAdmissionError.preparationFailed
         }
     }

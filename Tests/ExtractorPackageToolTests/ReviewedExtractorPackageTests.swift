@@ -28,15 +28,45 @@ struct ReviewedExtractorPackageTests {
         #expect(output.registrationIDs == ["document"])
     }
 
-    /// The digest is the package's identity. Validation recomputes it from the
-    /// committed bytes, so an unreviewed edit changes it.
+    /// The reviewed Docling Serve package (#1159): manifest revision 2,
+    /// protocol revision 2, one PDF registration declaring the optional
+    /// `api-token` requirement. No secret value and no credential reference
+    /// may appear in the committed bytes.
+    @Test func doclingServePackageValidatesRevisionTwoContract() throws {
+        let output = try validate("DoclingServe")
+
+        #expect(output.packageID == "org.selfdrivingwiki.docling-serve")
+        #expect(output.protocolRevision == 2)
+        #expect(output.registrationIDs == ["document"])
+
+        let manifest = try manifest("DoclingServe")
+        #expect(manifest.manifestRevision == .v2)
+        let requirements = manifest.registrations.flatMap(\.credentialRequirements)
+        #expect(requirements.map(\.id.rawValue) == ["api-token"])
+        #expect(requirements.allSatisfy { $0.isOptional && $0.kind == .secret })
+
+        // Secret-free bytes: the declared requirement is a review fact; a
+        // value or a reference binding must never be committed.
+        let manifestData = try Data(contentsOf: Self.packageURL("DoclingServe")
+            .appendingPathComponent("manifest.json"))
+        let payload = String(decoding: manifestData, as: UTF8.self)
+        #expect(payload.contains("credentialReference") == false)
+        #expect(payload.contains("credential_locations") == false)
+    }
+
     @Test func reviewedDigestsAreStableAcrossRepeatedValidation() throws {
-        for name in ["Defuddle", "Pdf2md"] {
+        for name in ["Defuddle", "Pdf2md", "DoclingServe"] {
             let first = try validate(name)
             let second = try validate(name)
             #expect(first.packageDigest == second.packageDigest)
             #expect(first.packageDigest.count == 64)
         }
+        // The compiled reviewed identity matches the committed bytes (AC.17).
+        // The golden constant lives in WikiFSEngine.ReviewedExtractorPackages;
+        // pinned here byte-for-byte so this tool-target gate fails loudly on
+        // drift even though it cannot import the engine module.
+        #expect(try validate("DoclingServe").packageDigest
+            == "1a47573f0e07699a42f25b27bb300a29437c83489f18f33e1653f3e6192eb658")
     }
 
     /// Revision 1 supports PDF and HTML byte extraction only, and the two

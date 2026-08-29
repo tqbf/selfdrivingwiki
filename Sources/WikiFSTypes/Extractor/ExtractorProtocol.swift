@@ -157,6 +157,15 @@ public struct ExtractorOperationConfiguration: Codable, Hashable, Sendable {
                   endpoint.contains("\0") == false else {
                 throw ExtractorValidationError.invalidManifest("operation endpoint")
             }
+            // Only http/https endpoints are valid targets (security review
+            // HIGH-2): other schemes (file:, data:, ftp:) must never reach a
+            // package's request builder.
+            guard let url = URL(string: endpoint),
+                  let scheme = url.scheme?.lowercased(),
+                  scheme == "http" || scheme == "https",
+                  url.host != nil else {
+                throw ExtractorValidationError.invalidManifest("operation endpoint scheme")
+            }
         }
         if let timeoutMilliseconds {
             guard timeoutMilliseconds > 0,

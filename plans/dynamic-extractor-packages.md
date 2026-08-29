@@ -2,7 +2,7 @@
 
 Implement machine-scoped dynamic extractor packages for byte-backed PDF and HTML sources. Represent each exact validated package revision as a host-generated Cordis plugin while package code runs only in a separate process through a versioned protocol.
 
-Migrate Defuddle and pdf2md into reviewed packages. Preserve existing extraction workflows, configuration, fallbacks, provenance compatibility, and optional Bun and uv behavior.
+Migrate Defuddle and pdf2md into reviewed packages. Preserve existing extraction workflows, configuration, provenance compatibility, and optional Bun and uv behavior. Explicit unavailable selections fail closed.
 
 # Implementation Summary
 
@@ -90,7 +90,7 @@ Primary touch points include:
 4. Add one `progress/` record after each merged phase. Do not add a generic `PROGRESS.md` entry.
 5. Characterize current behavior before composition changes:
    - all built-in PDF backend resolutions;
-   - HTML selection and Defuddle-to-tag-based fallback;
+   - HTML selection and explicit tag-based extraction;
    - queue and direct UI extraction;
    - readiness, setup progress, conversion progress, cancellation, and failure display;
    - backend, model, tool, and technique provenance.
@@ -181,11 +181,11 @@ Primary touch points include:
    - when the new logical field is absent, use the legacy `backend` or `htmlBackend` field unchanged;
    - when the new logical field selects a built-in, that explicit selection wins over the legacy field;
    - when the new logical field selects an installed package, a compatible active exact registration wins over the legacy field;
-   - when that installed selection is unavailable, preserve it, emit one redacted diagnostic, and use the fixed reviewed PDF or tag-based HTML fallback. Do not return to a conflicting legacy third-party choice.
+   - when that installed selection is unavailable, preserve it, emit one redacted diagnostic, and block the route. Do not run another extractor.
 29. Resolve logical installed references from compatible, active exact plugin registrations. Rank by semantic version, then exact revision identity. Never use install or activation order.
 30. Keep all compatible installed revisions mounted. A failed higher version leaves a working lower version available.
-31. Keep reviewed local pdf2md as the PDF fallback and built-in tag-based extraction as the HTML fallback.
-32. Keep an unavailable logical selection saved. Report one redacted diagnostic and use the documented fallback. Never select another third-party package silently.
+31. Keep reviewed local pdf2md when it is the explicit or legacy PDF choice. Keep tag-based extraction when it is the explicit or legacy HTML choice.
+32. Keep an unavailable logical selection saved. Report one redacted diagnostic and require recovery or another explicit selection.
 
 ## Route selections: typed MIME routes
 
@@ -203,7 +203,7 @@ Precedence for a route:
 
 Below both layers, `backend` and `htmlBackend` keep their existing meaning. A config file without `routeExtractors` resolves exactly as before.
 
-Dual-write compatibility. A write through `setExtractorSelection(_:for:)` to a canonical route also updates the matching legacy reference field, so old builds reading `pdfExtractor` or `htmlExtractor` see the same selection. Removal clears the record and the legacy reference, so the legacy fallback applies again. The Settings mapping (`writePDF` / `writeHTML`) keeps owning `backend` and `htmlBackend`.
+Dual-write compatibility. A write through `setExtractorSelection(_:for:)` to a canonical route also updates the matching legacy reference field, so old builds reading `pdfExtractor` or `htmlExtractor` see the same selection. Removal clears the record and the legacy reference, so the legacy backend fields apply again. The Settings mapping (`writePDF` / `writeHTML`) keeps owning `backend` and `htmlBackend`.
 
 Decode resilience. A missing key decodes to an empty list. A malformed record is dropped through the logged decode seam. Duplicate records for one route resolve deterministically: the canonically-greatest record wins, independent of file order, with one bounded diagnostic.
 
@@ -224,7 +224,7 @@ Ordering and deduplication:
 - Choices order like the pickers they replace: prompt (HTML), reviewed package, installed packages by package ID, connected services, built-ins.
 - The reviewed packages attach only to their canonical routes; direct Anthropic and Gemini API choices never appear.
 
-Statuses: available; using a named fixed fallback when a saved installed selection is unavailable; waiting for host service when the selected package has a waiting definition; failed activation when the reconciler retained a failure for it.
+Statuses use a compact typed vocabulary: **Ready**, **Needs setup**, **Not installed**, **Starting**, and **Failed**. A non-ready status opens **Extractor Status** with the cause, blocked-route impact, supported recovery actions, and a redacted diagnostic preview. Settings reports route configuration and lifecycle health. Per-document operation failures remain in Activity.
 
 ## Phase 2: Add the trusted dynamic Cordis plugin host
 
@@ -302,7 +302,7 @@ Statuses: available; using a named fixed fallback when a saved installed selecti
 5. Always provide deterministic locale, operation-private `HOME`, package-private temporary/cache directories, and request correlation values.
 6. Grant shared runtime or model caches only through matching capabilities.
 7. Never inherit credentials, API tokens, provider secrets, wiki database paths, unrelated environment values, or the parent environment wholesale.
-8. Keep Bun and uv optional. A missing runtime returns a typed failure and leaves fallback available.
+8. Keep Bun and uv optional. A missing runtime returns a typed failure. An explicitly selected package does not cause another extractor to run.
 9. Treat runtime executables as user-account-trusted dependencies, not digest-verified package bytes. Keep the ordered resolution locations immutable in host policy, but do not describe user-writable mise shims as immutable executables. Resolve through mise-managed execution paths where practical. Record the absolute runtime path and pre-spawn file identity in bounded diagnostics, then recheck identity immediately before spawn.
 10. Extend or replace `AsyncProcessRunner` with:
    - standard-input data and deterministic EOF;
@@ -317,14 +317,14 @@ Statuses: available; using a named fixed fallback when a saved installed selecti
 12. On cancellation or timeout, verify child identity, send `TERM` to the owned group, wait a named grace period, then send `KILL` to the same verified group.
 13. Keep pure signal targeting in the existing safe seam. Tests signal fixture processes only.
 14. Use structured concurrency for pipe drains, timeout, completion, and cancellation.
-15. Log request ID, exact revision, digest prefix, protocol revision, duration, byte counts, exit cause, and fallback cause through `DebugLog.extraction`. Do not log content, full paths, environment values, credentials, or unbounded stderr.
+15. Log request ID, exact revision, digest prefix, protocol revision, duration, byte counts, and exit cause through `DebugLog.extraction`. Do not log content, full paths, environment values, credentials, or unbounded stderr.
 
 ### Process-backed adapter and operation lifetime
 
 1. Add `ProcessExtractorProvider` for one exact validated revision and managed process service.
 2. Adapt registrations to existing PDF and HTML extraction surfaces. Package scripts do not conform to Swift protocols.
 3. Translate protocol progress to existing queue and UI callbacks.
-4. Map process and protocol failures to typed extraction failures and existing fallbacks.
+4. Map process and protocol failures to typed extraction failures. Do not substitute another extractor after explicit package selection.
 5. During adapter preparation:
    - verify the plugin activation token is still admitted;
    - verify the exact revision remains in the authoritative catalog or reviewed overlay;
@@ -345,7 +345,7 @@ Statuses: available; using a named fixed fallback when a saved installed selecti
 3. Collapse `ExtractionRuntimeFactory` onto the process extraction context. It must not create a private competing `CordisContext` or manual backend resolver after migration.
 4. Keep `MutableExtractionServices` as the stable process facade installed by `ProcessRuntimePlugins.extractionDefinition`. `ExtractionCompositionOwner` owns that same process graph and its reconciler lifecycle. Queue workers, app direct UI, daemon workloads, and per-wiki runtime services resolve the same registry-backed facade instance within their process.
 5. Update `ProcessCompositionInputs`, `ProcessServiceKeys`, `ProductionPluginCatalogs`, profile bundle rows, and boot tests together. Preserve dependency-order independence.
-6. Define CLI scope explicitly. Revision 1 CLI profiles can use exact reviewed bundled Defuddle/pdf2md revisions only. They do not reconcile local imported packages or become catalog writers. If a CLI path observes an installed logical selection, it emits one redacted diagnostic and uses the reviewed built-in fallback.
+6. Define CLI scope explicitly. Revision 1 CLI profiles can use exact reviewed bundled Defuddle and pdf2md revisions only. They do not reconcile local imported packages or become catalog writers. If a CLI path observes an unavailable installed logical selection, it emits one redacted diagnostic and fails closed.
 7. Add composition identity tests that open two wiki profiles and prove one process registry/reconciler/package activation set, while app and daemon still own different registry instances. Prove app direct UI and queue extraction resolve the same package adapter through the same process registry.
 
 ### Generated plugin definition
@@ -421,12 +421,12 @@ Statuses: available; using a named fixed fallback when a saved installed selecti
 4. Put identical reviewed package resources where both app and signed `wikid.xpc` can resolve them. Validate final signed bundle layouts.
 5. Feed reviewed revisions through the same generated plugin factory and reconciler as installed revisions.
 6. Let the app bootstrap reviewed revisions into the machine store. Let both processes use separately verified bundled revisions until publication succeeds.
-7. Make reviewed fallback bypass third-party logical selection and machine-index recursion.
+7. Resolve a reviewed package only when it is the explicit or legacy choice. Never use it to replace an unavailable third-party selection.
 
 ### Defuddle
 
 8. Create one reviewed Bun protocol entry point with pinned Defuddle library code. Do not wrap a second Defuddle CLI process.
-9. Preserve article extraction, metadata, empty-content failure, progress/diagnostics, and tag-based fallback.
+9. Preserve article extraction, metadata, empty-content failure, progress, diagnostics, and explicit tag-based extraction.
 10. Update `tools/defuddle/README.md` with generation, provenance, and protocol tests.
 11. Remove path probing and package-specific process ownership from `DefuddleExtractionService` after all callers use the package plugin.
 
@@ -435,11 +435,11 @@ Statuses: available; using a named fixed fallback when a saved installed selecti
 12. Keep `convert_pdf` decorated with `@beartype`. Preserve the human CLI, PEP 723 metadata, and exit codes.
 13. Add protocol mode to `tools/pdf2md/pdf2md` with progress frames and file-based Markdown output.
 14. Keep PEP 723 and `pyproject.toml` dependencies synchronized.
-15. Preserve readiness, dependency/model setup, progress, cancellation, and raw-source fallback.
-16. Remove package-specific process ownership from `PdfExtractionService` after queue, UI, shutdown, and fallback coverage passes.
+15. Preserve readiness, dependency and model setup, progress, and cancellation.
+16. Remove package-specific process ownership from `PdfExtractionService` after queue, UI, shutdown, and fail-closed coverage passes.
 17. Map old built-in local pdf2md and Defuddle choices to reviewed logical package registrations.
 18. If bootstrap or index preparation fails, run the exact reviewed bundled revision through its generated package plugin in both app and daemon contexts.
-19. Never activate an unexpected reviewed identity or resolve fallback through the same unavailable third-party reference.
+19. Never activate an unexpected reviewed identity or resolve another extractor through an unavailable third-party reference.
 
 ## Phase 7: Add package selection, trust, lifecycle, and inspection UI
 
@@ -449,7 +449,7 @@ Statuses: available; using a named fixed fallback when a saved installed selecti
 4. Show this warning before import: installing an extractor package authorizes executable code to run on this Mac. State that Cordis lifecycle and capabilities do not create a security sandbox.
 5. Show package name, versions, exact digest, registrations, capabilities, runtime, validation state, and redacted diagnostics.
 6. Show Cordis lifecycle states with user terms such as Available, Waiting for Host Service, Failed to Activate, Stopping, and Removing. Keep raw IDs and detailed run history behind disclosure. `Stopped` is an internal/transient inspection state after disposal, not a user-persisted disable setting in revision 1.
-7. Add removal with confirmation. Removal is the only user action that stops an installed revision in revision 1. Preserve sources and logical selections. State that fallback applies.
+7. Add removal with confirmation. Removal is the only user action that stops an installed revision in revision 1. Preserve sources and logical selections. State that a selected route stays blocked until the user chooses another extractor.
 8. Add readiness per registration. It must not download a model without a separate explicit action.
 9. Keep forms compact and use progressive disclosure.
 10. Use semantic text styles, system colors, and standard controls. Give each import, selection, readiness, and removal control a stable accessibility identifier, accessible name, state value where applicable, and keyboard path.
@@ -474,7 +474,7 @@ Statuses: available; using a named fixed fallback when a saved installed selecti
 1. Add `docs/architecture/extractor-script-protocol.md` as the normative protocol reference.
 2. Add `docs/architecture/extractor-package-manifest.md` as the normative package and digest reference.
 3. Add `docs/architecture/dynamic-extractor-cordis-lifecycle.md` for durable-catalog reconciliation, generated plugin identity, activation, stop, undefine, inspection, operation pinning, and app/daemon independence.
-4. Add `docs/user-guide/extractor-packages.md` for import, selection, trust, lifecycle states, fallback, runtime setup, diagnostics, and removal.
+4. Add `docs/user-guide/extractor-packages.md` for import, selection, trust, lifecycle states, fail-closed recovery, runtime setup, diagnostics, and removal.
 5. Cross-link renderer packages without claiming a shared execution or security model.
 6. Update `docs/user-guide/README.md`, `README.md` where needed, `PLAN.md`, `plans/architecture.md`, `plans/cordis-extraction-services.md`, `plans/mise-toolchain.md`, and tool READMEs.
 7. Add `docs/skills/extractor-package-maintainer/SKILL.md` with manifest, validation, protocol, capability, reviewed-package, and lifecycle-inspection references.
@@ -510,9 +510,9 @@ Statuses: available; using a named fixed fallback when a saved installed selecti
 - **AC.10:** Each process reconciles durable catalog generations independently. One failed package does not block others, a failed new version leaves older versions available, stale generations cannot restore removed admission, and app/daemon handles never cross processes.
 - **AC.11:** One package plugin activates all declared extraction registrations atomically. Failed activation rolls back all registrations, and a stale batch disposer cannot remove a newer registration.
 - **AC.12:** `ExtractionBackendRegistry` is the sole adapter authority for built-in and package PDF/HTML extraction. `ExtractionRuntimeFactory` has no manual second resolver.
-- **AC.13:** Existing PDF, HTML, and transcript behavior remains compatible. Missing, failed, removed, or incompatible third-party packages preserve selection and use non-recursive reviewed or tag-based fallback.
-- **AC.14:** Defuddle runs as a reviewed generated package plugin and preserves article extraction, metadata, empty-content behavior, and tag-based fallback.
-- **AC.15:** pdf2md runs as a reviewed generated package plugin while preserving `convert_pdf`, CLI, PEP 723, readiness, setup, progress, cancellation, and fallback.
+- **AC.13:** Legacy defaults and explicit built-in choices remain compatible. An unavailable explicit installed selection stays selected and fails closed in app and daemon preparation.
+- **AC.14:** Defuddle runs as a reviewed generated package plugin and preserves article extraction, metadata, empty-content behavior, and explicit tag-based selection.
+- **AC.15:** pdf2md runs as a reviewed generated package plugin while preserving `convert_pdf`, CLI, PEP 723, readiness, setup, progress, and cancellation.
 - **AC.16:** Settings can import, inspect, select, check readiness, and remove packages with executable-code warning and accessible native controls. Removal shows stopping/removing progress; revision 1 has no persistent Stop/Start control.
 - **AC.17:** A prepared extraction pins one exact validated snapshot and provenance. Plugin stop, package removal, or catalog refresh cannot change or terminate that operation, while full context shutdown cancels it.
 - **AC.18:** Activity plan version 1 stores exact package revision, registration, protocol, and tool/model metadata. Existing and unknown producers retain compatible fallback without SQLite migration.
@@ -537,9 +537,9 @@ Use Swift Testing for new Swift suites. Mark subprocess, signed-service, and mul
 | AC.10 | `ExtractorPluginReconcilerTests.testReconcilesCatalogGeneration`; `testOneFailedRevisionDoesNotBlockOthers`; `testFailedHigherVersionLeavesLowerVersionAvailable`; `testSameLineageVersionsRemainActiveAndRankDeterministically`; `testStaleGenerationCannotRestoreAdmission`; `testRemovalClosesAdmissionBeforeCleanup`; `testReconcileDoesNotDuplicateWaitingRun`; `testIndependentAppAndDaemonHostsShareNoHandles`; real daemon-before-bootstrap and concurrent publication scenarios. |
 | AC.11 | `ExtractionBackendRegistryBatchTests.testBatchCommitsAtomically`; `testSameLineageRevisionsUseDistinctExactKeys`; `testLogicalQueryReturnsBothCompatibleRevisions`; `testCollisionCommitsNothing`; `testActivationFailureRollsBackBatch`; `testStaleBatchDisposerCannotRemoveNewerToken`; `testPluginStopWaitsForPreparationQuiescence`. |
 | AC.12 | `ExtractionRuntimeFactoryTests.testRegistryIsSingleResolverForBuiltInAndPackageAdapters`; `ExtractionCompositionIdentityTests.testTwoWikiProfilesShareOneProcessRegistryAndReconciler`; `testAppUIAndQueueResolveThroughSameProcessRegistry`; `testAppAndDaemonUseDifferentProcessRegistries`; `ExtractionBackendAuthorityAuditTests.testNoSecondConstructionSwitch`; built-in and consumer-call-site exhaustiveness tests. |
-| AC.13 | Existing extraction, queue, HTML, plugin, runtime, and transcript suites; `ExtractionConfigSelectionTests.testLegacyPDFBackendAppliesWhenLogicalFieldIsAbsent`; `testLegacyHTMLBackendAppliesWhenLogicalFieldIsAbsent`; `testResolvableLogicalSelectionOverridesLegacyBackend`; `InstalledExtractorFallbackTests` for missing, invalid, failed, and removed revisions; `testUnavailableLogicalSelectionUsesFixedFallbackInsteadOfConflictingLegacyBackend`; `testThirdPartyFallbackCannotRecurse`; `CLIExtractionScopeTests.testReviewedPackagesWorkWithoutLocalCatalogReconciliation`; `testInstalledLogicalSelectionLogsOnceAndUsesReviewedFallback`; app/daemon reviewed-snapshot tests for bootstrap failure, missing/corrupt index, and conflicting machine record. |
-| AC.14 | `DefuddleExtractorPackageTests.testReviewedIdentityAndGeneratedPlugin`; article fixture, metadata, empty content, protocol progress, and tag-based fallback tests. |
-| AC.15 | `PdfExtractorPackageTests.testReviewedIdentityAndGeneratedPlugin`; Python protocol success/progress/setup/empty-output tests; CLI and API compatibility; package cancellation and fallback tests. |
+| AC.13 | Existing extraction, queue, HTML, plugin, runtime, and transcript suites; legacy-default and explicit-built-in selection tests; `ExtractionConfigTests.unavailableExplicitSelectionResolvesAsUnavailable`; fail-closed PDF and HTML preparation tests; reviewed Docling lineage tests; app and daemon process-service parity. |
+| AC.14 | `DefuddleExtractorPackageTests.testReviewedIdentityAndGeneratedPlugin`; article fixture, metadata, empty content, protocol progress, explicit tag-based selection, and fail-closed package failure tests. |
+| AC.15 | `PdfExtractorPackageTests.testReviewedIdentityAndGeneratedPlugin`; Python protocol success, progress, setup, and empty-output tests; CLI and API compatibility; package cancellation and fail-closed tests. |
 | AC.16 | `ExtractionSettingsPackagePickerTests.testAcceptsOneDirectoryOnly`; `ExtractionSettingsPackageHostedTests.testLogicalSelectionSurvivesUnavailableRevision`; `testImportDisclosureShowsExecutableCodeWarning`; `testLifecycleDetailsAndRemovalProgressAreVisible`; `testReadinessDoesNotDownloadModels`; `testImportControlsHaveAccessibilityLabelsAndKeyEquivalents`; `testLifecycleControlsExposeAccessibleNamesAndValues`. Run a manual VoiceOver smoke test for import, selection, readiness, and removal because hosted tests validate the accessibility contract but cannot validate spoken announcements. |
 | AC.17 | `InstalledExtractorSnapshotTests.testPluginStopDoesNotChangePreparedOperation`; `testRemovalDoesNotChangeSnapshotOrProvenance`; `testCatalogRefreshAffectsOnlyFuturePreparation`; `testFullContextShutdownCancelsManagedOperation`; real multiprocess removal-during-preparation scenario. |
 | AC.18 | `ExtractionActivityPlanCodecTests.testVersion1InstalledPackageRoundTrips`; existing v1 and legacy fixtures; `testUnknownProducerPreservesAllOuterFields`; parameterized malformed-installed payload tests that preserve every valid outer field; `ExtractionWriterContractTests.testInstalledPackageAllowsToolAndReportedModelMetadata`; `testInstalledPackageRejectsProviderID`; parameterized incompatible-field rejection tests; normalized-column fallback and projection tests. |
@@ -587,7 +587,7 @@ Create:
 - `docs/architecture/extractor-script-protocol.md` for protocol revision 1;
 - `docs/architecture/extractor-package-manifest.md` for manifest, digest, modes, capabilities, and compatibility;
 - `docs/architecture/dynamic-extractor-cordis-lifecycle.md` for durable catalog versus process graph, generated definition identity, reconciliation, activation, stop, undefine, inspection, failure isolation, and operation pinning;
-- `docs/user-guide/extractor-packages.md` for import, selection, trust, lifecycle, fallback, runtime setup, diagnostics, and removal;
+- `docs/user-guide/extractor-packages.md` for import, selection, trust, lifecycle, fail-closed recovery, runtime setup, diagnostics, and removal;
 - `docs/skills/extractor-package-maintainer/SKILL.md` and focused references;
 - machine-readable schema and fixture corpus.
 
@@ -615,7 +615,7 @@ State consistently:
 - app and daemon reconcile independent process-local graphs;
 - package import is local-directory-only and machine-scoped;
 - Bun and uv remain optional;
-- fallback is reviewed and non-recursive;
+- an unavailable explicit extractor selection stays selected and fails closed;
 - package bytes never enter a wiki or File Provider.
 
 # Risks, Blockers, and Required Decisions
@@ -658,3 +658,36 @@ Known execution risks:
 12. **Accessibility validation:** Hosted tests can verify labels, values, identifiers, focusability, and key equivalents. They cannot verify VoiceOver speech or focus order. Run and record the manual VoiceOver smoke script before release.
 13. **Provenance compatibility:** Do not force package identity into closed `ExtractionBackend`. Keep typed execution provenance end to end.
 13. **Working tree:** Leave the unrelated untracked `mise.lock` untouched.
+
+## Issue #1159 — manifest/protocol revision 2 and credential authorization
+
+Implemented on top of this plan (see
+[`plans/credential-service.md`](plans/credential-service.md) for the full
+design):
+
+- **Manifest revision 2** adds registration-scoped credential requirement
+  declarations (`id`/`kind`/`optional`/`label`/`purpose`). Revision 1
+  decoding, canonical JSON, and package digests are unchanged; revision 1
+  rejects the new key outright. Requirement IDs are unique across the whole
+  manifest, so package lineage + requirement ID is an unambiguous
+  authorization identity.
+- **Protocol revision 2** adds optional RELATIVE request paths for a private
+  credential input file and a public operation-configuration file. Values
+  never ride stdin JSON or environment variables. Revision 1 requests keep
+  their exact old shape.
+- **Authorization** binds one package lineage + one requirement to one
+  credential reference, pinned to a fingerprint of the normalized contract.
+  A newer revision inherits the grant only while the fingerprint is
+  unchanged; Settings states this rule before approval. The app is the only
+  writer; the daemon reads the same bindings. Removing a package never
+  deletes a grant.
+- **Per-operation injection:** every execute rechecks admission, catalog
+  membership, authorization, and values; the request-scoped 0400 credential
+  file lives inside the private operation root and is deleted on every
+  terminal path; package-controlled strings are redacted through the
+  request's values before reaching host diagnostics or UI.
+- **Reviewed Docling Serve package** (`org.selfdrivingwiki.docling-serve`,
+  manifest/protocol revision 2) replaces the retired in-process adapter. The
+  legacy `.doclingServe` selection maps to this lineage; the optional token
+  is the existing `extraction.docling-serve-token` Keychain item and reaches
+  the package only after explicit authorization.

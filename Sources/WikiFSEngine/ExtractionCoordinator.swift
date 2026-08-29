@@ -30,11 +30,19 @@ public struct ExtractionPreparation: Sendable {
 
 public enum ExtractionServicesError: Error, Equatable, Sendable, LocalizedError {
     case unavailable
+    /// An explicit installed extractor selection has no executable registration.
+    /// This value contains only the route and logical package identity.
+    case selectedExtractorUnavailable(
+        route: ExtractorRouteID,
+        reference: LogicalExtractorReference)
 
     public var errorDescription: String? {
         switch self {
         case .unavailable:
             return "Extraction services are unavailable."
+        case .selectedExtractorUnavailable(let route, let reference):
+            return "The selected \(route.kind.rawValue.uppercased()) extractor "
+                + "\(reference.packageID.rawValue) is unavailable. Open Extraction Settings to fix this route or choose another extractor."
         }
     }
 }
@@ -112,6 +120,12 @@ public actor MutableExtractionServices: ExtractionServices {
 
     public func prepare(backendOverride: ExtractionBackend?) async throws -> ExtractionPreparation {
         try await installed.prepare(backendOverride: backendOverride)
+    }
+
+    public func prepareHTML(
+        backendOverride: HtmlExtractionBackend?
+    ) async throws -> any HtmlMarkdownExtractor {
+        try await installed.prepareHTML(backendOverride: backendOverride)
     }
 }
 
@@ -197,10 +211,15 @@ private final class LegacyExtractionServices: ExtractionServices {
         case .localPdf2md:
             extractor = localExtractorFactory()
         case .acp:
-            extractor = ACPExtractionClient.resolveProvider(
+            // An absent provider is an unavailable selection: fail closed
+            // instead of substituting the retired in-process adapter.
+            guard let provider = ACPExtractionClient.resolveProvider(
                 containerDirectory: containerDirectory,
                 acpProviderId: configuration.acpProviderId,
-                acpCredentialStore: acpCredentialStore) ?? localExtractorFactory()
+                acpCredentialStore: acpCredentialStore) else {
+                throw ExtractionServicesError.unavailable
+            }
+            extractor = provider
         case .anthropic:
             extractor = AnthropicExtractionClient(
                 model: configuration.anthropicModel,
@@ -216,10 +235,12 @@ private final class LegacyExtractionServices: ExtractionServices {
                     ?? ExtractionDefaultURL.gemini,
                 fetcher: fetcher)
         case .doclingServe:
-            extractor = DoclingServeClient(
-                endpoint: configuration.doclingServeEndpoint ?? "",
-                apiToken: credentialStore.secret(.doclingServeToken),
-                fetcher: fetcher)
+            // #1159 (PR 4 review HIGH-2): the legacy extraction coordinator
+            // must not keep a direct Docling execution path — Docling runs
+            // through the reviewed revision 2 package, whose lineage receives
+            // the token only after explicit authorization. This legacy seam
+            // fails closed instead.
+            throw ExtractionServicesError.unavailable
         }
         let modelVersion: String? = switch backend {
         case .anthropic: configuration.anthropicModel

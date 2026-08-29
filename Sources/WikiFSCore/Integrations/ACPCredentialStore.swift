@@ -136,8 +136,8 @@ public struct KeychainACPCredentialStore: ACPCredentialStore {
             try KeychainCredentialService().set(value, for: reference)
         } catch let error as CredentialStoreError {
             switch error {
-            case .writeFailed(let operation, let status):
-                throw ACPKeychainError(operation: "\(operation)(\(errorAccount))", status: status)
+            case .writeFailed(let status):
+                throw ACPKeychainError(operation: "write(\(errorAccount))", status: status)
             default:
                 throw ACPKeychainError(operation: "write(\(errorAccount))", status: -1)
             }

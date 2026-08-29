@@ -158,6 +158,14 @@ public enum ExtractorPackagePluginDefinitionFactory {
                 ExtractionServiceKeys.packageSourceLocator)
             let operationCredentialResolver = try await activation.require(
                 ExtractionServiceKeys.operationCredentialResolver)
+            // Public, non-secret operation configuration (#1159): the
+            // reviewed Docling Serve package reads its endpoint + timeout
+            // from typed host settings through the configuration envelope.
+            let isDoclingServe = revision.packageID == ReviewedExtractorPackages.doclingServe.packageID
+            let doclingConfigurationProvider = isDoclingServe
+                ? Self.doclingOperationConfigurationProvider(
+                    appGroupRoot: layout.appGroupContainerRoot)
+                : nil
             let provider = ProcessExtractorProvider(
                 layout: layout,
                 catalogReader: catalogReader,
@@ -166,7 +174,8 @@ public enum ExtractorPackagePluginDefinitionFactory {
                 sourceLocator: sourceLocator,
                 sharedRuntimeCacheRoot: layout.root.appendingPathComponent("runtime-cache", isDirectory: true),
                 sharedModelCacheRoot: layout.root.appendingPathComponent("model-cache", isDirectory: true),
-                operationCredentials: operationCredentialResolver)
+                operationCredentials: operationCredentialResolver,
+                operationConfiguration: doclingConfigurationProvider)
 
             // Build every registration factory before mutating the registry.
             var entries: [ExtractionBatchEntry] = []
@@ -233,7 +242,9 @@ public enum ExtractorPackagePluginDefinitionFactory {
     }
 
     private static func validate(_ manifest: ExtractorManifest) throws {
-        guard manifest.protocolRevision == .v1 else {
+        // #1159: protocol revision 2 (credential-declaring requests) is
+        // supported alongside revision 1.
+        guard manifest.protocolRevision == .v1 || manifest.protocolRevision == .v2 else {
             throw FactoryError.unsupportedProtocol(manifest.protocolRevision)
         }
         for registration in manifest.registrations {
@@ -258,6 +269,26 @@ public enum ExtractorPackagePluginDefinitionFactory {
 
     private static let identityDigestLength = 32
     private static let legacyPlaceholderKey = ExtractionBackendKey(kind: .pdf, backendID: "placeholder")
+
+    /// The host-owned PUBLIC operation-configuration provider for the
+    /// reviewed Docling Serve package: endpoint + timeout from typed
+    /// settings — never a credential (#1159).
+    static func doclingOperationConfigurationProvider(
+        appGroupRoot: URL
+    ) -> @Sendable (ExtractorPackageRevisionID) -> ExtractorOperationConfiguration? {
+        { _ in
+            let configuration = ExtractionConfig.load(from: appGroupRoot)
+            // The typed fields are bounded; the envelope constructor rejects
+            // out-of-policy values, and a malformed configuration degrades to
+            // "no operation configuration" (the package then reports a clear
+            // setup failure instead of inheriting a wrong endpoint).
+            // swiftlint:disable:next silent_try_optional
+            return try? ExtractorOperationConfiguration(
+                endpoint: configuration.doclingServeEndpoint,
+                timeoutMilliseconds:
+                    configuration.effectiveDoclingServeTimeoutMilliseconds)
+        }
+    }
 }
 
 extension String {

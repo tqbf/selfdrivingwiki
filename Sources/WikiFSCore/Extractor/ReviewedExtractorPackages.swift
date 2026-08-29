@@ -1,6 +1,5 @@
 #if os(macOS)
 import Foundation
-import WikiFSCore
 import WikiFSTypes
 
 // pattern: Imperative Shell
@@ -43,7 +42,13 @@ public enum ReviewedExtractorPackages {
         version: "1.0.0",
         digest: "126a7d20f2381e90f8d44811b73ee933a43c948f1bbcb53e45b413fcceff3079")
 
-    public static let all: [ReviewedExtractorPackage] = [defuddle, pdf2md]
+    public static let doclingServe = make(
+        directoryName: "DoclingServe",
+        packageID: "org.selfdrivingwiki.docling-serve",
+        version: "1.0.0",
+        digest: "1a47573f0e07699a42f25b27bb300a29437c83489f18f33e1653f3e6192eb658")
+
+    public static let all: [ReviewedExtractorPackage] = [defuddle, pdf2md, doclingServe]
 
     /// Locates the reviewed payload. `Bundle.main` resolves in both hosts:
     /// `build.sh` copies the same tree into the application resources and into

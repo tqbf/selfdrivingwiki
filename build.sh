@@ -199,15 +199,24 @@ write_id_sidecar "${BUILD_DIR}"
 # wikid.xpc` so it's sealed into the daemon bundle. (#887 follow-up.)
 mkdir -p "${DAEMON_XPC_CONTENTS}/Resources"
 write_id_sidecar "${DAEMON_XPC_CONTENTS}/Resources"
-# Copy identical reviewed extractor package resources into the app and wikid XPC.
-# The signed feasibility probe resolves only the XPC-owned copy. Future reviewed
-# packages use this same bundle shape.
+# Copy identical reviewed extractor package resources into the app and wikid
+# XPC. The reviewed packages (Defuddle, pdf2md, Docling Serve) MUST ship in
+# both bundles: the compiled reviewed overlay admits only those bundled
+# revisions, and the app bootstrap publishes them into the machine catalog on
+# first launch. Without them the routes fail closed as Not installed. The
+# signed feasibility fixture ships alongside them for the opt-in signed-XPC
+# gate, with its fixture binary injected below.
 EXTRACTOR_PACKAGES_SRC="ExtractorPackages"
 APP_EXTRACTOR_PACKAGES="${RESOURCES_DIR}/ExtractorPackages"
 DAEMON_EXTRACTOR_PACKAGES="${DAEMON_XPC_CONTENTS}/Resources/ExtractorPackages"
 mkdir -p "${APP_EXTRACTOR_PACKAGES}" "${DAEMON_EXTRACTOR_PACKAGES}"
-cp -R "${EXTRACTOR_PACKAGES_SRC}/SignedWikiDExtractorFixture" "${APP_EXTRACTOR_PACKAGES}/"
-cp -R "${EXTRACTOR_PACKAGES_SRC}/SignedWikiDExtractorFixture" "${DAEMON_EXTRACTOR_PACKAGES}/"
+for package_dir in "${EXTRACTOR_PACKAGES_SRC}"/*; do
+  [ -d "${package_dir}" ] || continue
+  package_name="$(basename "${package_dir}")"
+  cp -R "${package_dir}" "${APP_EXTRACTOR_PACKAGES}/"
+  cp -R "${package_dir}" "${DAEMON_EXTRACTOR_PACKAGES}/"
+  echo "  ✓ bundled extractor package ${package_name}"
+done
 for package_root in \
   "${APP_EXTRACTOR_PACKAGES}/SignedWikiDExtractorFixture" \
   "${DAEMON_EXTRACTOR_PACKAGES}/SignedWikiDExtractorFixture"; do

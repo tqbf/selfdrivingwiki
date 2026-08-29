@@ -103,17 +103,18 @@ struct WikiStoreModelHtmlExtractionTests {
         #expect(headFromStore?.id == head.id)
     }
 
-    // MARK: - AC.6 — Defuddle fallback when the reviewed package is unavailable
+    // MARK: - AC.6 — an unavailable selected extractor fails closed
 
-    @Test func extractHtmlWithDefuddleDegradesToTagBasedWhenPackageUnavailable() async throws {
+    @Test func extractHtmlWithoutResolvedExtractorFailsClosed() async throws {
         let (store, model, sourceID) = try modelWithHTMLSource()
 
+        // The caller could not resolve the selected extractor (the package
+        // is unavailable): no version is written, and nothing substitutes
+        // tag-based extraction for the failed selection.
         let version = await model.extractHtml(for: sourceID, backend: .defuddle)
 
-        let head = try #require(version)
-        #expect(head.origin == .extraction)
-        #expect(head.technique == "html-to-markdown")
-        #expect(!head.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        #expect(version == nil)
+        #expect(try store.processedMarkdownHead(sourceID: sourceID) == nil)
         _ = store
     }
 

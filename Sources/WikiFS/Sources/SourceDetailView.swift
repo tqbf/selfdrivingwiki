@@ -76,6 +76,9 @@ struct SourceDetailView: View {
     /// Caret position in the editor, for outline cursor tracking (issue #268).
     @State private var caretCharIndex: Int?
     @State private var isExtracting = false
+    /// User-facing cause when HTML extraction fails closed (an unavailable
+    /// explicit selection blocks the route; nothing substitutes itself).
+    @State private var htmlExtractionError: String?
     /// True while a podcast transcription (re-fetch via the signing-helper
     /// pipeline) is in flight (issue #799 PR4). Sibling of `isExtracting`
     /// (PDF/HTML Extract) and `isRefreshing` (Refresh) — the three gates
@@ -462,6 +465,16 @@ struct SourceDetailView: View {
         // inspector claims its persisted width. Matches PageDetailView and
         // ChatDetailView's minimum detail-column contract.
         .frame(minWidth: PageEditorMetrics.detailMinWidth)
+        .alert(
+            "Extraction Unavailable",
+            isPresented: Binding(
+                get: { htmlExtractionError != nil },
+                set: { if !$0 { htmlExtractionError = nil } }),
+            presenting: htmlExtractionError) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { message in
+            Text(message)
+        }
         .onAppear {
             refreshSourceBytesSnapshot()
             headVersion = store.processedMarkdownHead(for: file)
@@ -483,6 +496,7 @@ struct SourceDetailView: View {
             flushEditIfDirty()
             isEditing = false
             isExtracting = false
+            htmlExtractionError = nil
             isRefreshing = false
             refreshError = nil
             showReingestConfirmation = false
@@ -1472,21 +1486,22 @@ struct SourceDetailView: View {
     /// HTML bytes, resolves the reviewed package extractor, and writes the
     /// result via
     /// `appendProcessedMarkdown` (same write path as `enrichWithDefuddle`).
-    /// Uses the configured `store.htmlBackend` if set. Otherwise it uses
-    /// `.defuddle`, with tag-based fallback when the package is unavailable.
+    /// Uses the configured route selection. An unavailable explicit selection
+    /// blocks extraction until the user fixes it in Extraction Settings.
     private func runHtmlExtraction() async {
         isExtracting = true
         defer {
             isExtracting = false
         }
         let backend = store.htmlBackend ?? .defuddle
-        let extractor: (any HtmlMarkdownExtractor)?
+        let extractor: any HtmlMarkdownExtractor
         do {
-            extractor = try await extractionCoordinator.prepareHTML(backendOverride: backend)
+            extractor = try await extractionCoordinator.prepareHTML(backendOverride: nil)
         } catch {
-            DebugLog.extraction(
-                "HTML extractor preparation failed; using tag-based fallback")
-            extractor = nil
+            DebugLog.extraction("HTML extractor preparation failed: \(error.localizedDescription)")
+            htmlExtractionError = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+            return
         }
         if let head = await store.extractHtml(
             for: file.id,
@@ -1510,7 +1525,17 @@ struct SourceDetailView: View {
         defer {
             isExtracting = false
         }
-        if let head = await store.extractHtml(for: file.id, backend: backend) {
+        // The override is the user's explicit backend choice for this run.
+        let extractor: any HtmlMarkdownExtractor
+        do {
+            extractor = try await extractionCoordinator.prepareHTML(backendOverride: backend)
+        } catch {
+            DebugLog.extraction("HTML extractor preparation failed: \(error.localizedDescription)")
+            htmlExtractionError = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+            return
+        }
+        if let head = await store.extractHtml(for: file.id, backend: backend, extractor: extractor) {
             headVersion = head
         }
     }

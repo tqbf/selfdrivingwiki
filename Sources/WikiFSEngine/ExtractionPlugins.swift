@@ -133,32 +133,11 @@ public enum GeminiExtractionPlugin {
     }
 }
 
-public enum DoclingExtractionPlugin {
-    public static let id = PluginID("wiki.extraction.docling")
-    public static let key = ExtractionBackendKey(kind: .pdf, backendID: ExtractionBackend.doclingServe.rawValue)
-
-    public static func definition(
-        readCredential: @escaping ExtractionPluginFactory.CredentialReader,
-        fetcher: any HTTPRequestFetcher
-    ) -> PluginDefinition {
-        PluginDefinition(
-            id: id,
-            label: "Docling Serve extraction",
-            dependencies: [ServiceDependency(ExtractionServiceKeys.backends)],
-            config: DoclingExtractionAdapterConfig.self
-        ) { config in
-            try adapterComponent(label: "wiki.extraction.docling", key: key) {
-                .pdf(ExtractionPreparation(
-                    extractor: DoclingServeClient(
-                        endpoint: config.endpoint,
-                        apiToken: readCredential(.doclingServeToken),
-                        fetcher: fetcher),
-                    backend: .doclingServe,
-                    modelVersion: nil))
-            }
-        }
-    }
-}
+// `DoclingExtractionPlugin` was REMOVED (#1159, plan step 15): Docling Serve
+// runs through the reviewed revision 2 extractor package. The legacy
+// `.doclingServe` selection maps to that lineage in
+// `ProcessExtractionServices.prepare`; `DoclingServeClient` remains only as
+// the shared request implementation behind the Settings connection test.
 
 public enum DefuddleExtractionPlugin {
     public static let id = PluginID("wiki.extraction.defuddle")

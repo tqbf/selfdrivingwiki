@@ -84,6 +84,7 @@ private func makeOperation(
         protocolRevision: manifest.protocolRevision,
         mimeTypes: ["application/pdf"],
         executor: executor,
+        launchGate: nil,
         operationCredentials: resolver,
         operationConfiguration: configuration,
         runtimeSearchPolicy: .standard)
@@ -418,8 +419,14 @@ struct ProcessExtractorCredentialTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let url = root.appendingPathComponent("input.json")
         try SelfTestSupport.writeWithMode(data: Data("{}".utf8), url: url, mode: 0o644)
+        // Verification is now descriptor-bound (fstat + lstat dev/ino): a
+        // 0644 file re-opened for reading fails the mode and ownership
+        // checks exactly as before, through the new signature.
+        let fd = open(url.path, O_RDONLY)
+        #expect(fd >= 0)
+        defer { close(fd) }
         #expect(throws: ExtractorDirectoryAdmissionError.self) {
-            _ = try PreparedProcessOperation.verifyOwnerReadOnlyFile(at: url)
+            _ = try PreparedProcessOperation.verifyOwnerReadOnlyFile(fd: fd, at: url)
         }
     }
 }

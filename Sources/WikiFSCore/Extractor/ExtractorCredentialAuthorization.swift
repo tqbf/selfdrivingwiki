@@ -139,14 +139,18 @@ public actor ExtractorCredentialAuthorizationWriter {
     }
 
     /// The locked RMW core: acquire the kernel + in-process locks, reload the
-    /// newest snapshot, apply the record mutation with a generation check,
-    /// and atomically replace the file with owner-only permissions.
+    /// newest snapshot (a corrupt or unreadable store ABORTS the mutation —
+    /// it is never destructively reseeded, PR 2 review HIGH-C), apply the
+    /// record mutation, publish the replacement through a temp file created
+    /// O_EXCL at mode 0600 and verified via fstat before rename (PR 2 review
+    /// HIGH-B: chmod-after-rename left an unguaranteed window and logged
+    /// failures as successes). All under the lock.
     private func mutate(
         _ body: @Sendable (ExtractorCredentialAuthorizationSnapshot) -> [ExtractorCredentialAuthorizationRecord]
     ) async throws -> ExtractorCredentialAuthorizationSnapshot {
         let descriptor = try await acquireLock()
         defer { releaseLock(descriptor) }
-        let current = readSnapshotLocked()
+        let current = try readSnapshotLocked()
             ?? ExtractorCredentialAuthorizationSnapshot.empty
         let records = body(current)
         let updated = ExtractorCredentialAuthorizationSnapshot(
@@ -164,25 +168,84 @@ public actor ExtractorCredentialAuthorizationWriter {
                 "ExtractorCredentialAuthorizationWriter: encode failed: \(error)")
             throw ExtractorCredentialAuthorizationStoreError.writeFailed
         }
-        try data.write(to: layout.fileURL, options: .atomic)
-        // Owner-only permissions on the persisted store (it is secret-free,
-        // but its references reveal which credentials the user granted).
-        do {
-            try FileManager.default.setAttributes(
-                [.posixPermissions: 0o600], ofItemAtPath: layout.fileURL.path)
-        } catch {
-            DebugLog.store(
-                "ExtractorCredentialAuthorizationWriter: chmod failed: \(error)")
-        }
+        try publishAtomicallyOwnerOnly(data)
         return updated
     }
 
-    /// Locked reload with generation-conflict detection helper: returns the
-    /// decoded snapshot after validating it is well-formed.
-    private func readSnapshotLocked() -> ExtractorCredentialAuthorizationSnapshot? {
-        // Absent file = empty store (never authorized), not an error.
-        // swiftlint:disable:next silent_try_optional
-        guard let data = try? Data(contentsOf: layout.fileURL) else { return nil }
+    /// Writes `data` to a temp file created O_CREAT | O_EXCL | O_NOFOLLOW at
+    /// mode 0600, verifies the OPENED inode via fstat (regular file, owner,
+    /// exactly 0600), fsyncs, then renames over the live store. Any failure
+    /// leaves the previous store untouched and throws instead of publishing.
+    private func publishAtomicallyOwnerOnly(_ data: Data) throws {
+        let temporaryURL = layout.fileURL
+            .deletingLastPathComponent()
+            .appendingPathComponent(
+                ".\(layout.fileURL.lastPathComponent).tmp-\(UUID().uuidString.lowercased())")
+        let fd = temporaryURL.path.withCString {
+            open($0, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
+        }
+        guard fd >= 0 else {
+            DebugLog.store(
+                "ExtractorCredentialAuthorizationWriter: temp store creation failed: errno \(errno)")
+            throw ExtractorCredentialAuthorizationStoreError.writeFailed
+        }
+        defer { close(fd) }
+        let written: Int = data.withUnsafeBytes { raw in
+            guard var pointer = raw.baseAddress else { return -1 }
+            var remaining = raw.count
+            var total = 0
+            while remaining > 0 {
+                let count = write(fd, pointer, remaining)
+                if count <= 0 { return -1 }
+                total += count
+                pointer += count
+                remaining -= count
+            }
+            return total
+        }
+        guard written == data.count else {
+            DebugLog.store(
+                "ExtractorCredentialAuthorizationWriter: temp store write failed.")
+            throw ExtractorCredentialAuthorizationStoreError.writeFailed
+        }
+        var status = stat()
+        guard fstat(fd, &status) == 0,
+              status.st_mode & S_IFMT == S_IFREG,
+              status.st_uid == getuid(),
+              status.st_mode & 0o777 == 0o600 else {
+            DebugLog.store(
+                "ExtractorCredentialAuthorizationWriter: temp store mode verification failed.")
+            throw ExtractorCredentialAuthorizationStoreError.writeFailed
+        }
+        guard fsync(fd) == 0 else {
+            DebugLog.store(
+                "ExtractorCredentialAuthorizationWriter: temp store fsync failed: errno \(errno)")
+            throw ExtractorCredentialAuthorizationStoreError.writeFailed
+        }
+        // rename(2) atomically replaces the live file — no delete window.
+        guard rename(temporaryURL.path, layout.fileURL.path) == 0 else {
+            DebugLog.store(
+                "ExtractorCredentialAuthorizationWriter: rename failed: errno \(errno)")
+            throw ExtractorCredentialAuthorizationStoreError.writeFailed
+        }
+    }
+
+    /// Locked reload. Returns `nil` ONLY for a confirmed-absent file (the
+    /// never-authorized state). A read failure or malformed snapshot THROWS:
+    /// treating it as empty would let the next grant destructively replace
+    /// the complete authorization history (PR 2 review HIGH-C). The corrupt
+    /// bytes are preserved for diagnosis.
+    private func readSnapshotLocked() throws -> ExtractorCredentialAuthorizationSnapshot? {
+        let data: Data
+        do {
+            data = try Data(contentsOf: layout.fileURL)
+        } catch let error as NSError where error.code == NSFileReadNoSuchFileError {
+            return nil
+        } catch {
+            DebugLog.store(
+                "ExtractorCredentialAuthorizationWriter: store read failed; mutation aborted: \(error)")
+            throw ExtractorCredentialAuthorizationStoreError.writeFailed
+        }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         do {
@@ -190,8 +253,8 @@ public actor ExtractorCredentialAuthorizationWriter {
                 ExtractorCredentialAuthorizationSnapshot.self, from: data)
         } catch {
             DebugLog.store(
-                "ExtractorCredentialAuthorizationWriter: corrupt store, reseeding: \(error)")
-            return nil
+                "ExtractorCredentialAuthorizationWriter: corrupt store; mutation aborted (bytes preserved): \(error)")
+            throw ExtractorCredentialAuthorizationStoreError.writeFailed
         }
     }
 

@@ -23,6 +23,9 @@ public enum ResolvedExtractionSelection: Hashable, Sendable {
     case pdfBuiltIn(ExtractionBackend)
     case htmlBuiltIn(HtmlExtractionBackend)
     case installed(kind: ExtractorKind, reference: ExtractorReference)
+    /// The saved installed selection has no compatible active registration.
+    /// The logical identity stays selected and no other extractor may run.
+    case unavailableInstalled(kind: ExtractorKind, reference: LogicalExtractorReference)
     case noHTMLSelection
 }
 
@@ -80,7 +83,7 @@ public enum ExtractorSelectionResolver {
                 return ExtractionSelectionDecision(selection: .installed(kind: .pdf, reference: exact))
             }
             return ExtractionSelectionDecision(
-                selection: .pdfBuiltIn(.localPdf2md),
+                selection: .unavailableInstalled(kind: .pdf, reference: logicalReference),
                 diagnostic: .unavailableInstalled(logicalReference))
         }
     }
@@ -115,7 +118,7 @@ public enum ExtractorSelectionResolver {
                 return ExtractionSelectionDecision(selection: .installed(kind: .html, reference: exact))
             }
             return ExtractionSelectionDecision(
-                selection: .htmlBuiltIn(.tagBased),
+                selection: .unavailableInstalled(kind: .html, reference: logicalReference),
                 diagnostic: .unavailableInstalled(logicalReference))
         }
     }
@@ -127,7 +130,9 @@ public enum ExtractorSelectionResolver {
     ) -> ExtractorReference? {
         activeRegistrations
             .filter {
-                $0.protocolRevision == .v1
+                // #1159: protocol revision 2 registrations are selectable
+                // alongside revision 1.
+                ($0.protocolRevision == .v1 || $0.protocolRevision == .v2)
                     && $0.kinds.contains(kind)
                     && $0.reference.revision.packageID == logicalReference.packageID
                     && $0.reference.registrationID == logicalReference.registrationID

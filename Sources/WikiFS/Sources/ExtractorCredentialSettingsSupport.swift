@@ -80,27 +80,39 @@ enum ExtractorCredentialSettingsSupport {
     }
 
     /// The host's binding policy for one requirement: WHICH stored credential
-    /// the package would receive. Today: a package that declares
-    /// `api-token` for PDF binds to the legacy Docling Serve token reference;
-    /// everything else gets a package-scoped reference under the shared
-    /// credential service. Values never pass through here — references only.
+    /// the package would receive. Values never pass through here — references
+    /// only.
+    ///
+    /// Legacy bindings are reserved for their reviewed lineages (HIGH-1,
+    /// security review): a package ID other than the reviewed Docling Serve
+    /// lineage can never bind to `extraction.docling-serve-token`, no matter
+    /// what it names its requirement. Everything else gets a package-scoped
+    /// reference under the shared credential service, keyed by a SHA-256
+    /// prefix of the package ID (injective, unlike dot-flattening — L-9).
     static func bindingReference(
         for summary: ExtractorCredentialRequirementSummary
     ) -> CredentialReference? {
-        if summary.requirementID == "api-token" {
+        let packageID = summary.packageID
+        if packageID == ReviewedExtractorPackages.doclingServe.packageID.rawValue,
+           summary.requirementID == "api-token" {
             return CredentialReference.extraction(.doclingServeToken)
         }
-        // Package-scoped NEW reference: flatten the (dotted) package ID into
-        // one grammar-valid label. The flattening is deterministic; reviewed
-        // packages are identified by their lineage and legacy bindings take
-        // precedence above.
-        let flattened = summary.packageID
-            .lowercased()
-            .map { character -> Character in
-                character == "." ? "-" : character
-            }
+        // Package-scoped NEW reference: the package ID is hashed into one
+        // grammar-valid label, so two distinct lineages can never collide on
+        // one reference.
+        let digest = ExtractorSHA256.digest(Data(packageID.utf8)).hex
+        let hashedLabel = String(digest.prefix(32))
         return CredentialReference(validatingLabels: [
-            "extractor-package", String(flattened), summary.requirementID.lowercased(),
+            "extractor-package", hashedLabel, summary.requirementID.lowercased(),
         ])
+    }
+
+    /// The stored credential a grant for `summary` would bind, by reference
+    /// identity (never a value) — surfaced in the consent dialog so the user
+    /// sees WHICH stored credential is being shared (MEDIUM-8).
+    static func boundReferenceName(
+        for summary: ExtractorCredentialRequirementSummary
+    ) -> String? {
+        bindingReference(for: summary)?.rawValue
     }
 }

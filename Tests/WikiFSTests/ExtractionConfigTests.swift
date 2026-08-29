@@ -271,20 +271,20 @@ struct ExtractionConfigTests {
         #expect(decision.diagnostic == nil)
     }
 
-    @Test func unavailableInstalledSelectionUsesFixedFallbackAndPreservesChoice() throws {
+    @Test func unavailableExplicitSelectionResolvesAsUnavailable() throws {
         let logical = LogicalExtractorReference(
             packageID: try ExtractorPackageID(validating: "org.example.missing"),
             registrationID: try ExtractorRegistrationID(validating: "main"))
         let htmlOnly = try activeRegistration(logical: logical, version: "9.0.0", digestByte: 9, kinds: [.html])
         let pdfConfig = ExtractionConfig(backend: .gemini, pdfExtractor: .installed(logical))
         let pdf = ExtractorSelectionResolver.resolvePDF(configuration: pdfConfig, activeRegistrations: [htmlOnly])
-        #expect(pdf.selection == .pdfBuiltIn(.localPdf2md))
+        #expect(pdf.selection == .unavailableInstalled(kind: .pdf, reference: logical))
         #expect(pdf.diagnostic == .unavailableInstalled(logical))
         #expect(pdfConfig.pdfExtractor == .installed(logical))
 
         let htmlConfig = ExtractionConfig(htmlBackend: .defuddle, htmlExtractor: .installed(logical))
         let html = ExtractorSelectionResolver.resolveHTML(configuration: htmlConfig, activeRegistrations: [])
-        #expect(html.selection == .htmlBuiltIn(.tagBased))
+        #expect(html.selection == .unavailableInstalled(kind: .html, reference: logical))
         #expect(html.diagnostic == .unavailableInstalled(logical))
         #expect(htmlConfig.htmlExtractor == .installed(logical))
     }
@@ -484,7 +484,7 @@ struct ExtractionConfigTests {
     /// AC.4: PDF/HTML resolution produces the same decision whether a selection
     /// is expressed as a legacy reference field or an equivalent route record,
     /// and a route record overrides a conflicting legacy field. Unavailable
-    /// installed selections keep the exact fixed fallback and diagnostic.
+    /// installed selections keep the logical identity and diagnostic.
     @Test func routeResolutionMatchesLegacyEntryPoints() throws {
         let logical = LogicalExtractorReference(
             packageID: try ExtractorPackageID(validating: "org.example.pdf"),
@@ -504,12 +504,12 @@ struct ExtractionConfigTests {
         #expect(recordPDF.selection == .installed(kind: .pdf, reference: pdfOnly.reference))
         #expect(recordPDF.diagnostic == nil)
 
-        // Unavailable installed via a route record: fixed fallback + diagnostic,
-        // identical to the legacy expression of the same selection.
+        // An unavailable installed route record stays unavailable with the same
+        // diagnostic as the equivalent legacy selection.
         config.pdfExtractor = nil
         let unavailableRecord = config
         let unavailablePDF = ExtractorSelectionResolver.resolvePDF(configuration: unavailableRecord, activeRegistrations: [])
-        #expect(unavailablePDF.selection == .pdfBuiltIn(.localPdf2md))
+        #expect(unavailablePDF.selection == .unavailableInstalled(kind: .pdf, reference: logical))
         #expect(unavailablePDF.diagnostic == .unavailableInstalled(logical))
         let legacyUnavailable = ExtractionConfig(
             backend: .acp,
