@@ -294,6 +294,31 @@ struct ExtractionRouteTableHostedTests {
         #expect(source.contains("Text(\"Transcripts\")"))
     }
 
+    @Test("picker options show only extractor names")
+    func pickerOptionsHideImplementationCategories() throws {
+        let route = ExtractorRouteID.canonicalPDF
+        let logical = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.example.extractor"),
+            registrationID: try ExtractorRegistrationID(validating: "main"))
+        let cases: [(ExtractorRouteSourceCategory, ExtractionBackendReference?, String)] = [
+            (.reviewedPackage, .installed(logical), "Reviewed Extractor"),
+            (.installedPackage, .installed(logical), "Installed Extractor"),
+            (.connectedService, .builtIn(.pdf(.acp)), "ACP Provider"),
+            (.builtIn, .builtIn(.html(.tagBased)), "Tag-based"),
+            (.prompt, nil, "No default (ask each time)"),
+            (.unavailable, .installed(logical), "Missing Extractor"),
+        ]
+
+        for (category, reference, name) in cases {
+            let choice = ExtractorRouteChoice(
+                route: route,
+                reference: reference,
+                displayName: name,
+                category: category)
+            #expect(ExtractionSettingsView.optionLabel(choice) == name)
+        }
+    }
+
     /// A stale installed selection stays selected and blocks the route after a
     /// persisted-file round trip.
     @Test("a stale installed selection persists and remains unavailable")

@@ -930,21 +930,10 @@ struct ExtractionSettingsView: View {
         return "\(selectedName), \(recoveryPresentation(for: row).shortStatusLabel)"
     }
 
-    /// The picker's option caption, matching the pickers this table replaced:
-    /// "name — source".
+    /// The picker shows the extractor name. Status and recovery surfaces
+    /// explain setup and availability without exposing implementation types.
     static func optionLabel(_ choice: ExtractorRouteChoice) -> String {
-        "\(choice.displayName) — \(sourceName(choice.category))"
-    }
-
-    static func sourceName(_ category: ExtractorRouteSourceCategory) -> String {
-        switch category {
-        case .reviewedPackage: "Reviewed package"
-        case .installedPackage: "Installed package"
-        case .connectedService: "Connected service"
-        case .builtIn: "Built in"
-        case .prompt: "Prompt"
-        case .unavailable: "Not installed"
-        }
+        choice.displayName
     }
 
     /// Rebuilds the rows and the derived per-route selections from the current
