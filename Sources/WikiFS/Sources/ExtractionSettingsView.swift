@@ -275,11 +275,10 @@ struct ExtractionSettingsView: View {
             TableColumn("Status") { (row: ExtractorRouteSettingsRow) in
                 statusLabel(row)
             }
-            // Status is primary information sized to its longest string
-            // ("Waiting for host service") — it must never truncate
-            // (macos-design visual-design + typography-designer guidance).
-            // The flexible Default-extractor column absorbs remaining space.
-            .width(min: 180, ideal: 200)
+            // Status is a semantic-colored icon + short label — compact by
+            // design (PR 4 review follow-up: the long phrase truncated, so
+            // the icon carries the state and the short text never wraps).
+            .width(min: 110, ideal: 120)
             TableColumn("Configuration") { (row: ExtractorRouteSettingsRow) in
                 if let dialog = configurationDialog(for: row) {
                     Button("Configure…") {
@@ -375,26 +374,49 @@ struct ExtractionSettingsView: View {
         }
     }
 
+    /// Status renders as a semantic-colored icon + SHORT label so the cell
+    /// never truncates in the fixed-height table. Each state has a distinct
+    /// icon shape, satisfying Differentiate Without Color; the full state
+    /// text is the accessibility label, and the fallback detail (what
+    /// actually runs) rides in the tooltip.
     @ViewBuilder
     private func statusLabel(_ row: ExtractorRouteSettingsRow) -> some View {
         switch row.status {
         case .available:
-            Text("Available")
-                .foregroundStyle(.secondary)
+            statusBadge(
+                color: .green, symbol: "checkmark.circle.fill",
+                shortText: "Available", status: row.status)
         case .usingFallback(let description):
-            Label("Using fallback", systemImage: "arrow.triangle.swap")
-                .foregroundStyle(.orange)
+            statusBadge(
+                color: .orange, symbol: "arrow.triangle.swap",
+                shortText: "Fallback", status: row.status)
                 .help(description)
         case .notInstalled:
-            Text("Not installed")
-                .foregroundStyle(.orange)
+            statusBadge(
+                color: .orange, symbol: "minus.circle",
+                shortText: "Not installed", status: row.status)
         case .waitingForHostService:
-            Label("Waiting for host service", systemImage: "clock")
-                .foregroundStyle(.orange)
+            statusBadge(
+                color: .yellow, symbol: "clock",
+                shortText: "Waiting", status: row.status)
         case .failedActivation:
-            Label("Failed to activate", systemImage: "exclamationmark.triangle")
-                .foregroundStyle(.red)
+            statusBadge(
+                color: .red, symbol: "xmark.octagon",
+                shortText: "Failed", status: row.status)
         }
+    }
+
+    private func statusBadge(
+        color: Color, symbol: String, shortText: String,
+        status: ExtractorRouteStatus
+    ) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: symbol)
+                .foregroundStyle(color)
+            Text(shortText)
+        }
+        .fixedSize()
+        .accessibilityLabel(Self.statusText(status))
     }
 
     private func accessibilityValue(_ row: ExtractorRouteSettingsRow) -> String {
