@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import WikiFSTypes
 
 // Provider environment secrets (issue #1159, plans/credential-service.md).
@@ -155,12 +156,20 @@ public struct AgentProviderCredentialMigrationReport: Equatable, Sendable {
     /// The provider id / variable could not form a typed reference; plaintext
     /// preserved untouched.
     public var unmappable: [AgentProviderCredentialMigrationEntry] = []
+    /// The locked sidecar persist failed after resolutions succeeded: the
+    /// file was NOT rewritten, so plaintext remains and the next launch
+    /// retries. The Keychain writes already succeeded (they become duplicate
+    /// removals on retry), but the migration must not report a clean state
+    /// until the removal is durable (PR 1 review, MEDIUM).
+    public var commitFailed: Bool = false
 
     public init() {}
 
-    /// True when the sidecar holds no plaintext secrets after this pass.
+    /// True when the migration needs operator attention. Successful
+    /// migrations/duplicate-removals are clean; conflicts, failures,
+    /// unmappable entries, and commit failures are not.
     public var isClean: Bool {
-        conflicts.isEmpty && failures.isEmpty && unmappable.isEmpty
+        conflicts.isEmpty && failures.isEmpty && unmappable.isEmpty && !commitFailed
     }
 }
 
@@ -245,15 +254,79 @@ public enum AgentProviderCredentialMigrator {
     }
 
     /// Scan + migrate (see the type's doc comment for the full contract).
+    ///
+    /// The ENTIRE cycle — raw-byte scan, Keychain writes, and the secret-
+    /// stripping persist — runs inside `store.mutate`'s lock (security review
+    /// follow-up, PR 1 HIGH): scanning outside the lock allowed a plaintext
+    /// entry added between scan and persist to be stripped by the decoded
+    /// write without ever being migrated. Keychain operations inside the
+    /// lock are bounded (single-digit ms per item). When any entry cannot be
+    /// resolved (conflict/failure/unmappable), the mutation THROWS a private
+    /// sentinel so `mutate` does not write — the sidecar keeps every
+    /// plaintext byte and the next launch retries.
     public static func migrateIfNeeded(
         directory: URL,
         store: AgentProvidersConfigStore,
         credentials: CredentialDescribing & CredentialWriting & CredentialResolving
     ) async -> AgentProviderCredentialMigrationReport {
-        var report = AgentProviderCredentialMigrationReport()
-        let entries = rawPlaintextEntries(at: directory)
-        guard !entries.isEmpty else { return report }
+        // Fast pre-scan purely to skip the common clean case without taking
+        // the sidecar lock or bumping its generation.
+        guard !rawPlaintextEntries(at: directory).isEmpty else {
+            return AgentProviderCredentialMigrationReport()
+        }
 
+        let reportBox = Mutex<AgentProviderCredentialMigrationReport?>(nil)
+        do {
+            // The mutation body is @Sendable and must return a config; the
+            // report crosses back through a locked box (Synchronization.Mutex
+            // — no @unchecked Sendable needed).
+            _ = try await store.mutate { config in
+                // INSIDE the lock: re-scan the raw bytes of the file this
+                // mutation will replace. The decode→write pair strips known
+                // secret variables, so every plaintext entry present at this
+                // instant must be resolved (migrated) before that write may
+                // happen — otherwise it is preserved by aborting.
+                let entries = rawPlaintextEntries(at: directory)
+                guard !entries.isEmpty else { return config }
+                let outcome = migrateEntries(
+                    entries: entries, credentials: credentials)
+                reportBox.withLock { $0 = outcome.report }
+                if outcome.anyChange, outcome.allResolved {
+                    // The decoded config has already dropped the secrets, so
+                    // this write is exactly "the removal", still under lock.
+                    return config
+                }
+                // Conflicts/failures/unmappable: abort the write so the
+                // sidecar keeps every plaintext byte untouched.
+                throw MigrationDeferred()
+            }
+        } catch is MigrationDeferred {
+            // Expected for conflicted/failed entries: the file is preserved.
+        } catch {
+            // The locked mutation failed (e.g. lock timeout or write error):
+            // the sidecar is untouched, every plaintext entry is preserved,
+            // and the next launch retries. Value-free diagnostic. The report
+            // records the commit failure so `isClean` stays false (PR 1
+            // review, MEDIUM).
+            DebugLog.store(
+                "AgentProvider credential migration: locked mutation failed: \(error)")
+            reportBox.withLock { report in
+                report?.commitFailed = true
+            }
+        }
+        return reportBox.withLock { $0 } ?? AgentProviderCredentialMigrationReport()
+    }
+
+    /// Thrown inside the locked mutation to abort the persist while keeping
+    /// the sidecar byte-identical. Never escapes `migrateIfNeeded`.
+    private struct MigrationDeferred: Error {}
+
+    /// The locked migration decisions over one raw entry batch.
+    private static func migrateEntries(
+        entries: [RawSidecarEntry],
+        credentials: CredentialDescribing & CredentialWriting & CredentialResolving
+    ) -> (report: AgentProviderCredentialMigrationReport, anyChange: Bool, allResolved: Bool) {
+        var report = AgentProviderCredentialMigrationReport()
         var anyChange = false
         var allResolved = true
         for entry in entries {
@@ -298,23 +371,6 @@ public enum AgentProviderCredentialMigrator {
                 allResolved = false
             }
         }
-
-        // Persist the secret-free sidecar only when EVERY entry resolved —
-        // the decoded config has already dropped the secrets, so this write
-        // is exactly "the removal", under the sidecar lock.
-        if anyChange, allResolved {
-            do {
-                let committed = try await store.mutate { config in config }
-                DebugLog.store(
-                    "AgentProvider credential migration: persisted secret-free sidecar (generation \(committed.generation), \(report.migrated.count) migrated, \(report.removedDuplicates.count) duplicates removed)")
-            } catch {
-                // The locked write failed: the sidecar keeps its plaintext
-                // and the next launch retries. Keychain already holds the
-                // values, so the retry reports duplicates-and-removes.
-                DebugLog.store(
-                    "AgentProvider credential migration: locked persist failed: \(error)")
-            }
-        }
-        return report
+        return (report, anyChange, allResolved)
     }
 }

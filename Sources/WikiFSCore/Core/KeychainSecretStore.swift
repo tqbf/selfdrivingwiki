@@ -92,7 +92,7 @@ public enum KeychainSecretStore {
         let status = SecItemCopyMatching(query as CFDictionary, &item)
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess else {
-            throw CredentialStoreError.readFailed(operation: "read", status: status)
+            throw CredentialStoreError.readFailed(status: status)
         }
         guard let data = item as? Data else { return nil }
         // An empty (or non-UTF8) item is absence, not a value: `resolve` never

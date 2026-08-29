@@ -89,12 +89,13 @@ owner-read-only file that is deleted as soon as the request ends.
 2. In **Settings** → **Extraction**, select **Docling Serve** as the PDF
    default extractor and set the **Endpoint** (and optionally a
    **Timeout**; the default is 600 seconds).
-3. If your server was started with `DOCLING_SERVE_API_KEY`, paste the token
-   once and press **Save Token**. It is stored in your Keychain and is never
-   displayed again.
-4. Press **Authorize…** on the **Docling Serve API token** requirement in
-   **Package Credentials**. Until you authorize, a Docling selection shows
-   its needs-authorization state and the extraction does not run.
+4. If your server was started with `DOCLING_SERVE_API_KEY`, paste the token
+   once and press **Save Token** (it is stored in your Keychain and is never
+   displayed again), then press **Authorize…** on the **Docling Serve API
+   token** requirement in **Package Credentials**. The token is optional:
+   without it the package sends no auth header, which works with open
+   servers; servers that require `X-Api-Key` reject the request until you
+   authorize the stored token.
 5. Use **Test Connection** to verify the endpoint. The stored token is never
    returned to the settings window.
 

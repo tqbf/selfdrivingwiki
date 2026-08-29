@@ -52,8 +52,8 @@ public struct KeychainZoteroCredentialStore: ZoteroCredentialStore {
                 CredentialValue.normalized(key), for: .zoteroAPIKey())
         } catch let error as CredentialStoreError {
             switch error {
-            case .writeFailed(let operation, let status):
-                throw ZoteroKeychainError(operation: operation, status: status)
+            case .writeFailed(let status):
+                throw ZoteroKeychainError(operation: "write", status: status)
             default:
                 throw ZoteroKeychainError(operation: "write", status: -1)
             }

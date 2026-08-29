@@ -11,32 +11,34 @@ import WikiFSTypes
 struct DoclingExecutionScopeAuditTests {
 
     /// Engine sources must not construct `DoclingServeClient` nor register a
-    /// host Docling execution backend.
+    /// host Docling execution backend. The watch list is the ENTIRE engine
+    /// module directory (PR 4 review HIGH-2: a hard-coded file list let a
+    /// bypass survive in a file that was not listed).
     @Test func noProductionHostAdapterOrDirectConstruction() throws {
-        let engineFiles = [
-            "Sources/WikiFSEngine/ProcessExtractionServices.swift",
-            "Sources/WikiFSEngine/ExtractionRuntimeFactory.swift",
-            "Sources/WikiFSEngine/ExtractionPlugins.swift",
-            "Sources/WikiFSEngine/ProcessExtractorProvider.swift",
-        ]
+        let engineDirectory = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/WikiFSEngine", isDirectory: true)
         let forbidden = [
             "DoclingServeClient(",
-            "apiToken: input.readCredential(.doclingServeToken)",
-            "apiToken: readCredential(.doclingServeToken)",
+            "readCredential(.doclingServeToken)",
+            "secret(.doclingServeToken)",
         ]
-        let root = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        for relative in engineFiles {
-            let source = try String(
-                contentsOf: root.appendingPathComponent(relative), encoding: .utf8)
+        let enumerator = FileManager.default.enumerator(
+            at: engineDirectory, includingPropertiesForKeys: nil)
+        var checked = 0
+        while let file = enumerator?.nextObject() as? URL {
+            guard file.pathExtension == "swift" else { continue }
+            checked += 1
+            let source = try String(contentsOf: file, encoding: .utf8)
             for needle in forbidden {
                 #expect(
                     source.contains(needle) == false,
-                    "\(relative) must not construct a host Docling execution path: \(needle)")
+                    "\(file.lastPathComponent) must not construct a host Docling execution path: \(needle)")
             }
         }
+        #expect(checked > 10, "expected to scan the engine module sources")
     }
 
     /// The legacy `.doclingServe` selection maps to the reviewed lineage in

@@ -23,7 +23,7 @@ Issue #1159 PR 4, branch `feature/docling-serve-extractor-package`
   and emits bounded frames — never printing headers, credential input, or
   token-bearing errors.
 - Compiled reviewed identity
-  `org.selfdrivingwiki.docling-serve 1.0.0` digest `e072e3bd…`; validated by
+  `org.selfdrivingwiki.docling-serve 1.0.0` digest `1a47573f…`; validated by
   the real validator in `ReviewedExtractorPackageTests` with the digest
   pinned byte-for-byte.
 - Routing: `ProcessExtractionServices.reviewedDoclingLogical`; the legacy
@@ -32,10 +32,11 @@ Issue #1159 PR 4, branch `feature/docling-serve-extractor-package`
   backend tag (never the interim `.localPdf2md` tag); the route host catalog
   presents Docling as a reviewed package choice.
 - Host bypass removal: the built-in Docling registry entry, the
-  `.doclingServe` case in `ExtractionRuntimeFactory`, and
-  `DoclingExtractionPlugin` are gone; `DoclingServeClient` remains only
-  behind the Settings connection test. Enforced by
-  `DoclingExecutionScopeAuditTests` source contracts.
+  `.doclingServe` case in `ExtractionRuntimeFactory`, the
+  `ExtractionCoordinator` legacy Docling path, and `DoclingExtractionPlugin`
+  are gone; `DoclingServeClient` remains only behind the Settings connection
+  test. Enforced by `DoclingExecutionScopeAuditTests` source contracts
+  scanning the entire engine module directory.
 - Public settings: typed `doclingServeTimeoutMilliseconds` on
   `ExtractionConfig` (600 s compatibility default, deterministic Codable),
   a Settings timeout field, and a per-lineage operation-configuration

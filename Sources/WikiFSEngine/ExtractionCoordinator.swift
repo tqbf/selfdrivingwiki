@@ -216,10 +216,12 @@ private final class LegacyExtractionServices: ExtractionServices {
                     ?? ExtractionDefaultURL.gemini,
                 fetcher: fetcher)
         case .doclingServe:
-            extractor = DoclingServeClient(
-                endpoint: configuration.doclingServeEndpoint ?? "",
-                apiToken: credentialStore.secret(.doclingServeToken),
-                fetcher: fetcher)
+            // #1159 (PR 4 review HIGH-2): the legacy extraction coordinator
+            // must not keep a direct Docling execution path — Docling runs
+            // through the reviewed revision 2 package, whose lineage receives
+            // the token only after explicit authorization. This legacy seam
+            // fails closed instead.
+            throw ExtractionServicesError.unavailable
         }
         let modelVersion: String? = switch backend {
         case .anthropic: configuration.anthropicModel

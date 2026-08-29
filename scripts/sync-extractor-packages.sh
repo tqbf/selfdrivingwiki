@@ -462,6 +462,18 @@ if ! diff -r -q "${STAGE}/Pdf2md" "${PACKAGES_DIR}/Pdf2md" >/dev/null 2>&1; then
   status=1
 fi
 
+# DoclingServe is generated (copy + generated entry point), so --check
+# regenerates and compares bytes directly, like Pdf2md (PR 4 review
+# MEDIUM-4: source-lock comparison alone cannot prove generated files are
+# current).
+generate_docling_package "${STAGE}/DoclingServe"
+if ! diff -r -q "${STAGE}/DoclingServe" "${PACKAGES_DIR}/DoclingServe" >/dev/null 2>&1; then
+  echo "error: ${PACKAGES_DIR}/DoclingServe is stale" >&2
+  diff -r -q "${STAGE}/DoclingServe" "${PACKAGES_DIR}/DoclingServe" >&2 || true
+  echo "       run: scripts/sync-extractor-packages.sh" >&2
+  status=1
+fi
+
 if [[ $status -eq 0 ]]; then
   echo "✓ extractor packages are current"
 fi

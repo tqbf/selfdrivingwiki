@@ -103,6 +103,22 @@ def _read_optional_json(path: str | None) -> dict | None:
 
 def run(request_text: str) -> int:
     try:
+        return _run_guarded(request_text)
+    except Exception:  # noqa: BLE001 — final boundary: a bounded frame, never a traceback
+        # Any unexpected package-side failure must surface as a bounded
+        # failure frame. A raw interpreter traceback could echo header values
+        # (including the token) or operation paths to stderr (security
+        # review MEDIUM-5).
+        try:
+            _fail("", "extraction-failure",
+                  "The Docling Serve extractor failed unexpectedly.")
+        except Exception:  # noqa: BLE001
+            pass
+        return 0
+
+
+def _run_guarded(request_text: str) -> int:
+    try:
         request = json.loads(request_text)
     except json.JSONDecodeError:
         _fail("", "invalid-request", "The request was not valid JSON.")
@@ -148,14 +164,34 @@ def run(request_text: str) -> int:
     file_bytes = input_path.read_bytes()
     filename = _sanitize_filename(str(request.get("originalFilename") or "source.pdf"))
     mime_type = mimetypes.guess_type(filename)[0] or "application/pdf"
-    part = (
+    # The established Docling Serve wire contract (mirroring the host's
+    # DoclingServeClient): scalar form fields `to_formats=md` and
+    # `from_formats=pdf` BEFORE the file part, and the Markdown is returned
+    # as `document.md_content`.
+    scalar_parts = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="to_formats"\r\n\r\n'
+        "md\r\n"
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="from_formats"\r\n\r\n'
+        "pdf\r\n"
+    )
+    file_part = (
         f"--{boundary}\r\n"
         f'Content-Disposition: form-data; name="files"; filename="{filename}"\r\n'
         f"Content-Type: {mime_type}\r\n\r\n"
     ).encode("utf-8") + file_bytes + f"\r\n--{boundary}--\r\n".encode("utf-8")
+    part = scalar_parts.encode("utf-8") + file_part
 
     headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
     if token:
+        # urllib raises ValueError (echoing the value) for control characters
+        # in header values; validate first so the token can never reach a
+        # traceback (security review MEDIUM-5).
+        if any(ord(character) < 32 or ord(character) == 127 for character in token):
+            _fail(request_id, "setup",
+                  "The stored token contains control characters and cannot be used.")
+            return 0
         headers["X-Api-Key"] = token
 
     http_request = urllib.request.Request(
@@ -185,7 +221,10 @@ def run(request_text: str) -> int:
     document = payload.get("document") if isinstance(payload, dict) else None
     markdown = ""
     if isinstance(document, dict):
-        markdown = str(document.get("markdown_content") or "")
+        # The single-file contract returns md_content; markdown_content is
+        # accepted only as a documented compatibility alias.
+        markdown = str(document.get("md_content")
+                       or document.get("markdown_content") or "")
     elif isinstance(payload, str):
         markdown = payload
     if not markdown:

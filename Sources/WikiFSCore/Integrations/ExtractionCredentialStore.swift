@@ -97,8 +97,8 @@ public struct KeychainExtractionCredentialStore: ExtractionCredentialStore {
                 CredentialValue.normalized(value), for: reference)
         } catch let error as CredentialStoreError {
             switch error {
-            case .writeFailed(let operation, let status):
-                throw ExtractionKeychainError(operation: "\(operation)(\(accountName))", status: status)
+            case .writeFailed(let status):
+                throw ExtractionKeychainError(operation: "write(\(accountName))", status: status)
             default:
                 throw ExtractionKeychainError(operation: "write(\(accountName))", status: -1)
             }

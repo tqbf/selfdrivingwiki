@@ -63,6 +63,36 @@ struct ReviewedDoclingLegacyMappingTests {
         await services.shutdown()
     }
 
+    /// The legacy selection is preserved in the route record but the mapped
+    /// reviewed lineage refuses to resolve silently: a Docling selection
+    /// whose lineage is unavailable fails closed instead of falling back to
+    /// pdf2md (PR 4 review HIGH-3, plan step 12).
+    @Test func unavailableDoclingLineageFailsClosedInsteadOfSwappingPackages() async throws {
+        let environment = try Environment.make(
+            configuration: { configuration in
+                configuration.backend = .doclingServe
+            })
+        defer { environment.cleanup() }
+
+        // Assemble WITHOUT the reviewed bundle root: the reviewed Docling
+        // lineage is absent, exactly like a Mac where the package was
+        // removed or failed admission.
+        let context = try await ProcessExtractionContext.assemble(
+            layout: environment.layout,
+            reviewedPackageRoot: environment.root)
+        _ = await context.reconcileNow()
+        let services = try await ProcessExtractionServices.assemble(
+            context: context, input: environment.input())
+
+        do {
+            _ = try await services.prepare(backendOverride: nil)
+            Issue.record("a Docling selection silently swapped to another extractor")
+        } catch let error as ExtractionServicesError {
+            #expect(error == .unavailable)
+        }
+        await services.shutdown()
+    }
+
     /// The route host catalog presents Docling Serve as a reviewed package
     /// choice (not a connected host service).
     @Test func routeCatalogPresentsDoclingAsReviewedPackage() throws {

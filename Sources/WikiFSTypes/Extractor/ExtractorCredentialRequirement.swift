@@ -148,6 +148,24 @@ public struct ExtractorCredentialRequirementFingerprint:
 
     init(value: String) { self.value = value }
 
+    /// Decoded fingerprints must be exactly 32 bytes of lowercase hex
+    /// (SHA-256) — malformed state fails at the persistence boundary instead
+    /// of surviving until it happens not to match (PR 2 review, MEDIUM).
+    public init(from decoder: any Decoder) throws {
+        let value = try String(from: decoder)
+        guard value.count == 64,
+              value.allSatisfy({ $0.isASCII && (($0.isLetter && $0.isLowercase) || $0.isNumber) })
+        else {
+            throw ExtractorValidationError.invalidDigest(value)
+        }
+        self.value = value
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(value)
+    }
+
     /// Canonical inputs: package lineage, registration identity + scope, and
     /// the normalized requirement. Deterministic across processes (sorted,
     /// stable field order via sorted-key JSON).
@@ -305,6 +323,12 @@ public struct ExtractorCredentialAuthorizationSnapshot: Codable, Hashable, Senda
     public let records: [ExtractorCredentialAuthorizationRecord]
 
     public init(generation: UInt64, records: [ExtractorCredentialAuthorizationRecord]) {
+        // Duplicate authorization IDs would make `record(for:)` depend on
+        // input ordering; a well-formed snapshot can never carry them (PR 2
+        // review, MEDIUM).
+        let ids = records.map(\.authorizationID)
+        precondition(Set(ids).count == ids.count,
+                     "duplicate authorization IDs in snapshot")
         self.generation = generation
         self.records = records.sorted { lhs, rhs in
             lhs.authorizationID < rhs.authorizationID
@@ -323,6 +347,13 @@ public struct ExtractorCredentialAuthorizationSnapshot: Codable, Hashable, Senda
             generation: container.decode(UInt64.self, forKey: .generation),
             records: container.decode(
                 [ExtractorCredentialAuthorizationRecord].self, forKey: .records))
+        // Decoding must reject ambiguous duplicate grants rather than letting
+        // `record(for:)` pick whichever came first (PR 2 review, MEDIUM).
+        let ids = records.map(\.authorizationID)
+        guard Set(ids).count == ids.count else {
+            throw ExtractorValidationError.invalidManifest(
+                "authorization snapshot contains duplicate authorization IDs")
+        }
     }
 
     public func encode(to encoder: any Encoder) throws {

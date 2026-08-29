@@ -321,6 +321,46 @@ struct ExtractorCredentialAuthorizationStoreTests {
     }
 }
 
+// MARK: - Forgeability boundary (PR 2 review HIGH, rebuttal + enforcement)
+
+/// The PR 2 review flagged that `ExtractorCredentialAuthorizationWriter` is
+/// public in `WikiFSCore`, which the daemon and CLI also link, so a caller
+/// could pass `processRole: .app`. Swift cannot structurally distinguish
+/// executable targets that link one module, and moving the writer to the app
+/// target would strip its unit tests from the default CI graph — so the
+/// boundary is enforced where it is real: a SOURCE CONTRACT that the daemon
+/// and CLI composition never construct a writer, on top of the runtime
+/// boundaries (cross-process flock, 0600 file, App Group placement).
+struct ExtractorCredentialWriterPlacementAuditTests {
+
+    @Test func daemonAndCLINeverConstructTheAuthorizationWriter() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let watched = [
+            "Sources/wikid",
+            "Sources/wikictl",
+            "Sources/WikiFSFileProvider",
+        ]
+        for relative in watched {
+            let directory = root.appendingPathComponent(relative, isDirectory: true)
+            guard FileManager.default.fileExists(atPath: directory.path) else {
+                continue
+            }
+            let enumerator = FileManager.default.enumerator(
+                at: directory, includingPropertiesForKeys: nil)
+            while let file = enumerator?.nextObject() as? URL {
+                guard file.pathExtension == "swift" else { continue }
+                let source = try String(contentsOf: file, encoding: .utf8)
+                #expect(
+                    source.contains("ExtractorCredentialAuthorizationWriter(") == false,
+                    "\(file.lastPathComponent) must never construct the authorization writer")
+            }
+        }
+    }
+}
+
 // MARK: - Resolver
 
 struct ExtractorCredentialAuthorizationResolverTests {

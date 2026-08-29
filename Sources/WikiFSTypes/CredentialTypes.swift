@@ -209,15 +209,17 @@ public struct ResolvedCredential: Sendable, CustomStringConvertible,
 // MARK: - Errors
 
 /// Bounded service failures. Every case is value-free: errors name the
-/// operation and the underlying OS status (an integer), never the secret.
+/// operation as a closed case tag and the underlying OS status (an integer),
+/// never the secret, and no case carries free-form text that could smuggle
+/// one into a description (PR 1 review, LOW).
 public enum CredentialStoreError: Error, Equatable, Sendable,
     CustomStringConvertible {
     /// `resolve` of a reference with no configured value.
     case notConfigured(CredentialReference)
     /// A Keychain read failed. `status` is the raw `OSStatus`.
-    case readFailed(operation: String, status: Int32)
+    case readFailed(status: Int32)
     /// A Keychain write or delete failed. `status` is the raw `OSStatus`.
-    case writeFailed(operation: String, status: Int32)
+    case writeFailed(status: Int32)
     /// The source rejects mutation (e.g. a read-only future source).
     case notWritable(CredentialReference)
 
@@ -225,10 +227,10 @@ public enum CredentialStoreError: Error, Equatable, Sendable,
         switch self {
         case .notConfigured(let reference):
             return "credential not configured: \(reference.rawValue)"
-        case .readFailed(let operation, let status):
-            return "credential read failed (\(operation), status \(status))"
-        case .writeFailed(let operation, let status):
-            return "credential write failed (\(operation), status \(status))"
+        case .readFailed(let status):
+            return "credential read failed (status \(status))"
+        case .writeFailed(let status):
+            return "credential write failed (status \(status))"
         case .notWritable(let reference):
             return "credential is not writable: \(reference.rawValue)"
         }

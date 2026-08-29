@@ -178,13 +178,13 @@ public struct KeychainCredentialService: CredentialService {
             try KeychainSecretStore.write(
                 service: location.service, account: location.account,
                 value: normalized,
-                error: { operation, status in
-                    CredentialStoreError.writeFailed(operation: operation, status: status)
+                error: { _, status in
+                    CredentialStoreError.writeFailed(status: status)
                 })
         } catch let error as CredentialStoreError {
             throw error
         } catch {
-            throw CredentialStoreError.writeFailed(operation: "write", status: -1)
+            throw CredentialStoreError.writeFailed(status: -1)
         }
     }
 

@@ -46,7 +46,7 @@ public enum ReviewedExtractorPackages {
         directoryName: "DoclingServe",
         packageID: "org.selfdrivingwiki.docling-serve",
         version: "1.0.0",
-        digest: "8e3ad795a1f1dd2a1750a425e9f16df221078d065a07dbe71818b7603521d113")
+        digest: "1a47573f0e07699a42f25b27bb300a29437c83489f18f33e1653f3e6192eb658")
 
     public static let all: [ReviewedExtractorPackage] = [defuddle, pdf2md, doclingServe]
 

@@ -287,6 +287,18 @@ public struct ProcessExtractorProvider: Sendable {
             protocolRevision: manifest.protocolRevision,
             mimeTypes: registration.mimeTypes.sorted().map(\.rawValue),
             executor: executor,
+            launchGate: { [admission, catalogReader, revision] in
+                // Final launch-seam TOCTOU gate (PR 3 review HIGH-1): the
+                // request snapshot is immutable by the time this runs; a
+                // removal/revocation here applies to the NEXT execute.
+                guard await admission.isAdmitted(revision) else {
+                    throw ExtractorOperationCredentialError.packageNotAdmitted
+                }
+                let catalog = try catalogReader.read()
+                guard catalog.records.contains(where: { $0.revision == revision }) else {
+                    throw ExtractorOperationCredentialError.unknownRevision
+                }
+            },
             operationCredentials: operationCredentials,
             operationConfiguration: operationConfiguration,
             runtimeSearchPolicy: .standard)
@@ -336,6 +348,11 @@ public final class PreparedProcessOperation: Sendable {
     let sharedModelCacheRoot: URL?
     let mimeTypes: [String]
     let executor: any ManagedProcessExecuting
+    /// Final launch-seam TOCTOU gate (PR 3 review HIGH-1): rechecks
+    /// admission + exact-revision catalog membership immediately before
+    /// `executor.execute`, AFTER the request snapshot is immutable. Nil for
+    /// tests.
+    let launchGate: (@Sendable () async throws -> Void)?
     let operationCredentials: (any ExtractorOperationCredentialResolving)?
     let operationConfiguration:
         (@Sendable (ExtractorPackageRevisionID) -> ExtractorOperationConfiguration?)?
@@ -356,6 +373,7 @@ public final class PreparedProcessOperation: Sendable {
         protocolRevision: ExtractorProtocolRevision,
         mimeTypes: [String],
         executor: any ManagedProcessExecuting,
+        launchGate: (@Sendable () async throws -> Void)?,
         operationCredentials: (any ExtractorOperationCredentialResolving)?,
         operationConfiguration: (@Sendable (ExtractorPackageRevisionID) -> ExtractorOperationConfiguration?)?,
         runtimeSearchPolicy: ExtractorRuntimeSearchPolicy
@@ -374,6 +392,7 @@ public final class PreparedProcessOperation: Sendable {
         self.protocolRevision = protocolRevision
         self.mimeTypes = mimeTypes
         self.executor = executor
+        self.launchGate = launchGate
         self.operationCredentials = operationCredentials
         self.operationConfiguration = operationConfiguration
         self.runtimeSearchPolicy = runtimeSearchPolicy
@@ -563,6 +582,13 @@ public final class PreparedProcessOperation: Sendable {
                     privateCacheRoot: self.cacheRoot,
                     sharedRuntimeCacheRoot: runtimeCacheRoot,
                     sharedModelCacheRoot: modelCacheRoot))
+            // Final launch-seam gate: the LAST thing before spawn, after the
+            // request snapshot is fully constructed (PR 3 review HIGH-1).
+            // Revision-1 prepared operations never re-consult admission
+            // (their pinned-snapshot semantics are preserved).
+            if declaresRequirements, let launchGate = self.launchGate {
+                try await launchGate()
+            }
             let outcome = try await self.executor.execute(managedRequest) { [redactor] (frame: ExtractorProtocolFrame) in
                 if case .progress(let progress) = frame, let message = progress.message {
                     // Package-controlled progress text is redacted before it
@@ -626,28 +652,40 @@ public final class PreparedProcessOperation: Sendable {
     }
 
     /// Result frames carry package-controlled article metadata (title,
-    /// author, description, published) that downstream becomes persisted
-    /// source filenames. Every text field passes through the request's
-    /// redactor before the frame leaves the execution boundary.
+    /// author, description, published), warnings, and reported tool/model
+    /// strings. Every text field passes through the request's redactor before
+    /// the frame leaves the execution boundary (PR 3 review HIGH-3).
+    ///
+    /// The Markdown OUTPUT is deliberately NOT redacted: it is the extraction
+    /// product the user asked for, and the child legitimately holds the
+    /// values. That is a documented policy exception, not an oversight — a
+    /// package echoing a secret into its result corrupts its own output.
     static func redactedResultFrame(
         _ frame: ExtractorResultFrame,
         redactor: ExtractorSecretRedactor
     ) throws -> ExtractorResultFrame {
         let metadata = frame.articleMetadata
-        guard let metadata else { return frame }
-        let redacted = try ExtractorArticleMetadata(
-            title: metadata.title.map(redactor.redact),
-            author: metadata.author.map(redactor.redact),
-            description: metadata.description.map(redactor.redact),
-            published: metadata.published.map(redactor.redact),
-            wordCount: metadata.wordCount)
+        let redactedMetadata = try metadata.map { article in
+            try ExtractorArticleMetadata(
+                title: article.title.map(redactor.redact),
+                author: article.author.map(redactor.redact),
+                description: article.description.map(redactor.redact),
+                published: article.published.map(redactor.redact),
+                wordCount: article.wordCount)
+        }
+        let reported = frame.metadata
+        let redactedReported = try ExtractorReportedMetadata(
+            toolName: reported.toolName.map(redactor.redact),
+            toolVersion: reported.toolVersion.map(redactor.redact),
+            modelName: reported.modelName.map(redactor.redact),
+            modelVersion: reported.modelVersion.map(redactor.redact))
         return try ExtractorResultFrame(
             requestID: frame.requestID,
             outputPath: frame.outputPath,
             markdownByteCount: frame.markdownByteCount,
             warnings: frame.warnings.map(redactor.redact),
-            metadata: frame.metadata,
-            articleMetadata: redacted)
+            metadata: redactedReported,
+            articleMetadata: redactedMetadata)
     }
 
     /// Creates a regular owner-read-only (0400) file at `url`. The file is
@@ -687,20 +725,28 @@ public final class PreparedProcessOperation: Sendable {
         guard result == data.count else {
             throw ExtractorDirectoryAdmissionError.preparationFailed
         }
-        try verifyOwnerReadOnlyFile(at: url)
+        try verifyOwnerReadOnlyFile(fd: fd, at: url)
     }
 
-    /// Post-write verification: regular file, owner UID, link count 1, mode
-    /// 0400, and containment within the operation directory layout.
-    static func verifyOwnerReadOnlyFile(at url: URL) throws {
-        var status = stat()
-        guard lstat(url.path, &status) == 0 else {
+    /// Post-write verification, bound to the OPENED inode: fstat of the
+    /// descriptor we wrote through and lstat of the path must name the SAME
+    /// device+inode, so a concurrent same-UID process renaming or replacing
+    /// the path during the write fails verification instead of silently
+    /// approving a different file. Regular file, owner UID, link count 1,
+    /// mode 0400 (PR 3 review HIGH-4).
+    static func verifyOwnerReadOnlyFile(fd: Int32, at url: URL) throws {
+        var viaFD = stat()
+        var viaPath = stat()
+        guard fstat(fd, &viaFD) == 0,
+              lstat(url.path, &viaPath) == 0 else {
             throw ExtractorDirectoryAdmissionError.preparationFailed
         }
-        guard status.st_mode & S_IFMT == S_IFREG,
-              status.st_uid == getuid(),
-              status.st_nlink == 1,
-              status.st_mode & 0o777 == 0o400 else {
+        guard viaFD.st_dev == viaPath.st_dev,
+              viaFD.st_ino == viaPath.st_ino,
+              viaFD.st_mode & S_IFMT == S_IFREG,
+              viaFD.st_uid == getuid(),
+              viaFD.st_nlink == 1,
+              viaFD.st_mode & 0o777 == 0o400 else {
             throw ExtractorDirectoryAdmissionError.preparationFailed
         }
     }

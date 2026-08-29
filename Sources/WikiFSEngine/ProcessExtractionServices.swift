@@ -213,6 +213,12 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
             if let match = await registry.resolveInstalled(reference, kind: .pdf) {
                 return match.key
             }
+            // #1159 (PR 4 review HIGH-3): a saved reviewed-Docling selection
+            // FAILS CLOSED when its lineage is unavailable — it must never
+            // silently swap to reviewed pdf2md or any other extractor.
+            if reference == ProcessExtractionServices.reviewedDoclingLogical {
+                throw ExtractionServicesError.unavailable
+            }
             DebugLog.extraction(
                 "Configured installed PDF extractor is unavailable; using the reviewed pdf2md fallback")
             return try await reviewedKey(
