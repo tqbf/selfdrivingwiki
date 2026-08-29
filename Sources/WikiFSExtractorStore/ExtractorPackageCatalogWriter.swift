@@ -263,6 +263,17 @@ private func installStaged(
         root: staged.root,
         within: layout.stagingRoot,
         expectedRevision: staged.revisionID)
+    // Reviewed lineages are RESERVED (issue #1159, security review HIGH-3):
+    // an imported package can never claim a reviewed package ID unless its
+    // bytes reproduce the pinned reviewed revision exactly. Without this, a
+    // self-declared packageID + version bump would let third-party code
+    // squat a reviewed lineage and silently inherit its credential grants.
+    if let reviewed = ReviewedExtractorPackages.all.first(
+        where: { $0.packageID == revalidated.revisionID.packageID }),
+        revalidated.revisionID != reviewed.revision {
+        throw ExtractorDirectoryAdmissionError.reviewedLineageReserved(
+            revalidated.revisionID.packageID.rawValue)
+    }
     let current = try ExtractorPackageCatalogReader.readCatalog(directoryFD: roots.derived)
     let reservation = ExtractorPackageReservation(
         packageID: revalidated.revisionID.packageID,

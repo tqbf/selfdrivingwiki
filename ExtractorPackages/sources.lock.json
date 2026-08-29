@@ -3,7 +3,7 @@
   "defuddleLibraryVersion": "0.19.1",
   "sources": {
     "tools/defuddle/extractor-protocol.js": "09bb21528839e125b6ee9de3a6ad192fe595d097d9454623f3f9dc27755d6781",
-    "tools/docling-serve/docling_serve_extractor.py": "76cc805fb45cd0dbd5d6cb52878b0c7f6655051dfef8af754c0b339fc47345a7",
+    "tools/docling-serve/docling_serve_extractor.py": "7b280693ba73ab8076ca5138d62af14442d80e4a1a7fa009d9572bc47305b555",
     "tools/pdf2md/pdf2md": "0ec600ec2acd6a8c9073e9a11ba0310c35c76eefaf9cfdd12b9dd80945a30943"
   }
 }

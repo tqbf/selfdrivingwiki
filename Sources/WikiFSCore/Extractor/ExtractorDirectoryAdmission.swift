@@ -80,6 +80,10 @@ public enum ExtractorDirectoryAdmissionError: Error, Equatable, Sendable {
     case deviceChanged(String), metadataChanged(String), modeChanged(String), collision(String), containment
     case copyFailed(String), preparationFailed, validationFailed, expectedRevisionMismatch, invalidStagingID, limitExceeded
     case manifest(ExtractorManifestValidationError)
+    /// A third-party import tried to claim a reviewed package lineage with
+    /// bytes that do not reproduce the pinned reviewed revision (#1159,
+    /// security review HIGH-3).
+    case reviewedLineageReserved(String)
 }
 
 public struct ValidatedExtractorDirectory: Sendable {

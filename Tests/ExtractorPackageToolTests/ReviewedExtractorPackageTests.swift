@@ -66,7 +66,7 @@ struct ReviewedExtractorPackageTests {
         // pinned here byte-for-byte so this tool-target gate fails loudly on
         // drift even though it cannot import the engine module.
         #expect(try validate("DoclingServe").packageDigest
-            == "e072e3bd28ea37f5e018c8441fe1a4f638e9d07d0cf96b650f6bb7e08f4129ba")
+            == "8e3ad795a1f1dd2a1750a425e9f16df221078d065a07dbe71818b7603521d113")
     }
 
     /// Revision 1 supports PDF and HTML byte extraction only, and the two

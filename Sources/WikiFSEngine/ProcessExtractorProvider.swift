@@ -238,7 +238,11 @@ public struct ProcessExtractorProvider: Sendable {
             at: operationRoot,
             withIntermediateDirectories: false,
             attributes: [.posixPermissions: 0o700])
-        for subdirectory in ["input", "output", "home", "tmp", "cache"] {
+        for subdirectory in ["input", "output", "home", "tmp", "cache",
+                             "credentials", "config"] {
+            // `credentials` and `config` are pre-created owner-private so a
+            // request-scoped subdirectory's parent never inherits umask
+            // defaults (security review L-12).
             try FileManager.default.createDirectory(
                 at: operationRoot.appendingPathComponent(subdirectory, isDirectory: true),
                 withIntermediateDirectories: false,
@@ -467,8 +471,12 @@ public final class PreparedProcessOperation: Sendable {
         let redactor = ExtractorSecretRedactor(
             values: Array(resolvedValues.values))
 
-        // Materialize the private credential file AFTER resolution. From this
-        // point every terminal path must clean it up (defer below).
+        // Materialize the private credential file AFTER resolution. The
+        // cleanup defer arms IMMEDIATELY after the file exists so every
+        // terminal path — including a throw in the configuration block below
+        // — deletes it (AC.14, security review MEDIUM-7). It fires when this
+        // function exits, i.e. after the managed run has terminated and
+        // reaped any child process group.
         if declaresRequirements {
             let envelope = try ExtractorCredentialInputEnvelope(
                 requirements: registration.credentialRequirements,
@@ -484,6 +492,23 @@ public final class PreparedProcessOperation: Sendable {
             try Self.writeOwnerReadOnlyFile(data, at: fileURL)
             credentialFilePath = try ExtractorRelativePath(
                 validating: "credentials/\(name)/input.json")
+        }
+        // AC.14 structural guarantee: armed the moment the credential file
+        // exists, so a throw anywhere later — including the configuration
+        // block below — still deletes it. Fires on success, every error, and
+        // cancellation.
+        defer {
+            for subdirectory in [credentialSubdirectory, configurationSubdirectory]
+            .compactMap({ $0 }) {
+                do {
+                    try FileManager.default.removeItem(at: subdirectory)
+                } catch {
+                    // Value-free diagnostic; the operation-root deinitializer
+                    // remains the final safety net.
+                    DebugLog.extraction(
+                        "Extractor request input cleanup failed (deferred to operation root cleanup).")
+                }
+            }
         }
         if let configuration {
             let subdirectory = directoryRoot
@@ -503,8 +528,6 @@ public final class PreparedProcessOperation: Sendable {
         let requestConfigurationPath = configurationFilePath
         return try await runManaged(
             redactor: redactor,
-            credentialSubdirectory: credentialSubdirectory,
-            configurationSubdirectory: configurationSubdirectory,
             onProgress: onProgress
         ) {
             let inputURL = self.directoryRoot.appendingPathComponent(inputPath)
@@ -558,10 +581,18 @@ public final class PreparedProcessOperation: Sendable {
                 guard let markdown = String(data: data, encoding: .utf8) else {
                     throw ProcessPackageRunError.invalidOutputEncoding
                 }
-                return ProcessPackageExecutionOutcome(frame: frame, markdown: markdown)
+                // Result-frame article metadata is package-controlled text
+                // that becomes a persisted source filename and reaches the
+                // wiki DB and File Provider — it passes through the redactor
+                // like every other package-controlled string (MEDIUM-5).
+                return ProcessPackageExecutionOutcome(
+                    frame: try Self.redactedResultFrame(frame, redactor: redactor),
+                    markdown: markdown)
             case .failure(let frame):
                 // Terminal failure frames are package-controlled: redact the
-                // message AND warnings before mapping into a user error.
+                // message before mapping into a user error (warnings are not
+                // consumed anywhere, but they are dropped here to keep the
+                // contract explicit).
                 throw ProcessPackageError(
                     message: redactor.redact(
                         ProcessPackageFailureMapper.terminalMessage(frame)))
@@ -571,31 +602,16 @@ public final class PreparedProcessOperation: Sendable {
         }
     }
 
-    /// Shared terminal-path wrapper: catches every thrown error AFTER the
-    /// credential file was materialized, deletes the request-scoped
-    /// credential + configuration subdirectories (AC.14), and rethrows a
-    /// redacted error. On success the cleanup runs too. When a child process
-    /// did launch, the executor has already terminated and reaped the process
-    /// group before this point (Risk 8 ordering).
+    /// Shared terminal-path wrapper: maps every thrown error through the
+    /// request's redactor so a secret that reached stderr, a frame, or a
+    /// launch error cannot escape. Cleanup of request-scoped files is owned
+    /// by `execute`'s defer, which arms the moment the credential file exists
+    /// and therefore covers this entire region.
     fileprivate func runManaged(
         redactor: ExtractorSecretRedactor,
-        credentialSubdirectory: URL?,
-        configurationSubdirectory: URL?,
         onProgress: (@Sendable (String) -> Void)?,
         _ body: @Sendable () async throws -> ProcessPackageExecutionOutcome
     ) async throws -> ProcessPackageExecutionOutcome {
-        defer {
-            for subdirectory in [credentialSubdirectory, configurationSubdirectory].compactMap({ $0 }) {
-                do {
-                    try FileManager.default.removeItem(at: subdirectory)
-                } catch {
-                    // Value-free diagnostic; the operation-root deinitializer
-                    // remains the final safety net.
-                    DebugLog.extraction(
-                        "Extractor request input cleanup failed (deferred to operation root cleanup).")
-                }
-            }
-        }
         do {
             return try await body()
         } catch is CancellationError {
@@ -607,6 +623,31 @@ public final class PreparedProcessOperation: Sendable {
             // reached stderr, a frame, or a launch error cannot escape.
             throw ProcessPackageError(message: redactor.redactedMessage(error))
         }
+    }
+
+    /// Result frames carry package-controlled article metadata (title,
+    /// author, description, published) that downstream becomes persisted
+    /// source filenames. Every text field passes through the request's
+    /// redactor before the frame leaves the execution boundary.
+    static func redactedResultFrame(
+        _ frame: ExtractorResultFrame,
+        redactor: ExtractorSecretRedactor
+    ) throws -> ExtractorResultFrame {
+        let metadata = frame.articleMetadata
+        guard let metadata else { return frame }
+        let redacted = try ExtractorArticleMetadata(
+            title: metadata.title.map(redactor.redact),
+            author: metadata.author.map(redactor.redact),
+            description: metadata.description.map(redactor.redact),
+            published: metadata.published.map(redactor.redact),
+            wordCount: metadata.wordCount)
+        return try ExtractorResultFrame(
+            requestID: frame.requestID,
+            outputPath: frame.outputPath,
+            markdownByteCount: frame.markdownByteCount,
+            warnings: frame.warnings.map(redactor.redact),
+            metadata: frame.metadata,
+            articleMetadata: redacted)
     }
 
     /// Creates a regular owner-read-only (0400) file at `url`. The file is

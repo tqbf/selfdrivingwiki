@@ -1,6 +1,5 @@
 #if os(macOS)
 import Foundation
-import WikiFSCore
 import WikiFSTypes
 
 // pattern: Imperative Shell
@@ -47,7 +46,7 @@ public enum ReviewedExtractorPackages {
         directoryName: "DoclingServe",
         packageID: "org.selfdrivingwiki.docling-serve",
         version: "1.0.0",
-        digest: "e072e3bd28ea37f5e018c8441fe1a4f638e9d07d0cf96b650f6bb7e08f4129ba")
+        digest: "8e3ad795a1f1dd2a1750a425e9f16df221078d065a07dbe71818b7603521d113")
 
     public static let all: [ReviewedExtractorPackage] = [defuddle, pdf2md, doclingServe]
 

@@ -26,9 +26,52 @@ import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
+from urllib.parse import urlparse
 
 _PROGRESS_LIMIT = 1024
 _MAX_OUTPUT_BYTES = 128 * 1024 * 1024
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Blocks redirect following for authenticated requests.
+
+    urllib's default redirect handler re-sends headers — including
+    X-Api-Key — to the redirect target, which may be a different origin or
+    a plaintext downgrade. A 3xx is surfaced as an error instead.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def _sanitize_filename(name: str) -> str:
+    """Make `name` safe for a multipart Content-Disposition header.
+
+    Strips CR/LF and other controls, backslash-escapes quotes and
+    backslashes, so no part-header injection is possible (security review
+    MEDIUM-6).
+    """
+    cleaned = "".join(
+        character for character in name if ord(character) >= 32 and character != "\x7f"
+    )
+    return cleaned.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _token_allowed_for(endpoint: str) -> bool:
+    """The token is attached only for https endpoints or loopback http.
+
+    Plaintext off-host transport would expose the token on the wire
+    (security review HIGH-2a).
+    """
+    parsed = urlparse(endpoint)
+    if parsed.scheme == "https":
+        return True
+    if parsed.scheme == "http" and parsed.hostname in ("127.0.0.1", "::1", "localhost"):
+        return True
+    return False
 
 
 def _emit(frame: dict) -> None:
@@ -79,19 +122,31 @@ def run(request_text: str) -> int:
 
     credentials_data = _read_optional_json(request.get("credentialFilePath")) or {}
     token = str((credentials_data.get("credentials") or {}).get("api-token") or "")
+    if token and not _token_allowed_for(endpoint):
+        _fail(request_id, "setup",
+              "Refusing to send the API token over a non-HTTPS, non-loopback endpoint.")
+        return 0
 
     input_path = Path(str(request.get("inputPath", "")))
     output_path = Path(str(request.get("outputPath", "")))
     if not input_path.is_file():
         _fail(request_id, "invalid-request", "The input file is missing.")
         return 0
+    # The host deletes the credential file on every terminal path; deleting
+    # it here too closes the window early (security review L-14).
+    credential_path = request.get("credentialFilePath")
+    if credential_path:
+        try:
+            Path(str(credential_path)).unlink()
+        except OSError:
+            pass
 
     _emit({"kind": "progress", "payload": {
         "requestID": request_id, "message": "Uploading to Docling Serve"}})
 
     boundary = "wiki-extractor-" + uuid.uuid4().hex
     file_bytes = input_path.read_bytes()
-    filename = str(request.get("originalFilename") or "source.pdf")
+    filename = _sanitize_filename(str(request.get("originalFilename") or "source.pdf"))
     mime_type = mimetypes.guess_type(filename)[0] or "application/pdf"
     part = (
         f"--{boundary}\r\n"
@@ -106,9 +161,15 @@ def run(request_text: str) -> int:
     http_request = urllib.request.Request(
         endpoint + "/v1/convert/file", data=part, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(http_request, timeout=timeout_seconds) as response:
+        with _OPENER.open(http_request, timeout=timeout_seconds) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
+        if 300 <= error.code < 400:
+            # Redirects are blocked so the token can never follow them to
+            # another origin (security review HIGH-2b).
+            _fail(request_id, "setup",
+                  "Docling Serve returned a redirect; redirects are not allowed.")
+            return 0
         # Never include request headers or the token in the failure text.
         _fail(request_id, "extraction-failure",
               f"Docling Serve returned HTTP {error.code}.")

@@ -618,10 +618,15 @@ struct ExtractionSettingsView: View {
     // MARK: - Credential requirements (#1159)
 
     /// The inheritance rule, stated BEFORE approval (plan step 22 / AC.16).
+    /// Package-authored strings are quoted so they cannot impersonate the
+    /// host's own text, and the host names the exact stored credential being
+    /// bound (security review MEDIUM-8).
     static func authorizationConfirmationMessage(
         _ summary: ExtractorCredentialRequirementSummary
     ) -> String {
-        "Allow \(summary.packageName) to use \(summary.label) — \(summary.purpose) Authorization follows future revisions of this package only while this requirement's label, purpose, optionality, and registration stay unchanged; a changed requirement asks you to authorize again."
+        let boundReference = ExtractorCredentialSettingsSupport.boundReferenceName(for: summary)
+        let binding = boundReference.map { " This grants access to your stored credential \"\($0)\"." } ?? ""
+        return "Allow \"\(summary.packageName)\" to use \"\(summary.label)\" (\(summary.purpose)).\(binding) Authorization follows future revisions of this package only while this requirement's label, purpose, optionality, and registration stay unchanged; a changed requirement asks you to authorize again."
     }
 
     @ViewBuilder
@@ -1316,6 +1321,8 @@ enum ExtractorPackageMutationMessage {
         switch error as? ExtractorDirectoryAdmissionError {
         case .nonFileURL, .sourceNotDirectory:
             return "Select one local extractor package folder."
+        case .reviewedLineageReserved:
+            return "This package claims a reserved built-in package identity with different contents and cannot be installed."
         case .sourceChanged, .symlink, .hardLink, .specialFile, .deviceChanged,
              .metadataChanged, .modeChanged, .containment:
             return "The package folder changed or is unsafe to import."

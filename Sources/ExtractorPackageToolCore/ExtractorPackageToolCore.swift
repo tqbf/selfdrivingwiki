@@ -90,6 +90,8 @@ public enum ExtractorPackageToolFailure: Error, Equatable, Sendable {
 
     private static func admissionDiagnostic(_ error: ExtractorDirectoryAdmissionError) -> String {
         switch error {
+        case .reviewedLineageReserved:
+            "this package claims a reserved built-in package identity with different contents"
         case .nonFileURL, .sourceNotDirectory:
             "the package path must be one local folder"
         case .mutationForbidden:
