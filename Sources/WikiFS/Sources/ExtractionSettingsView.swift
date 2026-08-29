@@ -275,6 +275,11 @@ struct ExtractionSettingsView: View {
             TableColumn("Status") { (row: ExtractorRouteSettingsRow) in
                 statusLabel(row)
             }
+            // Status is primary information sized to its longest string
+            // ("Waiting for host service") — it must never truncate
+            // (macos-design visual-design + typography-designer guidance).
+            // The flexible Default-extractor column absorbs remaining space.
+            .width(min: 180, ideal: 200)
             TableColumn("Configuration") { (row: ExtractorRouteSettingsRow) in
                 if let dialog = configurationDialog(for: row) {
                     Button("Configure…") {
@@ -1080,7 +1085,10 @@ struct ExtractionSettingsView: View {
     }
 
     private enum Metrics {
-        static let width: CGFloat = 460
+        /// Four route-table columns (Format 90+, Default extractor 220+,
+        /// Status 180+, Configuration 110+) need this minimum to display
+        /// without truncating the Status column.
+        static let width: CGFloat = 700
         /// Connected-service configuration dialogs (macos-design: a compact
         /// modal form with a Done button).
         static let dialogWidth: CGFloat = 460
