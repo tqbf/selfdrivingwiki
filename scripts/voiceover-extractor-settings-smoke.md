@@ -10,15 +10,17 @@ Run this test on macOS with VoiceOver enabled. Use a test App Group and a dispos
 6. Confirm that VoiceOver reads the selected extractor and the status (for example `pdf2md, Available`).
 7. Open the PDF pop-up. Confirm the option captions read `name — source` (Reviewed package, Installed package, Connected service, Built in).
 8. Choose the ACP Provider option. Confirm the ACP Provider section appears below the table and VoiceOver announces focus movement to the next control after the table.
-9. Choose the Docling Serve option. Confirm the Docling Serve section replaces it and includes the Endpoint, Timeout, and write-only API Token fields.
-10. With the Docling Serve option selected, focus the `API Token` field. Confirm VoiceOver announces the placeholder (`Configured — enter a new token to replace` when a token is stored, `Enter token` otherwise) and that the stored token itself is never spoken.
-11. Activate `Save Token`. Confirm VoiceOver announces the `Token configured` status and the field clears.
-12. Activate `Remove Token`. Confirm the status announces `No token stored`.
-13. Move focus to the `Package Credentials` section. Confirm VoiceOver reads one row per declared requirement with the label, purpose, package name, optionality (optional or required), and authorization state (`Authorized`, `Needs authorization`, or `Changed — re-authorization needed`).
-14. Activate `Authorize…` on a requirement. Confirm the dialog states the inheritance rule (future revisions keep the grant only while the requirement stays unchanged) before `Authorize` and `Cancel`.
-15. Activate `Authorize`. Confirm the row announces `Authorized`.
-16. Activate `Revoke…`. Confirm the dialog states that revoking the grant does not delete the stored credential, then activate `Revoke`. Confirm the row announces `Needs authorization` again.
-17. Choose the reviewed pdf2md option. Confirm no service section remains.
+9. Choose the Docling Serve option. Confirm a compact `Selected Service` summary row appears with a `Configure…` button instead of inline fields.
+10. Activate `Configure…`. Confirm the configuration dialog opens with the Endpoint, Timeout, and write-only API Token fields, and that the stored token itself is never spoken.
+11. Focus the `API Token` field. Confirm VoiceOver announces the placeholder (`Configured — enter a new token to replace` when a token is stored, `Enter token` otherwise).
+12. Activate `Save Token`. Confirm VoiceOver announces the `Token configured` status and the field clears.
+13. Activate `Remove Token`. Confirm the status announces `No token stored`.
+14. Activate `Done` to close the dialog.
+15. Move focus to the `Package Credentials` section. Confirm VoiceOver reads one row per declared requirement with the label, purpose, package name, optionality (optional or required), and authorization state (`Authorized`, `Needs authorization`, or `Changed — re-authorization needed`).
+16. Activate `Authorize…` on a requirement. Confirm the dialog states the inheritance rule (future revisions keep the grant only while the requirement stays unchanged) before `Authorize` and `Cancel`.
+17. Activate `Authorize`. Confirm the row announces `Authorized`.
+18. Activate `Revoke…`. Confirm the dialog states that revoking the grant does not delete the stored credential, then activate `Revoke`. Confirm the row announces `Needs authorization` again.
+19. Choose the reviewed pdf2md option. Confirm no service section remains.
 18. Move focus to a Status cell that reads `Using fallback`. Activate the help text. Confirm VoiceOver reads the fallback that actually runs (Bundled pdf2md extraction or Tag-based text extraction).
 19. Move focus to `Advanced Local Package Import`.
 20. Confirm that VoiceOver reads the executable-code warning.

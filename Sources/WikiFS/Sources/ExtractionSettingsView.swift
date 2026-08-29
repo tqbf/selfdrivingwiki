@@ -81,7 +81,7 @@ struct ExtractionSettingsView: View {
     /// Pending revocation confirmation.
     @State private var revocationCandidate: ExtractorCredentialRequirementSummary?
 
-    private enum TestPhase: Equatable {
+    enum TestPhase: Equatable {
         case idle
         case testing
         case succeeded
@@ -444,11 +444,90 @@ struct ExtractionSettingsView: View {
 
     // MARK: - Selected service configuration
 
+    // MARK: - Selected service configuration
+
+    /// Which connected service has a configuration dialog open (macOS
+    /// Settings idiom: the main pane shows a compact summary + Configure…
+    /// button; the options live in a dialog, per the macos-design skill).
+    enum ServiceConfigurationDialog: String, Identifiable {
+        case acp
+        case docling
+
+        var id: String { rawValue }
+    }
+
+    @State private var serviceConfigurationDialog: ServiceConfigurationDialog?
+
     @ViewBuilder private var backendConfigSection: some View {
         switch routeSelections[ExtractorRouteID.canonicalPDF.description] {
-        case .connectedService(.acp): acpSection
-        case .connectedService(.doclingServe), .reviewedDocling: doclingSection
-        default: EmptyView()
+        case .connectedService(.acp):
+            serviceConfigurationRow(
+                name: "ACP Provider",
+                detail: acpProviderSelection.isEmpty
+                    ? "Default (use the app's default provider)"
+                    : acpProviderSelection,
+                dialog: .acp)
+        case .connectedService(.doclingServe), .reviewedDocling:
+            serviceConfigurationRow(
+                name: "Docling Serve",
+                detail: doclingEndpointText.trimmingCharacters(in: .whitespaces).isEmpty
+                    ? "No endpoint configured"
+                    : doclingEndpointText.trimmingCharacters(in: .whitespaces),
+                dialog: .docling)
+        default:
+            EmptyView()
+        }
+    }
+
+    /// Compact summary + Configure… button replacing the former inline
+    /// configuration sections (macos-design: progressive disclosure — the
+    /// route table stays scannable; options open in a dialog).
+    private func serviceConfigurationRow(
+        name: String, detail: String, dialog: ServiceConfigurationDialog
+    ) -> some View {
+        Section {
+            LabeledContent {
+                Button("Configure…") {
+                    serviceConfigurationDialog = dialog
+                }
+                .accessibilityIdentifier("extraction.service.configure.\(dialog.id)")
+                .accessibilityLabel("Configure \(name)")
+            } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(name)
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+        } header: {
+            Text("Selected Service")
+        } footer: {
+            Text("Configuration options for this service open in a dialog.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .sheet(item: $serviceConfigurationDialog) { dialog in
+            switch dialog {
+            case .acp:
+                ACPConfigurationDialog(
+                    providerSelection: $acpProviderSelection,
+                    enabledProviders: launcher.providersConfig().enabledProviders,
+                    onPersist: { persistAll() })
+            case .docling:
+                DoclingConfigurationDialog(
+                    endpoint: $doclingEndpointText,
+                    timeoutSeconds: $doclingTimeoutText,
+                    tokenDraft: $doclingTokenText,
+                    tokenConfigured: doclingTokenConfigured,
+                    testPhase: $doclingTest,
+                    onPersist: { persistAll() },
+                    onSaveToken: { saveDoclingToken() },
+                    onRemoveToken: { removeDoclingToken() },
+                    onTestConnection: { testDocling() })
+            }
         }
     }
 
@@ -769,64 +848,140 @@ struct ExtractionSettingsView: View {
         static let error = "extraction.packages.error"
     }
 
-    // MARK: - ACP Provider section
+    // MARK: - ACP configuration dialog
 
-    @ViewBuilder private var acpSection: some View {
-        Section {
-            Picker("Provider", selection: $acpProviderSelection) {
-                Text("Default (use app's default provider)").tag("")
-                ForEach(launcher.providersConfig().enabledProviders, id: \.id) { provider in
-                    Text(provider.label).tag(provider.id.rawValue)
+    /// The ACP provider picker, presented in a dialog (macos-design:
+    /// progressive disclosure). Edits persist through the parent's auto-save
+    /// exactly as the inline section did.
+    struct ACPConfigurationDialog: View {
+        @Binding var providerSelection: String
+        let enabledProviders: [AgentProvider]
+        let onPersist: () -> Void
+
+        var body: some View {
+            VStack(spacing: 0) {
+                Form {
+                    Section {
+                        Picker("Provider", selection: $providerSelection) {
+                            Text("Default (use app's default provider)").tag("")
+                            ForEach(enabledProviders, id: \.id) { provider in
+                                Text(provider.label).tag(provider.id.rawValue)
+                            }
+                        }
+                        .onChange(of: providerSelection) { onPersist() }
+                    } header: {
+                        Text("ACP Provider")
+                    } footer: {
+                        Text("Delegates PDF extraction to your configured ACP provider. Reuses the API key from Settings → Providers — no separate credentials needed. The provider reads the PDF from disk and returns markdown. Choose \"Default\" to use the same provider as chat and ingest.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
+                .formStyle(.grouped)
+                dialogFooter
             }
-            .onChange(of: acpProviderSelection) { persistAll() }
-        } header: {
-            Text("ACP Provider")
-        } footer: {
-            Text("Delegates PDF extraction to your configured ACP provider. Reuses the API key from Settings → Providers — no separate credentials needed. The provider reads the PDF from disk and returns markdown. Choose \"Default\" to use the same provider as chat and ingest.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            .frame(width: ExtractionSettingsView.Metrics.dialogWidth,
+                   height: ExtractionSettingsView.Metrics.dialogHeight)
+        }
+
+        private var dialogFooter: some View {
+            HStack {
+                Spacer()
+                Button("Done") { onPersist() }
+            }
+            .padding(12)
         }
     }
 
-    // MARK: - Docling section
+    // MARK: - Docling configuration dialog
 
-    @ViewBuilder private var doclingSection: some View {
-        Section {
-            TextField("Endpoint", text: $doclingEndpointText, prompt: Text(ExtractionConfig.defaultDoclingServeEndpoint))
-                .onChange(of: doclingEndpointText) { persistAll() }
-            TextField("Timeout (seconds)", text: $doclingTimeoutText, prompt: Text("600"))
-                .onChange(of: doclingTimeoutText) { persistAll() }
-            // Write-only token entry (#1159): the field starts blank and
-            // never shows the stored token; Save/Remove are explicit.
-            SecureField("API Token (optional)", text: $doclingTokenText, prompt: Text(doclingTokenConfigured ? "Configured — enter a new token to replace" : "Enter token"))
-                .accessibilityIdentifier("extraction.docling.token.field")
-            HStack {
-                Group {
-                    if doclingTokenConfigured {
-                        Label("Token configured", systemImage: "checkmark.seal")
-                    } else {
-                        Text("No token stored")
-                    }
+    /// Endpoint, timeout, write-only token, and Test Connection, presented
+    /// in a dialog (macos-design: progressive disclosure).
+    struct DoclingConfigurationDialog: View {
+        @Binding var endpoint: String
+        @Binding var timeoutSeconds: String
+        @Binding var tokenDraft: String
+        let tokenConfigured: Bool
+        @Binding var testPhase: ExtractionSettingsView.TestPhase
+        let onPersist: () -> Void
+        let onSaveToken: () -> Void
+        let onRemoveToken: () -> Void
+        let onTestConnection: () -> Void
+
+        var body: some View {
+            VStack(spacing: 0) {
+                Form {
+                    doclingDialogFields
+                    testRow
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .accessibilityIdentifier("extraction.docling.token.status")
-                Spacer()
-                Button("Save Token") { saveDoclingToken() }
-                    .disabled(CredentialValue.normalized(doclingTokenText) == nil)
-                    .accessibilityIdentifier("extraction.docling.token.save")
-                Button("Remove Token", role: .destructive) { removeDoclingToken() }
-                    .disabled(!doclingTokenConfigured)
-                    .accessibilityIdentifier("extraction.docling.token.remove")
+                .formStyle(.grouped)
+                dialogFooter
             }
-            testConnectionRow(phase: $doclingTest, action: testDocling)
-        } header: {
-            Text("Docling Serve")
-        } footer: {
-            Text("Run `docling-serve run` locally, then point this at its base URL. Private to your network. The token is only needed if the server was started with DOCLING_SERVE_API_KEY; it is stored in your Keychain and never shown after you save it.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            .frame(width: ExtractionSettingsView.Metrics.dialogWidth,
+                   height: ExtractionSettingsView.Metrics.dialogHeight)
+        }
+
+        @ViewBuilder private var testRow: some View {
+            HStack(spacing: 10) {
+                Button("Test Connection", action: onTestConnection)
+                    .disabled(testPhase == .testing)
+                switch testPhase {
+                case .testing:
+                    ProgressView().controlSize(.small)
+                case .succeeded:
+                    Label("Connected", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                        .font(.callout)
+                case .idle, .failed:
+                    EmptyView()
+                }
+            }
+        }
+
+        @ViewBuilder private var doclingDialogFields: some View {
+            Section {
+                TextField("Endpoint", text: $endpoint, prompt: Text(ExtractionConfig.defaultDoclingServeEndpoint))
+                    .onChange(of: endpoint) { onPersist() }
+                TextField("Timeout (seconds)", text: $timeoutSeconds, prompt: Text("600"))
+                    .onChange(of: timeoutSeconds) { onPersist() }
+                // Write-only token entry (#1159): the field starts blank and
+                // never shows the stored token; Save/Remove are explicit.
+                SecureField("API Token (optional)", text: $tokenDraft, prompt: Text(tokenConfigured ? "Configured — enter a new token to replace" : "Enter token"))
+                    .accessibilityIdentifier("extraction.docling.token.field")
+                HStack {
+                    Group {
+                        if tokenConfigured {
+                            Label("Token configured", systemImage: "checkmark.seal")
+                        } else {
+                            Text("No token stored")
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("extraction.docling.token.status")
+                    Spacer()
+                    Button("Save Token") { onSaveToken() }
+                        .disabled(CredentialValue.normalized(tokenDraft) == nil)
+                        .accessibilityIdentifier("extraction.docling.token.save")
+                    Button("Remove Token", role: .destructive) { onRemoveToken() }
+                        .disabled(!tokenConfigured)
+                        .accessibilityIdentifier("extraction.docling.token.remove")
+                }
+            } header: {
+                Text("Docling Serve")
+            } footer: {
+                Text("Run `docling-serve run` locally, then point this at its base URL. Private to your network. The token is only needed if the server was started with DOCLING_SERVE_API_KEY; it is stored in your Keychain and never shown after you save it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+
+        private var dialogFooter: some View {
+            HStack {
+                Spacer()
+                Button("Done") { onPersist() }
+            }
+            .padding(12)
         }
     }
 
@@ -948,6 +1103,10 @@ struct ExtractionSettingsView: View {
 
     private enum Metrics {
         static let width: CGFloat = 460
+        /// Connected-service configuration dialogs (macos-design: a compact
+        /// modal form with a Done button).
+        static let dialogWidth: CGFloat = 460
+        static let dialogHeight: CGFloat = 380
         /// A fixed height tall enough for the multi-line footers and so that
         /// switching backends (sections of different heights) doesn't resize
         /// the window. A short section just leaves space below it.

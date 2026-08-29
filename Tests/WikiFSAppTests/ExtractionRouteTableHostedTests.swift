@@ -222,11 +222,15 @@ struct ExtractionRouteTableHostedTests {
         #expect(source.contains("NSViewRepresentable") == false)
 
         // ACP and Docling configuration follows the PDF route selection only.
-        // #1159: the Docling section also follows the reviewed Docling
-        // package selection.
+        // #1159: connected-service options open in a Configure… dialog
+        // (macos-design progressive disclosure) rather than inline sections.
         #expect(source.contains("switch routeSelections[ExtractorRouteID.canonicalPDF.description]"))
-        #expect(source.contains("case .connectedService(.acp): acpSection"))
-        #expect(source.contains(".reviewedDocling: doclingSection"))
+        #expect(source.contains("case .connectedService(.acp):"))
+        #expect(source.contains(".reviewedDocling:"))
+        #expect(source.contains("Button(\"Configure…\")"))
+        #expect(source.contains(".sheet(item: $serviceConfigurationDialog)"))
+        #expect(source.contains("ACPConfigurationDialog("))
+        #expect(source.contains("DoclingConfigurationDialog("))
 
         // Technical MIME identity stays out of the primary columns (help text).
         #expect(source.contains("MIME type: \\(row.route.mimeType.rawValue)"))
