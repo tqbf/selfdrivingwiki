@@ -8,8 +8,10 @@ import WikiFSCore
 /// registry. Settings consumes this snapshot to build route choices without
 /// inspecting package payloads, paths, or manifests.
 public struct ExtractorRouteRegistrationSnapshot: Hashable, Sendable {
-    /// The exact active registration (revision + registration ID).
+    /// The exact package registration (revision + registration ID).
     public let reference: ExtractorReference
+    /// The package source used for picker presentation.
+    public let sourceCategory: ExtractorRouteSourceCategory
     /// User-facing registration name from the validated manifest.
     public let displayName: String
     /// User-facing package name from the validated manifest.
@@ -25,6 +27,7 @@ public struct ExtractorRouteRegistrationSnapshot: Hashable, Sendable {
 
     public init(
         reference: ExtractorReference,
+        sourceCategory: ExtractorRouteSourceCategory = .installedPackage,
         displayName: String,
         packageName: String,
         kinds: Set<ExtractorKind>,
@@ -33,6 +36,7 @@ public struct ExtractorRouteRegistrationSnapshot: Hashable, Sendable {
         credentialRequirements: [ExtractorCredentialRequirement] = []
     ) {
         self.reference = reference
+        self.sourceCategory = sourceCategory
         self.displayName = displayName
         self.packageName = packageName
         self.kinds = kinds
@@ -154,9 +158,8 @@ public struct ExtractorRouteSettingsRow: Hashable, Sendable, Identifiable {
     public var id: String { descriptor.route.description }
 }
 
-/// Host-owned route descriptors and built-in/connected choices for the two
-/// canonical routes. Future registrations can add routes and package choices,
-/// but the host's own choices are fixed here — reviewed packages included.
+/// Host-owned route descriptors and non-package choices for the two canonical
+/// routes. Package choices come from validated catalog records.
 public enum ExtractorRouteHostCatalog {
     /// Canonical routes in host display order (PDF first, then HTML).
     public static let descriptors: [ExtractorRouteDescriptor] = [
@@ -178,19 +181,6 @@ public enum ExtractorRouteHostCatalog {
             return [
                 ExtractorRouteChoice(
                     route: route,
-                    reference: .installed(ProcessExtractionServices.reviewedPDFLogical),
-                    displayName: "pdf2md",
-                    category: .reviewedPackage),
-                // Docling Serve runs through the reviewed revision 2 package
-                // (#1159) — a reviewed package choice, not a connected host
-                // service.
-                ExtractorRouteChoice(
-                    route: route,
-                    reference: .installed(ProcessExtractionServices.reviewedDoclingLogical),
-                    displayName: "Docling Serve",
-                    category: .reviewedPackage),
-                ExtractorRouteChoice(
-                    route: route,
                     reference: .builtIn(.pdf(.acp)),
                     displayName: "ACP Provider",
                     category: .connectedService),
@@ -203,11 +193,6 @@ public enum ExtractorRouteHostCatalog {
                     reference: nil,
                     displayName: "No default (ask each time)",
                     category: .prompt),
-                ExtractorRouteChoice(
-                    route: route,
-                    reference: .installed(ProcessExtractionServices.reviewedHTMLLogical),
-                    displayName: "Defuddle",
-                    category: .reviewedPackage),
                 ExtractorRouteChoice(
                     route: route,
                     reference: .builtIn(.html(.tagBased)),

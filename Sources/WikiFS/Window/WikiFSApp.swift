@@ -802,6 +802,7 @@ struct WikiFSApp: App {
                         snapshot.registrationSnapshots = await services.extractionBackends.installedRegistrationSnapshots()
                         if let context = services.extractionContext {
                             let observation = await context.observationSnapshot()
+                            snapshot.availableRegistrationSnapshots = context.availableRegistrationSnapshots()
                             snapshot.failedPackages = observation.retainedFailures.map {
                                 ExtractorPackageFailureSummary(
                                     packageID: $0.packageID,

@@ -93,16 +93,30 @@ struct ReviewedDoclingLegacyMappingTests {
         await services.shutdown()
     }
 
-    /// The route host catalog presents Docling Serve as a reviewed package
-    /// choice (not a connected host service).
-    @Test func routeCatalogPresentsDoclingAsReviewedPackage() throws {
-        let choice = try #require(
-            ExtractorRouteHostCatalog.choices(for: .canonicalPDF)
-                .first { $0.displayName == "Docling Serve" })
-        #expect(choice.category == .reviewedPackage)
+    /// The host catalog owns no package choices. A validated package snapshot
+    /// supplies the reviewed Docling choice.
+    @Test func routeBuilderProjectsDoclingFromPackageSnapshot() throws {
         #expect(
-            choice.reference
-                == .installed(ProcessExtractionServices.reviewedDoclingLogical))
+            ExtractorRouteHostCatalog.choices(for: .canonicalPDF)
+                .contains { $0.category == .reviewedPackage } == false)
+        let package = ReviewedExtractorPackages.doclingServe
+        let snapshot = ExtractorRouteRegistrationSnapshot(
+            reference: ExtractorReference(
+                revision: package.revision,
+                registrationID: try ExtractorRegistrationID(validating: "document")),
+            sourceCategory: .reviewedPackage,
+            displayName: "Docling Serve",
+            packageName: "Docling Serve",
+            kinds: [.pdf],
+            mimeTypes: [ExtractorRouteID.canonicalPDF.mimeType],
+            filenameExtensions: [])
+        let row = try #require(ExtractorRouteTableBuilder.build(.init(
+            configuration: ExtractionConfig(backend: .acp),
+            registrations: [],
+            availableRegistrations: [snapshot])).first { $0.route == .canonicalPDF })
+        let choice = try #require(row.choices.first { $0.displayName == "Docling Serve" })
+        #expect(choice.category == .reviewedPackage)
+        #expect(choice.reference == .installed(ProcessExtractionServices.reviewedDoclingLogical))
     }
 
     // MARK: - Support

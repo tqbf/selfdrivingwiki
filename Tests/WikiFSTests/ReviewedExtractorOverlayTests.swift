@@ -55,6 +55,29 @@ struct ReviewedExtractorOverlayTests {
         await context.shutdown()
     }
 
+    /// Settings projects reviewed choices from the validated overlay before
+    /// activation. The host catalog contributes no package choices.
+    @Test func reviewedOverlayProvidesPreActivationRouteChoices() async throws {
+        let environment = try Environment.make()
+        defer { environment.cleanup() }
+
+        let context = try await ProcessExtractionContext.assemble(
+            layout: environment.layout,
+            reviewedPackageRoot: Environment.reviewedPackagesRoot)
+        let snapshots = context.availableRegistrationSnapshots()
+        await context.shutdown()
+
+        #expect(snapshots.count == ReviewedExtractorPackages.all.count)
+        #expect(snapshots.allSatisfy { $0.sourceCategory == .reviewedPackage })
+        #expect(Set(snapshots.map(\.reference.revision)) == Set(ReviewedExtractorPackages.all.map(\.revision)))
+        #expect(
+            ExtractorRouteHostCatalog.choices(for: .canonicalPDF)
+                .contains { $0.category == .reviewedPackage } == false)
+        #expect(
+            ExtractorRouteHostCatalog.choices(for: .canonicalHTML)
+                .contains { $0.category == .reviewedPackage } == false)
+    }
+
     /// Running reviewed packages must not make a reader process a catalog
     /// writer. The durable catalog stays empty.
     @Test func reviewedOverlayNeverWritesTheDurableCatalog() async throws {

@@ -24,6 +24,7 @@ struct ExtractorRouteTableBuilderTests {
         registrationID: String = "main",
         displayName: String,
         packageName: String = "Example Package",
+        sourceCategory: ExtractorRouteSourceCategory = .installedPackage,
         kinds: Set<ExtractorKind>,
         mimeTypes: [String],
         extensions: Set<String> = []
@@ -35,6 +36,7 @@ struct ExtractorRouteTableBuilderTests {
                     version: ExtractorPackageVersion(validating: version),
                     digest: ExtractorPackageDigest(hex: digestHex)),
                 registrationID: ExtractorRegistrationID(validating: registrationID)),
+            sourceCategory: sourceCategory,
             displayName: displayName,
             packageName: packageName,
             kinds: kinds,
@@ -156,6 +158,28 @@ struct ExtractorRouteTableBuilderTests {
         #expect(packageChoices[0].exactSummary?.hasPrefix("2.0.0 · \(digest(6).prefix(12))") == true)
     }
 
+    @Test func activeReviewedPackageAppearsOnceFromCatalogProjection() throws {
+        let reviewed = try snapshot(
+            packageID: ProcessExtractionServices.reviewedPDFLogical.packageID.rawValue,
+            version: "1.0.0",
+            digestHex: digest(16),
+            registrationID: ProcessExtractionServices.reviewedPDFLogical.registrationID.rawValue,
+            displayName: "pdf2md",
+            sourceCategory: .reviewedPackage,
+            kinds: [.pdf],
+            mimeTypes: ["application/pdf"])
+        let rows = ExtractorRouteTableBuilder.build(.init(
+            configuration: ExtractionConfig(backend: .acp),
+            registrations: [reviewed],
+            availableRegistrations: [reviewed]))
+        let pdf = try #require(rows.first { $0.route == .canonicalPDF })
+        let matches = pdf.choices.filter {
+            $0.reference == .installed(ProcessExtractionServices.reviewedPDFLogical)
+        }
+        #expect(matches.count == 1)
+        #expect(matches.first?.category == .reviewedPackage)
+    }
+
     // MARK: - AC.8: stale selections stay visible and blocked
 
     @Test func staleSelectionIsPreservedAndUnavailable() throws {
@@ -258,36 +282,66 @@ struct ExtractorRouteTableBuilderTests {
     // MARK: - AC.9: current choice matrix
 
     @Test func currentRouteChoiceMatrix() throws {
+        let active = [
+            try snapshot(
+                packageID: "org.example.pdf",
+                version: "1.0.0",
+                digestHex: digest(9),
+                registrationID: "pdfmain",
+                displayName: "PDF Package",
+                kinds: [.pdf],
+                mimeTypes: ["application/pdf"]),
+            try snapshot(
+                packageID: "org.example.html",
+                version: "1.0.0",
+                digestHex: digest(10),
+                registrationID: "htmlmain",
+                displayName: "HTML Package",
+                kinds: [.html],
+                mimeTypes: ["text/html"]),
+        ]
+        let available = active + [
+            try snapshot(
+                packageID: ProcessExtractionServices.reviewedPDFLogical.packageID.rawValue,
+                version: "1.0.0",
+                digestHex: digest(13),
+                registrationID: ProcessExtractionServices.reviewedPDFLogical.registrationID.rawValue,
+                displayName: "pdf2md",
+                sourceCategory: .reviewedPackage,
+                kinds: [.pdf],
+                mimeTypes: ["application/pdf"]),
+            try snapshot(
+                packageID: ProcessExtractionServices.reviewedDoclingLogical.packageID.rawValue,
+                version: "1.0.0",
+                digestHex: digest(14),
+                registrationID: ProcessExtractionServices.reviewedDoclingLogical.registrationID.rawValue,
+                displayName: "Docling Serve",
+                sourceCategory: .reviewedPackage,
+                kinds: [.pdf],
+                mimeTypes: ["application/pdf"]),
+            try snapshot(
+                packageID: ProcessExtractionServices.reviewedHTMLLogical.packageID.rawValue,
+                version: "1.0.0",
+                digestHex: digest(15),
+                registrationID: ProcessExtractionServices.reviewedHTMLLogical.registrationID.rawValue,
+                displayName: "Defuddle",
+                sourceCategory: .reviewedPackage,
+                kinds: [.html],
+                mimeTypes: ["text/html"]),
+        ]
         let input = ExtractorRouteTableBuilder.Input(
             configuration: ExtractionConfig(backend: .acp),
-            registrations: [
-                try snapshot(
-                    packageID: "org.example.pdf",
-                    version: "1.0.0",
-                    digestHex: digest(9),
-                    registrationID: "pdfmain",
-                    displayName: "PDF Package",
-                    kinds: [.pdf],
-                    mimeTypes: ["application/pdf"]),
-                try snapshot(
-                    packageID: "org.example.html",
-                    version: "1.0.0",
-                    digestHex: digest(10),
-                    registrationID: "htmlmain",
-                    displayName: "HTML Package",
-                    kinds: [.html],
-                    mimeTypes: ["text/html"]),
-            ])
+            registrations: active,
+            availableRegistrations: available)
         let rows = ExtractorRouteTableBuilder.build(input)
         let pdf = rows.first { $0.route == .canonicalPDF }
         let html = rows.first { $0.route == .canonicalHTML }
 
-        // PDF: reviewed pdf2md, reviewed Docling Serve, installed PDF
-        // packages, ACP — in that order (#1159 moved Docling into the
-        // reviewed-package category).
+        // PDF: reviewed packages and installed packages sort by package ID,
+        // followed by the host-owned ACP service.
         #expect(pdf?.choices.map { "\($0.displayName)|\($0.category.rawValue)" } == [
-            "pdf2md|reviewed-package",
             "Docling Serve|reviewed-package",
+            "pdf2md|reviewed-package",
             "PDF Package|installed-package",
             "ACP Provider|connected-service",
         ])

@@ -37,6 +37,7 @@ public struct ProcessExtractionContext: Sendable {
     public let host: DynamicPluginHost
     public let reconciler: ExtractorPackagePluginReconciler
     public let layout: ExtractorPackageStoreLayout
+    private let catalogReader: any ExtractorPackageCatalogReading
     /// Retained for the process lifetime so local and cross-process catalog
     /// wakes reach this context's reconciler. Wakes are hints only.
     private let wakeObserver: ExtractorCatalogWakeObserver
@@ -142,6 +143,7 @@ public struct ProcessExtractionContext: Sendable {
             host: host,
             reconciler: reconciler,
             layout: layout,
+            catalogReader: catalogReader,
             wakeObserver: wakeObserver)
     }
 
@@ -167,6 +169,35 @@ public struct ProcessExtractionContext: Sendable {
         waitingRevisionIDs: Set<ExtractorPackageRevisionID>
     ) {
         await reconciler.observation()
+    }
+
+    /// Validated package registrations available for route selection. This uses
+    /// the same durable-plus-reviewed catalog that drives reconciliation.
+    public func availableRegistrationSnapshots() -> [ExtractorRouteRegistrationSnapshot] {
+        let catalog: ExtractorPackageCatalog
+        do {
+            catalog = try catalogReader.read()
+        } catch {
+            DebugLog.extraction("extractor route choices: catalog unreadable")
+            return []
+        }
+        let reviewedRevisions = Set(ReviewedExtractorPackages.all.map(\.revision))
+        return catalog.records.flatMap { record in
+            record.registrations.map { registration in
+                ExtractorRouteRegistrationSnapshot(
+                    reference: ExtractorReference(
+                        revision: record.revision,
+                        registrationID: registration.id),
+                    sourceCategory: reviewedRevisions.contains(record.revision)
+                        ? .reviewedPackage : .installedPackage,
+                    displayName: registration.displayName,
+                    packageName: record.displayName,
+                    kinds: registration.kinds,
+                    mimeTypes: registration.mimeTypes,
+                    filenameExtensions: registration.filenameExtensions,
+                    credentialRequirements: registration.credentialRequirements)
+            }
+        }.sorted { $0.reference < $1.reference }
     }
 
     /// Disposes the process-local Cordis graph. Cordis owns idempotence, so a

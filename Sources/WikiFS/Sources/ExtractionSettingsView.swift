@@ -955,6 +955,7 @@ struct ExtractionSettingsView: View {
         routeRows = ExtractorRouteTableBuilder.build(.init(
             configuration: config,
             registrations: packageModel.snapshot.registrationSnapshots,
+            availableRegistrations: packageModel.snapshot.routeChoiceRegistrationSnapshots,
             installedRevisionIDs: Set(packageModel.snapshot.rows.map(\.revision)),
             waitingRevisionIDs: packageModel.snapshot.waitingRevisionIDs))
         var selections: [String: ExtractorRouteSettingsSelection] = [:]
@@ -1962,6 +1963,7 @@ struct ExtractorPackageSettingsSnapshot: Sendable, Equatable {
     var failedPackages: [ExtractorPackageFailureSummary] = []
     var appliedGeneration: UInt64?
     var registrationSnapshots: [ExtractorRouteRegistrationSnapshot] = []
+    var availableRegistrationSnapshots: [ExtractorRouteRegistrationSnapshot] = []
     var waitingRevisionIDs: Set<ExtractorPackageRevisionID> = []
     /// Credential requirement summaries (#1159): presentation values only —
     /// label, purpose, optionality, configured/missing state, source, and
@@ -1970,6 +1972,17 @@ struct ExtractorPackageSettingsSnapshot: Sendable, Equatable {
     var credentialRequirements: [ExtractorCredentialRequirementSummary] = []
 
     static let empty = ExtractorPackageSettingsSnapshot()
+
+    /// Catalog entries own picker presentation. Active entries fill gaps if a
+    /// catalog read fails or changes during a refresh.
+    var routeChoiceRegistrationSnapshots: [ExtractorRouteRegistrationSnapshot] {
+        var byReference = Dictionary(
+            uniqueKeysWithValues: registrationSnapshots.map { ($0.reference, $0) })
+        for snapshot in availableRegistrationSnapshots {
+            byReference[snapshot.reference] = snapshot
+        }
+        return byReference.values.sorted { $0.reference < $1.reference }
+    }
 }
 
 /// One declared credential requirement as presented in Installed Extractor
