@@ -7,7 +7,7 @@ Run this test on macOS with VoiceOver enabled. Use a test App Group and a dispos
 3. Move focus to the `Default extractor routes` table in the Default Extractors section.
 4. Confirm that VoiceOver announces the two canonical rows, PDF first and HTML second.
 5. In each row, move to the `Default extractor for PDF` / `Default extractor for HTML` pop-up.
-6. Confirm that VoiceOver reads the selected extractor and the status (for example `pdf2md, Available`).
+6. Confirm that VoiceOver reads the selected extractor, the status icon color, and the short status label (for example `pdf2md, Available`).
 7. Open the PDF pop-up. Confirm the option captions read `name — source` (Reviewed package, Installed package, Connected service, Built in).
 8. Choose the ACP Provider option. Confirm a `Configure…` button appears in that row's Configuration column, and VoiceOver announces focus movement to the next control after the table.
 9. Choose the Docling Serve option. Confirm a `Configure…` button appears in that row's Configuration column instead of inline fields.
@@ -21,7 +21,7 @@ Run this test on macOS with VoiceOver enabled. Use a test App Group and a dispos
 17. Activate `Authorize`. Confirm the row announces `Authorized`.
 18. Activate `Revoke…`. Confirm the dialog states that revoking the grant does not delete the stored credential, then activate `Revoke`. Confirm the row announces `Needs authorization` again.
 19. Choose the reviewed pdf2md option. Confirm no service section remains.
-18. Move focus to a Status cell that reads `Using fallback`. Activate the help text. Confirm VoiceOver reads the fallback that actually runs (Bundled pdf2md extraction or Tag-based text extraction).
+20. Move focus to a Status cell showing the orange swap icon with the label `Fallback`. Activate the cell. Confirm VoiceOver reads the full state text (`Using fallback`) and the tooltip names the fallback that actually runs (Bundled pdf2md extraction or Tag-based text extraction).
 19. Move focus to `Advanced Local Package Import`.
 20. Confirm that VoiceOver reads the executable-code warning.
 21. Confirm that VoiceOver reads that the app's lifecycle and capability controls do not create a security sandbox.
