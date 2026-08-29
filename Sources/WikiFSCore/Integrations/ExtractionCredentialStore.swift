@@ -20,6 +20,18 @@ public enum ExtractionSecret: String, Sendable {
     case doclingServeToken
 }
 
+extension CredentialReference {
+    /// The typed reference for an extraction secret at its legacy
+    /// extraction-service location (`org.sockpuppet.WikiFS.extraction`).
+    public static func extraction(_ secret: ExtractionSecret) -> CredentialReference? {
+        switch secret {
+        case .anthropicAPIKey: return extraction("anthropic-api-key")
+        case .geminiAPIKey: return extraction("gemini-api-key")
+        case .doclingServeToken: return extraction("docling-serve-token")
+        }
+    }
+}
+
 #if os(macOS)
 import Security
 
@@ -30,10 +42,13 @@ public struct ExtractionKeychainError: Error, Equatable {
 }
 
 /// The production `ExtractionCredentialStore`: one generic-password Keychain
-/// item per secret, under a shared `service`. `KeychainSecretStore` (the shared
-/// helper) writes items to the DataProtection keychain under a shared
-/// `keychain-access-groups` access group so the un-sandboxed `wikid` daemon can
-/// read them — see `plans/keychain-sharing.md`.
+/// item per secret, under a shared `service`.
+///
+/// Issue #1159: a thin adapter over the shared `KeychainCredentialService`.
+/// Each `ExtractionSecret` maps to a typed reference under the `extraction`
+/// domain; the location catalog resolves those references to the exact
+/// `org.sockpuppet.WikiFS.extraction` accounts this store always used, so
+/// existing secrets are read and written in place with no copy (AC.3).
 public struct KeychainExtractionCredentialStore: ExtractionCredentialStore {
     private static let service = "org.sockpuppet.WikiFS.extraction"
 
@@ -47,17 +62,47 @@ public struct KeychainExtractionCredentialStore: ExtractionCredentialStore {
         }
     }
 
+    private func reference(for secret: ExtractionSecret) -> CredentialReference? {
+        CredentialReference.extraction(account(for: secret))
+    }
+
     public func secret(_ secret: ExtractionSecret) -> String? {
-        KeychainSecretStore.read(service: Self.service, account: account(for: secret))
+        guard let reference = reference(for: secret) else {
+            return KeychainSecretStore.read(
+                service: Self.service, account: account(for: secret))
+        }
+        do {
+            return try KeychainCredentialService().resolve(reference).value
+        } catch CredentialStoreError.notConfigured {
+            return nil
+        } catch {
+            DebugLog.config(
+                "Extraction credential read failed for \(reference.rawValue): \(error)")
+            return nil
+        }
     }
 
     public func setSecret(_ value: String?, _ secret: ExtractionSecret) throws {
-        let account = account(for: secret)
-        try KeychainSecretStore.write(
-            service: Self.service, account: account, value: value,
-            error: { operation, status in
-                ExtractionKeychainError(operation: "\(operation)(\(account))", status: status)
-            })
+        let accountName = account(for: secret)
+        guard let reference = reference(for: secret) else {
+            try KeychainSecretStore.write(
+                service: Self.service, account: accountName, value: value,
+                error: { operation, status in
+                    ExtractionKeychainError(operation: "\(operation)(\(accountName))", status: status)
+                })
+            return
+        }
+        do {
+            try KeychainCredentialService().set(
+                CredentialValue.normalized(value), for: reference)
+        } catch let error as CredentialStoreError {
+            switch error {
+            case .writeFailed(let operation, let status):
+                throw ExtractionKeychainError(operation: "\(operation)(\(accountName))", status: status)
+            default:
+                throw ExtractionKeychainError(operation: "write(\(accountName))", status: -1)
+            }
+        }
     }
 }
 #endif // os(macOS)

@@ -77,5 +77,25 @@ struct KeychainSecretStoreTests {
         #expect(query[kSecUseDataProtectionKeychain as String] as? Bool == true)
         #expect(query[kSecAttrAccessGroup as String] == nil)
     }
+
+    // MARK: - Throwing reads (#1159 credential service backend)
+
+    @Test func throwingReadQueryMatchesTheSharedBaseQueryShape() {
+        // The throwing path queries with exactly the attributes the
+        // legacy path used (service + account + optional DP/group), so a
+        // legacy item is found in place. The REAL absence-vs-failure
+        // semantics of `readOrThrow` need a live keychain — that coverage is
+        // the opt-in `CredentialKeychainMultiprocessTests` (the configured
+        // access group on signed machines makes an un-gated real read throw
+        // errSecMissingEntitlement here).
+        let query = KeychainSecretStore.baseQuery(
+            service: "org.sockpuppet.WikiFS.credentials",
+            account: "test.reference",
+            useDP: KeychainSecretStore.useDataProtectionKeychain,
+            accessGroup: KeychainSecretStore.accessGroup)
+        #expect(query[kSecClass as String] as? String == kSecClassGenericPassword as String)
+        #expect(query[kSecAttrService as String] as? String == "org.sockpuppet.WikiFS.credentials")
+        #expect(query[kSecAttrAccount as String] as? String == "test.reference")
+    }
 }
 #endif // os(macOS)

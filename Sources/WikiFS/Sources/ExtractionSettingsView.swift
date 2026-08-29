@@ -17,7 +17,14 @@ import WikiFSTypes
 /// is unambiguous (it always targets the visible section).
 struct ExtractionSettingsView: View {
     let containerDirectory: URL
-    let credentialStore: any ExtractionCredentialStore
+    /// UI-safe credential authority (#1159): describe (configured state) +
+    /// write for the Docling token. NOT a `CredentialResolving` — the view
+    /// cannot read a secret value, only store or remove one.
+    let credentials: any CredentialDescribing & CredentialWriting
+    /// Host-owned privileged action for Test Connection: resolves the stored
+    /// Docling token OUTSIDE the view and verifies the endpoint. Returns
+    /// `nil` on success or a redacted failure message.
+    let verifyDoclingConnection: @Sendable (_ endpoint: String) async -> String?
     let fetcher: any HTTPRequestFetcher
     /// Provides the enabled-provider list for the ACP backend picker.
     let launcher: AgentLauncher
@@ -44,7 +51,10 @@ struct ExtractionSettingsView: View {
     @State private var routeSelections: [String: ExtractorRouteSettingsSelection] = [:]
     @State private var acpProviderSelection: String
     @State private var doclingEndpointText: String
-    @State private var doclingTokenText: String
+    /// Write-only token draft (#1159): starts blank, never preloads the
+    /// stored token. `doclingTokenConfigured` drives the status + Remove.
+    @State private var doclingTokenText = ""
+    @State private var doclingTokenConfigured = false
     @State private var doclingTest = TestPhase.idle
     // Issue #799 PR1: Podcast backend draft (optional — nil = no default yet,
     // user is prompted to pick on first transcription). Seeded from
@@ -65,7 +75,8 @@ struct ExtractionSettingsView: View {
     init(
         containerDirectory: URL,
         launcher: AgentLauncher,
-        credentialStore: any ExtractionCredentialStore = KeychainExtractionCredentialStore(),
+        credentials: (any CredentialDescribing & CredentialWriting)? = nil,
+        verifyDoclingConnection: (@Sendable (_ endpoint: String) async -> String?)? = nil,
         fetcher: any HTTPRequestFetcher = URLSessionRequestFetcher(),
         packageSnapshot: (@Sendable () async -> ExtractorPackageSettingsSnapshot)? = nil,
         importPackage: (@Sendable (URL) async -> ExtractorPackageMutationOutcome)? = nil,
@@ -73,7 +84,11 @@ struct ExtractionSettingsView: View {
     ) {
         self.containerDirectory = containerDirectory
         self.launcher = launcher
-        self.credentialStore = credentialStore
+        self.credentials = credentials ?? KeychainCredentialService()
+        // Default action: host-owned privileged resolution (see
+        // HostCredentialActions) — the view itself never resolves a value.
+        self.verifyDoclingConnection = verifyDoclingConnection
+            ?? HostCredentialActions.verifyDocling(fetcher: fetcher)
         self.fetcher = fetcher
         self.packageSnapshot = packageSnapshot
         self.importPackage = importPackage
@@ -81,10 +96,10 @@ struct ExtractionSettingsView: View {
 
         // Seed the drafts once, at construction — so there's no onAppear race
         // where an `.onChange` fires before the loaded values are in place.
+        // The token draft is deliberately NOT seeded (#1159): write-only.
         let config = ExtractionConfig.load(from: containerDirectory)
         _acpProviderSelection = State(initialValue: ExtractorSettingsSelectionMapping.acpProviderSelection(from: config))
         _doclingEndpointText = State(initialValue: config.doclingServeEndpoint ?? "")
-        _doclingTokenText = State(initialValue: credentialStore.secret(.doclingServeToken) ?? "")
         _draftPodcastBackend = State(initialValue: config.podcastBackend)
         _packageModel = State(initialValue: ExtractorPackageSettingsModel(
             loadSnapshot: packageSnapshot,
@@ -141,6 +156,7 @@ struct ExtractionSettingsView: View {
         // Async model mutations stay on the main actor; the load closure hops
         // to the process registry off-main and returns a value snapshot.
         .task {
+            doclingTokenConfigured = refreshDoclingTokenState()
             await packageModel.refresh()
             rebuildRouteRows()
         }
@@ -601,13 +617,34 @@ struct ExtractionSettingsView: View {
         Section {
             TextField("Endpoint", text: $doclingEndpointText, prompt: Text(ExtractionConfig.defaultDoclingServeEndpoint))
                 .onChange(of: doclingEndpointText) { persistAll() }
-            SecureField("API Token (optional)", text: $doclingTokenText)
-                .onChange(of: doclingTokenText) { persistAll() }
+            // Write-only token entry (#1159): the field starts blank and
+            // never shows the stored token; Save/Remove are explicit.
+            SecureField("API Token (optional)", text: $doclingTokenText, prompt: Text(doclingTokenConfigured ? "Configured — enter a new token to replace" : "Enter token"))
+                .accessibilityIdentifier("extraction.docling.token.field")
+            HStack {
+                Group {
+                    if doclingTokenConfigured {
+                        Label("Token configured", systemImage: "checkmark.seal")
+                    } else {
+                        Text("No token stored")
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("extraction.docling.token.status")
+                Spacer()
+                Button("Save Token") { saveDoclingToken() }
+                    .disabled(CredentialValue.normalized(doclingTokenText) == nil)
+                    .accessibilityIdentifier("extraction.docling.token.save")
+                Button("Remove Token", role: .destructive) { removeDoclingToken() }
+                    .disabled(!doclingTokenConfigured)
+                    .accessibilityIdentifier("extraction.docling.token.remove")
+            }
             testConnectionRow(phase: $doclingTest, action: testDocling)
         } header: {
             Text("Docling Serve")
         } footer: {
-            Text("Run `docling-serve run` locally, then point this at its base URL. Private to your network. The token is only needed if the server was started with DOCLING_SERVE_API_KEY.")
+            Text("Run `docling-serve run` locally, then point this at its base URL. Private to your network. The token is only needed if the server was started with DOCLING_SERVE_API_KEY; it is stored in your Keychain and never shown after you save it.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -649,15 +686,44 @@ struct ExtractionSettingsView: View {
 
     // MARK: - Auto-save
 
-    /// Persist every non-secret draft into `ExtractionConfig` and every secret
-    /// into Keychain. Called from each field's `.onChange`, so the panel is
-    /// always up to date — no Save button, no lost-on-close window.
+    /// Persist every non-secret draft into `ExtractionConfig`. Called from
+    /// each field's `.onChange`, so the panel is always up to date — no Save
+    /// button, no lost-on-close window. The Docling token is NOT here: it is
+    /// write-only (#1159) with explicit Save/Remove buttons.
     private func persistAll() {
         var config = ExtractionConfig.load(from: containerDirectory)
         writeConfig(into: &config)
         DebugLog.trying("save extraction config", operation: { try config.save(to: containerDirectory) })
+    }
 
-        DebugLog.trying("set Docling token", operation: { try credentialStore.setSecret(doclingTokenText.isEmpty ? nil : doclingTokenText, .doclingServeToken) })
+    /// Explicit token save (write-only authority): normalized write, then
+    /// clear the draft and refresh the configured state.
+    private func saveDoclingToken() {
+        guard let value = CredentialValue.normalized(doclingTokenText),
+              let reference = CredentialReference.extraction(.doclingServeToken)
+        else { return }
+        DebugLog.trying("set Docling token", operation: {
+            try credentials.set(value, for: reference)
+        })
+        doclingTokenText = ""
+        doclingTokenConfigured = refreshDoclingTokenState()
+    }
+
+    /// Explicit removal — an untouched blank field never deletes the token.
+    private func removeDoclingToken() {
+        guard let reference = CredentialReference.extraction(.doclingServeToken) else { return }
+        DebugLog.trying("remove Docling token", operation: {
+            try credentials.unset(reference)
+        })
+        doclingTokenText = ""
+        doclingTokenConfigured = refreshDoclingTokenState()
+    }
+
+    private func refreshDoclingTokenState() -> Bool {
+        guard let reference = CredentialReference.extraction(.doclingServeToken) else {
+            return false
+        }
+        return credentials.describe(reference).isConfigured
     }
 
     /// Write every non-secret draft into `config`. The route selections are
@@ -672,17 +738,17 @@ struct ExtractionSettingsView: View {
 
     // MARK: - Test Connection
 
+    /// Host-owned action: the view passes only the endpoint; the stored token
+    /// resolves OUTSIDE the view and the outcome is redacted.
     private func testDocling() {
         doclingTest = .testing
         let endpoint = doclingEndpointText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let client = DoclingServeClient(
-            endpoint: endpoint, apiToken: doclingTokenText, fetcher: fetcher)
+        let action = verifyDoclingConnection
         Task {
-            do {
-                try await client.verifyConnection()
+            if let failureMessage = await action(endpoint) {
+                doclingTest = .failed(failureMessage)
+            } else {
                 doclingTest = .succeeded
-            } catch {
-                doclingTest = .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
             }
         }
     }

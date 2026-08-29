@@ -8,15 +8,27 @@ import WikiFSCore
 /// failures via `.alert`, mirroring `WikiFSApp`'s `FileProviderSetupWarning`
 /// pattern.
 ///
-/// Changes persist immediately via `.onChange(of:)` — no explicit save step.
-/// The Keychain-backed API key is written on every keystroke; the config JSON
-/// is written whenever the library ID or directory override change.
+/// # Credential authority (#1159, plans/credential-service.md)
+/// The API key is WRITE-ONLY from this view's perspective: the field starts
+/// blank, never preloads the stored key, and `credentials` (a
+/// `CredentialDescribing & CredentialWriting` handle) has NO method that can
+/// return a value. Saving is explicit (Save Key button); removal is explicit
+/// (Remove Key) — an untouched blank field no longer means "delete".
+/// "Test Connection" resolves the stored key OUTSIDE the view through the
+/// host-owned `verifyConnection` action and returns only a redacted outcome.
+///
+/// Library ID and directory override persist immediately via `.onChange(of:)`.
 struct ZoteroSettingsView: View {
     let containerDirectory: URL
-    let credentialStore: any ZoteroCredentialStore
-    let fetcher: any ZoteroClient.RequestFetcher
+    /// UI-safe credential authority: describe (configured state) + write.
+    /// Deliberately NOT a `CredentialResolving` — the view cannot read values.
+    let credentials: any CredentialDescribing & CredentialWriting
+    /// Host-owned privileged action: resolves the stored key outside the view
+    /// and verifies it. Returns `nil` on success or a redacted failure message.
+    let verifyConnection: @Sendable (_ libraryID: String) async -> String?
 
     @State private var apiKeyText = ""
+    @State private var isKeyConfigured = false
     @State private var libraryIDText = ""
     @State private var zoteroDirText = ""
     @State private var testPhase: TestPhase = .idle
@@ -30,23 +42,38 @@ struct ZoteroSettingsView: View {
 
     init(
         containerDirectory: URL,
-        credentialStore: any ZoteroCredentialStore = KeychainZoteroCredentialStore(),
+        credentials: (any CredentialDescribing & CredentialWriting)? = nil,
+        verifyConnection: (@Sendable (_ libraryID: String) async -> String?)? = nil,
         fetcher: any ZoteroClient.RequestFetcher = URLSessionZoteroFetcher()
     ) {
         self.containerDirectory = containerDirectory
-        self.credentialStore = credentialStore
-        self.fetcher = fetcher
+        self.credentials = credentials ?? KeychainCredentialService()
+        // Default action: host-owned privileged resolution (see
+        // HostCredentialActions) — the view itself never resolves a value.
+        self.verifyConnection = verifyConnection
+            ?? HostCredentialActions.verifyZotero(fetcher: fetcher)
     }
 
     var body: some View {
         Form {
             Section {
-                SecureField("API Key", text: $apiKeyText)
+                SecureField("API Key", text: $apiKeyText, prompt: Text(isKeyConfigured ? "Configured — enter a new key to replace" : "Enter API key"))
+                    .accessibilityIdentifier("zotero.apiKey.field")
+                HStack {
+                    configuredStatusLabel
+                    Spacer()
+                    Button("Save Key") { saveCredential() }
+                        .disabled(CredentialValue.normalized(apiKeyText) == nil)
+                        .accessibilityIdentifier("zotero.apiKey.save")
+                    Button("Remove Key", role: .destructive) { removeCredential() }
+                        .disabled(!isKeyConfigured)
+                        .accessibilityIdentifier("zotero.apiKey.remove")
+                }
                 TextField("Library ID", text: $libraryIDText)
             } header: {
                 Text("Zotero Account")
             } footer: {
-                Text("Generate a key at zotero.org/settings/keys. Your library ID is the numeric userID shown on that page.")
+                Text("Generate a key at zotero.org/settings/keys. Your library ID is the numeric userID shown on that page. The key is stored in your Keychain and is never shown after you save it.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -83,9 +110,23 @@ struct ZoteroSettingsView: View {
         } message: { message in
             Text(message)
         }
-        .onChange(of: apiKeyText) { _, _ in saveCredential() }
         .onChange(of: libraryIDText) { _, _ in saveConfig() }
         .onChange(of: zoteroDirText) { _, _ in saveConfig() }
+    }
+
+    /// Configured state from `CredentialDescribing` — never a value.
+    private var configuredStatusLabel: some View {
+        Group {
+            if isKeyConfigured {
+                Label("Key configured", systemImage: "checkmark.seal")
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("No key stored")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .font(.caption)
+        .accessibilityIdentifier("zotero.apiKey.status")
     }
 
     // MARK: - Test Connection row
@@ -93,7 +134,8 @@ struct ZoteroSettingsView: View {
     private var testConnectionRow: some View {
         HStack(spacing: 10) {
             Button("Test Connection") { testConnection() }
-                .disabled(testPhase == .testing || libraryIDText.isEmpty || apiKeyText.isEmpty)
+                .disabled(testPhase == .testing || libraryIDText.isEmpty || !isKeyConfigured)
+                .accessibilityIdentifier("zotero.testConnection")
             switch testPhase {
             case .testing:
                 ProgressView().controlSize(.small)
@@ -122,14 +164,33 @@ struct ZoteroSettingsView: View {
     // MARK: - Load / save
 
     private func load() {
-        apiKeyText = credentialStore.apiKey() ?? ""
+        // Write-only: the key field starts BLANK. Only the configured state
+        // is read back (CredentialDescribing — no value surface).
+        isKeyConfigured = credentials.describe(.zoteroAPIKey()).isConfigured
         let config = ZoteroConfig.load(from: containerDirectory)
         libraryIDText = config.libraryID ?? ""
         zoteroDirText = config.zoteroDirOverride ?? ""
     }
 
+    /// Explicit save: normalized write (whitespace-only = no-op), then clear
+    /// the draft and refresh the configured state.
     private func saveCredential() {
-        DebugLog.trying("set Zotero API key", operation: { try credentialStore.setAPIKey(apiKeyText.isEmpty ? nil : apiKeyText) })
+        let value = CredentialValue.normalized(apiKeyText)
+        guard value != nil else { return }
+        DebugLog.trying("set Zotero API key", operation: {
+            try credentials.set(value, for: .zoteroAPIKey())
+        })
+        apiKeyText = ""
+        isKeyConfigured = credentials.describe(.zoteroAPIKey()).isConfigured
+    }
+
+    /// Explicit removal — an untouched blank field never deletes anything.
+    private func removeCredential() {
+        DebugLog.trying("remove Zotero API key", operation: {
+            try credentials.unset(.zoteroAPIKey())
+        })
+        apiKeyText = ""
+        isKeyConfigured = credentials.describe(.zoteroAPIKey()).isConfigured
     }
 
     private func saveConfig() {
@@ -148,20 +209,17 @@ struct ZoteroSettingsView: View {
         zoteroDirText = url.path
     }
 
+    /// Host-owned action: the view never sees the key; the outcome is only
+    /// connected / failed-with-redacted-message.
     private func testConnection() {
-        let config = ZoteroClient.Config(
-            libraryID: libraryIDText.trimmingCharacters(in: .whitespacesAndNewlines),
-            apiKey: apiKeyText)
-        let client = ZoteroClient(config: config, fetcher: fetcher)
+        let libraryID = libraryIDText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let action = verifyConnection
         testPhase = .testing
         Task {
-            do {
-                try await client.verifyConnection()
+            if let failureMessage = await action(libraryID) {
+                testPhase = .failed(failureMessage)
+            } else {
                 testPhase = .succeeded
-            } catch {
-                let message = (error as? ZoteroClient.ZoteroError)?.errorDescription
-                    ?? error.localizedDescription
-                testPhase = .failed(message)
             }
         }
     }

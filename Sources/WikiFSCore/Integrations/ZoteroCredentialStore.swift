@@ -23,9 +23,11 @@ public struct ZoteroKeychainError: Error, Equatable {
 }
 
 /// The production `ZoteroCredentialStore`: a generic-password Keychain item.
-/// `KeychainSecretStore` (the shared helper) writes items to the DataProtection
-/// keychain under a shared `keychain-access-groups` access group so the
-/// un-sandboxed `wikid` daemon can read them — see `plans/keychain-sharing.md`.
+///
+/// Issue #1159: a thin adapter over the shared `KeychainCredentialService`.
+/// The typed `.zoteroAPIKey()` reference maps to the exact
+/// `org.sockpuppet.WikiFS.zotero` / `zotero-api-key` location this store
+/// always used — existing keys are read and written in place, no copy.
 public struct KeychainZoteroCredentialStore: ZoteroCredentialStore {
     private static let service = "org.sockpuppet.WikiFS.zotero"
     private static let account = "zotero-api-key"
@@ -33,15 +35,29 @@ public struct KeychainZoteroCredentialStore: ZoteroCredentialStore {
     public init() {}
 
     public func apiKey() -> String? {
-        KeychainSecretStore.read(service: Self.service, account: Self.account)
+        do {
+            return try KeychainCredentialService()
+                .resolve(.zoteroAPIKey()).value
+        } catch CredentialStoreError.notConfigured {
+            return nil
+        } catch {
+            DebugLog.config("Zotero credential read failed: \(error)")
+            return nil
+        }
     }
 
     public func setAPIKey(_ key: String?) throws {
-        try KeychainSecretStore.write(
-            service: Self.service, account: Self.account, value: key,
-            error: { operation, status in
-                ZoteroKeychainError(operation: operation, status: status)
-            })
+        do {
+            try KeychainCredentialService().set(
+                CredentialValue.normalized(key), for: .zoteroAPIKey())
+        } catch let error as CredentialStoreError {
+            switch error {
+            case .writeFailed(let operation, let status):
+                throw ZoteroKeychainError(operation: operation, status: status)
+            default:
+                throw ZoteroKeychainError(operation: "write", status: -1)
+            }
+        }
     }
 }
 #endif // os(macOS)

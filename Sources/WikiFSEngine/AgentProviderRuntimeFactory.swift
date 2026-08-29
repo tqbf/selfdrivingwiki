@@ -13,6 +13,7 @@ public struct AgentProviderRuntimeFactory: Sendable {
         case configurationReader
         case commandResolver
         case credentialReader
+        case spawnSecretReader
         case permissionPolicyResolver
         case backendFactory
         case catalogProbe
@@ -24,6 +25,7 @@ public struct AgentProviderRuntimeFactory: Sendable {
         static let configurationReader = ServiceKey<AgentProviderRuntime.ConfigurationReader>(label: "agent-provider.configuration-reader")
         static let commandResolver = ServiceKey<AgentProviderRuntime.CommandResolver>(label: "agent-provider.command-resolver")
         static let credentialReader = ServiceKey<AgentProviderRuntime.CredentialReader>(label: "agent-provider.credential-reader")
+        static let spawnSecretReader = ServiceKey<AgentProviderRuntime.SpawnSecretReader>(label: "agent-provider.spawn-secret-reader")
         static let permissionPolicyResolver = ServiceKey<AgentProviderRuntime.PermissionPolicyResolver>(label: "agent-provider.permission-policy-resolver")
         static let backendFactory = ServiceKey<AgentProviderRuntime.BackendFactory>(label: "agent-provider.backend-factory")
         static let catalogProbe = ServiceKey<AgentProviderRuntime.CatalogProbe>(label: "agent-provider.catalog-probe")
@@ -34,6 +36,7 @@ public struct AgentProviderRuntimeFactory: Sendable {
     public let readConfiguration: AgentProviderRuntime.ConfigurationReader
     public let resolveCommand: AgentProviderRuntime.CommandResolver
     public let readCredential: AgentProviderRuntime.CredentialReader
+    public let readSpawnSecrets: AgentProviderRuntime.SpawnSecretReader
     public let resolvePermissionPolicy: AgentProviderRuntime.PermissionPolicyResolver
     public let makeBackend: AgentProviderRuntime.BackendFactory
     public let probeCatalog: AgentProviderRuntime.CatalogProbe
@@ -42,6 +45,7 @@ public struct AgentProviderRuntimeFactory: Sendable {
         readConfiguration: @escaping AgentProviderRuntime.ConfigurationReader,
         resolveCommand: @escaping AgentProviderRuntime.CommandResolver,
         readCredential: @escaping AgentProviderRuntime.CredentialReader,
+        readSpawnSecrets: @escaping AgentProviderRuntime.SpawnSecretReader = { _ in [:] },
         resolvePermissionPolicy: @escaping AgentProviderRuntime.PermissionPolicyResolver,
         makeBackend: @escaping AgentProviderRuntime.BackendFactory = { policy, budget, ceiling in
             AgentBackendFactory.makeBackend(policy: policy, budget: budget, turnCeilingTimeout: ceiling)
@@ -57,6 +61,7 @@ public struct AgentProviderRuntimeFactory: Sendable {
         self.readConfiguration = readConfiguration
         self.resolveCommand = resolveCommand
         self.readCredential = readCredential
+        self.readSpawnSecrets = readSpawnSecrets
         self.resolvePermissionPolicy = resolvePermissionPolicy
         self.makeBackend = makeBackend
         self.probeCatalog = probeCatalog
@@ -120,6 +125,10 @@ public struct AgentProviderRuntimeFactory: Sendable {
             return try ComponentDefinition(label: component.rawValue, provisions: [ServiceDependency(Keys.credentialReader)]) { activation in
                 _ = try await activation.supply(Keys.credentialReader, value: readCredential)
             }
+        case .spawnSecretReader:
+            return try ComponentDefinition(label: component.rawValue, provisions: [ServiceDependency(Keys.spawnSecretReader)]) { activation in
+                _ = try await activation.supply(Keys.spawnSecretReader, value: readSpawnSecrets)
+            }
         case .permissionPolicyResolver:
             return try ComponentDefinition(label: component.rawValue, provisions: [ServiceDependency(Keys.permissionPolicyResolver)]) { activation in
                 _ = try await activation.supply(Keys.permissionPolicyResolver, value: resolvePermissionPolicy)
@@ -135,12 +144,13 @@ public struct AgentProviderRuntimeFactory: Sendable {
         case .runtime:
             return try ComponentDefinition(
                 label: component.rawValue,
-                dependencies: [ServiceDependency(Keys.configurationReader), ServiceDependency(Keys.commandResolver), ServiceDependency(Keys.credentialReader), ServiceDependency(Keys.permissionPolicyResolver), ServiceDependency(Keys.backendFactory), ServiceDependency(Keys.catalogProbe)],
+                dependencies: [ServiceDependency(Keys.configurationReader), ServiceDependency(Keys.commandResolver), ServiceDependency(Keys.credentialReader), ServiceDependency(Keys.spawnSecretReader), ServiceDependency(Keys.permissionPolicyResolver), ServiceDependency(Keys.backendFactory), ServiceDependency(Keys.catalogProbe)],
                 provisions: [ServiceDependency(Keys.runtime)]) { activation in
                     let runtime = AgentProviderRuntime(
                         readConfiguration: try await activation.require(Keys.configurationReader),
                         resolveCommand: try await activation.require(Keys.commandResolver),
                         readCredential: try await activation.require(Keys.credentialReader),
+                        readSpawnSecrets: try await activation.require(Keys.spawnSecretReader),
                         resolvePermissionPolicy: try await activation.require(Keys.permissionPolicyResolver),
                         makeBackend: try await activation.require(Keys.backendFactory),
                         probeCatalog: try await activation.require(Keys.catalogProbe))

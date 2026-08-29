@@ -284,6 +284,12 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
     public typealias ConfigurationReader = @Sendable () throws -> AgentProvidersConfig
     public typealias CommandResolver = @Sendable ([AgentProvider]) async -> [ProviderID: [String]]
     public typealias CredentialReader = @Sendable (ProviderID) -> String?
+    /// #1159: resolves the SELECTED provider's known secret environment
+    /// variables (`ProviderSecretEnvironmentVariable`) from the shared
+    /// credential service. Trusted host only — the returned map merges into
+    /// this provider's private spawn hints at preparation time and is never
+    /// persisted or logged.
+    public typealias SpawnSecretReader = @Sendable (ProviderID) -> [String: String]
     public typealias PermissionPolicyResolver = @Sendable (PermissionOperationKind) -> PermissionPolicy
     public typealias BackendFactory = @Sendable (PermissionPolicy, Duration?, TimeInterval) -> any AgentBackend
     public typealias CatalogProbe = @Sendable (
@@ -299,6 +305,7 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
     private let readConfiguration: ConfigurationReader
     private let resolveCommand: CommandResolver
     private let readCredential: CredentialReader
+    private let readSpawnSecrets: SpawnSecretReader
     private let resolvePermissionPolicy: PermissionPolicyResolver
     private let makeBackend: BackendFactory
     private let probeCatalog: CatalogProbe
@@ -311,6 +318,7 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         readConfiguration: @escaping ConfigurationReader,
         resolveCommand: @escaping CommandResolver,
         readCredential: @escaping CredentialReader,
+        readSpawnSecrets: @escaping SpawnSecretReader = { _ in [:] },
         resolvePermissionPolicy: @escaping PermissionPolicyResolver,
         makeBackend: @escaping BackendFactory = {
             AgentBackendFactory.makeBackend(
@@ -329,6 +337,7 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         self.readConfiguration = readConfiguration
         self.resolveCommand = resolveCommand
         self.readCredential = readCredential
+        self.readSpawnSecrets = readSpawnSecrets
         self.resolvePermissionPolicy = resolvePermissionPolicy
         self.makeBackend = makeBackend
         self.probeCatalog = probeCatalog
@@ -534,6 +543,12 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
         let commands = await resolveCommand(Array(uniqueProviders.values))
         let credentials = Dictionary(
             uniqueKeysWithValues: uniqueProviders.keys.map { ($0, readCredential($0)) })
+        // #1159: resolve each provider's known secret environment variables
+        // ONCE per preparation, here in the trusted host. Rotation is visible
+        // on the NEXT preparation because this snapshot is rebuilt per prepare
+        // call and resolved values are never cached beyond it.
+        let spawnSecrets = Dictionary(
+            uniqueKeysWithValues: uniqueProviders.keys.map { ($0, readSpawnSecrets($0)) })
         for stage in stages {
             let providers = stageProviders[stage] ?? []
             var records: [SpawnRecord] = []
@@ -552,11 +567,18 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
                         forStage: stage.configurationKey,
                         fallbackProvider: provider.id)
                 }
-                let hints = AgentBackendFactory.providerHints(
+                var hints = AgentBackendFactory.providerHints(
                     provider: provider,
                     resolvedCommand: commands[provider.id] ?? [],
                     apiKey: credentials[provider.id] ?? nil,
                     selectedModelId: model?.rawValue)
+                // Resolved secrets ride the established `env.` hint prefix.
+                // They override any same-named entry — `provider.env` cannot
+                // carry known secret keys anymore (stripped at every
+                // boundary), so this is additive in practice.
+                for (key, value) in spawnSecrets[provider.id] ?? [:] {
+                    hints[HintKey.env(key)] = value
+                }
                 records.append(SpawnRecord(provider: provider, model: model, hints: hints))
             }
             chains[stage] = records

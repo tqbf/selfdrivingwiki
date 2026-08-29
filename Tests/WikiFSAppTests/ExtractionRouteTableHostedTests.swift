@@ -32,11 +32,9 @@ struct ExtractionRouteTableHostedTests {
         return app
     }()
 
-    /// In-memory credential stub — the hosted view must never touch Keychain.
-    private struct StubCredentialStore: ExtractionCredentialStore {
-        func secret(_ secret: ExtractionSecret) -> String? { nil }
-        func setSecret(_ value: String?, _ secret: ExtractionSecret) throws {}
-    }
+    /// In-memory credential stub (#1159) — the hosted view must never touch
+    /// Keychain; `InMemoryCredentialService` backs the write-only UI seam.
+    private static let stubCredentials = InMemoryCredentialService()
 
     private func tempDirectory(_ name: String) throws -> URL {
         let dir = FileManager.default.temporaryDirectory
@@ -68,7 +66,7 @@ struct ExtractionRouteTableHostedTests {
         ExtractionSettingsView(
             containerDirectory: directory,
             launcher: AgentLauncher(),
-            credentialStore: StubCredentialStore(),
+            credentials: Self.stubCredentials,
             packageSnapshot: { snapshot })
     }
 
