@@ -112,6 +112,31 @@ struct QueueExtractionTests {
         store.close()
     }
 
+    @Test func testUnavailableSelectionFailsInsteadOfStayingQueued() async throws {
+        let store = try QueueStore(databaseURL: tempDatabaseURL())
+
+        // An explicitly selected extractor with no active registration is an
+        // actionable per-item failure — never an indefinite stay in .queued.
+        // providerID(for:) hands the item a neutral capacity bucket so
+        // dispatch claims it, and the worker's typed error marks it failed
+        // with the message that directs the user to Extraction Settings.
+        let provider = FakeExtractionProvider(resolveResult: .unavailableSelection)
+        let factory = QueueExtractionWorkerFactory(
+            provider: provider, emitProgress: { _, _ in })
+        let engine = QueueEngine(store: store, workerFactory: factory)
+        await engine.start()
+
+        let id = try await engine.enqueue(
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "wiki1"), payload: makePayload()))
+
+        try await Task.sleep(nanoseconds: 300_000_000)
+
+        let item = try store.getItem(id)
+        #expect(item?.state == .failed)
+        #expect(item?.error?.contains("Extraction Settings") == true)
+        store.close()
+    }
+
     // MARK: - AC.4: Readiness check
 
     @Test func testReadinessCheckMarksFailed() async throws {
@@ -392,6 +417,9 @@ private final class FakeExtractionProvider: QueueExtractionProvider, @unchecked 
     enum ResolveResult {
         case resolved(ExtractionBackend)
         case nilResolution
+        /// The typed fail-closed error for an explicit selection with no
+        /// active registration.
+        case unavailableSelection
     }
 
     private let lock = OSAllocatedUnfairLock(initialState: State())
@@ -439,6 +467,12 @@ private final class FakeExtractionProvider: QueueExtractionProvider, @unchecked 
             )
         case .nilResolution:
             return nil
+        case .unavailableSelection:
+            let logical = try LogicalExtractorReference(
+                packageID: ExtractorPackageID(validating: "org.example.missing"),
+                registrationID: ExtractorRegistrationID(validating: "main"))
+            throw ExtractionServicesError.selectedExtractorUnavailable(
+                route: .canonicalPDF, reference: logical)
         }
     }
 

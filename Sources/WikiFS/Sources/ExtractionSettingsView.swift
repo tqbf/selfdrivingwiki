@@ -4,6 +4,408 @@ import WikiFSEngine
 import WikiFSCore
 import WikiFSTypes
 
+// pattern: Functional Core
+
+/// Recovery actions supported by the Extractor Status sheet.
+enum ExtractorRouteRecoveryAction: String, CaseIterable, Hashable, Sendable {
+    case configure
+    case authorizeCredential
+    case testConnection
+    case retryActivation
+    case refreshStatus
+    case chooseAnotherExtractor
+    case copyDiagnostics
+
+    var title: String {
+        switch self {
+        case .configure: "Configure…"
+        case .authorizeCredential: "Authorize Credential…"
+        case .testConnection: "Test Connection"
+        case .retryActivation: "Retry Activation"
+        case .refreshStatus: "Refresh Status"
+        case .chooseAnotherExtractor: "Choose Another Extractor…"
+        case .copyDiagnostics: "Copy Diagnostics"
+        }
+    }
+}
+
+enum ExtractorRouteDiagnosticCategory: String, Hashable, Sendable {
+    case ready
+    case needsSetup = "needs-setup"
+    case packageNotInstalled = "package-not-installed"
+    case waitingForActivation = "waiting-for-activation"
+    case activationFailed = "activation-failed"
+    case unavailableSelection = "unavailable-selection"
+}
+
+enum ExtractorConnectionTestCategory: String, Hashable, Sendable {
+    case notRun = "not-run"
+    case running
+    case succeeded
+    case failed
+}
+
+/// UI-safe facts that can refine engine-owned route lifecycle state.
+struct ExtractorRouteRecoveryFacts: Hashable, Sendable {
+    var acpProviderID: String?
+    var acpProviderAvailable = false
+    var doclingEndpoint: String?
+    var doclingTimeoutMilliseconds: Int?
+    var doclingCredentialConfigured = false
+    var connectionTest: ExtractorConnectionTestCategory = .notRun
+    var connectionFailureMessage: String?
+    var credentialRequirements: [ExtractorCredentialRequirementSummary] = []
+    var retainedFailures: [ExtractorPackageFailureSummary] = []
+    var appVersion = "unknown"
+    var appBuild = "unknown"
+    var macOSVersion = "unknown"
+}
+
+/// The complete value presentation for one route status and recovery sheet.
+struct ExtractorRouteRecoveryPresentation: Identifiable, Hashable, Sendable {
+    let route: ExtractorRouteID
+    let extractorName: String
+    let status: ExtractorRouteStatus
+    let shortStatusLabel: String
+    let systemImage: String
+    let title: String
+    let summary: String
+    let impact: String
+    let primaryAction: ExtractorRouteRecoveryAction?
+    let secondaryActions: [ExtractorRouteRecoveryAction]
+    let accessibilityText: String
+    let diagnosticCategory: ExtractorRouteDiagnosticCategory
+    let diagnosticReport: String
+    let authorizationRequirement: ExtractorCredentialRequirementSummary?
+
+    var id: String { route.description }
+    var actions: [ExtractorRouteRecoveryAction] {
+        primaryAction.map { [$0] + secondaryActions } ?? secondaryActions
+    }
+    var isReady: Bool { status == .ready }
+}
+
+/// A deterministic, bounded, value-only diagnostic report.
+struct ExtractorRouteDiagnosticReport: Hashable, Sendable {
+    static let maximumFieldLength = 300
+    static let maximumReportLength = 4_000
+
+    let extractorName: String
+    let packageID: String?
+    let registrationID: String?
+    let version: String?
+    let digestPrefix: String?
+    let routeKind: String
+    let mimeType: String
+    let category: ExtractorRouteDiagnosticCategory
+    let failureMessage: String?
+    let acpProviderID: String?
+    let doclingEndpointOrigin: String?
+    let doclingTimeoutMilliseconds: Int?
+    let credentialConfigured: Bool?
+    let credentialAuthorized: Bool?
+    let connectionTest: ExtractorConnectionTestCategory?
+    let appVersion: String
+    let appBuild: String
+    let macOSVersion: String
+
+    var formatted: String {
+        var lines = [
+            "Extractor Status Diagnostic",
+            "Extractor: \(Self.field(extractorName))",
+            "Route kind: \(Self.field(routeKind))",
+            "MIME type: \(Self.field(mimeType))",
+            "Status: \(category.rawValue)",
+        ]
+        Self.append("Package ID", packageID, to: &lines)
+        Self.append("Registration ID", registrationID, to: &lines)
+        Self.append("Version", version, to: &lines)
+        Self.append("Digest prefix", digestPrefix, to: &lines)
+        Self.append("Failure", failureMessage, to: &lines)
+        Self.append("ACP provider ID", acpProviderID, to: &lines)
+        Self.append("Docling endpoint origin", doclingEndpointOrigin, to: &lines)
+        if let doclingTimeoutMilliseconds {
+            lines.append("Docling timeout: \(doclingTimeoutMilliseconds) ms")
+        }
+        if let credentialConfigured {
+            lines.append("Credential configured: \(credentialConfigured ? "yes" : "no")")
+        }
+        if let credentialAuthorized {
+            lines.append("Credential authorized: \(credentialAuthorized ? "yes" : "no")")
+        }
+        if let connectionTest {
+            lines.append("Connection test: \(connectionTest.rawValue)")
+        }
+        lines.append("App version: \(Self.field(appVersion))")
+        lines.append("App build: \(Self.field(appBuild))")
+        lines.append("macOS: \(Self.field(macOSVersion))")
+        return Self.bounded(lines.joined(separator: "\n"), limit: Self.maximumReportLength)
+    }
+
+    static func endpointOrigin(_ raw: String?) -> String? {
+        guard let raw,
+              raw.utf8.count <= maximumFieldLength,
+              let components = URLComponents(string: raw),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let host = components.host, host.isEmpty == false
+        else { return nil }
+        var origin = "\(scheme)://\(host.lowercased())"
+        if let port = components.port { origin += ":\(port)" }
+        return field(origin)
+    }
+
+    private static func append(_ name: String, _ value: String?, to lines: inout [String]) {
+        if let value { lines.append("\(name): \(field(value))") }
+    }
+
+    private static func field(_ value: String) -> String {
+        let singleLine = value
+            .replacingOccurrences(of: "\r", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+        return bounded(singleLine, limit: maximumFieldLength)
+    }
+
+    private static func bounded(_ value: String, limit: Int) -> String {
+        guard value.count > limit else { return value }
+        return String(value.prefix(max(0, limit - 14))) + "… [truncated]"
+    }
+}
+
+enum ExtractorRouteRecoveryPresenter {
+    static let blockedImpact = "This route is blocked. No other extractor will run automatically."
+
+    static func present(
+        row: ExtractorRouteSettingsRow,
+        extractorName: String,
+        facts: ExtractorRouteRecoveryFacts
+    ) -> ExtractorRouteRecoveryPresentation {
+        let logical = logicalReference(row.savedSelection)
+        let requirement = matchingRequiredRequirement(logical: logical, facts: facts)
+        let failure = newestFailure(logical: logical, facts: facts)
+        let isACP = row.savedSelection == .builtIn(.pdf(.acp))
+        let isDocling = row.savedSelection == .installed(ProcessExtractionServices.reviewedDoclingLogical)
+            || row.savedSelection == .builtIn(.pdf(.doclingServe))
+
+        let status: ExtractorRouteStatus
+        if let failure {
+            status = .activationFailed(message: failure.message)
+        } else if isACP, facts.acpProviderID?.isEmpty != false {
+            status = .needsSetup(.missingACPProvider)
+        } else if isACP, facts.acpProviderAvailable == false {
+            status = .needsSetup(.unavailableACPProvider)
+        } else if isDocling, ExtractorRouteDiagnosticReport.endpointOrigin(facts.doclingEndpoint) == nil {
+            status = .needsSetup(.invalidDoclingEndpoint)
+        } else if isDocling, facts.doclingCredentialConfigured == false {
+            status = .needsSetup(.missingDoclingCredential)
+        } else if let requirement,
+                  requirement.authorizationState != .authorized || requirement.isConfigured == false {
+            status = .needsSetup(.unauthorizedDoclingCredential)
+        } else if isDocling, facts.connectionTest == .failed {
+            status = .needsSetup(.doclingConnectionFailed)
+        } else {
+            status = row.status
+        }
+
+        let content = content(
+            status: status,
+            extractorName: extractorName,
+            isACP: isACP,
+            isDocling: isDocling,
+            canAuthorize: requirement != nil)
+        let category = category(status)
+        let report = report(
+            row: row,
+            extractorName: extractorName,
+            status: status,
+            category: category,
+            facts: facts,
+            requirement: requirement,
+            failure: failure).formatted
+        return ExtractorRouteRecoveryPresentation(
+            route: row.route,
+            extractorName: extractorName,
+            status: status,
+            shortStatusLabel: content.label,
+            systemImage: content.icon,
+            title: content.title,
+            summary: content.summary,
+            impact: blockedImpact,
+            primaryAction: content.actions.first,
+            secondaryActions: Array(content.actions.dropFirst()),
+            accessibilityText: "\(row.descriptor.displayName), \(extractorName), \(content.label). \(content.summary)",
+            diagnosticCategory: category,
+            diagnosticReport: report,
+            authorizationRequirement: requirement)
+    }
+
+    private static func logicalReference(_ selection: ExtractionBackendReference?) -> LogicalExtractorReference? {
+        guard case .installed(let logical)? = selection else { return nil }
+        return logical
+    }
+
+    private static func matchingRequiredRequirement(
+        logical: LogicalExtractorReference?,
+        facts: ExtractorRouteRecoveryFacts
+    ) -> ExtractorCredentialRequirementSummary? {
+        guard let logical else { return nil }
+        return facts.credentialRequirements.first {
+            $0.packageID == logical.packageID.rawValue
+                && $0.registrationID == logical.registrationID.rawValue
+                && $0.isOptional == false
+                && ($0.authorizationState != .authorized || $0.isConfigured == false)
+        }
+    }
+
+    private static func newestFailure(
+        logical: LogicalExtractorReference?,
+        facts: ExtractorRouteRecoveryFacts
+    ) -> ExtractorPackageFailureSummary? {
+        guard let logical else { return nil }
+        return facts.retainedFailures.reversed().first {
+            $0.packageID == logical.packageID.rawValue
+        }
+    }
+
+    private static func category(_ status: ExtractorRouteStatus) -> ExtractorRouteDiagnosticCategory {
+        switch status {
+        case .ready: .ready
+        case .needsSetup: .needsSetup
+        case .packageNotInstalled: .packageNotInstalled
+        case .waitingForHostActivation: .waitingForActivation
+        case .activationFailed: .activationFailed
+        case .unavailableSelection: .unavailableSelection
+        }
+    }
+
+    private static func content(
+        status: ExtractorRouteStatus,
+        extractorName: String,
+        isACP: Bool,
+        isDocling: Bool,
+        canAuthorize: Bool
+    ) -> (label: String, icon: String, title: String, summary: String, actions: [ExtractorRouteRecoveryAction]) {
+        let common: [ExtractorRouteRecoveryAction] = [.chooseAnotherExtractor, .copyDiagnostics]
+        switch status {
+        case .ready:
+            return ("Ready", "checkmark.circle.fill", "\(extractorName) is ready", "The selected extractor can run for this route.", [])
+        case .needsSetup(let reason):
+            let reasonText: String
+            var recovery: [ExtractorRouteRecoveryAction] = []
+            switch reason {
+            case .missingACPProvider:
+                reasonText = "Select an ACP provider before this extractor can run."
+                recovery = [.configure]
+            case .unavailableACPProvider:
+                reasonText = "The selected ACP provider is not enabled."
+                recovery = [.configure, .refreshStatus]
+            case .invalidDoclingEndpoint:
+                reasonText = "Set a valid HTTP or HTTPS Docling endpoint."
+                recovery = [.configure]
+            case .missingDoclingCredential:
+                reasonText = "Add the Docling credential before this extractor can run."
+                recovery = [.configure]
+            case .unauthorizedDoclingCredential:
+                reasonText = "Authorize the package to use the configured Docling credential."
+                recovery = canAuthorize ? [.authorizeCredential] : [.refreshStatus]
+            case .doclingConnectionFailed:
+                reasonText = "The most recent Docling connection test failed."
+                recovery = [.testConnection, .configure]
+            }
+            if isACP == false && isDocling == false && recovery.isEmpty { recovery = [.refreshStatus] }
+            return ("Needs setup", "wrench.and.screwdriver", "\(extractorName) needs setup", reasonText, recovery + common)
+        case .packageNotInstalled:
+            return ("Not installed", "shippingbox", "\(extractorName) is not installed", "The saved package selection is not present on this Mac.", [.refreshStatus] + common)
+        case .waitingForHostActivation:
+            return ("Starting", "clock.arrow.circlepath", "\(extractorName) is starting", "The package is installed, but its host has not activated it.", [.retryActivation, .refreshStatus] + common)
+        case .activationFailed(let message):
+            return ("Failed", "exclamationmark.octagon", "\(extractorName) failed to start", message ?? "The package host could not activate this extractor.", [.retryActivation, .refreshStatus] + common)
+        case .unavailableSelection:
+            return ("Failed", "slash.circle", "\(extractorName) is unavailable", "The installed package does not provide an active extractor for this route.", [.retryActivation, .refreshStatus] + common)
+        }
+    }
+
+    private static func report(
+        row: ExtractorRouteSettingsRow,
+        extractorName: String,
+        status: ExtractorRouteStatus,
+        category: ExtractorRouteDiagnosticCategory,
+        facts: ExtractorRouteRecoveryFacts,
+        requirement: ExtractorCredentialRequirementSummary?,
+        failure: ExtractorPackageFailureSummary?
+    ) -> ExtractorRouteDiagnosticReport {
+        let logical = logicalReference(row.savedSelection)
+        let exact = exactIdentity(logical: logical, row: row, failure: failure)
+        let isDocling = logical == ProcessExtractionServices.reviewedDoclingLogical
+        return ExtractorRouteDiagnosticReport(
+            extractorName: extractorName,
+            packageID: logical?.packageID.rawValue,
+            registrationID: logical?.registrationID.rawValue,
+            version: exact.version,
+            digestPrefix: exact.digestPrefix,
+            routeKind: row.route.kind.rawValue,
+            mimeType: row.route.mimeType.rawValue,
+            category: category,
+            failureMessage: safeFailureMessage(
+                failure?.message
+                    ?? facts.connectionFailureMessage
+                    ?? status.setupFailureMessage),
+            acpProviderID: row.savedSelection == .builtIn(.pdf(.acp)) ? facts.acpProviderID : nil,
+            doclingEndpointOrigin: isDocling ? ExtractorRouteDiagnosticReport.endpointOrigin(facts.doclingEndpoint) : nil,
+            doclingTimeoutMilliseconds: isDocling ? facts.doclingTimeoutMilliseconds : nil,
+            credentialConfigured: requirement.map { $0.isConfigured },
+            credentialAuthorized: requirement.map { $0.authorizationState == .authorized },
+            connectionTest: isDocling ? facts.connectionTest : nil,
+            appVersion: facts.appVersion,
+            appBuild: facts.appBuild,
+            macOSVersion: facts.macOSVersion)
+    }
+
+    /// Retained package failures have passed the host redaction boundary, but
+    /// diagnostics still reject path-, header-, credential-, and userinfo-URL-
+    /// shaped text.
+    private static func safeFailureMessage(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let lowered = value.lowercased()
+        let forbidden = [
+            "authorization:", "x-api-key", "api_key", "bearer ", "keychain",
+            "file://", "/users/", "/private/", "document content",
+            "/tmp/", "/var/", "~/", "://", "@",
+        ]
+        guard forbidden.contains(where: lowered.contains) == false else {
+            return "A redacted host failure is available in Console."
+        }
+        return value
+    }
+
+    private static func exactIdentity(
+        logical: LogicalExtractorReference?,
+        row: ExtractorRouteSettingsRow,
+        failure: ExtractorPackageFailureSummary?
+    ) -> (version: String?, digestPrefix: String?) {
+        if let failure { return (failure.version, failure.digestPrefix) }
+        guard logical != nil,
+              let summary = row.choices.first(where: { $0.reference == row.savedSelection })?.exactSummary
+        else { return (nil, nil) }
+        let parts = summary.components(separatedBy: " · ")
+        return (parts.first, parts.count > 1 ? parts[1] : nil)
+    }
+}
+
+private extension ExtractorRouteStatus {
+    var setupFailureMessage: String? {
+        guard case .needsSetup(let reason) = self else { return nil }
+        return switch reason {
+        case .missingACPProvider: "No ACP provider is selected."
+        case .unavailableACPProvider: "The selected ACP provider is unavailable."
+        case .invalidDoclingEndpoint: "The Docling endpoint is missing or invalid."
+        case .missingDoclingCredential: "The Docling credential is not configured."
+        case .unauthorizedDoclingCredential: "The package is not authorized to use the credential."
+        case .doclingConnectionFailed: "The Docling connection test failed."
+        }
+    }
+}
+
 /// Settings for source extraction. Unified PDF and HTML extractor pickers list
 /// reviewed packages, installed packages, built-in adapters, and connected
 /// services without exposing the legacy backend/package precedence. Mirrors `ZoteroSettingsView`
@@ -49,6 +451,10 @@ struct ExtractionSettingsView: View {
     /// lineage; a reinstall shows (and may revoke) the stale grant. Nil hides
     /// the Revoke control.
     let revokeRequirement: (@Sendable (ExtractorCredentialRequirementSummary) async -> ExtractorPackageMutationOutcome)?
+    /// Retries package host activation through the process-owned context.
+    let retryActivation: (@Sendable () async -> Void)?
+    /// Injectable clipboard boundary for hosted tests.
+    let copyDiagnostics: @MainActor (String) -> Bool
 
     // Route table rows built from the PR 2 projection: host descriptors, the
     // package model's registration snapshots, and saved selections. Rebuilt
@@ -80,6 +486,16 @@ struct ExtractionSettingsView: View {
     @State private var authorizationCandidate: ExtractorCredentialRequirementSummary?
     /// Pending revocation confirmation.
     @State private var revocationCandidate: ExtractorCredentialRequirementSummary?
+    @State private var routeStatusDialog: ExtractorRouteRecoveryPresentation?
+    @State private var routeStatusAction: ExtractorRouteRecoveryAction?
+    /// Route whose picker receives focus after the status sheet finishes
+    /// dismissing ("Choose Another Extractor…").
+    @State private var pendingFocusRoute: ExtractorRouteID?
+    /// Event-driven snapshot of the enabled agent providers. Computed once per
+    /// rebuild instead of per render: reading provider config hits disk (and
+    /// can trigger discovery), which must not run on every keystroke.
+    @State private var enabledProvidersCache: [AgentProvider]?
+    @FocusState private var focusedRoutePicker: ExtractorRouteID?
 
     enum TestPhase: Equatable {
         case idle
@@ -97,6 +513,12 @@ struct ExtractionSettingsView: View {
         packageSnapshot: (@Sendable () async -> ExtractorPackageSettingsSnapshot)? = nil,
         authorizeRequirement: (@Sendable (ExtractorCredentialRequirementSummary) async -> ExtractorPackageMutationOutcome)? = nil,
         revokeRequirement: (@Sendable (ExtractorCredentialRequirementSummary) async -> ExtractorPackageMutationOutcome)? = nil,
+        retryActivation: (@Sendable () async -> Void)? = nil,
+        copyDiagnostics: @escaping @MainActor (String) -> Bool = { value in
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            return pasteboard.setString(value, forType: .string)
+        },
         importPackage: (@Sendable (URL) async -> ExtractorPackageMutationOutcome)? = nil,
         removePackage: (@Sendable (ExtractorPackageRevisionID) async -> ExtractorPackageMutationOutcome)? = nil
     ) {
@@ -113,6 +535,8 @@ struct ExtractionSettingsView: View {
         self.removePackage = removePackage
         self.authorizeRequirement = authorizeRequirement
         self.revokeRequirement = revokeRequirement
+        self.retryActivation = retryActivation
+        self.copyDiagnostics = copyDiagnostics
 
         // Seed the drafts once, at construction — so there's no onAppear race
         // where an `.onChange` fires before the loaded values are in place.
@@ -206,7 +630,7 @@ struct ExtractionSettingsView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: { row in
-                Text("Remove \(row.packageID) \(row.version) from this Mac? Its registrations fall back to the built-in backends. A default selection that points at this package keeps falling back until you change it.")
+                Text("Remove \(row.packageID) \(row.version) from this Mac? If this package is selected, that route stays blocked until you choose another extractor.")
             }
         // Authorization confirmation (#1159): states the inheritance rule
         // BEFORE approval — a future revision of the same package keeps the
@@ -251,6 +675,21 @@ struct ExtractionSettingsView: View {
             if let diagnostic {
                 announceAccessibility(diagnostic)
             }
+        }
+        .sheet(item: $routeStatusDialog) { presentation in
+            ExtractorStatusDialog(
+                presentation: presentation,
+                inProgressAction: routeStatusAction,
+                onAction: { action in
+                    handleRecoveryAction(action, presentation: presentation)
+                })
+        }
+        // Focus lands after the sheet's dismissal completes, so sheet teardown
+        // cannot reset first responder before the picker receives focus.
+        .onChange(of: routeStatusDialog) { oldValue, newValue in
+            guard oldValue != nil, newValue == nil, let route = pendingFocusRoute else { return }
+            pendingFocusRoute = nil
+            focusedRoutePicker = route
         }
     }
 
@@ -329,6 +768,7 @@ struct ExtractionSettingsView: View {
         }
         .labelsHidden()
         .frame(maxWidth: 260)
+        .focused($focusedRoutePicker, equals: row.route)
         .accessibilityIdentifier("\(RouteAccessibility.pickerPrefix).\(Self.accessibilityKey(row.route))")
         .accessibilityLabel("Default extractor for \(row.descriptor.displayName)")
         .accessibilityValue(accessibilityValue(row))
@@ -343,10 +783,6 @@ struct ExtractionSettingsView: View {
             set: { writeRouteSelection($0, for: row) })
     }
 
-    /// Status cell + spoken/label text. The vocabulary is fixed: Available,
-    /// Using fallback, Not installed, Waiting for host service, Failed to
-    /// activate. The fallback description (what is actually being used) rides
-    /// in help text and the accessibility value.
     /// Maps one table choice to its typed selection value — the picker tag.
     static func selection(for choice: ExtractorRouteChoice) -> ExtractorRouteSettingsSelection {
         switch choice.category {
@@ -374,49 +810,113 @@ struct ExtractionSettingsView: View {
         }
     }
 
-    /// Status renders as a semantic-colored icon + SHORT label so the cell
-    /// never truncates in the fixed-height table. Each state has a distinct
-    /// icon shape, satisfying Differentiate Without Color; the full state
-    /// text is the accessibility label, and the fallback detail (what
-    /// actually runs) rides in the tooltip.
+    /// Status renders as a semantic icon and a short label. Each state uses a
+    /// distinct shape so it remains clear without color.
     @ViewBuilder
     private func statusLabel(_ row: ExtractorRouteSettingsRow) -> some View {
-        switch row.status {
-        case .available:
-            statusBadge(
-                color: .green, symbol: "checkmark.circle.fill",
-                shortText: "Available", status: row.status)
-        case .usingFallback(let description):
-            statusBadge(
-                color: .orange, symbol: "arrow.triangle.swap",
-                shortText: "Fallback", status: row.status)
-                .help(description)
-        case .notInstalled:
-            statusBadge(
-                color: .orange, symbol: "minus.circle",
-                shortText: "Not installed", status: row.status)
-        case .waitingForHostService:
-            statusBadge(
-                color: .yellow, symbol: "clock",
-                shortText: "Waiting", status: row.status)
-        case .failedActivation:
-            statusBadge(
-                color: .red, symbol: "xmark.octagon",
-                shortText: "Failed", status: row.status)
+        let presentation = recoveryPresentation(for: row)
+        if presentation.isReady {
+            statusBadge(presentation)
+        } else {
+            Button {
+                routeStatusDialog = presentation
+            } label: {
+                statusBadge(presentation)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier(
+                "\(RouteAccessibility.statusPrefix).\(Self.accessibilityKey(row.route))")
+            .accessibilityLabel(presentation.accessibilityText)
+            .accessibilityHint("Show status details")
         }
     }
 
-    private func statusBadge(
-        color: Color, symbol: String, shortText: String,
-        status: ExtractorRouteStatus
-    ) -> some View {
+    private func statusBadge(_ presentation: ExtractorRouteRecoveryPresentation) -> some View {
         HStack(spacing: 5) {
-            Image(systemName: symbol)
-                .foregroundStyle(color)
-            Text(shortText)
+            Image(systemName: presentation.systemImage)
+                .foregroundStyle(statusColor(presentation.status))
+            Text(presentation.shortStatusLabel)
         }
-        .fixedSize()
-        .accessibilityLabel(Self.statusText(status))
+        .fixedSize(horizontal: false, vertical: true)
+        .lineLimit(1)
+        .truncationMode(.tail)
+        .minimumScaleFactor(0.8)
+        .help("\(presentation.summary) \(presentation.impact)")
+    }
+
+    private func statusColor(_ status: ExtractorRouteStatus) -> Color {
+        switch status {
+        case .ready: .green
+        case .needsSetup, .packageNotInstalled: .orange
+        case .waitingForHostActivation: .yellow
+        case .activationFailed, .unavailableSelection: .red
+        }
+    }
+
+    private func recoveryPresentation(
+        for row: ExtractorRouteSettingsRow
+    ) -> ExtractorRouteRecoveryPresentation {
+        let providers = enabledProvidersCache ?? launcher.providersConfig().enabledProviders
+        let selectedName = row.choices.first { choice in
+            Self.selection(for: choice) == routeSelections[row.id]
+        }?.displayName ?? "No default extractor"
+        let connectionCategory: ExtractorConnectionTestCategory = switch doclingTest {
+        case .idle: .notRun
+        case .testing: .running
+        case .succeeded: .succeeded
+        case .failed: .failed
+        }
+        let connectionMessage: String? = if case .failed(let message) = doclingTest {
+            message
+        } else {
+            nil
+        }
+        let timeout = Int(doclingTimeoutText).map { $0 * 1_000 }
+        let facts = ExtractorRouteRecoveryFacts(
+            acpProviderID: acpProviderSelection.isEmpty ? nil : acpProviderSelection,
+            acpProviderAvailable: acpProviderSelection.isEmpty
+                ? providers.contains(where: \.isDefault)
+                : providers.contains { $0.id.rawValue == acpProviderSelection },
+            doclingEndpoint: doclingEndpointText,
+            doclingTimeoutMilliseconds: timeout,
+            doclingCredentialConfigured: doclingTokenConfigured,
+            connectionTest: connectionCategory,
+            connectionFailureMessage: connectionMessage,
+            credentialRequirements: packageModel.snapshot.credentialRequirements,
+            retainedFailures: packageModel.snapshot.failedPackages,
+            appVersion: GeneratedVersion.appVersion,
+            appBuild: GeneratedVersion.buildVersion,
+            macOSVersion: ProcessInfo.processInfo.operatingSystemVersionString)
+        return ExtractorRouteRecoveryPresenter.present(
+            row: recoveryRow(row),
+            extractorName: selectedName,
+            facts: facts)
+    }
+
+    private func recoveryRow(_ row: ExtractorRouteSettingsRow) -> ExtractorRouteSettingsRow {
+        let reference: ExtractionBackendReference?
+        switch routeSelections[row.id] {
+        case .reviewedPdf2md:
+            reference = .installed(ProcessExtractionServices.reviewedPDFLogical)
+        case .reviewedDefuddle:
+            reference = .installed(ProcessExtractionServices.reviewedHTMLLogical)
+        case .reviewedDocling:
+            reference = .installed(ProcessExtractionServices.reviewedDoclingLogical)
+        case .installed(let logical), .unavailableInstalled(let logical):
+            reference = .installed(logical)
+        case .connectedService(let backend):
+            reference = .builtIn(.pdf(backend))
+        case .builtInTagBased:
+            reference = .builtIn(.html(.tagBased))
+        case .prompt, .none:
+            reference = nil
+        }
+        return ExtractorRouteSettingsRow(
+            descriptor: row.descriptor,
+            savedSelection: reference,
+            resolvedSelection: row.resolvedSelection,
+            choices: row.choices,
+            status: row.status)
     }
 
     private func accessibilityValue(_ row: ExtractorRouteSettingsRow) -> String {
@@ -427,7 +927,7 @@ struct ExtractionSettingsView: View {
         } else {
             selectedName = "No default"
         }
-        return "\(selectedName), \(Self.statusText(row.status))"
+        return "\(selectedName), \(recoveryPresentation(for: row).shortStatusLabel)"
     }
 
     /// The picker's option caption, matching the pickers this table replaced:
@@ -447,24 +947,15 @@ struct ExtractionSettingsView: View {
         }
     }
 
-    static func statusText(_ status: ExtractorRouteStatus) -> String {
-        switch status {
-        case .available: "Available"
-        case .usingFallback: "Using fallback"
-        case .notInstalled: "Not installed"
-        case .waitingForHostService: "Waiting for host service"
-        case .failedActivation: "Failed to activate"
-        }
-    }
-
     /// Rebuilds the rows and the derived per-route selections from the current
     /// config plus the package model's projection snapshot.
     private func rebuildRouteRows() {
+        enabledProvidersCache = launcher.providersConfig().enabledProviders
         let config = ExtractionConfig.load(from: containerDirectory)
         routeRows = ExtractorRouteTableBuilder.build(.init(
             configuration: config,
             registrations: packageModel.snapshot.registrationSnapshots,
-            failedPackageIDs: Set(packageModel.snapshot.failedPackages.map(\.packageID)),
+            installedRevisionIDs: Set(packageModel.snapshot.rows.map(\.revision)),
             waitingRevisionIDs: packageModel.snapshot.waitingRevisionIDs))
         var selections: [String: ExtractorRouteSettingsSelection] = [:]
         for row in routeRows {
@@ -496,7 +987,155 @@ struct ExtractionSettingsView: View {
         static let statusPrefix = "extraction.routes.status"
     }
 
-    // MARK: - Selected service configuration
+    // MARK: - Extractor status recovery
+
+    private func handleRecoveryAction(
+        _ action: ExtractorRouteRecoveryAction,
+        presentation: ExtractorRouteRecoveryPresentation
+    ) {
+        guard routeStatusAction == nil else { return }
+        switch action {
+        case .configure:
+            routeStatusDialog = nil
+            guard let row = routeRows.first(where: { $0.route == presentation.route }),
+                  let dialog = configurationDialog(for: row)
+            else { return }
+            Task { @MainActor in serviceConfigurationDialog = dialog }
+        case .authorizeCredential:
+            routeStatusDialog = nil
+            guard let requirement = presentation.authorizationRequirement else { return }
+            Task { @MainActor in authorizationCandidate = requirement }
+        case .testConnection:
+            // testDocling single-flights on doclingTest and returns without
+            // running its completion when a test is already in flight; check
+            // the precondition BEFORE latching the in-progress action, or the
+            // sheet wedges with every control disabled.
+            guard doclingTest != .testing else {
+                announceAccessibility("A connection test is already running.")
+                return
+            }
+            routeStatusAction = action
+            testDocling {
+                routeStatusAction = nil
+                refreshPresentedStatus(for: presentation.route)
+                announceAccessibility("Docling connection test completed.")
+            }
+        case .retryActivation:
+            runRecoveryAction(action, completion: "Extractor activation retry completed.") {
+                await retryActivation?()
+            }
+        case .refreshStatus:
+            runRecoveryAction(action, completion: "Extractor status refreshed.") {}
+        case .chooseAnotherExtractor:
+            pendingFocusRoute = presentation.route
+            routeStatusDialog = nil
+        case .copyDiagnostics:
+            if copyDiagnostics(presentation.diagnosticReport) {
+                announceAccessibility("Extractor diagnostics copied.")
+            } else {
+                announceAccessibility("Extractor diagnostics could not be copied.")
+            }
+        }
+    }
+
+    private func runRecoveryAction(
+        _ action: ExtractorRouteRecoveryAction,
+        completion: String,
+        operation: @escaping @MainActor () async -> Void
+    ) {
+        routeStatusAction = action
+        Task { @MainActor in
+            await operation()
+            await packageModel.refresh()
+            rebuildRouteRows()
+            routeStatusAction = nil
+            if let route = routeStatusDialog?.route { refreshPresentedStatus(for: route) }
+            announceAccessibility(completion)
+        }
+    }
+
+    private func refreshPresentedStatus(for route: ExtractorRouteID) {
+        rebuildRouteRows()
+        guard let row = routeRows.first(where: { $0.route == route }) else {
+            routeStatusDialog = nil
+            return
+        }
+        let refreshed = recoveryPresentation(for: row)
+        routeStatusDialog = refreshed.isReady ? nil : refreshed
+    }
+
+    struct ExtractorStatusDialog: View {
+        let presentation: ExtractorRouteRecoveryPresentation
+        let inProgressAction: ExtractorRouteRecoveryAction?
+        let onAction: (ExtractorRouteRecoveryAction) -> Void
+        @State private var showsTechnicalDetails = false
+        @Environment(\.dismiss) private var dismiss
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(alignment: .top, spacing: 14) {
+                    Image(systemName: presentation.systemImage)
+                        .font(.largeTitle)
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(presentation.title)
+                            .font(.title2.weight(.semibold))
+                        Text(presentation.summary)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Text(presentation.impact)
+                    .font(.callout.weight(.medium))
+                recoveryActions
+                DisclosureGroup("Technical Details", isExpanded: $showsTechnicalDetails) {
+                    ScrollView {
+                        Text(presentation.diagnosticReport)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 6)
+                    }
+                    .frame(maxHeight: 150)
+                }
+                .accessibilityIdentifier("extraction.status.technical-details")
+                HStack {
+                    Spacer()
+                    Button("Done") { dismiss() }
+                        .keyboardShortcut(.defaultAction)
+                        .accessibilityIdentifier("extraction.status.done")
+                }
+            }
+            .padding(22)
+            .frame(width: Metrics.statusDialogWidth)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Extractor Status. \(presentation.accessibilityText)")
+        }
+
+        private var recoveryActions: some View {
+            LazyVGrid(
+                columns: [GridItem(.adaptive(minimum: 190), spacing: 8)],
+                alignment: .leading,
+                spacing: 8
+            ) {
+                ForEach(presentation.actions, id: \.self) { action in
+                    Button {
+                        onAction(action)
+                    } label: {
+                        if inProgressAction == action {
+                            ProgressView()
+                                .controlSize(.small)
+                                .accessibilityLabel("\(action.title) in progress")
+                        } else {
+                            Text(action.title)
+                        }
+                    }
+                    .disabled(inProgressAction != nil)
+                    .accessibilityIdentifier("extraction.status.action.\(action.rawValue)")
+                }
+            }
+        }
+    }
 
     // MARK: - Selected service configuration
 
@@ -1086,16 +1725,18 @@ struct ExtractionSettingsView: View {
 
     /// Host-owned action: the view passes only the endpoint; the stored token
     /// resolves OUTSIDE the view and the outcome is redacted.
-    private func testDocling() {
+    private func testDocling(completion: (@MainActor () -> Void)? = nil) {
+        guard doclingTest != .testing else { return }
         doclingTest = .testing
         let endpoint = doclingEndpointText.trimmingCharacters(in: .whitespacesAndNewlines)
         let action = verifyDoclingConnection
-        Task {
+        Task { @MainActor in
             if let failureMessage = await action(endpoint) {
                 doclingTest = .failed(failureMessage)
             } else {
                 doclingTest = .succeeded
             }
+            completion?()
         }
     }
 
@@ -1108,13 +1749,14 @@ struct ExtractionSettingsView: View {
 
     private enum Metrics {
         /// Four route-table columns (Format 90+, Default extractor 220+,
-        /// Status 180+, Configuration 110+) need this minimum to display
+        /// Status 110+, Configuration 110+) need this minimum to display
         /// without truncating the Status column.
         static let width: CGFloat = 700
         /// Connected-service configuration dialogs (macos-design: a compact
         /// modal form with a Done button).
         static let dialogWidth: CGFloat = 460
         static let dialogHeight: CGFloat = 380
+        static let statusDialogWidth: CGFloat = 520
         /// A fixed height tall enough for the multi-line footers and so that
         /// switching backends (sections of different heights) doesn't resize
         /// the window. A short section just leaves space below it.

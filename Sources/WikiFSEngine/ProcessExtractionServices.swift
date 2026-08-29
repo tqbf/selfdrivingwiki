@@ -111,76 +111,32 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
         return preparation
     }
 
-    /// Resolves an HTML adapter through the same exact registry used by PDF
-    /// extraction. The default remains the always-available tag-based adapter.
+    /// Resolves one configured or explicitly overridden HTML adapter. An
+    /// unavailable installed selection blocks the route without substitution.
     public func prepareHTML(
         backendOverride: HtmlExtractionBackend?
     ) async throws -> any HtmlMarkdownExtractor {
         let configuration = try input.readConfiguration()
-        var key: ExtractionAdapterKey
-        if let backendOverride {
-            key = .builtIn(ExtractionBackendKey(
-                kind: .html,
-                backendID: backendOverride.rawValue))
-        } else if let logical = configuration.htmlExtractor {
-            switch logical {
-            case .builtIn(.html(let backend)):
-                key = .builtIn(ExtractionBackendKey(kind: .html, backendID: backend.rawValue))
-            case .builtIn(.pdf):
-                key = .builtIn(ExtractionBackendKey(kind: .html, backendID: HtmlExtractionBackend.tagBased.rawValue))
-            case .installed(let reference):
-                if let match = await registry.resolveInstalled(reference, kind: .html) {
-                    key = match.key
-                } else {
-                    DebugLog.extraction(
-                        "Configured installed HTML extractor is unavailable; using tag-based fallback")
-                    key = .builtIn(ExtractionBackendKey(
-                        kind: .html,
-                        backendID: HtmlExtractionBackend.tagBased.rawValue))
-                }
-            }
-        } else if let legacy = configuration.htmlBackend {
-            key = .builtIn(ExtractionBackendKey(kind: .html, backendID: legacy.rawValue))
-        } else {
-            key = .builtIn(ExtractionBackendKey(
-                kind: .html,
-                backendID: HtmlExtractionBackend.tagBased.rawValue))
-        }
+        var key = try await htmlKey(
+            configuration: configuration,
+            override: backendOverride)
 
-        // Map the legacy Defuddle selection to the reviewed package lineage.
-        // The tag-based fallback is never mapped.
+        // The legacy Defuddle choice maps to its reviewed package lineage.
         if case .builtIn(let builtIn) = key,
-           builtIn == ExtractionBackendKey(kind: .html, backendID: HtmlExtractionBackend.defuddle.rawValue) {
-            do {
-                key = try await reviewedKey(
-                    logical: Self.reviewedHTMLLogical,
-                    kind: .html)
-            } catch {
-                DebugLog.extraction(
-                    "Reviewed Defuddle extractor is unavailable; using tag-based fallback")
-                key = .builtIn(ExtractionBackendKey(
-                    kind: .html,
-                    backendID: HtmlExtractionBackend.tagBased.rawValue))
-            }
+           builtIn == ExtractionBackendKey(
+               kind: .html,
+               backendID: HtmlExtractionBackend.defuddle.rawValue)
+        {
+            key = try await reviewedKey(
+                logical: Self.reviewedHTMLLogical,
+                kind: .html)
         }
 
-        do {
-            let adapter = try await makeAdapter(for: key)
-            guard case .html(let extractor) = adapter else {
-                throw ExtractionServicesError.unavailable
-            }
-            return extractor
-        } catch {
-            DebugLog.extraction(
-                "HTML extractor is unavailable; using tag-based fallback")
-            let fallback = try await makeAdapter(for: .builtIn(ExtractionBackendKey(
-                kind: .html,
-                backendID: HtmlExtractionBackend.tagBased.rawValue)))
-            guard case .html(let extractor) = fallback else {
-                throw ExtractionServicesError.unavailable
-            }
-            return extractor
+        let adapter = try await makeAdapter(for: key)
+        guard case .html(let extractor) = adapter else {
+            throw ExtractionServicesError.unavailable
         }
+        return extractor
     }
 
     /// Stops host-owned built-in registrations, then disposes the package
@@ -210,20 +166,41 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
                 kind: .pdf,
                 backendID: configuration.backend.rawValue))
         case .installed(let reference):
-            if let match = await registry.resolveInstalled(reference, kind: .pdf) {
-                return match.key
+            guard let match = await registry.resolveInstalled(reference, kind: .pdf) else {
+                throw ExtractionServicesError.selectedExtractorUnavailable(
+                    route: .canonicalPDF,
+                    reference: reference)
             }
-            // #1159 (PR 4 review HIGH-3): a saved reviewed-Docling selection
-            // FAILS CLOSED when its lineage is unavailable — it must never
-            // silently swap to reviewed pdf2md or any other extractor.
-            if reference == ProcessExtractionServices.reviewedDoclingLogical {
-                throw ExtractionServicesError.unavailable
+            return match.key
+        }
+    }
+
+    private func htmlKey(
+        configuration: ExtractionConfig,
+        override: HtmlExtractionBackend?
+    ) async throws -> ExtractionAdapterKey {
+        if let override {
+            return .builtIn(ExtractionBackendKey(kind: .html, backendID: override.rawValue))
+        }
+        guard let logical = configuration.htmlExtractor else {
+            return .builtIn(ExtractionBackendKey(
+                kind: .html,
+                backendID: (configuration.htmlBackend ?? .tagBased).rawValue))
+        }
+        switch logical {
+        case .builtIn(.html(let backend)):
+            return .builtIn(ExtractionBackendKey(kind: .html, backendID: backend.rawValue))
+        case .builtIn(.pdf):
+            return .builtIn(ExtractionBackendKey(
+                kind: .html,
+                backendID: (configuration.htmlBackend ?? .tagBased).rawValue))
+        case .installed(let reference):
+            guard let match = await registry.resolveInstalled(reference, kind: .html) else {
+                throw ExtractionServicesError.selectedExtractorUnavailable(
+                    route: .canonicalHTML,
+                    reference: reference)
             }
-            DebugLog.extraction(
-                "Configured installed PDF extractor is unavailable; using the reviewed pdf2md fallback")
-            return try await reviewedKey(
-                logical: Self.reviewedPDFLogical,
-                kind: .pdf)
+            return match.key
         }
     }
 
@@ -271,7 +248,7 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
                     let configuration = try input.readConfiguration()
                     guard let extractor = input.resolveACP(configuration) else {
                         DebugLog.config(
-                            "ExtractionServices: .acp backend has no provider; using the reviewed pdf2md package fallback")
+                            "ExtractionServices: .acp backend has no configured provider")
                         throw ExtractionServicesError.unavailable
                     }
                     return .pdf(ExtractionPreparation(

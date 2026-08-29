@@ -183,6 +183,19 @@ public actor ExtractorPackagePluginReconciler {
             // can report the failed-to-activate lifecycle state.
             let activationFailures = activateFailures(from: report)
             retainEach(activationFailures)
+            // A lineage that now hosts a non-failed definition is healthy in
+            // this process: drop its retained failures so a fixed package
+            // stops reporting Failed after a successful retry.
+            let failedDefinitionIDs = Set(report.outcomes.compactMap { id, outcome -> DynamicPluginDefinitionID? in
+                if case .failed = outcome { return id }
+                return nil
+            })
+            let successPackageIDs = Set(
+                built.revisionIDsByDefinitionID
+                    .filter { failedDefinitionIDs.contains($0.key) == false }
+                    .values
+                    .map { $0.packageID.rawValue })
+            retainedFailures.removeAll { successPackageIDs.contains($0.packageID) }
             return ExtractorPackageReconciliationReport(
                 observedGeneration: catalog.generation,
                 appliedGeneration: catalog.generation,

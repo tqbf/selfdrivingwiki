@@ -30,7 +30,7 @@ struct ProcessExtractorProviderTests {
         #expect(progress.lines == ["complete\n"])
     }
 
-    @Test func htmlExtractionCarriesMetadataAndFallsBackOnFailure() async throws {
+    @Test func htmlExtractionCarriesMetadataAndSurfacesFailure() async throws {
         let environment = try await InstalledFixtureEnvironment.install()
         defer { environment.cleanup() }
 

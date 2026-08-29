@@ -23,19 +23,24 @@ Two facts bound the risk, and neither is a sandbox:
 
 The capability list in a manifest (network, shared caches, model download) is a reviewed declaration about behavior. It is not an operating-system restriction.
 
-## Selection and fallback
+## Selection and route status
 
-Open **Settings** → **Extraction** and use the **Default Extractors** section. The section shows a table with one row per extraction route. The current routes are PDF and HTML. A registration can add a row for a new format without another app update, although formats outside PDF and HTML have no extraction adapter yet.
+Open **Settings** → **Extraction** and use the **Default Extractors** section. The table has one row for each extraction route. The current routes are PDF and HTML. A registration can add a row for a new format without an app update. Formats other than PDF and HTML do not have an extraction adapter yet.
 
-Each row has three columns:
+Each row has four columns:
 
-- **Format** shows the route name, such as PDF or HTML. The technical MIME type is in the help text.
-- **Default extractor** is a pop-up that lists the compatible choices for that row: reviewed packages, installed packages, connected services, and built-in extractors. HTML also offers a no-default prompt choice. The labels match the older pickers: **Reviewed package**, **Installed package**, **Connected service**, and **Built in**.
-- **Status** shows **Available**, **Using fallback**, **Not installed**, **Waiting for host service**, or **Failed to activate**. When the status is **Using fallback**, the help text names the fallback that actually runs.
+- **Format** shows the route name, such as PDF or HTML. Help text shows the MIME type.
+- **Default extractor** lists reviewed packages, installed packages, connected services, and built-in extractors. HTML also has a no-default prompt choice.
+- **Status** shows **Ready**, **Needs setup**, **Not installed**, **Starting**, or **Failed**.
+- **Configuration** shows **Configure…** when the selected extractor has host settings.
 
-A package selection does not pin a version. The app uses the highest compatible active revision of that package lineage. If the selected package is missing, failed, or incompatible, the pop-up keeps the unavailable selection selected and the app uses the fixed fallback: reviewed pdf2md for PDF or built-in tag-based extraction for HTML. The app never selects another third-party package silently.
+A package selection does not pin a version. The app uses the highest compatible active revision from the selected package lineage.
 
-Older package versions stay available while a newer version is installed, so a failed upgrade does not remove a working version.
+An explicit unavailable selection stays selected and blocks that route. The app does not run another extractor automatically. Select a different extractor if you want to change the route.
+
+Activate a non-ready status to open **Extractor Status**. The sheet explains the cause and confirms that the route is blocked. It shows only actions that can help the current state. These actions can include **Configure…**, **Authorize Credential…**, **Test Connection**, **Retry Activation**, **Refresh Status**, **Choose Another Extractor…**, and **Copy Diagnostics**.
+
+Older package versions stay available while a newer version is installed. A failed new version does not remove a working older version.
 
 ## Installed packages in Settings
 
@@ -101,7 +106,7 @@ owner-read-only file that is deleted as soon as the request ends.
 
 ## Runtime setup
 
-Defuddle needs Bun. pdf2md needs uv. Both are optional: without them, package extraction fails with a clear cause and the built-in fallback runs instead. The app looks for runtime commands in the standard search paths, including the mise shim directory (`~/.local/share/mise/shims`), `~/.local/bin`, Homebrew, and system paths.
+Defuddle needs Bun. pdf2md needs uv. Both runtimes are optional. If a selected package cannot find its runtime, that route fails with a clear cause. The app does not run another extractor automatically. The app looks for runtime commands in the standard search paths, including the mise shim directory (`~/.local/share/mise/shims`), `~/.local/bin`, Homebrew, and system paths.
 
 pdf2md can download a model on first use because its manifest declares the model-download capability. The app does not download a model on its own.
 
@@ -109,13 +114,19 @@ pdf2md can download a model on first use because its manifest declares the model
 
 Import accepts one local folder. It does not accept ZIP files, other archives, remote catalogs, or network installation. The app validates the folder, copies it to a private machine store, and verifies every file digest before it runs anything. The source folder is not used after import. A package cannot replace a different package under the same name and version.
 
-Removing a package deletes its copied payload from this Mac and falls back to the built-in backends. Your sources and your selections are preserved.
+Removing a package deletes its copied payload from this Mac. Your sources and selections remain. If the package is selected, that route stays blocked until you select another extractor.
 
 Package data is machine-scoped. It does not appear in any wiki, in the File Provider, or in another Mac's store.
 
 ## Diagnostics
 
-Extractor diagnostics are redacted. They identify the package lineage, version, digest prefix, registration, and failure phase. They do not contain source content, full paths, environment values, credentials, or unbounded process output.
+Open **Technical Details** in the **Extractor Status** sheet to preview a deterministic redacted report. **Copy Diagnostics** copies the same text that the sheet shows.
+
+The report can identify the extractor, package, registration, version, digest prefix, route, health category, and bounded host failure message. It can also include safe setup facts, such as an ACP provider ID or a Docling endpoint origin.
+
+The Docling endpoint contains only its scheme, host, and optional port. The report does not include URL user information, paths, queries, fragments, credential values, headers, source content, private paths, environment values, Keychain locations, or raw package output.
+
+Settings reports route health for configuration, authorization, connection checks, package presence, host activation, and selection availability. A document extraction failure remains in **Activity**. It does not change the Settings route status.
 
 ## Relation to renderer packages
 

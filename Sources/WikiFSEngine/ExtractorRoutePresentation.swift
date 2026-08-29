@@ -53,19 +53,16 @@ public enum ExtractorRouteSourceCategory: String, Hashable, Sendable, CaseIterab
     case unavailable
 }
 
-/// One host-owned route presentation: what the format column shows and what
-/// the fixed fallback for that route is.
+/// One host-owned route presentation for the format column.
 public struct ExtractorRouteDescriptor: Hashable, Sendable {
     public let route: ExtractorRouteID
     public let displayName: String
     public let systemImage: String?
-    public let fallbackDescription: String
 
-    public init(route: ExtractorRouteID, displayName: String, systemImage: String?, fallbackDescription: String) {
+    public init(route: ExtractorRouteID, displayName: String, systemImage: String?) {
         self.route = route
         self.displayName = displayName
         self.systemImage = systemImage
-        self.fallbackDescription = fallbackDescription
     }
 }
 
@@ -107,19 +104,24 @@ public struct ExtractorRouteChoice: Hashable, Sendable, Identifiable {
     }
 }
 
-/// What the status column reports for a route row.
+public enum ExtractorRouteSetupReason: Hashable, Sendable {
+    case missingACPProvider
+    case unavailableACPProvider
+    case invalidDoclingEndpoint
+    case missingDoclingCredential
+    case unauthorizedDoclingCredential
+    case doclingConnectionFailed
+}
+
+/// Engine-owned lifecycle health for one route. App configuration facts can
+/// refine this value in the recovery presenter.
 public enum ExtractorRouteStatus: Hashable, Sendable {
-    /// The resolved selection is usable right now.
-    case available
-    /// A saved installed selection is unavailable and a fixed fallback is active.
-    case usingFallback(description: String)
-    /// A saved installed selection has no active registration and no recorded
-    /// activation failure or waiting run.
-    case notInstalled
-    /// The selected package is admitted but its host service has not activated it.
-    case waitingForHostService
-    /// The selected package's activation failed in this process.
-    case failedActivation
+    case ready
+    case needsSetup(ExtractorRouteSetupReason)
+    case packageNotInstalled
+    case waitingForHostActivation
+    case activationFailed(message: String?)
+    case unavailableSelection
 }
 
 /// One route row in the Settings extractor route table: descriptor, the saved
@@ -161,13 +163,11 @@ public enum ExtractorRouteHostCatalog {
         ExtractorRouteDescriptor(
             route: .canonicalPDF,
             displayName: "PDF",
-            systemImage: "doc.richtext",
-            fallbackDescription: "Bundled pdf2md extraction"),
+            systemImage: "doc.richtext"),
         ExtractorRouteDescriptor(
             route: .canonicalHTML,
             displayName: "HTML",
-            systemImage: "safari",
-            fallbackDescription: "Tag-based text extraction"),
+            systemImage: "safari"),
     ]
 
     /// The host's fixed choices for one route. Only the canonical routes have
@@ -218,14 +218,11 @@ public enum ExtractorRouteHostCatalog {
         return []
     }
 
-    /// Stable fallback label for a route without a host descriptor — derived
-    /// from the normalized MIME type alone. Future-facing: no current
-    /// registration produces a route outside the host catalog.
-    public static func fallbackDescriptor(for route: ExtractorRouteID) -> ExtractorRouteDescriptor {
+    /// Stable descriptor for a route without host-owned presentation metadata.
+    public static func genericDescriptor(for route: ExtractorRouteID) -> ExtractorRouteDescriptor {
         ExtractorRouteDescriptor(
             route: route,
             displayName: route.mimeType.rawValue,
-            systemImage: nil,
-            fallbackDescription: "No built-in fallback for this format")
+            systemImage: nil)
     }
 }

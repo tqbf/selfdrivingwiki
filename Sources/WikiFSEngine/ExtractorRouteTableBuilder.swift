@@ -17,7 +17,7 @@ import WikiFSCore
 ///   Settings layout change. Execution adapters for new kinds stay separate
 ///   work — such rows resolve to no selection.
 /// - Saved route records seed their route even when nothing active backs it,
-///   keeping a stale package selection visible with its fallback state.
+///   keeping a stale package selection visible with its blocked state.
 ///
 /// Deterministic ordering: host descriptor order first (PDF, then HTML), then
 /// remaining routes by the typed route order (kind raw value, then MIME raw
@@ -28,21 +28,20 @@ public enum ExtractorRouteTableBuilder {
     public struct Input: Sendable {
         public let configuration: ExtractionConfig
         public let registrations: [ExtractorRouteRegistrationSnapshot]
-        /// Package IDs with a retained reconciler activation failure — the
-        /// "failed to activate" signal, matched at package granularity.
-        public let failedPackageIDs: Set<String>
+        /// Exact revisions present in the installed-package lifecycle snapshot.
+        public let installedRevisionIDs: Set<ExtractorPackageRevisionID>
         /// Exact revisions with a hosted definition waiting for activation.
         public let waitingRevisionIDs: Set<ExtractorPackageRevisionID>
 
         public init(
             configuration: ExtractionConfig,
             registrations: [ExtractorRouteRegistrationSnapshot],
-            failedPackageIDs: Set<String> = [],
+            installedRevisionIDs: Set<ExtractorPackageRevisionID> = [],
             waitingRevisionIDs: Set<ExtractorPackageRevisionID> = []
         ) {
             self.configuration = configuration
             self.registrations = registrations
-            self.failedPackageIDs = failedPackageIDs
+            self.installedRevisionIDs = installedRevisionIDs
             self.waitingRevisionIDs = waitingRevisionIDs
         }
     }
@@ -75,7 +74,7 @@ public enum ExtractorRouteTableBuilder {
             extra.append(record.route)
         }
         // Deterministic: typed route order (kind raw value, then MIME raw value).
-        descriptors.append(contentsOf: extra.sorted().map(ExtractorRouteHostCatalog.fallbackDescriptor(for:)))
+        descriptors.append(contentsOf: extra.sorted().map(ExtractorRouteHostCatalog.genericDescriptor(for:)))
         return descriptors
     }
 
@@ -111,7 +110,7 @@ public enum ExtractorRouteTableBuilder {
 
     private static func descriptor(for route: ExtractorRouteID, input: Input) -> ExtractorRouteDescriptor {
         ExtractorRouteHostCatalog.descriptors.first { $0.route == route }
-            ?? ExtractorRouteHostCatalog.fallbackDescriptor(for: route)
+            ?? ExtractorRouteHostCatalog.genericDescriptor(for: route)
     }
 
     private static func buildChoices(
@@ -128,8 +127,8 @@ public enum ExtractorRouteTableBuilder {
         let insertIndex = choices.lastIndex { $0.category == .reviewedPackage }.map { $0 + 1 } ?? 0
         choices.insert(contentsOf: packages, at: insertIndex)
         // A saved installed selection with no active registration stays
-        // selectable so the picker keeps showing it (the status column reports
-        // the fallback). Every other saved value is already represented.
+        // selectable so the picker keeps showing it as unavailable. Every
+        // other saved value is already represented.
         if case .installed(let logical)? = savedSelection,
            choices.contains(where: { $0.reference == .installed(logical) }) == false {
             let staleIndex = choices.lastIndex { $0.category == .reviewedPackage }.map { $0 + 1 } ?? 0
@@ -185,26 +184,18 @@ public enum ExtractorRouteTableBuilder {
         decision: ExtractionSelectionDecision?
     ) -> ExtractorRouteStatus {
         guard case .installed(let logical)? = savedSelection else {
-            // Built-in, connected, prompt, and no selection: what resolves is
-            // what runs.
-            return .available
+            return .ready
         }
         if case .installed? = decision?.selection {
-            return .available
+            return .ready
         }
-        // Unavailable installed selection: keep it selected and report the
-        // live fallback, or the package-level lifecycle state when one exists.
         if input.waitingRevisionIDs.contains(where: { $0.packageID == logical.packageID }) {
-            return .waitingForHostService
+            return .waitingForHostActivation
         }
-        if input.failedPackageIDs.contains(logical.packageID.rawValue) {
-            return .failedActivation
+        if input.installedRevisionIDs.contains(where: { $0.packageID == logical.packageID }) {
+            return .unavailableSelection
         }
-        return .usingFallback(description: fallbackDescription(route: route, input: input))
-    }
-
-    private static func fallbackDescription(route: ExtractorRouteID, input: Input) -> String {
-        descriptor(for: route, input: input).fallbackDescription
+        return .packageNotInstalled
     }
 
     // MARK: - Resolver inputs

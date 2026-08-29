@@ -878,6 +878,18 @@ struct WikiFSApp: App {
                             return .failed(ExtractorPackageMutationMessage.describe(error))
                         }
                     },
+                    retryActivation: { [weak processProfileOwner] in
+                        guard let services = await processProfileOwner?.services else { return }
+                        let report = await services.extractionContext?.reconcileNow(force: true)
+                        // The refreshed snapshot is the user-visible signal;
+                        // this log keeps an incomplete forced retry visible in
+                        // Console. Counts only — no package messages here.
+                        if let report, report.appliedGeneration == nil
+                            || report.failedPackages.isEmpty == false {
+                            DebugLog.extraction(
+                                "forced extractor activation retry incomplete: applied=\(report.appliedGeneration.map(String.init) ?? "none"), failed=\(report.failedPackages.count)")
+                        }
+                    },
                     // Package mutation is app-only: the catalog writer rejects
                     // non-app roles, and only this Settings wiring constructs
                     // one. A published generation wakes every process

@@ -6,9 +6,9 @@ import WikiFSTypes
 @testable import WikiFSEngine
 
 /// The legacy `localPdf2md` and `defuddle` selections map to the reviewed
-/// package lineages when those lineages are active, and only to them. A
-/// third-party package with a similar registration cannot capture the default
-/// path, the fallback path, or the tag-based fallback.
+/// package lineages when those lineages are active, and only to them. An
+/// unavailable explicit package selection fails closed. A third-party package
+/// with a similar registration cannot capture the default path.
 @Suite("Reviewed legacy selection mapping", .serialized, .timeLimit(.minutes(5)))
 struct ReviewedLegacySelectionMappingTests {
     /// The default configuration selects `localPdf2md`. With the reviewed
@@ -30,8 +30,7 @@ struct ReviewedLegacySelectionMappingTests {
     }
 
     /// Without the reviewed package, the retired in-process PDF adapter is not
-    /// available. The caller can surface the setup failure and use its fixed
-    /// non-recursive fallback.
+    /// available. Preparation reports the unavailable extraction service.
     @Test func defaultPDFSelectionIsUnavailableWithoutTheReviewedPackage() async throws {
         let environment = try Environment.make()
         defer { environment.cleanup() }
@@ -53,7 +52,7 @@ struct ReviewedLegacySelectionMappingTests {
     }
 
     /// The explicit `defuddle` HTML selection serves through the reviewed
-    /// Defuddle package when it is active. The tag-based fallback never maps.
+    /// Defuddle package when it is active. Tag-based extraction does not map.
     @Test func defuddleHTMLSelectionUsesTheReviewedPackage() async throws {
         let environment = try Environment.make()
         defer { environment.cleanup() }
@@ -79,11 +78,9 @@ struct ReviewedLegacySelectionMappingTests {
         await services.shutdown()
     }
 
-    /// An unavailable installed PDF selection falls back to the reviewed
-    /// package lineage, never to a conflicting third-party choice. The
-    /// fallback resolves by reviewed identity, so it cannot recurse through
-    /// the same unavailable logical reference.
-    @Test func unavailableInstalledSelectionFallsBackToTheReviewedPackage() async throws {
+    /// An unavailable installed PDF selection remains selected and blocks the
+    /// route. The reviewed pdf2md package must not run automatically.
+    @Test func unavailableInstalledPDFSelectionFailsClosed() async throws {
         let environment = try Environment.make()
         defer { environment.cleanup() }
 
@@ -98,8 +95,40 @@ struct ReviewedLegacySelectionMappingTests {
             context: context,
             input: environment.input(pdfExtractor: .installed(unavailable)))
 
-        let preparation = try await services.prepare(backendOverride: nil)
-        #expect(preparation.technique == "package:org.selfdrivingwiki.pdf2md")
+        await #expect(
+            throws: ExtractionServicesError.selectedExtractorUnavailable(
+                route: .canonicalPDF,
+                reference: unavailable)
+        ) {
+            try await services.prepare(backendOverride: nil)
+        }
+        await services.shutdown()
+    }
+
+    /// An unavailable installed HTML selection blocks the route. Tag-based
+    /// extraction and the reviewed Defuddle package must not run automatically.
+    @Test func unavailableInstalledHTMLSelectionFailsClosed() async throws {
+        let environment = try Environment.make()
+        defer { environment.cleanup() }
+
+        let context = try await ProcessExtractionContext.assemble(
+            layout: environment.layout,
+            reviewedPackageRoot: Environment.reviewedPackagesRoot)
+        _ = await context.reconcileNow()
+        let unavailable = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.example.thirdparty"),
+            registrationID: try ExtractorRegistrationID(validating: "article"))
+        let services = try await ProcessExtractionServices.assemble(
+            context: context,
+            input: environment.input(htmlExtractor: .installed(unavailable)))
+
+        await #expect(
+            throws: ExtractionServicesError.selectedExtractorUnavailable(
+                route: .canonicalHTML,
+                reference: unavailable)
+        ) {
+            try await services.prepareHTML(backendOverride: nil)
+        }
         await services.shutdown()
     }
 
@@ -181,10 +210,12 @@ struct ReviewedLegacySelectionMappingTests {
 
         func input(
             pdfExtractor: ExtractionBackendReference? = nil,
-            htmlBackend: HtmlExtractionBackend? = nil
+            htmlBackend: HtmlExtractionBackend? = nil,
+            htmlExtractor: ExtractionBackendReference? = nil
         ) -> ExtractionProcessInput {
             var mutable = ExtractionConfig()
             mutable.htmlBackend = htmlBackend
+            mutable.htmlExtractor = htmlExtractor
             if let pdfExtractor {
                 mutable.pdfExtractor = pdfExtractor
             }
