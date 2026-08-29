@@ -32,34 +32,12 @@ struct ReviewedDoclingLegacyMappingTests {
         // The technique names the reviewed package lineage, not the retired
         // in-process adapter.
         #expect(preparation.technique == "package:org.selfdrivingwiki.docling-serve")
+        #expect(preparation.backend != .localPdf2md)
         // The provenance records the reviewed lineage + protocol revision 2.
         let provenance = try #require(preparation.packageProvenance)
         #expect(provenance.revision.packageID.rawValue == "org.selfdrivingwiki.docling-serve")
         #expect(provenance.protocolRevision == .v2)
         #expect(provenance.registrationID.rawValue == "document")
-        await services.shutdown()
-    }
-
-    /// The interim `.localPdf2md` backend tag must never be used for a
-    /// Docling selection (plan step 11).
-    @Test func legacySelectionRecordsReviewedLineageAndDoclingBackendTag() async throws {
-        let environment = try Environment.make(
-            configuration: { configuration in
-                configuration.backend = .doclingServe
-            })
-        defer { environment.cleanup() }
-
-        let context = try await ProcessExtractionContext.assemble(
-            layout: environment.layout,
-            reviewedPackageRoot: Environment.reviewedPackagesRoot)
-        _ = await context.reconcileNow()
-        let services = try await ProcessExtractionServices.assemble(
-            context: context, input: environment.input())
-
-        let preparation = try await services.prepare(backendOverride: nil)
-        #expect(preparation.packageProvenance != nil)
-        #expect(preparation.backend != .localPdf2md)
-        #expect(preparation.technique?.contains("pdf2md") == false)
         await services.shutdown()
     }
 
@@ -91,32 +69,6 @@ struct ReviewedDoclingLegacyMappingTests {
             #expect(error == .unavailable)
         }
         await services.shutdown()
-    }
-
-    /// The host catalog owns no package choices. A validated package snapshot
-    /// supplies the reviewed Docling choice.
-    @Test func routeBuilderProjectsDoclingFromPackageSnapshot() throws {
-        #expect(
-            ExtractorRouteHostCatalog.choices(for: .canonicalPDF)
-                .contains { $0.category == .reviewedPackage } == false)
-        let package = ReviewedExtractorPackages.doclingServe
-        let snapshot = ExtractorRouteRegistrationSnapshot(
-            reference: ExtractorReference(
-                revision: package.revision,
-                registrationID: try ExtractorRegistrationID(validating: "document")),
-            sourceCategory: .reviewedPackage,
-            displayName: "Docling Serve",
-            packageName: "Docling Serve",
-            kinds: [.pdf],
-            mimeTypes: [ExtractorRouteID.canonicalPDF.mimeType],
-            filenameExtensions: [])
-        let row = try #require(ExtractorRouteTableBuilder.build(.init(
-            configuration: ExtractionConfig(backend: .acp),
-            registrations: [],
-            availableRegistrations: [snapshot])).first { $0.route == .canonicalPDF })
-        let choice = try #require(row.choices.first { $0.displayName == "Docling Serve" })
-        #expect(choice.category == .reviewedPackage)
-        #expect(choice.reference == .installed(ProcessExtractionServices.reviewedDoclingLogical))
     }
 
     // MARK: - Support

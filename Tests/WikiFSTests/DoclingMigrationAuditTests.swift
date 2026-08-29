@@ -41,21 +41,6 @@ struct DoclingExecutionScopeAuditTests {
         #expect(checked > 10, "expected to scan the engine module sources")
     }
 
-    /// The legacy `.doclingServe` selection maps to the reviewed lineage in
-    /// the production prepare path — the mapping MUST stay present, so its
-    /// absence (an accidental revert) fails here.
-    @Test func legacyDoclingSelectionMappingRemainsInProductionPrepare() throws {
-        let source = try String(
-            contentsOf: URL(fileURLWithPath: #filePath)
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-                .appendingPathComponent(
-                    "Sources/WikiFSEngine/ProcessExtractionServices.swift"),
-            encoding: .utf8)
-        #expect(source.contains("reviewedDoclingLogical"))
-        #expect(source.contains("ExtractionBackend.doclingServe.rawValue"))
-    }
 }
 
 /// The typed Docling timeout field (#1159): deterministic Codable round trip

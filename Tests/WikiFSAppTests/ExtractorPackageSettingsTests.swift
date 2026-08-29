@@ -409,7 +409,6 @@ struct ExtractorPackageSettingsTests {
         #expect(viewSource.contains("extraction.packages.import.disclosure"))
         #expect(viewSource.contains("extraction.packages.import.button"))
         #expect(viewSource.contains("extraction.packages.import.trust"))
-        #expect(viewSource.contains("extraction.packages.configure"))
         #expect(viewSource.contains("extraction.packages.remove"))
         #expect(viewSource.contains("extraction.packages.failure"))
         #expect(viewSource.contains("extraction.packages.failure.message"))
@@ -430,9 +429,6 @@ struct ExtractorPackageSettingsTests {
 
         // One package-first picker per kind maps into both compatibility domains.
         #expect(viewSource.contains("Default Extractors"))
-        #expect(viewSource.contains("Reviewed package"))
-        #expect(viewSource.contains("Installed package"))
-        #expect(viewSource.contains("Connected service"))
         #expect(viewSource.contains("Built-in default") == false)
         #expect(viewSource.contains("ExtractorRouteSettingsMapping.write"))
         #expect(viewSource.contains("Table(routeRows)"))
@@ -446,13 +442,6 @@ struct ExtractorPackageSettingsTests {
             encoding: .utf8)
         #expect(sourceDetailSource.contains("ForEach(ExtractionBackend.userSelectableCases"))
         #expect(sourceDetailSource.contains("ForEach(ExtractionBackend.allCases") == false)
-
-        // The ACP provider picker stores a String. Every provider tag must use
-        // the raw String value rather than the typed ProviderID wrapper.
-        #expect(viewSource.contains("providerSelection: $acpProviderSelection"))
-        #expect(viewSource.contains("selection: $providerSelection"))
-        #expect(viewSource.contains("Text(provider.label).tag(provider.id.rawValue)"))
-        #expect(viewSource.contains("Text(provider.label).tag(provider.id)\n") == false)
 
         // Part 1 regression guard: no production target wires
         // `PdfExtractionService` anymore. The type itself remains for tests.

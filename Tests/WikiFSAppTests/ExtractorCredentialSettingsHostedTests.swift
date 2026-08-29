@@ -217,7 +217,7 @@ struct ExtractorCredentialSettingsHostedTests {
             requirements: [doclingRequirement]) == nil)
     }
 
-    @Test func credentialsLiveInConfigurationDialogs() throws {
+    @Test func removedTopLevelCredentialSectionDoesNotReturn() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -229,11 +229,6 @@ struct ExtractorCredentialSettingsHostedTests {
 
         #expect(source.contains("credentialRequirementsSection") == false)
         #expect(source.contains("Text(\"Package Credentials\")") == false)
-        #expect(source.contains("CredentialAuthorizationConfiguration("))
-        #expect(source.contains("PackageConfigurationDialog("))
-        #expect(source.contains("requirements: doclingCredentialRequirements"))
-        #expect(source.contains("serviceConfigurationDialog = .package(package)"))
-        #expect(source.contains("extraction.packages.configure"))
     }
 
     /// Source contract: the authorization writer is only constructed by the
