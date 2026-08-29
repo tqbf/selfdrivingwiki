@@ -827,6 +827,7 @@ struct ExtractionSettingsView: View {
         @Binding var providerSelection: String
         let enabledProviders: [AgentProvider]
         let onPersist: () -> Void
+        @Environment(\.dismiss) private var dismiss
 
         var body: some View {
             VStack(spacing: 0) {
@@ -857,7 +858,10 @@ struct ExtractionSettingsView: View {
         private var dialogFooter: some View {
             HStack {
                 Spacer()
-                Button("Done") { onPersist() }
+                Button("Done") {
+                    onPersist()
+                    dismiss()
+                }
             }
             .padding(12)
         }
@@ -877,6 +881,7 @@ struct ExtractionSettingsView: View {
         let onSaveToken: () -> Void
         let onRemoveToken: () -> Void
         let onTestConnection: () -> Void
+        @Environment(\.dismiss) private var dismiss
 
         var body: some View {
             VStack(spacing: 0) {
@@ -949,7 +954,10 @@ struct ExtractionSettingsView: View {
         private var dialogFooter: some View {
             HStack {
                 Spacer()
-                Button("Done") { onPersist() }
+                Button("Done") {
+                    onPersist()
+                    dismiss()
+                }
             }
             .padding(12)
         }
