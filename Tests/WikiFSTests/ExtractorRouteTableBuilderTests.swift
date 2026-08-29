@@ -279,12 +279,14 @@ struct ExtractorRouteTableBuilderTests {
         let pdf = rows.first { $0.route == .canonicalPDF }
         let html = rows.first { $0.route == .canonicalHTML }
 
-        // PDF: reviewed pdf2md, installed PDF packages, ACP, Docling — in that order.
+        // PDF: reviewed pdf2md, reviewed Docling Serve, installed PDF
+        // packages, ACP — in that order (#1159 moved Docling into the
+        // reviewed-package category).
         #expect(pdf?.choices.map { "\($0.displayName)|\($0.category.rawValue)" } == [
             "pdf2md|reviewed-package",
+            "Docling Serve|reviewed-package",
             "PDF Package|installed-package",
             "ACP Provider|connected-service",
-            "Docling Serve|connected-service",
         ])
         // HTML: prompt, reviewed Defuddle, installed HTML packages, tag-based.
         #expect(html?.choices.map { "\($0.displayName)|\($0.category.rawValue)" } == [

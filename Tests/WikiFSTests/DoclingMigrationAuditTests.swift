@@ -1,0 +1,97 @@
+import Foundation
+import Testing
+import WikiFSCore
+import WikiFSTypes
+
+/// Execution-scope audit (issue #1159 — AC.19): after the Docling migration
+/// no PRODUCTION host Docling extraction adapter remains. `DoclingServeClient`
+/// survives only as the shared request implementation behind the Settings
+/// connection test (the app target), never as an extraction execution path in
+/// the engine or daemon.
+struct DoclingExecutionScopeAuditTests {
+
+    /// Engine sources must not construct `DoclingServeClient` nor register a
+    /// host Docling execution backend.
+    @Test func noProductionHostAdapterOrDirectConstruction() throws {
+        let engineFiles = [
+            "Sources/WikiFSEngine/ProcessExtractionServices.swift",
+            "Sources/WikiFSEngine/ExtractionRuntimeFactory.swift",
+            "Sources/WikiFSEngine/ExtractionPlugins.swift",
+            "Sources/WikiFSEngine/ProcessExtractorProvider.swift",
+        ]
+        let forbidden = [
+            "DoclingServeClient(",
+            "apiToken: input.readCredential(.doclingServeToken)",
+            "apiToken: readCredential(.doclingServeToken)",
+        ]
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        for relative in engineFiles {
+            let source = try String(
+                contentsOf: root.appendingPathComponent(relative), encoding: .utf8)
+            for needle in forbidden {
+                #expect(
+                    source.contains(needle) == false,
+                    "\(relative) must not construct a host Docling execution path: \(needle)")
+            }
+        }
+    }
+
+    /// The legacy `.doclingServe` selection maps to the reviewed lineage in
+    /// the production prepare path — the mapping MUST stay present, so its
+    /// absence (an accidental revert) fails here.
+    @Test func legacyDoclingSelectionMappingRemainsInProductionPrepare() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .deletingLastPathComponent()
+                .appendingPathComponent(
+                    "Sources/WikiFSEngine/ProcessExtractionServices.swift"),
+            encoding: .utf8)
+        #expect(source.contains("reviewedDoclingLogical"))
+        #expect(source.contains("ExtractionBackend.doclingServe.rawValue"))
+    }
+}
+
+/// The typed Docling timeout field (#1159): deterministic Codable round trip
+/// and the 600-second compatibility default for files written before the
+/// field existed.
+struct ExtractionConfigDoclingTimeoutTests {
+
+    @Test func timeoutFieldRoundTripsDeterministically() throws {
+        var configuration = ExtractionConfig()
+        configuration.doclingServeEndpoint = "http://127.0.0.1:8000"
+        configuration.doclingServeTimeoutMilliseconds = 900_000
+        let data = try JSONEncoder().encode(configuration)
+        let decoded = try JSONDecoder().decode(ExtractionConfig.self, from: data)
+        #expect(decoded.doclingServeTimeoutMilliseconds == 900_000)
+        #expect(decoded.effectiveDoclingServeTimeoutMilliseconds == 900_000)
+        #expect(
+            String(decoding: data, as: UTF8.self).contains("doclingServeTimeoutMilliseconds"))
+    }
+
+    @Test func absentFieldKeepsTheCompatibilityDefault() throws {
+        // A legacy config without the key decodes cleanly and keeps the
+        // exact pre-field behavior: 600 seconds.
+        let legacy = """
+        {"backend":"localPdf2md"}
+        """
+        let decoded = try JSONDecoder().decode(
+            ExtractionConfig.self, from: Data(legacy.utf8))
+        #expect(decoded.doclingServeTimeoutMilliseconds == nil)
+        #expect(decoded.effectiveDoclingServeTimeoutMilliseconds == 600_000)
+    }
+
+    @Test func outOfRangeValuesFallBackToTheDefault() {
+        var configuration = ExtractionConfig()
+        configuration.doclingServeTimeoutMilliseconds = 0
+        #expect(configuration.effectiveDoclingServeTimeoutMilliseconds == 600_000)
+        configuration.doclingServeTimeoutMilliseconds = 1_800_001
+        #expect(configuration.effectiveDoclingServeTimeoutMilliseconds == 600_000)
+        configuration.doclingServeTimeoutMilliseconds = 1
+        #expect(configuration.effectiveDoclingServeTimeoutMilliseconds == 1)
+    }
+}

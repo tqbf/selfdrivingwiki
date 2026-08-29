@@ -155,11 +155,16 @@ public struct ProcessExtractorProvider: Sendable {
     ) async throws -> ExtractionPreparation {
         let operation = try await prepareOperation(
             kind: .pdf, revision: revision, manifest: manifest)
+        // Backend tag (#1159, plan step 11): the reviewed Docling Serve
+        // lineage pairs with `.doclingServe` — never the interim
+        // `.localPdf2md` tag that predates typed package provenance.
+        let backendTag: ExtractionBackend =
+            revision.packageID == ReviewedExtractorPackages.doclingServe.packageID
+            ? .doclingServe
+            : .localPdf2md
         return ExtractionPreparation(
             extractor: ProcessPackagePDFExtractor(operation: operation),
-            // Interim compatibility tag until Phase 5 installs typed package
-            // provenance; the activity plan producer carries exact identity.
-            backend: .localPdf2md,
+            backend: backendTag,
             modelVersion: nil,
             technique: "package:\(revision.packageID.rawValue)",
             packageProvenance: Self.packageProvenance(

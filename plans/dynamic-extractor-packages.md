@@ -658,3 +658,36 @@ Known execution risks:
 12. **Accessibility validation:** Hosted tests can verify labels, values, identifiers, focusability, and key equivalents. They cannot verify VoiceOver speech or focus order. Run and record the manual VoiceOver smoke script before release.
 13. **Provenance compatibility:** Do not force package identity into closed `ExtractionBackend`. Keep typed execution provenance end to end.
 13. **Working tree:** Leave the unrelated untracked `mise.lock` untouched.
+
+## Issue #1159 — manifest/protocol revision 2 and credential authorization
+
+Implemented on top of this plan (see
+[`plans/credential-service.md`](plans/credential-service.md) for the full
+design):
+
+- **Manifest revision 2** adds registration-scoped credential requirement
+  declarations (`id`/`kind`/`optional`/`label`/`purpose`). Revision 1
+  decoding, canonical JSON, and package digests are unchanged; revision 1
+  rejects the new key outright. Requirement IDs are unique across the whole
+  manifest, so package lineage + requirement ID is an unambiguous
+  authorization identity.
+- **Protocol revision 2** adds optional RELATIVE request paths for a private
+  credential input file and a public operation-configuration file. Values
+  never ride stdin JSON or environment variables. Revision 1 requests keep
+  their exact old shape.
+- **Authorization** binds one package lineage + one requirement to one
+  credential reference, pinned to a fingerprint of the normalized contract.
+  A newer revision inherits the grant only while the fingerprint is
+  unchanged; Settings states this rule before approval. The app is the only
+  writer; the daemon reads the same bindings. Removing a package never
+  deletes a grant.
+- **Per-operation injection:** every execute rechecks admission, catalog
+  membership, authorization, and values; the request-scoped 0400 credential
+  file lives inside the private operation root and is deleted on every
+  terminal path; package-controlled strings are redacted through the
+  request's values before reaching host diagnostics or UI.
+- **Reviewed Docling Serve package** (`org.selfdrivingwiki.docling-serve`,
+  manifest/protocol revision 2) replaces the retired in-process adapter. The
+  legacy `.doclingServe` selection maps to this lineage; the optional token
+  is the existing `extraction.docling-serve-token` Keychain item and reaches
+  the package only after explicit authorization.

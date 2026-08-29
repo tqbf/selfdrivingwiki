@@ -2,14 +2,15 @@
 
 An extractor package converts one source format to Markdown. The app uses extractor packages when it ingests a PDF or HTML source and produces a Markdown page. A package is one folder that contains `manifest.json` and the files the manifest declares.
 
-This Mac ships with two reviewed packages:
+This Mac ships with three reviewed packages:
 
 | Package | Format | What it does | Runtime it needs |
 | --- | --- | --- | --- |
 | Defuddle | HTML | Extracts the article body and article metadata | [Bun](https://bun.sh) |
 | pdf2md | PDF | Converts a PDF to Markdown. It can download its model. | [uv](https://docs.astral.sh/uv/) |
+| Docling Serve | PDF | Sends the PDF to your self-hosted [Docling Serve](https://github.com/DS4SD/docling-serve) and stores the Markdown it returns. Optional API token; endpoint and timeout are set in Settings. | [`python3`](https://www.python.org) |
 
-The app installs both packages into a machine catalog the first time it runs. You do not enable a package for each wiki. Every compatible installed package is available to every wiki on this Mac.
+The app installs the packages into a machine catalog the first time it runs. You do not enable a package for each wiki. Every compatible installed package is available to every wiki on this Mac.
 
 ## Trust
 
@@ -43,6 +44,59 @@ Use **Installed Extractor Packages** to manage exact revisions. This section doe
 Use **Refresh** after you install, update, or remove a runtime such as Bun or uv. The list reads the live process state, so a row appears only when its package has activated in this process.
 
 Lifecycle states use plain terms: a package is **Active** when you can select it. A package can also wait for a host service, fail to activate, or be in the process of stopping or removal. Raw identifiers and detailed history stay behind the disclosure rows.
+
+## Package credentials
+
+Some packages declare that they need a credential. A package never receives
+one until you authorize it, and it receives only the credential you
+authorized for it.
+
+Use the **Package Credentials** section (below **Installed Extractor
+Packages**) to see each requirement's label, purpose, whether it is optional
+or required, whether a value is stored, and its authorization state:
+
+- **Needs authorization** — the package declared a credential but you have
+  not granted it. Enter the value in **Settings** (provider credentials live
+  under **Settings** → the relevant provider; the Docling token under
+  **Settings** → **Extraction** → Docling Serve), then press **Authorize…**.
+- **Authorized** — the package receives the credential the next time it
+  runs. Rotating the value in Settings takes effect on the next run; you do
+  not re-authorize.
+- **Changed — re-authorization needed** — the package update changed the
+  requirement (its label, purpose, optionality, or registration), so the old
+  grant no longer applies. Review and authorize again.
+
+Press **Revoke…** to withdraw a grant. Revoking removes the authorization,
+not the stored value; the package stops receiving the credential on its next
+run. If you remove an authorized package, its grant is kept attached to that
+package's identity so a reinstall shows (and can revoke) the stale grant —
+it never transfers to a different package.
+
+Authorization follows future updates of the same package only while the
+requirement stays exactly as you approved it. The confirmation dialog states
+this before you approve.
+
+Credential values are stored in your Keychain. They are never shown in
+Settings after you save them, never written into any config file, catalog,
+or log, and never placed in a package's environment variables: the app hands
+the authorized values to the package process through a private,
+owner-read-only file that is deleted as soon as the request ends.
+
+## Docling Serve setup
+
+1. Run your Docling Serve instance (for example `docling-serve run`) and note
+   its base URL.
+2. In **Settings** → **Extraction**, select **Docling Serve** as the PDF
+   default extractor and set the **Endpoint** (and optionally a
+   **Timeout**; the default is 600 seconds).
+3. If your server was started with `DOCLING_SERVE_API_KEY`, paste the token
+   once and press **Save Token**. It is stored in your Keychain and is never
+   displayed again.
+4. Press **Authorize…** on the **Docling Serve API token** requirement in
+   **Package Credentials**. Until you authorize, a Docling selection shows
+   its needs-authorization state and the extraction does not run.
+5. Use **Test Connection** to verify the endpoint. The stored token is never
+   returned to the settings window.
 
 ## Runtime setup
 

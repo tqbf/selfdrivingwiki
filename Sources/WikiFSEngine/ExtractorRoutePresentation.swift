@@ -181,15 +181,18 @@ public enum ExtractorRouteHostCatalog {
                     reference: .installed(ProcessExtractionServices.reviewedPDFLogical),
                     displayName: "pdf2md",
                     category: .reviewedPackage),
+                // Docling Serve runs through the reviewed revision 2 package
+                // (#1159) — a reviewed package choice, not a connected host
+                // service.
+                ExtractorRouteChoice(
+                    route: route,
+                    reference: .installed(ProcessExtractionServices.reviewedDoclingLogical),
+                    displayName: "Docling Serve",
+                    category: .reviewedPackage),
                 ExtractorRouteChoice(
                     route: route,
                     reference: .builtIn(.pdf(.acp)),
                     displayName: "ACP Provider",
-                    category: .connectedService),
-                ExtractorRouteChoice(
-                    route: route,
-                    reference: .builtIn(.pdf(.doclingServe)),
-                    displayName: "Docling Serve",
                     category: .connectedService),
             ]
         }

@@ -124,7 +124,8 @@ struct ReviewedExtractorOverlayTests {
 
         #expect(overlay.roots[ReviewedExtractorPackages.pdf2md.revision] != nil)
         #expect(overlay.roots[ReviewedExtractorPackages.defuddle.revision] == nil)
-        #expect(overlay.diagnostics.count == 1)
+        // Three reviewed packages ship; two are absent from the partial root.
+        #expect(overlay.diagnostics.count == 2)
     }
 
     /// Once the machine installs a revision, the durable bytes are used. The

@@ -10,28 +10,35 @@ Run this test on macOS with VoiceOver enabled. Use a test App Group and a dispos
 6. Confirm that VoiceOver reads the selected extractor and the status (for example `pdf2md, Available`).
 7. Open the PDF pop-up. Confirm the option captions read `name — source` (Reviewed package, Installed package, Connected service, Built in).
 8. Choose the ACP Provider option. Confirm the ACP Provider section appears below the table and VoiceOver announces focus movement to the next control after the table.
-9. Choose the Docling Serve option. Confirm the Docling Serve section replaces it.
-10. Choose the reviewed pdf2md option. Confirm no service section remains.
-11. Move focus to a Status cell that reads `Using fallback`. Activate the help text. Confirm VoiceOver reads the fallback that actually runs (Bundled pdf2md extraction or Tag-based text extraction).
-12. Move focus to `Advanced Local Package Import`.
-13. Confirm that VoiceOver reads the executable-code warning.
-14. Confirm that VoiceOver reads that the app's lifecycle and capability controls do not create a security sandbox.
-15. Open the import disclosure.
-16. Activate `Import Extractor Package`.
-17. Choose one local package directory.
-18. Confirm that VoiceOver reads `Validating and installing package`.
-19. Confirm that VoiceOver reads the successful installation announcement.
-20. Move focus to an installed package row in Installed Extractor Packages.
-21. Confirm that VoiceOver reads the package name, version, kind, and `Active` state.
-22. Open the row disclosure.
-23. Confirm that VoiceOver reads the digest prefix, registration, and readiness state.
-24. Select the package in the PDF route pop-up. Confirm the status column reads `Available` and the picker's accessibility value contains the package name.
-25. Activate `Remove Package`.
-26. Confirm the destructive dialog text and `Cancel` action.
-27. Activate `Remove Package` in the dialog.
-28. Confirm that VoiceOver reads `Removing package` and the successful removal announcement.
-29. Confirm that the logical selection remains selected in the route pop-up as `Not installed` and the status column reads `Using fallback`.
-30. Confirm the row is removed and the documented built-in fallback remains active.
-31. Tab through the section: confirm focus moves row by row between the route pop-ups, then reaches the package controls after the table.
+9. Choose the Docling Serve option. Confirm the Docling Serve section replaces it and includes the Endpoint, Timeout, and write-only API Token fields.
+10. With the Docling Serve option selected, focus the `API Token` field. Confirm VoiceOver announces the placeholder (`Configured — enter a new token to replace` when a token is stored, `Enter token` otherwise) and that the stored token itself is never spoken.
+11. Activate `Save Token`. Confirm VoiceOver announces the `Token configured` status and the field clears.
+12. Activate `Remove Token`. Confirm the status announces `No token stored`.
+13. Move focus to the `Package Credentials` section. Confirm VoiceOver reads one row per declared requirement with the label, purpose, package name, optionality (optional or required), and authorization state (`Authorized`, `Needs authorization`, or `Changed — re-authorization needed`).
+14. Activate `Authorize…` on a requirement. Confirm the dialog states the inheritance rule (future revisions keep the grant only while the requirement stays unchanged) before `Authorize` and `Cancel`.
+15. Activate `Authorize`. Confirm the row announces `Authorized`.
+16. Activate `Revoke…`. Confirm the dialog states that revoking the grant does not delete the stored credential, then activate `Revoke`. Confirm the row announces `Needs authorization` again.
+17. Choose the reviewed pdf2md option. Confirm no service section remains.
+18. Move focus to a Status cell that reads `Using fallback`. Activate the help text. Confirm VoiceOver reads the fallback that actually runs (Bundled pdf2md extraction or Tag-based text extraction).
+19. Move focus to `Advanced Local Package Import`.
+20. Confirm that VoiceOver reads the executable-code warning.
+21. Confirm that VoiceOver reads that the app's lifecycle and capability controls do not create a security sandbox.
+22. Open the import disclosure.
+23. Activate `Import Extractor Package`.
+24. Choose one local package directory.
+25. Confirm that VoiceOver reads `Validating and installing package`.
+26. Confirm that VoiceOver reads the successful installation announcement.
+27. Move focus to an installed package row in Installed Extractor Packages.
+28. Confirm that VoiceOver reads the package name, version, kind, and `Active` state.
+29. Open the row disclosure.
+30. Confirm that VoiceOver reads the digest prefix, registration, and readiness state.
+31. Select the package in the PDF route pop-up. Confirm the status column reads `Available` and the picker's accessibility value contains the package name.
+32. Activate `Remove Package`.
+33. Confirm the destructive dialog text and `Cancel` action.
+34. Activate `Remove Package` in the dialog.
+35. Confirm that VoiceOver reads `Removing package` and the successful removal announcement.
+36. Confirm that the logical selection remains selected in the route pop-up as `Not installed` and the status column reads `Using fallback`.
+37. Confirm the row is removed and the documented built-in fallback remains active.
+38. Tab through the section: confirm focus moves row by row between the route pop-ups, then reaches the package controls after the table.
 
 Record the macOS version, app build, package digest prefix, and any missing or incorrect announcement. Do not record package source content or credentials.

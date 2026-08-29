@@ -67,6 +67,12 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
     public static let reviewedHTMLLogical = reviewedLogical(
         package: ReviewedExtractorPackages.defuddle, registration: "article")
 
+    /// The logical reference of the reviewed Docling Serve package
+    /// registration. The legacy `.doclingServe` selection maps to this
+    /// lineage when it is active (#1159).
+    public static let reviewedDoclingLogical = reviewedLogical(
+        package: ReviewedExtractorPackages.doclingServe, registration: "document")
+
     private static func reviewedLogical(
         package: ReviewedExtractorPackage,
         registration: String
@@ -86,6 +92,16 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
            builtIn == ExtractionBackendKey(kind: .pdf, backendID: ExtractionBackend.localPdf2md.rawValue) {
             key = try await reviewedKey(
                 logical: Self.reviewedPDFLogical,
+                kind: .pdf)
+        }
+        // Legacy `.doclingServe` selections run through the reviewed Docling
+        // Serve package. There is deliberately NO silent fallback to another
+        // third-party package: an unauthorized or unconfigured selection
+        // surfaces its needs-authorization state instead (plan step 12).
+        if case .builtIn(let builtIn) = key,
+           builtIn == ExtractionBackendKey(kind: .pdf, backendID: ExtractionBackend.doclingServe.rawValue) {
+            key = try await reviewedKey(
+                logical: Self.reviewedDoclingLogical,
                 kind: .pdf)
         }
         let adapter = try await makeAdapter(for: key)
@@ -233,8 +249,14 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
         let acpKey = ExtractionBackendKey(kind: .pdf, backendID: ExtractionBackend.acp.rawValue)
         let anthropicKey = ExtractionBackendKey(kind: .pdf, backendID: ExtractionBackend.anthropic.rawValue)
         let geminiKey = ExtractionBackendKey(kind: .pdf, backendID: ExtractionBackend.gemini.rawValue)
-        let doclingKey = ExtractionBackendKey(kind: .pdf, backendID: ExtractionBackend.doclingServe.rawValue)
         let tagBasedKey = ExtractionBackendKey(kind: .html, backendID: HtmlExtractionBackend.tagBased.rawValue)
+
+        // The in-process Docling Serve adapter was REMOVED (#1159, plan step
+        // 15): Docling runs through the reviewed revision 2 package, whose
+        // lineage receives the stored token only after explicit
+        // authorization. Legacy `.doclingServe` selections map to that
+        // lineage in `prepare`; `DoclingServeClient` remains only as the
+        // shared request implementation behind the Settings connection test.
 
         return [
             ExtractionBatchEntry(
@@ -282,18 +304,6 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
                             fetcher: input.httpFetcher),
                         backend: .gemini,
                         modelVersion: configuration.geminiModel))
-                }),
-            ExtractionBatchEntry(
-                key: .builtIn(doclingKey),
-                backend: RegisteredExtractionBackend(key: doclingKey) {
-                    let configuration = try input.readConfiguration()
-                    return .pdf(ExtractionPreparation(
-                        extractor: DoclingServeClient(
-                            endpoint: configuration.doclingServeEndpoint ?? "",
-                            apiToken: input.readCredential(.doclingServeToken),
-                            fetcher: input.httpFetcher),
-                        backend: .doclingServe,
-                        modelVersion: nil))
                 }),
             ExtractionBatchEntry(
                 key: .builtIn(tagBasedKey),

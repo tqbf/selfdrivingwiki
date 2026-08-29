@@ -127,7 +127,9 @@ public enum ExtractorSelectionResolver {
     ) -> ExtractorReference? {
         activeRegistrations
             .filter {
-                $0.protocolRevision == .v1
+                // #1159: protocol revision 2 registrations are selectable
+                // alongside revision 1.
+                ($0.protocolRevision == .v1 || $0.protocolRevision == .v2)
                     && $0.kinds.contains(kind)
                     && $0.reference.revision.packageID == logicalReference.packageID
                     && $0.reference.registrationID == logicalReference.registrationID

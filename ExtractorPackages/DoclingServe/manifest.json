@@ -1,0 +1,55 @@
+{
+  "capabilities": [
+    "network"
+  ],
+  "displayName": "Docling Serve",
+  "entryPoint": "bin/docling-serve-extractor",
+  "files": [
+    {
+      "digest": "424e778be89a3b06b0ccf4682cea1a97ee25e63c4b5713a1e980ac60b9d62182",
+      "path": "PROVENANCE.md"
+    },
+    {
+      "digest": "bc06fb6208f1cf0e9d6e498224240b81050302e82e59d9f74d1537a50d5d08db",
+      "path": "bin/docling-serve-extractor"
+    },
+    {
+      "digest": "76cc805fb45cd0dbd5d6cb52878b0c7f6655051dfef8af754c0b339fc47345a7",
+      "path": "bin/docling_serve_extractor.py"
+    }
+  ],
+  "launch": {
+    "mode": "direct"
+  },
+  "limits": {
+    "maximumDurationMilliseconds": 1800000,
+    "maximumInputByteCount": 134217728,
+    "maximumMarkdownOutputByteCount": 33554432,
+    "maximumProgressEventCount": 1024
+  },
+  "manifestRevision": 2,
+  "packageID": "org.selfdrivingwiki.docling-serve",
+  "protocolRevision": 2,
+  "registrations": [
+    {
+      "credentialRequirements": [
+        {
+          "id": "api-token",
+          "kind": "secret",
+          "label": "Docling Serve API token",
+          "optional": true,
+          "purpose": "Sent only as the X-Api-Key header when your Docling Serve requires authentication."
+        }
+      ],
+      "displayName": "Docling Serve document",
+      "id": "document",
+      "kinds": [
+        "pdf"
+      ],
+      "mimeTypes": [
+        "application/pdf"
+      ]
+    }
+  ],
+  "version": "1.0.0"
+}

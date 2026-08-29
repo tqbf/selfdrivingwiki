@@ -190,13 +190,12 @@ public struct ExtractionRuntimeFactory: Sendable {
                                 backend: backend,
                                 modelVersion: configuration.geminiModel)
                         case .doclingServe:
-                            return ExtractionPreparation(
-                                extractor: DoclingServeClient(
-                                    endpoint: configuration.doclingServeEndpoint ?? "",
-                                    apiToken: readCredential(.doclingServeToken),
-                                    fetcher: fetcher),
-                                backend: backend,
-                                modelVersion: nil)
+                            // #1159: no in-process Docling construction. The
+                            // legacy selection resolves through the reviewed
+                            // Docling Serve package (ProcessExtractionServices
+                            // maps the legacy key to that lineage); this
+                            // plugin-layer resolver fails closed instead.
+                            throw ExtractionServicesError.unavailable
                         }
                     }
                     _ = try await activation.supply(Keys.backendResolver, value: resolver)

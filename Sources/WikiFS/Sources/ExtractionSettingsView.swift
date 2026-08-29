@@ -60,6 +60,8 @@ struct ExtractionSettingsView: View {
     @State private var routeSelections: [String: ExtractorRouteSettingsSelection] = [:]
     @State private var acpProviderSelection: String
     @State private var doclingEndpointText: String
+    /// Typed Docling timeout in SECONDS (#1159); blank = the 600s default.
+    @State private var doclingTimeoutText: String
     /// Write-only token draft (#1159): starts blank, never preloads the
     /// stored token. `doclingTokenConfigured` drives the status + Remove.
     @State private var doclingTokenText = ""
@@ -118,6 +120,7 @@ struct ExtractionSettingsView: View {
         let config = ExtractionConfig.load(from: containerDirectory)
         _acpProviderSelection = State(initialValue: ExtractorSettingsSelectionMapping.acpProviderSelection(from: config))
         _doclingEndpointText = State(initialValue: config.doclingServeEndpoint ?? "")
+        _doclingTimeoutText = State(initialValue: config.doclingServeTimeoutMilliseconds.map { String($0 / 1_000) } ?? "")
         _draftPodcastBackend = State(initialValue: config.podcastBackend)
         _packageModel = State(initialValue: ExtractorPackageSettingsModel(
             loadSnapshot: packageSnapshot,
@@ -319,9 +322,13 @@ struct ExtractionSettingsView: View {
         case .prompt:
             return .prompt
         case .reviewedPackage:
-            return choice.reference == .installed(ProcessExtractionServices.reviewedPDFLogical)
-                ? .reviewedPdf2md
-                : .reviewedDefuddle
+            if choice.reference == .installed(ProcessExtractionServices.reviewedPDFLogical) {
+                return .reviewedPdf2md
+            }
+            if choice.reference == .installed(ProcessExtractionServices.reviewedDoclingLogical) {
+                return .reviewedDocling
+            }
+            return .reviewedDefuddle
         case .installedPackage:
             if case .installed(let logical) = choice.reference { return .installed(logical) }
             return .prompt
@@ -440,7 +447,7 @@ struct ExtractionSettingsView: View {
     @ViewBuilder private var backendConfigSection: some View {
         switch routeSelections[ExtractorRouteID.canonicalPDF.description] {
         case .connectedService(.acp): acpSection
-        case .connectedService(.doclingServe): doclingSection
+        case .connectedService(.doclingServe), .reviewedDocling: doclingSection
         default: EmptyView()
         }
     }
@@ -783,6 +790,8 @@ struct ExtractionSettingsView: View {
         Section {
             TextField("Endpoint", text: $doclingEndpointText, prompt: Text(ExtractionConfig.defaultDoclingServeEndpoint))
                 .onChange(of: doclingEndpointText) { persistAll() }
+            TextField("Timeout (seconds)", text: $doclingTimeoutText, prompt: Text("600"))
+                .onChange(of: doclingTimeoutText) { persistAll() }
             // Write-only token entry (#1159): the field starts blank and
             // never shows the stored token; Save/Remove are explicit.
             SecureField("API Token (optional)", text: $doclingTokenText, prompt: Text(doclingTokenConfigured ? "Configured — enter a new token to replace" : "Enter token"))
@@ -899,6 +908,12 @@ struct ExtractionSettingsView: View {
         config.acpProviderId = acpProviderSelection.isEmpty ? nil : acpProviderSelection
         let endpoint = doclingEndpointText.trimmingCharacters(in: .whitespacesAndNewlines)
         config.doclingServeEndpoint = endpoint.isEmpty ? nil : endpoint
+        let timeoutText = doclingTimeoutText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let seconds = Int(timeoutText), seconds > 0 {
+            config.doclingServeTimeoutMilliseconds = seconds * 1_000
+        } else {
+            config.doclingServeTimeoutMilliseconds = nil
+        }
         config.podcastBackend = draftPodcastBackend
     }
 
@@ -951,6 +966,8 @@ enum ExtractorRouteSettingsSelection: Hashable, Sendable {
     case prompt
     case reviewedPdf2md
     case reviewedDefuddle
+    /// PDF only: Docling Serve via the reviewed revision 2 package (#1159).
+    case reviewedDocling
     case installed(LogicalExtractorReference)
     /// A saved installed selection whose package is no longer active.
     case unavailableInstalled(LogicalExtractorReference)
@@ -978,9 +995,13 @@ enum ExtractorRouteSettingsMapping {
         if route == .canonicalPDF {
             switch saved {
             case .installed(let logical):
-                return logical == ProcessExtractionServices.reviewedPDFLogical
-                    ? .reviewedPdf2md
-                    : installedSelection(logical, row: row)
+                if logical == ProcessExtractionServices.reviewedPDFLogical {
+                    return .reviewedPdf2md
+                }
+                if logical == ProcessExtractionServices.reviewedDoclingLogical {
+                    return .reviewedDocling
+                }
+                return installedSelection(logical, row: row)
             case .builtIn(.pdf(let backend)):
                 return visiblePDFSelection(for: backend)
             case .builtIn(.html), .none:
@@ -1025,7 +1046,9 @@ enum ExtractorRouteSettingsMapping {
         case .anthropic, .gemini, .acp:
             return .connectedService(.acp)
         case .doclingServe:
-            return .connectedService(.doclingServe)
+            // The legacy Docling selection displays as the reviewed package
+            // (#1159): Docling runs through the reviewed revision 2 package.
+            return .reviewedDocling
         }
     }
 
@@ -1044,6 +1067,12 @@ enum ExtractorRouteSettingsMapping {
             case .reviewedPdf2md:
                 config.backend = .localPdf2md
                 reference = .installed(ProcessExtractionServices.reviewedPDFLogical)
+            case .reviewedDocling:
+                // Dual-write keeps the legacy compatibility field truthful:
+                // the Docling selection persists as `.doclingServe`, which
+                // maps back to the reviewed lineage at prepare time (#1159).
+                config.backend = .doclingServe
+                reference = .installed(ProcessExtractionServices.reviewedDoclingLogical)
             case .installed(let logical), .unavailableInstalled(let logical):
                 reference = .installed(logical)
             case .connectedService(let backend):
@@ -1065,7 +1094,7 @@ enum ExtractorRouteSettingsMapping {
             case .builtInTagBased:
                 config.htmlBackend = .tagBased
                 reference = .builtIn(.html(.tagBased))
-            case .reviewedPdf2md, .connectedService:
+            case .reviewedPdf2md, .reviewedDocling, .connectedService:
                 return
             }
         } else {

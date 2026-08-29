@@ -41,6 +41,22 @@ public struct ExtractionConfig: JSONSidecarConfig {
     /// `http://localhost:5001`. `nil` until configured.
     public var doclingServeEndpoint: String?
 
+    /// Typed Docling Serve request timeout (#1159). Compatibility default:
+    /// 600 seconds — the value the shared extraction HTTP fetcher always
+    /// applied before the field existed, so old config files (which lack the
+    /// key) keep their exact previous behavior.
+    public var doclingServeTimeoutMilliseconds: Int?
+
+    /// The effective timeout: the configured value, or the 600-second
+    /// compatibility default when absent.
+    public var effectiveDoclingServeTimeoutMilliseconds: Int {
+        guard let doclingServeTimeoutMilliseconds,
+              doclingServeTimeoutMilliseconds > 0,
+              doclingServeTimeoutMilliseconds <= 1_800_000
+        else { return 600_000 }
+        return doclingServeTimeoutMilliseconds
+    }
+
     /// The HTML→Markdown backend to use when the user explicitly extracts an
     /// HTML source (issue #799 PR1: scaffolding only — extraction still
     /// auto-runs at ingest with the current method; the trigger wiring lands in
@@ -88,6 +104,7 @@ public struct ExtractionConfig: JSONSidecarConfig {
         geminiModel: String = ExtractionConfig.defaultGeminiModel,
         geminiBaseURLOverride: String? = nil,
         doclingServeEndpoint: String? = nil,
+        doclingServeTimeoutMilliseconds: Int? = nil,
         htmlBackend: HtmlExtractionBackend? = nil,
         podcastBackend: PodcastTranscriptionBackend? = nil,
         pdfExtractor: ExtractionBackendReference? = nil,
@@ -101,6 +118,7 @@ public struct ExtractionConfig: JSONSidecarConfig {
         self.geminiModel = geminiModel
         self.geminiBaseURLOverride = geminiBaseURLOverride
         self.doclingServeEndpoint = doclingServeEndpoint
+        self.doclingServeTimeoutMilliseconds = doclingServeTimeoutMilliseconds
         self.htmlBackend = htmlBackend
         self.podcastBackend = podcastBackend
         self.pdfExtractor = pdfExtractor
@@ -146,6 +164,7 @@ public struct ExtractionConfig: JSONSidecarConfig {
         case anthropicModel, anthropicBaseURLOverride
         case geminiModel, geminiBaseURLOverride
         case doclingServeEndpoint
+        case doclingServeTimeoutMilliseconds
         case htmlBackend, podcastBackend
         case pdfExtractor, htmlExtractor
         case routeExtractors
@@ -162,6 +181,9 @@ public struct ExtractionConfig: JSONSidecarConfig {
             ?? ExtractionConfig.defaultGeminiModel
         self.geminiBaseURLOverride = try c.decodeIfPresent(String.self, forKey: .geminiBaseURLOverride)
         self.doclingServeEndpoint = try c.decodeIfPresent(String.self, forKey: .doclingServeEndpoint)
+        // #1159: absent key = the 600-second compatibility default via
+        // `effectiveDoclingServeTimeoutMilliseconds`.
+        self.doclingServeTimeoutMilliseconds = try c.decodeIfPresent(Int.self, forKey: .doclingServeTimeoutMilliseconds)
         // Forward-compat for issue #799 PR1: a config file written before
         // this field shipped (no `htmlBackend`/`podcastBackend` key) decodes
         // to nil — the user picks a backend on first extraction. Mirrors the
@@ -190,6 +212,7 @@ public struct ExtractionConfig: JSONSidecarConfig {
         try c.encode(geminiModel, forKey: .geminiModel)
         try c.encodeIfPresent(geminiBaseURLOverride, forKey: .geminiBaseURLOverride)
         try c.encodeIfPresent(doclingServeEndpoint, forKey: .doclingServeEndpoint)
+        try c.encodeIfPresent(doclingServeTimeoutMilliseconds, forKey: .doclingServeTimeoutMilliseconds)
         try c.encodeIfPresent(htmlBackend, forKey: .htmlBackend)
         try c.encodeIfPresent(podcastBackend, forKey: .podcastBackend)
         try c.encodeIfPresent(pdfExtractor, forKey: .pdfExtractor)

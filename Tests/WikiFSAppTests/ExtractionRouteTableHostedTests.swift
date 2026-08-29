@@ -222,9 +222,11 @@ struct ExtractionRouteTableHostedTests {
         #expect(source.contains("NSViewRepresentable") == false)
 
         // ACP and Docling configuration follows the PDF route selection only.
+        // #1159: the Docling section also follows the reviewed Docling
+        // package selection.
         #expect(source.contains("switch routeSelections[ExtractorRouteID.canonicalPDF.description]"))
         #expect(source.contains("case .connectedService(.acp): acpSection"))
-        #expect(source.contains("case .connectedService(.doclingServe): doclingSection"))
+        #expect(source.contains(".reviewedDocling: doclingSection"))
 
         // Technical MIME identity stays out of the primary columns (help text).
         #expect(source.contains("MIME type: \\(row.route.mimeType.rawValue)"))
