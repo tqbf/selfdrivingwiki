@@ -20,6 +20,8 @@ public struct ExtractorRouteRegistrationSnapshot: Hashable, Sendable {
     public let mimeTypes: Set<ExtractorMIMEType>
     /// Declared filename extensions — matching hints, never route identity.
     public let filenameExtensions: Set<ExtractorFileExtension>
+    /// Declared credential requirements (non-secret declarations; #1159).
+    public let credentialRequirements: [ExtractorCredentialRequirement]
 
     public init(
         reference: ExtractorReference,
@@ -27,7 +29,8 @@ public struct ExtractorRouteRegistrationSnapshot: Hashable, Sendable {
         packageName: String,
         kinds: Set<ExtractorKind>,
         mimeTypes: Set<ExtractorMIMEType>,
-        filenameExtensions: Set<ExtractorFileExtension>
+        filenameExtensions: Set<ExtractorFileExtension>,
+        credentialRequirements: [ExtractorCredentialRequirement] = []
     ) {
         self.reference = reference
         self.displayName = displayName
@@ -35,6 +38,7 @@ public struct ExtractorRouteRegistrationSnapshot: Hashable, Sendable {
         self.kinds = kinds
         self.mimeTypes = mimeTypes
         self.filenameExtensions = filenameExtensions
+        self.credentialRequirements = credentialRequirements
     }
 }
 

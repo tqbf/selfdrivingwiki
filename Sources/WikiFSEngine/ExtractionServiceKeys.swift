@@ -125,19 +125,24 @@ public struct ExtractorRegistrationPresentation: Hashable, Sendable {
     public let mimeTypes: Set<ExtractorMIMEType>
     /// Declared filename extensions — matching hints only, never route identity.
     public let filenameExtensions: Set<ExtractorFileExtension>
+    /// Declared credential REQUIREMENTS (non-secret review facts; #1159).
+    /// Never a value and never a reference binding.
+    public let credentialRequirements: [ExtractorCredentialRequirement]
 
     public init(
         displayName: String,
         packageName: String,
         kinds: Set<ExtractorKind>,
         mimeTypes: Set<ExtractorMIMEType>,
-        filenameExtensions: Set<ExtractorFileExtension>
+        filenameExtensions: Set<ExtractorFileExtension>,
+        credentialRequirements: [ExtractorCredentialRequirement] = []
     ) {
         self.displayName = displayName
         self.packageName = packageName
         self.kinds = kinds
         self.mimeTypes = mimeTypes
         self.filenameExtensions = filenameExtensions
+        self.credentialRequirements = credentialRequirements
     }
 }
 
@@ -418,7 +423,8 @@ public extension ExtractionBackendRegistry {
                     packageName: presentation.packageName,
                     kinds: presentation.kinds,
                     mimeTypes: presentation.mimeTypes,
-                    filenameExtensions: presentation.filenameExtensions)
+                    filenameExtensions: presentation.filenameExtensions,
+                    credentialRequirements: presentation.credentialRequirements)
             }
     }
 }

@@ -119,18 +119,30 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
         case id, displayName, kinds, mimeTypes, filenameExtensions
     }
 
+    /// Revision-2 keys: adds registration-scoped credential requirement
+    /// declarations (issue #1159). Revision 1 decoding rejects this key
+    /// (unknown-field policy), so a v1 manifest cannot carry credentials.
+    private enum V2CodingKeys: String, CodingKey, CaseIterable {
+        case id, displayName, kinds, mimeTypes, filenameExtensions, credentialRequirements
+    }
+
     public let id: ExtractorRegistrationID
     public let displayName: String
     public let kinds: Set<ExtractorKind>
     public let mimeTypes: Set<ExtractorMIMEType>
     public let filenameExtensions: Set<ExtractorFileExtension>
+    /// Non-secret credential DECLARATIONS (id/kind/optionality/label/purpose).
+    /// Never a value, never a reference binding. Empty for every revision-1
+    /// registration.
+    public let credentialRequirements: [ExtractorCredentialRequirement]
 
     public init(
         id: ExtractorRegistrationID,
         displayName: String,
         kinds: Set<ExtractorKind>,
         mimeTypes: Set<ExtractorMIMEType>,
-        filenameExtensions: Set<ExtractorFileExtension> = []
+        filenameExtensions: Set<ExtractorFileExtension> = [],
+        credentialRequirements: [ExtractorCredentialRequirement] = []
     ) throws {
         guard displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
               displayName.utf8.count <= 128 else {
@@ -138,16 +150,37 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
         }
         guard kinds.isEmpty == false else { throw ExtractorValidationError.invalidManifest("registration kind set is empty") }
         guard mimeTypes.isEmpty == false else { throw ExtractorValidationError.invalidManifest("registration MIME type set is empty") }
+        guard credentialRequirements.count <= ExtractorHostLimits.maximumRequirementsPerRegistration else {
+            throw ExtractorValidationError.invalidManifest("too many credential requirements")
+        }
+        guard Set(credentialRequirements.map(\.id)).count == credentialRequirements.count else {
+            throw ExtractorValidationError.invalidManifest(
+                "registration declares duplicate credential requirement IDs")
+        }
         self.id = id
         self.displayName = displayName
         self.kinds = kinds
         self.mimeTypes = mimeTypes
         self.filenameExtensions = filenameExtensions
+        self.credentialRequirements = credentialRequirements.sorted()
     }
 
+    /// The v1 decoder: strict, no credential key.
     public init(from decoder: any Decoder) throws {
-        try rejectUnknownKeys(from: decoder, allowed: CodingKeys.self)
-        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            from: decoder, manifestRevision: .v1)
+    }
+
+    /// Revision-aware decoding. Revision 1 rejects the
+    /// `credentialRequirements` key outright (unknown-field policy);
+    /// revision 2 accepts it and validates every declaration.
+    public init(from decoder: any Decoder, manifestRevision: ExtractorManifestRevision) throws {
+        if manifestRevision == .v2 {
+            try rejectUnknownKeys(from: decoder, allowed: V2CodingKeys.self)
+        } else {
+            try rejectUnknownKeys(from: decoder, allowed: CodingKeys.self)
+        }
+        let container = try decoder.container(keyedBy: V2CodingKeys.self)
         let kinds = try container.decode([ExtractorKind].self, forKey: .kinds)
         let mimeTypes = try container.decode([ExtractorMIMEType].self, forKey: .mimeTypes)
         let filenameExtensions = try container.decodeIfPresent([ExtractorFileExtension].self, forKey: .filenameExtensions) ?? []
@@ -156,21 +189,34 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
               Set(filenameExtensions).count == filenameExtensions.count else {
             throw ExtractorValidationError.invalidManifest("registration contains duplicate values")
         }
+        let requirements: [ExtractorCredentialRequirement]
+        if manifestRevision == .v2 {
+            requirements = try container.decodeIfPresent(
+                [ExtractorCredentialRequirement].self, forKey: .credentialRequirements) ?? []
+        } else {
+            requirements = []
+        }
         try self.init(
             id: container.decode(ExtractorRegistrationID.self, forKey: .id),
             displayName: container.decode(String.self, forKey: .displayName),
             kinds: Set(kinds),
             mimeTypes: Set(mimeTypes),
-            filenameExtensions: Set(filenameExtensions))
+            filenameExtensions: Set(filenameExtensions),
+            credentialRequirements: requirements)
     }
 
     public func encode(to encoder: any Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
+        var container = encoder.container(keyedBy: V2CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(displayName, forKey: .displayName)
         try container.encode(kinds.sorted { $0.rawValue < $1.rawValue }, forKey: .kinds)
         try container.encode(mimeTypes.sorted(), forKey: .mimeTypes)
         if filenameExtensions.isEmpty == false { try container.encode(filenameExtensions.sorted(), forKey: .filenameExtensions) }
+        // Emitted only when non-empty, so revision-1 canonical bytes (always
+        // empty here) are unchanged bit-for-bit.
+        if credentialRequirements.isEmpty == false {
+            try container.encode(credentialRequirements, forKey: .credentialRequirements)
+        }
     }
 
     public static func < (lhs: Self, rhs: Self) -> Bool { lhs.id < rhs.id }
@@ -232,7 +278,7 @@ public struct ExtractorManifest: Codable, Hashable, Sendable {
         files: [ExtractorPackageFile],
         limits: ExtractorOperationLimits
     ) throws {
-        guard manifestRevision == .v1 else {
+        guard manifestRevision == .v1 || manifestRevision == .v2 else {
             throw ExtractorValidationError.unsupportedManifestRevision(manifestRevision.rawValue)
         }
         guard displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
@@ -243,6 +289,24 @@ public struct ExtractorManifest: Codable, Hashable, Sendable {
         guard registrations.isEmpty == false else { throw ExtractorValidationError.invalidManifest("manifest has no registrations") }
         if let duplicate = zip(registrations, registrations.dropFirst()).first(where: { $0.id == $1.id })?.0.id {
             throw ExtractorValidationError.duplicateRegistration(duplicate)
+        }
+        // Credential declarations are a revision-2 feature. Revision 1 must
+        // reject them even in memory (a v1 manifest can never carry them in
+        // JSON — the decoder rejects the key — this guards construction).
+        if manifestRevision == .v1,
+           registrations.contains(where: { $0.credentialRequirements.isEmpty == false }) {
+            throw ExtractorValidationError.invalidManifest(
+                "credential requirements require manifest revision 2")
+        }
+        // Manifest-wide uniqueness of requirement IDs makes package lineage +
+        // requirement ID an unambiguous authorization identity (plan step 7).
+        var seenRequirementIDs: Set<ExtractorCredentialRequirementID> = []
+        for registration in registrations {
+            for requirement in registration.credentialRequirements
+            where seenRequirementIDs.insert(requirement.id).inserted == false {
+                throw ExtractorValidationError.invalidManifest(
+                    "duplicate credential requirement ID \(requirement.id.rawValue) across registrations")
+            }
         }
         let files = files.sorted()
         guard files.isEmpty == false else { throw ExtractorValidationError.invalidManifest("manifest has no declared files") }
@@ -275,19 +339,31 @@ public struct ExtractorManifest: Codable, Hashable, Sendable {
     public init(from decoder: any Decoder) throws {
         try rejectUnknownKeys(from: decoder, allowed: CodingKeys.self)
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        // Decode the revision FIRST so registration elements are decoded
+        // with the matching key policy (v1 rejects the credential key; v2
+        // accepts it).
+        let revision = try container.decode(
+            ExtractorManifestRevision.self, forKey: .manifestRevision)
+        var nested = try container.nestedUnkeyedContainer(forKey: .registrations)
+        var registrations: [ExtractorRegistration] = []
+        registrations.reserveCapacity(nested.count ?? 0)
+        while nested.isAtEnd == false {
+            registrations.append(try ExtractorRegistration(
+                from: nested.superDecoder(), manifestRevision: revision))
+        }
         let capabilities = try container.decode([ExtractorCapability].self, forKey: .capabilities)
         guard Set(capabilities).count == capabilities.count else {
             throw ExtractorValidationError.invalidManifest("manifest contains duplicate capabilities")
         }
         try self.init(
-            manifestRevision: container.decode(ExtractorManifestRevision.self, forKey: .manifestRevision),
+            manifestRevision: revision,
             packageID: container.decode(ExtractorPackageID.self, forKey: .packageID),
             version: container.decode(ExtractorPackageVersion.self, forKey: .version),
             displayName: container.decode(String.self, forKey: .displayName),
             protocolRevision: container.decode(ExtractorProtocolRevision.self, forKey: .protocolRevision),
             entryPoint: container.decode(ExtractorRelativePath.self, forKey: .entryPoint),
             launch: container.decode(ExtractorLaunch.self, forKey: .launch),
-            registrations: container.decode([ExtractorRegistration].self, forKey: .registrations),
+            registrations: registrations,
             capabilities: Set(capabilities),
             files: container.decode([ExtractorPackageFile].self, forKey: .files),
             limits: container.decode(ExtractorOperationLimits.self, forKey: .limits))
@@ -345,7 +421,7 @@ private struct AnyExtractorCodingKey: CodingKey {
     }
 }
 
-private func rejectUnknownKeys<Key>(from decoder: any Decoder, allowed: Key.Type) throws
+func rejectUnknownKeys<Key>(from decoder: any Decoder, allowed: Key.Type) throws
 where Key: CodingKey & CaseIterable, Key.AllCases: Sequence {
     let known = Set(Key.allCases.map(\.stringValue))
     let container = try decoder.container(keyedBy: AnyExtractorCodingKey.self)

@@ -176,7 +176,8 @@ public enum ExtractorPackagePluginDefinitionFactory {
                     packageName: manifest.displayName,
                     kinds: registration.kinds,
                     mimeTypes: registration.mimeTypes,
-                    filenameExtensions: registration.filenameExtensions)
+                    filenameExtensions: registration.filenameExtensions,
+                    credentialRequirements: registration.credentialRequirements)
                 let kinds = registration.kinds
                     .sorted { $0.rawValue < $1.rawValue }
                 for kind in kinds {
