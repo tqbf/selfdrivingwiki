@@ -592,12 +592,6 @@ struct ExtractionSettingsView: View {
                 installedPackagesSection
             }
 
-            // Credential requirements (#1159): per-declaration authorization
-            // state and explicit Authorize / Change Credential / Revoke
-            // actions. Hidden when no snapshot loader was wired.
-            if packageSnapshot != nil {
-                credentialRequirementsSection
-            }
         }
         .formStyle(.grouped)
         .frame(minWidth: Metrics.width, minHeight: Metrics.height)
@@ -747,10 +741,21 @@ struct ExtractionSettingsView: View {
                     tokenDraft: $doclingTokenText,
                     tokenConfigured: doclingTokenConfigured,
                     testPhase: $doclingTest,
+                    requirements: doclingCredentialRequirements,
+                    authorizeRequirement: authorizeRequirement,
+                    revokeRequirement: revokeRequirement,
+                    onCredentialMutation: { outcome in await handleMutationOutcome(outcome) },
                     onPersist: { persistAll() },
                     onSaveToken: { saveDoclingToken() },
                     onRemoveToken: { removeDoclingToken() },
                     onTestConnection: { testDocling() })
+            case .package(let package):
+                PackageConfigurationDialog(
+                    title: packageConfigurationTitle(package),
+                    requirements: credentialRequirements(for: package),
+                    authorizeRequirement: authorizeRequirement,
+                    revokeRequirement: revokeRequirement,
+                    onCredentialMutation: { outcome in await handleMutationOutcome(outcome) })
             }
         }
     }
@@ -1132,11 +1137,26 @@ struct ExtractionSettingsView: View {
     /// Which connected service has a configuration dialog open (macOS
     /// Settings idiom: the Configure… button lives in the route table row;
     /// the options open in a dialog, per the macos-design skill).
-    enum ServiceConfigurationDialog: String, Identifiable {
+    enum ServiceConfigurationDialog: Identifiable, Hashable {
         case acp
         case docling
+        case package(ExtractorPackageConfigurationID)
 
-        var id: String { rawValue }
+        var id: String {
+            switch self {
+            case .acp: "acp"
+            case .docling: "docling"
+            case .package(let package): "package/\(package.id)"
+            }
+        }
+    }
+
+    struct ExtractorPackageConfigurationID: Hashable, Sendable {
+        let packageID: String
+        let version: String
+        let registrationID: String
+
+        var id: String { "\(packageID)/\(version)/\(registrationID)" }
     }
 
     @State private var serviceConfigurationDialog: ServiceConfigurationDialog?
@@ -1155,6 +1175,62 @@ struct ExtractionSettingsView: View {
         default:
             return nil
         }
+    }
+
+    private var doclingCredentialRequirements: [ExtractorCredentialRequirementSummary] {
+        let reviewed = ReviewedExtractorPackages.doclingServe
+        return packageModel.snapshot.credentialRequirements.filter {
+            $0.packageID == reviewed.packageID.rawValue
+                && $0.packageVersion == reviewed.version.rawValue
+                && $0.registrationID == ProcessExtractionServices.reviewedDoclingLogical.registrationID.rawValue
+        }
+    }
+
+    private func packageConfigurationID(
+        for row: ExtractorPackageSettingsRow
+    ) -> ExtractorPackageConfigurationID? {
+        Self.packageConfigurationID(
+            for: row,
+            requirements: packageModel.snapshot.credentialRequirements)
+    }
+
+    static func packageConfigurationID(
+        for row: ExtractorPackageSettingsRow,
+        requirements: [ExtractorCredentialRequirementSummary]
+    ) -> ExtractorPackageConfigurationID? {
+        guard row.packageID != ReviewedExtractorPackages.doclingServe.packageID.rawValue else {
+            return nil
+        }
+        let candidate = ExtractorPackageConfigurationID(
+            packageID: row.packageID,
+            version: row.version,
+            registrationID: row.registrationID)
+        return credentialRequirements(for: candidate, in: requirements).isEmpty ? nil : candidate
+    }
+
+    private func credentialRequirements(
+        for package: ExtractorPackageConfigurationID
+    ) -> [ExtractorCredentialRequirementSummary] {
+        Self.credentialRequirements(
+            for: package,
+            in: packageModel.snapshot.credentialRequirements)
+    }
+
+    static func credentialRequirements(
+        for package: ExtractorPackageConfigurationID,
+        in requirements: [ExtractorCredentialRequirementSummary]
+    ) -> [ExtractorCredentialRequirementSummary] {
+        requirements.filter {
+            $0.packageID == package.packageID
+                && $0.packageVersion == package.version
+                && $0.registrationID == package.registrationID
+        }
+    }
+
+    private func packageConfigurationTitle(
+        _ package: ExtractorPackageConfigurationID
+    ) -> String {
+        credentialRequirements(for: package).first?.packageName ?? package.packageID
     }
 
     // MARK: - Installed extractor packages (Phase 7)
@@ -1225,7 +1301,7 @@ struct ExtractionSettingsView: View {
         } header: {
             Text("Installed Extractor Packages")
         } footer: {
-            Text("Manage exact validated package revisions available on this Mac. Choose defaults in the Default Extractors section above.")
+            Text("Manage exact validated package revisions and their credential access. Choose defaults in the Default Extractors section above.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -1265,9 +1341,17 @@ struct ExtractionSettingsView: View {
             LabeledContent("Registration", value: row.registrationID)
                 .font(.caption)
                 .accessibilityIdentifier("\(PackageAccessibility.registrationPrefix).\(row.id)")
-            if packageModel.canRemove {
-                HStack {
-                    Spacer()
+            HStack {
+                Spacer()
+                if let package = packageConfigurationID(for: row) {
+                    Button("Configure…") {
+                        serviceConfigurationDialog = .package(package)
+                    }
+                    .disabled(packageModel.isBusy)
+                    .accessibilityIdentifier("\(PackageAccessibility.configurePrefix).\(row.id)")
+                    .accessibilityLabel("Configure credentials for \(row.packageID), version \(row.version)")
+                }
+                if packageModel.canRemove {
                     Button("Remove Package…", role: .destructive) {
                         removalCandidate = row
                     }
@@ -1335,29 +1419,12 @@ struct ExtractionSettingsView: View {
     }
 
     @ViewBuilder
-    private var credentialRequirementsSection: some View {
-        Section {
-            if packageModel.snapshot.credentialRequirements.isEmpty {
-                Text("No extractor package on this Mac requests a credential.")
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier(RequirementAccessibility.emptyState)
-            } else {
-                ForEach(packageModel.snapshot.credentialRequirements) { summary in
-                    requirementRow(summary)
-                }
-            }
-        } header: {
-            Text("Package Credentials")
-        } footer: {
-            Text("Extractor packages declare the credentials they need. Nothing is granted until you authorize it here, and a package only ever receives the credentials you authorized for it. Credentials live in your Keychain; their values are never shown.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    @ViewBuilder
-    private func requirementRow(
-        _ summary: ExtractorCredentialRequirementSummary
+    static func requirementRow(
+        _ summary: ExtractorCredentialRequirementSummary,
+        authorizeRequirement: (@Sendable (ExtractorCredentialRequirementSummary) async -> ExtractorPackageMutationOutcome)?,
+        revokeRequirement: (@Sendable (ExtractorCredentialRequirementSummary) async -> ExtractorPackageMutationOutcome)?,
+        authorizationCandidate: Binding<ExtractorCredentialRequirementSummary?>,
+        revocationCandidate: Binding<ExtractorCredentialRequirementSummary?>
     ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
@@ -1370,29 +1437,29 @@ struct ExtractionSettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             HStack {
-                Text("\(summary.packageName) — \(summary.isOptional ? "optional" : "required")")
+                Text(summary.isOptional ? "Optional" : "Required")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
-                if authorizeRequirement != nil {
+                if authorizeRequirement != nil, summary.authorizationState != .authorized {
                     Button(summary.authorizationState == .changedContract
                            ? "Re-authorize…"
                            : "Authorize…") {
-                        authorizationCandidate = summary
+                        authorizationCandidate.wrappedValue = summary
                     }
                     .accessibilityIdentifier("\(RequirementAccessibility.authorizePrefix).\(summary.id)")
                     .accessibilityLabel("Authorize \(summary.label) for \(summary.packageName)")
                 }
                 if authorizeRequirement != nil, summary.authorizationState == .authorized {
-                    Button("Change Credential…") {
-                        authorizationCandidate = summary
+                    Button("Review Authorization…") {
+                        authorizationCandidate.wrappedValue = summary
                     }
                     .accessibilityIdentifier("\(RequirementAccessibility.changePrefix).\(summary.id)")
-                    .accessibilityLabel("Change the credential for \(summary.label)")
+                    .accessibilityLabel("Review authorization for \(summary.label)")
                 }
                 if revokeRequirement != nil, summary.authorizationState == .authorized {
                     Button("Revoke…", role: .destructive) {
-                        revocationCandidate = summary
+                        revocationCandidate.wrappedValue = summary
                     }
                     .accessibilityIdentifier("\(RequirementAccessibility.revokePrefix).\(summary.id)")
                     .accessibilityLabel("Revoke \(summary.label) authorization for \(summary.packageName)")
@@ -1405,7 +1472,7 @@ struct ExtractionSettingsView: View {
     }
 
     @ViewBuilder
-    private func authorizationStateLabel(
+    private static func authorizationStateLabel(
         _ summary: ExtractorCredentialRequirementSummary
     ) -> some View {
         switch summary.authorizationState {
@@ -1433,7 +1500,6 @@ struct ExtractionSettingsView: View {
     /// Stable accessibility identifiers for requirement rows and controls,
     /// derived from package + registration + requirement identities.
     private enum RequirementAccessibility {
-        static let emptyState = "extraction.credentials.empty"
         static let rowPrefix = "extraction.credentials.row"
         static let authorizePrefix = "extraction.credentials.authorize"
         static let changePrefix = "extraction.credentials.change"
@@ -1466,6 +1532,7 @@ struct ExtractionSettingsView: View {
         static let importDisclosure = "extraction.packages.import.disclosure"
         static let importButton = "extraction.packages.import.button"
         static let trustWarning = "extraction.packages.import.trust"
+        static let configurePrefix = "extraction.packages.configure"
         static let removePrefix = "extraction.packages.remove"
         static let failurePrefix = "extraction.packages.failure"
         static let failureMessagePrefix = "extraction.packages.failure.message"
@@ -1523,9 +1590,78 @@ struct ExtractionSettingsView: View {
         }
     }
 
+    struct CredentialAuthorizationConfiguration: View {
+        let requirements: [ExtractorCredentialRequirementSummary]
+        let authorizeRequirement: (@Sendable (ExtractorCredentialRequirementSummary) async -> ExtractorPackageMutationOutcome)?
+        let revokeRequirement: (@Sendable (ExtractorCredentialRequirementSummary) async -> ExtractorPackageMutationOutcome)?
+        let onCredentialMutation: (ExtractorPackageMutationOutcome?) async -> Void
+        @State private var authorizationCandidate: ExtractorCredentialRequirementSummary?
+        @State private var revocationCandidate: ExtractorCredentialRequirementSummary?
+
+        var body: some View {
+            Section {
+                ForEach(requirements) { summary in
+                    ExtractionSettingsView.requirementRow(
+                        summary,
+                        authorizeRequirement: authorizeRequirement,
+                        revokeRequirement: revokeRequirement,
+                        authorizationCandidate: $authorizationCandidate,
+                        revocationCandidate: $revocationCandidate)
+                }
+            } header: {
+                Text("Credential Access")
+            } footer: {
+                Text("The package receives only credentials that you authorize. Credential values stay in your Keychain and are never shown here.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .modifier(AuthorizationConfirmationModifier(
+                candidate: $authorizationCandidate,
+                authorize: authorizeRequirement,
+                onOutcome: onCredentialMutation))
+            .modifier(RevocationConfirmationModifier(
+                candidate: $revocationCandidate,
+                revoke: revokeRequirement,
+                onOutcome: onCredentialMutation))
+        }
+    }
+
+    struct PackageConfigurationDialog: View {
+        let title: String
+        let requirements: [ExtractorCredentialRequirementSummary]
+        let authorizeRequirement: (@Sendable (ExtractorCredentialRequirementSummary) async -> ExtractorPackageMutationOutcome)?
+        let revokeRequirement: (@Sendable (ExtractorCredentialRequirementSummary) async -> ExtractorPackageMutationOutcome)?
+        let onCredentialMutation: (ExtractorPackageMutationOutcome?) async -> Void
+        @Environment(\.dismiss) private var dismiss
+
+        var body: some View {
+            VStack(spacing: 0) {
+                Form {
+                    Section {
+                        Text(title)
+                            .font(.headline)
+                    }
+                    CredentialAuthorizationConfiguration(
+                        requirements: requirements,
+                        authorizeRequirement: authorizeRequirement,
+                        revokeRequirement: revokeRequirement,
+                        onCredentialMutation: onCredentialMutation)
+                }
+                .formStyle(.grouped)
+                HStack {
+                    Spacer()
+                    Button("Done") { dismiss() }
+                }
+                .padding(12)
+            }
+            .frame(width: ExtractionSettingsView.Metrics.dialogWidth,
+                   height: ExtractionSettingsView.Metrics.dialogHeight)
+        }
+    }
+
     // MARK: - Docling configuration dialog
 
-    /// Endpoint, timeout, write-only token, and Test Connection, presented
+    /// Endpoint, timeout, write-only token, authorization, and Test Connection.
     /// in a dialog (macos-design: progressive disclosure).
     struct DoclingConfigurationDialog: View {
         @Binding var endpoint: String
@@ -1533,6 +1669,10 @@ struct ExtractionSettingsView: View {
         @Binding var tokenDraft: String
         let tokenConfigured: Bool
         @Binding var testPhase: ExtractionSettingsView.TestPhase
+        let requirements: [ExtractorCredentialRequirementSummary]
+        let authorizeRequirement: (@Sendable (ExtractorCredentialRequirementSummary) async -> ExtractorPackageMutationOutcome)?
+        let revokeRequirement: (@Sendable (ExtractorCredentialRequirementSummary) async -> ExtractorPackageMutationOutcome)?
+        let onCredentialMutation: (ExtractorPackageMutationOutcome?) async -> Void
         let onPersist: () -> Void
         let onSaveToken: () -> Void
         let onRemoveToken: () -> Void
@@ -1543,6 +1683,13 @@ struct ExtractionSettingsView: View {
             VStack(spacing: 0) {
                 Form {
                     doclingDialogFields
+                    if requirements.isEmpty == false {
+                        CredentialAuthorizationConfiguration(
+                            requirements: requirements,
+                            authorizeRequirement: authorizeRequirement,
+                            revokeRequirement: revokeRequirement,
+                            onCredentialMutation: onCredentialMutation)
+                    }
                     testRow
                 }
                 .formStyle(.grouped)
@@ -1601,7 +1748,7 @@ struct ExtractionSettingsView: View {
             } header: {
                 Text("Docling Serve")
             } footer: {
-                Text("Run `docling-serve run` locally, then point this at its base URL. Private to your network. The token is only needed if the server was started with DOCLING_SERVE_API_KEY; it is stored in your Keychain and never shown after you save it.")
+                Text("Run `docling-serve run` locally, then point this at its base URL. Saving stores the token in your Keychain. Authorizing below separately lets the package use that stored token.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

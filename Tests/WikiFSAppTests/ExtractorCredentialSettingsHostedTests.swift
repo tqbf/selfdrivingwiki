@@ -2,6 +2,7 @@
 import Foundation
 import Testing
 import WikiFSCore
+import WikiFSEngine
 import WikiFSTypes
 @testable import WikiFS
 
@@ -152,6 +153,87 @@ struct ExtractorCredentialSettingsHostedTests {
             doclingSummary)
         #expect(message.contains("extraction.docling-serve-token"))
         #expect(message.contains("future revisions"))
+    }
+
+    @Test func packageConfigurationMatchesExactRegistrationAndExcludesDocling() throws {
+        let revision = ExtractorPackageRevisionID(
+            packageID: try ExtractorPackageID(validating: "org.example.pkg"),
+            version: try ExtractorPackageVersion(validating: "1.0.0"),
+            digest: try ExtractorPackageDigest(hex: String(repeating: "a", count: 64)))
+        let row = ExtractorPackageSettingsRow(
+            kind: .pdf,
+            packageID: revision.packageID.rawValue,
+            version: revision.version.rawValue,
+            digestPrefix: String(revision.digest.hex.prefix(12)),
+            registrationID: "main",
+            revision: revision)
+        let matching = makeSummary(state: .needsAuthorization, configured: true)
+        let wrongVersion = ExtractorCredentialRequirementSummary(
+            packageID: matching.packageID,
+            packageName: matching.packageName,
+            packageVersion: "2.0.0",
+            registrationID: matching.registrationID,
+            requirementID: matching.requirementID,
+            label: matching.label,
+            purpose: matching.purpose,
+            isOptional: matching.isOptional,
+            isConfigured: matching.isConfigured,
+            sourceName: matching.sourceName,
+            authorizationState: matching.authorizationState,
+            kinds: matching.kinds,
+            mimeTypes: matching.mimeTypes)
+
+        let package = try #require(ExtractionSettingsView.packageConfigurationID(
+            for: row,
+            requirements: [wrongVersion, matching]))
+        #expect(ExtractionSettingsView.credentialRequirements(
+            for: package,
+            in: [wrongVersion, matching]) == [matching])
+
+        let doclingRevision = ReviewedExtractorPackages.doclingServe.revision
+        let doclingRequirement = ExtractorCredentialRequirementSummary(
+            packageID: doclingRevision.packageID.rawValue,
+            packageName: "Docling Serve",
+            packageVersion: doclingRevision.version.rawValue,
+            registrationID: "document",
+            requirementID: "api-token",
+            label: "Docling Serve API token",
+            purpose: "Authenticates requests.",
+            isOptional: true,
+            isConfigured: true,
+            sourceName: "Keychain",
+            authorizationState: .needsAuthorization,
+            kinds: ["pdf"],
+            mimeTypes: ["application/pdf"])
+        let doclingRow = ExtractorPackageSettingsRow(
+            kind: .pdf,
+            packageID: doclingRevision.packageID.rawValue,
+            version: doclingRevision.version.rawValue,
+            digestPrefix: String(doclingRevision.digest.hex.prefix(12)),
+            registrationID: "document",
+            revision: doclingRevision)
+        #expect(ExtractionSettingsView.packageConfigurationID(
+            for: doclingRow,
+            requirements: [doclingRequirement]) == nil)
+    }
+
+    @Test func credentialsLiveInConfigurationDialogs() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent(
+                "Sources/WikiFS/Sources/ExtractionSettingsView.swift"),
+            encoding: .utf8)
+
+        #expect(source.contains("credentialRequirementsSection") == false)
+        #expect(source.contains("Text(\"Package Credentials\")") == false)
+        #expect(source.contains("CredentialAuthorizationConfiguration("))
+        #expect(source.contains("PackageConfigurationDialog("))
+        #expect(source.contains("requirements: doclingCredentialRequirements"))
+        #expect(source.contains("serviceConfigurationDialog = .package(package)"))
+        #expect(source.contains("extraction.packages.configure"))
     }
 
     /// Source contract: the authorization writer is only constructed by the

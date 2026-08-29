@@ -198,6 +198,41 @@ struct ExtractionRouteTableHostedTests {
         #expect(content.fittingSize.height > 0)
     }
 
+    @Test("a package credential configuration dialog mounts")
+    func packageCredentialConfigurationDialogMounts() async throws {
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        defer { lease.release() }
+        let requirement = ExtractorCredentialRequirementSummary(
+            packageID: "org.example.extractor",
+            packageName: "Example Extractor",
+            packageVersion: "1.0.0",
+            registrationID: "main",
+            requirementID: "api-token",
+            label: "API token",
+            purpose: "Authenticates requests.",
+            isOptional: false,
+            isConfigured: true,
+            sourceName: "Keychain",
+            authorizationState: .needsAuthorization,
+            kinds: ["pdf"],
+            mimeTypes: ["application/pdf"])
+        let controller = NSHostingController(
+            rootView: ExtractionSettingsView.PackageConfigurationDialog(
+                title: "Example Extractor",
+                requirements: [requirement],
+                authorizeRequirement: { _ in .succeeded(nil) },
+                revokeRequirement: { _ in .succeeded(nil) },
+                onCredentialMutation: { _ in }))
+        let window = NSWindow(contentViewController: controller)
+        window.setContentSize(NSSize(width: 460, height: 380))
+        window.layoutIfNeeded()
+        controller.view.layoutSubtreeIfNeeded()
+        window.orderFrontRegardless()
+        let content = try #require(window.contentView)
+        #expect(content.fittingSize.width > 0)
+        #expect(content.fittingSize.height > 0)
+    }
+
     @Test("the table keeps a constrained height at the Settings minimum size")
     func tableUsesConstrainedScrollableLayout() async throws {
         let lease = await HostedAppKitTestGate.shared.acquire()

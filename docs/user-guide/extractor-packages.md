@@ -53,12 +53,14 @@ Lifecycle states use plain terms: a package is **Active** when you can select it
 ## Package credentials
 
 Some packages declare that they need a credential. A package never receives
-one until you authorize it, and it receives only the credential you
-authorized for it.
+one until you authorize it. It receives only the credential that you authorize
+for it.
 
-Use the **Package Credentials** section (below **Installed Extractor
-Packages**) to see each requirement's label, purpose, whether it is optional
-or required, whether a value is stored, and its authorization state:
+Open the package configuration dialog to see each requirement. The dialog
+shows its label, purpose, optionality, stored-value state, and authorization
+state. For Docling Serve, use **Configure…** in the Default Extractors table.
+For other packages, expand the row under **Installed Extractor Packages** and
+select **Configure…**.
 
 - **Needs authorization** — the package declared a credential but you have
   not granted it. Enter the value in **Settings** (provider credentials live
@@ -92,17 +94,17 @@ owner-read-only file that is deleted as soon as the request ends.
 1. Run your Docling Serve instance (for example `docling-serve run`) and note
    its base URL.
 2. In **Settings** → **Extraction**, select **Docling Serve** as the PDF
-   default extractor and set the **Endpoint** (and optionally a
-   **Timeout**; the default is 600 seconds).
-4. If your server was started with `DOCLING_SERVE_API_KEY`, paste the token
-   once and press **Save Token** (it is stored in your Keychain and is never
-   displayed again), then press **Authorize…** on the **Docling Serve API
-   token** requirement in **Package Credentials**. The token is optional:
-   without it the package sends no auth header, which works with open
-   servers; servers that require `X-Api-Key` reject the request until you
-   authorize the stored token.
-5. Use **Test Connection** to verify the endpoint. The stored token is never
-   returned to the settings window.
+   default extractor.
+3. Select **Configure…**, then set the **Endpoint** and optional **Timeout**.
+   The default timeout is 600 seconds.
+4. If your server uses `DOCLING_SERVE_API_KEY`, paste the token and select
+   **Save Token**. The app stores the token in your Keychain and never shows it
+   again.
+5. In the same dialog, select **Authorize…** for the **Docling Serve API
+   token** requirement. The token is optional. The package sends no
+   authentication header when you do not authorize it.
+6. Use **Test Connection** to verify the endpoint. The settings window never
+   receives the stored token.
 
 ## Runtime setup
 

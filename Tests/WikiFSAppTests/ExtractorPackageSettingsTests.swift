@@ -184,7 +184,7 @@ struct ExtractorPackageSettingsTests {
         config.htmlBackend = .tagBased
         config.htmlExtractor = .builtIn(.pdf(.anthropic))
 
-        #expect(routeSelection(.canonicalPDF, from: config) == .connectedService(.doclingServe))
+        #expect(routeSelection(.canonicalPDF, from: config) == .reviewedDocling)
         #expect(routeSelection(.canonicalHTML, from: config) == .builtInTagBased)
     }
 
@@ -409,6 +409,7 @@ struct ExtractorPackageSettingsTests {
         #expect(viewSource.contains("extraction.packages.import.disclosure"))
         #expect(viewSource.contains("extraction.packages.import.button"))
         #expect(viewSource.contains("extraction.packages.import.trust"))
+        #expect(viewSource.contains("extraction.packages.configure"))
         #expect(viewSource.contains("extraction.packages.remove"))
         #expect(viewSource.contains("extraction.packages.failure"))
         #expect(viewSource.contains("extraction.packages.failure.message"))
@@ -448,7 +449,8 @@ struct ExtractorPackageSettingsTests {
 
         // The ACP provider picker stores a String. Every provider tag must use
         // the raw String value rather than the typed ProviderID wrapper.
-        #expect(viewSource.contains("selection: $acpProviderSelection"))
+        #expect(viewSource.contains("providerSelection: $acpProviderSelection"))
+        #expect(viewSource.contains("selection: $providerSelection"))
         #expect(viewSource.contains("Text(provider.label).tag(provider.id.rawValue)"))
         #expect(viewSource.contains("Text(provider.label).tag(provider.id)\n") == false)
 
