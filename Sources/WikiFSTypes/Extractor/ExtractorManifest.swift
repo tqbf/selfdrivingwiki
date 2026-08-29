@@ -122,7 +122,7 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
     /// Revision-2 keys: adds registration-scoped credential requirement
     /// declarations (issue #1159). Revision 1 decoding rejects this key
     /// (unknown-field policy), so a v1 manifest cannot carry credentials.
-    private enum V2CodingKeys: String, CodingKey, CaseIterable {
+    enum V2CodingKeys: String, CodingKey, CaseIterable {
         case id, displayName, kinds, mimeTypes, filenameExtensions, credentialRequirements
     }
 
@@ -181,9 +181,25 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
             try rejectUnknownKeys(from: decoder, allowed: CodingKeys.self)
         }
         let container = try decoder.container(keyedBy: V2CodingKeys.self)
-        let kinds = try container.decode([ExtractorKind].self, forKey: .kinds)
-        let mimeTypes = try container.decode([ExtractorMIMEType].self, forKey: .mimeTypes)
-        let filenameExtensions = try container.decodeIfPresent([ExtractorFileExtension].self, forKey: .filenameExtensions) ?? []
+        try self.init(keyedContainer: container, manifestRevision: manifestRevision)
+    }
+
+    /// Shared decode body over an already-keyed container. The catalog
+    /// record decoder uses this so a stored registration decodes under the
+    /// record's own protocol revision — the plain `init(from:)` defaults to
+    /// v1 semantics and would reject a v2 registration's credential key.
+    init(keyedContainer: KeyedDecodingContainer<V2CodingKeys>, manifestRevision: ExtractorManifestRevision) throws {
+        let known: Set<String> = Set(
+            (manifestRevision == .v2
+                ? V2CodingKeys.allCases.map(\.stringValue)
+                : CodingKeys.allCases.map(\.stringValue)))
+        if let unknown = keyedContainer.allKeys.first(where: { known.contains($0.stringValue) == false }) {
+            throw ExtractorValidationError.invalidManifest("unknown field \(unknown.stringValue)")
+        }
+        let kinds = try keyedContainer.decode([ExtractorKind].self, forKey: .kinds)
+        let mimeTypes = try keyedContainer.decode([ExtractorMIMEType].self, forKey: .mimeTypes)
+        let filenameExtensions = try keyedContainer.decodeIfPresent(
+            [ExtractorFileExtension].self, forKey: .filenameExtensions) ?? []
         guard Set(kinds).count == kinds.count,
               Set(mimeTypes).count == mimeTypes.count,
               Set(filenameExtensions).count == filenameExtensions.count else {
@@ -191,18 +207,35 @@ public struct ExtractorRegistration: Codable, Hashable, Sendable, Comparable {
         }
         let requirements: [ExtractorCredentialRequirement]
         if manifestRevision == .v2 {
-            requirements = try container.decodeIfPresent(
+            requirements = try keyedContainer.decodeIfPresent(
                 [ExtractorCredentialRequirement].self, forKey: .credentialRequirements) ?? []
         } else {
             requirements = []
         }
         try self.init(
-            id: container.decode(ExtractorRegistrationID.self, forKey: .id),
-            displayName: container.decode(String.self, forKey: .displayName),
+            id: keyedContainer.decode(ExtractorRegistrationID.self, forKey: .id),
+            displayName: keyedContainer.decode(String.self, forKey: .displayName),
             kinds: Set(kinds),
             mimeTypes: Set(mimeTypes),
             filenameExtensions: Set(filenameExtensions),
             credentialRequirements: requirements)
+    }
+
+    /// Decodes a registration array element-by-element under the given
+    /// manifest revision. The catalog record decoder uses this: the record's
+    /// `protocolRevision` governs how its stored registrations decode.
+    static func decodeArray(
+        from container: inout UnkeyedDecodingContainer,
+        manifestRevision: ExtractorManifestRevision
+    ) throws -> [ExtractorRegistration] {
+        var registrations: [ExtractorRegistration] = []
+        registrations.reserveCapacity(container.count ?? 0)
+        while container.isAtEnd == false {
+            let element = try container.superDecoder()
+            registrations.append(
+                try self.init(from: element, manifestRevision: manifestRevision))
+        }
+        return registrations
     }
 
     public func encode(to encoder: any Encoder) throws {

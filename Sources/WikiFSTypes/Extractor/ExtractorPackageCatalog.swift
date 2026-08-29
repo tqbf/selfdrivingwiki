@@ -77,12 +77,23 @@ public struct ExtractorPackageCatalogRecord: Codable, Hashable, Sendable, Compar
         guard Set(capabilities).count == capabilities.count else {
             throw ExtractorPackageCatalogError.invalidRecord
         }
+        // Registrations decode under the record's own protocol revision: a
+        // v2 registration carries credential declarations that the plain v1
+        // decoder rejects, which made the whole catalog unreadable.
+        let protocolRevision = try container.decode(
+            ExtractorProtocolRevision.self, forKey: .protocolRevision)
+        guard let manifestRevision = ExtractorManifestRevision(rawValue: protocolRevision.rawValue) else {
+            throw ExtractorValidationError.invalidRevision(protocolRevision.rawValue)
+        }
+        var registrationContainer = try container.nestedUnkeyedContainer(forKey: .registrations)
+        let registrations = try ExtractorRegistration.decodeArray(
+            from: &registrationContainer, manifestRevision: manifestRevision)
         try self.init(
             revision: container.decode(ExtractorPackageRevisionID.self, forKey: .revision),
             displayName: container.decode(String.self, forKey: .displayName),
-            protocolRevision: container.decode(ExtractorProtocolRevision.self, forKey: .protocolRevision),
+            protocolRevision: protocolRevision,
             launch: container.decode(ExtractorLaunch.self, forKey: .launch),
-            registrations: container.decode([ExtractorRegistration].self, forKey: .registrations),
+            registrations: registrations,
             capabilities: Set(capabilities),
             installedAt: container.decode(RFC3339Timestamp.self, forKey: .installedAt),
             admissionDiagnostics: container.decodeIfPresent(
