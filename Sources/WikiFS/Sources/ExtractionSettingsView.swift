@@ -160,10 +160,6 @@ struct ExtractionSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            // Only a selected host service needs configuration here. Package
-            // readiness and lifecycle belong to the package management section.
-            backendConfigSection
-
             // Installed extractor-package lifecycle (Phase 7): read-only list
             // of exact registry admissions with progressive disclosure, plus
             // app-only import/removal. Hidden when no snapshot loader was
@@ -279,10 +275,41 @@ struct ExtractionSettingsView: View {
             TableColumn("Status") { (row: ExtractorRouteSettingsRow) in
                 statusLabel(row)
             }
+            TableColumn("Configuration") { (row: ExtractorRouteSettingsRow) in
+                if let dialog = configurationDialog(for: row) {
+                    Button("Configure…") {
+                        serviceConfigurationDialog = dialog
+                    }
+                    .accessibilityIdentifier("extraction.service.configure.\(dialog.id)")
+                    .accessibilityLabel(
+                        "Configure \(dialog == .acp ? "ACP Provider" : "Docling Serve")")
+                }
+            }
+            .width(min: 110, ideal: 130)
         }
         .frame(height: Metrics.routeTableHeight)
         .accessibilityIdentifier(RouteAccessibility.table)
         .accessibilityLabel("Default extractor routes")
+        .sheet(item: $serviceConfigurationDialog) { dialog in
+            switch dialog {
+            case .acp:
+                ACPConfigurationDialog(
+                    providerSelection: $acpProviderSelection,
+                    enabledProviders: launcher.providersConfig().enabledProviders,
+                    onPersist: { persistAll() })
+            case .docling:
+                DoclingConfigurationDialog(
+                    endpoint: $doclingEndpointText,
+                    timeoutSeconds: $doclingTimeoutText,
+                    tokenDraft: $doclingTokenText,
+                    tokenConfigured: doclingTokenConfigured,
+                    testPhase: $doclingTest,
+                    onPersist: { persistAll() },
+                    onSaveToken: { saveDoclingToken() },
+                    onRemoveToken: { removeDoclingToken() },
+                    onTestConnection: { testDocling() })
+            }
+        }
     }
 
     /// One row's pop-up. Tags are the typed `ExtractorRouteSettingsSelection`
@@ -447,8 +474,8 @@ struct ExtractionSettingsView: View {
     // MARK: - Selected service configuration
 
     /// Which connected service has a configuration dialog open (macOS
-    /// Settings idiom: the main pane shows a compact summary + Configure…
-    /// button; the options live in a dialog, per the macos-design skill).
+    /// Settings idiom: the Configure… button lives in the route table row;
+    /// the options open in a dialog, per the macos-design skill).
     enum ServiceConfigurationDialog: String, Identifiable {
         case acp
         case docling
@@ -458,76 +485,19 @@ struct ExtractionSettingsView: View {
 
     @State private var serviceConfigurationDialog: ServiceConfigurationDialog?
 
-    @ViewBuilder private var backendConfigSection: some View {
-        switch routeSelections[ExtractorRouteID.canonicalPDF.description] {
+    /// The configuration dialog a row needs, based on its current selection:
+    /// ACP and Docling Serve (including the reviewed-Docling selection) open
+    /// dialogs; other choices have no connected-service configuration.
+    private func configurationDialog(
+        for row: ExtractorRouteSettingsRow
+    ) -> ServiceConfigurationDialog? {
+        switch routeSelections[row.id] {
         case .connectedService(.acp):
-            serviceConfigurationRow(
-                name: "ACP Provider",
-                detail: acpProviderSelection.isEmpty
-                    ? "Default (use the app's default provider)"
-                    : acpProviderSelection,
-                dialog: .acp)
+            return .acp
         case .connectedService(.doclingServe), .reviewedDocling:
-            serviceConfigurationRow(
-                name: "Docling Serve",
-                detail: doclingEndpointText.trimmingCharacters(in: .whitespaces).isEmpty
-                    ? "No endpoint configured"
-                    : doclingEndpointText.trimmingCharacters(in: .whitespaces),
-                dialog: .docling)
+            return .docling
         default:
-            EmptyView()
-        }
-    }
-
-    /// Compact summary + Configure… button replacing the former inline
-    /// configuration sections (macos-design: progressive disclosure — the
-    /// route table stays scannable; options open in a dialog).
-    private func serviceConfigurationRow(
-        name: String, detail: String, dialog: ServiceConfigurationDialog
-    ) -> some View {
-        Section {
-            LabeledContent {
-                Button("Configure…") {
-                    serviceConfigurationDialog = dialog
-                }
-                .accessibilityIdentifier("extraction.service.configure.\(dialog.id)")
-                .accessibilityLabel("Configure \(name)")
-            } label: {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(name)
-                    Text(detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-            }
-        } header: {
-            Text("Selected Service")
-        } footer: {
-            Text("Configuration options for this service open in a dialog.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .sheet(item: $serviceConfigurationDialog) { dialog in
-            switch dialog {
-            case .acp:
-                ACPConfigurationDialog(
-                    providerSelection: $acpProviderSelection,
-                    enabledProviders: launcher.providersConfig().enabledProviders,
-                    onPersist: { persistAll() })
-            case .docling:
-                DoclingConfigurationDialog(
-                    endpoint: $doclingEndpointText,
-                    timeoutSeconds: $doclingTimeoutText,
-                    tokenDraft: $doclingTokenText,
-                    tokenConfigured: doclingTokenConfigured,
-                    testPhase: $doclingTest,
-                    onPersist: { persistAll() },
-                    onSaveToken: { saveDoclingToken() },
-                    onRemoveToken: { removeDoclingToken() },
-                    onTestConnection: { testDocling() })
-            }
+            return nil
         }
     }
 

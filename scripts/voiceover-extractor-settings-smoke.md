@@ -9,8 +9,8 @@ Run this test on macOS with VoiceOver enabled. Use a test App Group and a dispos
 5. In each row, move to the `Default extractor for PDF` / `Default extractor for HTML` pop-up.
 6. Confirm that VoiceOver reads the selected extractor and the status (for example `pdf2md, Available`).
 7. Open the PDF pop-up. Confirm the option captions read `name — source` (Reviewed package, Installed package, Connected service, Built in).
-8. Choose the ACP Provider option. Confirm the ACP Provider section appears below the table and VoiceOver announces focus movement to the next control after the table.
-9. Choose the Docling Serve option. Confirm a compact `Selected Service` summary row appears with a `Configure…` button instead of inline fields.
+8. Choose the ACP Provider option. Confirm a `Configure…` button appears in that row's Configuration column, and VoiceOver announces focus movement to the next control after the table.
+9. Choose the Docling Serve option. Confirm a `Configure…` button appears in that row's Configuration column instead of inline fields.
 10. Activate `Configure…`. Confirm the configuration dialog opens with the Endpoint, Timeout, and write-only API Token fields, and that the stored token itself is never spoken.
 11. Focus the `API Token` field. Confirm VoiceOver announces the placeholder (`Configured — enter a new token to replace` when a token is stored, `Enter token` otherwise).
 12. Activate `Save Token`. Confirm VoiceOver announces the `Token configured` status and the field clears.
