@@ -272,7 +272,7 @@ struct WikiFSApp: App {
             extractionProvider: extractionProvider,
             searchRuntimeRegistry: searchRuntimeRegistry,
             providerServices: providerServices,
-            htmlBackendResolver: { ExtractionConfig.load(from: directory).htmlBackend },
+            htmlBackendResolver: { ExtractionConfig.load(from: directory).htmlSelectionLabel },
             podcastBackendResolver: { ExtractionConfig.load(from: directory).podcastBackend },
             interactiveUsageRecorder: { [weak activityTracker] usage in
                 activityTracker?.recordInteractiveUsage(usage)
@@ -288,7 +288,7 @@ struct WikiFSApp: App {
                     catalog: appCatalog,
                     extractionProvider: extractionProvider,
                     searchRuntimeRegistry: searchRuntimeRegistry,
-                    htmlBackendResolver: { ExtractionConfig.load(from: directory).htmlBackend },
+                    htmlBackendResolver: { ExtractionConfig.load(from: directory).htmlSelectionLabel },
                     podcastBackendResolver: { ExtractionConfig.load(from: directory).podcastBackend },
                     interactiveUsageRecorder: { usage in
                         activityTracker?.recordInteractiveUsage(usage)

@@ -23,19 +23,15 @@ struct ExtractionConfigTests {
         return .host(HostExtractorReference(adapterID: adapterID))
     }
 
-    /// A loaded config always carries the bundled default-route records, so
-    /// round-trip equality compares against the defaults-applied value.
-    private func withDefaults(_ config: ExtractionConfig) -> ExtractionConfig {
-        config.applying(defaults: .bundled)
-    }
-
     /// The in-disk value of an in-memory config: the retired typed fields are
     /// decode-only and not persisted, so a round trip resets them to defaults.
+    /// Load never bakes the bundled default-route policy into the file —
+    /// defaults participate at read time via `selectionOrDefault`.
     private func persisted(_ config: ExtractionConfig) -> ExtractionConfig {
         var result = config
         result.backend = .localPdf2md
         result.htmlBackend = nil
-        return withDefaults(result)
+        return result
     }
 
     @Test func defaultsAreLocalPdf2mdAndSonnetModel() {
@@ -64,12 +60,13 @@ struct ExtractionConfigTests {
         #expect(loaded == persisted(config))
     }
 
-    /// A fresh install loads the bundled default-route policy: the PDF route
-    /// defaults to the reviewed pdf2md lineage and the DOCX route to the
-    /// reviewed docx2md lineage. HTML has no shipped default (prompt).
+    /// A fresh install writes nothing to disk; the bundled default-route
+    /// policy participates at read time: the PDF route defaults to the
+    /// reviewed pdf2md lineage and the DOCX route to the reviewed docx2md
+    /// lineage. HTML has no shipped default (prompt).
     @Test func missingFileLoadsBundledRouteDefaults() throws {
         let config = ExtractionConfig.load(from: tempDirectory())
-        #expect(config == withDefaults(ExtractionConfig()))
+        #expect(config.routeExtractors.isEmpty)
 
         let pdf2md = LogicalExtractorReference(
             packageID: try ExtractorPackageID(validating: "org.selfdrivingwiki.pdf2md"),
@@ -77,16 +74,16 @@ struct ExtractionConfigTests {
         let docx2md = LogicalExtractorReference(
             packageID: try ExtractorPackageID(validating: "org.selfdrivingwiki.docx2md"),
             registrationID: try ExtractorRegistrationID(validating: "document"))
-        #expect(config.extractorSelection(for: .canonicalPDF) == .installed(pdf2md))
-        #expect(config.extractorSelection(for: .canonicalDOCX) == .installed(docx2md))
-        #expect(config.extractorSelection(for: .canonicalHTML) == nil)
+        #expect(config.selectionOrDefault(for: .canonicalPDF) == .installed(pdf2md))
+        #expect(config.selectionOrDefault(for: .canonicalDOCX) == .installed(docx2md))
+        #expect(config.selectionOrDefault(for: .canonicalHTML) == nil)
     }
 
     @Test func corruptFileLoadsBundledDefaults() throws {
         let dir = tempDirectory()
         let url = dir.appendingPathComponent(ExtractionConfig.fileName, isDirectory: false)
         try Data("not json".utf8).write(to: url)
-        #expect(ExtractionConfig.load(from: dir) == withDefaults(ExtractionConfig()))
+        #expect(ExtractionConfig.load(from: dir) == ExtractionConfig())
     }
 
     @Test func partialJSONFillsMissingFieldsWithDefaults() throws {
@@ -159,7 +156,7 @@ struct ExtractionConfigTests {
         let pdf2md = LogicalExtractorReference(
             packageID: try ExtractorPackageID(validating: "org.selfdrivingwiki.pdf2md"),
             registrationID: try ExtractorRegistrationID(validating: "document"))
-        #expect(loaded.extractorSelection(for: .canonicalPDF) == .installed(pdf2md))
+        #expect(loaded.selectionOrDefault(for: .canonicalPDF) == .installed(pdf2md))
     }
 
     @Test func acpProviderIdDecodesAsNilWhenAbsent() throws {
@@ -187,7 +184,7 @@ struct ExtractionConfigTests {
         try config.save(to: dir)
 
         let loaded = ExtractionConfig.load(from: dir)
-        #expect(loaded == withDefaults(config))
+        #expect(loaded == persisted(config))
         #expect(loaded.podcastBackend == .appleTranscript)
     }
 
@@ -511,7 +508,7 @@ struct ExtractionConfigTests {
         // Round-trips through disk.
         let dir = tempDirectory()
         try config.save(to: dir)
-        #expect(ExtractionConfig.load(from: dir) == withDefaults(config))
+        #expect(ExtractionConfig.load(from: dir) == persisted(config))
 
         config.setExtractorSelection(nil, for: .canonicalDOCX)
         #expect(config.extractorSelection(for: .canonicalDOCX) == nil)

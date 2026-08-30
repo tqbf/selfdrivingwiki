@@ -1497,7 +1497,10 @@ struct SourceDetailView: View {
         defer {
             isExtracting = false
         }
-        let backend = store.htmlBackend ?? .defuddle
+        // The label reflects the session-wired HTML selection (route-record
+        // derived); nil falls back to the tag-based execution floor. The
+        // extractor itself resolves through the route record either way.
+        let backend = store.htmlBackend ?? .tagBased
         let extractor: any HtmlMarkdownExtractor
         do {
             extractor = try await extractionCoordinator.prepareHTML(backendOverride: nil)

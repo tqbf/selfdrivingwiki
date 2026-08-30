@@ -321,9 +321,13 @@ public struct ExtractionConfig: JSONSidecarConfig {
     /// file degrades to an empty (default) config rather than throwing — same
     /// fresh-install behavior as `ZoteroConfig.load`. Delegates the file read +
     /// decode to `JSONSidecarConfig.load(from:)` and supplies the default config.
+    ///
+    /// The loaded config is NOT baked with the bundled default-route policy:
+    /// the file holds only explicit user choices, and defaults participate at
+    /// read time through `selectionOrDefault(for:)`. Baking them in at load
+    /// would pin this build's policy into the user's file on the next save.
     public static func load(from directory: URL) -> ExtractionConfig {
-        let user = load(from: directory) ?? ExtractionConfig()
-        return user.applying(defaults: .bundled)
+        load(from: directory) ?? ExtractionConfig()
     }
 }
 

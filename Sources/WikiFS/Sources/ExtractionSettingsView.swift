@@ -1994,10 +1994,13 @@ enum ExtractorRouteSettingsMapping {
                 default:
                     return .prompt
                 }
-            default:
-                // `.none` (explicit) and nil (no record): the bundled default
-                // record supplies the reviewed pdf2md lineage, so the
-                // display matches it.
+            case .some(ExtractionBackendReference.none):
+                // An explicit disable is a real state: display no-selection
+                // instead of the healthy default.
+                return .prompt
+            case nil:
+                // No record: the bundled default record supplies the
+                // reviewed pdf2md lineage, so the display matches it.
                 return .reviewedPdf2md
             }
         }

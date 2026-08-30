@@ -30,8 +30,9 @@ public enum ResolvedExtractionSelection: Hashable, Sendable {
     /// The saved installed selection has no compatible active registration.
     /// The logical identity stays selected and no other extractor may run.
     case unavailableInstalled(kind: ExtractorKind, reference: LogicalExtractorReference)
-    /// No default: nothing runs until a selection is made (the HTML prompt
-    /// state, or an explicit disable of the shipped default).
+    /// No stored record and no bundled default (or an explicit disable). The
+    /// per-route floor policy decides what actually runs: HTML floors to the
+    /// tag-based adapter, DOCX to the reviewed lineage, and PDF fails closed.
     case noSelection
 }
 

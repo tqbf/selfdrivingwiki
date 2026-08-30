@@ -3609,11 +3609,22 @@ public final class WikiStoreModel {
 
     /// The auto-extraction work behind the gate. Public as the test seam
     /// (the fire-and-forget task itself cannot be awaited from a test).
+    ///
+    /// Import-time extraction is deliberately log-only: the manual Extract
+    /// button is the retry that surfaces failures to the user. The readiness
+    /// gate still skips a missing runtime with one clear log line instead of
+    /// letting the managed spawn fail.
     public func runDocxImportExtraction(sourceID: SourceID) async {
         guard let prepare = docxImportExtractor,
               let extractor = await prepare() else {
             DebugLog.extraction(
                 "DOCX import auto-extraction skipped: no active extractor (source=\(sourceID.rawValue))")
+            return
+        }
+        let readiness = await extractor.readiness()
+        guard readiness.isReady else {
+            DebugLog.extraction(
+                "DOCX import auto-extraction skipped: not ready — \(String(describing: readiness)) (source=\(sourceID.rawValue))")
             return
         }
         _ = await extractDocx(for: sourceID, extractor: extractor)

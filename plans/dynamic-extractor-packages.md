@@ -191,7 +191,7 @@ Primary touch points include:
 
 The Settings routing table needs a stable identity for one default-extraction route. Route identity is a typed pair, `ExtractorRouteID`: an `ExtractorKind` plus a normalized `ExtractorMIMEType`. The type keeps three namespaces distinct — a route is not an extractor kind, not a backend kind, and not a raw MIME string. MIME is authoritative. Filename extensions stay registration matching hints and never enter the persisted route.
 
-The current canonical routes are PDF (`application/pdf`) and HTML (`text/html`). Route identity admits other kind-plus-MIME pairs, and the UI can display them, but execution adapters for new kinds stay separate work. This stack changes no execution path.
+The current canonical routes are PDF (`application/pdf`), HTML (`text/html`), and Word (`application/vnd.openxmlformats-officedocument.wordprocessingml.document`). Route identity admits other kind-plus-MIME pairs, and the UI can display them, but execution adapters for new kinds stay separate work. This stack changes no execution path.
 
 `ExtractionConfig.routeExtractors` stores one `ExtractorRouteSelectionRecord` per route as a deterministically sorted array. A string-keyed JSON dictionary was rejected: an array keeps the persisted order canonical and makes duplicate route keys in hand-edited files representable and resolvable.
 
@@ -213,15 +213,15 @@ The Settings route table is a pure projection. `ExtractorRouteTableBuilder` buil
 
 Union rules:
 
-- Host descriptors seed the canonical PDF and HTML rows, so both stay visible with zero packages installed.
+- Host descriptors seed the canonical PDF, HTML, and Word rows, so all three stay visible with zero packages installed.
 - Every active exact registration contributes rows for its declared (kind, MIME) pairs. A future registration can add a row without another Settings layout change, but execution adapters for new kinds remain separate work.
 - Saved records seed their route even when nothing active backs it. A stale installed selection stays selected and selectable (one unavailable choice in its picker); the row reports what actually resolves.
 
 Ordering and deduplication:
 
-- Rows sort by host order (PDF, then HTML) first, then by typed route order (kind raw value, then MIME raw value).
+- Rows sort by host order (PDF, then HTML, then Word) first, then by typed route order (kind raw value, then MIME raw value).
 - Multiple exact versions of one logical registration deduplicate into one choice showing the highest active revision; the package lifecycle rows below the table keep every exact version for inspection and removal.
-- Choices order like the pickers they replace: prompt (HTML), reviewed package, installed packages by package ID, connected services, built-ins.
+- Choices order like the pickers they replace: prompt (HTML and Word), reviewed package, installed packages by package ID, connected services, built-ins.
 - The reviewed packages attach only to their canonical routes; direct Anthropic and Gemini API choices never appear.
 
 Statuses use a compact typed vocabulary: **Ready**, **Needs setup**, **Not installed**, **Starting**, and **Failed**. A non-ready status opens **Extractor Status** with the cause, blocked-route impact, supported recovery actions, and a redacted diagnostic preview. Settings reports route configuration and lifecycle health. Per-document operation failures remain in Activity.

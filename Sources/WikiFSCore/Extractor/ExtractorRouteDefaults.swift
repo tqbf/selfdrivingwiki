@@ -12,18 +12,13 @@ public struct ExtractorRouteDefaults: Decodable, Sendable {
 
     /// Defaults shipped with this build. A missing or invalid resource is a
     /// packaging error because fresh-install extraction depends on this policy.
+    /// The resource ships via Package.swift's `.copy("Resources/Extraction")`,
+    /// so only the module bundle is consulted.
     public static let bundled: ExtractorRouteDefaults = {
-        let url = Bundle.main.url(
+        let url = Bundle.module.url(
             forResource: "default-routes",
             withExtension: "json",
             subdirectory: "Extraction")
-            ?? Bundle.module.url(
-                forResource: "default-routes",
-                withExtension: "json",
-                subdirectory: "Extraction")
-            ?? Bundle.module.url(
-                forResource: "default-routes",
-                withExtension: "json")
         guard let url else {
             preconditionFailure("Missing bundled extractor default-route policy")
         }
@@ -55,5 +50,29 @@ public extension ExtractionConfig {
     func selectionOrDefault(for route: ExtractorRouteID) -> ExtractionBackendReference? {
         extractorSelection(for: route)
             ?? ExtractorRouteDefaults.bundled.routeExtractors.first { $0.route == route }?.extractor
+    }
+
+    /// Presentation mapping for the HTML route: the effective selection as the
+    /// legacy backend label the store's Extract path still carries, or `nil`
+    /// when the selection names no known HTML adapter (the execution floor is
+    /// the tag-based adapter). Session wiring feeds this to the store; the
+    /// retired `htmlBackend` config key is never read again.
+    var htmlSelectionLabel: HtmlExtractionBackend? {
+        guard let selection = selectionOrDefault(for: .canonicalHTML) else { return nil }
+        switch selection {
+        case .none:
+            return nil
+        case .host(let host):
+            switch host.adapterID.rawValue {
+            case HtmlExtractionBackend.defuddle.rawValue: return .defuddle
+            case HtmlExtractionBackend.tagBased.rawValue: return .tagBased
+            default: return nil
+            }
+        case .installed(let logical):
+            // The reviewed Defuddle lineage presents as the defuddle backend.
+            // The identity literals mirror the engine's legacy host remap.
+            return logical.packageID.rawValue == "org.selfdrivingwiki.defuddle"
+                && logical.registrationID.rawValue == "article" ? .defuddle : nil
+        }
     }
 }
