@@ -9,7 +9,7 @@ This Mac ships with four reviewed packages:
 | Defuddle | HTML | Extracts the article body and article metadata | [Bun](https://bun.sh) |
 | pdf2md | PDF | Converts a PDF to Markdown. It can download its model. | [uv](https://docs.astral.sh/uv/) |
 | Docling Serve | PDF | Sends the PDF to your self-hosted [Docling Serve](https://github.com/DS4SD/docling-serve) and stores the Markdown it returns. Optional API token; endpoint and timeout are set in Settings. | [`python3`](https://www.python.org) |
-| docx2md | Word (.docx) | Converts a Word document to Markdown, offline. Uses the **Extract** button on the source. | [Bun](https://bun.sh) |
+| docx2md | Word (.docx) | Converts a Word document to Markdown offline at import. **Extract** retries a failed conversion. | [Bun](https://bun.sh) |
 
 ### Word documents (.docx)
 
@@ -26,9 +26,9 @@ sources.
 - Embedded images are not extracted. Each image becomes a
   `![Figure N](figure-N.png)` placeholder, and the result carries a warning
   that says how many images were skipped.
-- docx2md needs [Bun](https://bun.sh). If Bun is missing, the route shows
-  **Not installed**, the import stores the file without conversion, and the
-  **Extract** button on the source remains the manual retry.
+- docx2md needs [Bun](https://bun.sh). If Bun is missing, extraction fails
+  with a clear cause. The import stores the file, and the **Extract** button
+  remains the manual retry.
 - A `.docx` source is not staged to agents until it has a Markdown version.
   The raw bytes are a binary zip with no value as agent context.
 

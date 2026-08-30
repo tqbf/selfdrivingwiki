@@ -14,7 +14,8 @@ Read the normative references before you change a package:
 ## Package facts
 
 - An extractor package is one local directory with `manifest.json` and declared files. Import accepts no archives, URLs, or remote sources.
-- Protocol revision 1 and manifest revision 1 are the only supported revisions. One request in, one terminal frame out, JSON Lines on standard output.
+- Protocol revision 1 is the only supported protocol revision. Use manifest revision 1 unless a package declares credential requirements. Credential requirements require manifest revision 2.
+- One request enters the process. One terminal frame exits on standard output as JSON Lines.
 - Supported extractor kinds are `pdf`, `html`, and `docx`. One input file, one Markdown result per operation.
 - Capabilities are the closed set `network`, `shared-runtime-cache`, `model-download`. `model-download` requires `network`. A capability is a declaration, not a sandbox.
 - A package runs as a one-shot process. It never runs as Swift, never provides a Cordis plugin, and never receives a `CordisContext`.
