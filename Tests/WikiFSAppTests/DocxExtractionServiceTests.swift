@@ -35,18 +35,6 @@ struct DocxExtractionServiceTests {
         #expect(model.processedMarkdownHead(for: source)?.id == version.id)
     }
 
-    @Test("a double without package provenance records the legacy docx technique")
-    @MainActor
-    func docxExtractionWithoutPackageProvenanceRecordsLegacyTechnique() async throws {
-        let (_, model, source) = try makeStoreWithDocxSource()
-
-        let version = try #require(
-            await model.extractDocx(for: source.id, extractor: BareDocxExtractor()))
-        // Only a double without package provenance can hit this arm;
-        // production DOCX adapters always carry it.
-        #expect(version.technique == "docx-to-markdown")
-    }
-
     @Test("empty extractor output returns nil and seeds nothing")
     @MainActor
     func emptyDocxExtractionReturnsNil() async throws {
@@ -76,9 +64,10 @@ struct DocxExtractionServiceTests {
             try? FileManager.default.removeItem(at: directory)
         }
 
-        let registered = RegisteredExtractionInputs(
-            mimeTypes: [.init(kind: .docx, mimeType: MimeType.docx)],
-            filenameExtensions: [.init(kind: .docx, ext: "docx")])
+        let registered = RegisteredExtractionInputs(claims: [.init(
+            kind: .docx,
+            mimeTypes: [MimeType.docx],
+            filenameExtensions: ["docx"])])
 
         store.registeredExtractionInputs = registered
         let dropHints = ContentTypeDetectionHints(filename: "report.docx")
@@ -122,9 +111,10 @@ struct DocxExtractionServiceTests {
     @MainActor
     func docxImportAutoExtractionSeedsHead() async throws {
         let (_, model, source) = try makeStoreWithDocxSource()
-        model.registeredExtractionInputs = RegisteredExtractionInputs(
-            mimeTypes: [.init(kind: .docx, mimeType: MimeType.docx)],
-            filenameExtensions: [.init(kind: .docx, ext: "docx")])
+        model.registeredExtractionInputs = RegisteredExtractionInputs(claims: [.init(
+            kind: .docx,
+            mimeTypes: [MimeType.docx],
+            filenameExtensions: ["docx"])])
 
         // No extractor wired → the gate closes, nothing runs.
         await model.runDocxImportExtraction(sourceID: source.id)
@@ -164,9 +154,10 @@ struct DocxExtractionServiceTests {
         // The store's source rows classify through the registration surface
         // in production; seed the same surface so the fixture source's own
         // classification matches.
-        store.registeredExtractionInputs = RegisteredExtractionInputs(
-            mimeTypes: [.init(kind: .docx, mimeType: MimeType.docx)],
-            filenameExtensions: [.init(kind: .docx, ext: "docx")])
+        store.registeredExtractionInputs = RegisteredExtractionInputs(claims: [.init(
+            kind: .docx,
+            mimeTypes: [MimeType.docx],
+            filenameExtensions: ["docx"])])
         let source = try store.addSource(filename: "report.docx", data: Self.fixtureDocx)
         return (store, model, source)
     }
@@ -185,7 +176,11 @@ struct DocxExtractionServiceTests {
             .appendingPathComponent("tests", isDirectory: true)
             .appendingPathComponent("fixtures", isDirectory: true)
             .appendingPathComponent("fixture.docx")
-        return (try? Data(contentsOf: url)) ?? Data("fixture-unavailable".utf8)
+        do {
+            return try Data(contentsOf: url)
+        } catch {
+            fatalError("Required DOCX fixture is unreadable: \(error.localizedDescription)")
+        }
     }
 }
 
@@ -195,6 +190,13 @@ private struct StubDocxExtractor: DocxMarkdownExtractor {
     let result: DocxExtractionResult?
     var provenance: ExtractorPackageExecutionProvenance?
 
+    var packageProvenance: ExtractorPackageExecutionProvenance {
+        provenance ?? ExtractorPackageExecutionProvenance(
+            revision: ReviewedExtractorPackages.docx2md.revision,
+            registrationID: ProcessExtractionServices.reviewedDOCXLogical.registrationID,
+            protocolRevision: .v1)
+    }
+
     init(result: DocxExtractionResult?, provenance: ExtractorPackageExecutionProvenance? = nil) {
         self.result = result
         self.provenance = provenance
@@ -203,21 +205,5 @@ private struct StubDocxExtractor: DocxMarkdownExtractor {
     func extract(docx: Data) async -> DocxExtractionResult? { result }
 }
 
-extension StubDocxExtractor: ProcessPackageProvenanceProviding {
-    var displayName: String { "stub-docx2md" }
-    var packageProvenance: ExtractorPackageExecutionProvenance {
-        provenance ?? ExtractorPackageExecutionProvenance(
-            revision: ReviewedExtractorPackages.docx2md.revision,
-            registrationID: ProcessExtractionServices.reviewedDOCXLogical.registrationID,
-            protocolRevision: .v1)
-    }
-}
 
-/// A DOCX adapter double with NO package provenance — pins the legacy
-/// technique fallback arm (production adapters always carry provenance).
-private struct BareDocxExtractor: DocxMarkdownExtractor {
-    func extract(docx: Data) async -> DocxExtractionResult? {
-        DocxExtractionResult(markdown: "# Plain conversion\n", warnings: [])
-    }
-}
 #endif

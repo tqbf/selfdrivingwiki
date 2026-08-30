@@ -62,11 +62,9 @@ struct ProcessExtractorProviderTests {
         let failure = await extractor.extract(docx: Data("failure".utf8))
         #expect(failure == nil)
 
-        // Package provenance rides on the process adapter so the store path
-        // records the `.installedPackage` producer.
-        let provenancing = extractor as? any ProcessPackageProvenanceProviding
-        #expect(provenancing?.packageProvenance.revision == environment.revision)
-        #expect(provenancing?.packageProvenance.registrationID.rawValue == "document")
+        // Package provenance is part of the DOCX extractor contract.
+        #expect(extractor.packageProvenance.revision == environment.revision)
+        #expect(extractor.packageProvenance.registrationID.rawValue == "document")
     }
 
     @Test func preparedSnapshotSurvivesRemovalAndFuturePreparationFails() async throws {

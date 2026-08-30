@@ -78,6 +78,49 @@ struct ReviewedLegacySelectionMappingTests {
         await services.shutdown()
     }
 
+    /// An empty DOCX selection resolves to the reviewed docx2md lineage.
+    @Test func defaultDOCXSelectionUsesTheReviewedPackage() async throws {
+        let environment = try Environment.make()
+        defer { environment.cleanup() }
+
+        let context = try await ProcessExtractionContext.assemble(
+            layout: environment.layout,
+            reviewedPackageRoot: Environment.reviewedPackagesRoot)
+        _ = await context.reconcileNow()
+        let services = try await ProcessExtractionServices.assemble(
+            context: context, input: environment.input())
+
+        let extractor = try await services.prepareDOCX()
+        #expect(extractor.packageProvenance.revision == ReviewedExtractorPackages.docx2md.revision)
+        await services.shutdown()
+    }
+
+    /// An unavailable installed DOCX selection remains selected and blocks the route.
+    @Test func unavailableInstalledDOCXSelectionFailsClosed() async throws {
+        let environment = try Environment.make()
+        defer { environment.cleanup() }
+
+        let context = try await ProcessExtractionContext.assemble(
+            layout: environment.layout,
+            reviewedPackageRoot: Environment.reviewedPackagesRoot)
+        _ = await context.reconcileNow()
+        let unavailable = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.example.thirdparty"),
+            registrationID: try ExtractorRegistrationID(validating: "document"))
+        let services = try await ProcessExtractionServices.assemble(
+            context: context,
+            input: environment.input(docxExtractor: .installed(unavailable)))
+
+        await #expect(
+            throws: ExtractionServicesError.selectedExtractorUnavailable(
+                route: .canonicalDOCX,
+                reference: unavailable)
+        ) {
+            try await services.prepareDOCX()
+        }
+        await services.shutdown()
+    }
+
     /// An unavailable installed PDF selection remains selected and blocks the
     /// route. The reviewed pdf2md package must not run automatically.
     @Test func unavailableInstalledPDFSelectionFailsClosed() async throws {
@@ -211,11 +254,13 @@ struct ReviewedLegacySelectionMappingTests {
         func input(
             pdfExtractor: ExtractionBackendReference? = nil,
             htmlBackend: HtmlExtractionBackend? = nil,
-            htmlExtractor: ExtractionBackendReference? = nil
+            htmlExtractor: ExtractionBackendReference? = nil,
+            docxExtractor: ExtractionBackendReference? = nil
         ) -> ExtractionProcessInput {
             var mutable = ExtractionConfig()
             mutable.htmlBackend = htmlBackend
             mutable.htmlExtractor = htmlExtractor
+            mutable.docxExtractor = docxExtractor
             if let pdfExtractor {
                 mutable.pdfExtractor = pdfExtractor
             }

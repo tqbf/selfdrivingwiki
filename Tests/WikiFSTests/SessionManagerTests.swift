@@ -217,6 +217,28 @@ struct SessionManagerTests {
         #expect(manager.sessions.count == 2)
     }
 
+    @Test func refreshRegisteredInputsUpdatesEveryLiveSession() throws {
+        let dir = tempDirectory()
+        let registry = makeSeededRegistry(dir: dir)
+        let manager = makeSessionManager(dir: dir)
+        let first = registry.wikis.first!
+        let second = WikiDescriptor.make(displayName: "Second Wiki")
+        _ = try StoreBackend.current.makeStore(
+            databaseURL: dir.appendingPathComponent("\(second.id.rawValue).sqlite"))
+
+        let firstSession = try! manager.session(for: first.id, descriptor: first)
+        let secondSession = try! manager.session(for: second.id, descriptor: second)
+        let inputs = RegisteredExtractionInputs(claims: [.init(
+            kind: .docx,
+            mimeTypes: [MimeType.docx],
+            filenameExtensions: ["docx"])])
+
+        manager.refreshRegisteredExtractionInputsForLiveSessions(inputs)
+
+        #expect(firstSession.store.registeredExtractionInputs == inputs)
+        #expect(secondSession.store.registeredExtractionInputs == inputs)
+    }
+
     // MARK: - releaseSession(for:)
 
     @Test func testReleaseSessionRemovesFromCache() {

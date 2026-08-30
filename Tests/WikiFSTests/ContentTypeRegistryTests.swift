@@ -294,23 +294,29 @@ struct ContentTypeRegistryTests {
         #expect(kind == .pdf)
     }
 
-    @Test("nil mime + .docx ext falls back to docx") func docxExtFallback() {
-        let kind = ContentKind.resolve(mimeType: nil, provider: nil, ext: "docx")
+    @Test("nil mime + .docx ext requires an active registration")
+    func docxExtRequiresRegistration() {
+        #expect(ContentKind.resolve(
+            mimeType: nil,
+            provider: nil,
+            ext: "docx") == .unknown)
+        let kind = ContentKind.resolve(
+            mimeType: nil,
+            provider: nil,
+            ext: "docx",
+            registeredInputs: Self.registeredDocx)
         #expect(kind == .docx)
         #expect(kind.capabilities.extractionPath == .docxBackend)
-        #expect(kind.capabilities.hasFileExtractionBackend == true)
+        #expect(kind.capabilities.hasFileExtractionBackend)
         #expect(kind.capabilities.shouldAutoIngest == false)
     }
 
     // MARK: - Registration-driven recognition (the package declares the input)
 
-    private static let registeredDocx = RegisteredExtractionInputs(
-        mimeTypes: [
-            .init(kind: .docx, mimeType: MimeType.docx),
-        ],
-        filenameExtensions: [
-            .init(kind: .docx, ext: "docx"),
-        ])
+    private static let registeredDocx = RegisteredExtractionInputs(claims: [.init(
+        kind: .docx,
+        mimeTypes: [MimeType.docx],
+        filenameExtensions: ["docx"])])
 
     @Test("an active docx registration promotes a zip-sniffed source to docx")
     func registeredDocxInputPromotesZipContainer() {
@@ -325,9 +331,10 @@ struct ContentTypeRegistryTests {
 
         let byMIME = ContentKind.resolve(
             mimeType: MimeType.zip, provider: .localFile, ext: "mystery",
-            registeredInputs: RegisteredExtractionInputs(
-                mimeTypes: [.init(kind: .docx, mimeType: MimeType.docx)],
-                filenameExtensions: []))
+            registeredInputs: RegisteredExtractionInputs(claims: [.init(
+                kind: .docx,
+                mimeTypes: [MimeType.docx],
+                filenameExtensions: [])]))
         // declaredMIME path: the zip mime itself is not the registered type,
         // so a mystery extension does not promote here.
         #expect(byMIME == .binary)
@@ -352,10 +359,10 @@ struct ContentTypeRegistryTests {
             registeredInputs: Self.registeredDocx)
         #expect(kind == .docx)
 
-        // Unregistered extensions still fail safe to .unknown.
+        // Without the active registration, the same extension stays unknown.
         #expect(ContentKind.resolve(
             mimeType: nil, provider: nil, ext: "docx",
-            registeredInputs: .none) == .docx)   // hardcoded fallback arm
+            registeredInputs: .none) == .unknown)
         #expect(ContentKind.resolve(
             mimeType: nil, provider: nil, ext: "zzz",
             registeredInputs: Self.registeredDocx) == .unknown)
@@ -381,6 +388,30 @@ struct ContentTypeRegistryTests {
         #expect(RegisteredExtractionInputs.none.promotedMIME(
             detectedMIME: MimeType.zip, declaredMIME: nil,
             filenameExtension: "docx") == nil)
+    }
+
+    @Test("conflicting registration claims do not synthesize an input mapping")
+    func conflictingRegistrationClaimsFailClosed() {
+        let conflicting = RegisteredExtractionInputs(claims: [
+            .init(
+                kind: .docx,
+                mimeTypes: [MimeType.docx],
+                filenameExtensions: ["docx"]),
+            .init(
+                kind: .docx,
+                mimeTypes: ["application/x-other-docx"],
+                filenameExtensions: ["docx"]),
+        ])
+
+        #expect(conflicting.promotedMIME(
+            detectedMIME: MimeType.zip,
+            declaredMIME: nil,
+            filenameExtension: "docx") == nil)
+        #expect(ContentKind.resolve(
+            mimeType: MimeType.zip,
+            provider: .localFile,
+            ext: "docx",
+            registeredInputs: conflicting) == .binary)
     }
 
     @Test("dispatch keeps the Word format for a registered docx zip")

@@ -31,7 +31,7 @@ struct ExtractorRouteTests {
         #expect(otherKind != pdf)
         #expect(otherKind.mimeType == pdf.mimeType)
 
-        // The two canonical routes are the only canonical ones.
+        // The three canonical routes are the only canonical ones.
         #expect(pdf.isCanonical)
         #expect(html.isCanonical)
         #expect(ExtractorRouteID.canonicalDOCX.isCanonical)

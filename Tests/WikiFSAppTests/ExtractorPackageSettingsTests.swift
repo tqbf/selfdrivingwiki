@@ -656,6 +656,13 @@ private struct SettingsStubHTMLExtractor: HtmlMarkdownExtractor {
 }
 
 private struct SettingsStubDOCXExtractor: DocxMarkdownExtractor {
+    var packageProvenance: ExtractorPackageExecutionProvenance {
+        ExtractorPackageExecutionProvenance(
+            revision: ReviewedExtractorPackages.docx2md.revision,
+            registrationID: ProcessExtractionServices.reviewedDOCXLogical.registrationID,
+            protocolRevision: .v1)
+    }
+
     func extract(docx: Data) async -> DocxExtractionResult? { nil }
 }
 #endif
