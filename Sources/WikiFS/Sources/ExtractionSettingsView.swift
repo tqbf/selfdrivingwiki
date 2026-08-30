@@ -183,9 +183,9 @@ enum ExtractorRouteRecoveryPresenter {
         let logical = logicalReference(row.savedSelection)
         let requirement = matchingRequiredRequirement(logical: logical, facts: facts)
         let failure = newestFailure(logical: logical, facts: facts)
-        let isACP = row.savedSelection == ExtractorRouteHostCatalog.acpReference
-        let isDocling = row.savedSelection == .installed(ProcessExtractionServices.reviewedDoclingLogical)
-            || row.savedSelection == ExtractorRouteHostCatalog.legacyDoclingServeReference
+        let savedRole = ExtractorRouteHostCatalog.role(for: row.savedSelection)
+        let isACP = savedRole == .connectedServiceACP
+        let isDocling = savedRole == .doclingLineage
 
         let status: ExtractorRouteStatus
         if let failure {
@@ -813,8 +813,7 @@ struct ExtractionSettingsView: View {
             if case .installed(let logical) = choice.reference { return .unavailableInstalled(logical) }
             return .prompt
         case .connectedService:
-            if case .host(let host) = choice.reference,
-               host.adapterID.rawValue == ExtractionBackend.acp.rawValue {
+            if ExtractorRouteHostCatalog.role(for: choice.reference) == .connectedServiceACP {
                 return .connectedService(.acp)
             }
             return .prompt
@@ -1980,16 +1979,14 @@ enum ExtractorRouteSettingsMapping {
                 }
                 return installedSelection(logical, row: row)
             case .host(let host):
-                switch host.adapterID.rawValue {
-                case ExtractionBackend.acp.rawValue:
-                    return .connectedService(.acp)
-                case ExtractionBackend.anthropic.rawValue, ExtractionBackend.gemini.rawValue:
+                switch ExtractorRouteHostCatalog.role(forHostAdapterID: host.adapterID) {
+                case .connectedServiceACP, .retiredDirectAnthropicAPI, .retiredDirectGeminiAPI:
                     // Retired direct-API selections display as their ACP
                     // successor; execution no longer consults them.
                     return .connectedService(.acp)
-                case ExtractionBackend.doclingServe.rawValue:
+                case .doclingLineage:
                     return .reviewedDocling
-                case ExtractionBackend.localPdf2md.rawValue:
+                case .pdf2mdLineage:
                     return .reviewedPdf2md
                 default:
                     return .prompt
@@ -2011,10 +2008,10 @@ enum ExtractorRouteSettingsMapping {
                     ? .reviewedDefuddle
                     : installedSelection(logical, row: row)
             case .host(let host):
-                switch host.adapterID.rawValue {
-                case HtmlExtractionBackend.defuddle.rawValue:
+                switch ExtractorRouteHostCatalog.role(forHostAdapterID: host.adapterID) {
+                case .defuddleLineage:
                     return .reviewedDefuddle
-                case HtmlExtractionBackend.tagBased.rawValue:
+                case .builtInTagBased:
                     return .builtInTagBased
                 default:
                     return .prompt
@@ -2127,10 +2124,10 @@ enum ExtractorSettingsSelectionMapping {
         // its ACP successor's provider; every other selection keeps the
         // stored provider draft.
         if case .host(let host)? = config.selectionOrDefault(for: .canonicalPDF) {
-            switch host.adapterID.rawValue {
-            case ExtractionBackend.anthropic.rawValue:
+            switch ExtractorRouteHostCatalog.role(forHostAdapterID: host.adapterID) {
+            case .retiredDirectAnthropicAPI:
                 return claudeACPProviderID.rawValue
-            case ExtractionBackend.gemini.rawValue:
+            case .retiredDirectGeminiAPI:
                 return geminiACPProviderID.rawValue
             default:
                 break
