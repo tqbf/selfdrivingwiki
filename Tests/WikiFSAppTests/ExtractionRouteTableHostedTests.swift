@@ -383,6 +383,36 @@ struct ExtractionRouteTableHostedTests {
         #expect(pdf?.status == .packageNotInstalled)
         #expect(pdf?.savedSelection == .installed(logical))
     }
+
+    /// DOCX analogue of the stale-PDF fixture: an explicit installed DOCX
+    /// selection that has no active registration persists through the
+    /// mapping write + config round trip and blocks the DOCX route with the
+    /// redacted unavailable diagnostic.
+    @Test("a stale DOCX selection persists and remains unavailable")
+    func staleDocxSelectionRemainsUnavailable() async throws {
+        let dir = try tempDirectory("route-table-stale-docx")
+        let logical = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.example.gone.docx"),
+            registrationID: try ExtractorRegistrationID(validating: "document"))
+
+        var config = ExtractionConfig(backend: .acp)
+        ExtractorRouteSettingsMapping.write(.installed(logical), route: .canonicalDOCX, into: &config)
+        try config.save(to: dir)
+
+        let reloaded = ExtractionConfig.load(from: dir)
+        #expect(reloaded.extractorSelection(for: .canonicalDOCX) == .installed(logical))
+        #expect(reloaded.docxExtractor == .installed(logical))
+        let decision = ExtractorSelectionResolver.resolveDOCX(configuration: reloaded, activeRegistrations: [])
+        #expect(decision.selection == .unavailableInstalled(kind: .docx, reference: logical))
+        #expect(decision.diagnostic == .unavailableInstalled(logical))
+
+        let rows = ExtractorRouteTableBuilder.build(.init(
+            configuration: reloaded,
+            registrations: []))
+        let docx = rows.first { $0.route == .canonicalDOCX }
+        #expect(docx?.status == .packageNotInstalled)
+        #expect(docx?.savedSelection == .installed(logical))
+    }
 }
 
 @Suite("Extractor route recovery presenter")

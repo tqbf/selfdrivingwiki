@@ -35,6 +35,7 @@ import Foundation
 public enum SourceFormat: Sendable, Equatable {
     case html           // verbatim HTML (sidecar only on snapshot path post-PR3)
     case pdf            // verbatim PDF
+    case docx           // verbatim Word document (extractable via docx2md)
     case text            // verbatim text
     case binary          // verbatim other bytes
 }
@@ -170,6 +171,17 @@ public enum FormatMaterializer {
                 detectionResult: detectionResult)
         }
 
+        // OOXML Word documents keep their bytes verbatim as the source blob
+        // (extraction runs on demand from the Extract button — the registry's
+        // `.docx` classification drives eligibility, not this dispatcher).
+        // Legacy `application/msword` (.doc) stays `.binary` — no path.
+        if MimeType.isDOCX(mime) {
+            let filename = ensureExtension(sanitizeStem(stem), ext: "docx")
+            return FormatPlan(
+                filename: filename, data: data, format: .docx,
+                detectionResult: detectionResult)
+        }
+
         if let mime, MimeType.isText(mime) {
             let ext = textExtension(forMIME: mime, extensionHint: extensionHint)
             let filename = ensureExtension(sanitizeStem(stem), ext: ext)
@@ -287,6 +299,7 @@ public enum FormatMaterializer {
             case "application/json": return "json"
             case "application/zip": return "zip"
             case "application/epub+zip": return "epub"
+            case MimeType.docx: return "docx"
             default:
                 // Use the subtype if it looks like a clean extension token.
                 if let sub = mime.split(separator: "/").last,

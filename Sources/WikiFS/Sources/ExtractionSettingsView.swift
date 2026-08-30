@@ -802,6 +802,9 @@ struct ExtractionSettingsView: View {
             if choice.reference == .installed(ProcessExtractionServices.reviewedDoclingLogical) {
                 return .reviewedDocling
             }
+            if choice.reference == .installed(ProcessExtractionServices.reviewedDOCXLogical) {
+                return .reviewedDocx2md
+            }
             return .reviewedDefuddle
         case .installedPackage:
             if case .installed(let logical) = choice.reference { return .installed(logical) }
@@ -909,6 +912,8 @@ struct ExtractionSettingsView: View {
             reference = .installed(ProcessExtractionServices.reviewedHTMLLogical)
         case .reviewedDocling:
             reference = .installed(ProcessExtractionServices.reviewedDoclingLogical)
+        case .reviewedDocx2md:
+            reference = .installed(ProcessExtractionServices.reviewedDOCXLogical)
         case .installed(let logical), .unavailableInstalled(let logical):
             reference = .installed(logical)
         case .connectedService(let backend):
@@ -1913,10 +1918,10 @@ struct ExtractionSettingsView: View {
         /// switching backends (sections of different heights) doesn't resize
         /// the window. A short section just leaves space below it.
         static let height: CGFloat = 420
-        /// The route table's fixed height: both canonical rows plus room for a
-        /// few registration-derived rows, with internal scrolling beyond that
-        /// so the Settings window never grows without bound.
-        static let routeTableHeight: CGFloat = 132
+        /// The route table's fixed height: the three canonical rows plus room
+        /// for a few registration-derived rows, with internal scrolling
+        /// beyond that so the Settings window never grows without bound.
+        static let routeTableHeight: CGFloat = 172
     }
 }
 
@@ -1934,6 +1939,8 @@ enum ExtractorRouteSettingsSelection: Hashable, Sendable {
     case reviewedDefuddle
     /// PDF only: Docling Serve via the reviewed revision 2 package (#1159).
     case reviewedDocling
+    /// DOCX only: the reviewed docx2md package (the only DOCX execution path).
+    case reviewedDocx2md
     case installed(LogicalExtractorReference)
     /// A saved installed selection whose package is no longer active.
     case unavailableInstalled(LogicalExtractorReference)
@@ -1985,6 +1992,18 @@ enum ExtractorRouteSettingsMapping {
             case .builtIn(.pdf), .none:
                 guard let legacy = config.htmlBackend else { return .prompt }
                 return legacy == .defuddle ? .reviewedDefuddle : .builtInTagBased
+            }
+        }
+        if route == .canonicalDOCX {
+            switch saved {
+            case .installed(let logical):
+                return logical == ProcessExtractionServices.reviewedDOCXLogical
+                    ? .reviewedDocx2md
+                    : installedSelection(logical, row: row)
+            case .builtIn, .none:
+                // No built-in DOCX backend exists: no selection displays as
+                // "use the reviewed package" (execution defaults to it).
+                return .prompt
             }
         }
         // Future registration-derived routes carry package choices only.
@@ -2044,7 +2063,7 @@ enum ExtractorRouteSettingsMapping {
             case .connectedService(let backend):
                 config.backend = backend
                 reference = .builtIn(.pdf(backend))
-            case .prompt, .reviewedDefuddle, .builtInTagBased:
+            case .prompt, .reviewedDefuddle, .reviewedDocx2md, .builtInTagBased:
                 return
             }
         } else if route == .canonicalHTML {
@@ -2060,7 +2079,23 @@ enum ExtractorRouteSettingsMapping {
             case .builtInTagBased:
                 config.htmlBackend = .tagBased
                 reference = .builtIn(.html(.tagBased))
-            case .reviewedPdf2md, .reviewedDocling, .connectedService:
+            case .reviewedPdf2md, .reviewedDocling, .reviewedDocx2md, .connectedService:
+                return
+            }
+        } else if route == .canonicalDOCX {
+            switch selection {
+            case .reviewedDocx2md:
+                // DOCX has no legacy field beneath the route record —
+                // `setExtractorSelection` dual-writes `docxExtractor`, which
+                // is the field itself.
+                reference = .installed(ProcessExtractionServices.reviewedDOCXLogical)
+            case .installed(let logical), .unavailableInstalled(let logical):
+                reference = .installed(logical)
+            case .prompt:
+                // "No default (use the reviewed package)": clearing the
+                // selection restores the engine's reviewed-lineage default.
+                reference = nil
+            default:
                 return
             }
         } else {

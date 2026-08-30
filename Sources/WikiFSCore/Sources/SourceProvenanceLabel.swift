@@ -35,12 +35,14 @@ public enum SourceProvenanceLabel {
         switch (ext ?? "").lowercased() {
         case "mmd", "mermaid": return "Mermaid"
         case "pdf":            return "PDF"
+        case "docx":           return "Word"
         case "md", "markdown": return "Markdown"
         default: break
         }
         // Extension didn't map — fall back to MIME for sources whose ext was
         // lost or never set (e.g. a `text/markdown` row stored without an ext).
         if MimeType.isPDF(mimeType) { return "PDF" }
+        if MimeType.isDOCX(mimeType) { return "Word" }
         if MimeType.isMarkdown(mimeType) { return "Markdown" }
         if MimeType.isMermaid(mimeType) { return "Mermaid" }
         return nil

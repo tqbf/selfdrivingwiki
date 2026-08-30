@@ -107,6 +107,7 @@ import WikiFSTypes
     }
 
     private var pdfSource: SourceSummary { source(filename: "paper.pdf", mime: "application/pdf", ext: "pdf") }
+    private var docxSource: SourceSummary { source(filename: "report.docx", mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", ext: "docx") }
     private var htmlSource: SourceSummary { source(filename: "page.html", mime: "text/html", ext: "html") }
     private var xhtmlSource: SourceSummary { source(filename: "page.xhtml", mime: "application/xhtml+xml", ext: "xhtml") }
     private var pngSource: SourceSummary { source(filename: "diagram.png", mime: "image/png", ext: "png") }
@@ -199,6 +200,38 @@ import WikiFSTypes
             processedMarkdownHead: stubHead(content: "# Legacy HTML extracted"))
         #expect(staged.ext == "md")
         #expect(staged.bytes == Data("# Legacy HTML extracted".utf8))
+    }
+
+    // MARK: - DOCX staging (registry-driven via .docxBackend)
+
+    @Test("DOCX WITH head reuses markdown bytes + ext 'md'")
+    func docxWithHeadReusesMarkdown() {
+        // `hasFileExtractionBackend == true` for `.docxBackend`, so a docx
+        // source whose Extract-button head exists stages the markdown, not
+        // the raw binary zip.
+        let docxBytes = Data([0x50, 0x4B, 0x03, 0x04]) + Data("zip".utf8)
+        let head = stubHead(content: "# DOCX extracted markdown")
+        let staged = AppQueueIngestionProvider._stagedBytesAndExt(
+            for: docxSource,
+            originalBytes: docxBytes,
+            processedMarkdownHead: head)
+        #expect(staged.ext == "md")
+        #expect(staged.bytes == Data("# DOCX extracted markdown".utf8))
+        #expect(staged.bytes != docxBytes)
+    }
+
+    @Test("DOCX WITHOUT head uses raw docx bytes + ext 'docx'")
+    func docxWithoutHeadUsesRaw() {
+        // v1: docx sources are not auto-ingested (`shouldAutoIngest == false`),
+        // so staging only sees them on explicit retry paths; the contract is
+        // still pinned: no head → raw bytes verbatim.
+        let docxBytes = Data([0x50, 0x4B, 0x03, 0x04]) + Data("zip".utf8)
+        let staged = AppQueueIngestionProvider._stagedBytesAndExt(
+            for: docxSource,
+            originalBytes: docxBytes,
+            processedMarkdownHead: nil)
+        #expect(staged.ext == "docx")
+        #expect(staged.bytes == docxBytes)
     }
 
     // MARK: - Non-extractable kinds (no reuse — raw bytes verbatim)

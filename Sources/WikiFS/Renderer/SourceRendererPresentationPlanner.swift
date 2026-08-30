@@ -113,6 +113,14 @@ struct SourceRendererPresentationPlanner: Sendable {
         htmlSource(source)
     }
 
+    /// DOCX classification is source metadata, mirroring `isHTMLSource`. A
+    /// docx source dispatches the Extract button to the inline package-only
+    /// `prepareDOCX` path (the queue engine is PDF-coupled).
+    nonisolated static func isDOCXSource(_ source: SourceSummary) -> Bool {
+        if let mime = source.mimeType { return MimeType.isDOCX(mime) }
+        return source.ext.lowercased() == "docx"
+    }
+
     nonisolated static func renderableMermaidMarkdown(_ markdown: String?) -> String? {
         guard let markdown else { return nil }
         return MermaidSourceDetector.renderableMarkdown(from: markdown)
