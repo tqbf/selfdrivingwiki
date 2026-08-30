@@ -46,9 +46,9 @@ Older package versions stay available while a newer version is installed. A fail
 
 Use **Installed Extractor Packages** to manage exact revisions. This section does not contain another default picker or the local import workflow. Expand a row to see its version, digest prefix, and registration name.
 
-Use **Advanced Local Package Import** in its separate section to add a local package folder. The app validates and copies the folder into the extractor store on this Mac.
+Click the **Advanced Local Package Import** row to expand or contract it. Use the row's **Import Extractor Package…** button to add a local package folder. The app validates and copies the folder into the extractor store on this Mac.
 
-Use **Refresh** after you install, update, or remove a runtime such as Bun or uv. The list reads the live process state, so a row appears only when its package has activated in this process.
+Click an installed package row to expand or contract its details. Use **Refresh** after you install, update, or remove a runtime such as Bun or uv. The list reads the live process state, so a row appears only when its package has activated in this process.
 
 Lifecycle states use plain terms: a package is **Active** when you can select it. A package can also wait for a host service, fail to activate, or be in the process of stopping or removal. Raw identifiers and detailed history stay behind the disclosure rows.
 
