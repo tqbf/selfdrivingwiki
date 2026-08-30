@@ -273,6 +273,36 @@ struct FormatMaterializerTests {
     /// AC.7 — `FormatMaterializer.swift` must not reference `FetchResponse`,
     /// `StorePlan`, a `: URL` parameter/return annotation, or import URL-coupled
     /// modules. This is a targeted source check, not a bare substring search.
+    /// A dropped legacy Word document keeps its own `.doc` filename: the
+    /// MIME subtype ("msword") must not rename the user's file. The subtype
+    /// stays the extension fallback only for bytes with no filename hint.
+    @Test func legacyDocKeepsOwnExtensionOverMIMESubtype() {
+        let ole2Magic = Data([
+            0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ])
+        let plan = FormatMaterializer.dispatch(
+            data: ole2Magic + Data(repeating: 0x00, count: 64),
+            contentType: "application/msword",
+            stem: "legacy-notes",
+            extensionHint: "doc")
+        #expect(plan.format == .binary)
+        #expect(plan.filename == "legacy-notes.doc")
+    }
+
+    @Test func binaryExtensionPrefersCleanHintOverSubtypeGuess() {
+        #expect(FormatMaterializer.binaryExtension(
+            forMIME: "application/msword", extensionHint: "doc") == "doc")
+        // No filename to honor — the subtype is the guess.
+        #expect(FormatMaterializer.binaryExtension(
+            forMIME: "application/msword", extensionHint: nil) == "msword")
+        #expect(FormatMaterializer.binaryExtension(
+            forMIME: "application/octet-stream", extensionHint: "bin") == "bin")
+        // The known table still canonicalizes.
+        #expect(FormatMaterializer.binaryExtension(
+            forMIME: "image/jpeg", extensionHint: "jpeg") == "jpg")
+    }
+
     @Test func formatMaterializerHasNoURLTypeDependency() throws {
         let repoRoot = try #require(Self.locateRepoRoot())
         let path = repoRoot

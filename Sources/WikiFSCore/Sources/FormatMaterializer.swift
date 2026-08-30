@@ -299,8 +299,9 @@ public enum FormatMaterializer {
         }
     }
 
-    /// Extension for a non-text response: from the MIME subtype when recognizable,
-    /// else `extensionHint`, else empty (no extension).
+    /// Extension for a non-text response: the known MIME table first, then
+    /// the file's own extension when it is a clean token, then the MIME
+    /// subtype as a guess for hint-less bytes, else empty.
     static func binaryExtension(forMIME mime: String?, extensionHint: String?) -> String {
         if let jsonExtension = jsonDocumentExtension(from: extensionHint) {
             return jsonExtension
@@ -317,7 +318,13 @@ public enum FormatMaterializer {
             case "application/epub+zip": return "epub"
             case MimeType.docx: return "docx"
             default:
-                // Use the subtype if it looks like a clean extension token.
+                // The file's own extension wins over a guessed subtype: a
+                // dropped `notes.doc` with `application/msword` keeps `.doc`
+                // — the subtype ("msword") would rename the user's file. The
+                // subtype stays the fallback for hint-less bytes.
+                if let kept = Self.cleanExtensionToken(extensionHint) {
+                    return kept
+                }
                 if let sub = mime.split(separator: "/").last,
                    sub.allSatisfy({ $0.isLetter || $0.isNumber }), !sub.isEmpty {
                     return String(sub)
@@ -325,6 +332,16 @@ public enum FormatMaterializer {
             }
         }
         return extensionHint ?? ""
+    }
+
+    /// The last dot-component of `hint` when it is a clean alphanumerical
+    /// token, else nil.
+    static func cleanExtensionToken(_ hint: String?) -> String? {
+        guard let hint,
+              let token = hint.split(separator: ".").last,
+              !token.isEmpty,
+              token.allSatisfy({ $0.isLetter || $0.isNumber }) else { return nil }
+        return String(token)
     }
 
     static func nonEmpty(_ s: String) -> String? {
