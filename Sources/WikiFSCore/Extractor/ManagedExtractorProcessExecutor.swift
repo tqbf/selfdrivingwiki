@@ -316,6 +316,16 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
            isDirectory.boolValue {
             environment["MISE_CONFIG_DIR"] = miseConfigDir.path
         }
+        // A shim resolves the tool version from config walking up from the
+        // current directory; the operation root has no declaring config, so
+        // the tool reads as "not active" and the shim exits with
+        // `mise use -g`. Pin the version via mise's env override, requesting
+        // the highest installed tool.
+        if case .runtime(let command, _) = operation.manifest.launch {
+            let toolKey = "MISE_"
+                + command.rawValue.uppercased().map { $0.isLetter || $0.isNumber ? $0 : "_" }
+            environment[toolKey] = "latest"
+        }
         if operation.manifest.capabilities.contains(.sharedRuntimeCache),
            let shared = operation.paths.sharedRuntimeCacheRoot {
             environment["WIKI_EXTRACTOR_SHARED_RUNTIME_CACHE"] = shared.path
