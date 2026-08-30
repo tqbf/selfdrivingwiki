@@ -12,6 +12,9 @@ signing/.portal-pending
 __pycache__/
 # Vendored JS tooling — reproduction is `npm ci` from the pinned lockfile.
 tools/markdownlint-vendor/node_modules/
+# docx2md extractor package dependencies — reproduction is `bun install`
+# from the pinned lockfile (tools/docx2md/bun.lock).
+tools/docx2md/node_modules/
 # MLX MiniLM model — downloaded on demand (not committed). Regenerate via
 # tools/minilm-prepare/download.py (pinned HF revision); build.sh bundles it
 # into the .app. See plans/mlx-minilm-design.md.

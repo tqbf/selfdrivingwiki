@@ -54,8 +54,31 @@ struct ReviewedExtractorPackageTests {
         #expect(payload.contains("credential_locations") == false)
     }
 
+    /// The reviewed docx2md package: manifest revision 1, protocol revision
+    /// 1, one DOCX registration with no capabilities (offline conversion).
+    @Test func docx2mdPackageValidatesAndKeepsItsReviewedIdentity() throws {
+        let output = try validate("Docx2md")
+
+        #expect(output.packageID == "org.selfdrivingwiki.docx2md")
+        #expect(output.protocolRevision == 1)
+        #expect(output.registrationIDs == ["document"])
+
+        let manifest = try manifest("Docx2md")
+        let registration = try #require(manifest.registrations.first)
+        #expect(registration.kinds == [.docx])
+        #expect(registration.filenameExtensions.contains(
+            try ExtractorFileExtension(validating: "docx")))
+        #expect(manifest.capabilities.isEmpty)
+        guard case .runtime(let command, let arguments) = manifest.launch else {
+            Issue.record("docx2md must launch through a runtime")
+            return
+        }
+        #expect(command.rawValue == "bun")
+        #expect(arguments.isEmpty)
+    }
+
     @Test func reviewedDigestsAreStableAcrossRepeatedValidation() throws {
-        for name in ["Defuddle", "Pdf2md", "DoclingServe"] {
+        for name in ["Defuddle", "Pdf2md", "DoclingServe", "Docx2md"] {
             let first = try validate(name)
             let second = try validate(name)
             #expect(first.packageDigest == second.packageDigest)
@@ -67,16 +90,38 @@ struct ReviewedExtractorPackageTests {
         // drift even though it cannot import the engine module.
         #expect(try validate("DoclingServe").packageDigest
             == "1a47573f0e07699a42f25b27bb300a29437c83489f18f33e1653f3e6192eb658")
+        #expect(try validate("Docx2md").packageDigest
+            == "ae5247e9108a0da5b8deb4f1dda154f72939c758f9f3db8f12d4dbb61977d42e")
     }
 
-    /// Revision 1 supports PDF and HTML byte extraction only, and the two
-    /// reviewed packages must not claim the same kind.
+    /// Revision 1 supports PDF, HTML, and DOCX byte extraction, and every
+    /// reviewed package must claim a distinct kind.
     @Test func reviewedPackagesCoverDistinctKinds() throws {
         let defuddle = try manifest("Defuddle")
         let pdf2md = try manifest("Pdf2md")
+        let docx2md = try manifest("Docx2md")
 
         #expect(defuddle.registrations.allSatisfy { $0.kinds == [.html] })
         #expect(pdf2md.registrations.allSatisfy { $0.kinds == [.pdf] })
+        #expect(docx2md.registrations.allSatisfy { $0.kinds == [.docx] })
+    }
+
+    /// AC.4: a frames.jsonl + request.json pair recorded from a real run of
+    /// the committed bundle replays through `protocol-smoke` with exactly one
+    /// terminal result frame. The tool never launches the process — it
+    /// validates the directory and replays the recorded frames.
+    @Test func docx2mdRecordedProtocolFramesReplayThroughProtocolSmoke() throws {
+        let fixtures = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/Docx2md", isDirectory: true)
+        let output = try ExtractorPackageToolExecutor().execute(arguments: [
+            "protocol-smoke",
+            Self.packageURL("Docx2md").path,
+            fixtures.appendingPathComponent("request.json").path,
+            fixtures.appendingPathComponent("frames.jsonl").path,
+        ])
+        #expect(output.packageID == "org.selfdrivingwiki.docx2md")
+        #expect(output.terminalKind == "result")
     }
 
     /// A runtime package must name one command without a path. The host

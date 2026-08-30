@@ -30,6 +30,10 @@
 #
 # Bundling Defuddle needs the globally installed `defuddle` npm package. When
 # it is absent the committed bundle is kept and the step is reported.
+#
+# Bundling Docx2md needs `tools/docx2md/node_modules` (`cd tools/docx2md &&
+# bun install`). Like Defuddle, its bun bundle is not byte-reproducible
+# across machines, so --check compares the sources.lock digest only.
 
 set -euo pipefail
 
@@ -48,6 +52,7 @@ PACKAGES_DIR="ExtractorPackages"
 LOCK_FILE="${PACKAGES_DIR}/sources.lock.json"
 DEFUDDLE_SOURCE="tools/defuddle/extractor-protocol.js"
 PDF2MD_SOURCE="tools/pdf2md/pdf2md"
+DOCX2MD_SOURCE="tools/docx2md/extractor-protocol.js"
 
 # A fixed, repository-relative build directory. Bun records its input path in
 # the bundle, so a stable path keeps repeated local builds identical.
@@ -61,6 +66,7 @@ sha256() {
 
 DEFUDDLE_SOURCE_DIGEST="$(sha256 "$DEFUDDLE_SOURCE")"
 PDF2MD_SOURCE_DIGEST="$(sha256 "$PDF2MD_SOURCE")"
+DOCX2MD_SOURCE_DIGEST="$(sha256 "$DOCX2MD_SOURCE")"
 DOCLING_SOURCE="tools/docling-serve/docling_serve_extractor.py"
 DOCLING_SOURCE_DIGEST="$(sha256 "$DOCLING_SOURCE")"
 
@@ -73,6 +79,16 @@ if [[ -z "$DEFUDDLE_VERSION" ]] && [[ -f "${PACKAGES_DIR}/Defuddle/manifest.json
   DEFUDDLE_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "${PACKAGES_DIR}/Defuddle/manifest.json")"
 fi
 : "${DEFUDDLE_VERSION:?defuddle version could not be resolved}"
+
+# The mammoth version recorded in sources.lock.json. Read from the installed
+# node_modules; when they are absent (bundle-keep degradation), fall back to
+# the committed lock so --check does not report phantom drift.
+DOCX2MD_MAMMOTH_VERSION=""
+if [[ -f "tools/docx2md/node_modules/mammoth/package.json" ]]; then
+  DOCX2MD_MAMMOTH_VERSION="$(python3 -c 'import json; print(json.load(open("tools/docx2md/node_modules/mammoth/package.json"))["version"])')"
+elif [[ -f "$LOCK_FILE" ]]; then
+  DOCX2MD_MAMMOTH_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("mammothLibraryVersion") or "")' "$LOCK_FILE")"
+fi
 
 # ── Defuddle ─────────────────────────────────────────────────────────────
 
@@ -386,24 +402,126 @@ PY
 }
 
 write_lock_file() {
-  python3 - "$1" "$DEFUDDLE_SOURCE_DIGEST" "$PDF2MD_SOURCE_DIGEST" "$DOCLING_SOURCE_DIGEST" "$DEFUDDLE_VERSION" <<'PY'
+  python3 - "$1" "$DEFUDDLE_SOURCE_DIGEST" "$PDF2MD_SOURCE_DIGEST" "$DOCX2MD_SOURCE_DIGEST" "$DOCLING_SOURCE_DIGEST" "$DEFUDDLE_VERSION" "$DOCX2MD_MAMMOTH_VERSION" <<'PY'
 import json, sys
 
-path, defuddle_source, pdf2md_source, docling_source, defuddle_version = sys.argv[1:6]
+path, defuddle_source, pdf2md_source, docx2md_source, docling_source, defuddle_version, mammoth_version = sys.argv[1:8]
 lock = {
     "comment": (
         "Digests of the sources the reviewed packages are generated from. "
         "Regenerate with scripts/sync-extractor-packages.sh."
     ),
     "defuddleLibraryVersion": defuddle_version,
+    "mammothLibraryVersion": mammoth_version or None,
     "sources": {
         "tools/defuddle/extractor-protocol.js": defuddle_source,
         "tools/pdf2md/pdf2md": pdf2md_source,
+        "tools/docx2md/extractor-protocol.js": docx2md_source,
         "tools/docling-serve/docling_serve_extractor.py": docling_source,
     },
 }
 with open(path, "w", encoding="utf-8") as handle:
     json.dump(lock, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+PY
+}
+
+# ── Docx2md ──────────────────────────────────────────────────────────────
+#
+# Bun bundle of tools/docx2md/extractor-protocol.js against the pinned
+# dependencies in tools/docx2md/node_modules. Like the Defuddle bundle, the
+# output embeds input paths, so bytes are only reproducible from the same
+# absolute path; --check therefore uses the sources.lock digest strategy for
+# this package and the committed bytes are policed by the validator tests.
+
+build_docx_bundle() {
+  local destination="$1"
+  rm -rf "$BUILD_DIR"
+  mkdir -p "$BUILD_DIR"
+  cp "$DOCX2MD_SOURCE" "${BUILD_DIR}/entry.js"
+  ln -sfn "$ROOT/tools/docx2md/node_modules" "${BUILD_DIR}/node_modules"
+  mise exec -- bun build "${BUILD_DIR}/entry.js" \
+    --outfile "${BUILD_DIR}/docx2md-extractor.js" --target=bun >/dev/null
+  mkdir -p "$(dirname "$destination")"
+  cp "${BUILD_DIR}/docx2md-extractor.js" "$destination"
+  rm -rf "$BUILD_DIR"
+}
+
+write_docx_provenance() {
+  local target="$1"
+  local licenses_dir="${target}/licenses"
+  mkdir -p "$licenses_dir"
+  # Vendored upstream licenses are part of the reviewed payload: a missing
+  # file is a hard error, mirroring the Defuddle license rule.
+  local mammoth_license turndown_license gfm_license
+  mammoth_license="$ROOT/tools/docx2md/node_modules/mammoth/LICENSE"
+  turndown_license="$ROOT/tools/docx2md/node_modules/turndown/LICENSE"
+  gfm_license="$ROOT/tools/docx2md/node_modules/turndown-plugin-gfm/LICENSE"
+  [ -f "$mammoth_license" ] || { echo "missing mammoth license at $mammoth_license" >&2; echo "       run: cd tools/docx2md && bun install" >&2; exit 1; }
+  [ -f "$turndown_license" ] || { echo "missing turndown license at $turndown_license" >&2; echo "       run: cd tools/docx2md && bun install" >&2; exit 1; }
+  [ -f "$gfm_license" ] || { echo "missing turndown-plugin-gfm license at $gfm_license" >&2; echo "       run: cd tools/docx2md && bun install" >&2; exit 1; }
+  cp "$mammoth_license" "${licenses_dir}/mammoth-LICENSE"
+  cp "$turndown_license" "${licenses_dir}/turndown-LICENSE"
+  cp "$gfm_license" "${licenses_dir}/turndown-plugin-gfm-LICENSE"
+  cat > "${target}/PROVENANCE.md" <<EOF
+# Reviewed package provenance
+
+- Package: org.selfdrivingwiki.docx2md
+- Version: 1.0.0
+- Upstream libraries: mammoth ${DOCX2MD_MAMMOTH_VERSION} (BSD-2-Clause, see
+  licenses/mammoth-LICENSE), turndown (MIT, see licenses/turndown-LICENSE),
+  turndown-plugin-gfm (MIT, see licenses/turndown-plugin-gfm-LICENSE)
+- Entry point: generated from tools/docx2md/extractor-protocol.js
+- Table rules: adapted from turndown-plugin-gfm (MIT) with a
+  first-row-as-header fallback and mammoth cell cleanup
+- Bundle: \`mise exec -- bun build --target=bun\` against the pinned
+  dependencies
+- Regenerate: scripts/sync-extractor-packages.sh
+- Drift gate: ExtractorPackages/sources.lock.json records source digests
+EOF
+}
+
+write_docx_manifest() {
+  python3 - "$1" "$2" "$3" "$4" "$5" "$6" <<'PY'
+import json, sys
+
+path, bundle_digest, provenance_digest, mammoth_license_digest, turndown_license_digest, gfm_license_digest = sys.argv[1:7]
+manifest = {
+    "manifestRevision": 1,
+    "packageID": "org.selfdrivingwiki.docx2md",
+    "version": "1.0.0",
+    "displayName": "Local docx2md",
+    "protocolRevision": 1,
+    "entryPoint": "bin/docx2md-extractor.js",
+    "launch": {"mode": "runtime", "command": "bun"},
+    "registrations": [
+        {
+            "id": "document",
+            "displayName": "docx2md Document",
+            "kinds": ["docx"],
+            "mimeTypes": ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+            "filenameExtensions": ["docx"],
+        }
+    ],
+    # Local conversion reads only the operation input file; mammoth and
+    # turndown are fully offline.
+    "capabilities": [],
+    "files": [
+        {"path": "PROVENANCE.md", "digest": provenance_digest},
+        {"path": "bin/docx2md-extractor.js", "digest": bundle_digest},
+        {"path": "licenses/mammoth-LICENSE", "digest": mammoth_license_digest},
+        {"path": "licenses/turndown-LICENSE", "digest": turndown_license_digest},
+        {"path": "licenses/turndown-plugin-gfm-LICENSE", "digest": gfm_license_digest},
+    ],
+    "limits": {
+        "maximumInputByteCount": 33554432,
+        "maximumMarkdownOutputByteCount": 33554432,
+        "maximumDurationMilliseconds": 120000,
+        "maximumProgressEventCount": 64,
+    },
+}
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(manifest, handle, indent=2, sort_keys=True)
     handle.write("\n")
 PY
 }
@@ -435,8 +553,30 @@ if [[ "$MODE" == "sync" ]]; then
   generate_pdf2md_package "${PACKAGES_DIR}/Pdf2md"
   rm -rf "${PACKAGES_DIR}/DoclingServe"
   generate_docling_package "${PACKAGES_DIR}/DoclingServe"
+
+  if [[ -d "tools/docx2md/node_modules" ]]; then
+    rm -rf "${PACKAGES_DIR}/Docx2md"
+    mkdir -p "${PACKAGES_DIR}/Docx2md/bin"
+    build_docx_bundle "${PACKAGES_DIR}/Docx2md/bin/docx2md-extractor.js"
+    write_docx_provenance "${PACKAGES_DIR}/Docx2md"
+    write_docx_manifest \
+      "${PACKAGES_DIR}/Docx2md/manifest.json" \
+      "$(sha256 "${PACKAGES_DIR}/Docx2md/bin/docx2md-extractor.js")" \
+      "$(sha256 "${PACKAGES_DIR}/Docx2md/PROVENANCE.md")" \
+      "$(sha256 "${PACKAGES_DIR}/Docx2md/licenses/mammoth-LICENSE")" \
+      "$(sha256 "${PACKAGES_DIR}/Docx2md/licenses/turndown-LICENSE")" \
+      "$(sha256 "${PACKAGES_DIR}/Docx2md/licenses/turndown-plugin-gfm-LICENSE")"
+    docx_state="rebuilt"
+  elif [[ -f "${PACKAGES_DIR}/Docx2md/bin/docx2md-extractor.js" ]]; then
+    echo "note: tools/docx2md/node_modules is absent — keeping the committed Docx2md bundle" >&2
+    docx_state="kept"
+  else
+    echo "error: tools/docx2md/node_modules is absent and no Docx2md bundle is committed" >&2
+    echo "       run: cd tools/docx2md && bun install" >&2
+    exit 1
+  fi
   write_lock_file "$LOCK_FILE"
-  echo "✓ extractor packages synced (defuddle ${DEFUDDLE_VERSION}, bundle ${bundle_state})"
+  echo "✓ extractor packages synced (defuddle ${DEFUDDLE_VERSION}, bundle ${bundle_state}, docx ${docx_state})"
   exit 0
 fi
 

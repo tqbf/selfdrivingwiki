@@ -1,9 +1,11 @@
 {
   "comment": "Digests of the sources the reviewed packages are generated from. Regenerate with scripts/sync-extractor-packages.sh.",
   "defuddleLibraryVersion": "0.19.1",
+  "mammothLibraryVersion": "1.12.2",
   "sources": {
     "tools/defuddle/extractor-protocol.js": "09bb21528839e125b6ee9de3a6ad192fe595d097d9454623f3f9dc27755d6781",
     "tools/docling-serve/docling_serve_extractor.py": "eb8c0a2a07e353935c7859998f6c249c3dc4f8f915e751eab7df51d22b41bbd4",
+    "tools/docx2md/extractor-protocol.js": "f41fad99bf960b6cc075087f12baa44484a8af9657fb15d10454fca99b30a916",
     "tools/pdf2md/pdf2md": "0ec600ec2acd6a8c9073e9a11ba0310c35c76eefaf9cfdd12b9dd80945a30943"
   }
 }
