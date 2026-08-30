@@ -310,7 +310,7 @@ public struct ProcessExtractorProvider: Sendable {
             },
             operationCredentials: operationCredentials,
             operationConfiguration: operationConfiguration,
-            runtimeSearchPolicy: .standard)
+            runtimeSearchPolicy: await ExtractorRuntimeSearchPolicyResolver.resolved())
     }
 
     private static func isOwnerPrivateDirectory(_ url: URL) throws -> Bool {

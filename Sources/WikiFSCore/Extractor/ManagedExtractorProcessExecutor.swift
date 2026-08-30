@@ -20,17 +20,56 @@ public struct ExtractorRuntimeSearchPolicy: Sendable {
         self.searchDirectories = searchDirectories.map(\.standardizedFileURL)
     }
 
+    /// Standalone runtime locations, with the mise shims dir last. A
+    /// self-contained `bun`/`uv` runs under the sandboxed environment with no
+    /// help; a shim is a symlink to the `mise` selector binary, which needs
+    /// data-dir/config-dir/version env support to even find its tool under
+    /// the sandboxed HOME. For the full user-facing precedence use
+    /// `ExtractorRuntimeSearchPolicyResolver.resolved()`, which prepends the
+    /// login-shell PATH.
     public static var standard: Self {
         let home = FileManager.default.homeDirectoryForCurrentUser
         return Self(searchDirectories: [
-            home.appendingPathComponent(".local/share/mise/shims", isDirectory: true),
             home.appendingPathComponent(".bun/bin", isDirectory: true),
             home.appendingPathComponent(".local/bin", isDirectory: true),
             URL(fileURLWithPath: "/opt/homebrew/bin", isDirectory: true),
             URL(fileURLWithPath: "/usr/local/bin", isDirectory: true),
             URL(fileURLWithPath: "/usr/bin", isDirectory: true),
             URL(fileURLWithPath: "/bin", isDirectory: true),
+            home.appendingPathComponent(".local/share/mise/shims", isDirectory: true),
         ])
+    }
+
+    /// `standard` with the user's login-shell PATH directories first
+    /// (deduplicated by standardized path). A GUI process does not inherit
+    /// the shell's PATH, so the login shell is the authority for where the
+    /// user actually installs tools and in which order.
+    public static func union(loginShellPath: String?) -> Self {
+        let loginDirs = (loginShellPath ?? "")
+            .split(separator: ":", omittingEmptySubsequences: true)
+            .map { URL(fileURLWithPath: String($0)).standardizedFileURL }
+        var merged = loginDirs
+        var seen = Set(loginDirs.map(\.standardizedFileURL.path))
+        for directory in standard.searchDirectories {
+            let key = directory.standardizedFileURL.path
+            if seen.insert(key).inserted { merged.append(directory) }
+        }
+        return Self(searchDirectories: merged)
+    }
+}
+
+/// Process-lifetime cached policy: the user's login-shell PATH is resolved
+/// once (this spawns a login shell) and merged ahead of the standard list,
+/// so every runtime launch in the process shares one answer to "where are
+/// the user's tools installed".
+public enum ExtractorRuntimeSearchPolicyResolver {
+    private static let cached = Task<ExtractorRuntimeSearchPolicy, Never> {
+        ExtractorRuntimeSearchPolicy.union(
+            loginShellPath: await PathPreflight.loginShellPATH())
+    }
+
+    public static func resolved() async -> ExtractorRuntimeSearchPolicy {
+        await cached.value
     }
 }
 
