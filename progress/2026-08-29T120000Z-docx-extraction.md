@@ -9,18 +9,19 @@ status: complete
 
 ## Progress
 
-A `.docx` source now gets an Extract button, a "Word" provenance chip, and a
-stored Markdown version. Conversion runs through the fourth reviewed extractor
-package, `org.selfdrivingwiki.docx2md` (mammoth + turndown, bundled with bun,
-offline, no capabilities).
+A `.docx` source dropped into a wiki is now recognized and extracted
+automatically. The docx2md package's registration declares the Word MIME
+type and the `.docx` extension; those declared inputs, folded from the live
+registry into `RegisteredExtractionInputs`, are what recognize the file (a
+`.docx` IS a zip the sniffer reports as `application/zip`). With the
+registration active, extraction runs at import through the injected
+coordinator and seeds the Markdown head with `.installedPackage` provenance;
+the Extract button remains as the manual retry.
 
-`ContentKind` gains `.docx` with `.docxBackend` and `shouldAutoIngest: false`:
-raw docx bytes are a binary zip, so the ingest gate stays closed and extraction
-runs on demand. The backend is package-only — the reviewed lineage is the
-default selection, and an inactive package fails closed with one redacted
-diagnostic. `ExtractionConfig.docxExtractor`, `resolveDOCX`, the Word route
-row in Settings, and `WikiStoreModel.extractDocx` follow the HTML pattern,
-including `.installedPackage` provenance.
+`ContentKind.docx` keeps `shouldAutoIngest: false` — raw docx bytes are never
+staged to agents; the auto-extracted Markdown version is what ingestion
+stages. `ExtractionConfig.docxExtractor`, `resolveDOCX`, the Word route row
+in Settings, and `WikiStoreModel.extractDocx` follow the HTML pattern.
 
 `tools/docx2md/` holds the reviewed entry source with pinned dependencies and
 an 11-case bun suite over a committed fixture document. Embedded images become

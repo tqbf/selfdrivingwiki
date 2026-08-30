@@ -339,6 +339,29 @@ public final class WikiStoreModel {
     /// config-aware; config is read by `ExtractionCoordinator` in
     /// `WikiFSEngine`).
     @ObservationIgnored public var podcastBackend: PodcastTranscriptionBackend?
+
+    /// The active extractor registrations' declared input surface, set at app
+    /// wiring time from `ExtractionBackendRegistry.registeredExtractionInputs()`
+    /// and pushed straight to the store. Registration-driven recognition: a
+    /// generic archive container an ACTIVE registration declares as its input
+    /// (a `.docx` IS a zip) classifies and stores as the registered type at
+    /// ingestion — the package's registration is the declaration that this
+    /// content has an extraction path. `.none` (the default) keeps sniff-only
+    /// behavior for hosts that do not wire it (CLI, daemon, tests).
+    @ObservationIgnored public var registeredExtractionInputs: RegisteredExtractionInputs = .none {
+        didSet { store.registeredExtractionInputs = registeredExtractionInputs }
+    }
+
+    /// Import-time DOCX auto-extraction, set at app wiring time with the
+    /// process `ExtractionCoordinator`. When a registered DOCX extraction is
+    /// active, a dropped Word document converts on import instead of waiting
+    /// for a manual Extract tap — the registration is what makes the content
+    /// extractable, so extraction follows it automatically. The closure
+    /// returns nil when the route cannot prepare an extractor (package
+    /// inactive, runtime missing); the Extract button remains the manual
+    /// retry. `nil` (the default) disables auto-extraction.
+    @ObservationIgnored public var docxImportExtractor:
+        (@Sendable () async -> (any DocxMarkdownExtractor)?)?
     private var autosaveTask: Task<Void, Never>?
 
     deinit {
@@ -2166,10 +2189,15 @@ public final class WikiStoreModel {
                 continue
             }
             // Materialize off-main (read + dispatch), store on the main actor.
-            let provider = LocalFileMaterializer(fileURL: url)
+            var materializer = LocalFileMaterializer(fileURL: url)
+            // Registration-driven recognition: the dispatch consults the
+            // active registrations' declared inputs so a registered
+            // zip-container input (a `.docx`) keeps its Word format and
+            // filename, matching what the store records.
+            materializer.registeredInputs = registeredExtractionInputs
             let materialized: MaterializedSource
             do {
-                materialized = try await provider.materialize()
+                materialized = try await materializer.materialize()
             } catch {
                 DebugLog.store("WikiStoreModel.addFiles read failed for \(url.lastPathComponent): \(error)")
                 continue
@@ -2191,6 +2219,12 @@ public final class WikiStoreModel {
                 let summary = try storeMaterialized(materialized, resolvedDisplayName: resolvedDisplayName)
                 lastSourceID = summary.id
                 lastSourceName = summary.effectiveName
+                // A registered DOCX extraction converts on import (the
+                // registration is what makes the content extractable). DOCX
+                // deliberately differs from the PR3 HTML posture: raw docx
+                // bytes are a binary zip with no fallback text path, so
+                // waiting for a manual tap leaves the source unusable.
+                autoExtractDocxIfRegistered(summary)
             } catch WikiStoreError.duplicateContent(let existing) {
                 // Byte-identical to an already-stored source — skip rather than
                 // abort the rest of the drop batch; report it so the user isn't
@@ -3565,6 +3599,39 @@ public final class WikiStoreModel {
             DebugLog.store("WikiStoreModel.extractDocx appendDerivedMarkdown failed (source=\(sourceID.rawValue)): \(error)")
             return nil
         }
+    }
+
+    /// Registration-driven auto-extraction: when an ACTIVE DOCX registration
+    /// recognized this source at import (its stored type is the registered
+    /// Word document type) and the app wiring injected an import extractor,
+    /// the conversion runs immediately after the source commits. The gate is
+    /// synchronous and pure-ish; the work is a detached main-actor task so
+    /// the drop itself never blocks on a conversion — best-effort, with the
+    /// manual Extract button as the retry when preparation fails.
+    func autoExtractDocxIfRegistered(_ summary: SourceSummary) {
+        guard docxImportExtractor != nil,
+              ContentKind.resolve(
+                  mimeType: summary.mimeType,
+                  provider: nil,
+                  ext: summary.ext,
+                  registeredInputs: registeredExtractionInputs) == .docx
+        else { return }
+        let sourceID = summary.id
+        Task { @MainActor in
+            await self.runDocxImportExtraction(sourceID: sourceID)
+        }
+    }
+
+    /// The auto-extraction work behind the gate. Public as the test seam
+    /// (the fire-and-forget task itself cannot be awaited from a test).
+    public func runDocxImportExtraction(sourceID: SourceID) async {
+        guard let prepare = docxImportExtractor,
+              let extractor = await prepare() else {
+            DebugLog.extraction(
+                "DOCX import auto-extraction skipped: no active extractor (source=\(sourceID.rawValue))")
+            return
+        }
+        _ = await extractDocx(for: sourceID, extractor: extractor)
     }
 
     /// **On-demand transcript dispatch** (issue #799 PR5): the unified entry

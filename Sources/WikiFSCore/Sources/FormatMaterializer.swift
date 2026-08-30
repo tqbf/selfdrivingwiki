@@ -118,14 +118,16 @@ public enum FormatMaterializer {
         data: Data,
         hints: ContentTypeDetectionHints,
         stem: String,
-        extensionHint: String?
+        extensionHint: String?,
+        registeredInputs: RegisteredExtractionInputs = .none
     ) -> FormatPlan {
         let detection = ContentTypeDetector.detect(.init(data: data, hints: hints))
         return dispatch(
             data: data,
             detectionResult: detection,
             stem: stem,
-            extensionHint: extensionHint)
+            extensionHint: extensionHint,
+            registeredInputs: registeredInputs)
     }
 
     public static func dispatch(
@@ -147,9 +149,23 @@ public enum FormatMaterializer {
         data: Data,
         detectionResult: ContentTypeDetectionResult,
         stem: String,
-        extensionHint: String?
+        extensionHint: String?,
+        registeredInputs: RegisteredExtractionInputs = .none
     ) -> FormatPlan {
-        let mime = detectionResult.normalizedMIMEType
+        var mime = detectionResult.normalizedMIMEType
+
+        // Registration-driven recognition: a registered input that IS an
+        // archive container (a `.docx` is a ZIP the sniffer resolves to
+        // application/zip) promotes to the registered MIME when an active
+        // registration declares this file's extension or MIME. The
+        // registration, not the sniff, says the container has an extraction
+        // path.
+        if let promoted = registeredInputs.promotedMIME(
+            detectedMIME: mime,
+            declaredMIME: nil,
+            filenameExtension: extensionHint) {
+            mime = promoted
+        }
 
         if mime == MimeType.html || mime == MimeType.xhtml {
             let html = decodeText(data)

@@ -13,12 +13,24 @@ This Mac ships with four reviewed packages:
 
 ### Word documents (.docx)
 
-Select a `.docx` source and press **Extract** to convert it. The source keeps its original bytes, and the Markdown becomes a derived version, as with HTML sources.
+Drop a `.docx` into a wiki and it converts automatically: the reviewed
+docx2md registration declares the Word MIME type and the `.docx` extension,
+and those declared inputs are what recognize the file (a `.docx` is a zip
+container the byte sniffer alone cannot tell apart from any archive). With
+the registration active, extraction runs at import and the Markdown appears
+as a derived version. The source keeps its original bytes, as with HTML
+sources.
 
-- Scope is `.docx` only. Legacy `.doc` and macro `.docm` files have no extraction path.
-- Embedded images are not extracted. Each image becomes a `![Figure N](figure-N.png)` placeholder, and the result carries a warning that says how many images were skipped.
-- docx2md needs [Bun](https://bun.sh). If Bun is missing, the route shows **Not installed**. There is no built-in fallback.
-- A `.docx` source is not staged to agents until you extract it. The raw bytes are a binary zip with no value as agent context.
+- Scope is `.docx` only. Legacy `.doc` and macro `.docm` files have no
+  extraction path.
+- Embedded images are not extracted. Each image becomes a
+  `![Figure N](figure-N.png)` placeholder, and the result carries a warning
+  that says how many images were skipped.
+- docx2md needs [Bun](https://bun.sh). If Bun is missing, the route shows
+  **Not installed**, the import stores the file without conversion, and the
+  **Extract** button on the source remains the manual retry.
+- A `.docx` source is not staged to agents until it has a Markdown version.
+  The raw bytes are a binary zip with no value as agent context.
 
 The app installs the packages into a machine catalog the first time it runs. You do not enable a package for each wiki. Every compatible installed package is available to every wiki on this Mac.
 

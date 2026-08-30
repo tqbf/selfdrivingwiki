@@ -24,17 +24,28 @@ is the maintainers' recommended route.
 
 - **Scope is `.docx` only.** Legacy `.doc` (`application/msword`) and macro
   `.docm` stay `.binary` with no extraction path.
+- **Recognition is registration-driven.** A `.docx` IS a zip container, so
+  the byte sniffer reports `application/zip` — a type with no extraction
+  path. The ACTIVE registration's declared inputs (`mimeTypes` +
+  `filenameExtensions` from the docx2md manifest) are what recognize the
+  file: `RegisteredExtractionInputs` (a pure leaf-type value folded from the
+  live registry) promotes a claimed container at the store's authoritative
+  addSource, at `FormatMaterializer.dispatch`, and in
+  `ContentKind.resolve`. Registering an extractor for a container type is
+  what makes files of that type recognizable — no hardcoded byte or name
+  table in the sniffer.
+- **Extraction runs automatically at import.** With the registration active,
+  a dropped Word document converts right after the source commits (a
+  fire-and-forget task over the injected coordinator). If preparation fails
+  (package inactive, Bun missing), the import still stores the file and the
+  Extract button remains the manual retry.
 - **Images become placeholders.** Each embedded image renders as
   `![Figure N](figure-N.png)`, and the result frame carries one warning that
   reports the count. Extracting image bytes is future work.
-- **Package-only backend.** There is no built-in Swift docx adapter. The
-  reviewed package is the default selection; if it is not active (removed, or
-  Bun missing), extraction fails closed with one redacted diagnostic.
 - **No auto-ingest.** `ContentKind.docx.capabilities.shouldAutoIngest` is
   false. Raw docx bytes are a binary zip and would be noise as staged agent
-  context, unlike HTML text. Extraction is a manual Extract action; the
-  resulting Markdown version becomes the source's ingestible content. If a
-  later design adds queue-integrated docx extraction, the flag flips then.
+  context, unlike HTML text; the auto-extracted Markdown version is what
+  ingestion stages (the staging path reuses an existing head).
 - **Header fallback for tables.** turndown-plugin-gfm keeps a table as raw
   HTML unless its first row is entirely `<th>`. Word tables rarely declare
   header rows, so the reviewed entry point treats the first row as the header

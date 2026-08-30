@@ -28,6 +28,11 @@ public enum MimeType {
     /// it has no extraction path and stays classified `.binary`.
     public static let docx = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
+    /// `application/zip` — the generic archive container. Registered
+    /// extractor inputs can BE zip containers (a `.docx` is one); the
+    /// registry's registration surface, not the sniff, says which.
+    public static let zip = "application/zip"
+
     /// `application/octet-stream` — the generic binary catch-all / fallback.
     public static let octetStream = "application/octet-stream"
 

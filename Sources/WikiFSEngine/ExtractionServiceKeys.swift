@@ -380,6 +380,31 @@ public struct ExtractorPackageSettingsRow: Identifiable, Hashable, Sendable {
 }
 
 public extension ExtractionBackendRegistry {
+    /// Registration-driven recognition surface: the MIME types and filename
+    /// extensions every ACTIVE installed registration declares as its input,
+    /// folded into the pure leaf-type value the store and model consult at
+    /// ingestion. A `.docx` IS a zip; this surface is what lets the pipeline
+    /// tell them apart — the package's registration declares the input, so
+    /// registering an extractor for a container type is what makes files of
+    /// that type recognizable.
+    func registeredExtractionInputs() async -> RegisteredExtractionInputs {
+        var mimes: Set<RegisteredExtractionInputs.RegisteredMIME> = []
+        var extensions: Set<RegisteredExtractionInputs.RegisteredExtension> = []
+        for snapshot in await installedRegistrationSnapshots() {
+            for mimeType in snapshot.mimeTypes {
+                for kind in snapshot.kinds {
+                    mimes.insert(.init(kind: kind, mimeType: mimeType.rawValue))
+                }
+            }
+            for ext in snapshot.filenameExtensions {
+                for kind in snapshot.kinds {
+                    extensions.insert(.init(kind: kind, ext: ext.rawValue))
+                }
+            }
+        }
+        return RegisteredExtractionInputs(mimeTypes: mimes, filenameExtensions: extensions)
+    }
+
     /// Snapshot of every active installed (exact) PDF, HTML, and DOCX
     /// registration, highest revision first within a deterministic package
     /// sort. Transcript kinds are out of scope for revision 1. A package that

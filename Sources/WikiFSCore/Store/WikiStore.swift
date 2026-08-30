@@ -223,7 +223,7 @@ public struct PageSourceLink: Equatable, Sendable {
 /// Read/write storage interface for wiki pages (INITIAL.md §3). The SQLite
 /// implementation is the source of truth; the Phase 2 File Provider extension
 /// will adopt a read-only subset (`WikiReadStore`) of this.
-public protocol WikiStore: Sendable {
+public protocol WikiStore: AnyObject, Sendable {
     /// Per-wiki resource-change event bus. `GRDBWikiStore` emits one event per
     /// public mutating method (outside its recursive lock, via `mutate()`);
     /// `nil` for stores that never surface changes (e.g. `wikictl`'s own store,
@@ -231,6 +231,14 @@ public protocol WikiStore: Sendable {
     /// open; the File Provider signaler and the model's external-reload path
     /// both subscribe to it. See `plans/event-bus.md`.
     var eventBus: WikiEventBus? { get set }
+
+    /// The active extractor registrations' declared input surface
+    /// (`ExtractionBackendRegistry.registeredExtractionInputs()`), kept in
+    /// sync by the owning model. Registration-driven recognition: a generic
+    /// archive container an ACTIVE registration declares as its input (a
+    /// `.docx` IS a zip) stores its registered type at ingestion instead of
+    /// the sniff's `application/zip`. `.none` keeps sniff-only behavior.
+    var registeredExtractionInputs: RegisteredExtractionInputs { get set }
 
     /// Page summaries ordered by the given sort criterion.
     func listPages(sortBy: PageSortOrder) throws -> [WikiPageSummary]

@@ -81,7 +81,7 @@ extension ProfileWikiSession {
         interactiveUsageRecorder: @escaping @MainActor (SessionUsage) -> Void = { _ in }
     ) throws {
         let databaseURL = containerDirectory.appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false)
-        var rawStore = try makeStore(databaseURL)
+        let rawStore = try makeStore(databaseURL)
         let bus = rawStore.eventBus ?? WikiEventBus(wikiID: wikiID)
         rawStore.eventBus = bus
         let model = WikiStoreModel(store: rawStore)
@@ -148,6 +148,25 @@ extension AppProcessProfileOwner {
         let pair = childServices.launcherFactory(wikiID: wikiID)
         pair.launcher.pdf2mdScriptPathResolver = pdf2mdScriptPathResolver
         pair.launcher.onInteractiveUsage = interactiveUsageRecorder
+        // Registration-driven recognition + auto-extraction: the active
+        // extractor registrations' declared inputs make registered
+        // zip-container content (a `.docx`) recognizable at ingestion, and a
+        // registered DOCX extraction converts on import instead of waiting
+        // for a manual Extract tap.
+        let extractionCoordinator = ExtractionCoordinator(services: processServices.extraction)
+        if let process = processServices.extraction as? ProcessExtractionServices {
+            model.registeredExtractionInputs = await process.context.registry
+                .registeredExtractionInputs()
+        }
+        model.docxImportExtractor = { [extractionCoordinator] in
+            do {
+                return try await extractionCoordinator.prepareDOCX()
+            } catch {
+                DebugLog.extraction(
+                    "DOCX import auto-extraction could not prepare an extractor: \(error.localizedDescription)")
+                return nil
+            }
+        }
         return ProfileWikiSession(
             wikiID: wikiID,
             descriptor: descriptor,
@@ -155,7 +174,7 @@ extension AppProcessProfileOwner {
             searchCompositionOwner: searchOwner,
             generationGate: pair.gate,
             agentLauncher: pair.launcher,
-            extractionCoordinator: ExtractionCoordinator(services: processServices.extraction),
+            extractionCoordinator: extractionCoordinator,
             queueEngine: processServices.queue,
             extractionProvider: extractionProvider,
             htmlBackend: htmlBackendResolver(),

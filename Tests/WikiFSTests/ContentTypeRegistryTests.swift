@@ -302,6 +302,109 @@ struct ContentTypeRegistryTests {
         #expect(kind.capabilities.shouldAutoIngest == false)
     }
 
+    // MARK: - Registration-driven recognition (the package declares the input)
+
+    private static let registeredDocx = RegisteredExtractionInputs(
+        mimeTypes: [
+            .init(kind: .docx, mimeType: MimeType.docx),
+        ],
+        filenameExtensions: [
+            .init(kind: .docx, ext: "docx"),
+        ])
+
+    @Test("an active docx registration promotes a zip-sniffed source to docx")
+    func registeredDocxInputPromotesZipContainer() {
+        // A .docx IS a zip; the sniffer reports application/zip. The ACTIVE
+        // registration's declared extension is what recognizes the file —
+        // recognition comes from the package, not the sniff or a name table.
+        let byExt = ContentKind.resolve(
+            mimeType: MimeType.zip, provider: .localFile, ext: "docx",
+            registeredInputs: Self.registeredDocx)
+        #expect(byExt == .docx)
+        #expect(byExt.capabilities.extractionPath == .docxBackend)
+
+        let byMIME = ContentKind.resolve(
+            mimeType: MimeType.zip, provider: .localFile, ext: "mystery",
+            registeredInputs: RegisteredExtractionInputs(
+                mimeTypes: [.init(kind: .docx, mimeType: MimeType.docx)],
+                filenameExtensions: []))
+        // declaredMIME path: the zip mime itself is not the registered type,
+        // so a mystery extension does not promote here.
+        #expect(byMIME == .binary)
+
+        // Without the registration, the same file stays a binary zip.
+        let unregistered = ContentKind.resolve(
+            mimeType: MimeType.zip, provider: .localFile, ext: "docx",
+            registeredInputs: .none)
+        #expect(unregistered == .binary)
+
+        // A zip the registration does not claim stays a zip.
+        let plainZip = ContentKind.resolve(
+            mimeType: MimeType.zip, provider: .localFile, ext: "zip",
+            registeredInputs: Self.registeredDocx)
+        #expect(plainZip == .binary)
+    }
+
+    @Test("an active registration recognizes its extension without a stored MIME")
+    func registeredExtensionRecognizesNilMime() {
+        let kind = ContentKind.resolve(
+            mimeType: nil, provider: nil, ext: "docx",
+            registeredInputs: Self.registeredDocx)
+        #expect(kind == .docx)
+
+        // Unregistered extensions still fail safe to .unknown.
+        #expect(ContentKind.resolve(
+            mimeType: nil, provider: nil, ext: "docx",
+            registeredInputs: .none) == .docx)   // hardcoded fallback arm
+        #expect(ContentKind.resolve(
+            mimeType: nil, provider: nil, ext: "zzz",
+            registeredInputs: Self.registeredDocx) == .unknown)
+    }
+
+    @Test("promotedMIME fires only for generic containers claimed by a registration")
+    func promotedMIMETable() {
+        // Extension path.
+        #expect(Self.registeredDocx.promotedMIME(
+            detectedMIME: MimeType.zip, declaredMIME: nil,
+            filenameExtension: "docx") == MimeType.docx)
+        // Declared-MIME path (e.g. a fetch that declared the Word type).
+        #expect(Self.registeredDocx.promotedMIME(
+            detectedMIME: MimeType.zip, declaredMIME: MimeType.docx,
+            filenameExtension: nil) == MimeType.docx)
+        // Not a container, or not claimed → nil.
+        #expect(Self.registeredDocx.promotedMIME(
+            detectedMIME: MimeType.pdf, declaredMIME: nil,
+            filenameExtension: "docx") == nil)
+        #expect(Self.registeredDocx.promotedMIME(
+            detectedMIME: MimeType.zip, declaredMIME: nil,
+            filenameExtension: "zip") == nil)
+        #expect(RegisteredExtractionInputs.none.promotedMIME(
+            detectedMIME: MimeType.zip, declaredMIME: nil,
+            filenameExtension: "docx") == nil)
+    }
+
+    @Test("dispatch keeps the Word format for a registered docx zip")
+    func registeredDispatchKeepsDocxFormat() {
+        let docxBytes = Data([0x50, 0x4B, 0x03, 0x04]) + Data("container".utf8)
+        let plan = FormatMaterializer.dispatch(
+            data: docxBytes,
+            hints: .init(filenameExtension: "docx"),
+            stem: "report",
+            extensionHint: "docx",
+            registeredInputs: Self.registeredDocx)
+        #expect(plan.format == .docx)
+        #expect(plan.filename == "report.docx")
+
+        // Without the registration, the same bytes stay a zip binary.
+        let unregistered = FormatMaterializer.dispatch(
+            data: docxBytes,
+            hints: .init(filenameExtension: "docx"),
+            stem: "report",
+            extensionHint: "docx")
+        #expect(unregistered.format == .binary)
+        #expect(unregistered.filename == "report.zip")
+    }
+
     @Test("nil mime + unknown ext still returns .unknown (fail safe)") func unknownExtFallback() {
         let kind = ContentKind.resolve(mimeType: nil, provider: nil, ext: "dat")
         #expect(kind == .unknown)

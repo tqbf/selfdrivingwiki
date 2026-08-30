@@ -81,6 +81,41 @@ struct ExtractorPackageSettingsTests {
         #expect(rows.isEmpty)
     }
 
+    @Test("registeredExtractionInputs folds every active registration's declared inputs")
+    func registeredInputsFoldActiveRegistrations() async throws {
+        let registry = ExtractionBackendRegistry()
+        let reference = try reference(
+            packageID: "org.example.docxpkg",
+            version: "1.0.0",
+            digestHex: String(repeating: "a", count: 64))
+
+        _ = try await registry.registerBatch([
+            ExtractionBatchEntry(
+                key: .installed(kind: .docx, reference: reference),
+                backend: stubDOCXBackend(),
+                presentation: ExtractorRegistrationPresentation(
+                    displayName: "docx2md Document",
+                    packageName: "Example docx2md",
+                    kinds: [.docx],
+                    mimeTypes: Set([ExtractorMIMEType(validating: MimeType.docx)]),
+                    filenameExtensions: Set([try ExtractorFileExtension(validating: "docx")])),
+            ),
+        ])
+
+        let inputs = await registry.registeredExtractionInputs()
+
+        #expect(inputs.registeredMIME(forNormalizedMIME: MimeType.docx)?.kind == .docx)
+        #expect(inputs.registeredInput(forNormalizedExtension: "docx")?.kind == .docx)
+        // A container claimed by no active registration does not promote.
+        #expect(inputs.promotedMIME(
+            detectedMIME: MimeType.zip, declaredMIME: nil,
+            filenameExtension: "zip") == nil)
+
+        // An empty registry folds to an empty surface.
+        let empty = await ExtractionBackendRegistry().registeredExtractionInputs()
+        #expect(empty.isEmpty)
+    }
+
     // MARK: - Route-scoped extractor selection mapping
 
     /// Derives the view selection for one canonical route from a config,

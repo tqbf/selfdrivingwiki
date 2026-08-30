@@ -93,7 +93,7 @@ public enum StorePlugin {
             ]
         ) { activation in
             let databaseURL = URL(fileURLWithPath: config.databasePath, isDirectory: false)
-            var store: any WikiStore = try StoreBackend.current.makeStore(databaseURL: databaseURL)
+            let store: any WikiStore = try StoreBackend.current.makeStore(databaseURL: databaseURL)
             let bus = WikiEventBus(wikiID: WikiID(rawValue: config.wikiID))
             store.eventBus = bus
             let readService = WikiReadService(databaseURL: databaseURL)

@@ -166,7 +166,7 @@ import WikiFSTypes
             let path = kind.capabilities.extractionPath
             let expected: SourceDetailView.ExtractionAffordance
             switch path {
-            case .pdfBackend, .htmlToMarkdown:           expected = .extract
+            case .pdfBackend, .htmlToMarkdown, .docxBackend: expected = .extract
             case .podcastTranscript, .youtubeTranscript: expected = .transcribe
             case nil:                                    expected = .none
             }
