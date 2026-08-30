@@ -2096,6 +2096,13 @@ public final class WikiStoreModel {
     /// `FormatMaterializer.enrich` returns for a successful defuddle run.
     private static let defuddleTechnique = "defuddle"
 
+    /// Technique tag stamped on a DOCX source's extracted-markdown version.
+    /// DOCX extraction is package-only, so production runs always record the
+    /// `.installedPackage` producer; this tag is the `note`/technique text
+    /// alongside it and the fallback producer tag for an injected test double
+    /// that carries no package provenance.
+    private static let docxToMarkdownTechnique = "docx-to-markdown"
+
     /// Best-effort: if the materialized source is HTML (has an extracted-markdown
     /// sidecar from `FormatMaterializer.dispatch`), run the defuddle extractor to
     /// obtain site-specific markdown + metadata. On any failure, keep the
@@ -3492,6 +3499,70 @@ public final class WikiStoreModel {
             // user-triggered (a button tap or Re-extract menu click), so a
             // swallowed throw would silently lose the result with no trace.
             DebugLog.store("WikiStoreModel.extractHtml appendDerivedMarkdown failed (source=\(sourceID.rawValue)): \(error)")
+            return nil
+        }
+    }
+
+    /// DOCX extraction trigger — the package-only sibling of
+    /// `extractHtml(for:backend:extractor:)`. Mirrors its shape (read source
+    /// bytes → run the injected adapter → append a processed-markdown
+    /// version) without refactoring the HTML path.
+    ///
+    /// There is no backend parameter and no built-in fallback: DOCX runs
+    /// exclusively through the reviewed docx2md package adapter the caller
+    /// resolved via `ExtractionCoordinator.prepareDOCX()`. A failed package
+    /// preparation never reaches this method (preparation throws at the
+    /// coordinator), and an extractor that returns empty markdown returns nil
+    /// here — nothing substitutes another extractor.
+    ///
+    /// The package-run provenance records the additive
+    /// `.installedPackage` producer (the process adapter conforms to
+    /// `ProcessPackageProvenanceProviding`); only an injected test double
+    /// without package provenance falls back to the legacy technique tag.
+    ///
+    /// - Returns: the new `SourceMarkdownVersion`, or nil if the source's
+    ///   bytes couldn't be read, the extractor returned empty markdown, or
+    ///   the store write threw.
+    @discardableResult
+    public func extractDocx(
+        for sourceID: SourceID,
+        extractor: any DocxMarkdownExtractor
+    ) async -> SourceMarkdownVersion? {
+        guard let data = DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: sourceID) }) else {
+            DebugLog.store("WikiStoreModel.extractDocx: source bytes unreadable (source=\(sourceID.rawValue))")
+            return nil
+        }
+        guard !data.isEmpty else {
+            DebugLog.store("WikiStoreModel.extractDocx: source is empty (source=\(sourceID.rawValue))")
+            return nil
+        }
+        guard let result = await extractor.extract(docx: data),
+              !result.markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            DebugLog.store("WikiStoreModel.extractDocx: extractor returned empty markdown (source=\(sourceID.rawValue))")
+            return nil
+        }
+        let package: ExtractionInstalledPackageProducer?
+        if let processExtractor = extractor as? any ProcessPackageProvenanceProviding {
+            package = ExtractionInstalledPackageProducer(
+                revision: processExtractor.packageProvenance.revision,
+                registrationID: processExtractor.packageProvenance.registrationID,
+                protocolRevision: processExtractor.packageProvenance.protocolRevision,
+                reportedMetadata: processExtractor.packageProvenance.reportedMetadata)
+        } else {
+            // Package-only in production; only a test double without package
+            // provenance can hit this arm.
+            package = nil
+        }
+        do {
+            return try store.appendDerivedMarkdown(
+                sourceID: sourceID, content: result.markdown, origin: .extraction,
+                producer: package.map(ExtractionProducer.installedPackage)
+                    ?? .legacy(rawTechnique: Self.docxToMarkdownTechnique),
+                providerID: nil, modelID: nil, toolVersion: nil,
+                sourceVersionID: nil, note: "extract via \(Self.docxToMarkdownTechnique)")
+        } catch {
+            // #475/#492: never silently swallow — see the HTML sibling above.
+            DebugLog.store("WikiStoreModel.extractDocx appendDerivedMarkdown failed (source=\(sourceID.rawValue)): \(error)")
             return nil
         }
     }
