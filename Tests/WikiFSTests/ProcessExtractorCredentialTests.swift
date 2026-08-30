@@ -87,7 +87,7 @@ private func makeOperation(
         launchGate: nil,
         operationCredentials: resolver,
         operationConfiguration: configuration,
-        runtimeSearchPolicy: .standard)
+        runtimeResolution: nil)
 }
 
 /// Captures the managed request, verifies the credential file existed at

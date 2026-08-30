@@ -26,7 +26,13 @@ struct ManagedExtractorProcessExecutorTests {
 
     @Test func environmentIsAllowlistedAndCapabilityGated() async throws {
         setenv("PARENT_SECRET", "must-not-leak", 1)
-        defer { unsetenv("PARENT_SECRET") }
+        setenv("MISE_DATA_DIR", "/must-not-leak", 1)
+        setenv("MISE_CONFIG_DIR", "/must-not-leak", 1)
+        defer {
+            unsetenv("PARENT_SECRET")
+            unsetenv("MISE_DATA_DIR")
+            unsetenv("MISE_CONFIG_DIR")
+        }
         let fixture = try Fixture(mode: "environment")
         defer { fixture.cleanup() }
 
@@ -37,78 +43,146 @@ struct ManagedExtractorProcessExecutorTests {
         #expect(environment.contains("TMPDIR=\(fixture.temporaryRoot.path)"))
         #expect(environment.contains("PARENT_SECRET=<missing>"))
         #expect(environment.contains("PATH=<missing>"))
+        #expect(environment.contains("MISE_DATA_DIR=<missing>"))
+        #expect(environment.contains("MISE_CONFIG_DIR=<missing>"))
         #expect(environment.contains("WIKI_EXTRACTOR_SHARED_RUNTIME_CACHE=<missing>"))
         #expect(environment.contains("WIKI_EXTRACTOR_SHARED_MODEL_CACHE=<missing>"))
     }
 
-    @Test func runtimeResolutionIsAbsoluteAndMissingRuntimeIsTyped() async throws {
-        let fixture = try Fixture(mode: "success", launch: .runtime(
-            command: ExtractorRuntimeName(validating: "missing-runtime"),
-            arguments: []))
+    /// AC.3: runtime launch uses the retained absolute URL directly, with
+    /// the allowlisted environment and no PATH. The fixture runtime is a
+    /// copy of the protocol fixture placed in a private bin directory; the
+    /// executor never searches a directory.
+    @Test func runtimeLaunchUsesRetainedAbsoluteURLWithAllowlistedEnvironment() async throws {
+        setenv("MISE_DATA_DIR", "/must-not-leak", 1)
+        defer { unsetenv("MISE_DATA_DIR") }
+        let fixture = try Fixture(
+            mode: "environment",
+            launch: .runtime(
+                command: ExtractorRuntimeName(validating: "fixture-runtime"),
+                arguments: []))
+        defer { fixture.cleanup() }
+
+        let result = try await ManagedExtractorProcessExecutor().execute(fixture.operation)
+        #expect(result.terminationCause == .exited(code: 0))
+        #expect(result.executableURL == fixture.runtimeResolution?.executableURL)
+        let environment = try String(contentsOf: fixture.outputURL, encoding: .utf8)
+        #expect(environment.contains("PATH=<missing>"))
+        #expect(environment.contains("MISE_DATA_DIR=<missing>"))
+        #expect(environment.contains("HOME=\(fixture.homeRoot.path)"))
+    }
+
+    /// A runtime launch without a retained resolution is a typed failure;
+    /// the executor never searches for the command itself.
+    @Test func runtimeLaunchWithoutRetainedResolutionIsTyped() async throws {
+        let fixture = try Fixture(
+            mode: "success",
+            launch: .runtime(
+                command: ExtractorRuntimeName(validating: "missing-runtime"),
+                arguments: []),
+            resolveRuntime: false)
         defer { fixture.cleanup() }
 
         await #expect(throws: ManagedExtractorProcessError.missingRuntime(
-            try ExtractorRuntimeName(validating: "missing-runtime"))) {
+            try ExtractorRuntimeName(validating: "missing-runtime"),
+            cause: nil)) {
             _ = try await ManagedExtractorProcessExecutor().execute(fixture.operation)
         }
     }
 
-    /// mise-style runtime shims are SYMLINKS (shims/bun -> /opt/homebrew/bin/mise).
-    /// The resolver must probe through the link: a strict regular-file lstat on
-    /// the shim itself would report every mise-managed runtime as missing.
-    /// Regression for the app-side `missingRuntime(bun)` failure.
-    @Test func runtimeResolutionFollowsSymlinkedShims() async throws {
-        let searchDirectory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("managed-extractor-shims-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(
-            at: searchDirectory, withIntermediateDirectories: true)
+    /// A retained resolution naming a different command is an invalid
+    /// request, never a launch.
+    @Test func runtimeLaunchWithMismatchedResolutionIsRejected() async throws {
         let fixture = try Fixture(
             mode: "success",
             launch: .runtime(
-                command: ExtractorRuntimeName(validating: "fixture-shim"),
+                command: ExtractorRuntimeName(validating: "fixture-runtime"),
                 arguments: []),
-            runtimeSearchDirectories: [searchDirectory])
+            runtimeCommandName: "other-runtime")
         defer { fixture.cleanup() }
 
-        // The shim points at the fixture's own entry executable.
-        let shimURL = searchDirectory.appendingPathComponent("fixture-shim")
-        try FileManager.default.createSymbolicLink(
-            at: shimURL,
-            withDestinationURL: fixture.packageRoot
-                .appendingPathComponent("bin/fixture"))
+        await #expect(throws: ManagedExtractorProcessError.requestMismatch) {
+            _ = try await ManagedExtractorProcessExecutor().execute(fixture.operation)
+        }
+    }
 
-        let result = try await ManagedExtractorProcessExecutor().execute(
-            fixture.operation,
-            onFrame: { _ in })
+    // MARK: - Package entry-point rules (AC.4)
+
+    /// A direct entry point must be an executable regular file.
+    @Test func directEntryRequiresExecutableRegularFile() async throws {
+        let fixture = try Fixture(mode: "success", entryPermissions: 0o400)
+        defer { fixture.cleanup() }
+
+        await #expect(throws: ManagedExtractorProcessError.executableChanged) {
+            _ = try await ManagedExtractorProcessExecutor().execute(fixture.operation)
+        }
+    }
+
+    /// A runtime entry point is data for the runtime: a readable regular
+    /// file needs no execute permission.
+    @Test func runtimeEntryAllowsReadableNonExecutableFile() async throws {
+        let fixture = try Fixture(
+            mode: "success",
+            launch: .runtime(
+                command: ExtractorRuntimeName(validating: "fixture-runtime"),
+                arguments: []),
+            entryPermissions: 0o400)
+        defer { fixture.cleanup() }
+
+        let result = try await ManagedExtractorProcessExecutor().execute(fixture.operation)
         #expect(result.terminationCause == .exited(code: 0))
         #expect(try String(contentsOf: fixture.outputURL, encoding: .utf8) == "# Fixture\n")
     }
 
-    /// A broken symlink is not a runtime: the probe moves on and the typed
-    /// missing-runtime error is preserved.
-    @Test func brokenSymlinkShimStillReportsMissingRuntime() async throws {
-        let searchDirectory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("managed-extractor-broken-shims-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(
-            at: searchDirectory, withIntermediateDirectories: true)
+    /// Package payload rejects symlinks in every launch mode.
+    @Test func symlinkedPackageEntryIsRejected() async throws {
         let fixture = try Fixture(
             mode: "success",
             launch: .runtime(
-                command: ExtractorRuntimeName(validating: "fixture-shim"),
+                command: ExtractorRuntimeName(validating: "fixture-runtime"),
                 arguments: []),
-            runtimeSearchDirectories: [searchDirectory])
+            entryAsSymlink: true)
         defer { fixture.cleanup() }
 
-        try FileManager.default.createSymbolicLink(
-            at: searchDirectory.appendingPathComponent("fixture-shim"),
-            withDestinationURL: fixture.packageRoot
-                .appendingPathComponent("bin/does-not-exist"))
-
-        await #expect(throws: ManagedExtractorProcessError.missingRuntime(
-            try ExtractorRuntimeName(validating: "fixture-shim"))) {
+        await #expect(throws: ManagedExtractorProcessError.executableChanged) {
             _ = try await ManagedExtractorProcessExecutor().execute(fixture.operation)
         }
     }
+
+    /// Package payload rejects hard links in every launch mode.
+    @Test func hardLinkedPackageEntryIsRejected() async throws {
+        let fixture = try Fixture(
+            mode: "success",
+            entryHardLinked: true)
+        defer { fixture.cleanup() }
+
+        await #expect(throws: ManagedExtractorProcessError.executableChanged) {
+            _ = try await ManagedExtractorProcessExecutor().execute(fixture.operation)
+        }
+    }
+
+    // MARK: - Identity revalidation (AC.5)
+
+    /// The pinned host executable identity is revalidated immediately before
+    /// spawn: replacing the runtime binary after resolution fails closed and
+    /// no child starts.
+    @Test func runtimeIdentityChangePreventsSpawn() async throws {
+        let fixture = try Fixture(
+            mode: "success",
+            launch: .runtime(
+                command: ExtractorRuntimeName(validating: "fixture-runtime"),
+                arguments: []))
+        defer { fixture.cleanup() }
+        try fixture.replaceRuntimeExecutable()
+
+        await #expect(throws: ManagedExtractorProcessError.executableChanged) {
+            _ = try await ManagedExtractorProcessExecutor().execute(fixture.operation)
+        }
+        // No child started, so the fixture never wrote its output.
+        #expect(FileManager.default.fileExists(atPath: fixture.outputURL.path) == false)
+    }
+
+    // MARK: - Process behavior
 
     @Test func malformedProtocolAndNonzeroExitAreTyped() async throws {
         let malformed = try Fixture(mode: "malformed")
@@ -207,12 +281,18 @@ private final class Fixture: @unchecked Sendable {
     let inputURL: URL
     let outputURL: URL
     let operation: ManagedExtractorProcessRequest
+    var runtimeResolution: RuntimeCommandResolution?
+    private let runtimeExecutableURL: URL?
 
     init(
         mode: String,
         launch: ExtractorLaunch = .direct,
         maximumDurationMilliseconds: Int = 5_000,
-        runtimeSearchDirectories: [URL] = []
+        entryPermissions: mode_t = 0o500,
+        entryAsSymlink: Bool = false,
+        entryHardLinked: Bool = false,
+        resolveRuntime: Bool = true,
+        runtimeCommandName: String = "fixture-runtime"
     ) throws {
         root = FileManager.default.temporaryDirectory
             .appendingPathComponent("managed-extractor-\(UUID().uuidString)", isDirectory: true)
@@ -245,7 +325,49 @@ private final class Fixture: @unchecked Sendable {
             withIntermediateDirectories: true)
         let bytes = try Data(contentsOf: fixtureExecutable)
         try bytes.write(to: entryURL)
-        guard chmod(entryURL.path, 0o500) == 0 else { throw POSIXError(.EIO) }
+        guard chmod(entryURL.path, entryPermissions) == 0 else { throw POSIXError(.EIO) }
+        if entryAsSymlink {
+            // Replace the regular file with a symlink to the same bytes.
+            let target = root.appendingPathComponent("entry-target")
+            try bytes.write(to: target)
+            try FileManager.default.removeItem(at: entryURL)
+            try FileManager.default.createSymbolicLink(at: entryURL, withDestinationURL: target)
+        }
+        if entryHardLinked {
+            let secondLink = root.appendingPathComponent("entry-hardlink")
+            guard link(entryURL.path, secondLink.path) == 0 else { throw POSIXError(.EIO) }
+        }
+
+        // The retained runtime resolution points at a private copy of the
+        // fixture executable — one absolute URL, pinned identity.
+        var resolution: RuntimeCommandResolution?
+        var runtimeURL: URL?
+        if case .runtime = launch, resolveRuntime {
+            let bin = root.appendingPathComponent("runtime-bin", isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: bin, withIntermediateDirectories: true)
+            let executable = bin.appendingPathComponent(runtimeCommandName)
+            try bytes.write(to: executable)
+            guard chmod(executable.path, 0o500) == 0 else { throw POSIXError(.EIO) }
+            guard case .identity(let identity) = RuntimeFileProbe.probe(
+                executable.standardizedFileURL) else {
+                throw TestFailure("fixture runtime did not probe as a valid executable")
+            }
+            let requested = try ExtractorRuntimeName(validating: runtimeCommandName)
+            resolution = RuntimeCommandResolution(
+                command: requested,
+                source: .loginShell,
+                executableURL: executable.standardizedFileURL,
+                identity: identity,
+                description: RuntimePathDescription(
+                    redactedPath: executable.lastPathComponent,
+                    basename: executable.lastPathComponent,
+                    fingerprint: "fixture"))
+            runtimeURL = executable.standardizedFileURL
+        }
+        runtimeResolution = resolution
+        runtimeExecutableURL = runtimeURL
+
         let manifest = try ExtractorManifest(
             manifestRevision: .v1,
             packageID: ExtractorPackageID(validating: "org.example.managed-fixture"),
@@ -289,9 +411,19 @@ private final class Fixture: @unchecked Sendable {
                 homeRoot: homeRoot,
                 temporaryRoot: temporaryRoot,
                 privateCacheRoot: cacheRoot),
-            runtimeSearchPolicy: ExtractorRuntimeSearchPolicy(
-                searchDirectories: runtimeSearchDirectories),
+            runtimeResolution: resolution,
             cancellationGracePeriod: .milliseconds(50))
+    }
+
+    /// Replaces the resolved runtime executable with different bytes under a
+    /// new inode, after the resolution was pinned.
+    func replaceRuntimeExecutable() throws {
+        guard let url = runtimeExecutableURL else {
+            throw TestFailure("fixture has no runtime executable")
+        }
+        try FileManager.default.removeItem(at: url)
+        try Data("#!/bin/sh\nexit 1\n".utf8).write(to: url)
+        guard chmod(url.path, 0o500) == 0 else { throw POSIXError(.EIO) }
     }
 
     func cleanup() {

@@ -147,6 +147,98 @@ struct ProcessExtractorProviderTests {
         }
     }
 
+    // MARK: - Retained runtime resolution (AC.2, AC.9)
+
+    /// Preparation resolves the runtime exactly once; readiness and repeated
+    /// executions never resolve again.
+    @Test func runtimeResolutionOccursOncePerPreparedOperation() async throws {
+        let environment = try await InstalledFixtureEnvironment.install(
+            launch: .runtime(
+                command: ExtractorRuntimeName(validating: "fixture-runtime"),
+                arguments: []))
+        defer { environment.cleanup() }
+
+        let preparation = try await environment.provider.preparePDF(
+            revision: environment.revision,
+            manifest: environment.manifest)
+        let extractor = preparation.extractor
+
+        #expect(await extractor.readiness() == .ready)
+        #expect(await extractor.readiness() == .ready)
+        let markdown = try await extractor.convert(
+            pdfData: Data("success".utf8),
+            filename: "sample.pdf",
+            onProgress: nil)
+        #expect(markdown == "# Fixture\n")
+        #expect(await extractor.readiness() == .ready)
+        #expect(environment.locator.callCount == 1)
+    }
+
+    /// Readiness and execution consume the same retained result: a retained
+    /// failure reports setup guidance and throws the matching typed
+    /// managed-process error, without a second resolution.
+    @Test func readinessAndExecutionShareRetainedResolution() async throws {
+        let spy = SpyRuntimeLocator()
+        spy.queueOutcomes = [.failed(.commandAbsent)]
+        let environment = try await InstalledFixtureEnvironment.install(
+            launch: .runtime(
+                command: ExtractorRuntimeName(validating: "fixture-runtime"),
+                arguments: []),
+            locator: spy)
+        defer { environment.cleanup() }
+
+        let preparation = try await environment.provider.preparePDF(
+            revision: environment.revision,
+            manifest: environment.manifest)
+
+        #expect(await preparation.extractor.readiness() == .needsSetup(
+            "Runtime fixture-runtime is not installed. Install it and make sure it runs in your login shell."))
+        do {
+            _ = try await preparation.extractor.convert(
+                pdfData: Data("success".utf8),
+                filename: "sample.pdf",
+                onProgress: nil)
+            Issue.record("expected the retained failure to block execution")
+        } catch let error as ProcessPackageError {
+            #expect(error.message.contains("fixture-runtime is not available"))
+        }
+        // The same failure is retained — no second resolution even though a
+        // success is now available.
+        #expect(spy.callCount == 1)
+    }
+
+    /// AC.9: a newly prepared operation resolves again, so a runtime
+    /// installed after an earlier failure works without an app restart.
+    @Test func newPreparationRetriesRuntimeResolutionAfterEarlierFailure() async throws {
+        let spy = SpyRuntimeLocator()
+        spy.queueOutcomes = [.failed(.commandAbsent)]
+        let environment = try await InstalledFixtureEnvironment.install(
+            launch: .runtime(
+                command: ExtractorRuntimeName(validating: "fixture-runtime"),
+                arguments: []),
+            locator: spy)
+        defer { environment.cleanup() }
+
+        let first = try await environment.provider.preparePDF(
+            revision: environment.revision,
+            manifest: environment.manifest)
+        #expect(await first.extractor.readiness() == .needsSetup(
+            "Runtime fixture-runtime is not installed. Install it and make sure it runs in your login shell."))
+
+        // The "installation": from the next call the spy resolves the real
+        // fixture runtime in the environment's private bin.
+        let second = try await environment.provider.preparePDF(
+            revision: environment.revision,
+            manifest: environment.manifest)
+        #expect(await second.extractor.readiness() == .ready)
+        let markdown = try await second.extractor.convert(
+            pdfData: Data("success".utf8),
+            filename: "sample.pdf",
+            onProgress: nil)
+        #expect(markdown == "# Fixture\n")
+        #expect(spy.callCount == 2)
+    }
+
     // MARK: - Shared manifest builders
 
     /// A self-consistent manifest for revisions that are intentionally absent
@@ -163,7 +255,8 @@ struct ProcessExtractorProviderTests {
     static func buildManifest(
         packageID: String,
         entryPath: ExtractorRelativePath,
-        files: [ExtractorPackageFile]
+        files: [ExtractorPackageFile],
+        launch: ExtractorLaunch = .direct
     ) throws -> ExtractorManifest {
         var registrations: [ExtractorRegistration] = [
             try ExtractorRegistration(
@@ -190,7 +283,7 @@ struct ProcessExtractorProviderTests {
             displayName: "Managed Fixture",
             protocolRevision: .v1,
             entryPoint: entryPath,
-            launch: .direct,
+            launch: launch,
             registrations: registrations,
             capabilities: [],
             files: files,
@@ -222,12 +315,44 @@ final class ProgressRecorder: @unchecked Sendable {
     var lines: [String] { lock.withLock { storage } }
 }
 
+/// A locator spy for provider tests. Queued outcomes are consumed first, one
+/// per call; once the queue is empty the sticky `followUp` answer (if set)
+/// applies. Every call is counted.
+final class SpyRuntimeLocator: ExtractorRuntimeLocating, @unchecked Sendable {
+    private let lock = NSLock()
+    private var queue: [RuntimeCommandOutcome] = []
+    private var followUp: (@Sendable () -> RuntimeCommandOutcome)?
+    private var calls: [String] = []
+
+    var queueOutcomes: [RuntimeCommandOutcome] {
+        get { lock.withLock { queue } }
+        set { lock.withLock { queue = newValue } }
+    }
+
+    func setFollowUp(_ followUp: (@Sendable () -> RuntimeCommandOutcome)?) {
+        lock.withLock { self.followUp = followUp }
+    }
+
+    func locate(_ command: ExtractorRuntimeName) async -> RuntimeCommandOutcome {
+        lock.withLock {
+            calls.append(command.rawValue)
+            if queue.isEmpty {
+                return followUp?() ?? .failed(.commandAbsent)
+            }
+            return queue.removeFirst()
+        }
+    }
+
+    var callCount: Int { lock.withLock { calls.count } }
+}
+
 /// Installs the managed protocol fixture as a real catalog revision inside an
 /// isolated `.test` layout, and exposes a provider wired to it.
 private final class InstalledFixtureEnvironment: @unchecked Sendable {
     let root: URL
     let layout: ExtractorPackageStoreLayout
     let provider: ProcessExtractorProvider
+    let locator: SpyRuntimeLocator
     let revision: ExtractorPackageRevisionID
     let manifest: ExtractorManifest
 
@@ -237,7 +362,9 @@ private final class InstalledFixtureEnvironment: @unchecked Sendable {
     }
 
     static func install(
-        executor: any ManagedProcessExecuting = ManagedExtractorProcessExecutor()
+        executor: any ManagedProcessExecuting = ManagedExtractorProcessExecutor(),
+        launch: ExtractorLaunch = .direct,
+        locator: SpyRuntimeLocator? = nil
     ) async throws -> InstalledFixtureEnvironment {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("process-provider-\(UUID().uuidString)", isDirectory: true)
@@ -262,7 +389,8 @@ private final class InstalledFixtureEnvironment: @unchecked Sendable {
             entryPath: entryPath,
             files: [ExtractorPackageFile(
                 path: entryPath,
-                digest: ExtractorSHA256.digest(sourceBytes))])
+                digest: ExtractorSHA256.digest(sourceBytes))],
+            launch: launch)
         try JSONEncoder().encode(manifest).write(
             to: packageRoot.appendingPathComponent("manifest.json"))
 
@@ -276,6 +404,21 @@ private final class InstalledFixtureEnvironment: @unchecked Sendable {
             throw EnvironmentError.installationFailed
         }
 
+        // A runtime-launch environment resolves through a spy whose default
+        // sticky answer is the fixture executable in the environment's
+        // private bin; tests may override the follow-up after install.
+        let resolvedLocator = locator ?? SpyRuntimeLocator()
+        if case .runtime(let command, _) = launch {
+            resolvedLocator.setFollowUp { [root] in
+                do {
+                    return .resolved(try runtimeResolution(
+                        command: command.rawValue, root: root))
+                } catch {
+                    return .failed(.commandAbsent)
+                }
+            }
+        }
+
         return InstalledFixtureEnvironment(
             root: root,
             layout: layout,
@@ -283,21 +426,50 @@ private final class InstalledFixtureEnvironment: @unchecked Sendable {
                 layout: layout,
                 catalogReader: ExtractorPackageCatalogReader(layout: layout),
                 executor: executor,
-                admitted: { _ in true }),
+                admission: ClosureProcessPackageAdmission(check: { _ in true }),
+                runtimeLocator: resolvedLocator),
+            locator: resolvedLocator,
             revision: record.revision,
             manifest: manifest)
+    }
+
+    /// A resolution for the fixture executable copied into `root`'s private
+    /// bin directory — one absolute URL with a probed identity.
+    static func runtimeResolution(command: String, root: URL) throws -> RuntimeCommandResolution {
+        let bin = root.appendingPathComponent("runtime-bin", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: bin, withIntermediateDirectories: true)
+        let executable = bin.appendingPathComponent(command)
+        let bytes = try Data(contentsOf: findFixtureExecutable())
+        try bytes.write(to: executable)
+        guard chmod(executable.path, 0o500) == 0 else { throw POSIXError(.EIO) }
+        let url = executable.standardizedFileURL
+        guard case .identity(let identity) = RuntimeFileProbe.probe(url) else {
+            throw EnvironmentError.missingFixtureExecutable
+        }
+        return RuntimeCommandResolution(
+            command: try ExtractorRuntimeName(validating: command),
+            source: .loginShell,
+            executableURL: url,
+            identity: identity,
+            description: RuntimePathDescription(
+                redactedPath: url.lastPathComponent,
+                basename: url.lastPathComponent,
+                fingerprint: "fixture"))
     }
 
     private init(
         root: URL,
         layout: ExtractorPackageStoreLayout,
         provider: ProcessExtractorProvider,
+        locator: SpyRuntimeLocator,
         revision: ExtractorPackageRevisionID,
         manifest: ExtractorManifest
     ) {
         self.root = root
         self.layout = layout
         self.provider = provider
+        self.locator = locator
         self.revision = revision
         self.manifest = manifest
     }
