@@ -134,8 +134,8 @@ struct ExtractionRouteTableHostedTests {
         defer { lease.release() }
         let dir = try tempDirectory("route-table-render")
         // A real registration whose MIME is outside the host routes: the table
-        // then holds three rows (PDF, HTML, and the registration-derived epub
-        // route). Row views only exist after the async snapshot load rebuilds
+        // then holds four rows (PDF, HTML, Word, and the registration-derived
+        // epub route). Row views only exist after the async snapshot load rebuilds
         // routeRows, so the wait below observes the actual load instead of the
         // initial layout.
         let view = makeView(directory: dir, snapshot: snapshot(registrations: [
@@ -155,14 +155,14 @@ struct ExtractionRouteTableHostedTests {
         let window = mount(view)
 
         try await waitUntil {
-            self.firstTableView(window)?.numberOfRows == 3
+            self.firstTableView(window)?.numberOfRows == 4
         }
         // The hosted hierarchy contains a native table (row views) inside a
         // clip view — the scrollable, window-bounded layout.
         let content = try #require(window.contentView)
         #expect(containsDescendant(content) { $0 is NSClipView })
         let table = try #require(firstTableView(window))
-        #expect(table.numberOfRows == 3)
+        #expect(table.numberOfRows == 4)
     }
 
     @Test("a non-ready route status dialog mounts with recovery controls")
