@@ -244,6 +244,27 @@ public enum ExtractorRouteHostCatalog {
         return []
     }
 
+    /// Kinds the HOST itself can execute without any package: a route with a
+    /// `.builtIn` or `.connectedService` choice (PDF's connected ACP service,
+    /// HTML's built-in tag adapter). A route whose only host-side choice is
+    /// `.prompt` (DOCX today) is package-only — the host has no backend for
+    /// it, and the package registration is the only execution path.
+    ///
+    /// Host capability DATA derived from the choice table, not kind policy:
+    /// import auto-extraction derives its package-only kinds from this set,
+    /// so a future package-only kind converts on import with no host-policy
+    /// change. NOTE: route DESCRIPTORS alone are the wrong signal — the DOCX
+    /// Settings row is a display row for its package-only route; only the
+    /// choice categories say whether the host can execute the kind.
+    public static var hostBackendKinds: Set<ExtractorKind> {
+        Set(descriptors
+            .filter { descriptor in
+                choices(for: descriptor.route)
+                    .contains { $0.category == .builtIn || $0.category == .connectedService }
+            }
+            .map(\.route.kind))
+    }
+
     /// Stable descriptor for a route without host-owned presentation metadata.
     public static func genericDescriptor(for route: ExtractorRouteID) -> ExtractorRouteDescriptor {
         ExtractorRouteDescriptor(

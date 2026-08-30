@@ -153,17 +153,17 @@ extension AppProcessProfileOwner {
         // content (a `.docx`) recognizable at ingestion, and package-only
         // kinds convert on import instead of waiting for a manual Extract
         // tap. The kinds set is DERIVED, never enumerated: an active
-        // registration claims the kind AND the host route catalog has no
-        // built-in route for it. A future package-only kind starts
-        // converting on import with no host-policy change — only its typed
-        // adapter joins `prepareImportExtractor`.
+        // registration claims the kind AND the host has no backend of its
+        // own for it (hostBackendKinds reads the choice categories, not the
+        // route display rows). A future package-only kind starts converting
+        // on import with no host-policy change — only its typed adapter
+        // joins `prepareImportExtractor`.
         let extractionCoordinator = ExtractionCoordinator(services: processServices.extraction)
         let registeredInputs = await processServices.extraction
             .registeredExtractionInputs()
         model.registeredExtractionInputs = registeredInputs
         model.importAutoExtractionKinds = Set(registeredInputs.claims.map(\.kind))
-            .subtracting(
-                ExtractorRouteHostCatalog.descriptors.map(\.route.kind))
+            .subtracting(ExtractorRouteHostCatalog.hostBackendKinds)
         model.importExtractorProvider = { [extractionCoordinator] kind in
             await extractionCoordinator.prepareImportExtractor(kind: kind)
         }
