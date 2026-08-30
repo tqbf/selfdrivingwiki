@@ -298,17 +298,23 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
             "WIKI_EXTRACTOR_PROTOCOL_REVISION": String(operation.manifest.protocolRevision.rawValue),
         ]
         // Runtime selectors dispatch through mise-style shims, which locate
-        // already-installed tools via the mise data dir. Under the sandboxed
-        // HOME they would otherwise re-download the tool (or fail); point the
-        // selector at the user's real mise data dir. Deliberate, narrow hole:
-        // only the selector reads it, and only to find the runtime the user
-        // installed.
+        // already-installed tools via the mise data dir and read the active
+        // tool versions from the mise config dir. Under the sandboxed HOME
+        // they would otherwise re-download the tool or report it missing;
+        // point the selector at the user's real mise dirs. Deliberate, narrow
+        // hole: only the selector reads them, and only to find the runtime
+        // the user installed.
         let realHome = FileManager.default.homeDirectoryForCurrentUser
         let miseDataDir = realHome.appendingPathComponent(".local/share/mise", isDirectory: true)
         var isDirectory: ObjCBool = false
         if FileManager.default.fileExists(atPath: miseDataDir.path, isDirectory: &isDirectory),
            isDirectory.boolValue {
             environment["MISE_DATA_DIR"] = miseDataDir.path
+        }
+        let miseConfigDir = realHome.appendingPathComponent(".config/mise", isDirectory: true)
+        if FileManager.default.fileExists(atPath: miseConfigDir.path, isDirectory: &isDirectory),
+           isDirectory.boolValue {
+            environment["MISE_CONFIG_DIR"] = miseConfigDir.path
         }
         if operation.manifest.capabilities.contains(.sharedRuntimeCache),
            let shared = operation.paths.sharedRuntimeCacheRoot {
