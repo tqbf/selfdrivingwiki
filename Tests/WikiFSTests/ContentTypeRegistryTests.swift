@@ -143,6 +143,8 @@ struct ContentTypeRegistryTests {
         #expect(ContentKind.fromMIME("APPLICATION/VND.OPENXMLFORMATS-OFFICEDOCUMENT.WORDPROCESSINGML.DOCUMENT") == .docx)
         // Legacy Word formats do NOT classify as docx — no extraction path.
         #expect(ContentKind.fromMIME("application/msword") == .binary)
+        // A macro-enabled .docm extension has no fallback either (AC.5 pin).
+        #expect(ContentKind.resolve(mimeType: nil, provider: nil, ext: "docm") != .docx)
     }
 
     @Test("Markdown mimes resolve to markdown") func markdownMime() {
