@@ -196,6 +196,17 @@ public final class WikiStoreModel {
     /// projection leaf, or path in either the log title or note.
     private var sourceIngestedStatus: [SourceID: Bool] = [:]
 
+    /// Monotonic counter bumped on every `reloadSources()`. Extraction and
+    /// transcript writes (`appendDerivedMarkdown`) never touch the `sources`
+    /// row, so a rebuild can produce an `==` `sources` array and
+    /// `.onChange(of: sources)` never fires — leaving the reader on a stale
+    /// `headVersion` after import auto-extraction (#1179). This counter always
+    /// changes, so views observe it via `.onChange(of: sourcesVersion)` to
+    /// reload per-source derived state after any store mutation (local writes
+    /// self-manage through `reloadSources()`; external writes arrive via the
+    /// `WikiEventBus` → `reloadFromStore()` → `reloadSources()`).
+    public private(set) var sourcesVersion: Int = 0
+
     // MARK: - Bookmark nodes (v16 — Bookmarks sidebar tree)
 
     /// Flat bookmark nodes, rebuilt from store after mutation (§3.1 pattern).
@@ -4375,6 +4386,10 @@ public final class WikiStoreModel {
     }
 
     private func reloadSources() {
+        // Bump FIRST and unconditionally: extraction/transcript writes leave the
+        // `sources` array `==`, and views key their derived-state refresh on this
+        // counter (#1179), so the bump must not depend on the array changing.
+        sourcesVersion &+= 1
         sources = DebugLog.trying("listSources", operation: { try store.listSources() }) ?? []
         // Authoritative source: the flag the agent stamps via
         // `wikictl log append --kind ingest --source <id>` on success.
