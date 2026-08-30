@@ -34,6 +34,7 @@ struct ExtractorRouteTests {
         // The two canonical routes are the only canonical ones.
         #expect(pdf.isCanonical)
         #expect(html.isCanonical)
+        #expect(ExtractorRouteID.canonicalDOCX.isCanonical)
         #expect(xhtml.isCanonical == false)
 
         // A route identity helper accepts routes only — the adjacent lines show
@@ -50,6 +51,9 @@ struct ExtractorRouteTests {
         #expect(ExtractorRouteID.canonicalPDF.mimeType.rawValue == "application/pdf")
         #expect(ExtractorRouteID.canonicalHTML.kind == .html)
         #expect(ExtractorRouteID.canonicalHTML.mimeType.rawValue == "text/html")
+        #expect(ExtractorRouteID.canonicalDOCX.kind == .docx)
+        #expect(ExtractorRouteID.canonicalDOCX.mimeType.rawValue
+                == "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
     }
 
     // MARK: - Normalization and ordering

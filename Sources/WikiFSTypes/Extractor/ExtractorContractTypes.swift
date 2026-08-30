@@ -5,6 +5,7 @@ import Foundation
 public enum ExtractorKind: String, Codable, CaseIterable, Hashable, Sendable {
     case pdf
     case html
+    case docx
 }
 
 public enum ExtractorLaunchMode: String, Codable, CaseIterable, Hashable, Sendable {

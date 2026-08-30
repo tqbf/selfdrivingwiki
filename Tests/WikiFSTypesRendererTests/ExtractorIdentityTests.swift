@@ -43,7 +43,7 @@ struct ExtractorIdentityTests {
         // Revision 2 (issue #1159) is a supported protocol revision; 3 is not.
         #expect(ExtractorProtocolRevision(rawValue: 2) != nil)
         #expect(ExtractorProtocolRevision(rawValue: 3) == nil)
-        #expect(ExtractorKind.allCases == [.pdf, .html])
+        #expect(ExtractorKind.allCases == [.pdf, .html, .docx])
         #expect(ExtractorFailureCause.allCases.count == 10)
     }
 
