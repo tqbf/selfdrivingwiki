@@ -906,6 +906,11 @@ struct WikiFSApp: App {
                                 installedAt: RFC3339Timestamp(date: Date()))
                             if let services = await processProfileOwner?.services {
                                 await services.extractionContext?.receiveCatalogWake()
+                                let inputs = await services.extraction
+                                    .registeredExtractionInputs()
+                                await MainActor.run {
+                                    sessionManager.refreshRegisteredExtractionInputsForLiveSessions(inputs)
+                                }
                             }
                             return .succeeded(nil)
                         } catch {
@@ -919,6 +924,11 @@ struct WikiFSApp: App {
                             _ = try await writer.remove(revision: revision)
                             if let services = await processProfileOwner?.services {
                                 await services.extractionContext?.receiveCatalogWake()
+                                let inputs = await services.extraction
+                                    .registeredExtractionInputs()
+                                await MainActor.run {
+                                    sessionManager.refreshRegisteredExtractionInputsForLiveSessions(inputs)
+                                }
                             }
                             return .succeeded(nil)
                         } catch {

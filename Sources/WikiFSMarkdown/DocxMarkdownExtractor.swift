@@ -28,6 +28,10 @@ public struct DocxExtractionResult: Sendable {
 /// tag-based fallback. Reviewed package adapters conform to this protocol in
 /// `WikiFSEngine`.
 public protocol DocxMarkdownExtractor: Sendable {
+    /// Exact installed-package identity for the extraction activity.
+    /// DOCX has no built-in adapter, so provenance is part of the contract.
+    var packageProvenance: ExtractorPackageExecutionProvenance { get }
+
     /// Convert a `.docx` payload to Markdown. Best-effort: returns nil on any
     /// failure (runtime missing, unparseable OOXML, empty conversion) so the
     /// caller records the extraction attempt as failed rather than writing a

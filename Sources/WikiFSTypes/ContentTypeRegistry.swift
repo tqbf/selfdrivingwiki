@@ -292,7 +292,6 @@ public extension ContentKind {
             case "md", "markdown", "mdx":            return .markdown
             case "html", "htm", "xhtml":             return .html
             case "pdf":                              return .pdf
-            case "docx":                             return .docx
             default:
                 // Registration-driven extension fallback: an active
                 // registration that declares this extension recognizes the

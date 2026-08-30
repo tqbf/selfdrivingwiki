@@ -59,6 +59,8 @@ public protocol ExtractionServices: Sendable {
     /// resolves through the configuration, defaulting to the reviewed docx2md
     /// lineage when nothing is configured.
     func prepareDOCX() async throws -> any DocxMarkdownExtractor
+    /// Active package registration claims used for import recognition.
+    func registeredExtractionInputs() async -> RegisteredExtractionInputs
 }
 
 public extension ExtractionServices {
@@ -78,6 +80,10 @@ public extension ExtractionServices {
 
     func prepareDOCX() async throws -> any DocxMarkdownExtractor {
         throw ExtractionServicesError.unavailable
+    }
+
+    func registeredExtractionInputs() async -> RegisteredExtractionInputs {
+        .none
     }
 }
 
@@ -143,6 +149,10 @@ public actor MutableExtractionServices: ExtractionServices {
 
     public func prepareDOCX() async throws -> any DocxMarkdownExtractor {
         try await installed.prepareDOCX()
+    }
+
+    public func registeredExtractionInputs() async -> RegisteredExtractionInputs {
+        await installed.registeredExtractionInputs()
     }
 }
 

@@ -3549,10 +3549,8 @@ public final class WikiStoreModel {
     /// coordinator), and an extractor that returns empty markdown returns nil
     /// here — nothing substitutes another extractor.
     ///
-    /// The package-run provenance records the additive
-    /// `.installedPackage` producer (the process adapter conforms to
-    /// `ProcessPackageProvenanceProviding`); only an injected test double
-    /// without package provenance falls back to the legacy technique tag.
+    /// The extractor contract requires exact installed-package provenance.
+    /// The write always records the additive `.installedPackage` producer.
     ///
     /// - Returns: the new `SourceMarkdownVersion`, or nil if the source's
     ///   bytes couldn't be read, the extractor returned empty markdown, or
@@ -3575,23 +3573,10 @@ public final class WikiStoreModel {
             DebugLog.store("WikiStoreModel.extractDocx: extractor returned empty markdown (source=\(sourceID.rawValue))")
             return nil
         }
-        let package: ExtractionInstalledPackageProducer?
-        if let processExtractor = extractor as? any ProcessPackageProvenanceProviding {
-            package = ExtractionInstalledPackageProducer(
-                revision: processExtractor.packageProvenance.revision,
-                registrationID: processExtractor.packageProvenance.registrationID,
-                protocolRevision: processExtractor.packageProvenance.protocolRevision,
-                reportedMetadata: processExtractor.packageProvenance.reportedMetadata)
-        } else {
-            // Package-only in production; only a test double without package
-            // provenance can hit this arm.
-            package = nil
-        }
         do {
             return try store.appendDerivedMarkdown(
                 sourceID: sourceID, content: result.markdown, origin: .extraction,
-                producer: package.map(ExtractionProducer.installedPackage)
-                    ?? .legacy(rawTechnique: Self.docxToMarkdownTechnique),
+                producer: .installedPackage(extractor.packageProvenance),
                 providerID: nil, modelID: nil, toolVersion: nil,
                 sourceVersionID: nil, note: "extract via \(Self.docxToMarkdownTechnique)")
         } catch {

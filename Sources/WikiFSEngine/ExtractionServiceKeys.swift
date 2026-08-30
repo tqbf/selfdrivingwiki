@@ -388,21 +388,16 @@ public extension ExtractionBackendRegistry {
     /// registering an extractor for a container type is what makes files of
     /// that type recognizable.
     func registeredExtractionInputs() async -> RegisteredExtractionInputs {
-        var mimes: Set<RegisteredExtractionInputs.RegisteredMIME> = []
-        var extensions: Set<RegisteredExtractionInputs.RegisteredExtension> = []
+        var claims: Set<RegisteredExtractionInputs.Claim> = []
         for snapshot in await installedRegistrationSnapshots() {
-            for mimeType in snapshot.mimeTypes {
-                for kind in snapshot.kinds {
-                    mimes.insert(.init(kind: kind, mimeType: mimeType.rawValue))
-                }
-            }
-            for ext in snapshot.filenameExtensions {
-                for kind in snapshot.kinds {
-                    extensions.insert(.init(kind: kind, ext: ext.rawValue))
-                }
+            for kind in snapshot.kinds {
+                claims.insert(.init(
+                    kind: kind,
+                    mimeTypes: Set(snapshot.mimeTypes.map(\.rawValue)),
+                    filenameExtensions: Set(snapshot.filenameExtensions.map(\.rawValue))))
             }
         }
-        return RegisteredExtractionInputs(mimeTypes: mimes, filenameExtensions: extensions)
+        return RegisteredExtractionInputs(claims: claims)
     }
 
     /// Snapshot of every active installed (exact) PDF, HTML, and DOCX

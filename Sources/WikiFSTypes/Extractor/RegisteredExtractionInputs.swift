@@ -2,42 +2,42 @@ import Foundation
 
 // pattern: Functional Core
 
-/// The input surface an ACTIVE extractor registration declares: which MIME
-/// types and filename extensions each registered extractor kind accepts.
+/// The input claims declared by active extractor registrations.
 ///
-/// This is the value that makes package registrations RECOGNIZE content at
-/// ingestion. A manifest that declares `filenameExtensions: ["docx"]` and
-/// the wordprocessingml MIME is not just Settings presentation — it is the
-/// declaration that files of that shape have an extraction path. Ingestion
-/// consults this surface so a `.docx` (whose bytes are a generic ZIP
-/// container the byte sniffer cannot distinguish from any other archive)
-/// classifies as the registered Word type and flows to extraction
-/// automatically.
-///
-/// Pure value, built by the engine from the live registry
-/// (`ExtractionBackendRegistry.registeredExtractionInputs()`) and injected
-/// into the store/model so classification stays a leaf-type decision with
-/// no engine dependency. `.none` (the default) preserves the pre-registration
-/// behavior everywhere the surface is not wired.
+/// Each claim keeps one registration's kind, MIME types, and filename
+/// extensions together. This prevents an extension from one registration from
+/// borrowing a MIME type from another registration of the same kind.
 public struct RegisteredExtractionInputs: Hashable, Sendable {
-    /// Registered input MIME types by extractor kind (lowercased).
-    public let mimeTypes: Set<RegisteredMIME>
-    /// Registered filename extensions by extractor kind (lowercased, no dot).
-    public let filenameExtensions: Set<RegisteredExtension>
+    public let claims: Set<Claim>
 
-    public init(
-        mimeTypes: Set<RegisteredMIME> = [],
-        filenameExtensions: Set<RegisteredExtension> = []
-    ) {
-        self.mimeTypes = mimeTypes
-        self.filenameExtensions = filenameExtensions
+    public init(claims: Set<Claim> = []) {
+        self.claims = claims
     }
 
     public static let none = RegisteredExtractionInputs()
 
-    public var isEmpty: Bool { mimeTypes.isEmpty && filenameExtensions.isEmpty }
+    public var isEmpty: Bool { claims.isEmpty }
 
-    /// One registered input MIME type.
+    /// One active registration's declared input surface for one extractor kind.
+    public struct Claim: Hashable, Sendable {
+        public let kind: ExtractorKind
+        public let mimeTypes: Set<String>
+        public let filenameExtensions: Set<String>
+
+        public init(
+            kind: ExtractorKind,
+            mimeTypes: Set<String>,
+            filenameExtensions: Set<String>
+        ) {
+            self.kind = kind
+            self.mimeTypes = Set(mimeTypes.map { $0.lowercased() })
+            self.filenameExtensions = Set(filenameExtensions.map { $0.lowercased() })
+        }
+
+        fileprivate var preferredMIME: String? { mimeTypes.sorted().first }
+    }
+
+    /// One unambiguous registered MIME match.
     public struct RegisteredMIME: Hashable, Sendable, CustomStringConvertible {
         public let kind: ExtractorKind
         public let mimeType: String
@@ -50,7 +50,7 @@ public struct RegisteredExtractionInputs: Hashable, Sendable {
         public var description: String { "\(kind.rawValue) \(mimeType)" }
     }
 
-    /// One registered filename extension.
+    /// One unambiguous registered filename-extension match.
     public struct RegisteredExtension: Hashable, Sendable, CustomStringConvertible {
         public let kind: ExtractorKind
         public let ext: String
@@ -63,49 +63,53 @@ public struct RegisteredExtractionInputs: Hashable, Sendable {
         public var description: String { "\(kind.rawValue) .\(ext)" }
     }
 
-    /// The registered MIME for a normalized lowercase MIME type, if an
-    /// active registration declares it.
+    /// Returns a match only when all registrations that claim the MIME agree
+    /// on its extractor kind.
     public func registeredMIME(forNormalizedMIME mime: String) -> RegisteredMIME? {
-        mimeTypes.first { $0.mimeType == mime.lowercased() }
+        let normalized = mime.lowercased()
+        let kinds = Set(claims.lazy.filter { $0.mimeTypes.contains(normalized) }.map(\.kind))
+        guard kinds.count == 1, let kind = kinds.first else { return nil }
+        return RegisteredMIME(kind: kind, mimeType: normalized)
     }
 
-    /// The registered input for a lowercased filename extension (no dot),
-    /// if an active registration declares it.
+    /// Returns a match only when all registrations that claim the extension
+    /// agree on its extractor kind.
     public func registeredInput(forNormalizedExtension ext: String) -> RegisteredExtension? {
-        filenameExtensions.first { $0.ext == ext.lowercased() }
+        let normalized = ext.lowercased()
+        let kinds = Set(claims.lazy.filter {
+            $0.filenameExtensions.contains(normalized)
+        }.map(\.kind))
+        guard kinds.count == 1, let kind = kinds.first else { return nil }
+        return RegisteredExtension(kind: kind, ext: normalized)
     }
 
-    /// Registration-driven promotion for a generic container sniff.
-    ///
-    /// Some registered inputs ARE archive containers (a `.docx` is a ZIP),
-    /// so the byte sniffer resolves them to `application/zip` — a type with
-    /// no extraction path. When an active registration declares the file's
-    /// extension (or its declared MIME) as its input, the registration wins:
-    /// the registered MIME is what ingestion should record. This is the
-    /// "the package recognizes word documents" rule — recognition comes
-    /// from the registration, not from a hardcoded byte or name table.
-    ///
-    /// Returns nil when the detected type is not a generic container or no
-    /// active registration claims the file, leaving detection unchanged.
+    /// Promotes a generic ZIP detection when one active registration claim
+    /// identifies the input. Conflicting claims fail closed.
     public func promotedMIME(
         detectedMIME: String?,
         declaredMIME: String?,
         filenameExtension ext: String?
     ) -> String? {
         guard detectedMIME?.lowercased() == MimeType.zip else { return nil }
-        if let declaredMIME, let registered = registeredMIME(forNormalizedMIME: declaredMIME) {
-            return registered.mimeType
+
+        if let declaredMIME {
+            let normalized = declaredMIME.lowercased()
+            if registeredMIME(forNormalizedMIME: normalized) != nil {
+                return normalized
+            }
         }
-        if let ext,
-           let registered = registeredInput(forNormalizedExtension: ext),
-           // The same registry fold carries the kind's declared MIME types;
-           // pick one deterministically.
-           let mime = mimeTypes
-               .filter({ $0.kind == registered.kind })
-               .sorted(by: { $0.mimeType < $1.mimeType })
-               .first {
-            return mime.mimeType
-        }
-        return nil
+
+        guard let ext else { return nil }
+        let normalized = ext.lowercased()
+        let matches = claims.filter { $0.filenameExtensions.contains(normalized) }
+        guard !matches.isEmpty,
+              matches.allSatisfy({ $0.preferredMIME != nil }) else { return nil }
+
+        let resolved = Set(matches.compactMap { claim -> RegisteredMIME? in
+            guard let mime = claim.preferredMIME else { return nil }
+            return RegisteredMIME(kind: claim.kind, mimeType: mime)
+        })
+        guard resolved.count == 1 else { return nil }
+        return resolved.first?.mimeType
     }
 }

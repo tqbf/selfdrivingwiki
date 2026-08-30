@@ -154,10 +154,8 @@ extension AppProcessProfileOwner {
         // registered DOCX extraction converts on import instead of waiting
         // for a manual Extract tap.
         let extractionCoordinator = ExtractionCoordinator(services: processServices.extraction)
-        if let process = processServices.extraction as? ProcessExtractionServices {
-            model.registeredExtractionInputs = await process.context.registry
-                .registeredExtractionInputs()
-        }
+        model.registeredExtractionInputs = await processServices.extraction
+            .registeredExtractionInputs()
         model.docxImportExtractor = { [extractionCoordinator] in
             do {
                 return try await extractionCoordinator.prepareDOCX()

@@ -187,9 +187,9 @@ public enum FormatMaterializer {
                 detectionResult: detectionResult)
         }
 
-        // OOXML Word documents keep their bytes verbatim as the source blob
-        // (extraction runs on demand from the Extract button — the registry's
-        // `.docx` classification drives eligibility, not this dispatcher).
+        // OOXML Word documents keep their bytes verbatim as the source blob.
+        // The registry-driven store path starts extraction after import. This
+        // dispatcher only preserves the DOCX format and filename.
         // Legacy `application/msword` (.doc) stays `.binary` — no path.
         if MimeType.isDOCX(mime) {
             let filename = ensureExtension(sanitizeStem(stem), ext: "docx")
