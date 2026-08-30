@@ -27,6 +27,10 @@ public enum ResolvedExtractionSelection: Hashable, Sendable {
     /// The logical identity stays selected and no other extractor may run.
     case unavailableInstalled(kind: ExtractorKind, reference: LogicalExtractorReference)
     case noHTMLSelection
+    /// DOCX route with no explicit installed selection. Execution defaults to
+    /// the reviewed docx2md lineage at the engine layer; the resolver stays
+    /// package-agnostic and reports "no selection".
+    case noDOCXSelection
 }
 
 /// Redacted selection diagnostic. It contains no version, digest, path, or package output.
@@ -57,6 +61,7 @@ public enum ExtractorSelectionResolver {
     ) -> ExtractionSelectionDecision? {
         if route == .canonicalPDF { return resolvePDF(configuration: configuration, activeRegistrations: activeRegistrations) }
         if route == .canonicalHTML { return resolveHTML(configuration: configuration, activeRegistrations: activeRegistrations) }
+        if route == .canonicalDOCX { return resolveDOCX(configuration: configuration, activeRegistrations: activeRegistrations) }
         return nil
     }
 
@@ -120,6 +125,39 @@ public enum ExtractorSelectionResolver {
             return ExtractionSelectionDecision(
                 selection: .unavailableInstalled(kind: .html, reference: logicalReference),
                 diagnostic: .unavailableInstalled(logicalReference))
+        }
+    }
+
+    /// DOCX selection resolution — the `resolveHTML` shape minus built-ins:
+    /// DOCX is package-only, so a missing selection resolves to
+    /// `.noDOCXSelection` (the engine defaults execution to the reviewed
+    /// docx2md lineage), and a `.builtIn` reference can never satisfy this
+    /// route (no DOCX built-in exists; a cross-kind reference degrades to no
+    /// selection instead of resolving to a foreign backend).
+    public static func resolveDOCX(
+        configuration: ExtractionConfig,
+        activeRegistrations: [ActiveExtractorRegistration]
+    ) -> ExtractionSelectionDecision {
+        guard let logicalSelection = configuration.extractorSelection(for: .canonicalDOCX) else {
+            return ExtractionSelectionDecision(selection: .noDOCXSelection)
+        }
+        switch logicalSelection {
+        case .installed(let logicalReference):
+            if let exact = highestCompatible(
+                logicalReference,
+                kind: .docx,
+                activeRegistrations: activeRegistrations)
+            {
+                return ExtractionSelectionDecision(selection: .installed(kind: .docx, reference: exact))
+            }
+            return ExtractionSelectionDecision(
+                selection: .unavailableInstalled(kind: .docx, reference: logicalReference),
+                diagnostic: .unavailableInstalled(logicalReference))
+        case .builtIn:
+            // There is no built-in DOCX backend — a builtIn reference under
+            // the DOCX route is a cross-kind stray. Degrade to "no selection"
+            // rather than resolving to a PDF/HTML backend.
+            return ExtractionSelectionDecision(selection: .noDOCXSelection)
         }
     }
 

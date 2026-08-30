@@ -48,6 +48,27 @@ struct ProcessExtractorProviderTests {
         #expect(failure == nil)
     }
 
+    @Test func docxPreparationRunsTheManagedFixtureAndCarriesProvenance() async throws {
+        let environment = try await InstalledFixtureEnvironment.install()
+        defer { environment.cleanup() }
+
+        let extractor = try await environment.provider.prepareDOCX(
+            revision: environment.revision,
+            manifest: environment.manifest)
+
+        let success = await extractor.extract(docx: Data("success".utf8))
+        #expect(success?.markdown == "# Fixture\n")
+
+        let failure = await extractor.extract(docx: Data("failure".utf8))
+        #expect(failure == nil)
+
+        // Package provenance rides on the process adapter so the store path
+        // records the `.installedPackage` producer.
+        let provenancing = extractor as? any ProcessPackageProvenanceProviding
+        #expect(provenancing?.packageProvenance.revision == environment.revision)
+        #expect(provenancing?.packageProvenance.registrationID.rawValue == "document")
+    }
+
     @Test func preparedSnapshotSurvivesRemovalAndFuturePreparationFails() async throws {
         let environment = try await InstalledFixtureEnvironment.install()
         defer { environment.cleanup() }
@@ -157,6 +178,11 @@ struct ProcessExtractorProviderTests {
                 displayName: "HTML",
                 kinds: [.html],
                 mimeTypes: [ExtractorMIMEType(validating: "text/html")]),
+            try ExtractorRegistration(
+                id: ExtractorRegistrationID(validating: "document"),
+                displayName: "DOCX",
+                kinds: [.docx],
+                mimeTypes: [ExtractorMIMEType(validating: "application/vnd.openxmlformats-officedocument.wordprocessingml.document")]),
         ]
         registrations.sort()
         return try ExtractorManifest(

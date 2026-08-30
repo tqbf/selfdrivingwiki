@@ -54,6 +54,11 @@ public protocol ExtractionServices: Sendable {
     func prepareHTML(
         backendOverride: HtmlExtractionBackend?
     ) async throws -> any HtmlMarkdownExtractor
+    /// DOCX is package-only — there are no built-in DOCX backends, so unlike
+    /// `prepareHTML` there is no override parameter. The selection always
+    /// resolves through the configuration, defaulting to the reviewed docx2md
+    /// lineage when nothing is configured.
+    func prepareDOCX() async throws -> any DocxMarkdownExtractor
 }
 
 public extension ExtractionServices {
@@ -70,6 +75,10 @@ public extension ExtractionServices {
     ) async throws -> any HtmlMarkdownExtractor {
         throw ExtractionServicesError.unavailable
     }
+
+    func prepareDOCX() async throws -> any DocxMarkdownExtractor {
+        throw ExtractionServicesError.unavailable
+    }
 }
 
 public struct UnavailableExtractionServices: ExtractionServices {
@@ -82,6 +91,10 @@ public struct UnavailableExtractionServices: ExtractionServices {
     public func prepareHTML(
         backendOverride: HtmlExtractionBackend?
     ) async throws -> any HtmlMarkdownExtractor {
+        throw ExtractionServicesError.unavailable
+    }
+
+    public func prepareDOCX() async throws -> any DocxMarkdownExtractor {
         throw ExtractionServicesError.unavailable
     }
 }
@@ -126,6 +139,10 @@ public actor MutableExtractionServices: ExtractionServices {
         backendOverride: HtmlExtractionBackend?
     ) async throws -> any HtmlMarkdownExtractor {
         try await installed.prepareHTML(backendOverride: backendOverride)
+    }
+
+    public func prepareDOCX() async throws -> any DocxMarkdownExtractor {
+        try await installed.prepareDOCX()
     }
 }
 
@@ -293,6 +310,10 @@ public final class ExtractionCoordinator {
         backendOverride: HtmlExtractionBackend? = nil
     ) async throws -> any HtmlMarkdownExtractor {
         try await services.prepareHTML(backendOverride: backendOverride)
+    }
+
+    public func prepareDOCX() async throws -> any DocxMarkdownExtractor {
+        try await services.prepareDOCX()
     }
 }
 #endif

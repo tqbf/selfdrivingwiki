@@ -406,6 +406,92 @@ struct ExtractionConfigTests {
         #expect(ExtractionConfig.load(from: dir) == config)
     }
 
+    /// DOCX route persistence (AC.6): an installed selection round-trips
+    /// through the canonicalDOCX route record and dual-writes the
+    /// `docxExtractor` field (which has no older legacy layer beneath it),
+    /// and removal clears both.
+    @Test func docxRouteSelectionRoundTripsAndDualWrites() throws {
+        let logical = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.example.docx"),
+            registrationID: try ExtractorRegistrationID(validating: "document"))
+        var config = ExtractionConfig(backend: .localPdf2md)
+
+        config.setExtractorSelection(.installed(logical), for: .canonicalDOCX)
+        #expect(config.docxExtractor == .installed(logical))
+        #expect(config.routeExtractors.contains { $0.route == .canonicalDOCX })
+        #expect(config.extractorSelection(for: .canonicalDOCX) == .installed(logical))
+        // The legacy PDF/HTML fields are untouched.
+        #expect(config.pdfExtractor == nil)
+        #expect(config.htmlExtractor == nil)
+
+        // Round-trips through disk.
+        let dir = tempDirectory()
+        try config.save(to: dir)
+        #expect(ExtractionConfig.load(from: dir) == config)
+
+        config.setExtractorSelection(nil, for: .canonicalDOCX)
+        #expect(config.docxExtractor == nil)
+        #expect(config.extractorSelection(for: .canonicalDOCX) == nil)
+        #expect(config.routeExtractors.isEmpty)
+    }
+
+    /// DOCX degrade path (AC.6): a config file written before the
+    /// `docxExtractor` key existed decodes with the field nil, and a
+    /// malformed value degrades to nil without rejecting the file.
+    @Test func docxExtractorFieldDegradesToNil() throws {
+        let absent = try JSONDecoder().decode(ExtractionConfig.self, from: Data(#"{"backend":"anthropic"}"#.utf8))
+        #expect(absent.docxExtractor == nil)
+
+        let malformed = try JSONDecoder().decode(ExtractionConfig.self, from: Data(#"{"backend":"anthropic","docxExtractor":{"kind":"future"}}"#.utf8))
+        #expect(malformed.docxExtractor == nil)
+        #expect(malformed.backend == .anthropic)
+    }
+
+    /// DOCX route resolution (AC.7): the resolver reports `.noDOCXSelection`
+    /// with no saved selection, an installed selection with an active
+    /// registration resolves to it, and an inactive selection surfaces the
+    /// redacted unavailable diagnostic. A cross-kind builtIn stray degrades
+    /// to "no selection" (there is no built-in DOCX backend to resolve to).
+    @Test func docxRouteSelectionResolves() throws {
+        // No selection → .noDOCXSelection (execution defaults to the
+        // reviewed lineage at the engine layer).
+        let empty = ExtractionConfig()
+        #expect(ExtractorSelectionResolver.resolveDOCX(configuration: empty, activeRegistrations: []).selection == .noDOCXSelection)
+
+        // Active registration → the exact reference.
+        let logical = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.example.docx"),
+            registrationID: try ExtractorRegistrationID(validating: "document"))
+        let active = try activeRegistration(logical: logical, version: "1.0.0", digestByte: 3, kinds: [.docx])
+        let config = ExtractionConfig(docxExtractor: .installed(logical))
+        let decision = ExtractorSelectionResolver.resolveDOCX(
+            configuration: config, activeRegistrations: [active])
+        #expect(decision.selection == .installed(kind: .docx, reference: active.reference))
+        #expect(decision.diagnostic == nil)
+
+        // Inactive package → fail closed with the redacted diagnostic.
+        let decisionUnavailable = ExtractorSelectionResolver.resolveDOCX(
+            configuration: config, activeRegistrations: [])
+        #expect(decisionUnavailable.selection == .unavailableInstalled(kind: .docx, reference: logical))
+        #expect(decisionUnavailable.diagnostic == .unavailableInstalled(logical))
+
+        // A cross-kind installed reference never resolves in the DOCX namespace.
+        let htmlOnly = try activeRegistration(logical: logical, version: "9.0.0", digestByte: 9, kinds: [.html])
+        let crossKind = ExtractorSelectionResolver.resolveDOCX(
+            configuration: config, activeRegistrations: [htmlOnly])
+        #expect(crossKind.selection == .unavailableInstalled(kind: .docx, reference: logical))
+
+        // A builtIn stray degrades to no selection instead of a foreign backend.
+        let stray = ExtractionConfig(docxExtractor: .builtIn(.html(.tagBased)))
+        #expect(ExtractorSelectionResolver.resolveDOCX(configuration: stray, activeRegistrations: [active]).selection == .noDOCXSelection)
+
+        // The route-aware entry dispatches canonicalDOCX.
+        #expect(ExtractorSelectionResolver.resolve(
+            .canonicalDOCX,
+            configuration: empty,
+            activeRegistrations: [])?.selection == .noDOCXSelection)
+    }
+
     /// AC.2/AC.3: duplicate records for one route in a hand-edited file resolve
     /// to the same single record regardless of their order in the file, with
     /// malformed records dropped through the logged decode seam.

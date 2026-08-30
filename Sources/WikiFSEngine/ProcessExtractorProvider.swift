@@ -182,6 +182,15 @@ public struct ProcessExtractorProvider: Sendable {
         return ProcessPackageHTMLExtractor(operation: operation)
     }
 
+    public func prepareDOCX(
+        revision: ExtractorPackageRevisionID,
+        manifest: ExtractorManifest
+    ) async throws -> any DocxMarkdownExtractor {
+        let operation = try await prepareOperation(
+            kind: .docx, revision: revision, manifest: manifest)
+        return ProcessPackageDOCXExtractor(operation: operation)
+    }
+
     public static func packageProvenance(
         revision: ExtractorPackageRevisionID,
         manifest: ExtractorManifest,
@@ -556,7 +565,14 @@ public final class PreparedProcessOperation: Sendable {
                 attributes: [.posixPermissions: 0o700])
             try input.write(to: inputURL, options: [.atomic])
 
-            let fallbackMIMEType = kind == .pdf ? "application/pdf" : "text/html"
+            // Explicit per-kind input MIME default: the registration's declared
+            // MIME types win; the fallback matches the kind's canonical input
+            // type. A docx package must never silently present `text/html`.
+            let fallbackMIMEType: String = switch kind {
+            case .pdf: MimeType.pdf
+            case .html: MimeType.html
+            case .docx: MimeType.docx
+            }
             let request = try ExtractorProtocolRequest(
                 requestID: ExtractorRequestID(),
                 protocolRevision: self.manifest.protocolRevision,
@@ -859,6 +875,45 @@ public struct ProcessPackageHTMLExtractor: HtmlMarkdownExtractor, ProcessPackage
         } catch {
             DebugLog.extraction(
                 "Package HTML extraction fell back: \(ProcessPackageFailureMapper.message(error))")
+            return nil
+        }
+    }
+}
+
+/// The DOCX sibling of `ProcessPackageHTMLExtractor`. Runs the reviewed
+/// docx2md package in a managed process; one-shot, no in-process fallback
+/// (DOCX is package-only by design).
+public struct ProcessPackageDOCXExtractor: DocxMarkdownExtractor, ProcessPackageProvenanceProviding {
+    public var displayName: String { operation.manifest.displayName }
+    public var packageProvenance: ExtractorPackageExecutionProvenance {
+        ExtractorPackageExecutionProvenance(
+            revision: operation.revision,
+            registrationID: operation.registrationID,
+            protocolRevision: operation.protocolRevision)
+    }
+
+    let operation: PreparedProcessOperation
+
+    init(operation: PreparedProcessOperation) {
+        self.operation = operation
+    }
+
+    public func extract(docx: Data) async -> DocxExtractionResult? {
+        do {
+            let outcome = try await operation.execute(
+                kind: .docx,
+                input: docx,
+                filename: "source.docx",
+                onProgress: nil)
+            return DocxExtractionResult(
+                markdown: outcome.markdown,
+                warnings: outcome.frame.warnings)
+        } catch is CancellationError {
+            DebugLog.extraction("Package DOCX extraction was cancelled")
+            return nil
+        } catch {
+            DebugLog.extraction(
+                "Package DOCX extraction failed: \(ProcessPackageFailureMapper.message(error))")
             return nil
         }
     }

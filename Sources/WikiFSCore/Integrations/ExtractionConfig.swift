@@ -81,6 +81,12 @@ public struct ExtractionConfig: JSONSidecarConfig {
     /// `htmlBackend` keeps its existing meaning and precedence.
     public var htmlExtractor: ExtractionBackendReference?
 
+    /// Optional version-free DOCX extractor selection. DOCX is package-only —
+    /// there is no built-in DOCX backend and no legacy field beneath this one.
+    /// When absent (nil), execution resolves the reviewed docx2md lineage as
+    /// the default; the selection stores an explicit override only.
+    public var docxExtractor: ExtractionBackendReference?
+
     /// Route-indexed selections, one record per typed extraction route
     /// (`ExtractorRouteID` = kind + normalized MIME). A record for a canonical
     /// route takes precedence over the matching legacy `pdfExtractor` /
@@ -109,6 +115,7 @@ public struct ExtractionConfig: JSONSidecarConfig {
         podcastBackend: PodcastTranscriptionBackend? = nil,
         pdfExtractor: ExtractionBackendReference? = nil,
         htmlExtractor: ExtractionBackendReference? = nil,
+        docxExtractor: ExtractionBackendReference? = nil,
         routeExtractors: [ExtractorRouteSelectionRecord] = []
     ) {
         self.backend = backend
@@ -123,6 +130,7 @@ public struct ExtractionConfig: JSONSidecarConfig {
         self.podcastBackend = podcastBackend
         self.pdfExtractor = pdfExtractor
         self.htmlExtractor = htmlExtractor
+        self.docxExtractor = docxExtractor
         self.routeExtractors = routeExtractors.normalizedForPersistence().records
     }
 
@@ -166,7 +174,7 @@ public struct ExtractionConfig: JSONSidecarConfig {
         case doclingServeEndpoint
         case doclingServeTimeoutMilliseconds
         case htmlBackend, podcastBackend
-        case pdfExtractor, htmlExtractor
+        case pdfExtractor, htmlExtractor, docxExtractor
         case routeExtractors
     }
 
@@ -197,6 +205,7 @@ public struct ExtractionConfig: JSONSidecarConfig {
         self.podcastBackend = DebugLog.trying("init(from:) decode podcastBackend") { try c.decode(PodcastTranscriptionBackend.self, forKey: .podcastBackend) }
         self.pdfExtractor = DebugLog.trying("init(from:) decode pdfExtractor") { try c.decode(ExtractionBackendReference.self, forKey: .pdfExtractor) }
         self.htmlExtractor = DebugLog.trying("init(from:) decode htmlExtractor") { try c.decode(ExtractionBackendReference.self, forKey: .htmlExtractor) }
+        self.docxExtractor = DebugLog.trying("init(from:) decode docxExtractor") { try c.decode(ExtractionBackendReference.self, forKey: .docxExtractor) }
         self.routeExtractors = Self.decodedRouteRecords(from: c)
     }
 
@@ -217,6 +226,7 @@ public struct ExtractionConfig: JSONSidecarConfig {
         try c.encodeIfPresent(podcastBackend, forKey: .podcastBackend)
         try c.encodeIfPresent(pdfExtractor, forKey: .pdfExtractor)
         try c.encodeIfPresent(htmlExtractor, forKey: .htmlExtractor)
+        try c.encodeIfPresent(docxExtractor, forKey: .docxExtractor)
         try c.encode(routeExtractors.sorted(), forKey: .routeExtractors)
     }
 
@@ -232,6 +242,7 @@ public struct ExtractionConfig: JSONSidecarConfig {
         if let record = routeExtractors.first(where: { $0.route == route }) { return record.extractor }
         if route == .canonicalPDF { return pdfExtractor }
         if route == .canonicalHTML { return htmlExtractor }
+        if route == .canonicalDOCX { return docxExtractor }
         return nil
     }
 
@@ -255,6 +266,10 @@ public struct ExtractionConfig: JSONSidecarConfig {
             pdfExtractor = extractor
         } else if route == .canonicalHTML {
             htmlExtractor = extractor
+        } else if route == .canonicalDOCX {
+            // No legacy field predates the route record for DOCX —
+            // `docxExtractor` IS the field this dual-write maintains.
+            docxExtractor = extractor
         }
     }
 

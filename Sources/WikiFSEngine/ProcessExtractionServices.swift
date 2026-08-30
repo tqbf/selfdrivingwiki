@@ -73,6 +73,12 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
     public static let reviewedDoclingLogical = reviewedLogical(
         package: ReviewedExtractorPackages.doclingServe, registration: "document")
 
+    /// The logical reference of the reviewed docx2md package registration.
+    /// DOCX has no built-in backend, so this lineage is also the DEFAULT
+    /// selection when no `docxExtractor` reference is configured.
+    public static let reviewedDOCXLogical = reviewedLogical(
+        package: ReviewedExtractorPackages.docx2md, registration: "document")
+
     private static func reviewedLogical(
         package: ReviewedExtractorPackage,
         registration: String
@@ -134,6 +140,22 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
 
         let adapter = try await makeAdapter(for: key)
         guard case .html(let extractor) = adapter else {
+            throw ExtractionServicesError.unavailable
+        }
+        return extractor
+    }
+
+    /// Resolves one configured DOCX adapter. DOCX is package-only: there are
+    /// no built-in DOCX backends and no legacy selection to remap, so a nil
+    /// configured reference resolves directly to the reviewed docx2md
+    /// lineage. An inactive package (removed, not yet activated, or bun
+    /// missing) fails closed — no substitution, one redacted diagnostic via
+    /// `selectedExtractorUnavailable`.
+    public func prepareDOCX() async throws -> any DocxMarkdownExtractor {
+        let configuration = try input.readConfiguration()
+        let key = try await docxKey(configuration: configuration)
+        let adapter = try await makeAdapter(for: key)
+        guard case .docx(let extractor) = adapter else {
             throw ExtractionServicesError.unavailable
         }
         return extractor
@@ -213,6 +235,30 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
     ) async throws -> ExtractionAdapterKey {
         guard let match = await registry.resolveInstalled(logical, kind: kind) else {
             throw ExtractionServicesError.unavailable
+        }
+        return match.key
+    }
+
+    /// DOCX key resolution. DOCX is package-only, so an installed logical
+    /// reference must have an active registration in the DOCX namespace; no
+    /// selection (or a cross-kind builtIn stray) resolves to the reviewed
+    /// docx2md lineage, mirroring `pdfKey` / `htmlKey` fail-closed behavior.
+    private func docxKey(
+        configuration: ExtractionConfig
+    ) async throws -> ExtractionAdapterKey {
+        let logical: LogicalExtractorReference
+        switch configuration.docxExtractor {
+        case .installed(let reference):
+            logical = reference
+        case .builtIn, nil:
+            // There is no built-in DOCX backend; the default selection is
+            // the reviewed docx2md lineage.
+            logical = Self.reviewedDOCXLogical
+        }
+        guard let match = await registry.resolveInstalled(logical, kind: .docx) else {
+            throw ExtractionServicesError.selectedExtractorUnavailable(
+                route: .canonicalDOCX,
+                reference: logical)
         }
         return match.key
     }

@@ -3,10 +3,11 @@ import Foundation
 import WikiFSCore
 
 /// The input domain handled by an extraction backend. The case tag keeps PDF,
-/// HTML, and transcript backend identifiers in separate namespaces.
+/// HTML, DOCX, and transcript backend identifiers in separate namespaces.
 public enum ExtractionBackendKind: String, Codable, Hashable, Sendable {
     case pdf
     case html
+    case docx
     case youtubeTranscript
     case rssPodcastTranscript
     case applePodcastTranscript
@@ -29,6 +30,7 @@ public struct ExtractionBackendKey: Hashable, Sendable, CustomStringConvertible 
 public enum ExtractionBackendAdapter: Sendable {
     case pdf(ExtractionPreparation)
     case html(any HtmlMarkdownExtractor)
+    case docx(any DocxMarkdownExtractor)
     case youtubeTranscript(any YouTubeTranscriptFetching)
     case rssPodcastTranscript(any RSSFeedTranscriptFetching)
     case applePodcastTranscript(any PodcastTranscriptFetching)
@@ -378,13 +380,14 @@ public struct ExtractorPackageSettingsRow: Identifiable, Hashable, Sendable {
 }
 
 public extension ExtractionBackendRegistry {
-    /// Snapshot of every active installed (exact) PDF and HTML registration,
-    /// highest revision first within a deterministic package sort. Transcript
-    /// kinds are out of scope for revision 1. A package that stopped being
-    /// admitted (removed, failed activation) simply stops appearing.
+    /// Snapshot of every active installed (exact) PDF, HTML, and DOCX
+    /// registration, highest revision first within a deterministic package
+    /// sort. Transcript kinds are out of scope for revision 1. A package that
+    /// stopped being admitted (removed, failed activation) simply stops
+    /// appearing.
     func installedPackageRows() async -> [ExtractorPackageSettingsRow] {
         var rows: [ExtractorPackageSettingsRow] = []
-        for kind in [ExtractionBackendKind.pdf, .html] {
+        for kind in [ExtractionBackendKind.pdf, .html, .docx] {
             // Actor-isolated by default (extension of an actor), so the sync
             // registry read needs no hop.
             for match in installedMatches(kind: kind) {

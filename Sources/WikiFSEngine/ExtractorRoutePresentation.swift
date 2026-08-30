@@ -158,10 +158,11 @@ public struct ExtractorRouteSettingsRow: Hashable, Sendable, Identifiable {
     public var id: String { descriptor.route.description }
 }
 
-/// Host-owned route descriptors and non-package choices for the two canonical
+/// Host-owned route descriptors and non-package choices for the canonical
 /// routes. Package choices come from validated catalog records.
 public enum ExtractorRouteHostCatalog {
-    /// Canonical routes in host display order (PDF first, then HTML).
+    /// Canonical routes in host display order (PDF first, then HTML, then
+    /// DOCX).
     public static let descriptors: [ExtractorRouteDescriptor] = [
         ExtractorRouteDescriptor(
             route: .canonicalPDF,
@@ -171,11 +172,18 @@ public enum ExtractorRouteHostCatalog {
             route: .canonicalHTML,
             displayName: "HTML",
             systemImage: "safari"),
+        ExtractorRouteDescriptor(
+            route: .canonicalDOCX,
+            displayName: "Word",
+            systemImage: "doc.text"),
     ]
 
-    /// The host's fixed choices for one route. Only the canonical routes have
+    /// The host's fixed choices for one route. Only canonical routes have
     /// host choices; a future registration-derived route offers package
-    /// choices only.
+    /// choices only. The DOCX route has no built-in backend, so its only
+    /// host choice is the nil "no default" entry — the reviewed docx2md
+    /// package appears as a choice when its registration is active (from the
+    /// validated catalog record), and never as a hardcoded host row.
     public static func choices(for route: ExtractorRouteID) -> [ExtractorRouteChoice] {
         if route == .canonicalPDF {
             return [
@@ -198,6 +206,15 @@ public enum ExtractorRouteHostCatalog {
                     reference: .builtIn(.html(.tagBased)),
                     displayName: "Tag-based",
                     category: .builtIn),
+            ]
+        }
+        if route == .canonicalDOCX {
+            return [
+                ExtractorRouteChoice(
+                    route: route,
+                    reference: nil,
+                    displayName: "No default (use the reviewed package)",
+                    category: .prompt),
             ]
         }
         return []

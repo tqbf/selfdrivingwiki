@@ -67,13 +67,13 @@ struct ExtractorRouteTableBuilderTests {
                     mimeTypes: ["text/html"]),
             ])
         let rows = ExtractorRouteTableBuilder.build(input)
-        // Host PDF + HTML, plus the saved future route. The HTML registration
-        // covers the canonical HTML route and adds no new row.
-        #expect(rows.count == 3)
-        #expect(rows.map(\.route) == [.canonicalPDF, .canonicalHTML, futureRoute])
-        #expect(rows[2].savedSelection == .builtIn(.pdf(.acp)))
+        // Host PDF + HTML + DOCX, plus the saved future route. The HTML
+        // registration covers the canonical HTML route and adds no new row.
+        #expect(rows.count == 4)
+        #expect(rows.map(\.route) == [.canonicalPDF, .canonicalHTML, .canonicalDOCX, futureRoute])
+        #expect(rows[3].savedSelection == .builtIn(.pdf(.acp)))
         // No host execution exists for a future route.
-        #expect(rows[2].resolvedSelection == nil)
+        #expect(rows[3].resolvedSelection == nil)
     }
 
     @Test func rowsSortDeterministically() throws {
@@ -96,8 +96,8 @@ struct ExtractorRouteTableBuilderTests {
         // typed route order; identical inputs produce identical rows.
         #expect(first.map(\.route) == second.map(\.route))
         #expect(first == second)
-        #expect(first.map(\.route).prefix(2) == [.canonicalPDF, .canonicalHTML])
-        #expect(first.dropFirst(2).map(\.route) == first.dropFirst(2).map(\.route).sorted())
+        #expect(first.map(\.route).prefix(3) == [.canonicalPDF, .canonicalHTML, .canonicalDOCX])
+        #expect(first.dropFirst(3).map(\.route) == first.dropFirst(3).map(\.route).sorted())
     }
 
     @Test func unknownMIMEUsesStableGenericLabel() throws {
@@ -178,6 +178,39 @@ struct ExtractorRouteTableBuilderTests {
         }
         #expect(matches.count == 1)
         #expect(matches.first?.category == .reviewedPackage)
+    }
+
+    /// DOCX route scenario: an active reviewed docx2md registration projects
+    /// onto the canonical DOCX route as a single reviewed-package choice,
+    /// alongside the nil "no default" host choice. The host never hardcodes
+    /// the package row.
+    @Test func activeReviewedDocxPackageAppearsOnTheDocxRoute() throws {
+        let reviewed = try snapshot(
+            packageID: ProcessExtractionServices.reviewedDOCXLogical.packageID.rawValue,
+            version: "1.0.0",
+            digestHex: digest(17),
+            registrationID: ProcessExtractionServices.reviewedDOCXLogical.registrationID.rawValue,
+            displayName: "docx2md Document",
+            sourceCategory: .reviewedPackage,
+            kinds: [.docx],
+            mimeTypes: ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+            extensions: ["docx"])
+        let rows = ExtractorRouteTableBuilder.build(.init(
+            configuration: ExtractionConfig(backend: .acp),
+            registrations: [reviewed],
+            availableRegistrations: [reviewed]))
+        let docx = try #require(rows.first { $0.route == .canonicalDOCX })
+        // Nil "no default" host choice + the registration-derived package row.
+        #expect(docx.choices.count == 2)
+        #expect(docx.choices[0].reference == nil)
+        let matches = docx.choices.filter {
+            $0.reference == .installed(ProcessExtractionServices.reviewedDOCXLogical)
+        }
+        #expect(matches.count == 1)
+        #expect(matches.first?.category == .reviewedPackage)
+        // With no saved selection, the DOCX route is not blocked — execution
+        // defaults to the reviewed lineage.
+        #expect(docx.savedSelection == nil)
     }
 
     // MARK: - AC.8: stale selections stay visible and blocked
