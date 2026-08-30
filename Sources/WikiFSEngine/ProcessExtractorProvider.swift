@@ -784,14 +784,14 @@ public struct ProcessPackagePDFExtractor: MarkdownExtractor, ProcessPackageProve
     }
 
     public func readiness() async -> ExtractionReadiness {
-        guard Self.entryIsExecutable(operation.entryPointURL) else {
+        guard PackageExtractorProbes.entryIsExecutable(operation.entryPointURL) else {
             return .notInstalled("The installed extractor entry point is missing.")
         }
         switch operation.manifest.launch {
         case .direct:
             return .ready
         case .runtime(let command, _):
-            if Self.resolveRuntime(command, policy: operation.runtimeSearchPolicy) != nil {
+            if PackageExtractorProbes.resolveRuntime(command, policy: operation.runtimeSearchPolicy) != nil {
                 return .ready
             }
             return .needsSetup(
@@ -819,7 +819,15 @@ public struct ProcessPackagePDFExtractor: MarkdownExtractor, ProcessPackageProve
             throw ProcessPackageError(message: ProcessPackageFailureMapper.message(error))
         }
     }
+}
 
+/// Shared file probes for the package extractor shells' readiness checks.
+/// `entryIsExecutable` deliberately uses lstat and requires a regular file —
+/// package payload must not be a symlink (admission hardening). Runtime
+/// resolution, by contrast, resolves symlinks first because mise-style shims
+/// ARE symlinks (shims/bun -> /opt/homebrew/bin/mise); search directories are
+/// host PATH policy, not package payload.
+enum PackageExtractorProbes {
     static func entryIsExecutable(_ url: URL) -> Bool {
         var status = stat()
         guard lstat(url.path, &status) == 0,
@@ -833,9 +841,6 @@ public struct ProcessPackagePDFExtractor: MarkdownExtractor, ProcessPackageProve
         policy: ExtractorRuntimeSearchPolicy
     ) -> URL? {
         for directory in policy.searchDirectories {
-            // Probe the RESOLVED file: mise-style shims are symlinks, and
-            // `entryIsExecutable` deliberately requires a regular file. This
-            // mirrors the executor's launch resolution.
             let resolved = directory.appendingPathComponent(command.rawValue)
                 .standardizedFileURL
                 .resolvingSymlinksInPath()
@@ -920,6 +925,25 @@ public struct ProcessPackageDOCXExtractor: DocxMarkdownExtractor, ProcessPackage
             DebugLog.extraction(
                 "Package DOCX extraction failed: \(ProcessPackageFailureMapper.message(error))")
             return nil
+        }
+    }
+
+    /// Same probe as the PDF sibling: the entry point must exist and, for a
+    /// `runtime` launch, the command must resolve in the search policy. DOCX
+    /// has no built-in fallback, so this probe is the user's setup guidance.
+    public func readiness() async -> ExtractionReadiness {
+        guard PackageExtractorProbes.entryIsExecutable(operation.entryPointURL) else {
+            return .notInstalled("The installed extractor entry point is missing.")
+        }
+        switch operation.manifest.launch {
+        case .direct:
+            return .ready
+        case .runtime(let command, _):
+            if PackageExtractorProbes.resolveRuntime(command, policy: operation.runtimeSearchPolicy) != nil {
+                return .ready
+            }
+            return .needsSetup(
+                "Runtime \(command.rawValue) is not installed. Install it to use this extractor.")
         }
     }
 }
