@@ -189,6 +189,15 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
         case .exited(code: 0):
             break
         case .exited, .signaled:
+            // A bounded, single-line stderr tail makes non-protocol exits
+            // diagnosable (a bare exit code says nothing). Bounded by the
+            // runner's stderr limit; never the package's stdout.
+            let tail = execution.stderr
+                .split(separator: "\n").suffix(3)
+                .joined(separator: " | ")
+            let bounded = String(tail.prefix(512))
+            DebugLog.extraction(
+                "Managed extractor exited nonzero: \(execution.terminationCause); stderr tail: \(bounded.isEmpty ? "<empty>" : bounded)")
             throw ManagedExtractorProcessError.processTermination(execution.terminationCause)
         }
         do {
@@ -287,6 +296,19 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
             "WIKI_EXTRACTOR_REQUEST_ID": operation.protocolRequest.requestID.rawValue.uuidString.lowercased(),
             "WIKI_EXTRACTOR_PROTOCOL_REVISION": String(operation.manifest.protocolRevision.rawValue),
         ]
+        // Runtime selectors dispatch through mise-style shims, which locate
+        // already-installed tools via the mise data dir. Under the sandboxed
+        // HOME they would otherwise re-download the tool (or fail); point the
+        // selector at the user's real mise data dir. Deliberate, narrow hole:
+        // only the selector reads it, and only to find the runtime the user
+        // installed.
+        let realHome = FileManager.default.homeDirectoryForCurrentUser
+        let miseDataDir = realHome.appendingPathComponent(".local/share/mise", isDirectory: true)
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: miseDataDir.path, isDirectory: &isDirectory),
+           isDirectory.boolValue {
+            environment["MISE_DATA_DIR"] = miseDataDir.path
+        }
         if operation.manifest.capabilities.contains(.sharedRuntimeCache),
            let shared = operation.paths.sharedRuntimeCacheRoot {
             environment["WIKI_EXTRACTOR_SHARED_RUNTIME_CACHE"] = shared.path
