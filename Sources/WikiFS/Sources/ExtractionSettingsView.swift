@@ -1306,12 +1306,15 @@ struct ExtractionSettingsView: View {
             DisclosureGroup {
                 importDisclosureContent
             } label: {
-                Label("Import a local package", systemImage: "square.and.arrow.down")
+                HStack {
+                    Text(ExtractorSettingsPackagePicker.disclosureTitle)
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
             .accessibilityIdentifier(PackageAccessibility.importDisclosure)
             .accessibilityLabel("Advanced local extractor package import")
-        } header: {
-            Text(ExtractorSettingsPackagePicker.disclosureTitle)
         }
     }
 
@@ -1375,6 +1378,8 @@ struct ExtractionSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .accessibilityIdentifier("\(PackageAccessibility.rowPrefix).\(row.id)")
         .accessibilityLabel("\(row.packageID), version \(row.version), for \(kindDisplayName(row.kind))")
@@ -1398,6 +1403,8 @@ struct ExtractionSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .accessibilityIdentifier("\(PackageAccessibility.failurePrefix).\(failure.id)")
         .accessibilityLabel("\(failure.packageID), version \(failure.version), failed to activate")

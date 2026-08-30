@@ -49,19 +49,22 @@ Run this test on macOS with VoiceOver enabled. Use a test App Group and a dispos
 45. Confirm that the copied text equals the report in the sheet.
 46. Confirm that the report contains no token, header, URL path, URL query, source content, or private path.
 47. Activate **Done** and confirm that the sheet closes.
-48. Open **Advanced Local Package Import**.
-49. Confirm that VoiceOver reads the executable-code warning.
-50. Import the disposable package and select it for its route.
-51. Confirm that the selected route reads **Ready**.
-52. Activate **Remove Package…**.
-53. Confirm that the dialog says removal blocks a selected route.
-54. Remove the package.
-55. Confirm that VoiceOver announces removal progress and completion.
-56. Confirm that the unavailable selection remains selected.
-57. Confirm that the route reads **Not installed**.
-58. Open **Extractor Status**.
-59. Confirm that the sheet offers refresh, another selection, and diagnostic copy actions.
-60. Confirm that the app does not select or run another extractor automatically.
-61. Tab through the section and confirm a logical focus order.
+48. Click the **Advanced Local Package Import** row.
+49. Confirm that the row expands and VoiceOver reads the executable-code warning.
+50. Click the row again and confirm that it contracts.
+51. Click the line of an installed package.
+52. Confirm that the package details expand. Click the line again and confirm that they contract.
+53. Import the disposable package and select it for its route.
+54. Confirm that the selected route reads **Ready**.
+55. Activate **Remove Package…**.
+56. Confirm that the dialog says removal blocks a selected route.
+57. Remove the package.
+58. Confirm that VoiceOver announces removal progress and completion.
+59. Confirm that the unavailable selection remains selected.
+60. Confirm that the route reads **Not installed**.
+61. Open **Extractor Status**.
+62. Confirm that the sheet offers refresh, another selection, and diagnostic copy actions.
+63. Confirm that the app does not select or run another extractor automatically.
+64. Tab through the section and confirm a logical focus order.
 
 Record the macOS version, app build, package digest prefix, and each incorrect announcement. Do not record source content or credentials.
