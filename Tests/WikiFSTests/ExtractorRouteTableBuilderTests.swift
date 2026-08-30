@@ -52,8 +52,8 @@ struct ExtractorRouteTableBuilderTests {
 
     @Test func unionsHostActiveAndSavedRoutes() throws {
         let futureRoute = try ExtractorRouteID(kind: .pdf, mimeType: mime("application/epub+zip"))
-        var config = ExtractionConfig(backend: .gemini)
-        config.setExtractorSelection(.builtIn(.pdf(.acp)), for: futureRoute)
+        var config = ExtractionConfig()
+        config.setExtractorSelection(ExtractorRouteHostCatalog.acpReference, for: futureRoute)
         let input = ExtractorRouteTableBuilder.Input(
             configuration: config,
             registrations: [
@@ -71,7 +71,7 @@ struct ExtractorRouteTableBuilderTests {
         // registration covers the canonical HTML route and adds no new row.
         #expect(rows.count == 4)
         #expect(rows.map(\.route) == [.canonicalPDF, .canonicalHTML, .canonicalDOCX, futureRoute])
-        #expect(rows[3].savedSelection == .builtIn(.pdf(.acp)))
+        #expect(rows[3].savedSelection == ExtractorRouteHostCatalog.acpReference)
         // No host execution exists for a future route.
         #expect(rows[3].resolvedSelection == nil)
     }
@@ -200,9 +200,9 @@ struct ExtractorRouteTableBuilderTests {
             registrations: [reviewed],
             availableRegistrations: [reviewed]))
         let docx = try #require(rows.first { $0.route == .canonicalDOCX })
-        // Nil "no default" host choice + the registration-derived package row.
+        // Explicit "no default" host choice + the registration-derived package row.
         #expect(docx.choices.count == 2)
-        #expect(docx.choices[0].reference == nil)
+        #expect(docx.choices[0].reference == .none)
         let matches = docx.choices.filter {
             $0.reference == .installed(ProcessExtractionServices.reviewedDOCXLogical)
         }

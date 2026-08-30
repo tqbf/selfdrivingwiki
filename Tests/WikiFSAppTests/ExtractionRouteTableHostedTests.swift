@@ -335,12 +335,12 @@ struct ExtractionRouteTableHostedTests {
         let logical = LogicalExtractorReference(
             packageID: try ExtractorPackageID(validating: "org.example.extractor"),
             registrationID: try ExtractorRegistrationID(validating: "main"))
-        let cases: [(ExtractorRouteSourceCategory, ExtractionBackendReference?, String)] = [
+        let cases: [(ExtractorRouteSourceCategory, ExtractionBackendReference, String)] = [
             (.reviewedPackage, .installed(logical), "Reviewed Extractor"),
             (.installedPackage, .installed(logical), "Installed Extractor"),
-            (.connectedService, .builtIn(.pdf(.acp)), "ACP Provider"),
-            (.builtIn, .builtIn(.html(.tagBased)), "Tag-based"),
-            (.prompt, nil, "No default (ask each time)"),
+            (.connectedService, ExtractorRouteHostCatalog.acpReference, "ACP Provider"),
+            (.builtIn, ExtractorRouteHostCatalog.tagBasedReference, "Tag-based"),
+            (.prompt, .none, "No default (ask each time)"),
             (.unavailable, .installed(logical), "Missing Extractor"),
         ]
 
@@ -370,7 +370,6 @@ struct ExtractionRouteTableHostedTests {
 
         let reloaded = ExtractionConfig.load(from: dir)
         #expect(reloaded.extractorSelection(for: .canonicalPDF) == .installed(logical))
-        #expect(reloaded.pdfExtractor == .installed(logical))
         let decision = ExtractorSelectionResolver.resolvePDF(configuration: reloaded, activeRegistrations: [])
         #expect(decision.selection == .unavailableInstalled(kind: .pdf, reference: logical))
         #expect(decision.diagnostic == .unavailableInstalled(logical))
@@ -401,7 +400,6 @@ struct ExtractionRouteTableHostedTests {
 
         let reloaded = ExtractionConfig.load(from: dir)
         #expect(reloaded.extractorSelection(for: .canonicalDOCX) == .installed(logical))
-        #expect(reloaded.docxExtractor == .installed(logical))
         let decision = ExtractorSelectionResolver.resolveDOCX(configuration: reloaded, activeRegistrations: [])
         #expect(decision.selection == .unavailableInstalled(kind: .docx, reference: logical))
         #expect(decision.diagnostic == .unavailableInstalled(logical))
@@ -438,7 +436,7 @@ struct ExtractorRouteRecoveryPresenterTests {
             resolvedSelection: nil,
             choices: [ExtractorRouteChoice(
                 route: route,
-                reference: selection,
+                reference: selection ?? .none,
                 displayName: "Example Extractor",
                 category: selection == nil ? .prompt : .installedPackage,
                 exactSummary: exactSummary)],
@@ -488,7 +486,7 @@ struct ExtractorRouteRecoveryPresenterTests {
     }
 
     @Test func needsSetupMatrix() throws {
-        let acp = row(selection: .builtIn(.pdf(.acp)), status: .ready)
+        let acp = row(selection: ExtractorRouteHostCatalog.acpReference, status: .ready)
         var facts = ExtractorRouteRecoveryFacts()
         let missingProvider = ExtractorRouteRecoveryPresenter.present(
             row: acp, extractorName: "ACP Provider", facts: facts)

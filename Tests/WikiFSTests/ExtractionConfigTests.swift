@@ -3,8 +3,9 @@ import Testing
 @testable import WikiFSCore
 import WikiFSTypes
 
-/// `ExtractionConfig` load/save round-trip, defaulting, and resilient decode
-/// — mirrors `ZoteroConfigTests`'s temp-directory pattern.
+/// `ExtractionConfig` load/save round-trip, defaulting, resilient decode, and
+/// the one-time migration of the retired typed selection keys into the generic
+/// route-record table — mirrors `ZoteroConfigTests`'s temp-directory pattern.
 struct ExtractionConfigTests {
 
     private func tempDirectory() -> URL {
@@ -12,6 +13,29 @@ struct ExtractionConfigTests {
             .appendingPathComponent("extraction-config-tests-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
+    }
+
+    /// A validated host reference for adapter literals used in tests.
+    private func host(_ rawValue: String) -> ExtractionBackendReference {
+        guard let adapterID = HostExtractorID(rawValue: rawValue) else {
+            fatalError("invalid host adapter literal: \(rawValue)")
+        }
+        return .host(HostExtractorReference(adapterID: adapterID))
+    }
+
+    /// A loaded config always carries the bundled default-route records, so
+    /// round-trip equality compares against the defaults-applied value.
+    private func withDefaults(_ config: ExtractionConfig) -> ExtractionConfig {
+        config.applying(defaults: .bundled)
+    }
+
+    /// The in-disk value of an in-memory config: the retired typed fields are
+    /// decode-only and not persisted, so a round trip resets them to defaults.
+    private func persisted(_ config: ExtractionConfig) -> ExtractionConfig {
+        var result = config
+        result.backend = .localPdf2md
+        result.htmlBackend = nil
+        return withDefaults(result)
     }
 
     @Test func defaultsAreLocalPdf2mdAndSonnetModel() {
@@ -22,6 +46,7 @@ struct ExtractionConfigTests {
         #expect(config.geminiModel == ExtractionConfig.defaultGeminiModel)
         #expect(config.geminiBaseURLOverride == nil)
         #expect(config.doclingServeEndpoint == nil)
+        #expect(config.routeExtractors.isEmpty)
     }
 
     @Test func savesAndLoadsRoundTrip() throws {
@@ -36,19 +61,32 @@ struct ExtractionConfigTests {
         try config.save(to: dir)
 
         let loaded = ExtractionConfig.load(from: dir)
-        #expect(loaded == config)
+        #expect(loaded == persisted(config))
     }
 
-    @Test func missingFileLoadsDefaults() {
+    /// A fresh install loads the bundled default-route policy: the PDF route
+    /// defaults to the reviewed pdf2md lineage and the DOCX route to the
+    /// reviewed docx2md lineage. HTML has no shipped default (prompt).
+    @Test func missingFileLoadsBundledRouteDefaults() throws {
         let config = ExtractionConfig.load(from: tempDirectory())
-        #expect(config == ExtractionConfig())
+        #expect(config == withDefaults(ExtractionConfig()))
+
+        let pdf2md = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.selfdrivingwiki.pdf2md"),
+            registrationID: try ExtractorRegistrationID(validating: "document"))
+        let docx2md = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.selfdrivingwiki.docx2md"),
+            registrationID: try ExtractorRegistrationID(validating: "document"))
+        #expect(config.extractorSelection(for: .canonicalPDF) == .installed(pdf2md))
+        #expect(config.extractorSelection(for: .canonicalDOCX) == .installed(docx2md))
+        #expect(config.extractorSelection(for: .canonicalHTML) == nil)
     }
 
-    @Test func corruptFileLoadsDefaults() throws {
+    @Test func corruptFileLoadsBundledDefaults() throws {
         let dir = tempDirectory()
         let url = dir.appendingPathComponent(ExtractionConfig.fileName, isDirectory: false)
         try Data("not json".utf8).write(to: url)
-        #expect(ExtractionConfig.load(from: dir) == ExtractionConfig())
+        #expect(ExtractionConfig.load(from: dir) == withDefaults(ExtractionConfig()))
     }
 
     @Test func partialJSONFillsMissingFieldsWithDefaults() throws {
@@ -62,14 +100,18 @@ struct ExtractionConfigTests {
         #expect(config.geminiModel == ExtractionConfig.defaultGeminiModel)
         #expect(config.geminiBaseURLOverride == nil)
         #expect(config.doclingServeEndpoint == nil)
+        // The retired `backend` value migrates into a PDF host record.
+        #expect(config.extractorSelection(for: .canonicalPDF) == host("anthropic"))
     }
 
     @Test func unknownBackendValueDegradesToLocalPdf2md() throws {
-        // A future/typo'd backend raw value shouldn't crash the decode; it falls
-        // back to the safe local default (mirrors `load`'s corrupt-file rule).
+        // A future/typo'd backend raw value shouldn't crash the decode; it
+        // falls back to the safe local default and contributes no route
+        // record (the bundled default policy still fills the route).
         let json = Data(#"{"backend":"totally_made_up"}"#.utf8)
         let config = try JSONDecoder().decode(ExtractionConfig.self, from: json)
         #expect(config.backend == .localPdf2md)
+        #expect(config.routeExtractors.isEmpty)
     }
 
     @Test func nilFieldsRoundTripAsNil() throws {
@@ -81,7 +123,7 @@ struct ExtractionConfigTests {
             doclingServeEndpoint: nil)
         try config.save(to: dir)
         let loaded = ExtractionConfig.load(from: dir)
-        #expect(loaded == config)
+        #expect(loaded == persisted(config))
         #expect(loaded.anthropicBaseURLOverride == nil)
         #expect(loaded.doclingServeEndpoint == nil)
     }
@@ -111,8 +153,13 @@ struct ExtractionConfigTests {
         try config.save(to: dir)
 
         let loaded = ExtractionConfig.load(from: dir)
-        #expect(loaded.backend == .acp)
+        // The provider id persists; the retired `backend` field does not, so
+        // the PDF route resolves through the bundled default policy.
         #expect(loaded.acpProviderId == "claude-acp")
+        let pdf2md = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.selfdrivingwiki.pdf2md"),
+            registrationID: try ExtractorRegistrationID(validating: "document"))
+        #expect(loaded.extractorSelection(for: .canonicalPDF) == .installed(pdf2md))
     }
 
     @Test func acpProviderIdDecodesAsNilWhenAbsent() throws {
@@ -131,44 +178,33 @@ struct ExtractionConfigTests {
         #expect(loaded.acpProviderId == nil)
     }
 
-    // MARK: - Issue #799 PR1: HTML + Podcast backend round-trip
+    // MARK: - Podcast backend (a transcript setting, not a route selection)
 
-    /// AC.1: `ExtractionConfig` round-trips all three backend fields
-    /// (PDF + HTML + Podcast) via save/load.
-    @Test func htmlAndPodcastBackendsRoundTrip() throws {
+    @Test func podcastBackendRoundTrips() throws {
         let dir = tempDirectory()
         var config = ExtractionConfig()
-        config.backend = .doclingServe
-        config.htmlBackend = .tagBased
         config.podcastBackend = .appleTranscript
         try config.save(to: dir)
 
         let loaded = ExtractionConfig.load(from: dir)
-        #expect(loaded == config)
-        #expect(loaded.backend == .doclingServe)
-        #expect(loaded.htmlBackend == .tagBased)
+        #expect(loaded == withDefaults(config))
         #expect(loaded.podcastBackend == .appleTranscript)
     }
 
-    /// AC.1 (negative case): both new fields round-trip nil when explicitly
-    /// reset — the "prompt me" state must survive a save/load.
-    @Test func htmlAndPodcastBackendsRoundTripNil() throws {
-        let dir = tempDirectory()
-        let config = ExtractionConfig(
-            backend: .anthropic,
-            htmlBackend: nil,
-            podcastBackend: nil)
-        try config.save(to: dir)
-        let loaded = ExtractionConfig.load(from: dir)
-        #expect(loaded == config)
-        #expect(loaded.htmlBackend == nil)
-        #expect(loaded.podcastBackend == nil)
+    /// The retired `htmlBackend` field is a decode-only migration input: a
+    /// decode adopts it into an HTML route record, and a re-encode never
+    /// writes the key again.
+    @Test func htmlBackendFieldIsDecodeOnly() throws {
+        let json = Data(#"{"backend":"anthropic","htmlBackend":"defuddle"}"#.utf8)
+        let config = try JSONDecoder().decode(ExtractionConfig.self, from: json)
+        #expect(config.htmlBackend == .defuddle)
+        #expect(config.extractorSelection(for: .canonicalHTML) == host("defuddle"))
+
+        let data = try JSONEncoder().encode(config)
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        #expect(object?["htmlBackend"] == nil)
     }
 
-    /// AC.2: a legacy config file written before issue #799 PR1 shipped (no
-    /// `htmlBackend` / `podcastBackend` keys) decodes both new fields as nil
-    /// — the user is prompted to pick a backend on first extraction.
-    /// Mirrors `acpProviderIdDecodesAsNilWhenAbsent` forward-compat contract.
     @Test func htmlAndPodcastBackendsDecodeAsNilWhenAbsent() throws {
         let json = Data(#"{"backend":"anthropic"}"#.utf8)
         let config = try JSONDecoder().decode(ExtractionConfig.self, from: json)
@@ -177,14 +213,9 @@ struct ExtractionConfigTests {
         #expect(config.podcastBackend == nil)
     }
 
-    /// Unknown raw values for the new backends degrade silently to nil —
-    /// symmetric with `unknownBackendValueDegradesToLocalPdf2md` for the PDF
-    /// `backend` field (a future/typo'd raw value doesn't crash the decode,
-    /// the whole config still loads, the optional field just ends up nil). A
-    /// typo'd `htmlBackend` therefore picks "prompt me" rather than rejecting
-    /// the entire config — same resilient-decode philosophy as the existing
-    /// fields, and the safer posture for a fresh-install user who hand-edited
-    /// the JSON.
+    /// Unknown raw values for the retired optional fields degrade silently to
+    /// nil — symmetric with `unknownBackendValueDegradesToLocalPdf2md`: the
+    /// whole config still loads and no route record is produced.
     @Test func unknownHtmlAndPodcastBackendValuesDegradeToNil() throws {
         let json = Data(#"""
         {"backend":"anthropic","htmlBackend":"whisper","podcastBackend":"rev_ai"}
@@ -193,66 +224,107 @@ struct ExtractionConfigTests {
         #expect(config.backend == .anthropic)
         #expect(config.htmlBackend == nil)
         #expect(config.podcastBackend == nil)
+        // The unknown HTML/podcast values contribute nothing, but the backend
+        // value still migrates into its PDF host record.
+        #expect(config.extractorSelection(for: .canonicalPDF) == host("anthropic"))
+        #expect(config.extractorSelection(for: .canonicalHTML) == nil)
     }
 
-    /// A config with the new backends also persists the existing PDF backend
-    /// unchanged — the three fields coexist in one file without crosstalk.
-    @Test func pdfBackendSurvivesWhenNewBackendsAreSet() throws {
-        let dir = tempDirectory()
-        var config = ExtractionConfig()
-        config.backend = .acp
-        config.acpProviderId = "claude-acp"
-        config.htmlBackend = .defuddle
-        config.podcastBackend = .appleTranscript
-        try config.save(to: dir)
-        let loaded = ExtractionConfig.load(from: dir)
-        #expect(loaded.backend == .acp)
-        #expect(loaded.acpProviderId == "claude-acp")
-        #expect(loaded.htmlBackend == .defuddle)
-        #expect(loaded.podcastBackend == .appleTranscript)
+    // MARK: - Migration of the retired selection keys
+
+    /// Every retired key migrates in one file without crosstalk. The more
+    /// specific extractor keys win over the older typed backend fields, and
+    /// the re-encoded file keeps only `routeExtractors`.
+    @Test func legacySelectionKeysMigrateIntoRouteRecords() throws {
+        let json = Data(#"""
+        {"backend":"doclingServe","htmlBackend":"defuddle",
+         "pdfExtractor":{"kind":"builtIn","builtIn":{"kind":"pdf","backend":"acp"}},
+         "htmlExtractor":{"kind":"builtIn","builtIn":{"kind":"html","backend":"tagBased"}}}
+        """#.utf8)
+        let config = try JSONDecoder().decode(ExtractionConfig.self, from: json)
+        #expect(config.extractorSelection(for: .canonicalPDF) == host("acp"))
+        #expect(config.extractorSelection(for: .canonicalHTML) == host("tagBased"))
+
+        let data = try JSONEncoder().encode(config)
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        #expect(object?["backend"] == nil)
+        #expect(object?["htmlBackend"] == nil)
+        #expect(object?["pdfExtractor"] == nil)
+        #expect(object?["htmlExtractor"] == nil)
+        #expect(object?["routeExtractors"] != nil)
     }
 
-    @Test func logicalExtractorFieldsAreAbsentInLegacyConfig() throws {
-        let config = try JSONDecoder().decode(ExtractionConfig.self, from: Data(#"{"backend":"anthropic"}"#.utf8))
-        #expect(config.pdfExtractor == nil)
-        #expect(config.htmlExtractor == nil)
+    /// A legacy `backend` value without an extractor key becomes a host
+    /// reference record. `.localPdf2md` was the shipped default, so it leaves
+    /// the record absent and the bundled policy fills the route instead.
+    @Test func legacyBackendValuesMigrateToHostRecords() throws {
+        let acp = try JSONDecoder().decode(ExtractionConfig.self, from: Data(#"{"backend":"acp"}"#.utf8))
+        #expect(acp.extractorSelection(for: .canonicalPDF) == host("acp"))
+
+        let docling = try JSONDecoder().decode(ExtractionConfig.self, from: Data(#"{"backend":"doclingServe"}"#.utf8))
+        #expect(docling.extractorSelection(for: .canonicalPDF) == host("doclingServe"))
+
+        let retired = try JSONDecoder().decode(ExtractionConfig.self, from: Data(#"{"backend":"anthropic"}"#.utf8))
+        #expect(retired.extractorSelection(for: .canonicalPDF) == host("anthropic"))
+
+        let shippedDefault = try JSONDecoder().decode(ExtractionConfig.self, from: Data(#"{"backend":"localPdf2md"}"#.utf8))
+        #expect(shippedDefault.extractorSelection(for: .canonicalPDF) == nil)
     }
 
-    @Test func builtInAndInstalledExtractorSelectionsRoundTrip() throws {
+    /// An explicit route record wins over a retired key for the same route:
+    /// the record already claims the route, so the legacy value is ignored.
+    @Test func routeRecordsWinOverLegacyKeys() throws {
+        let logical = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.example.pdf"),
+            registrationID: try ExtractorRegistrationID(validating: "main"))
+        let record = """
+        {"route":{"kind":"pdf","mimeType":"application/pdf"},"extractor":{"kind":"installed",\
+        "installed":{"packageID":"org.example.pdf","registrationID":"main"}}}
+        """
+        let json = Data(#"""
+        {"backend":"acp","routeExtractors":[\#(record)]}
+        """#.utf8)
+        let config = try JSONDecoder().decode(ExtractionConfig.self, from: json)
+        #expect(config.extractorSelection(for: .canonicalPDF) == .installed(logical))
+    }
+
+    /// A malformed legacy key degrades to the next-older layer instead of
+    /// rejecting the file: the malformed `pdfExtractor` value is ignored and
+    /// the `backend` value still migrates — the same resilient-decode
+    /// philosophy as every other field.
+    @Test func malformedLegacyKeyDegradesToNoRecord() throws {
+        let json = Data(#"{"backend":"anthropic","pdfExtractor":{"kind":"future"}}"#.utf8)
+        let config = try JSONDecoder().decode(ExtractionConfig.self, from: json)
+        #expect(config.backend == .anthropic)
+        #expect(config.extractorSelection(for: .canonicalPDF) == host("anthropic"))
+    }
+
+    // MARK: - Route records
+
+    @Test func routeRecordsRoundTripAndLegacyKeysStayAbsent() throws {
         let logical = LogicalExtractorReference(
             packageID: try ExtractorPackageID(validating: "org.example.html"),
             registrationID: try ExtractorRegistrationID(validating: "article"))
         let config = ExtractionConfig(
             backend: .gemini,
-            htmlBackend: .tagBased,
-            pdfExtractor: .builtIn(.pdf(.localPdf2md)),
-            htmlExtractor: .installed(logical))
+            routeExtractors: [
+                .init(route: .canonicalPDF, extractor: host("acp")),
+                .init(route: .canonicalHTML, extractor: .installed(logical)),
+            ])
         let data = try JSONEncoder().encode(config)
         let decoded = try JSONDecoder().decode(ExtractionConfig.self, from: data)
-        #expect(decoded == config)
-        #expect(decoded.backend == .gemini)
-        #expect(decoded.htmlBackend == .tagBased)
-    }
+        var reset = config
+        reset.backend = .localPdf2md
+        reset.htmlBackend = nil
+        #expect(decoded == reset)
+        // The retired `backend` field is not persisted, so the decode falls
+        // back to its default regardless of the in-memory value.
+        #expect(decoded.backend == .localPdf2md)
 
-    @Test func malformedLogicalExtractorSelectionDegradesToNil() throws {
-        let data = Data(#"{"backend":"anthropic","pdfExtractor":{"kind":"future"}}"#.utf8)
-        let decoded = try JSONDecoder().decode(ExtractionConfig.self, from: data)
-        #expect(decoded.backend == .anthropic)
-        #expect(decoded.pdfExtractor == nil)
-    }
-
-    @Test func legacyAndExplicitBuiltInSelectionsKeepTheirPrecedence() {
-        let legacy = ExtractionConfig(backend: .anthropic, htmlBackend: .defuddle)
-        #expect(ExtractorSelectionResolver.resolvePDF(configuration: legacy, activeRegistrations: []).selection == .pdfBuiltIn(.anthropic))
-        #expect(ExtractorSelectionResolver.resolveHTML(configuration: legacy, activeRegistrations: []).selection == .htmlBuiltIn(.defuddle))
-
-        let explicit = ExtractionConfig(
-            backend: .gemini,
-            htmlBackend: .defuddle,
-            pdfExtractor: .builtIn(.pdf(.doclingServe)),
-            htmlExtractor: .builtIn(.html(.tagBased)))
-        #expect(ExtractorSelectionResolver.resolvePDF(configuration: explicit, activeRegistrations: []).selection == .pdfBuiltIn(.doclingServe))
-        #expect(ExtractorSelectionResolver.resolveHTML(configuration: explicit, activeRegistrations: []).selection == .htmlBuiltIn(.tagBased))
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        #expect(object?["pdfExtractor"] == nil)
+        #expect(object?["htmlExtractor"] == nil)
+        #expect(object?["docxExtractor"] == nil)
     }
 
     @Test func installedSelectionRanksBySemanticVersionThenExactRevision() throws {
@@ -263,7 +335,8 @@ struct ExtractionConfigTests {
         let prerelease = try activeRegistration(logical: logical, version: "2.0.0-beta.1", digestByte: 10, kinds: [.pdf])
         let highA = try activeRegistration(logical: logical, version: "2.0.0", digestByte: 1, kinds: [.pdf])
         let highB = try activeRegistration(logical: logical, version: "2.0.0+other", digestByte: 2, kinds: [.pdf])
-        let config = ExtractionConfig(backend: .gemini, pdfExtractor: .installed(logical))
+        var config = ExtractionConfig()
+        config.setExtractorSelection(.installed(logical), for: .canonicalPDF)
         let decision = ExtractorSelectionResolver.resolvePDF(
             configuration: config,
             activeRegistrations: [highA, prerelease, low, highB])
@@ -276,44 +349,60 @@ struct ExtractionConfigTests {
             packageID: try ExtractorPackageID(validating: "org.example.missing"),
             registrationID: try ExtractorRegistrationID(validating: "main"))
         let htmlOnly = try activeRegistration(logical: logical, version: "9.0.0", digestByte: 9, kinds: [.html])
-        let pdfConfig = ExtractionConfig(backend: .gemini, pdfExtractor: .installed(logical))
+        var pdfConfig = ExtractionConfig()
+        pdfConfig.setExtractorSelection(.installed(logical), for: .canonicalPDF)
         let pdf = ExtractorSelectionResolver.resolvePDF(configuration: pdfConfig, activeRegistrations: [htmlOnly])
         #expect(pdf.selection == .unavailableInstalled(kind: .pdf, reference: logical))
         #expect(pdf.diagnostic == .unavailableInstalled(logical))
-        #expect(pdfConfig.pdfExtractor == .installed(logical))
+        #expect(pdfConfig.extractorSelection(for: .canonicalPDF) == .installed(logical))
 
-        let htmlConfig = ExtractionConfig(htmlBackend: .defuddle, htmlExtractor: .installed(logical))
+        var htmlConfig = ExtractionConfig()
+        htmlConfig.setExtractorSelection(.installed(logical), for: .canonicalHTML)
         let html = ExtractorSelectionResolver.resolveHTML(configuration: htmlConfig, activeRegistrations: [])
         #expect(html.selection == .unavailableInstalled(kind: .html, reference: logical))
         #expect(html.diagnostic == .unavailableInstalled(logical))
-        #expect(htmlConfig.htmlExtractor == .installed(logical))
+        #expect(htmlConfig.extractorSelection(for: .canonicalHTML) == .installed(logical))
     }
 
-    // MARK: - Route selections (typed MIME routes)
-
-    /// AC.2: a config file without `routeExtractors` decodes to an empty record
-    /// list, the route accessors fall through to the legacy reference fields,
-    /// and PDF/HTML resolution is byte-for-byte the same decision the pre-route
-    /// entry points produced.
-    @Test func legacyPDFAndHTMLFieldsResolveWithoutRouteRecords() throws {
-        let json = Data(#"""
-        {"backend":"gemini","htmlBackend":"defuddle","pdfExtractor":{"kind":"builtIn","builtIn":{"kind":"pdf","backend":"acp"}},"htmlExtractor":{"kind":"builtIn","builtIn":{"kind":"html","backend":"tagBased"}}}
-        """#.utf8)
-        let decoded = try JSONDecoder().decode(ExtractionConfig.self, from: json)
-        let inCode = ExtractionConfig(
-            backend: .gemini,
-            htmlBackend: .defuddle,
-            pdfExtractor: .builtIn(.pdf(.acp)),
-            htmlExtractor: .builtIn(.html(.tagBased)))
-        #expect(decoded == inCode)
-        #expect(decoded.routeExtractors.isEmpty)
-        #expect(decoded.extractorSelection(for: .canonicalPDF) == decoded.pdfExtractor)
-        #expect(decoded.extractorSelection(for: .canonicalHTML) == decoded.htmlExtractor)
-        #expect(ExtractorSelectionResolver.resolvePDF(configuration: decoded, activeRegistrations: []) ==
-            ExtractorSelectionResolver.resolvePDF(configuration: inCode, activeRegistrations: []))
-        #expect(ExtractorSelectionResolver.resolveHTML(configuration: decoded, activeRegistrations: []) ==
-            ExtractorSelectionResolver.resolveHTML(configuration: inCode, activeRegistrations: []))
+    /// A host reference resolves as itself: the route supplies the input
+    /// format, the reference only names the host adapter.
+    @Test func hostSelectionsResolveAsHost() throws {
+        var config = ExtractionConfig()
+        config.setExtractorSelection(host("acp"), for: .canonicalPDF)
+        config.setExtractorSelection(host("tagBased"), for: .canonicalHTML)
+        #expect(ExtractorSelectionResolver.resolvePDF(configuration: config, activeRegistrations: []).selection == .host(HostExtractorReference(adapterID: HostExtractorID(rawValue: "acp")!)))
+        #expect(ExtractorSelectionResolver.resolveHTML(configuration: config, activeRegistrations: []).selection == .host(HostExtractorReference(adapterID: HostExtractorID(rawValue: "tagBased")!)))
     }
+
+    /// An explicit `.none` record resolves to no selection — the shipped
+    /// default stays disabled and nothing refills it.
+    @Test func explicitNoneResolvesToNoSelection() throws {
+        var config = ExtractionConfig()
+        config.setExtractorSelection(ExtractionBackendReference.none, for: .canonicalPDF)
+        config.setExtractorSelection(ExtractionBackendReference.none, for: .canonicalHTML)
+        #expect(ExtractorSelectionResolver.resolvePDF(configuration: config, activeRegistrations: []).selection == .noSelection)
+        #expect(ExtractorSelectionResolver.resolveHTML(configuration: config, activeRegistrations: []).selection == .noSelection)
+    }
+
+    /// Without a stored record the bundled default policy participates: the
+    /// PDF route defaults to the reviewed pdf2md lineage (unavailable here,
+    /// because the test provides no active registration) and HTML, which the
+    /// policy does not cover, resolves to no selection.
+    @Test func bundledDefaultsParticipateWhenNoRecordExists() throws {
+        let pdf2md = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.selfdrivingwiki.pdf2md"),
+            registrationID: try ExtractorRegistrationID(validating: "document"))
+        let pdf = ExtractorSelectionResolver.resolvePDF(
+            configuration: ExtractionConfig(), activeRegistrations: [])
+        #expect(pdf.selection == .unavailableInstalled(kind: .pdf, reference: pdf2md))
+        #expect(pdf.diagnostic == .unavailableInstalled(pdf2md))
+
+        let html = ExtractorSelectionResolver.resolveHTML(
+            configuration: ExtractionConfig(), activeRegistrations: [])
+        #expect(html.selection == .noSelection)
+    }
+
+    // MARK: - Route selection writes
 
     /// AC.3: records encode in deterministic route order regardless of the order
     /// they were inserted. Determinism is asserted through the real persistence
@@ -326,13 +415,13 @@ struct ExtractionConfigTests {
         let future = ExtractorRouteSelectionRecord(
             route: try ExtractorRouteID(kind: .pdf, mimeType: ExtractorMIMEType(validating: "application/epub+zip")),
             extractor: .installed(logical))
-        var first = ExtractionConfig(backend: .gemini)
+        var first = ExtractionConfig()
         first.setExtractorSelection(.installed(logical), for: .canonicalHTML)
-        first.setExtractorSelection(.builtIn(.pdf(.doclingServe)), for: .canonicalPDF)
+        first.setExtractorSelection(host("doclingServe"), for: .canonicalPDF)
         first.setExtractorSelection(.installed(logical), for: future.route)
-        var second = ExtractionConfig(backend: .gemini)
+        var second = ExtractionConfig()
         second.setExtractorSelection(.installed(logical), for: future.route)
-        second.setExtractorSelection(.builtIn(.pdf(.doclingServe)), for: .canonicalPDF)
+        second.setExtractorSelection(host("doclingServe"), for: .canonicalPDF)
         second.setExtractorSelection(.installed(logical), for: .canonicalHTML)
         #expect(first == second)
 
@@ -356,16 +445,16 @@ struct ExtractionConfigTests {
             packageID: try ExtractorPackageID(validating: "org.example.html"),
             registrationID: try ExtractorRegistrationID(validating: "article"))
         let htmlRecord = ExtractorRouteSelectionRecord(route: .canonicalHTML, extractor: .installed(htmlLogical))
-        var config = ExtractionConfig(backend: .gemini, routeExtractors: [htmlRecord])
+        var config = ExtractionConfig(routeExtractors: [htmlRecord])
 
-        config.setExtractorSelection(.builtIn(.pdf(.acp)), for: .canonicalPDF)
+        config.setExtractorSelection(host("acp"), for: .canonicalPDF)
         #expect(config.routeExtractors.count == 2)
         #expect(config.routeExtractors.contains { $0.route == .canonicalPDF })
 
-        config.setExtractorSelection(.builtIn(.pdf(.doclingServe)), for: .canonicalPDF)
+        config.setExtractorSelection(host("doclingServe"), for: .canonicalPDF)
         #expect(config.routeExtractors.count == 2)
         #expect(config.extractorSelection(for: .canonicalHTML) == .installed(htmlLogical))
-        #expect(config.extractorSelection(for: .canonicalPDF) == .builtIn(.pdf(.doclingServe)))
+        #expect(config.extractorSelection(for: .canonicalPDF) == host("doclingServe"))
 
         config.setExtractorSelection(nil, for: .canonicalPDF)
         #expect(config.routeExtractors.count == 1)
@@ -373,97 +462,99 @@ struct ExtractionConfigTests {
         #expect(config.extractorSelection(for: .canonicalPDF) == nil)
     }
 
-    /// AC.3 + AC.11 persistence half: a canonical route write dual-writes the
-    /// matching legacy reference field so old builds reading `pdfExtractor` /
-    /// `htmlExtractor` resolve the same selection; removal clears both. The
-    /// older `backend` / `htmlBackend` fields stay owned by the Settings
-    /// mapping and are not rewritten here.
-    @Test func canonicalRouteWritesKeepLegacyFieldsTruthful() throws {
+    /// A canonical route write touches ONLY the route table: the retired
+    /// typed fields keep whatever value they decoded with and are never
+    /// rewritten by selection writes.
+    @Test func canonicalRouteWritesTouchOnlyRouteRecords() throws {
         var config = ExtractionConfig(backend: .anthropic, htmlBackend: .defuddle)
 
-        config.setExtractorSelection(.builtIn(.pdf(.acp)), for: .canonicalPDF)
-        #expect(config.pdfExtractor == .builtIn(.pdf(.acp)))
+        config.setExtractorSelection(host("acp"), for: .canonicalPDF)
+        #expect(config.extractorSelection(for: .canonicalPDF) == host("acp"))
         #expect(config.backend == .anthropic)
 
-        config.setExtractorSelection(.builtIn(.html(.tagBased)), for: .canonicalHTML)
-        #expect(config.htmlExtractor == .builtIn(.html(.tagBased)))
+        config.setExtractorSelection(host("tagBased"), for: .canonicalHTML)
+        #expect(config.extractorSelection(for: .canonicalHTML) == host("tagBased"))
         #expect(config.htmlBackend == .defuddle)
 
         config.setExtractorSelection(nil, for: .canonicalPDF)
-        #expect(config.pdfExtractor == nil)
+        #expect(config.extractorSelection(for: .canonicalPDF) == nil)
         config.setExtractorSelection(nil, for: .canonicalHTML)
-        #expect(config.htmlExtractor == nil)
+        #expect(config.extractorSelection(for: .canonicalHTML) == nil)
 
-        // A non-canonical route record never touches legacy fields.
+        // A non-canonical route record never touches other routes.
         let future = try ExtractorRouteID(kind: .pdf, mimeType: ExtractorMIMEType(validating: "application/epub+zip"))
-        config.setExtractorSelection(.builtIn(.pdf(.acp)), for: future)
-        #expect(config.pdfExtractor == nil)
+        config.setExtractorSelection(host("acp"), for: future)
+        #expect(config.extractorSelection(for: .canonicalPDF) == nil)
         #expect(config.routeExtractors.count == 1)
 
         // Round-trips through disk.
         let dir = tempDirectory()
         try config.save(to: dir)
-        #expect(ExtractionConfig.load(from: dir) == config)
+        #expect(ExtractionConfig.load(from: dir) == persisted(config))
     }
 
-    /// DOCX route persistence (AC.6): an installed selection round-trips
-    /// through the canonicalDOCX route record and dual-writes the
-    /// `docxExtractor` field (which has no older legacy layer beneath it),
-    /// and removal clears both.
-    @Test func docxRouteSelectionRoundTripsAndDualWrites() throws {
+    /// DOCX route persistence (AC.6): installed and explicit-none selections
+    /// round-trip through the generic canonical DOCX route record. DOCX has
+    /// no retired legacy field.
+    @Test func docxRouteSelectionRoundTrips() throws {
         let logical = LogicalExtractorReference(
             packageID: try ExtractorPackageID(validating: "org.example.docx"),
             registrationID: try ExtractorRegistrationID(validating: "document"))
-        var config = ExtractionConfig(backend: .localPdf2md)
+        var config = ExtractionConfig()
 
         config.setExtractorSelection(.installed(logical), for: .canonicalDOCX)
-        #expect(config.docxExtractor == .installed(logical))
         #expect(config.routeExtractors.contains { $0.route == .canonicalDOCX })
         #expect(config.extractorSelection(for: .canonicalDOCX) == .installed(logical))
-        // The legacy PDF/HTML fields are untouched.
-        #expect(config.pdfExtractor == nil)
-        #expect(config.htmlExtractor == nil)
+        #expect(config.extractorSelection(for: .canonicalPDF) == nil)
+        #expect(config.extractorSelection(for: .canonicalHTML) == nil)
 
         // Round-trips through disk.
         let dir = tempDirectory()
         try config.save(to: dir)
-        #expect(ExtractionConfig.load(from: dir) == config)
+        #expect(ExtractionConfig.load(from: dir) == withDefaults(config))
 
         config.setExtractorSelection(nil, for: .canonicalDOCX)
-        #expect(config.docxExtractor == nil)
         #expect(config.extractorSelection(for: .canonicalDOCX) == nil)
         #expect(config.routeExtractors.isEmpty)
     }
 
-    /// DOCX degrade path (AC.6): a config file written before the
-    /// `docxExtractor` key existed decodes with the field nil, and a
-    /// malformed value degrades to nil without rejecting the file.
-    @Test func docxExtractorFieldDegradesToNil() throws {
-        let absent = try JSONDecoder().decode(ExtractionConfig.self, from: Data(#"{"backend":"anthropic"}"#.utf8))
-        #expect(absent.docxExtractor == nil)
+    /// An explicit `.none` DOCX record persists (it disables the bundled
+    /// reviewed-package default) and survives a save/load.
+    @Test func docxExplicitNoneRecordPersists() throws {
+        var config = ExtractionConfig()
+        config.setExtractorSelection(ExtractionBackendReference.none, for: .canonicalDOCX)
+        #expect(config.extractorSelection(for: .canonicalDOCX) == ExtractionBackendReference.none)
 
-        let malformed = try JSONDecoder().decode(ExtractionConfig.self, from: Data(#"{"backend":"anthropic","docxExtractor":{"kind":"future"}}"#.utf8))
-        #expect(malformed.docxExtractor == nil)
-        #expect(malformed.backend == .anthropic)
+        let dir = tempDirectory()
+        try config.save(to: dir)
+        let loaded = ExtractionConfig.load(from: dir)
+        // The explicit record wins over the bundled default policy.
+        #expect(loaded.extractorSelection(for: .canonicalDOCX) == ExtractionBackendReference.none)
     }
 
-    /// DOCX route resolution (AC.7): the resolver reports `.noDOCXSelection`
-    /// with no saved selection, an installed selection with an active
-    /// registration resolves to it, and an inactive selection surfaces the
-    /// redacted unavailable diagnostic. A cross-kind builtIn stray degrades
-    /// to "no selection" (there is no built-in DOCX backend to resolve to).
+    /// DOCX route resolution (AC.7): the resolver reports the bundled
+    /// reviewed-package default when no record exists, an active installed
+    /// selection resolves to it, an inactive selection surfaces the redacted
+    /// diagnostic, an explicit `.none` disables the route, and a host stray
+    /// resolves as itself (execution fails closed — no DOCX host adapters
+    /// exist).
     @Test func docxRouteSelectionResolves() throws {
-        // No selection → .noDOCXSelection (execution defaults to the
-        // reviewed lineage at the engine layer).
+        // No record → the bundled reviewed docx2md lineage; with no active
+        // registration it fails closed with the redacted diagnostic.
+        let reviewed = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.selfdrivingwiki.docx2md"),
+            registrationID: try ExtractorRegistrationID(validating: "document"))
         let empty = ExtractionConfig()
-        #expect(ExtractorSelectionResolver.resolveDOCX(configuration: empty, activeRegistrations: []).selection == .noDOCXSelection)
+        let defaulted = ExtractorSelectionResolver.resolveDOCX(configuration: empty, activeRegistrations: [])
+        #expect(defaulted.selection == .unavailableInstalled(kind: .docx, reference: reviewed))
 
         // Active registration → the exact reference.
         let logical = LogicalExtractorReference(
             packageID: try ExtractorPackageID(validating: "org.example.docx"),
             registrationID: try ExtractorRegistrationID(validating: "document"))
         let active = try activeRegistration(logical: logical, version: "1.0.0", digestByte: 3, kinds: [.docx])
-        let config = ExtractionConfig(docxExtractor: .installed(logical))
+        var config = ExtractionConfig()
+        config.setExtractorSelection(.installed(logical), for: .canonicalDOCX)
         let decision = ExtractorSelectionResolver.resolveDOCX(
             configuration: config, activeRegistrations: [active])
         #expect(decision.selection == .installed(kind: .docx, reference: active.reference))
@@ -481,67 +572,74 @@ struct ExtractionConfigTests {
             configuration: config, activeRegistrations: [htmlOnly])
         #expect(crossKind.selection == .unavailableInstalled(kind: .docx, reference: logical))
 
-        // A builtIn stray degrades to no selection instead of a foreign backend.
-        let stray = ExtractionConfig(docxExtractor: .builtIn(.html(.tagBased)))
-        #expect(ExtractorSelectionResolver.resolveDOCX(configuration: stray, activeRegistrations: [active]).selection == .noDOCXSelection)
+        // Explicit `.none` disables the shipped default.
+        var disabled = ExtractionConfig()
+        disabled.setExtractorSelection(ExtractionBackendReference.none, for: .canonicalDOCX)
+        #expect(ExtractorSelectionResolver.resolveDOCX(configuration: disabled, activeRegistrations: [active]).selection == .noSelection)
+
+        // A host stray under the DOCX route resolves as itself; the engine
+        // fails closed because no DOCX host adapter is registered.
+        var stray = ExtractionConfig()
+        stray.setExtractorSelection(host("tagBased"), for: .canonicalDOCX)
+        #expect(ExtractorSelectionResolver.resolveDOCX(configuration: stray, activeRegistrations: [active]).selection
+            == .host(HostExtractorReference(adapterID: HostExtractorID(rawValue: "tagBased")!)))
 
         // The route-aware entry dispatches canonicalDOCX.
-        #expect(ExtractorSelectionResolver.resolve(
-            .canonicalDOCX,
-            configuration: empty,
-            activeRegistrations: [])?.selection == .noDOCXSelection)
+        #expect(ExtractorSelectionResolver.resolve(.canonicalDOCX, configuration: empty, activeRegistrations: []) != nil)
     }
 
     /// AC.2/AC.3: duplicate records for one route in a hand-edited file resolve
     /// to the same single record regardless of their order in the file, with
-    /// malformed records dropped through the logged decode seam.
+    /// malformed records dropped through the logged decode seam. Legacy
+    /// `builtIn` payloads still decode (as host references) so files written
+    /// by earlier builds keep their selections.
     @Test func duplicateRouteRecordsResolveDeterministicallyAndLogBoundedDiagnostic() throws {
-        let builtInRecord = #"""
+        let legacyRecord = #"""
         {"route":{"kind":"pdf","mimeType":"application/pdf"},"extractor":{"kind":"builtIn","builtIn":{"kind":"pdf","backend":"acp"}}}
         """#
         let installedRecord = #"""
         {"route":{"kind":"pdf","mimeType":"application/pdf"},"extractor":{"kind":"installed","installed":{"packageID":"org.example.pdf","registrationID":"main"}}}
         """#
-        let htmlRecord = #"""
+        let legacyHTMLRecord = #"""
         {"route":{"kind":"html","mimeType":"text/html"},"extractor":{"kind":"builtIn","builtIn":{"kind":"html","backend":"tagBased"}}}
         """#
         let firstOrder = try JSONDecoder().decode(
             ExtractionConfig.self,
-            from: Data(#"{"backend":"gemini","routeExtractors":[\#(builtInRecord),\#(installedRecord),\#(htmlRecord)]}"#.utf8))
+            from: Data(#"{"routeExtractors":[\#(legacyRecord),\#(installedRecord),\#(legacyHTMLRecord)]}"#.utf8))
         let secondOrder = try JSONDecoder().decode(
             ExtractionConfig.self,
-            from: Data(#"{"backend":"gemini","routeExtractors":[\#(installedRecord),\#(htmlRecord),\#(builtInRecord)]}"#.utf8))
+            from: Data(#"{"routeExtractors":[\#(installedRecord),\#(legacyHTMLRecord),\#(legacyRecord)]}"#.utf8))
         #expect(firstOrder == secondOrder)
         #expect(firstOrder.routeExtractors.count == 2)
 
-        // The winner is the canonically-greatest record for the route (here the
-        // installed reference, which sorts after the built-in one).
+        // The winner is the canonically-greatest record for the route (here
+        // the installed reference, which sorts after the host one).
         #expect(firstOrder.extractorSelection(for: .canonicalPDF) ==
             .installed(LogicalExtractorReference(
                 packageID: try ExtractorPackageID(validating: "org.example.pdf"),
                 registrationID: try ExtractorRegistrationID(validating: "main"))))
-        #expect(firstOrder.extractorSelection(for: .canonicalHTML) == .builtIn(.html(.tagBased)))
+        #expect(firstOrder.extractorSelection(for: .canonicalHTML) == host("tagBased"))
 
         // A wholly malformed array and a malformed record both degrade without
         // throwing, keeping whatever records remain valid.
         let malformedArray = try JSONDecoder().decode(
-            ExtractionConfig.self, from: Data(#"{"backend":"gemini","routeExtractors":"nope"}"#.utf8))
+            ExtractionConfig.self, from: Data(#"{"routeExtractors":"nope"}"#.utf8))
         #expect(malformedArray.routeExtractors.isEmpty)
         let malformedRecord = try JSONDecoder().decode(
             ExtractionConfig.self,
-            from: Data(#"{"backend":"gemini","routeExtractors":[\#(builtInRecord),{"route":{"kind":"pdf","mimeType":"bogus"}}]}"#.utf8))
+            from: Data(#"{"routeExtractors":[\#(legacyRecord),{"route":{"kind":"pdf","mimeType":"bogus"}}]}"#.utf8))
         #expect(malformedRecord.routeExtractors.count == 1)
-        #expect(malformedRecord.extractorSelection(for: .canonicalPDF) == .builtIn(.pdf(.acp)))
+        #expect(malformedRecord.extractorSelection(for: .canonicalPDF) == host("acp"))
     }
 
     /// A malformed record must not swallow later valid records: Foundation's
     /// JSONDecoder leaves an unkeyed container's index in place after a failed
     /// decode, so the decode seam consumes the bad element and continues.
     @Test func malformedRecordDoesNotTruncateLaterValidRecords() throws {
-        let builtInRecord = #"""
+        let legacyRecord = #"""
         {"route":{"kind":"pdf","mimeType":"application/pdf"},"extractor":{"kind":"builtIn","builtIn":{"kind":"pdf","backend":"acp"}}}
         """#
-        let htmlRecord = #"""
+        let legacyHTMLRecord = #"""
         {"route":{"kind":"html","mimeType":"text/html"},"extractor":{"kind":"builtIn","builtIn":{"kind":"html","backend":"tagBased"}}}
         """#
         let malformed = #"{"route":{"kind":"pdf","mimeType":"bogus"}}"#
@@ -549,71 +647,77 @@ struct ExtractionConfigTests {
         // Malformed record first.
         let badFirst = try JSONDecoder().decode(
             ExtractionConfig.self,
-            from: Data(#"{"backend":"gemini","routeExtractors":[\#(malformed),\#(builtInRecord),\#(htmlRecord)]}"#.utf8))
+            from: Data(#"{"routeExtractors":[\#(malformed),\#(legacyRecord),\#(legacyHTMLRecord)]}"#.utf8))
         #expect(badFirst.routeExtractors.count == 2)
-        #expect(badFirst.extractorSelection(for: .canonicalPDF) == .builtIn(.pdf(.acp)))
-        #expect(badFirst.extractorSelection(for: .canonicalHTML) == .builtIn(.html(.tagBased)))
+        #expect(badFirst.extractorSelection(for: .canonicalPDF) == host("acp"))
+        #expect(badFirst.extractorSelection(for: .canonicalHTML) == host("tagBased"))
 
         // Malformed record in the middle.
         let badMiddle = try JSONDecoder().decode(
             ExtractionConfig.self,
-            from: Data(#"{"backend":"gemini","routeExtractors":[\#(builtInRecord),\#(malformed),\#(htmlRecord)]}"#.utf8))
+            from: Data(#"{"routeExtractors":[\#(legacyRecord),\#(malformed),\#(legacyHTMLRecord)]}"#.utf8))
         #expect(badMiddle == badFirst)
 
         // Multiple malformed records still terminate.
         let allBad = try JSONDecoder().decode(
             ExtractionConfig.self,
-            from: Data(#"{"backend":"gemini","routeExtractors":[\#(malformed),\#(malformed)]}"#.utf8))
+            from: Data(#"{"routeExtractors":[\#(malformed),\#(malformed)]}"#.utf8))
         #expect(allBad.routeExtractors.isEmpty)
     }
 
     /// AC.4: PDF/HTML resolution produces the same decision whether a selection
-    /// is expressed as a legacy reference field or an equivalent route record,
-    /// and a route record overrides a conflicting legacy field. Unavailable
-    /// installed selections keep the logical identity and diagnostic.
+    /// is expressed as a retired key or an equivalent route record, and a
+    /// route record overrides a conflicting legacy key. Unavailable installed
+    /// selections keep the logical identity and diagnostic.
     @Test func routeResolutionMatchesLegacyEntryPoints() throws {
         let logical = LogicalExtractorReference(
             packageID: try ExtractorPackageID(validating: "org.example.pdf"),
             registrationID: try ExtractorRegistrationID(validating: "main"))
         let pdfOnly = try activeRegistration(logical: logical, version: "1.0.0", digestByte: 3, kinds: [.pdf])
-        var config = ExtractionConfig(backend: .acp, htmlBackend: .tagBased, pdfExtractor: .builtIn(.pdf(.localPdf2md)))
+        let legacyJSON = Data(#"""
+        {"backend":"gemini","htmlBackend":"defuddle","pdfExtractor":{"kind":"builtIn","builtIn":{"kind":"pdf","backend":"acp"}}}
+        """#.utf8)
+        var config = try JSONDecoder().decode(ExtractionConfig.self, from: legacyJSON)
 
-        // Legacy reference and equivalent route record resolve identically.
+        // Migrated legacy key and an equivalent explicit record resolve
+        // identically.
         let legacyPDF = ExtractorSelectionResolver.resolvePDF(configuration: config, activeRegistrations: [pdfOnly])
-        #expect(legacyPDF.selection == .pdfBuiltIn(.localPdf2md))
-        config.setExtractorSelection(.builtIn(.pdf(.localPdf2md)), for: .canonicalPDF)
+        #expect(legacyPDF.selection == .host(HostExtractorReference(adapterID: HostExtractorID(rawValue: "acp")!)))
+        config.setExtractorSelection(host("acp"), for: .canonicalPDF)
         #expect(ExtractorSelectionResolver.resolvePDF(configuration: config, activeRegistrations: [pdfOnly]) == legacyPDF)
 
-        // A route record overrides a conflicting legacy field.
+        // A route record overrides a conflicting legacy value.
         config.setExtractorSelection(.installed(logical), for: .canonicalPDF)
         let recordPDF = ExtractorSelectionResolver.resolvePDF(configuration: config, activeRegistrations: [pdfOnly])
         #expect(recordPDF.selection == .installed(kind: .pdf, reference: pdfOnly.reference))
         #expect(recordPDF.diagnostic == nil)
 
-        // An unavailable installed route record stays unavailable with the same
-        // diagnostic as the equivalent legacy selection.
-        config.pdfExtractor = nil
-        let unavailableRecord = config
-        let unavailablePDF = ExtractorSelectionResolver.resolvePDF(configuration: unavailableRecord, activeRegistrations: [])
-        #expect(unavailablePDF.selection == .unavailableInstalled(kind: .pdf, reference: logical))
-        #expect(unavailablePDF.diagnostic == .unavailableInstalled(logical))
-        let legacyUnavailable = ExtractionConfig(
-            backend: .acp,
-            htmlBackend: .tagBased,
-            pdfExtractor: .installed(logical))
-        #expect(ExtractorSelectionResolver.resolvePDF(configuration: legacyUnavailable, activeRegistrations: []) == unavailablePDF)
+        // An unavailable installed route record stays unavailable with the
+        // same diagnostic as the equivalent legacy selection; once the record
+        // is removed the bundled default policy participates instead.
+        config.setExtractorSelection(nil, for: .canonicalPDF)
+        let defaultedPDF = ExtractorSelectionResolver.resolvePDF(configuration: config, activeRegistrations: [])
+        let pdf2md = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.selfdrivingwiki.pdf2md"),
+            registrationID: try ExtractorRegistrationID(validating: "document"))
+        #expect(defaultedPDF.selection == .unavailableInstalled(kind: .pdf, reference: pdf2md))
+        #expect(defaultedPDF.diagnostic == .unavailableInstalled(pdf2md))
+        var explicitUnavailable = ExtractionConfig()
+        explicitUnavailable.setExtractorSelection(.installed(logical), for: .canonicalPDF)
+        #expect(ExtractorSelectionResolver.resolvePDF(configuration: explicitUnavailable, activeRegistrations: [])
+            == .init(
+                selection: .unavailableInstalled(kind: .pdf, reference: logical),
+                diagnostic: .unavailableInstalled(logical)))
 
-        // HTML: route record overrides htmlBackend; removal restores the
-        // legacy path exactly.
-        var htmlConfig = ExtractionConfig(backend: .gemini, htmlBackend: .defuddle)
-        htmlConfig.setExtractorSelection(.builtIn(.html(.tagBased)), for: .canonicalHTML)
-        let recordHTML = ExtractorSelectionResolver.resolveHTML(configuration: htmlConfig, activeRegistrations: [])
-        #expect(recordHTML.selection == .htmlBuiltIn(.tagBased))
-        #expect(recordHTML == ExtractorSelectionResolver.resolveHTML(
-            configuration: ExtractionConfig(backend: .gemini, htmlExtractor: .builtIn(.html(.tagBased))),
-            activeRegistrations: []))
-        htmlConfig.setExtractorSelection(nil, for: .canonicalHTML)
-        #expect(ExtractorSelectionResolver.resolveHTML(configuration: htmlConfig, activeRegistrations: []).selection == .htmlBuiltIn(.defuddle))
+        // HTML: the migrated record drives resolution; removal restores the
+        // no-selection state exactly.
+        let migratedHTML = ExtractorSelectionResolver.resolveHTML(configuration: config, activeRegistrations: [])
+        #expect(migratedHTML.selection == .host(HostExtractorReference(adapterID: HostExtractorID(rawValue: "defuddle")!)))
+        config.setExtractorSelection(host("tagBased"), for: .canonicalHTML)
+        #expect(ExtractorSelectionResolver.resolveHTML(configuration: config, activeRegistrations: [])
+            .selection == .host(HostExtractorReference(adapterID: HostExtractorID(rawValue: "tagBased")!)))
+        config.setExtractorSelection(nil, for: .canonicalHTML)
+        #expect(ExtractorSelectionResolver.resolveHTML(configuration: config, activeRegistrations: []).selection == .noSelection)
     }
 
     /// The route-aware entry point agrees with the per-kind entry points on the
@@ -624,6 +728,8 @@ struct ExtractionConfigTests {
             ExtractorSelectionResolver.resolvePDF(configuration: config, activeRegistrations: []))
         #expect(ExtractorSelectionResolver.resolve(.canonicalHTML, configuration: config, activeRegistrations: []) ==
             ExtractorSelectionResolver.resolveHTML(configuration: config, activeRegistrations: []))
+        #expect(ExtractorSelectionResolver.resolve(.canonicalDOCX, configuration: config, activeRegistrations: []) ==
+            ExtractorSelectionResolver.resolveDOCX(configuration: config, activeRegistrations: []))
         let future = try ExtractorRouteID(kind: .html, mimeType: ExtractorMIMEType(validating: "application/xhtml+xml"))
         #expect(ExtractorSelectionResolver.resolve(future, configuration: config, activeRegistrations: []) == nil)
     }

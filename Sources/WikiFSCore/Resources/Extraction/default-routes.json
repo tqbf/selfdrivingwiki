@@ -1,0 +1,30 @@
+{
+  "routeExtractors": [
+    {
+      "route": {
+        "kind": "pdf",
+        "mimeType": "application/pdf"
+      },
+      "extractor": {
+        "kind": "installed",
+        "installed": {
+          "packageID": "org.selfdrivingwiki.pdf2md",
+          "registrationID": "document"
+        }
+      }
+    },
+    {
+      "route": {
+        "kind": "docx",
+        "mimeType": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      },
+      "extractor": {
+        "kind": "installed",
+        "installed": {
+          "packageID": "org.selfdrivingwiki.docx2md",
+          "registrationID": "document"
+        }
+      }
+    }
+  ]
+}

@@ -183,9 +183,9 @@ enum ExtractorRouteRecoveryPresenter {
         let logical = logicalReference(row.savedSelection)
         let requirement = matchingRequiredRequirement(logical: logical, facts: facts)
         let failure = newestFailure(logical: logical, facts: facts)
-        let isACP = row.savedSelection == .builtIn(.pdf(.acp))
+        let isACP = row.savedSelection == ExtractorRouteHostCatalog.acpReference
         let isDocling = row.savedSelection == .installed(ProcessExtractionServices.reviewedDoclingLogical)
-            || row.savedSelection == .builtIn(.pdf(.doclingServe))
+            || row.savedSelection == ExtractorRouteHostCatalog.legacyDoclingServeReference
 
         let status: ExtractorRouteStatus
         if let failure {
@@ -350,7 +350,7 @@ enum ExtractorRouteRecoveryPresenter {
                 failure?.message
                     ?? facts.connectionFailureMessage
                     ?? status.setupFailureMessage),
-            acpProviderID: row.savedSelection == .builtIn(.pdf(.acp)) ? facts.acpProviderID : nil,
+            acpProviderID: row.savedSelection == ExtractorRouteHostCatalog.acpReference ? facts.acpProviderID : nil,
             doclingEndpointOrigin: isDocling ? ExtractorRouteDiagnosticReport.endpointOrigin(facts.doclingEndpoint) : nil,
             doclingTimeoutMilliseconds: isDocling ? facts.doclingTimeoutMilliseconds : nil,
             credentialConfigured: requirement.map { $0.isConfigured },
@@ -461,8 +461,8 @@ struct ExtractionSettingsView: View {
     // after config writes and package-snapshot refreshes.
     @State private var routeRows: [ExtractorRouteSettingsRow] = []
     /// One route-scoped, typed selection per table row (`row.id`). The picker
-    /// binding writes through `ExtractorRouteSettingsMapping`, which keeps the
-    /// legacy compatibility fields truthful while persisting the route record.
+    /// binding writes through `ExtractorRouteSettingsMapping`, which persists
+    /// the generic route record.
     @State private var routeSelections: [String: ExtractorRouteSettingsSelection] = [:]
     @State private var acpProviderSelection: String
     @State private var doclingEndpointText: String
@@ -764,7 +764,7 @@ struct ExtractionSettingsView: View {
 
     /// One row's pop-up. Tags are the typed `ExtractorRouteSettingsSelection`
     /// values — no sentinel strings; the binding writes through the mapping
-    /// that dual-writes the legacy compatibility fields.
+    /// that persists the generic route record.
     private func routePicker(_ row: ExtractorRouteSettingsRow) -> some View {
         Picker(selection: selectionBinding(row)) {
             ForEach(row.choices) { choice in
@@ -813,7 +813,10 @@ struct ExtractionSettingsView: View {
             if case .installed(let logical) = choice.reference { return .unavailableInstalled(logical) }
             return .prompt
         case .connectedService:
-            if case .builtIn(.pdf(let backend)) = choice.reference { return .connectedService(backend) }
+            if case .host(let host) = choice.reference,
+               host.adapterID.rawValue == ExtractionBackend.acp.rawValue {
+                return .connectedService(.acp)
+            }
             return .prompt
         case .builtIn:
             return .builtInTagBased
@@ -916,12 +919,12 @@ struct ExtractionSettingsView: View {
             reference = .installed(ProcessExtractionServices.reviewedDOCXLogical)
         case .installed(let logical), .unavailableInstalled(let logical):
             reference = .installed(logical)
-        case .connectedService(let backend):
-            reference = .builtIn(.pdf(backend))
+        case .connectedService:
+            reference = ExtractorRouteHostCatalog.acpReference
         case .builtInTagBased:
-            reference = .builtIn(.html(.tagBased))
+            reference = ExtractorRouteHostCatalog.tagBasedReference
         case .prompt, .none:
-            reference = nil
+            reference = .some(.none)
         }
         return ExtractorRouteSettingsRow(
             descriptor: row.descriptor,
@@ -1950,15 +1953,16 @@ enum ExtractorRouteSettingsSelection: Hashable, Sendable {
     case builtInTagBased
 }
 
-/// Maps between `ExtractionConfig` (route records + legacy fields) and the
-/// route-scoped view selection, and writes a table pick through both layers:
-/// the legacy `backend` / `htmlBackend` / `pdfExtractor` / `htmlExtractor`
-/// fields stay truthful for old builds while `setExtractorSelection` persists
-/// the typed route record.
+/// Maps between `ExtractionConfig` (the generic route-record table) and the
+/// route-scoped view selection, and writes a table pick back through
+/// `setExtractorSelection`. The retired `backend` / `htmlBackend` fields are
+/// decode-only migration inputs — nothing here reads or writes them. Legacy
+/// host identities (a migrated `localPdf2md` / `doclingServe` / `defuddle`
+/// value) display as their reviewed-package choice.
 enum ExtractorRouteSettingsMapping {
     /// The view selection for one route, applying the same display semantics
-    /// the fixed pickers used (a legacy `localPdf2md` backend displays as the
-    /// reviewed package; direct API backends display as ACP).
+    /// the fixed pickers used (a legacy `localPdf2md` selection displays as
+    /// the reviewed package; retired direct-API selections display as ACP).
     static func selection(
         route: ExtractorRouteID,
         config: ExtractionConfig,
@@ -1975,10 +1979,26 @@ enum ExtractorRouteSettingsMapping {
                     return .reviewedDocling
                 }
                 return installedSelection(logical, row: row)
-            case .builtIn(.pdf(let backend)):
-                return visiblePDFSelection(for: backend)
-            case .builtIn(.html), .none:
-                return visiblePDFSelection(for: config.backend)
+            case .host(let host):
+                switch host.adapterID.rawValue {
+                case ExtractionBackend.acp.rawValue:
+                    return .connectedService(.acp)
+                case ExtractionBackend.anthropic.rawValue, ExtractionBackend.gemini.rawValue:
+                    // Retired direct-API selections display as their ACP
+                    // successor; execution no longer consults them.
+                    return .connectedService(.acp)
+                case ExtractionBackend.doclingServe.rawValue:
+                    return .reviewedDocling
+                case ExtractionBackend.localPdf2md.rawValue:
+                    return .reviewedPdf2md
+                default:
+                    return .prompt
+                }
+            default:
+                // `.none` (explicit) and nil (no record): the bundled default
+                // record supplies the reviewed pdf2md lineage, so the
+                // display matches it.
+                return .reviewedPdf2md
             }
         }
         if route == .canonicalHTML {
@@ -1987,11 +2007,17 @@ enum ExtractorRouteSettingsMapping {
                 return logical == ProcessExtractionServices.reviewedHTMLLogical
                     ? .reviewedDefuddle
                     : installedSelection(logical, row: row)
-            case .builtIn(.html(let backend)):
-                return backend == .defuddle ? .reviewedDefuddle : .builtInTagBased
-            case .builtIn(.pdf), .none:
-                guard let legacy = config.htmlBackend else { return .prompt }
-                return legacy == .defuddle ? .reviewedDefuddle : .builtInTagBased
+            case .host(let host):
+                switch host.adapterID.rawValue {
+                case HtmlExtractionBackend.defuddle.rawValue:
+                    return .reviewedDefuddle
+                case HtmlExtractionBackend.tagBased.rawValue:
+                    return .builtInTagBased
+                default:
+                    return .prompt
+                }
+            default:
+                return .prompt
             }
         }
         if route == .canonicalDOCX {
@@ -2000,9 +2026,9 @@ enum ExtractorRouteSettingsMapping {
                 return logical == ProcessExtractionServices.reviewedDOCXLogical
                     ? .reviewedDocx2md
                     : installedSelection(logical, row: row)
-            case .builtIn, .none:
-                // No built-in DOCX backend exists: no selection displays as
-                // "use the reviewed package" (execution defaults to it).
+            default:
+                // No built-in DOCX backend exists: "no default" displays as
+                // "use the reviewed package" (execution resolves to it).
                 return .prompt
             }
         }
@@ -2024,23 +2050,10 @@ enum ExtractorRouteSettingsMapping {
             : .unavailableInstalled(logical)
     }
 
-    private static func visiblePDFSelection(for backend: ExtractionBackend) -> ExtractorRouteSettingsSelection {
-        switch backend {
-        case .localPdf2md:
-            return .reviewedPdf2md
-        case .anthropic, .gemini, .acp:
-            return .connectedService(.acp)
-        case .doclingServe:
-            // The legacy Docling selection displays as the reviewed package
-            // (#1159): Docling runs through the reviewed revision 2 package.
-            return .reviewedDocling
-        }
-    }
-
-    /// Persists one table pick. The legacy mapping mirrors the old
-    /// `writePDF` / `writeHTML` semantics exactly; `setExtractorSelection`
-    /// then dual-writes the route record and the matching legacy reference
-    /// field.
+    /// Persists one table pick. The reference is generic: a reviewed pick
+    /// writes the package lineage, a connected-service or tag-based pick
+    /// writes a host reference, and the prompt choice writes the explicit
+    /// `.none` record so the bundled default policy does not refill it.
     static func write(
         _ selection: ExtractorRouteSettingsSelection,
         route: ExtractorRouteID,
@@ -2050,51 +2063,40 @@ enum ExtractorRouteSettingsMapping {
         if route == .canonicalPDF {
             switch selection {
             case .reviewedPdf2md:
-                config.backend = .localPdf2md
                 reference = .installed(ProcessExtractionServices.reviewedPDFLogical)
             case .reviewedDocling:
-                // Dual-write keeps the legacy compatibility field truthful:
-                // the Docling selection persists as `.doclingServe`, which
-                // maps back to the reviewed lineage at prepare time (#1159).
-                config.backend = .doclingServe
                 reference = .installed(ProcessExtractionServices.reviewedDoclingLogical)
             case .installed(let logical), .unavailableInstalled(let logical):
                 reference = .installed(logical)
-            case .connectedService(let backend):
-                config.backend = backend
-                reference = .builtIn(.pdf(backend))
+            case .connectedService:
+                reference = ExtractorRouteHostCatalog.acpReference
             case .prompt, .reviewedDefuddle, .reviewedDocx2md, .builtInTagBased:
                 return
             }
         } else if route == .canonicalHTML {
             switch selection {
             case .prompt:
-                config.htmlBackend = nil
-                reference = nil
+                reference = .some(.none)
             case .reviewedDefuddle:
-                config.htmlBackend = .defuddle
                 reference = .installed(ProcessExtractionServices.reviewedHTMLLogical)
             case .installed(let logical), .unavailableInstalled(let logical):
                 reference = .installed(logical)
             case .builtInTagBased:
-                config.htmlBackend = .tagBased
-                reference = .builtIn(.html(.tagBased))
+                reference = ExtractorRouteHostCatalog.tagBasedReference
             case .reviewedPdf2md, .reviewedDocling, .reviewedDocx2md, .connectedService:
                 return
             }
         } else if route == .canonicalDOCX {
             switch selection {
             case .reviewedDocx2md:
-                // DOCX has no legacy field beneath the route record —
-                // `setExtractorSelection` dual-writes `docxExtractor`, which
-                // is the field itself.
                 reference = .installed(ProcessExtractionServices.reviewedDOCXLogical)
             case .installed(let logical), .unavailableInstalled(let logical):
                 reference = .installed(logical)
             case .prompt:
-                // "No default (use the reviewed package)": clearing the
-                // selection restores the engine's reviewed-lineage default.
-                reference = nil
+                // "No default (use the reviewed package)": the explicit
+                // record states the reviewed-lineage default instead of
+                // relying on the bundled policy to refill it.
+                reference = .some(.none)
             default:
                 return
             }
@@ -2118,21 +2120,20 @@ enum ExtractorSettingsSelectionMapping {
     static let geminiACPProviderID = ProviderID(rawValue: "gemini")
 
     static func acpProviderSelection(from config: ExtractionConfig) -> String {
-        switch effectivePDFBackend(from: config) {
-        case .anthropic:
-            return claudeACPProviderID.rawValue
-        case .gemini:
-            return geminiACPProviderID.rawValue
-        case .acp, .doclingServe, .localPdf2md:
-            return config.acpProviderId ?? ""
+        // A legacy migrated direct-API selection (anthropic / gemini) prefills
+        // its ACP successor's provider; every other selection keeps the
+        // stored provider draft.
+        if case .host(let host)? = config.selectionOrDefault(for: .canonicalPDF) {
+            switch host.adapterID.rawValue {
+            case ExtractionBackend.anthropic.rawValue:
+                return claudeACPProviderID.rawValue
+            case ExtractionBackend.gemini.rawValue:
+                return geminiACPProviderID.rawValue
+            default:
+                break
+            }
         }
-    }
-
-    private static func effectivePDFBackend(from config: ExtractionConfig) -> ExtractionBackend {
-        if case .builtIn(.pdf(let backend)) = config.pdfExtractor {
-            return backend
-        }
-        return config.backend
+        return config.acpProviderId ?? ""
     }
 }
 

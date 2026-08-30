@@ -19,18 +19,20 @@ public struct ActiveExtractorRegistration: Hashable, Sendable {
     }
 }
 
+/// What execution would run for one route today. The route supplies the input
+/// format; these cases name only the implementation — a host adapter, an exact
+/// installed registration, a saved-but-absent lineage, or nothing.
 public enum ResolvedExtractionSelection: Hashable, Sendable {
-    case pdfBuiltIn(ExtractionBackend)
-    case htmlBuiltIn(HtmlExtractionBackend)
+    /// Execution would run the named host adapter (a connected service or the
+    /// built-in floor adapter), registered under this route's kind.
+    case host(HostExtractorReference)
     case installed(kind: ExtractorKind, reference: ExtractorReference)
     /// The saved installed selection has no compatible active registration.
     /// The logical identity stays selected and no other extractor may run.
     case unavailableInstalled(kind: ExtractorKind, reference: LogicalExtractorReference)
-    case noHTMLSelection
-    /// DOCX route with no explicit installed selection. Execution defaults to
-    /// the reviewed docx2md lineage at the engine layer; the resolver stays
-    /// package-agnostic and reports "no selection".
-    case noDOCXSelection
+    /// No default: nothing runs until a selection is made (the HTML prompt
+    /// state, or an explicit disable of the shipped default).
+    case noSelection
 }
 
 /// Redacted selection diagnostic. It contains no version, digest, path, or package output.
@@ -69,95 +71,55 @@ public enum ExtractorSelectionResolver {
         configuration: ExtractionConfig,
         activeRegistrations: [ActiveExtractorRegistration]
     ) -> ExtractionSelectionDecision {
-        // Route-aware: an exact route record participates first; with no
-        // records this is exactly the pre-route `pdfExtractor ?? backend` rule.
-        guard let logicalSelection = configuration.extractorSelection(for: .canonicalPDF) else {
-            return ExtractionSelectionDecision(selection: .pdfBuiltIn(configuration.backend))
-        }
-        switch logicalSelection {
-        case .builtIn(.pdf(let backend)):
-            return ExtractionSelectionDecision(selection: .pdfBuiltIn(backend))
-        case .builtIn(.html):
-            return ExtractionSelectionDecision(selection: .pdfBuiltIn(configuration.backend))
-        case .installed(let logicalReference):
-            if let exact = highestCompatible(
-                logicalReference,
-                kind: .pdf,
-                activeRegistrations: activeRegistrations)
-            {
-                return ExtractionSelectionDecision(selection: .installed(kind: .pdf, reference: exact))
-            }
-            return ExtractionSelectionDecision(
-                selection: .unavailableInstalled(kind: .pdf, reference: logicalReference),
-                diagnostic: .unavailableInstalled(logicalReference))
-        }
+        resolve(.canonicalPDF, kind: .pdf, configuration: configuration, activeRegistrations: activeRegistrations)
     }
 
     public static func resolveHTML(
         configuration: ExtractionConfig,
         activeRegistrations: [ActiveExtractorRegistration]
     ) -> ExtractionSelectionDecision {
-        // Route-aware: an exact route record participates first; with no
-        // records this is exactly the pre-route `htmlExtractor ?? htmlBackend`
-        // (or prompt) rule.
-        guard let logicalSelection = configuration.extractorSelection(for: .canonicalHTML) else {
-            guard let legacy = configuration.htmlBackend else {
-                return ExtractionSelectionDecision(selection: .noHTMLSelection)
-            }
-            return ExtractionSelectionDecision(selection: .htmlBuiltIn(legacy))
-        }
-        switch logicalSelection {
-        case .builtIn(.html(let backend)):
-            return ExtractionSelectionDecision(selection: .htmlBuiltIn(backend))
-        case .builtIn(.pdf):
-            guard let legacy = configuration.htmlBackend else {
-                return ExtractionSelectionDecision(selection: .noHTMLSelection)
-            }
-            return ExtractionSelectionDecision(selection: .htmlBuiltIn(legacy))
-        case .installed(let logicalReference):
-            if let exact = highestCompatible(
-                logicalReference,
-                kind: .html,
-                activeRegistrations: activeRegistrations)
-            {
-                return ExtractionSelectionDecision(selection: .installed(kind: .html, reference: exact))
-            }
-            return ExtractionSelectionDecision(
-                selection: .unavailableInstalled(kind: .html, reference: logicalReference),
-                diagnostic: .unavailableInstalled(logicalReference))
-        }
+        resolve(.canonicalHTML, kind: .html, configuration: configuration, activeRegistrations: activeRegistrations)
     }
 
-    /// DOCX selection resolution — the `resolveHTML` shape minus built-ins:
-    /// DOCX is package-only, so a missing selection resolves to
-    /// `.noDOCXSelection` (the engine defaults execution to the reviewed
-    /// docx2md lineage), and a `.builtIn` reference can never satisfy this
-    /// route (no DOCX built-in exists; a cross-kind reference degrades to no
-    /// selection instead of resolving to a foreign backend).
+    /// DOCX resolution is the same generic shape as every other route: DOCX is
+    /// package-only, so the bundled default record (the reviewed docx2md
+    /// lineage) supplies the default and an explicit `.none` disables it.
     public static func resolveDOCX(
         configuration: ExtractionConfig,
         activeRegistrations: [ActiveExtractorRegistration]
     ) -> ExtractionSelectionDecision {
-        guard let logicalSelection = configuration.extractorSelection(for: .canonicalDOCX) else {
-            return ExtractionSelectionDecision(selection: .noDOCXSelection)
+        resolve(.canonicalDOCX, kind: .docx, configuration: configuration, activeRegistrations: activeRegistrations)
+    }
+
+    /// The single generic precedence: the stored route record first, then the
+    /// bundled default-route record, then no selection. An installed reference
+    /// resolves to the highest compatible active registration or fails closed
+    /// with the redacted diagnostic; a host reference passes through.
+    private static func resolve(
+        _ route: ExtractorRouteID,
+        kind: ExtractorKind,
+        configuration: ExtractionConfig,
+        activeRegistrations: [ActiveExtractorRegistration]
+    ) -> ExtractionSelectionDecision {
+        guard let selection = configuration.selectionOrDefault(for: route) else {
+            return ExtractionSelectionDecision(selection: .noSelection)
         }
-        switch logicalSelection {
+        switch selection {
+        case .none:
+            return ExtractionSelectionDecision(selection: .noSelection)
+        case .host(let host):
+            return ExtractionSelectionDecision(selection: .host(host))
         case .installed(let logicalReference):
             if let exact = highestCompatible(
                 logicalReference,
-                kind: .docx,
+                kind: kind,
                 activeRegistrations: activeRegistrations)
             {
-                return ExtractionSelectionDecision(selection: .installed(kind: .docx, reference: exact))
+                return ExtractionSelectionDecision(selection: .installed(kind: kind, reference: exact))
             }
             return ExtractionSelectionDecision(
-                selection: .unavailableInstalled(kind: .docx, reference: logicalReference),
+                selection: .unavailableInstalled(kind: kind, reference: logicalReference),
                 diagnostic: .unavailableInstalled(logicalReference))
-        case .builtIn:
-            // There is no built-in DOCX backend — a builtIn reference under
-            // the DOCX route is a cross-kind stray. Degrade to "no selection"
-            // rather than resolving to a PDF/HTML backend.
-            return ExtractionSelectionDecision(selection: .noDOCXSelection)
         }
     }
 

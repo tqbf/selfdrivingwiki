@@ -96,9 +96,9 @@ struct ExtractorRouteTests {
     // MARK: - Record normalization
 
     @Test func recordNormalizationKeepsCanonicallyGreatestPerRoute() throws {
-        let builtIn = ExtractorRouteSelectionRecord(
+        let legacyHost = ExtractorRouteSelectionRecord(
             route: .canonicalPDF,
-            extractor: .builtIn(.pdf(.localPdf2md)))
+            extractor: .host(HostExtractorReference(adapterID: HostExtractorID(rawValue: "localPdf2md")!)))
         let logical = LogicalExtractorReference(
             packageID: try ExtractorPackageID(validating: "org.example.pdf"),
             registrationID: try ExtractorRegistrationID(validating: "main"))
@@ -107,14 +107,14 @@ struct ExtractorRouteTests {
             extractor: .installed(logical))
         let htmlRecord = ExtractorRouteSelectionRecord(
             route: .canonicalHTML,
-            extractor: .builtIn(.html(.tagBased)))
+            extractor: .host(HostExtractorReference(adapterID: HostExtractorID(rawValue: "tagBased")!)))
 
-        // The installed reference sorts after the built-in one canonically.
-        let expectedWinner = [builtIn, installed].sorted().last
+        // The installed reference sorts after the host one canonically.
+        let expectedWinner = [legacyHost, installed].sorted().last
 
         // Both original orders produce the identical normalized result.
-        let first = [builtIn, installed, htmlRecord].normalizedForPersistence()
-        let second = [installed, builtIn, htmlRecord].normalizedForPersistence()
+        let first = [legacyHost, installed, htmlRecord].normalizedForPersistence()
+        let second = [installed, legacyHost, htmlRecord].normalizedForPersistence()
         #expect(first.records == second.records)
         #expect(first.droppedDuplicates == 1)
         #expect(second.droppedDuplicates == 1)
@@ -123,8 +123,8 @@ struct ExtractorRouteTests {
         #expect(first.records.contains { $0 == expectedWinner })
 
         // Duplicate-free input is preserved in sorted route order.
-        let clean = [htmlRecord, builtIn].normalizedForPersistence()
-        #expect(clean.records == [htmlRecord, builtIn])
+        let clean = [htmlRecord, legacyHost].normalizedForPersistence()
+        #expect(clean.records == [htmlRecord, legacyHost])
         #expect(clean.droppedDuplicates == 0)
     }
 }

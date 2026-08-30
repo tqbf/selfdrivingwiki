@@ -73,9 +73,9 @@ public struct ExtractorRouteDescriptor: Hashable, Sendable {
 /// One selectable default-extractor choice inside a route row.
 public struct ExtractorRouteChoice: Hashable, Sendable, Identifiable {
     public let route: ExtractorRouteID
-    /// The persisted value this choice writes. `nil` only for the prompt
-    /// choice (no selection).
-    public let reference: ExtractionBackendReference?
+    /// The persisted value this choice writes. The prompt choice writes
+    /// `.none` (an explicit no-default record); there is no nil state.
+    public let reference: ExtractionBackendReference
     public let displayName: String
     public let category: ExtractorRouteSourceCategory
     /// For installed-namespace choices (reviewed and installed packages): the
@@ -85,7 +85,7 @@ public struct ExtractorRouteChoice: Hashable, Sendable, Identifiable {
 
     public init(
         route: ExtractorRouteID,
-        reference: ExtractionBackendReference?,
+        reference: ExtractionBackendReference,
         displayName: String,
         category: ExtractorRouteSourceCategory,
         exactSummary: String? = nil
@@ -101,7 +101,7 @@ public struct ExtractorRouteChoice: Hashable, Sendable, Identifiable {
         let referenceKey: String
         switch reference {
         case .none: referenceKey = "prompt"
-        case .builtIn(let builtIn): referenceKey = "builtIn/\(builtIn)"
+        case .host(let host): referenceKey = "host/\(host.adapterID.rawValue)"
         case .installed(let logical): referenceKey = "installed/\(logical)"
         }
         return "\(route.description)/\(referenceKey)"
@@ -161,6 +161,30 @@ public struct ExtractorRouteSettingsRow: Hashable, Sendable, Identifiable {
 /// Host-owned route descriptors and non-package choices for the canonical
 /// routes. Package choices come from validated catalog records.
 public enum ExtractorRouteHostCatalog {
+    /// The connected-service ACP adapter identity (host namespace). The
+    /// retired direct-API host IDs (anthropic, gemini) never appear as
+    /// choices; migrated selections of those values display as ACP.
+    public static let acpReference = hostReference(ExtractionBackend.acp.rawValue)
+
+    /// The built-in tag-based HTML adapter identity (host namespace).
+    public static let tagBasedReference = hostReference(HtmlExtractionBackend.tagBased.rawValue)
+
+    /// Legacy-only host identities: names older configs migrated onto host
+    /// references. Execution remaps them to their reviewed package lineages;
+    /// presentation maps them to the reviewed-package choices. They are never
+    /// offered as new choices.
+    public static let legacyPDF2mdReference = hostReference(ExtractionBackend.localPdf2md.rawValue)
+    public static let legacyDoclingServeReference = hostReference(ExtractionBackend.doclingServe.rawValue)
+    public static let legacyDefuddleReference = hostReference(HtmlExtractionBackend.defuddle.rawValue)
+
+    /// Builds a validated host reference for a known-good adapter literal.
+    public static func hostReference(_ rawValue: String) -> ExtractionBackendReference {
+        guard let adapterID = HostExtractorID(rawValue: rawValue) else {
+            preconditionFailure("Invalid host adapter literal: \(rawValue)")
+        }
+        return .host(HostExtractorReference(adapterID: adapterID))
+    }
+
     /// Canonical routes in host display order (PDF first, then HTML, then
     /// DOCX).
     public static let descriptors: [ExtractorRouteDescriptor] = [
@@ -181,7 +205,7 @@ public enum ExtractorRouteHostCatalog {
     /// The host's fixed choices for one route. Only canonical routes have
     /// host choices; a future registration-derived route offers package
     /// choices only. The DOCX route has no built-in backend, so its only
-    /// host choice is the nil "no default" entry — the reviewed docx2md
+    /// host choice is the explicit "no default" entry — the reviewed docx2md
     /// package appears as a choice when its registration is active (from the
     /// validated catalog record), and never as a hardcoded host row.
     public static func choices(for route: ExtractorRouteID) -> [ExtractorRouteChoice] {
@@ -189,7 +213,7 @@ public enum ExtractorRouteHostCatalog {
             return [
                 ExtractorRouteChoice(
                     route: route,
-                    reference: .builtIn(.pdf(.acp)),
+                    reference: acpReference,
                     displayName: "ACP Provider",
                     category: .connectedService),
             ]
@@ -198,12 +222,12 @@ public enum ExtractorRouteHostCatalog {
             return [
                 ExtractorRouteChoice(
                     route: route,
-                    reference: nil,
+                    reference: .none,
                     displayName: "No default (ask each time)",
                     category: .prompt),
                 ExtractorRouteChoice(
                     route: route,
-                    reference: .builtIn(.html(.tagBased)),
+                    reference: tagBasedReference,
                     displayName: "Tag-based",
                     category: .builtIn),
             ]
@@ -212,7 +236,7 @@ public enum ExtractorRouteHostCatalog {
             return [
                 ExtractorRouteChoice(
                     route: route,
-                    reference: nil,
+                    reference: .none,
                     displayName: "No default (use the reviewed package)",
                     category: .prompt),
             ]

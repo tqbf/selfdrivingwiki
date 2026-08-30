@@ -198,12 +198,12 @@ The current canonical routes are PDF (`application/pdf`) and HTML (`text/html`).
 Precedence for a route:
 
 1. An exact `routeExtractors` record.
-2. For a canonical route, the matching legacy field (`pdfExtractor` or `htmlExtractor`).
+2. The bundled default-route record for that route (`default-routes.json`).
 3. No selection.
 
-Below both layers, `backend` and `htmlBackend` keep their existing meaning. A config file without `routeExtractors` resolves exactly as before.
+Generic references only. A record names a host adapter, an installed package lineage, or the explicit no-default value. The route supplies the input format; the reference never carries PDF, HTML, or DOCX cases.
 
-Dual-write compatibility. A write through `setExtractorSelection(_:for:)` to a canonical route also updates the matching legacy reference field, so old builds reading `pdfExtractor` or `htmlExtractor` see the same selection. Removal clears the record and the legacy reference, so the legacy backend fields apply again. The Settings mapping (`writePDF` / `writeHTML`) keeps owning `backend` and `htmlBackend`.
+One-time migration. The retired `backend`, `htmlBackend`, `pdfExtractor`, and `htmlExtractor` keys are decode-only inputs. The decoder adopts each retired value into the matching route record when no record claims the route, and encode never writes the retired keys again. `routeExtractors` is the sole persisted extractor selection.
 
 Decode resilience. A missing key decodes to an empty list. A malformed record is dropped through the logged decode seam. Duplicate records for one route resolve deterministically: the canonically-greatest record wins, independent of file order, with one bounded diagnostic.
 

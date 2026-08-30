@@ -134,24 +134,25 @@ struct ExtractorPackageSettingsTests {
     @Test("legacy reviewed selections appear as reviewed packages")
     func legacyReviewedSelectionsMapToPackages() {
         var config = ExtractionConfig()
-        config.backend = .localPdf2md
-        config.htmlBackend = .defuddle
+        config.setExtractorSelection(ExtractorRouteHostCatalog.legacyPDF2mdReference, for: .canonicalPDF)
+        config.setExtractorSelection(ExtractorRouteHostCatalog.legacyDefuddleReference, for: .canonicalHTML)
 
         #expect(routeSelection(.canonicalPDF, from: config) == .reviewedPdf2md)
         #expect(routeSelection(.canonicalHTML, from: config) == .reviewedDefuddle)
     }
 
-    @Test("host service selections keep legacy fields truthful")
-    func hostSelectionsWriteBothCompatibilityDomains() {
+    @Test("host service selections write generic host records only")
+    func hostSelectionsWriteGenericRecords() {
         var config = ExtractionConfig()
 
         ExtractorRouteSettingsMapping.write(.connectedService(.acp), route: .canonicalPDF, into: &config)
         ExtractorRouteSettingsMapping.write(.builtInTagBased, route: .canonicalHTML, into: &config)
 
-        #expect(config.backend == .acp)
-        #expect(config.pdfExtractor == .builtIn(.pdf(.acp)))
-        #expect(config.htmlBackend == .tagBased)
-        #expect(config.htmlExtractor == .builtIn(.html(.tagBased)))
+        // The retired typed fields are never rewritten by selection writes.
+        #expect(config.backend == .localPdf2md)
+        #expect(config.htmlBackend == nil)
+        #expect(config.extractorSelection(for: .canonicalPDF) == ExtractorRouteHostCatalog.acpReference)
+        #expect(config.extractorSelection(for: .canonicalHTML) == ExtractorRouteHostCatalog.tagBasedReference)
     }
 
     @Test("new UI surfaces exclude direct API backends")
@@ -161,12 +162,12 @@ struct ExtractorPackageSettingsTests {
         #expect(ExtractionBackend.allCases.contains(.gemini))
     }
 
-    @Test("legacy direct API selections migrate to their ACP providers")
+    @Test("migrated direct API selections display and prefill as their ACP providers")
     func directAPISelectionsMapToACP() throws {
         var anthropic = ExtractionConfig()
-        anthropic.backend = .anthropic
+        anthropic.setExtractorSelection(ExtractorRouteHostCatalog.hostReference("anthropic"), for: .canonicalPDF)
         var gemini = ExtractionConfig()
-        gemini.pdfExtractor = .builtIn(.pdf(.gemini))
+        gemini.setExtractorSelection(ExtractorRouteHostCatalog.hostReference("gemini"), for: .canonicalPDF)
 
         #expect(routeSelection(.canonicalPDF, from: anthropic) == .connectedService(.acp))
         #expect(ExtractorSettingsSelectionMapping.acpProviderSelection(from: anthropic) == "claude-acp")
@@ -182,31 +183,25 @@ struct ExtractorPackageSettingsTests {
         ExtractorRouteSettingsMapping.write(.reviewedDefuddle, route: .canonicalHTML, into: &config)
         ExtractorRouteSettingsMapping.write(.reviewedDocx2md, route: .canonicalDOCX, into: &config)
 
-        #expect(config.backend == .localPdf2md)
-        #expect(config.pdfExtractor == .installed(ProcessExtractionServices.reviewedPDFLogical))
-        #expect(config.htmlBackend == .defuddle)
-        #expect(config.htmlExtractor == .installed(ProcessExtractionServices.reviewedHTMLLogical))
-        #expect(config.docxExtractor == .installed(ProcessExtractionServices.reviewedDOCXLogical))
-        // The canonical route records dual-write with the legacy fields.
         #expect(config.extractorSelection(for: .canonicalPDF) == .installed(ProcessExtractionServices.reviewedPDFLogical))
         #expect(config.extractorSelection(for: .canonicalHTML) == .installed(ProcessExtractionServices.reviewedHTMLLogical))
         #expect(config.extractorSelection(for: .canonicalDOCX) == .installed(ProcessExtractionServices.reviewedDOCXLogical))
     }
 
-    @Test("DOCX prompt clears the route selection so execution defaults to the reviewed package")
+    @Test("DOCX prompt writes the explicit reviewed-package default record")
     func docxPromptClearsSelection() {
         var config = ExtractionConfig()
-        config.docxExtractor = .installed(ProcessExtractionServices.reviewedDOCXLogical)
+        config.setExtractorSelection(.installed(ProcessExtractionServices.reviewedDOCXLogical), for: .canonicalDOCX)
 
         ExtractorRouteSettingsMapping.write(.prompt, route: .canonicalDOCX, into: &config)
 
-        #expect(config.docxExtractor == nil)
-        #expect(config.extractorSelection(for: .canonicalDOCX) == nil)
-        // The reviewed-package selection maps back through the table builder row.
+        // The explicit record states the reviewed-lineage default instead of
+        // relying on the bundled policy to refill it.
+        #expect(config.extractorSelection(for: .canonicalDOCX) == ExtractionBackendReference.none)
         #expect(routeSelection(.canonicalDOCX, from: config) == .prompt)
     }
 
-    @Test("installed selections preserve legacy fallback fields")
+    @Test("installed selections write only the route records")
     func installedSelectionsPreserveFallbacks() throws {
         let pdf = LogicalExtractorReference(
             packageID: try ExtractorPackageID(validating: "org.example.pdf"),
@@ -215,41 +210,34 @@ struct ExtractorPackageSettingsTests {
             packageID: try ExtractorPackageID(validating: "org.example.html"),
             registrationID: try ExtractorRegistrationID(validating: "article"))
         var config = ExtractionConfig()
-        config.backend = .anthropic
-        config.htmlBackend = .tagBased
 
         ExtractorRouteSettingsMapping.write(.installed(pdf), route: .canonicalPDF, into: &config)
         ExtractorRouteSettingsMapping.write(.installed(html), route: .canonicalHTML, into: &config)
 
-        #expect(config.backend == .anthropic)
-        #expect(config.pdfExtractor == .installed(pdf))
-        #expect(config.htmlBackend == .tagBased)
-        #expect(config.htmlExtractor == .installed(html))
+        #expect(config.extractorSelection(for: .canonicalPDF) == .installed(pdf))
+        #expect(config.extractorSelection(for: .canonicalHTML) == .installed(html))
     }
 
-    @Test("HTML prompt clears both compatibility fields")
+    @Test("HTML prompt writes the explicit no-default record")
     func htmlPromptClearsSelection() {
         var config = ExtractionConfig()
-        config.htmlBackend = .defuddle
-        config.htmlExtractor = .installed(ProcessExtractionServices.reviewedHTMLLogical)
+        config.setExtractorSelection(.installed(ProcessExtractionServices.reviewedHTMLLogical), for: .canonicalHTML)
 
         ExtractorRouteSettingsMapping.write(.prompt, route: .canonicalHTML, into: &config)
 
-        #expect(config.htmlBackend == nil)
-        #expect(config.htmlExtractor == nil)
-        #expect(config.extractorSelection(for: .canonicalHTML) == nil)
+        #expect(config.extractorSelection(for: .canonicalHTML) == ExtractionBackendReference.none)
     }
 
-    @Test("wrong-kind persisted references defer to legacy fields")
-    func wrongKindReferencesUseCompatibilityFields() {
+    @Test("host records with unknown-for-route adapter IDs display as prompt")
+    func unknownHostIDsDisplayAsPrompt() {
         var config = ExtractionConfig()
-        config.backend = .doclingServe
-        config.pdfExtractor = .builtIn(.html(.tagBased))
-        config.htmlBackend = .tagBased
-        config.htmlExtractor = .builtIn(.pdf(.anthropic))
+        config.setExtractorSelection(ExtractorRouteHostCatalog.tagBasedReference, for: .canonicalPDF)
+        config.setExtractorSelection(ExtractorRouteHostCatalog.acpReference, for: .canonicalHTML)
 
-        #expect(routeSelection(.canonicalPDF, from: config) == .reviewedDocling)
-        #expect(routeSelection(.canonicalHTML, from: config) == .builtInTagBased)
+        // The route supplies the format; a host ID that names no choice on
+        // that route never resolves to a foreign choice.
+        #expect(routeSelection(.canonicalPDF, from: config) == .prompt)
+        #expect(routeSelection(.canonicalHTML, from: config) == .prompt)
     }
 
     // MARK: - Settings model

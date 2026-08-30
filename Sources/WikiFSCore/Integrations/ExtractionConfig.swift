@@ -11,7 +11,10 @@ import Foundation
 /// pattern exactly (pure value type, explicit injected directory, atomic write),
 /// and `WikiRegistry`'s degrade-to-empty-on-corrupt rule.
 public struct ExtractionConfig: JSONSidecarConfig {
-    /// Which backend the next extraction service preparation resolves to.
+    /// DEPRECATED legacy input (decode-only): the pre-route PDF backend choice.
+    /// Runtime selection lives in `routeExtractors`; the decoder migrates this
+    /// value into a PDF route record and new files never write the key. Only
+    /// the retired test-only extraction runtime still reads the field.
     public var backend: ExtractionBackend
 
     /// For the `.acp` backend: the provider id (from `AgentProvidersConfig`)
@@ -57,13 +60,9 @@ public struct ExtractionConfig: JSONSidecarConfig {
         return doclingServeTimeoutMilliseconds
     }
 
-    /// The HTML→Markdown backend to use when the user explicitly extracts an
-    /// HTML source (issue #799 PR1: scaffolding only — extraction still
-    /// auto-runs at ingest with the current method; the trigger wiring lands in
-    /// PR2, the auto-extraction removal in PR3). `nil` = no default chosen:
-    /// the user is prompted to pick a backend before the first extraction.
-    /// Mirrors the typed-backend pattern of `backend` but optional, since HTML
-    /// has no always-available fallback (defuddle binary may be missing).
+    /// DEPRECATED legacy input (decode-only): the pre-route HTML backend
+    /// choice. The decoder migrates this value into an HTML route record and
+    /// new files never write the key.
     public var htmlBackend: HtmlExtractionBackend?
 
     /// The podcast→transcript backend to use when the user explicitly
@@ -73,30 +72,17 @@ public struct ExtractionConfig: JSONSidecarConfig {
     /// Whisper/Rev.ai backends as future follow-ups.
     public var podcastBackend: PodcastTranscriptionBackend?
 
-    /// Optional version-free PDF extractor selection. When absent, `backend`
-    /// keeps its existing meaning and precedence.
-    public var pdfExtractor: ExtractionBackendReference?
-
-    /// Optional version-free HTML extractor selection. When absent,
-    /// `htmlBackend` keeps its existing meaning and precedence.
-    public var htmlExtractor: ExtractionBackendReference?
-
-    /// Optional version-free DOCX extractor selection. DOCX is package-only —
-    /// there is no built-in DOCX backend and no legacy field beneath this one.
-    /// When absent (nil), execution resolves the reviewed docx2md lineage as
-    /// the default; the selection stores an explicit override only.
-    public var docxExtractor: ExtractionBackendReference?
-
     /// Route-indexed selections, one record per typed extraction route
     /// (`ExtractorRouteID` = kind + normalized MIME). A record for a canonical
-    /// route takes precedence over the matching legacy `pdfExtractor` /
-    /// `htmlExtractor` field; legacy fields remain the fallback when the record
-    /// is absent, so pre-route config files resolve exactly as before.
-    /// Mutation flows only through `setExtractorSelection(_:for:)` (and the
-    /// normalizing initializer/decoder), keeping the array sorted and
-    /// duplicate-free at all times. Persisted as a deterministically sorted
-    /// array (never a string-keyed dictionary); a missing key decodes to an
-    /// empty list.
+    /// route is the SOLE persisted extractor selection — the generic reference
+    /// names a host adapter or an installed package lineage, and the route
+    /// supplies the input format. The decoder migrates the retired
+    /// `backend` / `htmlBackend` / `pdfExtractor` / `htmlExtractor` keys into
+    /// these records; encode never writes them again. Mutation flows only
+    /// through `setExtractorSelection(_:for:)` (and the normalizing
+    /// initializer/decoder), keeping the array sorted and duplicate-free at
+    /// all times. Persisted as a deterministically sorted array (never a
+    /// string-keyed dictionary); a missing key decodes to an empty list.
     public private(set) var routeExtractors: [ExtractorRouteSelectionRecord]
 
     /// The config's JSON filename inside the App Group container.
@@ -113,9 +99,6 @@ public struct ExtractionConfig: JSONSidecarConfig {
         doclingServeTimeoutMilliseconds: Int? = nil,
         htmlBackend: HtmlExtractionBackend? = nil,
         podcastBackend: PodcastTranscriptionBackend? = nil,
-        pdfExtractor: ExtractionBackendReference? = nil,
-        htmlExtractor: ExtractionBackendReference? = nil,
-        docxExtractor: ExtractionBackendReference? = nil,
         routeExtractors: [ExtractorRouteSelectionRecord] = []
     ) {
         self.backend = backend
@@ -128,9 +111,6 @@ public struct ExtractionConfig: JSONSidecarConfig {
         self.doclingServeTimeoutMilliseconds = doclingServeTimeoutMilliseconds
         self.htmlBackend = htmlBackend
         self.podcastBackend = podcastBackend
-        self.pdfExtractor = pdfExtractor
-        self.htmlExtractor = htmlExtractor
-        self.docxExtractor = docxExtractor
         self.routeExtractors = routeExtractors.normalizedForPersistence().records
     }
 
@@ -174,7 +154,7 @@ public struct ExtractionConfig: JSONSidecarConfig {
         case doclingServeEndpoint
         case doclingServeTimeoutMilliseconds
         case htmlBackend, podcastBackend
-        case pdfExtractor, htmlExtractor, docxExtractor
+        case pdfExtractor, htmlExtractor
         case routeExtractors
     }
 
@@ -203,18 +183,62 @@ public struct ExtractionConfig: JSONSidecarConfig {
         // decode philosophy as `unknownBackendValueDegradesToLocalPdf2md`.
         self.htmlBackend = DebugLog.trying("init(from:) decode htmlBackend") { try c.decode(HtmlExtractionBackend.self, forKey: .htmlBackend) }
         self.podcastBackend = DebugLog.trying("init(from:) decode podcastBackend") { try c.decode(PodcastTranscriptionBackend.self, forKey: .podcastBackend) }
-        self.pdfExtractor = DebugLog.trying("init(from:) decode pdfExtractor") { try c.decode(ExtractionBackendReference.self, forKey: .pdfExtractor) }
-        self.htmlExtractor = DebugLog.trying("init(from:) decode htmlExtractor") { try c.decode(ExtractionBackendReference.self, forKey: .htmlExtractor) }
-        self.docxExtractor = DebugLog.trying("init(from:) decode docxExtractor") { try c.decode(ExtractionBackendReference.self, forKey: .docxExtractor) }
-        self.routeExtractors = Self.decodedRouteRecords(from: c)
+        var routes = Self.decodedRouteRecords(from: c)
+        // One-time migration: every retired format-specific selection key is a
+        // decode-only input. Each canonical route adopts its legacy value only
+        // when no route record already claims the route, so a file written by
+        // any earlier build resolves to the same selection it always had.
+        let legacyPDF = DebugLog.trying("init(from:) decode legacy pdfExtractor") {
+            try c.decode(ExtractionBackendReference.self, forKey: .pdfExtractor)
+        }
+        let legacyHTML = DebugLog.trying("init(from:) decode legacy htmlExtractor") {
+            try c.decode(ExtractionBackendReference.self, forKey: .htmlExtractor)
+        }
+        if routes.contains(where: { $0.route == .canonicalPDF }) == false {
+            if let legacyPDF {
+                routes.append(.init(route: .canonicalPDF, extractor: legacyPDF))
+            } else if let migrated = Self.migratedSelection(fromPDFBackend: backend) {
+                routes.append(.init(route: .canonicalPDF, extractor: migrated))
+            }
+        }
+        if routes.contains(where: { $0.route == .canonicalHTML }) == false {
+            if let legacyHTML {
+                routes.append(.init(route: .canonicalHTML, extractor: legacyHTML))
+            } else if let htmlBackend,
+                      let migrated = Self.migratedSelection(fromHTMLBackend: htmlBackend) {
+                routes.append(.init(route: .canonicalHTML, extractor: migrated))
+            }
+        }
+        self.routeExtractors = routes.normalizedForPersistence().records
+    }
+
+    /// Legacy `backend` values map onto generic host references. `.localPdf2md`
+    /// was the shipped default, so it leaves the record absent and the bundled
+    /// default-route policy supplies the reviewed pdf2md lineage instead.
+    private static func migratedSelection(
+        fromPDFBackend backend: ExtractionBackend
+    ) -> ExtractionBackendReference? {
+        guard backend != .localPdf2md,
+              let adapterID = HostExtractorID(rawValue: backend.rawValue) else { return nil }
+        return .host(HostExtractorReference(adapterID: adapterID))
+    }
+
+    /// Legacy `htmlBackend` values map onto generic host references.
+    private static func migratedSelection(
+        fromHTMLBackend backend: HtmlExtractionBackend
+    ) -> ExtractionBackendReference? {
+        guard let adapterID = HostExtractorID(rawValue: backend.rawValue) else { return nil }
+        return .host(HostExtractorReference(adapterID: adapterID))
     }
 
     public func encode(to encoder: any Encoder) throws {
         // Explicit encode so the persisted byte shape stays identical to the
         // synthesized form (encodeIfPresent for optionals) while route records
-        // are always written in deterministic route order.
+        // are always written in deterministic route order. The retired
+        // `backend` / `htmlBackend` / `pdfExtractor` / `htmlExtractor` keys are
+        // decode-only migration inputs and never re-enter the file — the route
+        // records are the sole persisted extractor selection.
         var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(backend, forKey: .backend)
         try c.encodeIfPresent(acpProviderId, forKey: .acpProviderId)
         try c.encode(anthropicModel, forKey: .anthropicModel)
         try c.encodeIfPresent(anthropicBaseURLOverride, forKey: .anthropicBaseURLOverride)
@@ -222,54 +246,26 @@ public struct ExtractionConfig: JSONSidecarConfig {
         try c.encodeIfPresent(geminiBaseURLOverride, forKey: .geminiBaseURLOverride)
         try c.encodeIfPresent(doclingServeEndpoint, forKey: .doclingServeEndpoint)
         try c.encodeIfPresent(doclingServeTimeoutMilliseconds, forKey: .doclingServeTimeoutMilliseconds)
-        try c.encodeIfPresent(htmlBackend, forKey: .htmlBackend)
         try c.encodeIfPresent(podcastBackend, forKey: .podcastBackend)
-        try c.encodeIfPresent(pdfExtractor, forKey: .pdfExtractor)
-        try c.encodeIfPresent(htmlExtractor, forKey: .htmlExtractor)
-        try c.encodeIfPresent(docxExtractor, forKey: .docxExtractor)
         try c.encode(routeExtractors.sorted(), forKey: .routeExtractors)
     }
 
     // MARK: - Route selections
 
-    /// The effective version-free selection for one route, applying the
-    /// persistence precedence: an exact `routeExtractors` record first, then the
-    /// matching legacy reference field for a canonical route (`pdfExtractor` /
-    /// `htmlExtractor`), then no selection. The older `backend` / `htmlBackend`
-    /// fields are the layer below this one — the resolver falls through to them
-    /// exactly as it did before route records existed.
+    /// The configured version-free selection for one route. The decoder
+    /// migrates old format-specific extractor keys into this generic table.
     public func extractorSelection(for route: ExtractorRouteID) -> ExtractionBackendReference? {
-        if let record = routeExtractors.first(where: { $0.route == route }) { return record.extractor }
-        if route == .canonicalPDF { return pdfExtractor }
-        if route == .canonicalHTML { return htmlExtractor }
-        if route == .canonicalDOCX { return docxExtractor }
-        return nil
+        routeExtractors.first(where: { $0.route == route })?.extractor
     }
 
     /// Insert, replace, or remove (`nil`) the selection for one route.
-    ///
-    /// Dual-write compatibility: a canonical-route write also updates the
-    /// matching legacy reference field (`pdfExtractor` / `htmlExtractor`) so old
-    /// builds reading those fields resolve the same selection. The older
-    /// `backend` / `htmlBackend` fields stay owned by the Settings mapping
-    /// (`writePDF` / `writeHTML`), which keeps them truthful when a selection is
-    /// expressed through them. Unrelated route records are preserved; removal
-    /// drops only this route's record and clears the legacy reference, letting
-    /// the legacy fallback layer apply again.
+    /// Unrelated route records are preserved. No format-specific selection
+    /// field is written.
     public mutating func setExtractorSelection(_ extractor: ExtractionBackendReference?, for route: ExtractorRouteID) {
         routeExtractors.removeAll { $0.route == route }
         if let extractor {
             routeExtractors.append(ExtractorRouteSelectionRecord(route: route, extractor: extractor))
             routeExtractors.sort()
-        }
-        if route == .canonicalPDF {
-            pdfExtractor = extractor
-        } else if route == .canonicalHTML {
-            htmlExtractor = extractor
-        } else if route == .canonicalDOCX {
-            // No legacy field predates the route record for DOCX —
-            // `docxExtractor` IS the field this dual-write maintains.
-            docxExtractor = extractor
         }
     }
 
@@ -326,7 +322,8 @@ public struct ExtractionConfig: JSONSidecarConfig {
     /// fresh-install behavior as `ZoteroConfig.load`. Delegates the file read +
     /// decode to `JSONSidecarConfig.load(from:)` and supplies the default config.
     public static func load(from directory: URL) -> ExtractionConfig {
-        load(from: directory) ?? ExtractionConfig()
+        let user = load(from: directory) ?? ExtractionConfig()
+        return user.applying(defaults: .bundled)
     }
 }
 

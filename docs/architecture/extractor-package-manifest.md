@@ -149,18 +149,15 @@ The index file is `derived/index.json` under the store root. Its schema version 
 
 ## Configuration compatibility
 
-`extraction-config.json` keeps its existing fields. Three optional logical fields extend it: `pdfExtractor`, `htmlExtractor`, and `docxExtractor`. Each holds either a built-in reference or an installed package reference.
+`extraction-config.json` stores one generic selection table: `routeExtractors`, a sorted array of route records. Each record names a typed extraction route (kind plus MIME type) and a version-free reference — a host adapter identity, an installed package lineage, or an explicit no-default value. The route supplies the input format; the reference names only the implementation.
 
-Selection precedence per extractor kind:
+One-time migration. The retired `backend`, `htmlBackend`, `pdfExtractor`, and `htmlExtractor` keys are decode-only inputs. The decoder adopts each retired value into the matching route record when no record claims that route: `backend` values become host references (`localPdf2md` leaves the record absent, because the bundled default supplies it), and `htmlBackend` values become host references. Encode never writes the retired keys again.
 
-1. If the logical field is absent, the legacy `backend` or `htmlBackend` field applies unchanged.
-2. If the logical field selects a built-in, that explicit selection wins over the legacy field.
-3. If the logical field selects an installed package and a compatible active registration exists, it wins.
-4. If that installed selection is unavailable, the app keeps the selection, emits one redacted diagnostic, and uses the fixed fallback: the built-in PDF backend for PDF, or built-in tag-based extraction for HTML. The app never silently selects a different third-party package.
+Defaults. Fresh installs and record-less routes resolve through the bundled default-route policy (`default-routes.json`): the PDF route defaults to the reviewed pdf2md lineage, and the DOCX route to the reviewed docx2md lineage (`org.selfdrivingwiki.docx2md`, registration `document`). HTML has no shipped default — the user picks an extractor, and the built-in tag-based adapter is the execution floor. An explicit no-default record disables the shipped default for its route.
 
-DOCX has no built-in backend and no legacy field. A missing `docxExtractor` resolves to the reviewed docx2md lineage (`org.selfdrivingwiki.docx2md`, registration `document`). If that package is not active, DOCX extraction fails closed with one redacted diagnostic.
+Failure posture. An installed selection with no compatible active registration keeps its saved identity, emits one redacted diagnostic, and fails closed. The app never silently selects a different third-party package.
 
-Legacy built-in selections keep working. The `localPdf2md` selection maps to the reviewed pdf2md package lineage (`org.selfdrivingwiki.pdf2md`, registration `document`) when it is active, and the legacy Defuddle selection maps to the reviewed Defuddle lineage (`org.selfdrivingwiki.defuddle`, registration `article`).
+Legacy host identities keep working. A migrated `localPdf2md`, `doclingServe`, or `defuddle` host reference maps to its reviewed package lineage (`org.selfdrivingwiki.pdf2md` / `org.selfdrivingwiki.docling-serve`, registration `document`; `org.selfdrivingwiki.defuddle`, registration `article`) when that lineage is active, and fails closed when it is not.
 
 ## Worked examples
 

@@ -74,8 +74,8 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
         package: ReviewedExtractorPackages.doclingServe, registration: "document")
 
     /// The logical reference of the reviewed docx2md package registration.
-    /// DOCX has no built-in backend, so this lineage is also the DEFAULT
-    /// selection when no `docxExtractor` reference is configured.
+    /// DOCX has no built-in backend, so this lineage is the host default when
+    /// the canonical DOCX route has no configured selection.
     public static let reviewedDOCXLogical = reviewedLogical(
         package: ReviewedExtractorPackages.docx2md, registration: "document")
 
@@ -93,23 +93,7 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
 
     public func prepare(backendOverride: ExtractionBackend?) async throws -> ExtractionPreparation {
         let configuration = try input.readConfiguration()
-        var key = try await pdfKey(configuration: configuration, override: backendOverride)
-        if case .builtIn(let builtIn) = key,
-           builtIn == ExtractionBackendKey(kind: .pdf, backendID: ExtractionBackend.localPdf2md.rawValue) {
-            key = try await reviewedKey(
-                logical: Self.reviewedPDFLogical,
-                kind: .pdf)
-        }
-        // Legacy `.doclingServe` selections run through the reviewed Docling
-        // Serve package. There is deliberately NO silent fallback to another
-        // third-party package: an unauthorized or unconfigured selection
-        // surfaces its needs-authorization state instead (plan step 12).
-        if case .builtIn(let builtIn) = key,
-           builtIn == ExtractionBackendKey(kind: .pdf, backendID: ExtractionBackend.doclingServe.rawValue) {
-            key = try await reviewedKey(
-                logical: Self.reviewedDoclingLogical,
-                kind: .pdf)
-        }
+        let key = try await pdfKey(configuration: configuration, override: backendOverride)
         let adapter = try await makeAdapter(for: key)
         guard case .pdf(let preparation) = adapter else {
             throw ExtractionServicesError.unavailable
@@ -123,21 +107,7 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
         backendOverride: HtmlExtractionBackend?
     ) async throws -> any HtmlMarkdownExtractor {
         let configuration = try input.readConfiguration()
-        var key = try await htmlKey(
-            configuration: configuration,
-            override: backendOverride)
-
-        // The legacy Defuddle choice maps to its reviewed package lineage.
-        if case .builtIn(let builtIn) = key,
-           builtIn == ExtractionBackendKey(
-               kind: .html,
-               backendID: HtmlExtractionBackend.defuddle.rawValue)
-        {
-            key = try await reviewedKey(
-                logical: Self.reviewedHTMLLogical,
-                kind: .html)
-        }
-
+        let key = try await htmlKey(configuration: configuration, override: backendOverride)
         let adapter = try await makeAdapter(for: key)
         guard case .html(let extractor) = adapter else {
             throw ExtractionServicesError.unavailable
@@ -146,10 +116,10 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
     }
 
     /// Resolves one configured DOCX adapter. DOCX is package-only: there are
-    /// no built-in DOCX backends and no legacy selection to remap, so a nil
-    /// configured reference resolves directly to the reviewed docx2md
-    /// lineage. An inactive package (removed, not yet activated, or bun
-    /// missing) fails closed — no substitution, one redacted diagnostic via
+    /// no built-in DOCX backends and no legacy selection to remap, so the
+    /// bundled default record supplies the reviewed docx2md lineage. An
+    /// inactive package (removed, not yet activated, or bun missing) fails
+    /// closed — no substitution, one redacted diagnostic via
     /// `selectedExtractorUnavailable`.
     public func prepareDOCX() async throws -> any DocxMarkdownExtractor {
         let configuration = try input.readConfiguration()
@@ -172,91 +142,67 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
         await context.shutdown()
     }
 
+    /// PDF key resolution through the generic route record. An explicit
+    /// override (a queued re-extract request) resolves as a host reference.
     private func pdfKey(
         configuration: ExtractionConfig,
         override: ExtractionBackend?
     ) async throws -> ExtractionAdapterKey {
         if let override {
-            return .builtIn(ExtractionBackendKey(kind: .pdf, backendID: override.rawValue))
+            return try await executionKey(
+                hostID: override.rawValue, kind: .pdf, route: .canonicalPDF)
         }
-        guard let logical = configuration.pdfExtractor else {
-            return .builtIn(ExtractionBackendKey(
-                kind: .pdf,
-                backendID: configuration.backend.rawValue))
+        let record = configuration.selectionOrDefault(for: .canonicalPDF)
+        if case .installed(let reference)? = record {
+            return try await installedKey(reference, kind: .pdf, route: .canonicalPDF)
         }
-        switch logical {
-        case .builtIn(.pdf(let backend)):
-            return .builtIn(ExtractionBackendKey(kind: .pdf, backendID: backend.rawValue))
-        case .builtIn(.html):
-            return .builtIn(ExtractionBackendKey(
-                kind: .pdf,
-                backendID: configuration.backend.rawValue))
-        case .installed(let reference):
-            guard let match = await registry.resolveInstalled(reference, kind: .pdf) else {
-                throw ExtractionServicesError.selectedExtractorUnavailable(
-                    route: .canonicalPDF,
-                    reference: reference)
-            }
-            return match.key
+        if case .host(let host)? = record {
+            return try await executionKey(
+                hostID: host.adapterID.rawValue, kind: .pdf, route: .canonicalPDF)
         }
+        // `.none` (explicit disable) or no record and no bundled default:
+        // fail closed instead of reviving a retired adapter.
+        throw ExtractionServicesError.unavailable
     }
 
+    /// HTML key resolution through the generic route record. HTML has no
+    /// bundled default: with no record (or an explicit `.none`), the built-in
+    /// tag-based adapter is the always-available execution floor.
     private func htmlKey(
         configuration: ExtractionConfig,
         override: HtmlExtractionBackend?
     ) async throws -> ExtractionAdapterKey {
         if let override {
-            return .builtIn(ExtractionBackendKey(kind: .html, backendID: override.rawValue))
+            return try await executionKey(
+                hostID: override.rawValue, kind: .html, route: .canonicalHTML)
         }
-        guard let logical = configuration.htmlExtractor else {
-            return .builtIn(ExtractionBackendKey(
-                kind: .html,
-                backendID: (configuration.htmlBackend ?? .tagBased).rawValue))
+        let record = configuration.selectionOrDefault(for: .canonicalHTML)
+        if case .installed(let reference)? = record {
+            return try await installedKey(reference, kind: .html, route: .canonicalHTML)
         }
-        switch logical {
-        case .builtIn(.html(let backend)):
-            return .builtIn(ExtractionBackendKey(kind: .html, backendID: backend.rawValue))
-        case .builtIn(.pdf):
-            return .builtIn(ExtractionBackendKey(
-                kind: .html,
-                backendID: (configuration.htmlBackend ?? .tagBased).rawValue))
-        case .installed(let reference):
-            guard let match = await registry.resolveInstalled(reference, kind: .html) else {
-                throw ExtractionServicesError.selectedExtractorUnavailable(
-                    route: .canonicalHTML,
-                    reference: reference)
-            }
-            return match.key
+        if case .host(let host)? = record {
+            return try await executionKey(
+                hostID: host.adapterID.rawValue, kind: .html, route: .canonicalHTML)
         }
+        return .builtIn(ExtractionBackendKey(
+            kind: .html,
+            backendID: HtmlExtractionBackend.tagBased.rawValue))
     }
 
-    /// Resolves a reviewed package lineage by identity. A missing reviewed
-    /// registration is a configuration error, not permission to restore a
-    /// retired in-process extractor.
-    private func reviewedKey(
-        logical: LogicalExtractorReference,
-        kind: ExtractionBackendKind
-    ) async throws -> ExtractionAdapterKey {
-        guard let match = await registry.resolveInstalled(logical, kind: kind) else {
-            throw ExtractionServicesError.unavailable
-        }
-        return match.key
-    }
-
-    /// DOCX key resolution. DOCX is package-only, so an installed logical
-    /// reference must have an active registration in the DOCX namespace; no
-    /// selection (or a cross-kind builtIn stray) resolves to the reviewed
-    /// docx2md lineage, mirroring `pdfKey` / `htmlKey` fail-closed behavior.
+    /// DOCX key resolution. DOCX is package-only: an installed logical
+    /// reference must have an active registration in the DOCX namespace;
+    /// every other selection state (`.none`, a host stray, or no record
+    /// before the bundled policy applies) resolves to the reviewed docx2md
+    /// lineage, matching the route's single "use the reviewed package"
+    /// non-package choice.
     private func docxKey(
         configuration: ExtractionConfig
     ) async throws -> ExtractionAdapterKey {
+        let record = configuration.selectionOrDefault(for: .canonicalDOCX)
         let logical: LogicalExtractorReference
-        switch configuration.docxExtractor {
-        case .installed(let reference):
+        if case .installed(let reference)? = record {
             logical = reference
-        case .builtIn, nil:
-            // There is no built-in DOCX backend; the default selection is
-            // the reviewed docx2md lineage.
+        } else {
             logical = Self.reviewedDOCXLogical
         }
         guard let match = await registry.resolveInstalled(logical, kind: .docx) else {
@@ -265,6 +211,48 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
                 reference: logical)
         }
         return match.key
+    }
+
+    /// Resolves an installed lineage to its exact registry key, failing
+    /// closed with the redacted route diagnostic when no active registration
+    /// of that lineage exists.
+    private func installedKey(
+        _ logical: LogicalExtractorReference,
+        kind: ExtractionBackendKind,
+        route: ExtractorRouteID
+    ) async throws -> ExtractionAdapterKey {
+        guard let match = await registry.resolveInstalled(logical, kind: kind) else {
+            throw ExtractionServicesError.selectedExtractorUnavailable(
+                route: route,
+                reference: logical)
+        }
+        return match.key
+    }
+
+    /// Resolves a host adapter ID to its registry key for the route's kind.
+    /// The three legacy backend names older configs migrated onto host IDs
+    /// remap to their reviewed package lineages; every other ID resolves as a
+    /// plain built-in key (`(kind, adapterID)` in the process registry).
+    private func executionKey(
+        hostID: String,
+        kind: ExtractionBackendKind,
+        route: ExtractorRouteID
+    ) async throws -> ExtractionAdapterKey {
+        let legacyLineage: LogicalExtractorReference?
+        switch (kind, hostID) {
+        case (.pdf, ExtractionBackend.localPdf2md.rawValue):
+            legacyLineage = Self.reviewedPDFLogical
+        case (.pdf, ExtractionBackend.doclingServe.rawValue):
+            legacyLineage = Self.reviewedDoclingLogical
+        case (.html, HtmlExtractionBackend.defuddle.rawValue):
+            legacyLineage = Self.reviewedHTMLLogical
+        default:
+            legacyLineage = nil
+        }
+        if let legacyLineage {
+            return try await installedKey(legacyLineage, kind: kind, route: route)
+        }
+        return .builtIn(ExtractionBackendKey(kind: kind, backendID: hostID))
     }
 
     private func makeAdapter(
