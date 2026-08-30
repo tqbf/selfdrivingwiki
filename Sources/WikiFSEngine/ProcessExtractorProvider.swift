@@ -833,8 +833,13 @@ public struct ProcessPackagePDFExtractor: MarkdownExtractor, ProcessPackageProve
         policy: ExtractorRuntimeSearchPolicy
     ) -> URL? {
         for directory in policy.searchDirectories {
-            let candidate = directory.appendingPathComponent(command.rawValue)
-            if entryIsExecutable(candidate) { return candidate }
+            // Probe the RESOLVED file: mise-style shims are symlinks, and
+            // `entryIsExecutable` deliberately requires a regular file. This
+            // mirrors the executor's launch resolution.
+            let resolved = directory.appendingPathComponent(command.rawValue)
+                .standardizedFileURL
+                .resolvingSymlinksInPath()
+            if entryIsExecutable(resolved) { return resolved }
         }
         return nil
     }

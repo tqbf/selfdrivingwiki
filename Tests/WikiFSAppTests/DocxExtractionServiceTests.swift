@@ -203,6 +203,7 @@ private struct StubDocxExtractor: DocxMarkdownExtractor {
     }
 
     func extract(docx: Data) async -> DocxExtractionResult? { result }
+    func readiness() async -> ExtractionReadiness { .ready }
 }
 
 

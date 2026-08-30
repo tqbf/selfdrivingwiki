@@ -53,6 +53,63 @@ struct ManagedExtractorProcessExecutorTests {
         }
     }
 
+    /// mise-style runtime shims are SYMLINKS (shims/bun -> /opt/homebrew/bin/mise).
+    /// The resolver must probe through the link: a strict regular-file lstat on
+    /// the shim itself would report every mise-managed runtime as missing.
+    /// Regression for the app-side `missingRuntime(bun)` failure.
+    @Test func runtimeResolutionFollowsSymlinkedShims() async throws {
+        let searchDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("managed-extractor-shims-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: searchDirectory, withIntermediateDirectories: true)
+        let fixture = try Fixture(
+            mode: "success",
+            launch: .runtime(
+                command: ExtractorRuntimeName(validating: "fixture-shim"),
+                arguments: []),
+            runtimeSearchDirectories: [searchDirectory])
+        defer { fixture.cleanup() }
+
+        // The shim points at the fixture's own entry executable.
+        let shimURL = searchDirectory.appendingPathComponent("fixture-shim")
+        try FileManager.default.createSymbolicLink(
+            at: shimURL,
+            withDestinationURL: fixture.packageRoot
+                .appendingPathComponent("bin/fixture"))
+
+        let result = try await ManagedExtractorProcessExecutor().execute(
+            fixture.operation,
+            onFrame: { _ in })
+        #expect(result.terminationCause == .exited(code: 0))
+        #expect(try String(contentsOf: fixture.outputURL, encoding: .utf8) == "# Fixture\n")
+    }
+
+    /// A broken symlink is not a runtime: the probe moves on and the typed
+    /// missing-runtime error is preserved.
+    @Test func brokenSymlinkShimStillReportsMissingRuntime() async throws {
+        let searchDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("managed-extractor-broken-shims-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: searchDirectory, withIntermediateDirectories: true)
+        let fixture = try Fixture(
+            mode: "success",
+            launch: .runtime(
+                command: ExtractorRuntimeName(validating: "fixture-shim"),
+                arguments: []),
+            runtimeSearchDirectories: [searchDirectory])
+        defer { fixture.cleanup() }
+
+        try FileManager.default.createSymbolicLink(
+            at: searchDirectory.appendingPathComponent("fixture-shim"),
+            withDestinationURL: fixture.packageRoot
+                .appendingPathComponent("bin/does-not-exist"))
+
+        await #expect(throws: ManagedExtractorProcessError.missingRuntime(
+            try ExtractorRuntimeName(validating: "fixture-shim"))) {
+            _ = try await ManagedExtractorProcessExecutor().execute(fixture.operation)
+        }
+    }
+
     @Test func malformedProtocolAndNonzeroExitAreTyped() async throws {
         let malformed = try Fixture(mode: "malformed")
         defer { malformed.cleanup() }
@@ -154,7 +211,8 @@ private final class Fixture: @unchecked Sendable {
     init(
         mode: String,
         launch: ExtractorLaunch = .direct,
-        maximumDurationMilliseconds: Int = 5_000
+        maximumDurationMilliseconds: Int = 5_000,
+        runtimeSearchDirectories: [URL] = []
     ) throws {
         root = FileManager.default.temporaryDirectory
             .appendingPathComponent("managed-extractor-\(UUID().uuidString)", isDirectory: true)
@@ -231,7 +289,8 @@ private final class Fixture: @unchecked Sendable {
                 homeRoot: homeRoot,
                 temporaryRoot: temporaryRoot,
                 privateCacheRoot: cacheRoot),
-            runtimeSearchPolicy: ExtractorRuntimeSearchPolicy(searchDirectories: []),
+            runtimeSearchPolicy: ExtractorRuntimeSearchPolicy(
+                searchDirectories: runtimeSearchDirectories),
             cancellationGracePeriod: .milliseconds(50))
     }
 

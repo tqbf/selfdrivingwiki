@@ -24,6 +24,7 @@ public struct ExtractorRuntimeSearchPolicy: Sendable {
         let home = FileManager.default.homeDirectoryForCurrentUser
         return Self(searchDirectories: [
             home.appendingPathComponent(".local/share/mise/shims", isDirectory: true),
+            home.appendingPathComponent(".bun/bin", isDirectory: true),
             home.appendingPathComponent(".local/bin", isDirectory: true),
             URL(fileURLWithPath: "/opt/homebrew/bin", isDirectory: true),
             URL(fileURLWithPath: "/usr/local/bin", isDirectory: true),
@@ -241,16 +242,26 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
             for directory in operation.runtimeSearchPolicy.searchDirectories {
                 let candidate = directory.appendingPathComponent(command.rawValue).standardizedFileURL
                 guard isContained(candidate, in: directory) else { continue }
+                // mise-style shims are symlinks to the real binary (shims/bun ->
+                // /opt/homebrew/bin/mise), so the probe must run on the RESOLVED
+                // file: the identity check requires a regular file, and the
+                // pinned identity must name the file that actually executes.
+                // Search directories are host PATH policy, not package payload —
+                // the strict no-symlink lstat rule stays on the package entry
+                // point above. The pinned identity plus the spawn-time
+                // re-verification keep the TOCTOU window closed.
+                let resolved = candidate.resolvingSymlinksInPath()
                 let identity: ManagedExecutableIdentity
                 do {
-                    // A search-directory entry that is absent or not an executable
-                    // regular file simply ends the probe of that candidate.
-                    identity = try executableIdentity(candidate, requireExecutable: true)
+                    // A search-directory entry that is absent, not an executable
+                    // regular file after resolution, or a broken symlink simply
+                    // ends the probe of that candidate.
+                    identity = try executableIdentity(resolved, requireExecutable: true)
                 } catch {
                     continue
                 }
                 return ManagedLaunch(
-                    executableURL: candidate,
+                    executableURL: resolved,
                     arguments: arguments + [entryPoint.path],
                     identity: identity)
             }

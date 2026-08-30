@@ -37,4 +37,9 @@ public protocol DocxMarkdownExtractor: Sendable {
     /// caller records the extraction attempt as failed rather than writing a
     /// partial result.
     func extract(docx: Data) async -> DocxExtractionResult?
+
+    /// A cheap probe before `extract`. DOCX has no built-in fallback, so a
+    /// not-ready probe (runtime missing, entry point absent) is user-facing
+    /// setup guidance rather than a substitution trigger.
+    func readiness() async -> ExtractionReadiness
 }

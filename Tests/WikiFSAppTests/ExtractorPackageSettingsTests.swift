@@ -652,5 +652,6 @@ private struct SettingsStubDOCXExtractor: DocxMarkdownExtractor {
     }
 
     func extract(docx: Data) async -> DocxExtractionResult? { nil }
+    func readiness() async -> ExtractionReadiness { .ready }
 }
 #endif

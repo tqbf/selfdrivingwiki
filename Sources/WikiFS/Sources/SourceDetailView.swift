@@ -1567,8 +1567,25 @@ struct SourceDetailView: View {
                 ?? error.localizedDescription
             return
         }
+        // A runtime problem (bun missing, entry point absent) is a cheap
+        // stat-based probe away — surface it instead of letting the managed
+        // spawn fail into a silent nil.
+        let readiness = await extractor.readiness()
+        switch readiness {
+        case .ready:
+            break
+        case .needsSetup(let message), .notInstalled(let message):
+            htmlExtractionError = message
+            return
+        }
         if let head = await store.extractDocx(for: file.id, extractor: extractor) {
             headVersion = head
+        } else {
+            // The extractor swallows process errors into nil (mirroring the
+            // HTML path) and the model logs the redacted reason; say
+            // something rather than doing nothing.
+            DebugLog.extraction("DOCX extraction returned no markdown (source=\(file.id.rawValue))")
+            htmlExtractionError = "Word document extraction failed. A redacted reason is in Console (subsystem com.selfdrivingwiki.debug)."
         }
     }
 
