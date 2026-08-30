@@ -112,13 +112,19 @@ final class BackgroundIngestCoordinator {
         store: WikiStoreModel
     ) -> IngestionDecision {
         // 1. Registry gate — PNG/XML/etc. are filtered HERE, before the
-        //    byte guard runs.
+        //    byte guard runs. Claims-aware (registration-driven kinds like
+        //    docx classify through their claims), and head-aware: a source
+        //    that already has processed markdown (an extracted docx) is
+        //    always ingestable — the head is what stages, never the raw
+        //    bytes.
         let origin = store.sourceOrigin(for: source.id)
         let kind = ContentKind.resolve(
             mimeType: source.mimeType,
             provider: origin?.provider,
-            ext: source.ext)
-        if !kind.capabilities.shouldAutoIngest {
+            ext: source.ext,
+            registeredInputs: store.registeredExtractionInputs)
+        if !kind.capabilities.shouldAutoIngest,
+           !store.hasProcessedMarkdown(for: source.id) {
             return .skipNonIngestible(kind: kind)
         }
         // 2. Byteless guard — a markdown-path kind with no content to stage

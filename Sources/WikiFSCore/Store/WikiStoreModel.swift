@@ -3316,8 +3316,21 @@ public final class WikiStoreModel {
         let kind = ContentKind.resolve(
             mimeType: source.mimeType,
             provider: origin?.provider,
-            ext: source.ext)
+            ext: source.ext,
+            registeredInputs: registeredExtractionInputs)
         return kind.capabilities.shouldAutoIngest
+    }
+
+    /// Ingestion eligibility: the content TYPE has a markdown path, OR the
+    /// source already has processed markdown to stage. A `.docx` type is
+    /// deliberately not auto-ingested (raw docx bytes are a binary zip with
+    /// no value as staged agent context), but its import auto-extraction
+    /// produces a Markdown head — and that head is exactly what ingestion
+    /// stages, so a head-bearing docx is ingestable. Without this disjunction
+    /// the manual Ingest chokepoint and the background coordinator would
+    /// drop every extracted docx on the type predicate alone.
+    public func isIngestible(_ source: SourceSummary) -> Bool {
+        shouldAutoIngest(source) || hasProcessedMarkdown(for: source.id)
     }
 
     /// All versions for a source, newest first. Empty if none.

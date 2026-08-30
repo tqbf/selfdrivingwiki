@@ -165,6 +165,33 @@ struct DocxExtractionServiceTests {
         var value: Bool { lock.withLock { recorded } }
     }
 
+    @Test("ingestion eligibility follows the extracted head, not the type alone")
+    @MainActor
+    func ingestionEligibilityFollowsExtractedHead() async throws {
+        let (_, model, source) = try makeStoreWithDocxSource()
+        model.registeredExtractionInputs = RegisteredExtractionInputs(claims: [.init(
+            kind: .docx,
+            mimeTypes: [MimeType.docx],
+            filenameExtensions: ["docx"])])
+
+        // The TYPE predicate stays false for docx by design (raw docx bytes
+        // are never staged), so a head-less docx is not ingestible…
+        #expect(model.shouldAutoIngest(source) == false)
+        #expect(model.isIngestible(source) == false)
+
+        // …but once the import extraction produces a head, the source is
+        // ingestable — the head is what stages.
+        model.importAutoExtractionKinds = [.docx]
+        model.importExtractorProvider = { _ in
+            .docx(StubDocxExtractor(result: DocxExtractionResult(
+                markdown: "# Ingestible\n",
+                warnings: [])))
+        }
+        await model.runImportExtraction(sourceID: source.id, kind: .docx)
+        #expect(model.processedMarkdownHead(for: source) != nil)
+        #expect(model.isIngestible(source) == true)
+    }
+
     @Test("import auto-extraction seeds a markdown head when the registration is active")
     @MainActor
     func docxImportAutoExtractionSeedsHead() async throws {

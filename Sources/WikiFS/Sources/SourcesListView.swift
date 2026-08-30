@@ -535,7 +535,7 @@ extension SourcesListViewController {
     /// for the menu (an item that does nothing is misleading).
     private func canIngest(_ source: SourceSummary) -> Bool {
         guard let store else { return false }
-        return store.canIngest(source) && store.shouldAutoIngest(source)
+        return store.canIngest(source) && store.isIngestible(source)
     }
 
     private func item(title: String, systemImage: String,

@@ -107,7 +107,8 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
             let staged = Self.stagedBytesAndExt(
                 for: source,
                 originalBytes: bytes,
-                processedMarkdownHead: head)
+                processedMarkdownHead: head,
+                registeredInputs: store.registeredExtractionInputs)
             if staged.ext == "md" && staged.bytes != bytes {
                 DebugLog.extraction("DaemonQueueIngestionProvider: reusing markdown for \(source.filename) (\(head?.origin.rawValue ?? "?"))")
             }
@@ -320,12 +321,14 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
     private static func stagedBytesAndExt(
         for source: SourceSummary,
         originalBytes: Data,
-        processedMarkdownHead: SourceMarkdownVersion?
+        processedMarkdownHead: SourceMarkdownVersion?,
+        registeredInputs: RegisteredExtractionInputs
     ) -> (bytes: Data, ext: String) {
         let kind = ContentKind.resolve(
             mimeType: source.mimeType,
             provider: nil,
-            ext: source.ext)
+            ext: source.ext,
+            registeredInputs: registeredInputs)
         guard kind.capabilities.hasFileExtractionBackend,
               let head = processedMarkdownHead,
               let markdownBytes = head.content.data(using: .utf8) else {
