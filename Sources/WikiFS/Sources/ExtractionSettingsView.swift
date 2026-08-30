@@ -585,11 +585,13 @@ struct ExtractionSettingsView: View {
             }
 
             // Installed extractor-package lifecycle (Phase 7): read-only list
-            // of exact registry admissions with progressive disclosure, plus
-            // app-only import/removal. Hidden when no snapshot loader was
-            // wired (tests, headless hosts).
+            // of exact registry admissions and app-only removal. Hidden when no
+            // snapshot loader was wired (tests, headless hosts).
             if packageSnapshot != nil {
                 installedPackagesSection
+                if packageModel.canImport {
+                    packageImportSection
+                }
             }
 
         }
@@ -1236,8 +1238,7 @@ struct ExtractionSettingsView: View {
     // MARK: - Installed extractor packages (Phase 7)
 
     /// Lifecycle list of the process registry's installed exact registrations,
-    /// packages that failed to activate, app-only import + removal, and the
-    /// per-kind default package selection persisted into `ExtractionConfig`.
+    /// packages that failed to activate, and app-only removal.
     /// Each control carries a stable accessibility identifier, an accessible
     /// name, and a state value (Phase 7.10); the contract test asserts these
     /// strings exist.
@@ -1251,16 +1252,6 @@ struct ExtractionSettingsView: View {
             .disabled(packageModel.isBusy)
             .accessibilityIdentifier(PackageAccessibility.refreshButton)
             .accessibilityLabel("Refresh installed extractor packages")
-
-            if packageModel.canImport {
-                DisclosureGroup {
-                    importDisclosureContent
-                } label: {
-                    Text(ExtractorSettingsPackagePicker.disclosureTitle)
-                }
-                .accessibilityIdentifier(PackageAccessibility.importDisclosure)
-                .accessibilityLabel("Advanced local extractor package import")
-            }
 
             if packageModel.isBusy {
                 ProgressView(packageModel.busyMessage ?? ExtractorPackageSettingsModel.checkingMessage)
@@ -1304,6 +1295,26 @@ struct ExtractionSettingsView: View {
             Text("Manage exact validated package revisions and their credential access. Choose defaults in the Default Extractors section above.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    /// A separate section for the app-only local package import workflow.
+    /// Keep the workflow behind a disclosure so installed package rows remain
+    /// the focus of the package section.
+    @ViewBuilder private var packageImportSection: some View {
+        Section {
+            DisclosureGroup {
+                importDisclosureContent
+            } label: {
+                HStack {
+                    Text(ExtractorSettingsPackagePicker.disclosureTitle)
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .accessibilityIdentifier(PackageAccessibility.importDisclosure)
+            .accessibilityLabel("Advanced local extractor package import")
         }
     }
 
@@ -1367,6 +1378,8 @@ struct ExtractionSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .accessibilityIdentifier("\(PackageAccessibility.rowPrefix).\(row.id)")
         .accessibilityLabel("\(row.packageID), version \(row.version), for \(kindDisplayName(row.kind))")
@@ -1390,6 +1403,8 @@ struct ExtractionSettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .accessibilityIdentifier("\(PackageAccessibility.failurePrefix).\(failure.id)")
         .accessibilityLabel("\(failure.packageID), version \(failure.version), failed to activate")

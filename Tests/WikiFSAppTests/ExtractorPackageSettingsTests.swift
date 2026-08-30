@@ -421,6 +421,15 @@ struct ExtractorPackageSettingsTests {
 
         // Local-directory-only import contract + executable-code trust warning.
         #expect(viewSource.contains("Advanced Local Package Import"))
+        // Keep import controls in a separate top-level Form section from the
+        // installed package rows. The visible title is the disclosure label.
+        #expect(viewSource.contains("installedPackagesSection\n                if packageModel.canImport {\n                    packageImportSection"))
+        #expect(viewSource.contains("@ViewBuilder private var packageImportSection: some View {\n        Section {"))
+        #expect(viewSource.contains("Text(ExtractorSettingsPackagePicker.disclosureTitle)"))
+        #expect(viewSource.contains(".frame(maxWidth: .infinity, alignment: .leading)"))
+        #expect(viewSource.contains(".contentShape(Rectangle())"))
+        #expect(viewSource.contains("            .contentShape(Rectangle())\n        }\n        .accessibilityIdentifier(\"\\(PackageAccessibility.rowPrefix).\\(row.id)\")"))
+        #expect(viewSource.contains("            .contentShape(Rectangle())\n        }\n        .accessibilityIdentifier(\"\\(PackageAccessibility.failurePrefix).\\(failure.id)\")"))
         #expect(viewSource.contains("Import Extractor Package…"))
         #expect(viewSource.contains("Select one local extractor package folder as an import source."))
         #expect(viewSource.contains("Files and archives are not supported."))
