@@ -149,7 +149,11 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
         let stdoutLimit = managedStandardOutputLimit(operation.manifest.limits)
         let handle: RaceFreeProcessGroupHandle
         do {
-            try verifyIdentity(launch.identity, at: launch.executableURL, requireExecutable: true)
+            try verifyIdentity(
+                launch.identity,
+                at: launch.executableURL,
+                requireExecutable: true,
+                followingSymlinks: launch.followsSymlinks)
             handle = try RaceFreeProcessGroupRunner.launch(.init(
                 executableURL: launch.executableURL,
                 arguments: launch.arguments,
@@ -242,28 +246,32 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
             for directory in operation.runtimeSearchPolicy.searchDirectories {
                 let candidate = directory.appendingPathComponent(command.rawValue).standardizedFileURL
                 guard isContained(candidate, in: directory) else { continue }
-                // mise-style shims are symlinks to the real binary (shims/bun ->
-                // /opt/homebrew/bin/mise), so the probe must run on the RESOLVED
-                // file: the identity check requires a regular file, and the
-                // pinned identity must name the file that actually executes.
-                // Search directories are host PATH policy, not package payload —
-                // the strict no-symlink lstat rule stays on the package entry
-                // point above. The pinned identity plus the spawn-time
-                // re-verification keep the TOCTOU window closed.
-                let resolved = candidate.resolvingSymlinksInPath()
+                // mise-style shims are SYMLINKS to the runtime selector binary
+                // (shims/bun -> /opt/homebrew/bin/mise) and dispatch on
+                // argv[0] — so the shim path itself is what launches. The
+                // identity probe therefore FOLLOWS the link (stat): the
+                // pinned identity names the real binary, and the spawn-time
+                // re-verification follows the same link, keeping the TOCTOU
+                // window closed. Search directories are host PATH policy,
+                // not package payload — the strict no-symlink lstat rule
+                // stays on the package entry point above.
                 let identity: ManagedExecutableIdentity
                 do {
-                    // A search-directory entry that is absent, not an executable
-                    // regular file after resolution, or a broken symlink simply
-                    // ends the probe of that candidate.
-                    identity = try executableIdentity(resolved, requireExecutable: true)
+                    // A search-directory entry that is absent, not an
+                    // executable regular file behind the link, or a broken
+                    // symlink simply ends the probe of that candidate.
+                    identity = try executableIdentity(
+                        candidate,
+                        requireExecutable: true,
+                        followingSymlinks: true)
                 } catch {
                     continue
                 }
                 return ManagedLaunch(
-                    executableURL: resolved,
+                    executableURL: candidate,
                     arguments: arguments + [entryPoint.path],
-                    identity: identity)
+                    identity: identity,
+                    followsSymlinks: true)
             }
             throw ManagedExtractorProcessError.missingRuntime(command)
         }
@@ -315,9 +323,19 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
             ExtractorHostLimits.maximumFrameByteCount * maximumFrames)
     }
 
-    private func executableIdentity(_ url: URL, requireExecutable: Bool) throws -> ManagedExecutableIdentity {
+    private func executableIdentity(
+        _ url: URL,
+        requireExecutable: Bool,
+        followingSymlinks: Bool = false
+    ) throws -> ManagedExecutableIdentity {
         var status = stat()
-        guard lstat(url.path, &status) == 0,
+        // lstat keeps the strict no-symlink package-payload rule; stat()
+        // follows symlinks for host PATH candidates (mise-style shims are
+        // links to the real binary).
+        let probe = followingSymlinks
+            ? stat(url.path, &status)
+            : lstat(url.path, &status)
+        guard probe == 0,
               status.st_mode & S_IFMT == S_IFREG,
               status.st_nlink == 1,
               requireExecutable == false || status.st_mode & S_IXUSR != 0 else {
@@ -333,9 +351,13 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
     private func verifyIdentity(
         _ expected: ManagedExecutableIdentity,
         at url: URL,
-        requireExecutable: Bool
+        requireExecutable: Bool,
+        followingSymlinks: Bool = false
     ) throws {
-        guard try executableIdentity(url, requireExecutable: requireExecutable) == expected else {
+        guard try executableIdentity(
+            url,
+            requireExecutable: requireExecutable,
+            followingSymlinks: followingSymlinks) == expected else {
             throw ManagedExtractorProcessError.executableChanged
         }
     }
@@ -351,6 +373,22 @@ private struct ManagedLaunch: Sendable {
     let executableURL: URL
     let arguments: [String]
     let identity: ManagedExecutableIdentity
+    /// True when `executableURL` is a symlink that must stay unresolved at
+    /// spawn (mise-style shims dispatch on argv[0]) and identity checks must
+    /// follow the link with stat().
+    let followsSymlinks: Bool
+
+    init(
+        executableURL: URL,
+        arguments: [String],
+        identity: ManagedExecutableIdentity,
+        followsSymlinks: Bool = false
+    ) {
+        self.executableURL = executableURL
+        self.arguments = arguments
+        self.identity = identity
+        self.followsSymlinks = followsSymlinks
+    }
 }
 
 private struct ManagedExecutableIdentity: Sendable, Equatable {
