@@ -11,12 +11,6 @@ import Foundation
 /// pattern exactly (pure value type, explicit injected directory, atomic write),
 /// and `WikiRegistry`'s degrade-to-empty-on-corrupt rule.
 public struct ExtractionConfig: JSONSidecarConfig {
-    /// DEPRECATED legacy input (decode-only): the pre-route PDF backend choice.
-    /// Runtime selection lives in `routeExtractors`; the decoder migrates this
-    /// value into a PDF route record and new files never write the key. Only
-    /// the retired test-only extraction runtime still reads the field.
-    public var backend: ExtractionBackend
-
     /// For the `.acp` backend: the provider id (from `AgentProvidersConfig`)
     /// to use for extraction. nil = use the app's default provider. Ignored by
     /// other backends. Forward-compatible: a missing key decodes to nil.
@@ -60,11 +54,6 @@ public struct ExtractionConfig: JSONSidecarConfig {
         return doclingServeTimeoutMilliseconds
     }
 
-    /// DEPRECATED legacy input (decode-only): the pre-route HTML backend
-    /// choice. The decoder migrates this value into an HTML route record and
-    /// new files never write the key.
-    public var htmlBackend: HtmlExtractionBackend?
-
     /// The podcast→transcript backend to use when the user explicitly
     /// transcribes a podcast source (issue #799 PR4 — framework only here;
     /// the Transcribe trigger and `#if PODCAST_TRANSCRIPTS` gating land in
@@ -89,7 +78,6 @@ public struct ExtractionConfig: JSONSidecarConfig {
     public static let fileName = "extraction-config.json"
 
     public init(
-        backend: ExtractionBackend = .localPdf2md,
         acpProviderId: String? = nil,
         anthropicModel: String = ExtractionConfig.defaultAnthropicModel,
         anthropicBaseURLOverride: String? = nil,
@@ -97,11 +85,9 @@ public struct ExtractionConfig: JSONSidecarConfig {
         geminiBaseURLOverride: String? = nil,
         doclingServeEndpoint: String? = nil,
         doclingServeTimeoutMilliseconds: Int? = nil,
-        htmlBackend: HtmlExtractionBackend? = nil,
         podcastBackend: PodcastTranscriptionBackend? = nil,
         routeExtractors: [ExtractorRouteSelectionRecord] = []
     ) {
-        self.backend = backend
         self.acpProviderId = acpProviderId
         self.anthropicModel = anthropicModel
         self.anthropicBaseURLOverride = anthropicBaseURLOverride
@@ -109,7 +95,6 @@ public struct ExtractionConfig: JSONSidecarConfig {
         self.geminiBaseURLOverride = geminiBaseURLOverride
         self.doclingServeEndpoint = doclingServeEndpoint
         self.doclingServeTimeoutMilliseconds = doclingServeTimeoutMilliseconds
-        self.htmlBackend = htmlBackend
         self.podcastBackend = podcastBackend
         self.routeExtractors = routeExtractors.normalizedForPersistence().records
     }
@@ -131,21 +116,11 @@ public struct ExtractionConfig: JSONSidecarConfig {
 
     public static let defaultGeminiBaseURL = "https://generativelanguage.googleapis.com"
 
-    /// The configured model id for the current backend, where applicable (used to
-    /// stamp the extraction agent's `version`). nil for backends without a model.
-    public var currentModelVersion: String? {
-        switch backend {
-        case .anthropic: return anthropicModel
-        case .gemini: return geminiModel
-        case .acp, .localPdf2md, .doclingServe: return nil
-        }
-    }
-
     // MARK: - Resilient Codable
 
     /// Decode each field with `decodeIfPresent` + a default fallback so a missing
-    /// key (forward-compat: a new field added later) or an unknown backend raw
-    /// value degrades to the default instead of throwing — same philosophy as
+    /// key (forward-compat: a new field added later) or an unknown raw value
+    /// degrades to the default instead of throwing — same philosophy as
     /// `load`'s corrupt-file handling.
     private enum CodingKeys: String, CodingKey {
         case backend, acpProviderId
@@ -160,7 +135,6 @@ public struct ExtractionConfig: JSONSidecarConfig {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.backend = DebugLog.trying("init(from:) decode backend") { try c.decode(ExtractionBackend.self, forKey: .backend) } ?? .localPdf2md
         self.acpProviderId = try c.decodeIfPresent(String.self, forKey: .acpProviderId)
         self.anthropicModel = try c.decodeIfPresent(String.self, forKey: .anthropicModel)
             ?? ExtractionConfig.defaultAnthropicModel
@@ -172,16 +146,23 @@ public struct ExtractionConfig: JSONSidecarConfig {
         // #1159: absent key = the 600-second compatibility default via
         // `effectiveDoclingServeTimeoutMilliseconds`.
         self.doclingServeTimeoutMilliseconds = try c.decodeIfPresent(Int.self, forKey: .doclingServeTimeoutMilliseconds)
+        // The retired `backend` / `htmlBackend` keys are decode-only migration
+        // inputs consumed as locals below (#1178): each value migrates into a
+        // route record at most once and never becomes stored state. A missing
+        // key OR an unknown raw value (a future/typo'd backend) degrades
+        // gracefully — the same resilient decode philosophy as every other
+        // field.
+        let legacyBackend = DebugLog.trying("init(from:) decode backend") {
+            try c.decode(ExtractionBackend.self, forKey: .backend)
+        } ?? .localPdf2md
         // Forward-compat for issue #799 PR1: a config file written before
         // this field shipped (no `htmlBackend`/`podcastBackend` key) decodes
-        // to nil — the user picks a backend on first extraction. Mirrors the
-        // exact pattern `backend` uses below: `try? c.decode(...)` so a missing
-        // key OR an unknown raw value (a future/typo'd backend) degrades
-        // gracefully rather than rejecting the whole file. The "default" for
-        // these optional fields is `nil` (vs `backend`'s `.localPdf2md`), so a
-        // typo silently picks "prompt me" instead of "PDF" — same resilient
-        // decode philosophy as `unknownBackendValueDegradesToLocalPdf2md`.
-        self.htmlBackend = DebugLog.trying("init(from:) decode htmlBackend") { try c.decode(HtmlExtractionBackend.self, forKey: .htmlBackend) }
+        // to nil — the user picks a backend on first extraction. `try?`
+        // decoding means a typo silently picks "prompt me" instead of a
+        // wrong backend.
+        let legacyHTMLBackend = DebugLog.trying("init(from:) decode htmlBackend") {
+            try c.decode(HtmlExtractionBackend.self, forKey: .htmlBackend)
+        }
         self.podcastBackend = DebugLog.trying("init(from:) decode podcastBackend") { try c.decode(PodcastTranscriptionBackend.self, forKey: .podcastBackend) }
         var routes = Self.decodedRouteRecords(from: c)
         // One-time migration: every retired format-specific selection key is a
@@ -197,15 +178,15 @@ public struct ExtractionConfig: JSONSidecarConfig {
         if routes.contains(where: { $0.route == .canonicalPDF }) == false {
             if let legacyPDF {
                 routes.append(.init(route: .canonicalPDF, extractor: legacyPDF))
-            } else if let migrated = Self.migratedSelection(fromPDFBackend: backend) {
+            } else if let migrated = Self.migratedSelection(fromPDFBackend: legacyBackend) {
                 routes.append(.init(route: .canonicalPDF, extractor: migrated))
             }
         }
         if routes.contains(where: { $0.route == .canonicalHTML }) == false {
             if let legacyHTML {
                 routes.append(.init(route: .canonicalHTML, extractor: legacyHTML))
-            } else if let htmlBackend,
-                      let migrated = Self.migratedSelection(fromHTMLBackend: htmlBackend) {
+            } else if let legacyHTMLBackend,
+                      let migrated = Self.migratedSelection(fromHTMLBackend: legacyHTMLBackend) {
                 routes.append(.init(route: .canonicalHTML, extractor: migrated))
             }
         }

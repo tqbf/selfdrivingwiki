@@ -10,9 +10,9 @@ struct ExtractionRuntimeFactoryTests {
     @Test("shuffled registration builds a ready runtime")
     func shuffledRegistrationBuildsReadyRuntime() async throws {
         let handle = try await makeAssembly(
-            state: ExtractionRuntimeTestState(configuration: ExtractionConfig(backend: .acp)))
+            state: ExtractionRuntimeTestState(configuration: ExtractionConfig()))
             .assemble(registrationOrder: ExtractionRuntimeFactory.Component.allCases.shuffled())
-        let preparation = try await handle.services.prepare()
+        let preparation = try await handle.services.prepare(backendOverride: .acp)
 
         #expect(preparation.backend == .acp)
         #expect(preparation.extractor.displayName == "local-1")
@@ -39,15 +39,19 @@ struct ExtractionRuntimeFactoryTests {
 
     @Test("preparations freeze one configuration and later calls read updates")
     func preparationFreezesConfiguration() async throws {
-        let state = ExtractionRuntimeTestState(configuration: ExtractionConfig(backend: .anthropic))
+        // #1178: the runtime no longer derives its backend from the config, so
+        // both preparations state the backend explicitly; the frozen-vs-fresh
+        // configuration property is unchanged — each preparation snapshots the
+        // config at call time and later calls observe updates.
+        let state = ExtractionRuntimeTestState(configuration: ExtractionConfig())
         let handle = try await makeAssembly(state: state).assemble()
-        let first = try await handle.services.prepare()
+        let first = try await handle.services.prepare(backendOverride: .anthropic)
 
-        state.updateConfiguration { configuration in
-            configuration.backend = .gemini
-            configuration.geminiModel = "gemini-next"
+        state.updateConfiguration {
+            $0.anthropicModel = "claude-next"
+            $0.geminiModel = "gemini-next"
         }
-        let second = try await handle.services.prepare()
+        let second = try await handle.services.prepare(backendOverride: .gemini)
 
         #expect(first.backend == .anthropic)
         #expect(first.modelVersion == ExtractionConfig.defaultAnthropicModel)
@@ -60,7 +64,7 @@ struct ExtractionRuntimeFactoryTests {
 
     @Test("backend override builds and reports the overridden backend")
     func backendOverrideBuildsAndReportsTheOverriddenBackend() async throws {
-        let state = ExtractionRuntimeTestState(configuration: ExtractionConfig(backend: .localPdf2md))
+        let state = ExtractionRuntimeTestState(configuration: ExtractionConfig())
         state.updateConfiguration { $0.anthropicModel = "claude-override" }
         let handle = try await makeAssembly(state: state).assemble()
 
@@ -74,11 +78,11 @@ struct ExtractionRuntimeFactoryTests {
 
     @Test("each preparation constructs a distinct ACP extractor")
     func concurrentPreparationsReturnDistinctExtractorInstances() async throws {
-        let state = ExtractionRuntimeTestState(configuration: ExtractionConfig(backend: .acp))
+        let state = ExtractionRuntimeTestState(configuration: ExtractionConfig())
         let handle = try await makeAssembly(state: state).assemble()
 
-        async let first = handle.services.prepare()
-        async let second = handle.services.prepare()
+        async let first = handle.services.prepare(backendOverride: .acp)
+        async let second = handle.services.prepare(backendOverride: .acp)
         let preparations = try await [first, second]
 
         #expect(Set(preparations.map(\.extractor.displayName)).count == 2)
@@ -127,9 +131,11 @@ struct ExtractionRuntimeFactoryTests {
         ExtractionRuntimeFactory(
             readConfiguration: { state.configuration },
             readCredential: { _ in "test-secret" },
-            resolveACP: { configuration in
-                guard configuration.backend == .acp else { return nil }
-                return ExtractionRuntimeExtractor(name: state.nextExtractorName())
+            resolveACP: { _ in
+                // The resolver only runs on the `.acp` resolution path, so no
+                // backend check is needed here (#1178 removed the config field
+                // it used to compare against).
+                ExtractionRuntimeExtractor(name: state.nextExtractorName())
             },
             httpFetcher: ExtractionRuntimeHTTPFetcher())
     }

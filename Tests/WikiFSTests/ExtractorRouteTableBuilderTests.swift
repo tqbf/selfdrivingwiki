@@ -79,7 +79,7 @@ struct ExtractorRouteTableBuilderTests {
     @Test func rowsSortDeterministically() throws {
         func buildInput() throws -> ExtractorRouteTableBuilder.Input {
             ExtractorRouteTableBuilder.Input(
-                configuration: ExtractionConfig(backend: .acp),
+                configuration: ExtractionConfig(),
                 registrations: [
                     try snapshot(
                         packageID: "org.example.multi",
@@ -102,7 +102,7 @@ struct ExtractorRouteTableBuilderTests {
 
     @Test func unknownMIMEUsesStableGenericLabel() throws {
         let input = ExtractorRouteTableBuilder.Input(
-            configuration: ExtractionConfig(backend: .acp),
+            configuration: ExtractionConfig(),
             registrations: [
                 try snapshot(
                     packageID: "org.example.x",
@@ -127,7 +127,7 @@ struct ExtractorRouteTableBuilderTests {
 
     @Test func multipleExactVersionsProduceOneLogicalChoice() throws {
         let input = ExtractorRouteTableBuilder.Input(
-            configuration: ExtractionConfig(backend: .acp),
+            configuration: ExtractionConfig(),
             registrations: [
                 try snapshot(
                     packageID: "org.example.pdf",
@@ -169,7 +169,7 @@ struct ExtractorRouteTableBuilderTests {
             kinds: [.pdf],
             mimeTypes: ["application/pdf"])
         let rows = ExtractorRouteTableBuilder.build(.init(
-            configuration: ExtractionConfig(backend: .acp),
+            configuration: ExtractionConfig(),
             registrations: [reviewed],
             availableRegistrations: [reviewed]))
         let pdf = try #require(rows.first { $0.route == .canonicalPDF })
@@ -196,7 +196,7 @@ struct ExtractorRouteTableBuilderTests {
             mimeTypes: ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
             extensions: ["docx"])
         let rows = ExtractorRouteTableBuilder.build(.init(
-            configuration: ExtractionConfig(backend: .acp),
+            configuration: ExtractionConfig(),
             registrations: [reviewed],
             availableRegistrations: [reviewed]))
         let docx = try #require(rows.first { $0.route == .canonicalDOCX })
@@ -219,7 +219,7 @@ struct ExtractorRouteTableBuilderTests {
         let logical = LogicalExtractorReference(
             packageID: try ExtractorPackageID(validating: "org.example.gone"),
             registrationID: try ExtractorRegistrationID(validating: "main"))
-        var config = ExtractionConfig(backend: .acp, htmlBackend: .defuddle)
+        var config = ExtractionConfig()
         config.setExtractorSelection(.installed(logical), for: .canonicalPDF)
         config.setExtractorSelection(.installed(logical), for: .canonicalHTML)
         let rows = ExtractorRouteTableBuilder.build(ExtractorRouteTableBuilder.Input(
@@ -241,7 +241,7 @@ struct ExtractorRouteTableBuilderTests {
         let logical = LogicalExtractorReference(
             packageID: try ExtractorPackageID(validating: "org.example.pending"),
             registrationID: try ExtractorRegistrationID(validating: "main"))
-        var config = ExtractionConfig(backend: .acp)
+        var config = ExtractionConfig()
         config.setExtractorSelection(.installed(logical), for: .canonicalPDF)
 
         let waiting = ExtractorRouteTableBuilder.build(ExtractorRouteTableBuilder.Input(
@@ -271,7 +271,7 @@ struct ExtractorRouteTableBuilderTests {
         let logical = LogicalExtractorReference(
             packageID: try ExtractorPackageID(validating: "org.example.gone"),
             registrationID: try ExtractorRegistrationID(validating: "main"))
-        var config = ExtractionConfig(backend: .acp)
+        var config = ExtractionConfig()
         config.setExtractorSelection(.installed(logical), for: .canonicalPDF)
         let pdf = ExtractorRouteTableBuilder.build(ExtractorRouteTableBuilder.Input(
             configuration: config,
@@ -289,7 +289,7 @@ struct ExtractorRouteTableBuilderTests {
         let logical = LogicalExtractorReference(
             packageID: try ExtractorPackageID(validating: "org.example.mime"),
             registrationID: try ExtractorRegistrationID(validating: "main"))
-        var config = ExtractionConfig(backend: .acp)
+        var config = ExtractionConfig()
         config.setExtractorSelection(.installed(logical), for: .canonicalPDF)
         let rows = ExtractorRouteTableBuilder.build(ExtractorRouteTableBuilder.Input(
             configuration: config,
@@ -363,7 +363,7 @@ struct ExtractorRouteTableBuilderTests {
                 mimeTypes: ["text/html"]),
         ]
         let input = ExtractorRouteTableBuilder.Input(
-            configuration: ExtractionConfig(backend: .acp),
+            configuration: ExtractionConfig(),
             registrations: active,
             availableRegistrations: available)
         let rows = ExtractorRouteTableBuilder.build(input)
@@ -391,7 +391,7 @@ struct ExtractorRouteTableBuilderTests {
     /// choices never re-enter the route table.
     @Test func directModelAPIChoicesRemainAbsent() throws {
         let input = ExtractorRouteTableBuilder.Input(
-            configuration: ExtractionConfig(backend: .anthropic),
+            configuration: ExtractionConfig(),
             registrations: [])
         let rows = ExtractorRouteTableBuilder.build(input)
         for row in rows {
@@ -408,7 +408,7 @@ struct ExtractorRouteTableBuilderTests {
     /// registration-declared future route never inherits host choices.
     @Test func reviewedChoicesStayOnCanonicalRoutes() throws {
         let input = ExtractorRouteTableBuilder.Input(
-            configuration: ExtractionConfig(backend: .acp),
+            configuration: ExtractionConfig(),
             registrations: [
                 try snapshot(
                     packageID: "org.example.pdf",
