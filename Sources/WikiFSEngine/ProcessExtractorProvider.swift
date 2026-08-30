@@ -783,14 +783,21 @@ public struct ProcessPackagePDFExtractor: MarkdownExtractor, ProcessPackageProve
         self.operation = operation
     }
 
+    /// Mirrors the executor's launch rules: a `direct` entry point must be an
+    /// executable regular file; a `runtime` entry point is data for the
+    /// runtime (regular file, no exec bit) and the runtime command itself
+    /// must resolve in the search policy.
     public func readiness() async -> ExtractionReadiness {
-        guard PackageExtractorProbes.entryIsExecutable(operation.entryPointURL) else {
-            return .notInstalled("The installed extractor entry point is missing.")
-        }
         switch operation.manifest.launch {
         case .direct:
+            guard PackageExtractorProbes.entryIsExecutable(operation.entryPointURL) else {
+                return .notInstalled("The installed extractor entry point is missing.")
+            }
             return .ready
         case .runtime(let command, _):
+            guard PackageExtractorProbes.entryIsPresent(operation.entryPointURL) else {
+                return .notInstalled("The installed extractor entry point is missing.")
+            }
             if PackageExtractorProbes.resolveRuntime(command, policy: operation.runtimeSearchPolicy) != nil {
                 return .ready
             }
@@ -833,6 +840,16 @@ enum PackageExtractorProbes {
         guard lstat(url.path, &status) == 0,
               status.st_mode & S_IFMT == S_IFREG,
               status.st_mode & S_IXUSR != 0 else { return false }
+        return true
+    }
+
+    /// Regular-file presence WITHOUT the exec-bit requirement — the rule the
+    /// executor applies to `runtime`-launch entry points (a `bun`/`uv` script
+    /// is data for the runtime, never launched directly).
+    static func entryIsPresent(_ url: URL) -> Bool {
+        var status = stat()
+        guard lstat(url.path, &status) == 0,
+              status.st_mode & S_IFMT == S_IFREG else { return false }
         return true
     }
 
@@ -928,17 +945,21 @@ public struct ProcessPackageDOCXExtractor: DocxMarkdownExtractor, ProcessPackage
         }
     }
 
-    /// Same probe as the PDF sibling: the entry point must exist and, for a
-    /// `runtime` launch, the command must resolve in the search policy. DOCX
-    /// has no built-in fallback, so this probe is the user's setup guidance.
+    /// Same launch-aware probe as the PDF sibling: a `runtime` entry point is
+    /// data for the runtime (regular file, no exec bit — the docx2md entry is
+    /// a `bun` script), and the runtime command itself must resolve. DOCX has
+    /// no built-in fallback, so this probe is the user's setup guidance.
     public func readiness() async -> ExtractionReadiness {
-        guard PackageExtractorProbes.entryIsExecutable(operation.entryPointURL) else {
-            return .notInstalled("The installed extractor entry point is missing.")
-        }
         switch operation.manifest.launch {
         case .direct:
+            guard PackageExtractorProbes.entryIsExecutable(operation.entryPointURL) else {
+                return .notInstalled("The installed extractor entry point is missing.")
+            }
             return .ready
         case .runtime(let command, _):
+            guard PackageExtractorProbes.entryIsPresent(operation.entryPointURL) else {
+                return .notInstalled("The installed extractor entry point is missing.")
+            }
             if PackageExtractorProbes.resolveRuntime(command, policy: operation.runtimeSearchPolicy) != nil {
                 return .ready
             }
