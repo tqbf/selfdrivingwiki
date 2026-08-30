@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import SwiftUI
+import WikiFSCore
 
 @MainActor
 @Observable
@@ -41,14 +42,23 @@ final class OptionalRuntimeSetupModel {
 
     var isComplete: Bool { missingRuntimes.isEmpty }
 
-    func refresh() {
+    /// Resolves each tool against the LOGIN-shell PATH (the same authority
+    /// extraction uses), not the GUI process PATH — a Finder-launched app
+    /// inherits a minimal PATH, so process-PATH checks report installed
+    /// tools as missing. Falls back to the process PATH when the shell hop
+    /// fails, matching the agent preflight behavior.
+    func refresh() async {
+        let path = await PathPreflight.loginShellPATH()
+            ?? ProcessInfo.processInfo.environment["PATH"] ?? ""
         paths = Dictionary(uniqueKeysWithValues: Runtime.allCases.map { runtime in
-            (runtime, executablePath(named: runtime.rawValue))
+            (runtime, executablePath(named: runtime.rawValue, onPath: path))
         })
     }
 
-    private func executablePath(named name: String) -> String? {
-        let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
+    private func executablePath(named name: String, onPath path: String) -> String? {
+        guard let executable = name.split(separator: "/").last, executable == name else {
+            return nil
+        }
         for directory in path.split(separator: ":", omittingEmptySubsequences: true) {
             let candidate = URL(fileURLWithPath: String(directory), isDirectory: true)
                 .appendingPathComponent(name, isDirectory: false)
@@ -86,7 +96,7 @@ struct OptionalRuntimeSetupSheet: View {
             .overlay { RoundedRectangle(cornerRadius: 8).stroke(.quaternary) }
 
             if !model.isComplete {
-                Text("You can install these tools with Homebrew, mise, or their official installers. The app will use them automatically when they are available on PATH.")
+                Text("You can install these tools with any method — Homebrew, an official installer, or a version manager. They work when your login shell can run them.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -97,14 +107,14 @@ struct OptionalRuntimeSetupSheet: View {
                 Button("Open uv Guide") { open(.uv) }
                 Button("Copy Commands") { copyCommands() }
                 Spacer()
-                Button("Check Again") { model.refresh() }
+                Button("Check Again") { Task { await model.refresh() } }
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.cancelAction)
             }
         }
         .padding(Metrics.padding)
         .frame(width: Metrics.width)
-        .task { model.refresh() }
+        .task { await model.refresh() }
     }
 
     private func open(_ runtime: OptionalRuntimeSetupModel.Runtime) {

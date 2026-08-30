@@ -35,6 +35,7 @@ import Foundation
 public enum SourceFormat: Sendable, Equatable {
     case html           // verbatim HTML (sidecar only on snapshot path post-PR3)
     case pdf            // verbatim PDF
+    case docx           // verbatim Word document (extractable via docx2md)
     case text            // verbatim text
     case binary          // verbatim other bytes
 }
@@ -117,14 +118,16 @@ public enum FormatMaterializer {
         data: Data,
         hints: ContentTypeDetectionHints,
         stem: String,
-        extensionHint: String?
+        extensionHint: String?,
+        registeredInputs: RegisteredExtractionInputs = .none
     ) -> FormatPlan {
         let detection = ContentTypeDetector.detect(.init(data: data, hints: hints))
         return dispatch(
             data: data,
             detectionResult: detection,
             stem: stem,
-            extensionHint: extensionHint)
+            extensionHint: extensionHint,
+            registeredInputs: registeredInputs)
     }
 
     public static func dispatch(
@@ -146,9 +149,23 @@ public enum FormatMaterializer {
         data: Data,
         detectionResult: ContentTypeDetectionResult,
         stem: String,
-        extensionHint: String?
+        extensionHint: String?,
+        registeredInputs: RegisteredExtractionInputs = .none
     ) -> FormatPlan {
-        let mime = detectionResult.normalizedMIMEType
+        var mime = detectionResult.normalizedMIMEType
+
+        // Registration-driven recognition: a registered input that IS an
+        // archive container (a `.docx` is a ZIP the sniffer resolves to
+        // application/zip) promotes to the registered MIME when an active
+        // registration declares this file's extension or MIME. The
+        // registration, not the sniff, says the container has an extraction
+        // path.
+        if let promoted = registeredInputs.promotedMIME(
+            detectedMIME: mime,
+            declaredMIME: nil,
+            filenameExtension: extensionHint) {
+            mime = promoted
+        }
 
         if mime == MimeType.html || mime == MimeType.xhtml {
             let html = decodeText(data)
@@ -167,6 +184,17 @@ public enum FormatMaterializer {
             let filename = ensureExtension(sanitizeStem(stem), ext: "pdf")
             return FormatPlan(
                 filename: filename, data: data, format: .pdf,
+                detectionResult: detectionResult)
+        }
+
+        // OOXML Word documents keep their bytes verbatim as the source blob.
+        // The registry-driven store path starts extraction after import. This
+        // dispatcher only preserves the DOCX format and filename.
+        // Legacy `application/msword` (.doc) stays `.binary` — no path.
+        if MimeType.isDOCX(mime) {
+            let filename = ensureExtension(sanitizeStem(stem), ext: "docx")
+            return FormatPlan(
+                filename: filename, data: data, format: .docx,
                 detectionResult: detectionResult)
         }
 
@@ -271,8 +299,9 @@ public enum FormatMaterializer {
         }
     }
 
-    /// Extension for a non-text response: from the MIME subtype when recognizable,
-    /// else `extensionHint`, else empty (no extension).
+    /// Extension for a non-text response: the known MIME table first, then
+    /// the file's own extension when it is a clean token, then the MIME
+    /// subtype as a guess for hint-less bytes, else empty.
     static func binaryExtension(forMIME mime: String?, extensionHint: String?) -> String {
         if let jsonExtension = jsonDocumentExtension(from: extensionHint) {
             return jsonExtension
@@ -287,8 +316,15 @@ public enum FormatMaterializer {
             case "application/json": return "json"
             case "application/zip": return "zip"
             case "application/epub+zip": return "epub"
+            case MimeType.docx: return "docx"
             default:
-                // Use the subtype if it looks like a clean extension token.
+                // The file's own extension wins over a guessed subtype: a
+                // dropped `notes.doc` with `application/msword` keeps `.doc`
+                // — the subtype ("msword") would rename the user's file. The
+                // subtype stays the fallback for hint-less bytes.
+                if let kept = Self.cleanExtensionToken(extensionHint) {
+                    return kept
+                }
                 if let sub = mime.split(separator: "/").last,
                    sub.allSatisfy({ $0.isLetter || $0.isNumber }), !sub.isEmpty {
                     return String(sub)
@@ -296,6 +332,16 @@ public enum FormatMaterializer {
             }
         }
         return extensionHint ?? ""
+    }
+
+    /// The last dot-component of `hint` when it is a clean alphanumerical
+    /// token, else nil.
+    static func cleanExtensionToken(_ hint: String?) -> String? {
+        guard let hint,
+              let token = hint.split(separator: ".").last,
+              !token.isEmpty,
+              token.allSatisfy({ $0.isLetter || $0.isNumber }) else { return nil }
+        return String(token)
     }
 
     static func nonEmpty(_ s: String) -> String? {

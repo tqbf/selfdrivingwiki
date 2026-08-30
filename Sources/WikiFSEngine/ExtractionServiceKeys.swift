@@ -3,10 +3,11 @@ import Foundation
 import WikiFSCore
 
 /// The input domain handled by an extraction backend. The case tag keeps PDF,
-/// HTML, and transcript backend identifiers in separate namespaces.
+/// HTML, DOCX, and transcript backend identifiers in separate namespaces.
 public enum ExtractionBackendKind: String, Codable, Hashable, Sendable {
     case pdf
     case html
+    case docx
     case youtubeTranscript
     case rssPodcastTranscript
     case applePodcastTranscript
@@ -29,6 +30,7 @@ public struct ExtractionBackendKey: Hashable, Sendable, CustomStringConvertible 
 public enum ExtractionBackendAdapter: Sendable {
     case pdf(ExtractionPreparation)
     case html(any HtmlMarkdownExtractor)
+    case docx(any DocxMarkdownExtractor)
     case youtubeTranscript(any YouTubeTranscriptFetching)
     case rssPodcastTranscript(any RSSFeedTranscriptFetching)
     case applePodcastTranscript(any PodcastTranscriptFetching)
@@ -378,13 +380,34 @@ public struct ExtractorPackageSettingsRow: Identifiable, Hashable, Sendable {
 }
 
 public extension ExtractionBackendRegistry {
-    /// Snapshot of every active installed (exact) PDF and HTML registration,
-    /// highest revision first within a deterministic package sort. Transcript
-    /// kinds are out of scope for revision 1. A package that stopped being
-    /// admitted (removed, failed activation) simply stops appearing.
+    /// Registration-driven recognition surface: the MIME types and filename
+    /// extensions every ACTIVE installed registration declares as its input,
+    /// folded into the pure leaf-type value the store and model consult at
+    /// ingestion. A `.docx` IS a zip; this surface is what lets the pipeline
+    /// tell them apart — the package's registration declares the input, so
+    /// registering an extractor for a container type is what makes files of
+    /// that type recognizable.
+    func registeredExtractionInputs() async -> RegisteredExtractionInputs {
+        var claims: Set<RegisteredExtractionInputs.Claim> = []
+        for snapshot in await installedRegistrationSnapshots() {
+            for kind in snapshot.kinds {
+                claims.insert(.init(
+                    kind: kind,
+                    mimeTypes: Set(snapshot.mimeTypes.map(\.rawValue)),
+                    filenameExtensions: Set(snapshot.filenameExtensions.map(\.rawValue))))
+            }
+        }
+        return RegisteredExtractionInputs(claims: claims)
+    }
+
+    /// Snapshot of every active installed (exact) PDF, HTML, and DOCX
+    /// registration, highest revision first within a deterministic package
+    /// sort. Transcript kinds are out of scope for revision 1. A package that
+    /// stopped being admitted (removed, failed activation) simply stops
+    /// appearing.
     func installedPackageRows() async -> [ExtractorPackageSettingsRow] {
         var rows: [ExtractorPackageSettingsRow] = []
-        for kind in [ExtractionBackendKind.pdf, .html] {
+        for kind in [ExtractionBackendKind.pdf, .html, .docx] {
             // Actor-isolated by default (extension of an actor), so the sync
             // registry read needs no hop.
             for match in installedMatches(kind: kind) {

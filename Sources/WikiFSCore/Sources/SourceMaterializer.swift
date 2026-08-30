@@ -213,6 +213,11 @@ public struct LocalFileMaterializer: SourceMaterializer {
     public let agentName = SourceProvider.localFile.rawValue
     public let fileURL: URL
 
+    /// The active extractor registrations' declared input surface. Set by the
+    /// owning model so a registered zip-container input (a `.docx`) keeps its
+    /// Word format and filename at dispatch, matching what the store records.
+    public var registeredInputs: RegisteredExtractionInputs = .none
+
     public init(fileURL: URL) {
         self.fileURL = fileURL
     }
@@ -237,7 +242,8 @@ public struct LocalFileMaterializer: SourceMaterializer {
             utiMIME: mimeType)
         let plan = FormatMaterializer.dispatch(
             data: data, hints: hints,
-            stem: stem, extensionHint: extHint)
+            stem: stem, extensionHint: extHint,
+            registeredInputs: registeredInputs)
         return MaterializedSource(
             filename: plan.filename,
             data: plan.data,

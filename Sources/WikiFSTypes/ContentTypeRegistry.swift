@@ -7,7 +7,7 @@ import Foundation
 /// Hosts two things:
 /// 1. **`ContentKind`** — a normalized closed enum collapsing every input
 ///    shape (`application/pdf` mimes, `.youtube` providers, `.md` extensions)
-///    into the 12 logical kinds the capability table below switches on.
+///    into the 13 logical kinds the capability table below switches on.
 /// 2. **`ContentCapabilities`** — the per-kind capability struct returned by
 ///    `ContentKind.capabilities` (`canExtractToMarkdown`, `shouldAutoIngest`,
 ///    `extractionPath`).
@@ -60,7 +60,7 @@ public enum ContentTypeRegistry {
 /// This is the single key the capability table in `ContentKind.capabilities`
 /// switches on.
 ///
-/// 12 cases — closed, exhaustive. Adding one requires adding both the case
+/// 13 cases — closed, exhaustive. Adding one requires adding both the case
 /// arm in `capabilities` and the resolution arms in `fromMIME` / `resolve`
 /// (or the compiler will fail at the table site). That intentional closedness
 /// is what keeps the decision table audit-able.
@@ -76,6 +76,17 @@ public enum ContentKind: Sendable, Equatable, CaseIterable {
     /// `text/html`, `application/xhtml+xml`, `.html`/`.htm`/`.xhtml`. Extracted
     /// via defuddle or tag-based fallback (issue #599).
     case html
+    /// `application/vnd.openxmlformats-officedocument.wordprocessingml.document`
+    /// (`.docx`). Extracted via the reviewed docx2md package (mammoth +
+    /// turndown). Legacy `.doc` (`application/msword`) does NOT classify here
+    /// — it stays `.binary`. Not auto-ingested: raw `.docx` bytes are a
+    /// binary zip, so staged agent context would be noise, unlike HTML text.
+    /// A `.docx` IS a zip container, so recognition is registration-driven —
+    /// an ACTIVE docx2md registration's declared inputs are what classify
+    /// the file — and that same registration triggers import-time
+    /// auto-extraction; the extracted Markdown version becomes the source's
+    /// ingestible content.
+    case docx
     /// Plain text / CSV / other `text/*` (except `text/xml`, which is `.binary`).
     /// Staged raw — no extraction needed.
     case text
@@ -129,6 +140,16 @@ public extension ContentKind {
         case .html:
             return .init(canExtractToMarkdown: true,  shouldAutoIngest: true,
                          extractionPath: .htmlToMarkdown)
+        case .docx:
+            // Extractable via the reviewed docx2md package, but NOT
+            // auto-ingested: raw docx bytes are a binary zip with no value
+            // as staged agent context — unlike HTML text. Recognition and
+            // extraction are registration-driven instead: an active docx2md
+            // registration's declared inputs classify the file at import and
+            // trigger auto-extraction, so the Markdown head exists without a
+            // manual tap.
+            return .init(canExtractToMarkdown: true,  shouldAutoIngest: false,
+                         extractionPath: .docxBackend)
         case .markdown:
             return .init(canExtractToMarkdown: false, shouldAutoIngest: true,
                          extractionPath: nil)   // already markdown — nothing to extract
@@ -189,6 +210,7 @@ public extension ContentKind {
         }
 
         if MimeType.isPDF(lowered)        { return .pdf }
+        if MimeType.isDOCX(lowered)      { return .docx }        // OOXML Word; msword (.doc) stays binary
         if MimeType.isMarkdown(lowered)  { return .markdown }
         if MimeType.isMermaid(lowered)   { return .markdown }   // mermaid is native text content
         if lowered == MimeType.html || lowered == MimeType.xhtml { return .html }
@@ -204,6 +226,14 @@ public extension ContentKind {
     /// podcasts is equally ambiguous). **MIME wins for byte-bearing file /
     /// website / legacy-import sources** (where provider adds nothing).
     ///
+    /// **Registration-driven recognition:** when the MIME classifies as a
+    /// generic container (`.binary` — e.g. a `.docx` is a ZIP the sniffer
+    /// cannot tell apart from any archive), an ACTIVE extractor registration
+    /// that declares the file's extension or MIME promotes the kind: the
+    /// package's registration is the declaration that this content has an
+    /// extraction path. `.none` (the default) preserves the table-only
+    /// behavior.
+    ///
     /// **Extension fallback** (§11-C4): before returning `.unknown`, consult
     /// the lowercased extension. A legacy markdown source (mime nil) with
     /// `.md` extension classifies as `.markdown`, not `.unknown`.
@@ -214,10 +244,13 @@ public extension ContentKind {
     ///     nil when there's no origin (e.g. before v39 legacy rows).
     ///   - ext: lowercased filename extension without leading dot (matches
     ///     `SourceSummary.ext`). Empty string is treated like nil.
+    ///   - registeredInputs: the active registrations' declared input surface
+    ///     (`ExtractionBackendRegistry.registeredExtractionInputs()`).
     static func resolve(
         mimeType: String?,
         provider: SourceProvider?,
-        ext: String? = nil
+        ext: String? = nil,
+        registeredInputs: RegisteredExtractionInputs = .none
     ) -> ContentKind {
         // 1. Provider-first for byteless embed providers.
         switch provider {
@@ -235,7 +268,20 @@ public extension ContentKind {
 
         // 2. MIME-first for byte-bearing sources.
         let fromMime = Self.fromMIME(mimeType)
-        if fromMime != .unknown { return fromMime }
+        if fromMime != .unknown {
+            // Registration-driven promotion: a generic archive container the
+            // byte sniffer resolves as `.binary` classifies as the registered
+            // kind when an active extractor registration claims the file.
+            if fromMime == .binary,
+               let promoted = registeredInputs.promotedMIME(
+                   detectedMIME: mimeType?.lowercased(),
+                   declaredMIME: mimeType,
+                   filenameExtension: ext),
+               let registered = registeredInputs.registeredMIME(forNormalizedMIME: promoted) {
+                return Self.contentKind(for: registered.kind)
+            }
+            return fromMime
+        }
 
         // 3. Extension fallback for legacy / nil-mime markdown sources
         //    (§11-C4). Without this, a legacy markdown source with mime NULL
@@ -246,10 +292,27 @@ public extension ContentKind {
             case "md", "markdown", "mdx":            return .markdown
             case "html", "htm", "xhtml":             return .html
             case "pdf":                              return .pdf
-            default:                                 break
+            default:
+                // Registration-driven extension fallback: an active
+                // registration that declares this extension recognizes the
+                // content even without a stored MIME.
+                if let registered = registeredInputs.registeredInput(forNormalizedExtension: ext) {
+                    return Self.contentKind(for: registered.kind)
+                }
             }
         }
         return .unknown
+    }
+
+    /// The content kind a registered extractor kind extracts. Registered
+    /// pdf/html kinds already classify through their MIME arms; this maps
+    /// the closed kind set onto the registry's table.
+    private static func contentKind(for kind: ExtractorKind) -> ContentKind {
+        switch kind {
+        case .pdf:   return .pdf
+        case .html:  return .html
+        case .docx:  return .docx
+        }
     }
 }
 
@@ -293,6 +356,9 @@ public extension ContentCapabilities {
         case pdfBackend
         /// defuddle / tag-based fallback (issue #599).
         case htmlToMarkdown
+        /// Reviewed docx2md package (mammoth + turndown). Package-only —
+        /// there is no built-in Swift docx adapter.
+        case docxBackend
         /// TTML / `<podcast:transcript>` (RSS feed scrape).
         case podcastTranscript
         /// watch-page → caption-track scrape (pure-Swift).
@@ -300,9 +366,9 @@ public extension ContentCapabilities {
     }
 
     /// `true` when this kind has a **non-transcript file-extraction
-    /// backend** (PDF or HTML) — i.e. the Extract button (NOT the Transcribe
-    /// button) is the appropriate UI affordance, and the staging path
-    /// (`AppQueueIngestionProvider`) reuses the extracted head when one
+    /// backend** (PDF, HTML, or DOCX) — i.e. the Extract button (NOT the
+    /// Transcribe button) is the appropriate UI affordance, and the staging
+    /// path (`AppQueueIngestionProvider`) reuses the extracted head when one
     /// exists.
     ///
     /// Distinct from `.canExtractToMarkdown` — that one is also `true` for
@@ -319,7 +385,7 @@ public extension ContentCapabilities {
     /// - `AppQueueIngestionProvider` staging reuse (replaces `MimeType.isPDF`).
     var hasFileExtractionBackend: Bool {
         switch extractionPath {
-        case .pdfBackend, .htmlToMarkdown: return true
+        case .pdfBackend, .htmlToMarkdown, .docxBackend: return true
         case .podcastTranscript, .youtubeTranscript, nil: return false
         }
     }
@@ -340,7 +406,7 @@ public extension ContentCapabilities {
     var hasTranscriptBackend: Bool {
         switch extractionPath {
         case .podcastTranscript, .youtubeTranscript: return true
-        case .pdfBackend, .htmlToMarkdown, nil: return false
+        case .pdfBackend, .htmlToMarkdown, .docxBackend, nil: return false
         }
     }
 }

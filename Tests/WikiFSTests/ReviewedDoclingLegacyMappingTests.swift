@@ -12,12 +12,15 @@ import WikiFSTypes
 @Suite("Reviewed Docling legacy mapping", .serialized, .timeLimit(.minutes(5)))
 struct ReviewedDoclingLegacyMappingTests {
 
-    /// A saved `.doclingServe` selection serves through the reviewed package
-    /// with its existing typed reference — no copy, no re-entry.
+    /// A saved legacy Docling selection (the migrated `doclingServe` host
+    /// identity) serves through the reviewed package with its existing typed
+    /// reference — no copy, no re-entry.
     @Test func legacySelectionUsesReviewedLineageAndExistingReference() async throws {
         let environment = try Environment.make(
             configuration: { configuration in
-                configuration.backend = .doclingServe
+                configuration.setExtractorSelection(
+                    ExtractorRouteHostCatalog.legacyDoclingServeReference,
+                    for: .canonicalPDF)
             })
         defer { environment.cleanup() }
 
@@ -43,12 +46,15 @@ struct ReviewedDoclingLegacyMappingTests {
 
     /// The legacy selection is preserved in the route record but the mapped
     /// reviewed lineage refuses to resolve silently: a Docling selection
-    /// whose lineage is unavailable fails closed instead of falling back to
-    /// pdf2md (PR 4 review HIGH-3, plan step 12).
+    /// whose lineage is unavailable fails closed with the redacted
+    /// named-lineage diagnostic instead of falling back to pdf2md (PR 4
+    /// review HIGH-3, plan step 12).
     @Test func unavailableDoclingLineageFailsClosedInsteadOfSwappingPackages() async throws {
         let environment = try Environment.make(
             configuration: { configuration in
-                configuration.backend = .doclingServe
+                configuration.setExtractorSelection(
+                    ExtractorRouteHostCatalog.legacyDoclingServeReference,
+                    for: .canonicalPDF)
             })
         defer { environment.cleanup() }
 
@@ -66,7 +72,9 @@ struct ReviewedDoclingLegacyMappingTests {
             _ = try await services.prepare(backendOverride: nil)
             Issue.record("a Docling selection silently swapped to another extractor")
         } catch let error as ExtractionServicesError {
-            #expect(error == .unavailable)
+            #expect(error == .selectedExtractorUnavailable(
+                route: .canonicalPDF,
+                reference: ProcessExtractionServices.reviewedDoclingLogical))
         }
         await services.shutdown()
     }

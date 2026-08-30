@@ -94,7 +94,7 @@ Primary touch points include:
    - queue and direct UI extraction;
    - readiness, setup progress, conversion progress, cancellation, and failure display;
    - backend, model, tool, and technique provenance.
-6. Build a signed-service feasibility harness before package or plugin implementation. Reuse the existing `wikid.xpc` precedent for spawning mise-managed pdf2md and agent CLIs. Test only these new boundaries:
+6. Build a signed-service feasibility harness before package or plugin implementation. Reuse the existing `wikid.xpc` precedent for spawning pdf2md and agent CLIs (historical note: runtime resolution now goes through the login shell; see `docs/architecture/extractor-package-manifest.md`). Test only these new boundaries:
    - add a no-dependency fixture executable that exchanges bounded standard-input and standard-output data and spawns a fixture child;
    - build and sign the real app with embedded `wikid.xpc`;
    - install and invoke the service through its production Mach service path;
@@ -191,19 +191,19 @@ Primary touch points include:
 
 The Settings routing table needs a stable identity for one default-extraction route. Route identity is a typed pair, `ExtractorRouteID`: an `ExtractorKind` plus a normalized `ExtractorMIMEType`. The type keeps three namespaces distinct — a route is not an extractor kind, not a backend kind, and not a raw MIME string. MIME is authoritative. Filename extensions stay registration matching hints and never enter the persisted route.
 
-The current canonical routes are PDF (`application/pdf`) and HTML (`text/html`). Route identity admits other kind-plus-MIME pairs, and the UI can display them, but execution adapters for new kinds stay separate work. This stack changes no execution path.
+The current canonical routes are PDF (`application/pdf`), HTML (`text/html`), and Word (`application/vnd.openxmlformats-officedocument.wordprocessingml.document`). Route identity admits other kind-plus-MIME pairs, and the UI can display them, but execution adapters for new kinds stay separate work. This stack changes no execution path.
 
 `ExtractionConfig.routeExtractors` stores one `ExtractorRouteSelectionRecord` per route as a deterministically sorted array. A string-keyed JSON dictionary was rejected: an array keeps the persisted order canonical and makes duplicate route keys in hand-edited files representable and resolvable.
 
 Precedence for a route:
 
 1. An exact `routeExtractors` record.
-2. For a canonical route, the matching legacy field (`pdfExtractor` or `htmlExtractor`).
+2. The bundled default-route record for that route (`default-routes.json`).
 3. No selection.
 
-Below both layers, `backend` and `htmlBackend` keep their existing meaning. A config file without `routeExtractors` resolves exactly as before.
+Generic references only. A record names a host adapter, an installed package lineage, or the explicit no-default value. The route supplies the input format; the reference never carries PDF, HTML, or DOCX cases.
 
-Dual-write compatibility. A write through `setExtractorSelection(_:for:)` to a canonical route also updates the matching legacy reference field, so old builds reading `pdfExtractor` or `htmlExtractor` see the same selection. Removal clears the record and the legacy reference, so the legacy backend fields apply again. The Settings mapping (`writePDF` / `writeHTML`) keeps owning `backend` and `htmlBackend`.
+One-time migration. The retired `backend`, `htmlBackend`, `pdfExtractor`, and `htmlExtractor` keys are decode-only inputs. The decoder adopts each retired value into the matching route record when no record claims the route, and encode never writes the retired keys again. `routeExtractors` is the sole persisted extractor selection.
 
 Decode resilience. A missing key decodes to an empty list. A malformed record is dropped through the logged decode seam. Duplicate records for one route resolve deterministically: the canonically-greatest record wins, independent of file order, with one bounded diagnostic.
 
@@ -213,15 +213,15 @@ The Settings route table is a pure projection. `ExtractorRouteTableBuilder` buil
 
 Union rules:
 
-- Host descriptors seed the canonical PDF and HTML rows, so both stay visible with zero packages installed.
+- Host descriptors seed the canonical PDF, HTML, and Word rows, so all three stay visible with zero packages installed.
 - Every active exact registration contributes rows for its declared (kind, MIME) pairs. A future registration can add a row without another Settings layout change, but execution adapters for new kinds remain separate work.
 - Saved records seed their route even when nothing active backs it. A stale installed selection stays selected and selectable (one unavailable choice in its picker); the row reports what actually resolves.
 
 Ordering and deduplication:
 
-- Rows sort by host order (PDF, then HTML) first, then by typed route order (kind raw value, then MIME raw value).
+- Rows sort by host order (PDF, then HTML, then Word) first, then by typed route order (kind raw value, then MIME raw value).
 - Multiple exact versions of one logical registration deduplicate into one choice showing the highest active revision; the package lifecycle rows below the table keep every exact version for inspection and removal.
-- Choices order like the pickers they replace: prompt (HTML), reviewed package, installed packages by package ID, connected services, built-ins.
+- Choices order like the pickers they replace: prompt (HTML and Word), reviewed package, installed packages by package ID, connected services, built-ins.
 - The reviewed packages attach only to their canonical routes; direct Anthropic and Gemini API choices never appear.
 
 Statuses use a compact typed vocabulary: **Ready**, **Needs setup**, **Not installed**, **Starting**, and **Failed**. A non-ready status opens **Extractor Status** with the cause, blocked-route impact, supported recovery actions, and a redacted diagnostic preview. Settings reports route configuration and lifecycle health. Per-document operation failures remain in Activity.
@@ -297,13 +297,13 @@ Statuses use a compact typed vocabulary: **Ready**, **Needs setup**, **Not insta
 
 1. Add a narrow `ManagedProcessExecuting` host service.
 2. Resolve a direct entry point beneath the validated operation snapshot.
-3. Resolve runtime commands against a host-owned immutable search list, including mise shims, before spawn. Launch an absolute executable URL and do not rely on child PATH lookup.
+3. Resolve runtime commands through the account's login shell exactly once per prepared operation, and retain the one absolute executable the shell selects for readiness and launch. Launch the retained absolute URL directly and do not rely on child PATH lookup. The host knows no tool manager and searches no directories.
 4. Separate launch requirements from behavioral capabilities.
 5. Always provide deterministic locale, operation-private `HOME`, package-private temporary/cache directories, and request correlation values.
 6. Grant shared runtime or model caches only through matching capabilities.
 7. Never inherit credentials, API tokens, provider secrets, wiki database paths, unrelated environment values, or the parent environment wholesale.
 8. Keep Bun and uv optional. A missing runtime returns a typed failure. An explicitly selected package does not cause another extractor to run.
-9. Treat runtime executables as user-account-trusted dependencies, not digest-verified package bytes. Keep the ordered resolution locations immutable in host policy, but do not describe user-writable mise shims as immutable executables. Resolve through mise-managed execution paths where practical. Record the absolute runtime path and pre-spawn file identity in bounded diagnostics, then recheck identity immediately before spawn.
+9. Treat runtime executables as user-account-trusted dependencies, not digest-verified package bytes. The login shell's selection is authoritative; a shim it returns is launched by the path the shell named, and the identity probe may follow a symlink while the launch URL stays unchanged. Record the requested command, a redacted path description, and the pre-spawn file identity in bounded diagnostics, then recheck the identity immediately before spawn and fail closed on change.
 10. Extend or replace `AsyncProcessRunner` with:
    - standard-input data and deterministic EOF;
    - continuous frame decoding;

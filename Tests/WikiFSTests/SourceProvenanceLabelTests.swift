@@ -39,10 +39,15 @@ struct SourceProvenanceLabelTests {
     }
 
     @Test func contentTypeLabelReturnsNilForUnrecognized() {
-        #expect(SourceProvenanceLabel.contentTypeLabel(ext: "docx", mimeType: nil) == nil)
+        // docx now maps to the "Word" label (extraction via docx2md).
+        #expect(SourceProvenanceLabel.contentTypeLabel(ext: "docx", mimeType: nil) == "Word")
         #expect(SourceProvenanceLabel.contentTypeLabel(ext: "txt", mimeType: "text/plain") == nil)
         #expect(SourceProvenanceLabel.contentTypeLabel(ext: nil, mimeType: nil) == nil)
         #expect(SourceProvenanceLabel.contentTypeLabel(ext: "", mimeType: "application/octet-stream") == nil)
+        // The MIME fallback arm also maps the wordprocessingml type to "Word";
+        // legacy msword (.doc) stays unrecognized.
+        #expect(SourceProvenanceLabel.contentTypeLabel(ext: "", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document") == "Word")
+        #expect(SourceProvenanceLabel.contentTypeLabel(ext: "doc", mimeType: "application/msword") == nil)
     }
 
     // MARK: - combine
@@ -101,7 +106,7 @@ struct SourceProvenanceLabelTests {
         // tag never reads "File / " or "Zotero / ".
         #expect(SourceProvenanceLabel.combine(
             provider: "File",
-            ext: "docx", mimeType: nil) == "File")
+            ext: "docx", mimeType: nil) == "File / Word")
         #expect(SourceProvenanceLabel.combine(
             provider: "Zotero",
             ext: "", mimeType: "application/octet-stream") == "Zotero")

@@ -131,8 +131,8 @@ func enqueueIngestion(
             DebugLog.ingest("enqueueIngestion: dropped \(sourceID.rawValue) — no markdown or bytes to ingest")
             continue
         }
-        guard store.shouldAutoIngest(source) else {
-            DebugLog.ingest("enqueueIngestion: dropped \(sourceID.rawValue) — content type has no markdown path")
+        guard store.isIngestible(source) else {
+            DebugLog.ingest("enqueueIngestion: dropped \(sourceID.rawValue) — content type has no markdown path and no extracted markdown head")
             continue
         }
         ingestionSourceIDs.append(sourceID)

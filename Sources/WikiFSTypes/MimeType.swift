@@ -22,6 +22,17 @@ public enum MimeType {
     /// `application/pdf`.
     public static let pdf = "application/pdf"
 
+    /// `application/vnd.openxmlformats-officedocument.wordprocessingml.document`
+    /// — the Office Open XML `.docx` Word format. The legacy binary
+    /// `application/msword` (`.doc`) is deliberately NOT a constant here:
+    /// it has no extraction path and stays classified `.binary`.
+    public static let docx = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+    /// `application/zip` — the generic archive container. Registered
+    /// extractor inputs can BE zip containers (a `.docx` is one); the
+    /// registry's registration surface, not the sniff, says which.
+    public static let zip = "application/zip"
+
     /// `application/octet-stream` — the generic binary catch-all / fallback.
     public static let octetStream = "application/octet-stream"
 
@@ -79,6 +90,14 @@ public enum MimeType {
         return mime.lowercased() == pdf
     }
 
+    /// Whether `mime` is the Office Open XML Word `.docx` type
+    /// (case-insensitive). `nil` is `false`. The legacy `application/msword`
+    /// (`.doc`) does NOT match — it has no extraction path.
+    public static func isDOCX(_ mime: String?) -> Bool {
+        guard let mime else { return false }
+        return mime.lowercased() == docx
+    }
+
     /// Whether `mime` is any `text/*` type (case-insensitive prefix). `nil` is `false`.
     public static func isText(_ mime: String?) -> Bool {
         guard let mime else { return false }
@@ -131,6 +150,7 @@ public enum MimeType {
         switch ext.lowercased() {
         case "mmd", "mermaid": return mermaid
         case "canvas": return json
+        case "docx": return docx
         default: return nil
         }
     }

@@ -200,6 +200,11 @@ public struct URLFetchService {
         switch format {
         case .html: return .html
         case .pdf: return .pdf
+        // A fetched docx URL payload is treated as opaque binary at the fetch
+        // layer: extraction eligibility comes from `ContentTypeRegistry` (the
+        // `.docx` classification), not from `FetchOutcome.Kind` — so no new
+        // UI-facing case is added.
+        case .docx: return .binary
         case .text: return .text
         case .binary: return .binary
         }

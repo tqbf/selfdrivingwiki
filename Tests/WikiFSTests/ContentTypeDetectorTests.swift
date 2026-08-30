@@ -41,6 +41,24 @@ struct ContentTypeDetectorTests {
         #expect(result.evidence.first?.origin == .binarySignature)
     }
 
+    // MARK: - Registration-driven recognition (a .docx IS a zip)
+
+    /// Recognition of registered zip-container inputs is NOT a detector
+    /// concern: the byte sniffer stays pure and reports `application/zip`.
+    /// The active extractor registrations' declared input surface promotes
+    /// the type at the classification, dispatch, and store seams (tests in
+    /// ContentTypeRegistryTests / FormatMaterializer / DocxExtractionService).
+    @Test("zip bytes stay application/zip at the detector, whatever the name")
+    func zipSniffIsRegistrationAgnostic() {
+        let docxBytes = Data([0x50, 0x4B, 0x03, 0x04]) + Data("container".utf8)
+        let noHints = ContentTypeDetector.detect(.init(data: docxBytes))
+        #expect(noHints.normalizedMIMEType == MimeType.zip)
+
+        let docxExt = ContentTypeDetector.detect(.init(
+            data: docxBytes, hints: .init(filenameExtension: "docx")))
+        #expect(docxExt.normalizedMIMEType == MimeType.zip)
+    }
+
     @Test(arguments: signatures)
     func commonSignaturesRejectTruncatedInputs(_ value: SignatureCase) {
         let truncated = Data(value.bytes.prefix(1))

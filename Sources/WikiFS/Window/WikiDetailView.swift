@@ -219,8 +219,11 @@ struct WikiDetailView: View {
                     // pdf2md step or the standalone runExtraction) — both insert
                     // into `extractingSourceIDs`, so this is now extraction-phase
                     // driven rather than the old `isExtracting &&
-                    // ingestingSourceIDs.contains` overload.
-                    isThisFileExtracting: tracker.extractingSourceIDs.contains(file.id),
+                    // ingestingSourceIDs.contains` overload. Import-time DOCX
+                    // auto-extraction runs outside the queue, so its in-flight
+                    // marker on the store model joins the same flag.
+                    isThisFileExtracting: tracker.extractingSourceIDs.contains(file.id)
+                        || session.store.importExtractingSourceIDs.contains(file.id),
                     // No edit lock — CAS prevents data races. Only extraction locks editing.
                     isEditLockedExternally: false,
                     wikiID: session.wikiID,

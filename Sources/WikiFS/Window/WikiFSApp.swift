@@ -272,7 +272,7 @@ struct WikiFSApp: App {
             extractionProvider: extractionProvider,
             searchRuntimeRegistry: searchRuntimeRegistry,
             providerServices: providerServices,
-            htmlBackendResolver: { ExtractionConfig.load(from: directory).htmlBackend },
+            htmlBackendResolver: { ExtractionConfig.load(from: directory).htmlSelectionLabel },
             podcastBackendResolver: { ExtractionConfig.load(from: directory).podcastBackend },
             interactiveUsageRecorder: { [weak activityTracker] usage in
                 activityTracker?.recordInteractiveUsage(usage)
@@ -288,7 +288,7 @@ struct WikiFSApp: App {
                     catalog: appCatalog,
                     extractionProvider: extractionProvider,
                     searchRuntimeRegistry: searchRuntimeRegistry,
-                    htmlBackendResolver: { ExtractionConfig.load(from: directory).htmlBackend },
+                    htmlBackendResolver: { ExtractionConfig.load(from: directory).htmlSelectionLabel },
                     podcastBackendResolver: { ExtractionConfig.load(from: directory).podcastBackend },
                     interactiveUsageRecorder: { usage in
                         activityTracker?.recordInteractiveUsage(usage)
@@ -385,7 +385,7 @@ struct WikiFSApp: App {
         startStatusItem()
         applyAppKitAppearance()
         await localQueueRuntimeController.awaitSettled()
-        optionalRuntimeSetupModel.refresh()
+        await optionalRuntimeSetupModel.refresh()
         showingOptionalRuntimeSetup = !optionalRuntimeSetupModel.isComplete
         connectToDaemon()
     }
@@ -906,6 +906,11 @@ struct WikiFSApp: App {
                                 installedAt: RFC3339Timestamp(date: Date()))
                             if let services = await processProfileOwner?.services {
                                 await services.extractionContext?.receiveCatalogWake()
+                                let inputs = await services.extraction
+                                    .registeredExtractionInputs()
+                                await MainActor.run {
+                                    sessionManager.refreshRegisteredExtractionInputsForLiveSessions(inputs)
+                                }
                             }
                             return .succeeded(nil)
                         } catch {
@@ -919,6 +924,11 @@ struct WikiFSApp: App {
                             _ = try await writer.remove(revision: revision)
                             if let services = await processProfileOwner?.services {
                                 await services.extractionContext?.receiveCatalogWake()
+                                let inputs = await services.extraction
+                                    .registeredExtractionInputs()
+                                await MainActor.run {
+                                    sessionManager.refreshRegisteredExtractionInputsForLiveSessions(inputs)
+                                }
                             }
                             return .succeeded(nil)
                         } catch {

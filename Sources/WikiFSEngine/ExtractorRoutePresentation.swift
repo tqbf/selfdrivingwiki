@@ -73,9 +73,9 @@ public struct ExtractorRouteDescriptor: Hashable, Sendable {
 /// One selectable default-extractor choice inside a route row.
 public struct ExtractorRouteChoice: Hashable, Sendable, Identifiable {
     public let route: ExtractorRouteID
-    /// The persisted value this choice writes. `nil` only for the prompt
-    /// choice (no selection).
-    public let reference: ExtractionBackendReference?
+    /// The persisted value this choice writes. The prompt choice writes
+    /// `.none` (an explicit no-default record); there is no nil state.
+    public let reference: ExtractionBackendReference
     public let displayName: String
     public let category: ExtractorRouteSourceCategory
     /// For installed-namespace choices (reviewed and installed packages): the
@@ -85,7 +85,7 @@ public struct ExtractorRouteChoice: Hashable, Sendable, Identifiable {
 
     public init(
         route: ExtractorRouteID,
-        reference: ExtractionBackendReference?,
+        reference: ExtractionBackendReference,
         displayName: String,
         category: ExtractorRouteSourceCategory,
         exactSummary: String? = nil
@@ -101,7 +101,7 @@ public struct ExtractorRouteChoice: Hashable, Sendable, Identifiable {
         let referenceKey: String
         switch reference {
         case .none: referenceKey = "prompt"
-        case .builtIn(let builtIn): referenceKey = "builtIn/\(builtIn)"
+        case .host(let host): referenceKey = "host/\(host.adapterID.rawValue)"
         case .installed(let logical): referenceKey = "installed/\(logical)"
         }
         return "\(route.description)/\(referenceKey)"
@@ -158,10 +158,35 @@ public struct ExtractorRouteSettingsRow: Hashable, Sendable, Identifiable {
     public var id: String { descriptor.route.description }
 }
 
-/// Host-owned route descriptors and non-package choices for the two canonical
+/// Host-owned route descriptors and non-package choices for the canonical
 /// routes. Package choices come from validated catalog records.
 public enum ExtractorRouteHostCatalog {
-    /// Canonical routes in host display order (PDF first, then HTML).
+    /// The connected-service ACP adapter identity (host namespace). The
+    /// retired direct-API host IDs (anthropic, gemini) never appear as
+    /// choices; migrated selections of those values display as ACP.
+    public static let acpReference = hostReference(ExtractionBackend.acp.rawValue)
+
+    /// The built-in tag-based HTML adapter identity (host namespace).
+    public static let tagBasedReference = hostReference(HtmlExtractionBackend.tagBased.rawValue)
+
+    /// Legacy-only host identities: names older configs migrated onto host
+    /// references. Execution remaps them to their reviewed package lineages;
+    /// presentation maps them to the reviewed-package choices. They are never
+    /// offered as new choices.
+    public static let legacyPDF2mdReference = hostReference(ExtractionBackend.localPdf2md.rawValue)
+    public static let legacyDoclingServeReference = hostReference(ExtractionBackend.doclingServe.rawValue)
+    public static let legacyDefuddleReference = hostReference(HtmlExtractionBackend.defuddle.rawValue)
+
+    /// Builds a validated host reference for a known-good adapter literal.
+    public static func hostReference(_ rawValue: String) -> ExtractionBackendReference {
+        guard let adapterID = HostExtractorID(rawValue: rawValue) else {
+            preconditionFailure("Invalid host adapter literal: \(rawValue)")
+        }
+        return .host(HostExtractorReference(adapterID: adapterID))
+    }
+
+    /// Canonical routes in host display order (PDF first, then HTML, then
+    /// DOCX).
     public static let descriptors: [ExtractorRouteDescriptor] = [
         ExtractorRouteDescriptor(
             route: .canonicalPDF,
@@ -171,17 +196,24 @@ public enum ExtractorRouteHostCatalog {
             route: .canonicalHTML,
             displayName: "HTML",
             systemImage: "safari"),
+        ExtractorRouteDescriptor(
+            route: .canonicalDOCX,
+            displayName: "Word",
+            systemImage: "doc.text"),
     ]
 
-    /// The host's fixed choices for one route. Only the canonical routes have
+    /// The host's fixed choices for one route. Only canonical routes have
     /// host choices; a future registration-derived route offers package
-    /// choices only.
+    /// choices only. The DOCX route has no built-in backend, so its only
+    /// host choice is the explicit "no default" entry — the reviewed docx2md
+    /// package appears as a choice when its registration is active (from the
+    /// validated catalog record), and never as a hardcoded host row.
     public static func choices(for route: ExtractorRouteID) -> [ExtractorRouteChoice] {
         if route == .canonicalPDF {
             return [
                 ExtractorRouteChoice(
                     route: route,
-                    reference: .builtIn(.pdf(.acp)),
+                    reference: acpReference,
                     displayName: "ACP Provider",
                     category: .connectedService),
             ]
@@ -190,17 +222,47 @@ public enum ExtractorRouteHostCatalog {
             return [
                 ExtractorRouteChoice(
                     route: route,
-                    reference: nil,
+                    reference: .none,
                     displayName: "No default (ask each time)",
                     category: .prompt),
                 ExtractorRouteChoice(
                     route: route,
-                    reference: .builtIn(.html(.tagBased)),
+                    reference: tagBasedReference,
                     displayName: "Tag-based",
                     category: .builtIn),
             ]
         }
+        if route == .canonicalDOCX {
+            return [
+                ExtractorRouteChoice(
+                    route: route,
+                    reference: .none,
+                    displayName: "No default (use the reviewed package)",
+                    category: .prompt),
+            ]
+        }
         return []
+    }
+
+    /// Kinds the HOST itself can execute without any package: a route with a
+    /// `.builtIn` or `.connectedService` choice (PDF's connected ACP service,
+    /// HTML's built-in tag adapter). A route whose only host-side choice is
+    /// `.prompt` (DOCX today) is package-only — the host has no backend for
+    /// it, and the package registration is the only execution path.
+    ///
+    /// Host capability DATA derived from the choice table, not kind policy:
+    /// import auto-extraction derives its package-only kinds from this set,
+    /// so a future package-only kind converts on import with no host-policy
+    /// change. NOTE: route DESCRIPTORS alone are the wrong signal — the DOCX
+    /// Settings row is a display row for its package-only route; only the
+    /// choice categories say whether the host can execute the kind.
+    public static var hostBackendKinds: Set<ExtractorKind> {
+        Set(descriptors
+            .filter { descriptor in
+                choices(for: descriptor.route)
+                    .contains { $0.category == .builtIn || $0.category == .connectedService }
+            }
+            .map(\.route.kind))
     }
 
     /// Stable descriptor for a route without host-owned presentation metadata.

@@ -4333,6 +4333,28 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
 
     // MARK: - WikiStore protocol: Sources
 
+    /// The active extractor registrations' declared input surface, kept in
+    /// sync by the owning `WikiStoreModel`. Registration-driven recognition:
+    /// when the byte sniffer resolves a file to a generic archive container
+    /// (`application/zip`) but an ACTIVE registration declares the file's
+    /// extension or MIME as its input (a `.docx` IS a zip), the registered
+    /// type is what the source records — the package's registration is the
+    /// declaration that this content has an extraction path. `.none` (the
+    /// default) keeps sniff-only behavior.
+    public var registeredExtractionInputs: RegisteredExtractionInputs = .none
+
+    /// Applies registration-driven promotion to one detection result's
+    /// stored MIME. Pure aside from reading `registeredExtractionInputs`.
+    private func registeredPromotedMIME(
+        _ detected: ContentTypeDetectionResult,
+        hints: ContentTypeDetectionHints
+    ) -> String? {
+        registeredExtractionInputs.promotedMIME(
+            detectedMIME: detected.normalizedMIMEType,
+            declaredMIME: hints.declaredMIME?.value,
+            filenameExtension: hints.filenameExtension)
+    }
+
     private static func logContentTypeConflicts(
         _ result: ContentTypeDetectionResult,
         filename: String
@@ -4405,7 +4427,14 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
             filenameExtension: ext.isEmpty ? nil : ext,
             utiMIME: utiMime)
         let detection = ContentTypeDetector.detect(.init(data: data, hints: hints))
-        let mime = detection.normalizedMIMEType
+        // Registration-driven recognition: the ONE authoritative promotion
+        // site. Every ingestion path funnels through this addSource, and a
+        // registered zip-container input (a `.docx`) must store its
+        // registered type even though the trusted declared MIME also loses
+        // to the archive signature in `chooseEvidence` — the ACTIVE
+        // registration's declared input is the more specific read.
+        let mime = registeredPromotedMIME(detection, hints: hints)
+            ?? detection.normalizedMIMEType
         Self.logContentTypeConflicts(detection, filename: filename)
         let displayName: String?
         if let resolved = resolvedDisplayName ?? DisplayNameResolver.resolve(

@@ -49,15 +49,27 @@ Import accepts one local directory only. The store rejects a single file, an arc
 - `direct`: the host executes the entry point itself. The source entry point must be a regular file with owner-read and owner-execute permission.
 - `runtime`: the host executes one command and passes the entry point path as the last argument. The command is a single name with no slash, at most 128 characters, from `[A-Za-z0-9._+-]`. The source entry point must be a regular file with owner-read permission. Execute permission is not required. Fixed arguments are optional, at most 64 arguments of at most 8 KiB each.
 
-The host resolves the command name against a fixed search list before spawn and launches the absolute path: `~/.local/share/mise/shims`, `~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`. Bun and uv are the runtimes the reviewed packages use. They are optional user-installed tools, not app dependencies. An absent runtime produces a typed `missing-runtime` failure, and fallback stays available.
+The user's login shell selects the executable. The host asks the account's configured login shell (zsh, bash, or fish, started as an interactive login shell) which absolute executable it runs for the command name, accepts exactly one absolute path, and pins that file's identity. The host retains that one resolution for the whole prepared operation: readiness and every launch use the same result, and nothing searches a PATH again. The host launches the retained absolute path directly, so the managed child receives no `PATH` and no tool-manager configuration. Bun and uv are the runtimes the reviewed packages use. They are optional user-installed tools, not app dependencies; any installation method works when the login shell resolves the name. A resolution failure is typed (account shell, shell family, shell start, startup timeout, shell exit, command absent, unexpected shell output, unusable executable), readiness reports it as setup guidance, and the next prepared operation resolves again.
 
 ### Registrations
+
+**Kind neutrality.** Extractor-kind policy comes from package data, not host
+branches. The manifest registrations declare what a package can extract, which
+MIME types and filename extensions it recognizes, and import-time
+auto-extraction follows that data: a kind converts on import when an active
+registration claims it and the host route catalog has no built-in route for it
+(package-only). Host code never compares against an extractor kind to decide
+recognition, selection, or import behavior, and never names a policy seam
+after a kind. Typed per-kind extractor protocols keep their kind names
+because their operation shapes differ; kind-to-value mapping tables (MIME
+fallbacks, labels) are data, not policy. `ExtractorKindNeutralityContractTests`
+enforces the boundary.
 
 | Field | Type | Rules |
 | --- | --- | --- |
 | `id` | string | 1 to 64 characters, lowercase ASCII letters, digits, hyphens. |
 | `displayName` | string | 1 to 128 bytes. |
-| `kinds` | array | Nonempty subset of `pdf` and `html`. Revision 1 supports no other kind. |
+| `kinds` | array | Nonempty subset of `pdf`, `html`, and `docx`. |
 | `mimeTypes` | array | Nonempty set of normalized lowercase MIME types. |
 | `filenameExtensions` | array, optional | Lowercase ASCII letters and digits, no leading dot, at most 32 characters. |
 
@@ -149,23 +161,24 @@ The index file is `derived/index.json` under the store root. Its schema version 
 
 ## Configuration compatibility
 
-`extraction-config.json` keeps its existing fields. Two optional logical fields extend it: `pdfExtractor` and `htmlExtractor`. Each holds either a built-in reference or an installed package reference.
+`extraction-config.json` stores one generic selection table: `routeExtractors`, a sorted array of route records. Each record names a typed extraction route (kind plus MIME type) and a version-free reference — a host adapter identity, an installed package lineage, or an explicit no-default value. The route supplies the input format; the reference names only the implementation.
 
-Selection precedence per extractor kind:
+One-time migration. The retired `backend`, `htmlBackend`, `pdfExtractor`, and `htmlExtractor` keys are decode-only inputs. The decoder adopts each retired value into the matching route record when no record claims that route: `backend` values become host references (`localPdf2md` leaves the record absent, because the bundled default supplies it), and `htmlBackend` values become host references. Encode never writes the retired keys again.
 
-1. If the logical field is absent, the legacy `backend` or `htmlBackend` field applies unchanged.
-2. If the logical field selects a built-in, that explicit selection wins over the legacy field.
-3. If the logical field selects an installed package and a compatible active registration exists, it wins.
-4. If that installed selection is unavailable, the app keeps the selection, emits one redacted diagnostic, and uses the fixed fallback: the built-in PDF backend for PDF, or built-in tag-based extraction for HTML. The app never silently selects a different third-party package.
+Defaults. Fresh installs and record-less routes resolve through the bundled default-route policy (`default-routes.json`): the PDF route defaults to the reviewed pdf2md lineage, and the DOCX route to the reviewed docx2md lineage (`org.selfdrivingwiki.docx2md`, registration `document`). HTML has no shipped default — the user picks an extractor, and the built-in tag-based adapter is the execution floor. An explicit no-default record disables the shipped default for its route.
 
-Legacy built-in selections keep working. The `localPdf2md` selection maps to the reviewed pdf2md package lineage (`org.selfdrivingwiki.pdf2md`, registration `document`) when it is active, and the legacy Defuddle selection maps to the reviewed Defuddle lineage (`org.selfdrivingwiki.defuddle`, registration `article`).
+Failure posture. An installed selection with no compatible active registration keeps its saved identity, emits one redacted diagnostic, and fails closed. The app never silently selects a different third-party package.
+
+Legacy host identities keep working. A migrated `localPdf2md`, `doclingServe`, or `defuddle` host reference maps to its reviewed package lineage (`org.selfdrivingwiki.pdf2md` / `org.selfdrivingwiki.docling-serve`, registration `document`; `org.selfdrivingwiki.defuddle`, registration `article`) when that lineage is active, and fails closed when it is not.
 
 ## Worked examples
 
-The reviewed packages in `ExtractorPackages/` are complete revision-1 packages:
+The reviewed packages in `ExtractorPackages/` are complete reviewed packages:
 
 - `Defuddle/manifest.json` — HTML article extraction, `runtime` launch with the `bun` command, no capabilities, 120-second duration limit, 32 MiB input and output limits.
 - `Pdf2md/manifest.json` — PDF conversion, `runtime` launch with the `uv` command and `run --script` arguments, `network`, `shared-runtime-cache`, and `model-download` capabilities, 30-minute duration limit, 128 MiB input limit.
+- `DoclingServe/manifest.json` — PDF conversion through a self-hosted Docling Serve, `direct` launch, manifest revision 2 with an optional `api-token` credential requirement, `network` capability.
+- `Docx2md/manifest.json` — Word `.docx` conversion, `runtime` launch with the `bun` command, no capabilities, 120-second duration limit, 32 MiB input and output limits.
 
 Validate any package folder with `swift run extractor-package-tool validate <folder>`. The tool prints the package ID, version, package digest, registration IDs, and protocol revision on success.
 

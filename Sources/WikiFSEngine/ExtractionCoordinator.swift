@@ -54,6 +54,13 @@ public protocol ExtractionServices: Sendable {
     func prepareHTML(
         backendOverride: HtmlExtractionBackend?
     ) async throws -> any HtmlMarkdownExtractor
+    /// DOCX is package-only — there are no built-in DOCX backends, so unlike
+    /// `prepareHTML` there is no override parameter. The selection always
+    /// resolves through the configuration, defaulting to the reviewed docx2md
+    /// lineage when nothing is configured.
+    func prepareDOCX() async throws -> any DocxMarkdownExtractor
+    /// Active package registration claims used for import recognition.
+    func registeredExtractionInputs() async -> RegisteredExtractionInputs
 }
 
 public extension ExtractionServices {
@@ -70,6 +77,14 @@ public extension ExtractionServices {
     ) async throws -> any HtmlMarkdownExtractor {
         throw ExtractionServicesError.unavailable
     }
+
+    func prepareDOCX() async throws -> any DocxMarkdownExtractor {
+        throw ExtractionServicesError.unavailable
+    }
+
+    func registeredExtractionInputs() async -> RegisteredExtractionInputs {
+        .none
+    }
 }
 
 public struct UnavailableExtractionServices: ExtractionServices {
@@ -82,6 +97,10 @@ public struct UnavailableExtractionServices: ExtractionServices {
     public func prepareHTML(
         backendOverride: HtmlExtractionBackend?
     ) async throws -> any HtmlMarkdownExtractor {
+        throw ExtractionServicesError.unavailable
+    }
+
+    public func prepareDOCX() async throws -> any DocxMarkdownExtractor {
         throw ExtractionServicesError.unavailable
     }
 }
@@ -126,6 +145,14 @@ public actor MutableExtractionServices: ExtractionServices {
         backendOverride: HtmlExtractionBackend?
     ) async throws -> any HtmlMarkdownExtractor {
         try await installed.prepareHTML(backendOverride: backendOverride)
+    }
+
+    public func prepareDOCX() async throws -> any DocxMarkdownExtractor {
+        try await installed.prepareDOCX()
+    }
+
+    public func registeredExtractionInputs() async -> RegisteredExtractionInputs {
+        await installed.registeredExtractionInputs()
     }
 }
 
@@ -293,6 +320,32 @@ public final class ExtractionCoordinator {
         backendOverride: HtmlExtractionBackend? = nil
     ) async throws -> any HtmlMarkdownExtractor {
         try await services.prepareHTML(backendOverride: backendOverride)
+    }
+
+    public func prepareDOCX() async throws -> any DocxMarkdownExtractor {
+        try await services.prepareDOCX()
+    }
+
+    /// Kind-neutral import-extraction preparation. WHICH kinds auto-extract
+    /// at import is package data derived by the wiring; this resolves the
+    /// typed extractor for whatever kind that data selects. The switch
+    /// below is the single typed adapter seam — policy never reaches it.
+    /// (typed-kind-dispatch: import adapter)
+    public func prepareImportExtractor(
+        kind: ExtractorKind
+    ) async -> PreparedImportExtractor? {
+        switch kind {
+        case .docx:
+            do {
+                return .docx(try await prepareDOCX())
+            } catch {
+                DebugLog.extraction(
+                    "Import auto-extraction could not prepare an extractor for kind \(kind.rawValue): \(error.localizedDescription)")
+                return nil
+            }
+        default:
+            return nil
+        }
     }
 }
 #endif

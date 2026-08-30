@@ -84,7 +84,7 @@ case "success", "environment":
             "HOME", "TMPDIR", "XDG_CACHE_HOME", "LANG", "LC_ALL",
             "WIKI_EXTRACTOR_REQUEST_ID", "WIKI_EXTRACTOR_PROTOCOL_REVISION",
             "WIKI_EXTRACTOR_SHARED_RUNTIME_CACHE", "WIKI_EXTRACTOR_SHARED_MODEL_CACHE",
-            "PARENT_SECRET", "PATH",
+            "PARENT_SECRET", "PATH", "MISE_DATA_DIR", "MISE_CONFIG_DIR",
         ]
         markdown = keys.map { "\($0)=\(environment[$0] ?? "<missing>")" }.joined(separator: "\n")
     } else {

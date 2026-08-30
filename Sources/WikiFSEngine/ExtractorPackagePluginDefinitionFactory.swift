@@ -221,6 +221,16 @@ public enum ExtractorPackagePluginDefinitionFactory {
                                 return ExtractionBackendAdapter.html(html)
                             },
                             presentation: presentation))
+                    case .docx:
+                        entries.append(ExtractionBatchEntry(
+                            key: .installed(kind: backendKind, reference: reference),
+                            backend: RegisteredExtractionBackend(key: legacyPlaceholderKey) {
+                                let docx = try await provider.prepareDOCX(
+                                    revision: revision,
+                                    manifest: manifest)
+                                return ExtractionBackendAdapter.docx(docx)
+                            },
+                            presentation: presentation))
                     }
                 }
             }
@@ -238,6 +248,7 @@ public enum ExtractorPackagePluginDefinitionFactory {
         switch kind {
         case .pdf: return .pdf
         case .html: return .html
+        case .docx: return .docx
         }
     }
 
@@ -248,8 +259,8 @@ public enum ExtractorPackagePluginDefinitionFactory {
             throw FactoryError.unsupportedProtocol(manifest.protocolRevision)
         }
         for registration in manifest.registrations {
-            guard registration.kinds.isSubset(of: [.pdf, .html]) else {
-                let offending = registration.kinds.subtracting([.pdf, .html]).first.map(\.rawValue) ?? "?"
+            guard registration.kinds.isSubset(of: [.pdf, .html, .docx]) else {
+                let offending = registration.kinds.subtracting([.pdf, .html, .docx]).first.map(\.rawValue) ?? "?"
                 throw FactoryError.unsupportedRegistrationKind(offending)
             }
         }

@@ -34,6 +34,20 @@ struct ContentTypeRegistryTests {
         #expect(c.extractionPath == .htmlToMarkdown)
     }
 
+    @Test func docxExtractsButDoesNotAutoIngest() {
+        // Extractable via the reviewed docx2md package, but raw docx bytes
+        // are a binary zip — useless as staged agent context — so the
+        // auto-ingest gate stays closed in v1 (unlike HTML/PDF). Extraction
+        // is a manual Extract-button action; the resulting Markdown version
+        // becomes the ingestible content.
+        let c = ContentKind.docx.capabilities
+        #expect(c.canExtractToMarkdown == true)
+        #expect(c.shouldAutoIngest == false)
+        #expect(c.extractionPath == .docxBackend)
+        #expect(c.hasFileExtractionBackend == true)
+        #expect(c.hasTranscriptBackend == false)
+    }
+
     @Test func markdownIsNativeNoExtraction() {
         // Already markdown — nothing to extract, but auto-ingestible.
         let c = ContentKind.markdown.capabilities
@@ -121,6 +135,16 @@ struct ContentTypeRegistryTests {
     @Test("HTML mime resolves to html") func htmlMime() {
         #expect(ContentKind.fromMIME("text/html") == .html)
         #expect(ContentKind.fromMIME("application/xhtml+xml") == .html)
+    }
+
+    @Test("DOCX mime resolves to docx") func docxMime() {
+        #expect(ContentKind.fromMIME("application/vnd.openxmlformats-officedocument.wordprocessingml.document") == .docx)
+        // Case-insensitive.
+        #expect(ContentKind.fromMIME("APPLICATION/VND.OPENXMLFORMATS-OFFICEDOCUMENT.WORDPROCESSINGML.DOCUMENT") == .docx)
+        // Legacy Word formats do NOT classify as docx — no extraction path.
+        #expect(ContentKind.fromMIME("application/msword") == .binary)
+        // A macro-enabled .docm extension has no fallback either (AC.5 pin).
+        #expect(ContentKind.resolve(mimeType: nil, provider: nil, ext: "docm") != .docx)
     }
 
     @Test("Markdown mimes resolve to markdown") func markdownMime() {
@@ -270,6 +294,148 @@ struct ContentTypeRegistryTests {
         #expect(kind == .pdf)
     }
 
+    @Test("nil mime + .docx ext requires an active registration")
+    func docxExtRequiresRegistration() {
+        #expect(ContentKind.resolve(
+            mimeType: nil,
+            provider: nil,
+            ext: "docx") == .unknown)
+        let kind = ContentKind.resolve(
+            mimeType: nil,
+            provider: nil,
+            ext: "docx",
+            registeredInputs: Self.registeredDocx)
+        #expect(kind == .docx)
+        #expect(kind.capabilities.extractionPath == .docxBackend)
+        #expect(kind.capabilities.hasFileExtractionBackend)
+        #expect(kind.capabilities.shouldAutoIngest == false)
+    }
+
+    // MARK: - Registration-driven recognition (the package declares the input)
+
+    private static let registeredDocx = RegisteredExtractionInputs(claims: [.init(
+        kind: .docx,
+        mimeTypes: [MimeType.docx],
+        filenameExtensions: ["docx"])])
+
+    @Test("an active docx registration promotes a zip-sniffed source to docx")
+    func registeredDocxInputPromotesZipContainer() {
+        // A .docx IS a zip; the sniffer reports application/zip. The ACTIVE
+        // registration's declared extension is what recognizes the file —
+        // recognition comes from the package, not the sniff or a name table.
+        let byExt = ContentKind.resolve(
+            mimeType: MimeType.zip, provider: .localFile, ext: "docx",
+            registeredInputs: Self.registeredDocx)
+        #expect(byExt == .docx)
+        #expect(byExt.capabilities.extractionPath == .docxBackend)
+
+        let byMIME = ContentKind.resolve(
+            mimeType: MimeType.zip, provider: .localFile, ext: "mystery",
+            registeredInputs: RegisteredExtractionInputs(claims: [.init(
+                kind: .docx,
+                mimeTypes: [MimeType.docx],
+                filenameExtensions: [])]))
+        // declaredMIME path: the zip mime itself is not the registered type,
+        // so a mystery extension does not promote here.
+        #expect(byMIME == .binary)
+
+        // Without the registration, the same file stays a binary zip.
+        let unregistered = ContentKind.resolve(
+            mimeType: MimeType.zip, provider: .localFile, ext: "docx",
+            registeredInputs: .none)
+        #expect(unregistered == .binary)
+
+        // A zip the registration does not claim stays a zip.
+        let plainZip = ContentKind.resolve(
+            mimeType: MimeType.zip, provider: .localFile, ext: "zip",
+            registeredInputs: Self.registeredDocx)
+        #expect(plainZip == .binary)
+    }
+
+    @Test("an active registration recognizes its extension without a stored MIME")
+    func registeredExtensionRecognizesNilMime() {
+        let kind = ContentKind.resolve(
+            mimeType: nil, provider: nil, ext: "docx",
+            registeredInputs: Self.registeredDocx)
+        #expect(kind == .docx)
+
+        // Without the active registration, the same extension stays unknown.
+        #expect(ContentKind.resolve(
+            mimeType: nil, provider: nil, ext: "docx",
+            registeredInputs: .none) == .unknown)
+        #expect(ContentKind.resolve(
+            mimeType: nil, provider: nil, ext: "zzz",
+            registeredInputs: Self.registeredDocx) == .unknown)
+    }
+
+    @Test("promotedMIME fires only for generic containers claimed by a registration")
+    func promotedMIMETable() {
+        // Extension path.
+        #expect(Self.registeredDocx.promotedMIME(
+            detectedMIME: MimeType.zip, declaredMIME: nil,
+            filenameExtension: "docx") == MimeType.docx)
+        // Declared-MIME path (e.g. a fetch that declared the Word type).
+        #expect(Self.registeredDocx.promotedMIME(
+            detectedMIME: MimeType.zip, declaredMIME: MimeType.docx,
+            filenameExtension: nil) == MimeType.docx)
+        // Not a container, or not claimed → nil.
+        #expect(Self.registeredDocx.promotedMIME(
+            detectedMIME: MimeType.pdf, declaredMIME: nil,
+            filenameExtension: "docx") == nil)
+        #expect(Self.registeredDocx.promotedMIME(
+            detectedMIME: MimeType.zip, declaredMIME: nil,
+            filenameExtension: "zip") == nil)
+        #expect(RegisteredExtractionInputs.none.promotedMIME(
+            detectedMIME: MimeType.zip, declaredMIME: nil,
+            filenameExtension: "docx") == nil)
+    }
+
+    @Test("conflicting registration claims do not synthesize an input mapping")
+    func conflictingRegistrationClaimsFailClosed() {
+        let conflicting = RegisteredExtractionInputs(claims: [
+            .init(
+                kind: .docx,
+                mimeTypes: [MimeType.docx],
+                filenameExtensions: ["docx"]),
+            .init(
+                kind: .docx,
+                mimeTypes: ["application/x-other-docx"],
+                filenameExtensions: ["docx"]),
+        ])
+
+        #expect(conflicting.promotedMIME(
+            detectedMIME: MimeType.zip,
+            declaredMIME: nil,
+            filenameExtension: "docx") == nil)
+        #expect(ContentKind.resolve(
+            mimeType: MimeType.zip,
+            provider: .localFile,
+            ext: "docx",
+            registeredInputs: conflicting) == .binary)
+    }
+
+    @Test("dispatch keeps the Word format for a registered docx zip")
+    func registeredDispatchKeepsDocxFormat() {
+        let docxBytes = Data([0x50, 0x4B, 0x03, 0x04]) + Data("container".utf8)
+        let plan = FormatMaterializer.dispatch(
+            data: docxBytes,
+            hints: .init(filenameExtension: "docx"),
+            stem: "report",
+            extensionHint: "docx",
+            registeredInputs: Self.registeredDocx)
+        #expect(plan.format == .docx)
+        #expect(plan.filename == "report.docx")
+
+        // Without the registration, the same bytes stay a zip binary.
+        let unregistered = FormatMaterializer.dispatch(
+            data: docxBytes,
+            hints: .init(filenameExtension: "docx"),
+            stem: "report",
+            extensionHint: "docx")
+        #expect(unregistered.format == .binary)
+        #expect(unregistered.filename == "report.zip")
+    }
+
     @Test("nil mime + unknown ext still returns .unknown (fail safe)") func unknownExtFallback() {
         let kind = ContentKind.resolve(mimeType: nil, provider: nil, ext: "dat")
         #expect(kind == .unknown)
@@ -283,27 +449,27 @@ struct ContentTypeRegistryTests {
 
     // MARK: - Closed-enum exhaustiveness check
 
-    @Test("ContentKind is closed at 12 cases") func enumIsClosedAt12() {
+    @Test("ContentKind is closed at 13 cases") func enumIsClosedAt13() {
         // Adding a case is a deliberate decision (new content type added to
         // the table). Pin the count so the review catches any accidental
         // expansion. Update this number + add a per-case capability test
         // above when adding a case.
-        #expect(ContentKind.allCases.count == 12)
+        #expect(ContentKind.allCases.count == 13)
     }
 
     // MARK: - Capability conveniences (PR2)
 
     /// `hasFileExtractionBackend` is the Extract-button predicate — true for
-    /// `.pdfBackend` / `.htmlToMarkdown` only. Using `canExtractToMarkdown`
-    /// for the Extract button (plan §5.4 original) would have wrongly
-    /// matched `.podcastTranscript` / `.youtubeTranscript`, breaking the
-    /// one-button-per-source exclusivity with Transcribe.
-    @Test("hasFileExtractionBackend is true for pdf + html only")
+    /// `.pdfBackend` / `.htmlToMarkdown` / `.docxBackend`. Using
+    /// `canExtractToMarkdown` for the Extract button (plan §5.4 original)
+    /// would have wrongly matched `.podcastTranscript` / `.youtubeTranscript`,
+    /// breaking the one-button-per-source exclusivity with Transcribe.
+    @Test("hasFileExtractionBackend is true for pdf + html + docx only")
     func fileExtractionBackendTable() {
-        let truthy: Set<ContentKind> = [.pdf, .html]
+        let truthy: Set<ContentKind> = [.pdf, .html, .docx]
         for kind in ContentKind.allCases {
             let path = kind.capabilities.extractionPath
-            let expected = (path == .pdfBackend || path == .htmlToMarkdown)
+            let expected = (path == .pdfBackend || path == .htmlToMarkdown || path == .docxBackend)
             #expect(kind.capabilities.hasFileExtractionBackend == expected,
                     "\(kind) should have hasFileExtractionBackend == \(expected)")
             #expect(kind.capabilities.hasFileExtractionBackend == truthy.contains(kind),
@@ -362,14 +528,14 @@ struct ContentTypeRegistryTests {
 
     // MARK: - closed-enum regression: ExtractionPath
 
-    @Test("ExtractionPath cases are stable (4 cases, no accidental growth)")
-    func extractionPathIsClosedAt4() {
+    @Test("ExtractionPath cases are stable (5 cases, no accidental growth)")
+    func extractionPathIsClosedAt5() {
         // Adding a case is a deliberate decision. Pin so a future
         // extraction-path addition flags the convenience tests above to
         // be re-audited.
         let allCases: [ContentCapabilities.ExtractionPath] = [
-            .pdfBackend, .htmlToMarkdown, .podcastTranscript, .youtubeTranscript
+            .pdfBackend, .htmlToMarkdown, .docxBackend, .podcastTranscript, .youtubeTranscript
         ]
-        #expect(allCases.count == 4)
+        #expect(allCases.count == 5)
     }
 }

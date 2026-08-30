@@ -48,12 +48,14 @@ Properties that the code enforces:
 
 ## Reviewed packages
 
-Two reviewed packages ship inside the app bundle and inside the daemon service bundle:
+Four reviewed packages ship inside the app bundle and inside the daemon service bundle:
 
 | Directory | Package ID | Version | Registration |
 | --- | --- | --- | --- |
 | `ExtractorPackages/Defuddle` | `org.selfdrivingwiki.defuddle` | 0.19.1 | `article` (HTML) |
 | `ExtractorPackages/Pdf2md` | `org.selfdrivingwiki.pdf2md` | 1.0.0 | `document` (PDF) |
+| `ExtractorPackages/DoclingServe` | `org.selfdrivingwiki.docling-serve` | 1.0.0 | `document` (PDF) |
+| `ExtractorPackages/Docx2md` | `org.selfdrivingwiki.docx2md` | 1.0.0 | `document` (DOCX) |
 
 The identity of each reviewed package is a compiled golden constant in `ReviewedExtractorPackages`. A bundled directory runs only when its bytes reproduce the compiled revision, so a tampered or stale bundle payload is rejected instead of executed.
 

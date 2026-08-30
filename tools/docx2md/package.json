@@ -1,0 +1,15 @@
+{
+  "name": "docx2md-extractor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Reviewed docx2md extractor package source: converts .docx to Markdown via mammoth + turndown (extractor protocol revision 1).",
+  "type": "module",
+  "scripts": {
+    "test": "bun test"
+  },
+  "dependencies": {
+    "mammoth": "^1.12.0",
+    "turndown": "^7.2.0",
+    "turndown-plugin-gfm": "^1.0.2"
+  }
+}

@@ -388,6 +388,17 @@ public final class SessionManager {
         }
     }
 
+    /// Applies the registry's current extraction input claims to every live
+    /// wiki model after package reconciliation. Closed wikis read the current
+    /// claims when their sessions start.
+    public func refreshRegisteredExtractionInputsForLiveSessions(
+        _ inputs: RegisteredExtractionInputs
+    ) {
+        for session in sessions.values {
+            session.store.registeredExtractionInputs = inputs
+        }
+    }
+
     /// The frontmost session, if any. Resolved from ``frontmostWikiID`` —
     /// `VacuumCommands` uses this to target the correct wiki for menu-bar
     /// Vacuum/Lint/Activity Log actions.

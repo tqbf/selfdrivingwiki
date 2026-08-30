@@ -13,26 +13,6 @@ public protocol ManagedProcessExecuting: Sendable {
     ) async throws -> ManagedExtractorProcessResult
 }
 
-public struct ExtractorRuntimeSearchPolicy: Sendable {
-    public let searchDirectories: [URL]
-
-    public init(searchDirectories: [URL]) {
-        self.searchDirectories = searchDirectories.map(\.standardizedFileURL)
-    }
-
-    public static var standard: Self {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        return Self(searchDirectories: [
-            home.appendingPathComponent(".local/share/mise/shims", isDirectory: true),
-            home.appendingPathComponent(".local/bin", isDirectory: true),
-            URL(fileURLWithPath: "/opt/homebrew/bin", isDirectory: true),
-            URL(fileURLWithPath: "/usr/local/bin", isDirectory: true),
-            URL(fileURLWithPath: "/usr/bin", isDirectory: true),
-            URL(fileURLWithPath: "/bin", isDirectory: true),
-        ])
-    }
-}
-
 public struct ManagedExtractorProcessPaths: Sendable {
     public let operationRoot: URL
     public let packageRoot: URL
@@ -66,7 +46,10 @@ public struct ManagedExtractorProcessRequest: Sendable {
     public let manifest: ExtractorManifest
     public let protocolRequest: ExtractorProtocolRequest
     public let paths: ManagedExtractorProcessPaths
-    public let runtimeSearchPolicy: ExtractorRuntimeSearchPolicy
+    /// The runtime resolution retained by the prepared operation. Required
+    /// for a `runtime` launch: the host launches exactly this executable and
+    /// never searches a PATH again.
+    public let runtimeResolution: RuntimeCommandResolution?
     public let cancellationGracePeriod: Duration
 
     public init(
@@ -74,14 +57,14 @@ public struct ManagedExtractorProcessRequest: Sendable {
         manifest: ExtractorManifest,
         protocolRequest: ExtractorProtocolRequest,
         paths: ManagedExtractorProcessPaths,
-        runtimeSearchPolicy: ExtractorRuntimeSearchPolicy = .standard,
+        runtimeResolution: RuntimeCommandResolution? = nil,
         cancellationGracePeriod: Duration = .seconds(1)
     ) {
         self.revision = revision
         self.manifest = manifest
         self.protocolRequest = protocolRequest
         self.paths = paths
-        self.runtimeSearchPolicy = runtimeSearchPolicy
+        self.runtimeResolution = runtimeResolution
         self.cancellationGracePeriod = cancellationGracePeriod
     }
 }
@@ -115,7 +98,9 @@ public enum ManagedExtractorProcessError: Error, Equatable, Sendable {
     case invalidOperationLayout
     case revisionMismatch
     case requestMismatch
-    case missingRuntime(ExtractorRuntimeName)
+    /// The runtime command did not resolve. `cause` carries the typed
+    /// login-shell resolution failure when the operation retained one.
+    case missingRuntime(ExtractorRuntimeName, cause: RuntimeCommandResolutionFailure?)
     case executableChanged
     case launch(RaceFreeProcessGroupError)
     case malformedProtocol
@@ -126,8 +111,46 @@ public enum ManagedExtractorProcessError: Error, Equatable, Sendable {
     case processTermination(ProcessTerminationCause)
 }
 
+extension ManagedExtractorProcessError: LocalizedError {
+    /// Short, safe user-facing messages. They contain no executable paths
+    /// and no subprocess output — actionable detail lives in Console
+    /// diagnostics.
+    public var errorDescription: String? {
+        switch self {
+        case .invalidOperationLayout:
+            "The extractor operation directory layout is invalid."
+        case .revisionMismatch:
+            "The extractor package revision does not match the manifest."
+        case .requestMismatch:
+            "The extractor request does not match the prepared operation."
+        case .missingRuntime(let command, _):
+            "Runtime \(command.rawValue) is not available. Install it and make sure your login shell runs it."
+        case .executableChanged:
+            "The extractor executable changed before launch. Try again."
+        case .launch:
+            "The extractor process could not start."
+        case .malformedProtocol:
+            "The extractor produced malformed protocol output."
+        case .protocolSequence:
+            "The extractor produced an invalid protocol sequence."
+        case .timeout:
+            "The extractor did not finish in time."
+        case .cancellation:
+            "The extraction was cancelled."
+        case .outputLimit:
+            "The extractor exceeded its output limit."
+        case .processTermination(let cause):
+            "The extractor process stopped unexpectedly (\(cause))."
+        }
+    }
+}
+
 public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable {
-    public init() {}
+    private let diagnostics: any ExtractorDiagnosticsSink
+
+    public init(diagnostics: (any ExtractorDiagnosticsSink)? = nil) {
+        self.diagnostics = diagnostics ?? DebugLogExtractorDiagnosticsSink()
+    }
 
     public func execute(
         _ operation: ManagedExtractorProcessRequest,
@@ -148,7 +171,30 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
         let stdoutLimit = managedStandardOutputLimit(operation.manifest.limits)
         let handle: RaceFreeProcessGroupHandle
         do {
-            try verifyIdentity(launch.identity, at: launch.executableURL, requireExecutable: true)
+            // Revalidate both pinned identities immediately before spawn:
+            // always the package entry point (no symlink following), and for
+            // a runtime launch the host executable (symlink following, the
+            // same rule used at resolution). Any change fails closed.
+            do {
+                try verifyIdentity(
+                    launch.entryPointIdentity,
+                    at: launch.entryPointURL,
+                    requirement: launch.entryPointRequirement,
+                    followingSymlinks: false)
+                if launch.launchesHostExecutable {
+                    try verifyIdentity(
+                        launch.executableIdentity,
+                        at: launch.executableURL,
+                        requirement: .executable,
+                        followingSymlinks: true)
+                }
+            } catch {
+                diagnostics.send(ManagedExtractorDiagnostics.Event.executableChanged(
+                    command: launch.commandDescription,
+                    identity: ManagedExtractorDiagnostics.identityFingerprint(
+                        for: launch.executableIdentity)).consoleLine)
+                throw error
+            }
             handle = try RaceFreeProcessGroupRunner.launch(.init(
                 executableURL: launch.executableURL,
                 arguments: launch.arguments,
@@ -160,6 +206,11 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
                 observeStdout: { protocolState.consume($0) }))
             cancellationSlot.install(handle)
         } catch let error as RaceFreeProcessGroupError {
+            diagnostics.send(ManagedExtractorDiagnostics.Event.spawnFailure(
+                command: launch.commandDescription,
+                detail: ManagedExtractorDiagnostics.sanitize(
+                    error.localizedDescription,
+                    limit: ManagedExtractorDiagnostics.maximumDetailLength)).consoleLine)
             throw ManagedExtractorProcessError.launch(error)
         }
 
@@ -174,16 +225,29 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
         } catch RaceFreeProcessGroupError.outputLimitExceeded {
             throw ManagedExtractorProcessError.outputLimit
         } catch let error as RaceFreeProcessGroupError {
+            diagnostics.send(ManagedExtractorDiagnostics.Event.spawnFailure(
+                command: launch.commandDescription,
+                detail: ManagedExtractorDiagnostics.sanitize(
+                    error.localizedDescription,
+                    limit: ManagedExtractorDiagnostics.maximumDetailLength)).consoleLine)
             throw ManagedExtractorProcessError.launch(error)
         }
 
         if protocolState.hasFailure {
+            diagnostics.send(protocolFailureLine(launch))
             throw ManagedExtractorProcessError.malformedProtocol
         }
         switch execution.terminationCause {
         case .exited(code: 0):
             break
         case .exited, .signaled:
+            diagnostics.send(ManagedExtractorDiagnostics.Event.nonzeroExit(
+                command: launch.commandDescription,
+                termination: String(describing: execution.terminationCause),
+                stderrTail: ManagedExtractorDiagnostics.singleLineTail(
+                    execution.stderr,
+                    displayLimit: ManagedExtractorDiagnostics
+                        .maximumStderrTailDisplayLength)).consoleLine)
             throw ManagedExtractorProcessError.processTermination(execution.terminationCause)
         }
         do {
@@ -196,10 +260,18 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
                 standardError: execution.stderr,
                 executableURL: launch.executableURL)
         } catch let error as ExtractorProtocolSequenceError {
+            diagnostics.send(protocolFailureLine(launch))
             throw ManagedExtractorProcessError.protocolSequence(error)
         } catch {
+            diagnostics.send(protocolFailureLine(launch))
             throw ManagedExtractorProcessError.malformedProtocol
         }
+    }
+
+    private func protocolFailureLine(_ launch: ManagedLaunch) -> String {
+        ManagedExtractorDiagnostics.Event.protocolFailure(
+            command: launch.commandDescription,
+            detail: "stdout is protocol data; see the protocol sequence error").consoleLine
     }
 
     private func validate(_ operation: ManagedExtractorProcessRequest) throws {
@@ -222,6 +294,11 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
         }
     }
 
+    /// Typed launch preparation. A `direct` launch validates and pins the
+    /// package entry point as the host executable. A `runtime` launch
+    /// validates the package script as a regular, single-link readable file
+    /// and uses the retained host executable from resolution — no PATH
+    /// search happens here.
     private func resolveLaunch(_ operation: ManagedExtractorProcessRequest) throws -> ManagedLaunch {
         let entryPoint = operation.paths.packageRoot
             .appendingPathComponent(operation.manifest.entryPoint.rawValue)
@@ -231,34 +308,48 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
         }
         switch operation.manifest.launch {
         case .direct:
-            let identity = try executableIdentity(entryPoint, requireExecutable: true)
+            let identity = try entryPointIdentity(
+                entryPoint, requirement: .executable)
             return ManagedLaunch(
+                commandDescription: entryPoint.lastPathComponent,
                 executableURL: entryPoint,
                 arguments: [],
-                identity: identity)
+                executableIdentity: identity,
+                entryPointURL: entryPoint,
+                entryPointIdentity: identity,
+                entryPointRequirement: .executable,
+                launchesHostExecutable: false)
         case .runtime(let command, let arguments):
-            _ = try executableIdentity(entryPoint, requireExecutable: false)
-            for directory in operation.runtimeSearchPolicy.searchDirectories {
-                let candidate = directory.appendingPathComponent(command.rawValue).standardizedFileURL
-                guard isContained(candidate, in: directory) else { continue }
-                let identity: ManagedExecutableIdentity
-                do {
-                    // A search-directory entry that is absent or not an executable
-                    // regular file simply ends the probe of that candidate.
-                    identity = try executableIdentity(candidate, requireExecutable: true)
-                } catch {
-                    continue
-                }
-                return ManagedLaunch(
-                    executableURL: candidate,
-                    arguments: arguments + [entryPoint.path],
-                    identity: identity)
+            // The retained resolution must name the manifest's command; a
+            // mismatch is an invalid request, never a launch.
+            guard let resolution = operation.runtimeResolution else {
+                throw ManagedExtractorProcessError.missingRuntime(command, cause: nil)
             }
-            throw ManagedExtractorProcessError.missingRuntime(command)
+            guard resolution.command == command else {
+                throw ManagedExtractorProcessError.requestMismatch
+            }
+            // The package script is data for the runtime: regular,
+            // single-link, owner-readable. It needs no execute permission.
+            let scriptIdentity = try entryPointIdentity(
+                entryPoint, requirement: .readable)
+            return ManagedLaunch(
+                commandDescription: command.rawValue,
+                executableURL: resolution.executableURL,
+                // Fixed manifest arguments first, the package entry-point
+                // path last.
+                arguments: arguments + [entryPoint.path],
+                executableIdentity: resolution.identity,
+                entryPointURL: entryPoint,
+                entryPointIdentity: scriptIdentity,
+                entryPointRequirement: .readable,
+                launchesHostExecutable: true)
         }
     }
 
     private func makeEnvironment(_ operation: ManagedExtractorProcessRequest) throws -> [String: String] {
+        // A closed allowlist: the managed extractor child receives only
+        // these variables. No PATH (launch uses an absolute executable), no
+        // inherited environment, no tool-manager configuration.
         var environment = [
             "HOME": operation.paths.homeRoot.path,
             "TMPDIR": operation.paths.temporaryRoot.path,
@@ -304,27 +395,61 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
             ExtractorHostLimits.maximumFrameByteCount * maximumFrames)
     }
 
-    private func executableIdentity(_ url: URL, requireExecutable: Bool) throws -> ManagedExecutableIdentity {
+    /// Package payload rule: an `lstat` probe (no symlink following) that
+    /// requires a regular, single-link file. `.executable` adds the owner
+    /// execute bit (direct launch); `.readable` requires the owner read bit
+    /// (a runtime script is data, never launched).
+    fileprivate enum EntryPointRequirement {
+        case executable
+        case readable
+
+        var requiresExecute: Bool { self == .executable }
+    }
+
+    private func entryPointIdentity(
+        _ url: URL,
+        requirement: EntryPointRequirement
+    ) throws -> RuntimeExecutableIdentity {
         var status = stat()
         guard lstat(url.path, &status) == 0,
               status.st_mode & S_IFMT == S_IFREG,
               status.st_nlink == 1,
-              requireExecutable == false || status.st_mode & S_IXUSR != 0 else {
+              status.st_mode & S_IRUSR != 0,
+              requirement.requiresExecute == false || status.st_mode & S_IXUSR != 0 else {
             throw ManagedExtractorProcessError.executableChanged
         }
-        return ManagedExecutableIdentity(
+        return RuntimeExecutableIdentity(
             device: UInt64(status.st_dev),
             inode: UInt64(status.st_ino),
             mode: UInt32(status.st_mode),
             size: Int64(status.st_size))
     }
 
+    /// Host executable rule: `stat` (follows symlinks — a tool-manager shim
+    /// may be a link to the real binary) requiring a regular, single-link,
+    /// owner-executable file.
     private func verifyIdentity(
-        _ expected: ManagedExecutableIdentity,
+        _ expected: RuntimeExecutableIdentity,
         at url: URL,
-        requireExecutable: Bool
+        requirement: EntryPointRequirement,
+        followingSymlinks: Bool
     ) throws {
-        guard try executableIdentity(url, requireExecutable: requireExecutable) == expected else {
+        var status = stat()
+        let probe = followingSymlinks
+            ? stat(url.path, &status)
+            : lstat(url.path, &status)
+        guard probe == 0,
+              status.st_mode & S_IFMT == S_IFREG,
+              status.st_nlink == 1,
+              status.st_mode & S_IRUSR != 0,
+              requirement.requiresExecute == false || status.st_mode & S_IXUSR != 0 else {
+            throw ManagedExtractorProcessError.executableChanged
+        }
+        guard RuntimeExecutableIdentity(
+            device: UInt64(status.st_dev),
+            inode: UInt64(status.st_ino),
+            mode: UInt32(status.st_mode),
+            size: Int64(status.st_size)) == expected else {
             throw ManagedExtractorProcessError.executableChanged
         }
     }
@@ -336,17 +461,26 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
     }
 }
 
+/// One validated launch: the executable to spawn, its pinned identity, the
+/// package entry point's pinned identity, and the entry-point rule that
+/// applies at revalidation.
 private struct ManagedLaunch: Sendable {
+    /// The command name for diagnostics (runtime name or entry basename).
+    let commandDescription: String
+    /// The absolute executable URL to spawn.
     let executableURL: URL
+    /// Fixed manifest arguments plus the entry-point path last.
     let arguments: [String]
-    let identity: ManagedExecutableIdentity
-}
-
-private struct ManagedExecutableIdentity: Sendable, Equatable {
-    let device: UInt64
-    let inode: UInt64
-    let mode: UInt32
-    let size: Int64
+    /// The pinned host-executable identity validated at launch construction.
+    let executableIdentity: RuntimeExecutableIdentity
+    /// The package entry point and its pinned identity.
+    let entryPointURL: URL
+    let entryPointIdentity: RuntimeExecutableIdentity
+    let entryPointRequirement: ManagedExtractorProcessExecutor.EntryPointRequirement
+    /// True when `executableURL` is a host tool (runtime launch) whose
+    /// identity must be revalidated following symlinks. A direct launch
+    /// spawns the package entry point itself.
+    let launchesHostExecutable: Bool
 }
 
 // NSLock protects all mutable state (`handle`, `terminationRequested`,

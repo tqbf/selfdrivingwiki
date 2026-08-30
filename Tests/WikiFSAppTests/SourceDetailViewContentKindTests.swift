@@ -61,6 +61,21 @@ import WikiFSTypes
             mimeType: nil, provider: .legacyImport, ext: "html") == .extract)
     }
 
+    @Test("DOCX (wordprocessingml mime and .docx ext fallback) → Extract")
+    func docxExtracts() {
+        // AC.5/AC.9 pin: the docx classification's affordance is the Extract
+        // button (via `.docxBackend`), exclusive with Transcribe.
+        #expect(SourceDetailView.extractionAffordance(
+            mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            provider: nil, ext: "docx") == .extract)
+        // Ext fallback (nil mime + .docx) also extracts.
+        #expect(SourceDetailView.extractionAffordance(
+            mimeType: nil, provider: .localFile, ext: "docx") == .extract)
+        // Legacy .doc (application/msword) has no path — never Extract.
+        #expect(SourceDetailView.extractionAffordance(
+            mimeType: "application/msword", provider: .localFile, ext: "doc") == .none)
+    }
+
     @Test("Apple Podcast (provider wins) → Transcribe")
     func applePodcastTranscribes() {
         #expect(SourceDetailView.extractionAffordance(
@@ -151,7 +166,7 @@ import WikiFSTypes
             let path = kind.capabilities.extractionPath
             let expected: SourceDetailView.ExtractionAffordance
             switch path {
-            case .pdfBackend, .htmlToMarkdown:           expected = .extract
+            case .pdfBackend, .htmlToMarkdown, .docxBackend: expected = .extract
             case .podcastTranscript, .youtubeTranscript: expected = .transcribe
             case nil:                                    expected = .none
             }

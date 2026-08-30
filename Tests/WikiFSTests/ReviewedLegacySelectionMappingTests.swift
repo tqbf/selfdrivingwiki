@@ -29,8 +29,9 @@ struct ReviewedLegacySelectionMappingTests {
         await services.shutdown()
     }
 
-    /// Without the reviewed package, the retired in-process PDF adapter is not
-    /// available. Preparation reports the unavailable extraction service.
+    /// Without the reviewed package, the shipped default (the reviewed pdf2md
+    /// lineage from the bundled policy) fails closed with the redacted
+    /// named-lineage diagnostic.
     @Test func defaultPDFSelectionIsUnavailableWithoutTheReviewedPackage() async throws {
         let environment = try Environment.make()
         defer { environment.cleanup() }
@@ -42,11 +43,12 @@ struct ReviewedLegacySelectionMappingTests {
         let services = try await ProcessExtractionServices.assemble(
             context: context, input: environment.input())
 
-        do {
-            _ = try await services.prepare(backendOverride: nil)
-            Issue.record("retired local PDF adapter remained available")
-        } catch let error as ExtractionServicesError {
-            #expect(error == .unavailable)
+        await #expect(
+            throws: ExtractionServicesError.selectedExtractorUnavailable(
+                route: .canonicalPDF,
+                reference: ProcessExtractionServices.reviewedPDFLogical)
+        ) {
+            try await services.prepare(backendOverride: nil)
         }
         await services.shutdown()
     }
@@ -70,11 +72,57 @@ struct ReviewedLegacySelectionMappingTests {
         } catch {
             Issue.record("HTML package factory failed: \\(error)")
         }
+        // A migrated legacy `defuddle` selection is a host reference whose
+        // adapter ID remaps to the reviewed package lineage at execution.
         let services = try await ProcessExtractionServices.assemble(
-            context: context, input: environment.input(htmlBackend: .defuddle))
+            context: context,
+            input: environment.input(htmlSelection: ExtractorRouteHostCatalog.legacyDefuddleReference))
 
         let extractor = try await services.prepareHTML()
         #expect(extractor is ProcessPackageHTMLExtractor)
+        await services.shutdown()
+    }
+
+    /// An empty DOCX selection resolves to the reviewed docx2md lineage.
+    @Test func defaultDOCXSelectionUsesTheReviewedPackage() async throws {
+        let environment = try Environment.make()
+        defer { environment.cleanup() }
+
+        let context = try await ProcessExtractionContext.assemble(
+            layout: environment.layout,
+            reviewedPackageRoot: Environment.reviewedPackagesRoot)
+        _ = await context.reconcileNow()
+        let services = try await ProcessExtractionServices.assemble(
+            context: context, input: environment.input())
+
+        let extractor = try await services.prepareDOCX()
+        #expect(extractor.packageProvenance.revision == ReviewedExtractorPackages.docx2md.revision)
+        await services.shutdown()
+    }
+
+    /// An unavailable installed DOCX selection remains selected and blocks the route.
+    @Test func unavailableInstalledDOCXSelectionFailsClosed() async throws {
+        let environment = try Environment.make()
+        defer { environment.cleanup() }
+
+        let context = try await ProcessExtractionContext.assemble(
+            layout: environment.layout,
+            reviewedPackageRoot: Environment.reviewedPackagesRoot)
+        _ = await context.reconcileNow()
+        let unavailable = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.example.thirdparty"),
+            registrationID: try ExtractorRegistrationID(validating: "document"))
+        let services = try await ProcessExtractionServices.assemble(
+            context: context,
+            input: environment.input(docxSelection: .installed(unavailable)))
+
+        await #expect(
+            throws: ExtractionServicesError.selectedExtractorUnavailable(
+                route: .canonicalDOCX,
+                reference: unavailable)
+        ) {
+            try await services.prepareDOCX()
+        }
         await services.shutdown()
     }
 
@@ -93,7 +141,7 @@ struct ReviewedLegacySelectionMappingTests {
             registrationID: try ExtractorRegistrationID(validating: "main"))
         let services = try await ProcessExtractionServices.assemble(
             context: context,
-            input: environment.input(pdfExtractor: .installed(unavailable)))
+            input: environment.input(pdfSelection: .installed(unavailable)))
 
         await #expect(
             throws: ExtractionServicesError.selectedExtractorUnavailable(
@@ -120,7 +168,7 @@ struct ReviewedLegacySelectionMappingTests {
             registrationID: try ExtractorRegistrationID(validating: "article"))
         let services = try await ProcessExtractionServices.assemble(
             context: context,
-            input: environment.input(htmlExtractor: .installed(unavailable)))
+            input: environment.input(htmlSelection: .installed(unavailable)))
 
         await #expect(
             throws: ExtractionServicesError.selectedExtractorUnavailable(
@@ -169,7 +217,12 @@ struct ReviewedLegacySelectionMappingTests {
             _ = try await services.prepare(backendOverride: nil)
             Issue.record("third-party package captured the default PDF selection")
         } catch let error as ExtractionServicesError {
-            #expect(error == .unavailable)
+            // The bundled default (the reviewed pdf2md lineage) fails closed
+            // with the named-lineage diagnostic — it never falls through to
+            // the registered third-party probe.
+            #expect(error == .selectedExtractorUnavailable(
+                route: .canonicalPDF,
+                reference: ProcessExtractionServices.reviewedPDFLogical))
         }
         await services.shutdown()
     }
@@ -209,15 +262,19 @@ struct ReviewedLegacySelectionMappingTests {
         }
 
         func input(
-            pdfExtractor: ExtractionBackendReference? = nil,
-            htmlBackend: HtmlExtractionBackend? = nil,
-            htmlExtractor: ExtractionBackendReference? = nil
+            pdfSelection: ExtractionBackendReference? = nil,
+            htmlSelection: ExtractionBackendReference? = nil,
+            docxSelection: ExtractionBackendReference? = nil
         ) -> ExtractionProcessInput {
             var mutable = ExtractionConfig()
-            mutable.htmlBackend = htmlBackend
-            mutable.htmlExtractor = htmlExtractor
-            if let pdfExtractor {
-                mutable.pdfExtractor = pdfExtractor
+            if let pdfSelection {
+                mutable.setExtractorSelection(pdfSelection, for: .canonicalPDF)
+            }
+            if let htmlSelection {
+                mutable.setExtractorSelection(htmlSelection, for: .canonicalHTML)
+            }
+            if let docxSelection {
+                mutable.setExtractorSelection(docxSelection, for: .canonicalDOCX)
             }
             let configuration = mutable
             return ExtractionProcessInput(

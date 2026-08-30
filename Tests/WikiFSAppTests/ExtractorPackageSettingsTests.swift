@@ -14,7 +14,7 @@ import WikiFSEngine
 struct ExtractorPackageSettingsTests {
     // MARK: - Registry snapshot
 
-    @Test("installedPackageRows lists only installed PDF/HTML admissions with exact identity")
+    @Test("installedPackageRows lists only installed PDF/HTML/DOCX admissions with exact identity")
     func snapshotListsInstalledRegistrationsOnly() async throws {
         let registry = ExtractionBackendRegistry()
         let pdfReference = try reference(
@@ -24,6 +24,9 @@ struct ExtractorPackageSettingsTests {
         let htmlReference = ExtractorReference(
             revision: pdfReference.revision,
             registrationID: try ExtractorRegistrationID(validating: "html"))
+        let docxReference = ExtractorReference(
+            revision: pdfReference.revision,
+            registrationID: try ExtractorRegistrationID(validating: "document"))
 
         _ = try await registry.registerBatch([
             ExtractionBatchEntry(
@@ -32,6 +35,9 @@ struct ExtractorPackageSettingsTests {
             ExtractionBatchEntry(
                 key: .installed(kind: .html, reference: htmlReference),
                 backend: stubHTMLBackend()),
+            ExtractionBatchEntry(
+                key: .installed(kind: .docx, reference: docxReference),
+                backend: stubDOCXBackend()),
             // Built-in adapters are picker territory, never package rows.
             ExtractionBatchEntry(
                 key: .builtIn(ExtractionBackendKey(kind: .pdf, backendID: "localPdf2md")),
@@ -40,7 +46,7 @@ struct ExtractorPackageSettingsTests {
 
         let rows = await registry.installedPackageRows()
 
-        #expect(rows.count == 2)
+        #expect(rows.count == 3)
         #expect(rows.contains(ExtractorPackageSettingsRow(
             kind: .pdf,
             packageID: "org.example.pdfpkg",
@@ -55,6 +61,13 @@ struct ExtractorPackageSettingsTests {
             digestPrefix: String(repeating: "a", count: 12),
             registrationID: "html",
             revision: pdfReference.revision)))
+        #expect(rows.contains(ExtractorPackageSettingsRow(
+            kind: .docx,
+            packageID: "org.example.pdfpkg",
+            version: "1.2.0",
+            digestPrefix: String(repeating: "a", count: 12),
+            registrationID: "document",
+            revision: pdfReference.revision)))
         // Deterministic order across kinds.
         #expect(rows.map(\.id) == rows.map(\.id).sorted())
     }
@@ -66,6 +79,41 @@ struct ExtractorPackageSettingsTests {
         let rows = await registry.installedPackageRows()
 
         #expect(rows.isEmpty)
+    }
+
+    @Test("registeredExtractionInputs folds every active registration's declared inputs")
+    func registeredInputsFoldActiveRegistrations() async throws {
+        let registry = ExtractionBackendRegistry()
+        let reference = try reference(
+            packageID: "org.example.docxpkg",
+            version: "1.0.0",
+            digestHex: String(repeating: "a", count: 64))
+
+        _ = try await registry.registerBatch([
+            ExtractionBatchEntry(
+                key: .installed(kind: .docx, reference: reference),
+                backend: stubDOCXBackend(),
+                presentation: ExtractorRegistrationPresentation(
+                    displayName: "docx2md Document",
+                    packageName: "Example docx2md",
+                    kinds: [.docx],
+                    mimeTypes: Set([ExtractorMIMEType(validating: MimeType.docx)]),
+                    filenameExtensions: Set([try ExtractorFileExtension(validating: "docx")])),
+            ),
+        ])
+
+        let inputs = await registry.registeredExtractionInputs()
+
+        #expect(inputs.registeredMIME(forNormalizedMIME: MimeType.docx)?.kind == .docx)
+        #expect(inputs.registeredInput(forNormalizedExtension: "docx")?.kind == .docx)
+        // A container claimed by no active registration does not promote.
+        #expect(inputs.promotedMIME(
+            detectedMIME: MimeType.zip, declaredMIME: nil,
+            filenameExtension: "zip") == nil)
+
+        // An empty registry folds to an empty surface.
+        let empty = await ExtractionBackendRegistry().registeredExtractionInputs()
+        #expect(empty.isEmpty)
     }
 
     // MARK: - Route-scoped extractor selection mapping
@@ -86,24 +134,25 @@ struct ExtractorPackageSettingsTests {
     @Test("legacy reviewed selections appear as reviewed packages")
     func legacyReviewedSelectionsMapToPackages() {
         var config = ExtractionConfig()
-        config.backend = .localPdf2md
-        config.htmlBackend = .defuddle
+        config.setExtractorSelection(ExtractorRouteHostCatalog.legacyPDF2mdReference, for: .canonicalPDF)
+        config.setExtractorSelection(ExtractorRouteHostCatalog.legacyDefuddleReference, for: .canonicalHTML)
 
         #expect(routeSelection(.canonicalPDF, from: config) == .reviewedPdf2md)
         #expect(routeSelection(.canonicalHTML, from: config) == .reviewedDefuddle)
     }
 
-    @Test("host service selections keep legacy fields truthful")
-    func hostSelectionsWriteBothCompatibilityDomains() {
+    @Test("host service selections write generic host records only")
+    func hostSelectionsWriteGenericRecords() {
         var config = ExtractionConfig()
 
         ExtractorRouteSettingsMapping.write(.connectedService(.acp), route: .canonicalPDF, into: &config)
         ExtractorRouteSettingsMapping.write(.builtInTagBased, route: .canonicalHTML, into: &config)
 
-        #expect(config.backend == .acp)
-        #expect(config.pdfExtractor == .builtIn(.pdf(.acp)))
-        #expect(config.htmlBackend == .tagBased)
-        #expect(config.htmlExtractor == .builtIn(.html(.tagBased)))
+        // The retired typed fields are never rewritten by selection writes.
+        #expect(config.backend == .localPdf2md)
+        #expect(config.htmlBackend == nil)
+        #expect(config.extractorSelection(for: .canonicalPDF) == ExtractorRouteHostCatalog.acpReference)
+        #expect(config.extractorSelection(for: .canonicalHTML) == ExtractorRouteHostCatalog.tagBasedReference)
     }
 
     @Test("new UI surfaces exclude direct API backends")
@@ -113,12 +162,12 @@ struct ExtractorPackageSettingsTests {
         #expect(ExtractionBackend.allCases.contains(.gemini))
     }
 
-    @Test("legacy direct API selections migrate to their ACP providers")
+    @Test("migrated direct API selections display and prefill as their ACP providers")
     func directAPISelectionsMapToACP() throws {
         var anthropic = ExtractionConfig()
-        anthropic.backend = .anthropic
+        anthropic.setExtractorSelection(ExtractorRouteHostCatalog.hostReference("anthropic"), for: .canonicalPDF)
         var gemini = ExtractionConfig()
-        gemini.pdfExtractor = .builtIn(.pdf(.gemini))
+        gemini.setExtractorSelection(ExtractorRouteHostCatalog.hostReference("gemini"), for: .canonicalPDF)
 
         #expect(routeSelection(.canonicalPDF, from: anthropic) == .connectedService(.acp))
         #expect(ExtractorSettingsSelectionMapping.acpProviderSelection(from: anthropic) == "claude-acp")
@@ -132,17 +181,27 @@ struct ExtractorPackageSettingsTests {
 
         ExtractorRouteSettingsMapping.write(.reviewedPdf2md, route: .canonicalPDF, into: &config)
         ExtractorRouteSettingsMapping.write(.reviewedDefuddle, route: .canonicalHTML, into: &config)
+        ExtractorRouteSettingsMapping.write(.reviewedDocx2md, route: .canonicalDOCX, into: &config)
 
-        #expect(config.backend == .localPdf2md)
-        #expect(config.pdfExtractor == .installed(ProcessExtractionServices.reviewedPDFLogical))
-        #expect(config.htmlBackend == .defuddle)
-        #expect(config.htmlExtractor == .installed(ProcessExtractionServices.reviewedHTMLLogical))
-        // The canonical route records dual-write with the legacy fields.
         #expect(config.extractorSelection(for: .canonicalPDF) == .installed(ProcessExtractionServices.reviewedPDFLogical))
         #expect(config.extractorSelection(for: .canonicalHTML) == .installed(ProcessExtractionServices.reviewedHTMLLogical))
+        #expect(config.extractorSelection(for: .canonicalDOCX) == .installed(ProcessExtractionServices.reviewedDOCXLogical))
     }
 
-    @Test("installed selections preserve legacy fallback fields")
+    @Test("DOCX prompt writes the explicit reviewed-package default record")
+    func docxPromptClearsSelection() {
+        var config = ExtractionConfig()
+        config.setExtractorSelection(.installed(ProcessExtractionServices.reviewedDOCXLogical), for: .canonicalDOCX)
+
+        ExtractorRouteSettingsMapping.write(.prompt, route: .canonicalDOCX, into: &config)
+
+        // The explicit record states the reviewed-lineage default instead of
+        // relying on the bundled policy to refill it.
+        #expect(config.extractorSelection(for: .canonicalDOCX) == ExtractionBackendReference.none)
+        #expect(routeSelection(.canonicalDOCX, from: config) == .prompt)
+    }
+
+    @Test("installed selections write only the route records")
     func installedSelectionsPreserveFallbacks() throws {
         let pdf = LogicalExtractorReference(
             packageID: try ExtractorPackageID(validating: "org.example.pdf"),
@@ -151,41 +210,34 @@ struct ExtractorPackageSettingsTests {
             packageID: try ExtractorPackageID(validating: "org.example.html"),
             registrationID: try ExtractorRegistrationID(validating: "article"))
         var config = ExtractionConfig()
-        config.backend = .anthropic
-        config.htmlBackend = .tagBased
 
         ExtractorRouteSettingsMapping.write(.installed(pdf), route: .canonicalPDF, into: &config)
         ExtractorRouteSettingsMapping.write(.installed(html), route: .canonicalHTML, into: &config)
 
-        #expect(config.backend == .anthropic)
-        #expect(config.pdfExtractor == .installed(pdf))
-        #expect(config.htmlBackend == .tagBased)
-        #expect(config.htmlExtractor == .installed(html))
+        #expect(config.extractorSelection(for: .canonicalPDF) == .installed(pdf))
+        #expect(config.extractorSelection(for: .canonicalHTML) == .installed(html))
     }
 
-    @Test("HTML prompt clears both compatibility fields")
+    @Test("HTML prompt writes the explicit no-default record")
     func htmlPromptClearsSelection() {
         var config = ExtractionConfig()
-        config.htmlBackend = .defuddle
-        config.htmlExtractor = .installed(ProcessExtractionServices.reviewedHTMLLogical)
+        config.setExtractorSelection(.installed(ProcessExtractionServices.reviewedHTMLLogical), for: .canonicalHTML)
 
         ExtractorRouteSettingsMapping.write(.prompt, route: .canonicalHTML, into: &config)
 
-        #expect(config.htmlBackend == nil)
-        #expect(config.htmlExtractor == nil)
-        #expect(config.extractorSelection(for: .canonicalHTML) == nil)
+        #expect(config.extractorSelection(for: .canonicalHTML) == ExtractionBackendReference.none)
     }
 
-    @Test("wrong-kind persisted references defer to legacy fields")
-    func wrongKindReferencesUseCompatibilityFields() {
+    @Test("host records with unknown-for-route adapter IDs display as prompt")
+    func unknownHostIDsDisplayAsPrompt() {
         var config = ExtractionConfig()
-        config.backend = .doclingServe
-        config.pdfExtractor = .builtIn(.html(.tagBased))
-        config.htmlBackend = .tagBased
-        config.htmlExtractor = .builtIn(.pdf(.anthropic))
+        config.setExtractorSelection(ExtractorRouteHostCatalog.tagBasedReference, for: .canonicalPDF)
+        config.setExtractorSelection(ExtractorRouteHostCatalog.acpReference, for: .canonicalHTML)
 
-        #expect(routeSelection(.canonicalPDF, from: config) == .reviewedDocling)
-        #expect(routeSelection(.canonicalHTML, from: config) == .builtInTagBased)
+        // The route supplies the format; a host ID that names no choice on
+        // that route never resolves to a foreign choice.
+        #expect(routeSelection(.canonicalPDF, from: config) == .prompt)
+        #expect(routeSelection(.canonicalHTML, from: config) == .prompt)
     }
 
     // MARK: - Settings model
@@ -555,6 +607,12 @@ struct ExtractorPackageSettingsTests {
             .html(SettingsStubHTMLExtractor())
         }
     }
+
+    private func stubDOCXBackend() -> RegisteredExtractionBackend {
+        RegisteredExtractionBackend(key: ExtractionBackendKey(kind: .docx, backendID: "stub")) {
+            .docx(SettingsStubDOCXExtractor())
+        }
+    }
 }
 
 /// Sendable mutation counter for observing refresh behavior across the
@@ -583,5 +641,17 @@ private struct SettingsStubMarkdownExtractor: MarkdownExtractor {
 
 private struct SettingsStubHTMLExtractor: HtmlMarkdownExtractor {
     func extract(html: String) async -> HtmlExtractionResult? { nil }
+}
+
+private struct SettingsStubDOCXExtractor: DocxMarkdownExtractor {
+    var packageProvenance: ExtractorPackageExecutionProvenance {
+        ExtractorPackageExecutionProvenance(
+            revision: ReviewedExtractorPackages.docx2md.revision,
+            registrationID: ProcessExtractionServices.reviewedDOCXLogical.registrationID,
+            protocolRevision: .v1)
+    }
+
+    func extract(docx: Data) async -> DocxExtractionResult? { nil }
+    func readiness() async -> ExtractionReadiness { .ready }
 }
 #endif

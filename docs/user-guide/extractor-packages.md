@@ -1,14 +1,36 @@
 # Extractor packages
 
-An extractor package converts one source format to Markdown. The app uses extractor packages when it ingests a PDF or HTML source and produces a Markdown page. A package is one folder that contains `manifest.json` and the files the manifest declares.
+An extractor package converts one source format to Markdown. The app uses extractor packages when it converts a PDF, HTML, or Word source and produces a Markdown page. A package is one folder that contains `manifest.json` and the files the manifest declares.
 
-This Mac ships with three reviewed packages:
+This Mac ships with four reviewed packages:
 
 | Package | Format | What it does | Runtime it needs |
 | --- | --- | --- | --- |
 | Defuddle | HTML | Extracts the article body and article metadata | [Bun](https://bun.sh) |
 | pdf2md | PDF | Converts a PDF to Markdown. It can download its model. | [uv](https://docs.astral.sh/uv/) |
 | Docling Serve | PDF | Sends the PDF to your self-hosted [Docling Serve](https://github.com/DS4SD/docling-serve) and stores the Markdown it returns. Optional API token; endpoint and timeout are set in Settings. | [`python3`](https://www.python.org) |
+| docx2md | Word (.docx) | Converts a Word document to Markdown offline at import. **Extract** retries a failed conversion. | [Bun](https://bun.sh) |
+
+### Word documents (.docx)
+
+Drop a `.docx` into a wiki and it converts automatically: the reviewed
+docx2md registration declares the Word MIME type and the `.docx` extension,
+and those declared inputs are what recognize the file (a `.docx` is a zip
+container the byte sniffer alone cannot tell apart from any archive). With
+the registration active, extraction runs at import and the Markdown appears
+as a derived version. The source keeps its original bytes, as with HTML
+sources.
+
+- Scope is `.docx` only. Legacy `.doc` and macro `.docm` files have no
+  extraction path.
+- Embedded images are not extracted. Each image becomes a
+  `![Figure N](figure-N.png)` placeholder, and the result carries a warning
+  that says how many images were skipped.
+- docx2md needs [Bun](https://bun.sh). If Bun is missing, extraction fails
+  with a clear cause. The import stores the file, and the **Extract** button
+  remains the manual retry.
+- A `.docx` source is not staged to agents until it has a Markdown version.
+  The raw bytes are a binary zip with no value as agent context.
 
 The app installs the packages into a machine catalog the first time it runs. You do not enable a package for each wiki. Every compatible installed package is available to every wiki on this Mac.
 
@@ -25,7 +47,7 @@ The capability list in a manifest (network, shared caches, model download) is a 
 
 ## Selection and route status
 
-Open **Settings** → **Extraction** and use the **Default Extractors** section. The table has one row for each extraction route. The current routes are PDF and HTML. A registration can add a row for a new format without an app update. Formats other than PDF and HTML do not have an extraction adapter yet.
+Open **Settings** → **Extraction** and use the **Default Extractors** section. The table has one row for each extraction route. The current routes are PDF, HTML, and Word (.docx). A registration can add a row for a new format without an app update. Formats without a route do not have an extraction adapter yet.
 
 Each row has four columns:
 
@@ -110,7 +132,7 @@ owner-read-only file that is deleted as soon as the request ends.
 
 ## Runtime setup
 
-Defuddle needs Bun. pdf2md needs uv. Both runtimes are optional. If a selected package cannot find its runtime, that route fails with a clear cause. The app does not run another extractor automatically. The app looks for runtime commands in the standard search paths, including the mise shim directory (`~/.local/share/mise/shims`), `~/.local/bin`, Homebrew, and system paths.
+Defuddle and docx2md need Bun. pdf2md needs uv. All runtimes are optional. Any installation method works: Homebrew, an official installer, or a version manager. The one requirement is that your login shell runs the command when you type it. The app asks your login shell (zsh, bash, or fish) which executable to use, and launches that exact executable. If the shell cannot find the runtime, that route reports setup guidance and fails with a clear cause. The app does not run another extractor automatically. Installing the runtime and retrying works without an app restart.
 
 pdf2md can download a model on first use because its manifest declares the model-download capability. The app does not download a model on its own.
 

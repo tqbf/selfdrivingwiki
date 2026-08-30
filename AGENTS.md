@@ -93,6 +93,20 @@ Last verified: 2026-08-13
   representable, and a missed write site becomes a compile error rather than an
   incoherent runtime state.
 
+* **Extractor-kind policy comes from package data, not host branches.** What
+  a package can extract, which sources it recognizes, and what happens
+  automatically at import are declared by manifest registrations
+  (`RegisteredExtractionInputs`) — the host must not privilege a kind in
+  Swift. Never gate behavior on a kind comparison (`== .docx`) and never
+  name a policy seam after a kind (`docxImportExtractor`); derive the
+  policy from the registration claims and route data instead (see
+  `WikiStoreModel.autoExtractIfRegistered` + the wiring's derived
+  package-only kinds set in `SessionsPlugin`). Typed per-kind extractor
+  protocols and their `prepare…` functions may keep kind names — their
+  operation shapes genuinely differ — and kind-to-value mapping tables
+  (MIME fallbacks, labels) are data, not policy.
+  `ExtractorKindNeutralityContractTests` enforces this.
+
 ## Design skills — sources
 
 The three design skills above are vendored in this repo at

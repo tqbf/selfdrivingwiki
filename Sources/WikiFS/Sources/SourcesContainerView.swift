@@ -67,7 +67,8 @@ struct SourcesContainerView: View {
                 SourcesListView(store: store, fileProvider: fileProvider,
                                 session: session, launcher: launcher,
                                 ingestingSourceIDs: ingestingSourceIDs,
-                                extractingSourceIDs: tracker.extractingSourceIDs,
+                                extractingSourceIDs: tracker.extractingSourceIDs
+                                    .union(store.importExtractingSourceIDs),
                                 sources: visibleSources,
                                 callbacks: callbacks)
                 if visibleSources.isEmpty && !store.sourceSearchQuery.isEmpty {

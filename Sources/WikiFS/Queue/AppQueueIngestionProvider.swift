@@ -180,7 +180,8 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             let staged = Self._stagedBytesAndExt(
                 for: source,
                 originalBytes: bytes,
-                processedMarkdownHead: head)
+                processedMarkdownHead: head,
+                registeredInputs: store.registeredExtractionInputs)
             sourceBytes = staged.bytes
             sourceExt = staged.ext
             if staged.ext == "md" && staged.bytes != bytes {
@@ -554,12 +555,14 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
     nonisolated static func _stagedBytesAndExt(
         for source: SourceSummary,
         originalBytes: Data,
-        processedMarkdownHead: SourceMarkdownVersion?
+        processedMarkdownHead: SourceMarkdownVersion?,
+        registeredInputs: RegisteredExtractionInputs
     ) -> (bytes: Data, ext: String) {
         let kind = ContentKind.resolve(
             mimeType: source.mimeType,
             provider: nil,          // byte-bearing MIME is authoritative (§5.6)
-            ext: source.ext)
+            ext: source.ext,
+            registeredInputs: registeredInputs)
         guard kind.capabilities.hasFileExtractionBackend,
               let head = processedMarkdownHead,
               let markdownBytes = head.content.data(using: .utf8) else {

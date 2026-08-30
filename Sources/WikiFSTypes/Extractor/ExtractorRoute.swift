@@ -8,7 +8,8 @@ import Foundation
 /// Route identity is deliberately its own type, distinct from every namespace it
 /// is assembled from:
 ///
-/// - `ExtractorKind` is the manifest/protocol operation family (`.pdf`, `.html`)
+/// - `ExtractorKind` is the manifest/protocol operation family (`.pdf`,
+///   `.html`, `.docx`)
 ///   and stays exactly that — a route adds the MIME dimension.
 /// - `ExtractionBackendKind` / `ExtractionBackend` (WikiFSMarkdown) is the
 ///   engine-adapter namespace — which backend runs, not which input it accepts.
@@ -70,11 +71,17 @@ public extension ExtractorRouteID {
     /// execution support.
     static let canonicalHTML = ExtractorRouteID.validatedCanonical(kind: .html, mimeTypeString: "text/html")
 
-    /// True for the two routes host execution supports today. Future package
+    /// The Word (`.docx`) document route — the only DOCX route current
+    /// registrations and execution support.
+    static let canonicalDOCX = ExtractorRouteID.validatedCanonical(
+        kind: .docx,
+        mimeTypeString: "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+    /// True for the routes host execution supports today. Future package
     /// registrations may declare other MIME types; displaying and resolving them
     /// is the route table's job, while execution adapters for new kinds remain
     /// separate work.
-    var isCanonical: Bool { self == .canonicalPDF || self == .canonicalHTML }
+    var isCanonical: Bool { self == .canonicalPDF || self == .canonicalHTML || self == .canonicalDOCX }
 
     private static func validatedCanonical(kind: ExtractorKind, mimeTypeString: String) -> ExtractorRouteID {
         guard let route = ExtractorRouteID(normalizing: kind, mimeTypeString: mimeTypeString) else {

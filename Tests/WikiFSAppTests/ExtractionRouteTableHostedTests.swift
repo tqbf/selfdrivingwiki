@@ -134,8 +134,8 @@ struct ExtractionRouteTableHostedTests {
         defer { lease.release() }
         let dir = try tempDirectory("route-table-render")
         // A real registration whose MIME is outside the host routes: the table
-        // then holds three rows (PDF, HTML, and the registration-derived epub
-        // route). Row views only exist after the async snapshot load rebuilds
+        // then holds four rows (PDF, HTML, Word, and the registration-derived
+        // epub route). Row views only exist after the async snapshot load rebuilds
         // routeRows, so the wait below observes the actual load instead of the
         // initial layout.
         let view = makeView(directory: dir, snapshot: snapshot(registrations: [
@@ -155,14 +155,14 @@ struct ExtractionRouteTableHostedTests {
         let window = mount(view)
 
         try await waitUntil {
-            self.firstTableView(window)?.numberOfRows == 3
+            self.firstTableView(window)?.numberOfRows == 4
         }
         // The hosted hierarchy contains a native table (row views) inside a
         // clip view — the scrollable, window-bounded layout.
         let content = try #require(window.contentView)
         #expect(containsDescendant(content) { $0 is NSClipView })
         let table = try #require(firstTableView(window))
-        #expect(table.numberOfRows == 3)
+        #expect(table.numberOfRows == 4)
     }
 
     @Test("a non-ready route status dialog mounts with recovery controls")
@@ -335,12 +335,12 @@ struct ExtractionRouteTableHostedTests {
         let logical = LogicalExtractorReference(
             packageID: try ExtractorPackageID(validating: "org.example.extractor"),
             registrationID: try ExtractorRegistrationID(validating: "main"))
-        let cases: [(ExtractorRouteSourceCategory, ExtractionBackendReference?, String)] = [
+        let cases: [(ExtractorRouteSourceCategory, ExtractionBackendReference, String)] = [
             (.reviewedPackage, .installed(logical), "Reviewed Extractor"),
             (.installedPackage, .installed(logical), "Installed Extractor"),
-            (.connectedService, .builtIn(.pdf(.acp)), "ACP Provider"),
-            (.builtIn, .builtIn(.html(.tagBased)), "Tag-based"),
-            (.prompt, nil, "No default (ask each time)"),
+            (.connectedService, ExtractorRouteHostCatalog.acpReference, "ACP Provider"),
+            (.builtIn, ExtractorRouteHostCatalog.tagBasedReference, "Tag-based"),
+            (.prompt, .none, "No default (ask each time)"),
             (.unavailable, .installed(logical), "Missing Extractor"),
         ]
 
@@ -370,7 +370,6 @@ struct ExtractionRouteTableHostedTests {
 
         let reloaded = ExtractionConfig.load(from: dir)
         #expect(reloaded.extractorSelection(for: .canonicalPDF) == .installed(logical))
-        #expect(reloaded.pdfExtractor == .installed(logical))
         let decision = ExtractorSelectionResolver.resolvePDF(configuration: reloaded, activeRegistrations: [])
         #expect(decision.selection == .unavailableInstalled(kind: .pdf, reference: logical))
         #expect(decision.diagnostic == .unavailableInstalled(logical))
@@ -382,6 +381,35 @@ struct ExtractionRouteTableHostedTests {
         let pdf = rows.first { $0.route == .canonicalPDF }
         #expect(pdf?.status == .packageNotInstalled)
         #expect(pdf?.savedSelection == .installed(logical))
+    }
+
+    /// DOCX analogue of the stale-PDF fixture: an explicit installed DOCX
+    /// selection that has no active registration persists through the
+    /// mapping write + config round trip and blocks the DOCX route with the
+    /// redacted unavailable diagnostic.
+    @Test("a stale DOCX selection persists and remains unavailable")
+    func staleDocxSelectionRemainsUnavailable() async throws {
+        let dir = try tempDirectory("route-table-stale-docx")
+        let logical = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.example.gone.docx"),
+            registrationID: try ExtractorRegistrationID(validating: "document"))
+
+        var config = ExtractionConfig(backend: .acp)
+        ExtractorRouteSettingsMapping.write(.installed(logical), route: .canonicalDOCX, into: &config)
+        try config.save(to: dir)
+
+        let reloaded = ExtractionConfig.load(from: dir)
+        #expect(reloaded.extractorSelection(for: .canonicalDOCX) == .installed(logical))
+        let decision = ExtractorSelectionResolver.resolveDOCX(configuration: reloaded, activeRegistrations: [])
+        #expect(decision.selection == .unavailableInstalled(kind: .docx, reference: logical))
+        #expect(decision.diagnostic == .unavailableInstalled(logical))
+
+        let rows = ExtractorRouteTableBuilder.build(.init(
+            configuration: reloaded,
+            registrations: []))
+        let docx = rows.first { $0.route == .canonicalDOCX }
+        #expect(docx?.status == .packageNotInstalled)
+        #expect(docx?.savedSelection == .installed(logical))
     }
 }
 
@@ -408,7 +436,7 @@ struct ExtractorRouteRecoveryPresenterTests {
             resolvedSelection: nil,
             choices: [ExtractorRouteChoice(
                 route: route,
-                reference: selection,
+                reference: selection ?? .none,
                 displayName: "Example Extractor",
                 category: selection == nil ? .prompt : .installedPackage,
                 exactSummary: exactSummary)],
@@ -458,7 +486,7 @@ struct ExtractorRouteRecoveryPresenterTests {
     }
 
     @Test func needsSetupMatrix() throws {
-        let acp = row(selection: .builtIn(.pdf(.acp)), status: .ready)
+        let acp = row(selection: ExtractorRouteHostCatalog.acpReference, status: .ready)
         var facts = ExtractorRouteRecoveryFacts()
         let missingProvider = ExtractorRouteRecoveryPresenter.present(
             row: acp, extractorName: "ACP Provider", facts: facts)

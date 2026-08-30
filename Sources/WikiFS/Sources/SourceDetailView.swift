@@ -781,14 +781,18 @@ struct SourceDetailView: View {
                         // Issue #799 PR2: HTML sources dispatch to the inline
                         // `runHtmlExtraction` path (queue engine is PDF-coupled
                         // via `ExtractionResolution.pdfData` /
-                        // `convert(pdfData:)` / `seedPdfMarkdown`); PDF sources
-                        // go through the queue as before.
-                        Button(isExtracting ? "Extracting…" : "Extract",
+                        // `convert(pdfData:)` / `seedPdfMarkdown`); DOCX
+                        // sources dispatch to the inline package-only
+                        // `runDocxExtraction` path for the same reason; PDF
+                        // sources go through the queue as before.
+                        Button(isExtracting || isThisFileExtracting ? "Extracting…" : "Extract",
                                systemImage: "doc.plaintext") {
-                            DebugLog.extraction("SourceDetailView: Extract tapped — id=\(file.id.rawValue), html=\(SourceRendererPresentationPlanner.isHTMLSource(file))")
+                            DebugLog.extraction("SourceDetailView: Extract tapped — id=\(file.id.rawValue), html=\(SourceRendererPresentationPlanner.isHTMLSource(file)), docx=\(SourceRendererPresentationPlanner.isDOCXSource(file))")
                             Task {
                                 if SourceRendererPresentationPlanner.isHTMLSource(file) {
                                     await runHtmlExtraction()
+                                } else if SourceRendererPresentationPlanner.isDOCXSource(file) {
+                                    await runDocxExtraction()
                                 } else {
                                     await runExtraction()
                                 }
@@ -1493,7 +1497,10 @@ struct SourceDetailView: View {
         defer {
             isExtracting = false
         }
-        let backend = store.htmlBackend ?? .defuddle
+        // The label reflects the session-wired HTML selection (route-record
+        // derived); nil falls back to the tag-based execution floor. The
+        // extractor itself resolves through the route record either way.
+        let backend = store.htmlBackend ?? .tagBased
         let extractor: any HtmlMarkdownExtractor
         do {
             extractor = try await extractionCoordinator.prepareHTML(backendOverride: nil)
@@ -1538,6 +1545,61 @@ struct SourceDetailView: View {
         if let head = await store.extractHtml(for: file.id, backend: backend, extractor: extractor) {
             headVersion = head
         }
+    }
+
+    /// DOCX extraction trigger — the package-only sibling of
+    /// `runHtmlExtraction`. Inline — does NOT route through the queue engine
+    /// (same PDF-coupling rationale as the HTML path). DOCX has no backend
+    /// choice and no built-in fallback: the route resolves the reviewed
+    /// docx2md package (or the user's explicit installed-package selection),
+    /// and an inactive package fails closed with a surfaced error.
+    /// Dispatches to `WikiStoreModel.extractDocx(for:extractor:)`, which reads
+    /// the source's `.docx` bytes and writes the result via
+    /// `appendProcessedMarkdown`.
+    private func runDocxExtraction() async {
+        isExtracting = true
+        defer {
+            isExtracting = false
+        }
+        let extractor: any DocxMarkdownExtractor
+        do {
+            extractor = try await extractionCoordinator.prepareDOCX()
+        } catch {
+            DebugLog.extraction("DOCX extractor preparation failed: \(error.localizedDescription)")
+            htmlExtractionError = (error as? LocalizedError)?.errorDescription
+                ?? error.localizedDescription
+            return
+        }
+        // A runtime problem (bun missing, entry point absent) is a cheap
+        // stat-based probe away — surface it instead of letting the managed
+        // spawn fail into a silent nil.
+        let readiness = await extractor.readiness()
+        switch readiness {
+        case .ready:
+            break
+        case .needsSetup(let message), .notInstalled(let message):
+            htmlExtractionError = message
+            return
+        }
+        if let head = await store.extractDocx(for: file.id, extractor: extractor) {
+            headVersion = head
+        } else {
+            // The extractor swallows process errors into nil (mirroring the
+            // HTML path) and the model logs the redacted reason; say
+            // something rather than doing nothing.
+            DebugLog.extraction("DOCX extraction returned no markdown (source=\(file.id.rawValue))")
+            htmlExtractionError = "Word document extraction failed. A redacted reason is in Console (subsystem com.selfdrivingwiki.debug)."
+        }
+    }
+
+    /// DOCX re-extraction trigger — the "Re-extract with" menu's DOCX branch.
+    /// There is exactly one DOCX execution path (the reviewed docx2md
+    /// package; no backend enum exists to iterate), so this is
+    /// `runDocxExtraction` under a re-extraction name. Like the HTML
+    /// re-extract, `appendProcessedMarkdown` always appends, so a re-run
+    /// creates a coexisting alternative the provenance chip surfaces.
+    private func runDocxReExtraction() async {
+        await runDocxExtraction()
     }
 
     /// Transcription trigger (issue #799 PR4 for podcasts; generalized to
@@ -1665,13 +1727,17 @@ struct SourceDetailView: View {
                 // issue #799 PR5) have a single entry today (the captions
                 // scrape — no `YouTubeTranscriptionBackend` enum added yet;
                 // revisit when the Python-subprocess backend lands, #584)
-                // and route to the parameterless `runTranscription()`. A
-                // source is HTML xor PDF xor podcast xor YouTube xor other —
-                // the four branches are mutually exclusive. The HTML, podcast,
-                // and YouTube branches route through the inline `extractHtml` /
-                // `transcribe` paths (issues #799 PR2 + PR4 + PR5 — the queue
-                // engine is PDF-coupled; generalizing it is a deferred
-                // sub-project per the parent plan's "Out of scope" section).
+                // and route to the parameterless `runTranscription()`. DOCX
+                // sources have a single entry too (the reviewed docx2md
+                // package — package-only, no backend enum) routing to the
+                // parameterless `runDocxReExtraction()`. A source is HTML xor
+                // DOCX xor PDF xor podcast xor YouTube xor other — the
+                // branches are mutually exclusive. The HTML, DOCX, podcast,
+                // and YouTube branches route through the inline `extractHtml`
+                // / `extractDocx` / `transcribe` paths (issues #799 PR2 +
+                // PR4 + PR5 — the queue engine is PDF-coupled; generalizing
+                // it is a deferred sub-project per the parent plan's "Out of
+                // scope" section).
                 if SourceRendererPresentationPlanner.isHTMLSource(file) {
                     ForEach(HtmlExtractionBackend.allCases, id: \.self) { backend in
                         Button(backend.displayName) {
@@ -1710,6 +1776,14 @@ struct SourceDetailView: View {
                     }
                     .disabled(isTranscribing
                               || isThisFileExtracting
+                              || tracker.isSlotBusyForOtherSource(file.id))
+                } else if SourceRendererPresentationPlanner.isDOCXSource(file) {
+                    // DOCX: a single package-only re-extraction path — there
+                    // is no backend enum to iterate.
+                    Button("docx2md") {
+                        Task { await runDocxReExtraction() }
+                    }
+                    .disabled(isThisFileExtracting
                               || tracker.isSlotBusyForOtherSource(file.id))
                 } else {
                     ForEach(ExtractionBackend.userSelectableCases, id: \.self) { backend in
@@ -2004,7 +2078,7 @@ extension SourceDetailView {
     ) -> ExtractionAffordance {
         let kind = ContentKind.resolve(mimeType: mimeType, provider: provider, ext: ext)
         switch kind.capabilities.extractionPath {
-        case .pdfBackend, .htmlToMarkdown:             return .extract
+        case .pdfBackend, .htmlToMarkdown, .docxBackend: return .extract
         case .podcastTranscript, .youtubeTranscript:   return .transcribe
         case nil:                                       return .none
         }

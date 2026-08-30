@@ -1,0 +1,56 @@
+{
+  "capabilities": [],
+  "displayName": "Local docx2md",
+  "entryPoint": "bin/docx2md-extractor.js",
+  "files": [
+    {
+      "digest": "daf2e04002f8d276e992f41b09c5ae8026f0f2c86f8b57d95e088cbeaaa14cd6",
+      "path": "PROVENANCE.md"
+    },
+    {
+      "digest": "73488b68dbdfd1b3ce300184bada80c3d7f78261098e8c8e4ff8172a3a0aedb7",
+      "path": "bin/docx2md-extractor.js"
+    },
+    {
+      "digest": "6663bbd049205d38a496ccacb412a151980b444627d38de218b3b809aef330f1",
+      "path": "licenses/mammoth-LICENSE"
+    },
+    {
+      "digest": "a055e3a15db4b4cbb5af381230eba085603126d7d5d8c4dae45ee85b877a9729",
+      "path": "licenses/turndown-LICENSE"
+    },
+    {
+      "digest": "a055e3a15db4b4cbb5af381230eba085603126d7d5d8c4dae45ee85b877a9729",
+      "path": "licenses/turndown-plugin-gfm-LICENSE"
+    }
+  ],
+  "launch": {
+    "command": "bun",
+    "mode": "runtime"
+  },
+  "limits": {
+    "maximumDurationMilliseconds": 120000,
+    "maximumInputByteCount": 33554432,
+    "maximumMarkdownOutputByteCount": 33554432,
+    "maximumProgressEventCount": 64
+  },
+  "manifestRevision": 1,
+  "packageID": "org.selfdrivingwiki.docx2md",
+  "protocolRevision": 1,
+  "registrations": [
+    {
+      "displayName": "docx2md Document",
+      "filenameExtensions": [
+        "docx"
+      ],
+      "id": "document",
+      "kinds": [
+        "docx"
+      ],
+      "mimeTypes": [
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      ]
+    }
+  ],
+  "version": "1.0.0"
+}
