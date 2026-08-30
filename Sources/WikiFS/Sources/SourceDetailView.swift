@@ -1697,7 +1697,7 @@ struct SourceDetailView: View {
                         headVersion = store.processedMarkdownHead(for: file)
                     } label: {
                         Label {
-                            Text("\(ExtractionAlternative.backendDisplayName(agentName: agent)) — \(version.createdAt, style: .date)")
+                            Text("\(ExtractionAlternative.backendDisplayName(agentName: agent)) — \(version.createdAt, format: .dateTime.year().month().day().hour().minute().second())")
                         } icon: {
                             Image(systemName: version.id.rawValue == headID
                                   ? "checkmark.circle.fill" : "doc.text")

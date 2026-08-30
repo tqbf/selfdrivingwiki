@@ -13,7 +13,11 @@ struct MetadataValueRendererTests {
 
     @Test func rendersDate() {
         if case .text(let value, _) = render(.date(Date(timeIntervalSince1970: 0))) {
-            #expect(!value.isEmpty)
+            // Second precision: runs seconds apart must stay distinguishable.
+            // The time portion must be h:mm:ss ("4:00:00 PM"), not the
+            // minute-only h:mm ("4:00 PM"). Epoch 0 renders in the machine's
+            // timezone, so match the shape, not a literal time.
+            #expect(value.range(of: #"\d{1,2}:\d{2}:\d{2}"#, options: .regularExpression) != nil)
         } else { Issue.record("date must render as text") }
     }
 
