@@ -44,7 +44,7 @@ The host encodes one `ExtractorProtocolRequest` as JSON, appends a newline, writ
 | --- | --- | --- |
 | `requestID` | UUID string | Identifies the operation. Every frame must repeat it. |
 | `protocolRevision` | integer | Must be `1`. |
-| `kind` | string | `pdf` or `html`. |
+| `kind` | string | `pdf`, `html`, or `docx`. |
 | `mimeType` | string | Normalized lowercase MIME type. |
 | `originalFilename` | string | 1 to 1,024 bytes, no NUL. |
 | `inputTransport` | string | `operation-file` in revision 1. |

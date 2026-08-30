@@ -57,7 +57,7 @@ The host resolves the command name against a fixed search list before spawn and 
 | --- | --- | --- |
 | `id` | string | 1 to 64 characters, lowercase ASCII letters, digits, hyphens. |
 | `displayName` | string | 1 to 128 bytes. |
-| `kinds` | array | Nonempty subset of `pdf` and `html`. Revision 1 supports no other kind. |
+| `kinds` | array | Nonempty subset of `pdf`, `html`, and `docx`. |
 | `mimeTypes` | array | Nonempty set of normalized lowercase MIME types. |
 | `filenameExtensions` | array, optional | Lowercase ASCII letters and digits, no leading dot, at most 32 characters. |
 
@@ -149,7 +149,7 @@ The index file is `derived/index.json` under the store root. Its schema version 
 
 ## Configuration compatibility
 
-`extraction-config.json` keeps its existing fields. Two optional logical fields extend it: `pdfExtractor` and `htmlExtractor`. Each holds either a built-in reference or an installed package reference.
+`extraction-config.json` keeps its existing fields. Three optional logical fields extend it: `pdfExtractor`, `htmlExtractor`, and `docxExtractor`. Each holds either a built-in reference or an installed package reference.
 
 Selection precedence per extractor kind:
 
@@ -158,14 +158,18 @@ Selection precedence per extractor kind:
 3. If the logical field selects an installed package and a compatible active registration exists, it wins.
 4. If that installed selection is unavailable, the app keeps the selection, emits one redacted diagnostic, and uses the fixed fallback: the built-in PDF backend for PDF, or built-in tag-based extraction for HTML. The app never silently selects a different third-party package.
 
+DOCX has no built-in backend and no legacy field. A missing `docxExtractor` resolves to the reviewed docx2md lineage (`org.selfdrivingwiki.docx2md`, registration `document`). If that package is not active, DOCX extraction fails closed with one redacted diagnostic.
+
 Legacy built-in selections keep working. The `localPdf2md` selection maps to the reviewed pdf2md package lineage (`org.selfdrivingwiki.pdf2md`, registration `document`) when it is active, and the legacy Defuddle selection maps to the reviewed Defuddle lineage (`org.selfdrivingwiki.defuddle`, registration `article`).
 
 ## Worked examples
 
-The reviewed packages in `ExtractorPackages/` are complete revision-1 packages:
+The reviewed packages in `ExtractorPackages/` are complete reviewed packages:
 
 - `Defuddle/manifest.json` — HTML article extraction, `runtime` launch with the `bun` command, no capabilities, 120-second duration limit, 32 MiB input and output limits.
 - `Pdf2md/manifest.json` — PDF conversion, `runtime` launch with the `uv` command and `run --script` arguments, `network`, `shared-runtime-cache`, and `model-download` capabilities, 30-minute duration limit, 128 MiB input limit.
+- `DoclingServe/manifest.json` — PDF conversion through a self-hosted Docling Serve, `direct` launch, manifest revision 2 with an optional `api-token` credential requirement, `network` capability.
+- `Docx2md/manifest.json` — Word `.docx` conversion, `runtime` launch with the `bun` command, no capabilities, 120-second duration limit, 32 MiB input and output limits.
 
 Validate any package folder with `swift run extractor-package-tool validate <folder>`. The tool prints the package ID, version, package digest, registration IDs, and protocol revision on success.
 
