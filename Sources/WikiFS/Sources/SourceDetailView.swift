@@ -559,17 +559,18 @@ struct SourceDetailView: View {
             updateRightSidebarRegistration()
         }
         .onChange(of: showsSourceOutlineTab) { _, _ in updateRightSidebarRegistration() }
-        // #842 PR2 C6: refresh the transcript head when the store's source list
-        // changes. `appendProcessedMarkdown` routes through `mutate()` → emits
-        // a `ResourceChangeEvent(.source, .updated)` → the model's bus
-        // subscriber calls `reloadFromStore()` → `reloadSources()` bumps
-        // `store.sources`. This onChange picks up that bump and re-reads
-        // `processedMarkdownHead` so the reader shows the new transcript
-        // immediately after the queue worker persists it — without relying
-        // solely on `runTranscription`'s post-completion refresh (which only
-        // fires for the view that initiated the job; another wiki window
-        // viewing the same source would see the stale head without this).
-        .onChange(of: store.sources) { _, _ in
+        // #842 PR2 C6, #1179: refresh the derived head whenever the store's
+        // source data reloads. Extraction and transcript writes
+        // (`appendDerivedMarkdown`) never touch the `sources` row, so a rebuild
+        // can produce an `==` `sources` array and a value-based
+        // `.onChange(of: store.sources)` stays silent — the reader kept showing
+        // the raw source after import auto-extraction. `sourcesVersion` is a
+        // monotonic counter bumped on every `reloadSources()`, so this always
+        // fires and re-reads `processedMarkdownHead`: import auto-extraction in
+        // this window, and the queue worker's transcript persist in another
+        // window, both update without relying on the initiating view's own
+        // post-completion refresh.
+        .onChange(of: store.sourcesVersion) { _, _ in
             if !isEditing {
                 headVersion = store.processedMarkdownHead(for: file)
                 refreshRendererPresentation()
