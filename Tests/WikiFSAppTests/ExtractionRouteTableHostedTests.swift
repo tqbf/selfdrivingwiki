@@ -364,7 +364,7 @@ struct ExtractionRouteTableHostedTests {
             registrationID: try ExtractorRegistrationID(validating: "main"))
 
         // The table's write path, exercised end to end: mapping write + save.
-        var config = ExtractionConfig(backend: .acp)
+        var config = ExtractionConfig()
         ExtractorRouteSettingsMapping.write(.installed(logical), route: .canonicalPDF, into: &config)
         try config.save(to: dir)
 
@@ -394,7 +394,7 @@ struct ExtractionRouteTableHostedTests {
             packageID: try ExtractorPackageID(validating: "org.example.gone.docx"),
             registrationID: try ExtractorRegistrationID(validating: "document"))
 
-        var config = ExtractionConfig(backend: .acp)
+        var config = ExtractionConfig()
         ExtractorRouteSettingsMapping.write(.installed(logical), route: .canonicalDOCX, into: &config)
         try config.save(to: dir)
 

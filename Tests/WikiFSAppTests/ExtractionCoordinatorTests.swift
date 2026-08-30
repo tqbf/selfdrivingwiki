@@ -7,11 +7,12 @@ import WikiFSEngine
 @testable import WikiFS
 @testable import WikiFSEngine
 
-/// `ExtractionCoordinator` backend resolution + readiness mapping. Uses an
-/// `InMemoryExtractionCredentialStore` and a temp container directory so tests
-/// are hermetic (no real Keychain pollution). The backend is driven through
-/// `ExtractionConfig` (the single source of truth), matching how
-/// `ExtractionSettingsView`'s Save writes it. The coordinator is `@MainActor`.
+/// `ExtractionCoordinator` backend resolution + readiness mapping over the
+/// test-only legacy seam. Uses an `InMemoryExtractionCredentialStore` and a
+/// temp container directory so tests are hermetic (no real Keychain
+/// pollution). #1178 removed the retired `ExtractionConfig.backend` fallback,
+/// so the seam receives its backend explicitly through `backendOverride` and
+/// fails closed when a caller supplies none. The coordinator is `@MainActor`.
 @MainActor
 struct ExtractionCoordinatorTests {
 
@@ -22,16 +23,15 @@ struct ExtractionCoordinatorTests {
         return dir
     }
 
-    /// A coordinator over `dir` with an in-memory secret store. `backend` is the
-    /// configured backend (written to `ExtractionConfig` before construction).
+    /// A coordinator over `dir` with an in-memory secret store. The config file
+    /// holds only persisted settings (models, endpoints, provider ids); the
+    /// backend itself is passed explicitly per `prepare(backendOverride:)` call.
     private func makeCoordinator(
-        backend: ExtractionBackend = .localPdf2md,
         dir: URL,
         seeds: [ExtractionSecret: String] = [:],
         configure: ((inout ExtractionConfig) -> Void)? = nil
     ) throws -> ExtractionCoordinator {
         var cfg = ExtractionConfig()
-        cfg.backend = backend
         configure?(&cfg)
         try cfg.save(to: dir)
         return ExtractionCoordinator(
@@ -43,126 +43,116 @@ struct ExtractionCoordinatorTests {
 
     // MARK: - Backend resolution
 
-    @Test func defaultsToLocalPdf2md() async throws {
+    @Test func localPdf2mdOverrideResolvesLocalExtractor() async throws {
         let coord = try makeCoordinator(dir: tempDirectory())
-        #expect((try await coord.prepare()).backend == .localPdf2md)
-        #expect((try await coord.prepare()).extractor is CoordinatorStubExtractor)
+        let preparation = try await coord.prepare(backendOverride: .localPdf2md)
+        #expect(preparation.backend == .localPdf2md)
+        #expect(preparation.extractor is CoordinatorStubExtractor)
+    }
+
+    /// #1178: with the retired `ExtractionConfig.backend` fallback gone, a
+    /// prepare call without an explicit backend fails closed instead of
+    /// inventing a default. Production resolves defaults through the route
+    /// records; this legacy seam does not.
+    @Test func missingOverrideFailsClosed() async throws {
+        let coord = try makeCoordinator(dir: tempDirectory())
+        await #expect(throws: ExtractionServicesError.unavailable) {
+            try await coord.prepare()
+        }
     }
 
     @Test func resolvesAnthropicBackend() async throws {
-        let coord = try makeCoordinator(backend: .anthropic, dir: tempDirectory(),
+        let coord = try makeCoordinator(dir: tempDirectory(),
                                         seeds: [.anthropicAPIKey: "k"])
-        #expect((try await coord.prepare()).extractor is AnthropicExtractionClient)
-    }
-
-    @Test func resolvesDoclingBackend() async throws {
-        let coord = try makeCoordinator(backend: .doclingServe, dir: tempDirectory())
-        #expect((try await coord.prepare()).extractor is DoclingServeClient)
+        #expect((try await coord.prepare(backendOverride: .anthropic)).extractor is AnthropicExtractionClient)
     }
 
     @Test func resolvesGeminiBackend() async throws {
-        let coord = try makeCoordinator(backend: .gemini, dir: tempDirectory(),
+        let coord = try makeCoordinator(dir: tempDirectory(),
                                         seeds: [.geminiAPIKey: "k"])
-        #expect((try await coord.prepare()).extractor is GeminiExtractionClient)
+        #expect((try await coord.prepare(backendOverride: .gemini)).extractor is GeminiExtractionClient)
     }
 
     @Test func geminiNeedsSetupWithoutKey() async throws {
-        let coord = try makeCoordinator(backend: .gemini, dir: tempDirectory())
-        let r = await (try await coord.prepare()).extractor.readiness()
+        let coord = try makeCoordinator(dir: tempDirectory())
+        let r = await (try await coord.prepare(backendOverride: .gemini)).extractor.readiness()
         if case .needsSetup = r { } else { Issue.record("expected .needsSetup") }
     }
 
     @Test func geminiReadyWithKey() async throws {
-        let coord = try makeCoordinator(backend: .gemini, dir: tempDirectory(),
+        let coord = try makeCoordinator(dir: tempDirectory(),
                                         seeds: [.geminiAPIKey: "AIza-x"])
-        #expect(await (try await coord.prepare()).extractor.readiness() == .ready)
+        #expect(await (try await coord.prepare(backendOverride: .gemini)).extractor.readiness() == .ready)
     }
 
     @Test func geminiClientUsesConfiguredModel() async throws {
-        let coord = try makeCoordinator(backend: .gemini, dir: tempDirectory(),
+        let coord = try makeCoordinator(dir: tempDirectory(),
                                         seeds: [.geminiAPIKey: "k"]) { cfg in
             cfg.geminiModel = "gemini-3.1-flash-lite"
         }
-        #expect(((try await coord.prepare()).extractor as? GeminiExtractionClient)?.model == "gemini-3.1-flash-lite")
+        #expect(((try await coord.prepare(backendOverride: .gemini)).extractor as? GeminiExtractionClient)?.model == "gemini-3.1-flash-lite")
     }
 
     // MARK: - Readiness mapping
 
     @Test func anthropicNeedsSetupWithoutKey() async throws {
-        let coord = try makeCoordinator(backend: .anthropic, dir: tempDirectory())
-        let r = await (try await coord.prepare()).extractor.readiness()
+        let coord = try makeCoordinator(dir: tempDirectory())
+        let r = await (try await coord.prepare(backendOverride: .anthropic)).extractor.readiness()
         if case .needsSetup = r { } else { Issue.record("expected .needsSetup") }
     }
 
     @Test func anthropicReadyWithKey() async throws {
-        let coord = try makeCoordinator(backend: .anthropic, dir: tempDirectory(),
+        let coord = try makeCoordinator(dir: tempDirectory(),
                                         seeds: [.anthropicAPIKey: "sk-ant-x"])
-        #expect(await (try await coord.prepare()).extractor.readiness() == .ready)
+        #expect(await (try await coord.prepare(backendOverride: .anthropic)).extractor.readiness() == .ready)
     }
 
-    @Test func doclingNeedsSetupWithoutEndpoint() async throws {
-        // No endpoint in config → coordinator passes "" → readiness .needsSetup.
-        let coord = try makeCoordinator(backend: .doclingServe, dir: tempDirectory())
-        let r = await (try await coord.prepare()).extractor.readiness()
-        if case .needsSetup = r { } else { Issue.record("expected .needsSetup") }
-    }
-
-    @Test func doclingReadyWithEndpoint() async throws {
-        let coord = try makeCoordinator(backend: .doclingServe, dir: tempDirectory()) { cfg in
+    /// #1159: the legacy seam keeps no direct Docling execution path — Docling
+    /// runs through the reviewed package, so an explicit `.doclingServe`
+    /// override fails closed here regardless of the configured endpoint.
+    @Test func doclingServeOverrideFailsClosed() async throws {
+        let coord = try makeCoordinator(dir: tempDirectory()) { cfg in
             cfg.doclingServeEndpoint = "http://localhost:5001"
         }
-        #expect(await (try await coord.prepare()).extractor.readiness() == .ready)
+        await #expect(throws: ExtractionServicesError.unavailable) {
+            try await coord.prepare(backendOverride: .doclingServe)
+        }
     }
 
     // MARK: - Config reload + default-model wiring
 
     @Test func configReloadsAfterSave() async throws {
         let dir = tempDirectory()
-        let coord = try makeCoordinator(backend: .anthropic, dir: dir)
-        #expect((try await coord.prepare()).modelVersion == ExtractionConfig.defaultAnthropicModel)
+        let coord = try makeCoordinator(dir: dir)
+        #expect((try await coord.prepare(backendOverride: .anthropic)).modelVersion == ExtractionConfig.defaultAnthropicModel)
         var cfg = ExtractionConfig.load(from: dir)
         cfg.anthropicModel = "claude-sonnet-4-6"
         try cfg.save(to: dir)
-        #expect((try await coord.prepare()).modelVersion == "claude-sonnet-4-6")
+        #expect((try await coord.prepare(backendOverride: .anthropic)).modelVersion == "claude-sonnet-4-6")
     }
 
     @Test func anthropicClientUsesConfiguredModel() async throws {
-        let coord = try makeCoordinator(backend: .anthropic, dir: tempDirectory(),
+        let coord = try makeCoordinator(dir: tempDirectory(),
                                         seeds: [.anthropicAPIKey: "k"]) { cfg in
             cfg.anthropicModel = "claude-sonnet-4-6"
         }
-        let client = (try await coord.prepare()).extractor as? AnthropicExtractionClient
+        let client = (try await coord.prepare(backendOverride: .anthropic)).extractor as? AnthropicExtractionClient
         #expect(client?.model == "claude-sonnet-4-6")
-    }
-
-    @Test func unknownBackendInConfigDegradesToLocal() async throws {
-        // A corrupt/unknown backend value in the JSON file should never crash a
-        // resolve — `ExtractionConfig` degrades it to `.localPdf2md`.
-        let dir = tempDirectory()
-        let url = dir.appendingPathComponent(ExtractionConfig.fileName, isDirectory: false)
-        try Data(#"{"backend":"definitely_not_real"}"#.utf8).write(to: url)
-        let coord = ExtractionCoordinator(
-            containerDirectory: dir,
-            credentialStore: InMemoryExtractionCredentialStore(),
-            fetcher: FakeHTTPFetcher(body: "x"),
-            localExtractorFactory: { CoordinatorStubExtractor() })
-        #expect((try await coord.prepare()).backend == .localPdf2md)
-        #expect((try await coord.prepare()).extractor is CoordinatorStubExtractor)
     }
 
     // MARK: - ACP backend
 
-    @Test func acpBackendWithNoProviderFallsBackToLocal() async throws {
-        // When .acp is configured but no ACP provider can be resolved (no
-        // command on PATH), the coordinator falls back to the local extractor
-        // rather than crashing. The resolveCommand closure returns nil.
+    /// An absent provider is an unavailable selection: with `.acp` requested
+    /// explicitly but no resolvable provider command, the seam fails closed
+    /// instead of substituting the local extractor.
+    @Test func acpOverrideWithoutResolvableProviderFailsClosed() async throws {
         let dir = tempDirectory()
         var cfg = ExtractionConfig()
-        cfg.backend = .acp
         cfg.acpProviderId = "claude-acp"
         try cfg.save(to: dir)
 
-        // Seed agent-providers.json so the provider exists + is enabled.
+        // Seed agent-providers.json so the provider exists + is enabled, but
+        // its command cannot be resolved (the path does not exist).
         let providersConfig = AgentProvidersConfig(providers: [
             AgentProvider(id: ProviderID(rawValue: "claude-acp"), label: "Claude", command: ["/nonexistent/claude"], enabled: true, isDefault: true)
         ])
@@ -174,9 +164,9 @@ struct ExtractionCoordinatorTests {
             acpCredentialStore: InMemoryACPCredentialStore(),
             fetcher: FakeHTTPFetcher(body: "x"),
             localExtractorFactory: { CoordinatorStubExtractor() })
-        #expect((try await coord.prepare()).backend == .acp)
-        // Falls back to local because the command cannot be resolved on PATH.
-        #expect((try await coord.prepare()).extractor is CoordinatorStubExtractor)
+        await #expect(throws: ExtractionServicesError.unavailable) {
+            try await coord.prepare(backendOverride: .acp)
+        }
     }
 }
 

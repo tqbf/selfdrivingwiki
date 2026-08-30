@@ -148,9 +148,7 @@ struct ExtractorPackageSettingsTests {
         ExtractorRouteSettingsMapping.write(.connectedService(.acp), route: .canonicalPDF, into: &config)
         ExtractorRouteSettingsMapping.write(.builtInTagBased, route: .canonicalHTML, into: &config)
 
-        // The retired typed fields are never rewritten by selection writes.
-        #expect(config.backend == .localPdf2md)
-        #expect(config.htmlBackend == nil)
+        // The retired typed selection keys are never rewritten by selection writes.
         #expect(config.extractorSelection(for: .canonicalPDF) == ExtractorRouteHostCatalog.acpReference)
         #expect(config.extractorSelection(for: .canonicalHTML) == ExtractorRouteHostCatalog.tagBasedReference)
     }

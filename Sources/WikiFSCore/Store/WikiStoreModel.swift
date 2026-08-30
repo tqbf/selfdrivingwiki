@@ -330,11 +330,13 @@ public final class WikiStoreModel {
     @ObservationIgnored public var searchServices: any SearchServices = UnavailableSearchServices()
 
     /// The configured HTML extraction backend (issue #799 PR2). Set at app
-    /// wiring time from `ExtractionConfig.htmlBackend` so the Extract button
-    /// and the "Re-extract with" menu have a default to use when the user
-    /// taps Extract without picking a backend explicitly. `nil` = no default
-    /// chosen (a fresh install, or a config file written before this field
-    /// shipped) — the menu then lists `HtmlExtractionBackend.allCases` so the
+    /// wiring time from `ExtractionConfig.htmlSelectionLabel` — the canonical
+    /// HTML route selection, which is where the retired `ExtractionConfig
+    /// .htmlBackend` field used to feed in before #1178 removed it — so the
+    /// Extract button and the "Re-extract with" menu have a default to use
+    /// when the user taps Extract without picking a backend explicitly.
+    /// `nil` = no default chosen (a fresh install, or no HTML route record)
+    /// — the menu then lists `HtmlExtractionBackend.allCases` so the
     /// user picks one. The process extraction facade resolves the selected
     /// adapter when extraction starts.
     @ObservationIgnored public var htmlBackend: HtmlExtractionBackend?

@@ -178,8 +178,14 @@ public actor ExtractionRuntime: ExtractionServices {
 
     public func prepare(backendOverride: ExtractionBackend?) async throws -> ExtractionPreparation {
         guard !disposed else { throw ExtractionServicesError.unavailable }
+        // #1178: the retired `ExtractionConfig.backend` fallback is gone, so
+        // this test-only runtime receives its backend explicitly and fails
+        // closed when a caller supplies no override. Production resolves
+        // default selections through the route records instead.
+        guard let effectiveBackend = backendOverride else {
+            throw ExtractionServicesError.unavailable
+        }
         let configuration = try readConfiguration()
-        let effectiveBackend = backendOverride ?? configuration.backend
         let preparation = try await resolveBackend(configuration, effectiveBackend)
         guard !disposed else { throw ExtractionServicesError.unavailable }
         return preparation
@@ -231,8 +237,14 @@ private final class LegacyExtractionServices: ExtractionServices {
     }
 
     func prepare(backendOverride: ExtractionBackend?) async throws -> ExtractionPreparation {
+        // #1178: the retired `ExtractionConfig.backend` fallback is gone, so
+        // this test-only seam receives its backend explicitly and fails closed
+        // when a caller supplies no override. Production resolves default
+        // selections through the route records instead.
+        guard let backend = backendOverride else {
+            throw ExtractionServicesError.unavailable
+        }
         let configuration = ExtractionConfig.load(from: containerDirectory)
-        let backend = backendOverride ?? configuration.backend
         let extractor: any MarkdownExtractor
         switch backend {
         case .localPdf2md:

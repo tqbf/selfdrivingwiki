@@ -23,20 +23,16 @@ struct ExtractionConfigTests {
         return .host(HostExtractorReference(adapterID: adapterID))
     }
 
-    /// The in-disk value of an in-memory config: the retired typed fields are
-    /// decode-only and not persisted, so a round trip resets them to defaults.
-    /// Load never bakes the bundled default-route policy into the file —
-    /// defaults participate at read time via `selectionOrDefault`.
+    /// The in-disk value of an in-memory config: every field persists, so a
+    /// round trip is exact. Load never bakes the bundled default-route policy
+    /// into the file — defaults participate at read time via
+    /// `selectionOrDefault`.
     private func persisted(_ config: ExtractionConfig) -> ExtractionConfig {
-        var result = config
-        result.backend = .localPdf2md
-        result.htmlBackend = nil
-        return result
+        config
     }
 
-    @Test func defaultsAreLocalPdf2mdAndSonnetModel() {
+    @Test func defaultsMatchBundledModels() {
         let config = ExtractionConfig()
-        #expect(config.backend == .localPdf2md)
         #expect(config.anthropicModel == ExtractionConfig.defaultAnthropicModel)
         #expect(config.anthropicBaseURLOverride == nil)
         #expect(config.geminiModel == ExtractionConfig.defaultGeminiModel)
@@ -48,7 +44,6 @@ struct ExtractionConfigTests {
     @Test func savesAndLoadsRoundTrip() throws {
         let dir = tempDirectory()
         var config = ExtractionConfig()
-        config.backend = .gemini
         config.anthropicModel = "claude-sonnet-4-6"
         config.anthropicBaseURLOverride = "https://proxy.example.com"
         config.geminiModel = "gemini-3.1-flash-lite"
@@ -91,30 +86,27 @@ struct ExtractionConfigTests {
         // still load, with the newer fields defaulting rather than throwing.
         let json = Data(#"{"backend":"anthropic"}"#.utf8)
         let config = try JSONDecoder().decode(ExtractionConfig.self, from: json)
-        #expect(config.backend == .anthropic)
         #expect(config.anthropicModel == ExtractionConfig.defaultAnthropicModel)
         #expect(config.anthropicBaseURLOverride == nil)
         #expect(config.geminiModel == ExtractionConfig.defaultGeminiModel)
         #expect(config.geminiBaseURLOverride == nil)
         #expect(config.doclingServeEndpoint == nil)
-        // The retired `backend` value migrates into a PDF host record.
+        // The retired `backend` key migrates into a PDF host record.
         #expect(config.extractorSelection(for: .canonicalPDF) == host("anthropic"))
     }
 
-    @Test func unknownBackendValueDegradesToLocalPdf2md() throws {
+    @Test func unknownBackendValueContributesNoRouteRecord() throws {
         // A future/typo'd backend raw value shouldn't crash the decode; it
-        // falls back to the safe local default and contributes no route
-        // record (the bundled default policy still fills the route).
+        // contributes no route record (the bundled default policy still fills
+        // the route).
         let json = Data(#"{"backend":"totally_made_up"}"#.utf8)
         let config = try JSONDecoder().decode(ExtractionConfig.self, from: json)
-        #expect(config.backend == .localPdf2md)
         #expect(config.routeExtractors.isEmpty)
     }
 
     @Test func nilFieldsRoundTripAsNil() throws {
         let dir = tempDirectory()
         let config = ExtractionConfig(
-            backend: .doclingServe,
             anthropicModel: "claude-opus-4-8",
             anthropicBaseURLOverride: nil,
             doclingServeEndpoint: nil)
@@ -145,13 +137,12 @@ struct ExtractionConfigTests {
     @Test func acpProviderIdRoundTrips() throws {
         let dir = tempDirectory()
         var config = ExtractionConfig()
-        config.backend = .acp
         config.acpProviderId = "claude-acp"
         try config.save(to: dir)
 
         let loaded = ExtractionConfig.load(from: dir)
-        // The provider id persists; the retired `backend` field does not, so
-        // the PDF route resolves through the bundled default policy.
+        // The provider id persists and the PDF route resolves through the
+        // bundled default policy.
         #expect(loaded.acpProviderId == "claude-acp")
         let pdf2md = LogicalExtractorReference(
             packageID: try ExtractorPackageID(validating: "org.selfdrivingwiki.pdf2md"),
@@ -169,7 +160,7 @@ struct ExtractionConfigTests {
 
     @Test func acpProviderIdRoundTripsNil() throws {
         let dir = tempDirectory()
-        let config = ExtractionConfig(backend: .acp, acpProviderId: nil)
+        let config = ExtractionConfig(acpProviderId: nil)
         try config.save(to: dir)
         let loaded = ExtractionConfig.load(from: dir)
         #expect(loaded.acpProviderId == nil)
@@ -188,13 +179,12 @@ struct ExtractionConfigTests {
         #expect(loaded.podcastBackend == .appleTranscript)
     }
 
-    /// The retired `htmlBackend` field is a decode-only migration input: a
+    /// The retired `htmlBackend` key is a decode-only migration input: a
     /// decode adopts it into an HTML route record, and a re-encode never
     /// writes the key again.
-    @Test func htmlBackendFieldIsDecodeOnly() throws {
+    @Test func htmlBackendKeyMigratesAndIsNotReEncoded() throws {
         let json = Data(#"{"backend":"anthropic","htmlBackend":"defuddle"}"#.utf8)
         let config = try JSONDecoder().decode(ExtractionConfig.self, from: json)
-        #expect(config.htmlBackend == .defuddle)
         #expect(config.extractorSelection(for: .canonicalHTML) == host("defuddle"))
 
         let data = try JSONEncoder().encode(config)
@@ -202,27 +192,22 @@ struct ExtractionConfigTests {
         #expect(object?["htmlBackend"] == nil)
     }
 
-    @Test func htmlAndPodcastBackendsDecodeAsNilWhenAbsent() throws {
+    @Test func podcastBackendDecodesAsNilWhenAbsent() throws {
         let json = Data(#"{"backend":"anthropic"}"#.utf8)
         let config = try JSONDecoder().decode(ExtractionConfig.self, from: json)
-        #expect(config.backend == .anthropic)
-        #expect(config.htmlBackend == nil)
         #expect(config.podcastBackend == nil)
     }
 
-    /// Unknown raw values for the retired optional fields degrade silently to
-    /// nil — symmetric with `unknownBackendValueDegradesToLocalPdf2md`: the
-    /// whole config still loads and no route record is produced.
+    /// Unknown raw values for the retired optional keys degrade silently to
+    /// nil — the whole config still loads and no route record is produced.
     @Test func unknownHtmlAndPodcastBackendValuesDegradeToNil() throws {
         let json = Data(#"""
         {"backend":"anthropic","htmlBackend":"whisper","podcastBackend":"rev_ai"}
         """#.utf8)
         let config = try JSONDecoder().decode(ExtractionConfig.self, from: json)
-        #expect(config.backend == .anthropic)
-        #expect(config.htmlBackend == nil)
         #expect(config.podcastBackend == nil)
         // The unknown HTML/podcast values contribute nothing, but the backend
-        // value still migrates into its PDF host record.
+        // key still migrates into its PDF host record.
         #expect(config.extractorSelection(for: .canonicalPDF) == host("anthropic"))
         #expect(config.extractorSelection(for: .canonicalHTML) == nil)
     }
@@ -292,7 +277,6 @@ struct ExtractionConfigTests {
     @Test func malformedLegacyKeyDegradesToNoRecord() throws {
         let json = Data(#"{"backend":"anthropic","pdfExtractor":{"kind":"future"}}"#.utf8)
         let config = try JSONDecoder().decode(ExtractionConfig.self, from: json)
-        #expect(config.backend == .anthropic)
         #expect(config.extractorSelection(for: .canonicalPDF) == host("anthropic"))
     }
 
@@ -303,20 +287,13 @@ struct ExtractionConfigTests {
             packageID: try ExtractorPackageID(validating: "org.example.html"),
             registrationID: try ExtractorRegistrationID(validating: "article"))
         let config = ExtractionConfig(
-            backend: .gemini,
             routeExtractors: [
                 .init(route: .canonicalPDF, extractor: host("acp")),
                 .init(route: .canonicalHTML, extractor: .installed(logical)),
             ])
         let data = try JSONEncoder().encode(config)
         let decoded = try JSONDecoder().decode(ExtractionConfig.self, from: data)
-        var reset = config
-        reset.backend = .localPdf2md
-        reset.htmlBackend = nil
-        #expect(decoded == reset)
-        // The retired `backend` field is not persisted, so the decode falls
-        // back to its default regardless of the in-memory value.
-        #expect(decoded.backend == .localPdf2md)
+        #expect(decoded == config)
 
         let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         #expect(object?["pdfExtractor"] == nil)
@@ -459,19 +436,16 @@ struct ExtractionConfigTests {
         #expect(config.extractorSelection(for: .canonicalPDF) == nil)
     }
 
-    /// A canonical route write touches ONLY the route table: the retired
-    /// typed fields keep whatever value they decoded with and are never
-    /// rewritten by selection writes.
+    /// A canonical route write touches ONLY the route table — no other config
+    /// field is rewritten by selection writes.
     @Test func canonicalRouteWritesTouchOnlyRouteRecords() throws {
-        var config = ExtractionConfig(backend: .anthropic, htmlBackend: .defuddle)
+        var config = ExtractionConfig()
 
         config.setExtractorSelection(host("acp"), for: .canonicalPDF)
         #expect(config.extractorSelection(for: .canonicalPDF) == host("acp"))
-        #expect(config.backend == .anthropic)
 
         config.setExtractorSelection(host("tagBased"), for: .canonicalHTML)
         #expect(config.extractorSelection(for: .canonicalHTML) == host("tagBased"))
-        #expect(config.htmlBackend == .defuddle)
 
         config.setExtractorSelection(nil, for: .canonicalPDF)
         #expect(config.extractorSelection(for: .canonicalPDF) == nil)
@@ -720,7 +694,7 @@ struct ExtractionConfigTests {
     /// The route-aware entry point agrees with the per-kind entry points on the
     /// canonical routes and declines routes without a host execution path.
     @Test func routeAwareEntryMatchesPerKindEntryPoints() throws {
-        let config = ExtractionConfig(backend: .anthropic, htmlBackend: .defuddle)
+        let config = ExtractionConfig()
         #expect(ExtractorSelectionResolver.resolve(.canonicalPDF, configuration: config, activeRegistrations: []) ==
             ExtractorSelectionResolver.resolvePDF(configuration: config, activeRegistrations: []))
         #expect(ExtractorSelectionResolver.resolve(.canonicalHTML, configuration: config, activeRegistrations: []) ==
