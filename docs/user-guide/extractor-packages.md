@@ -44,7 +44,9 @@ Older package versions stay available while a newer version is installed. A fail
 
 ## Installed packages in Settings
 
-Use **Installed Extractor Packages** to manage exact revisions. This section does not contain another default picker. Expand a row to see its version, digest prefix, and registration name.
+Use **Installed Extractor Packages** to manage exact revisions. This section does not contain another default picker or the local import workflow. Expand a row to see its version, digest prefix, and registration name.
+
+Use **Advanced Local Package Import** in its separate section to add a local package folder. The app validates and copies the folder into the extractor store on this Mac.
 
 Use **Refresh** after you install, update, or remove a runtime such as Bun or uv. The list reads the live process state, so a row appears only when its package has activated in this process.
 
