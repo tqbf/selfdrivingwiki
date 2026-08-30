@@ -22,7 +22,7 @@ mise exec -- uv --version
 
 ## Build and runtime behavior
 
-The app does not package `bun` or `uv` in `Contents/Helpers`. `build.sh` only packages app-owned helpers and scripts. Runtime subprocesses resolve the tools from PATH, with the mise shims directory included for Finder-launched processes. A missing tool produces a clear `mise install` message and the affected feature falls back where supported.
+The app does not package `bun` or `uv` in `Contents/Helpers`. `build.sh` only packages app-owned helpers and scripts. Extractor runtime subprocesses launch the one absolute executable the user's login shell selects for the command; the app itself does not depend on mise shims, activate mise, or emit mise-specific guidance. A missing runtime produces a clear setup message and the affected feature falls back where supported. Repository development scripts (and only those) may use mise to pin tool versions.
 
 CI runs the core Swift and skill checks without requiring these optional runtimes. Integration-specific jobs may use `mise.toml` when they exercise the corresponding scripts.
 

@@ -297,13 +297,13 @@ Statuses use a compact typed vocabulary: **Ready**, **Needs setup**, **Not insta
 
 1. Add a narrow `ManagedProcessExecuting` host service.
 2. Resolve a direct entry point beneath the validated operation snapshot.
-3. Resolve runtime commands against a host-owned immutable search list, including mise shims, before spawn. Launch an absolute executable URL and do not rely on child PATH lookup.
+3. Resolve runtime commands through the account's login shell exactly once per prepared operation, and retain the one absolute executable the shell selects for readiness and launch. Launch the retained absolute URL directly and do not rely on child PATH lookup. The host knows no tool manager and searches no directories.
 4. Separate launch requirements from behavioral capabilities.
 5. Always provide deterministic locale, operation-private `HOME`, package-private temporary/cache directories, and request correlation values.
 6. Grant shared runtime or model caches only through matching capabilities.
 7. Never inherit credentials, API tokens, provider secrets, wiki database paths, unrelated environment values, or the parent environment wholesale.
 8. Keep Bun and uv optional. A missing runtime returns a typed failure. An explicitly selected package does not cause another extractor to run.
-9. Treat runtime executables as user-account-trusted dependencies, not digest-verified package bytes. Keep the ordered resolution locations immutable in host policy, but do not describe user-writable mise shims as immutable executables. Resolve through mise-managed execution paths where practical. Record the absolute runtime path and pre-spawn file identity in bounded diagnostics, then recheck identity immediately before spawn.
+9. Treat runtime executables as user-account-trusted dependencies, not digest-verified package bytes. The login shell's selection is authoritative; a shim it returns is launched by the path the shell named, and the identity probe may follow a symlink while the launch URL stays unchanged. Record the requested command, a redacted path description, and the pre-spawn file identity in bounded diagnostics, then recheck the identity immediately before spawn and fail closed on change.
 10. Extend or replace `AsyncProcessRunner` with:
    - standard-input data and deterministic EOF;
    - continuous frame decoding;

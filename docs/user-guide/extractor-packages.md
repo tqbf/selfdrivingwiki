@@ -132,7 +132,7 @@ owner-read-only file that is deleted as soon as the request ends.
 
 ## Runtime setup
 
-Defuddle and docx2md need Bun. pdf2md needs uv. All runtimes are optional. If a selected package cannot find its runtime, that route fails with a clear cause. The app does not run another extractor automatically. The app looks for runtime commands in the standard search paths, including the mise shim directory (`~/.local/share/mise/shims`), `~/.local/bin`, Homebrew, and system paths.
+Defuddle and docx2md need Bun. pdf2md needs uv. All runtimes are optional. Any installation method works: Homebrew, an official installer, or a version manager. The one requirement is that your login shell runs the command when you type it. The app asks your login shell (zsh, bash, or fish) which executable to use, and launches that exact executable. If the shell cannot find the runtime, that route reports setup guidance and fails with a clear cause. The app does not run another extractor automatically. Installing the runtime and retrying works without an app restart.
 
 pdf2md can download a model on first use because its manifest declares the model-download capability. The app does not download a model on its own.
 
