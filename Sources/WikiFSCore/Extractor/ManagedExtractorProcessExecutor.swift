@@ -192,7 +192,8 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
             // A bounded, single-line stderr tail makes non-protocol exits
             // diagnosable (a bare exit code says nothing). Bounded by the
             // runner's stderr limit; never the package's stdout.
-            let tail = execution.stderr
+            let stderrText = String(decoding: execution.stderr, as: UTF8.self)
+            let tail = stderrText
                 .split(separator: "\n").suffix(3)
                 .joined(separator: " | ")
             let bounded = String(tail.prefix(512))
