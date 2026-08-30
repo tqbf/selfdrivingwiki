@@ -109,33 +109,35 @@ struct DocxExtractionServiceTests {
 
     @Test("import auto-extraction tracks the in-flight state around the run")
     @MainActor
-    func docxImportExtractionTracksInFlightState() async throws {
+    func importExtractionTracksInFlightState() async throws {
         let (_, model, source) = try makeStoreWithDocxSource()
         model.registeredExtractionInputs = RegisteredExtractionInputs(claims: [.init(
             kind: .docx,
             mimeTypes: [MimeType.docx],
             filenameExtensions: ["docx"])])
+        model.importAutoExtractionKinds = [.docx]
 
         // Direct invocation (the test seam) clears the marker on every exit,
-        // including the no-extractor skip.
-        await model.runDocxImportExtraction(sourceID: source.id)
+        // including the no-provider skip.
+        await model.runImportExtraction(sourceID: source.id, kind: .docx)
         #expect(model.importExtractingSourceIDs.isEmpty)
 
         // The gated auto path marks the source in flight synchronously at
         // commit time; the extractor preparation observes that marker; the
         // marker clears when the conversion lands.
         let observedInFlight = InFlightObservation()
-        model.docxImportExtractor = { @Sendable in
+        model.importExtractorProvider = { @Sendable kind in
             let inFlight = await MainActor.run {
                 model.importExtractingSourceIDs.contains(source.id)
             }
             observedInFlight.record(inFlight)
-            return StubDocxExtractor(result: DocxExtractionResult(
+            guard kind == .docx else { return nil }
+            return .docx(StubDocxExtractor(result: DocxExtractionResult(
                 markdown: "# Auto tracked\n",
-                warnings: []))
+                warnings: [])))
         }
 
-        model.autoExtractDocxIfRegistered(source)
+        model.autoExtractIfRegistered(source)
         #expect(model.importExtractingSourceIDs.contains(source.id))
 
         let clock = ContinuousClock()
@@ -172,23 +174,23 @@ struct DocxExtractionServiceTests {
             mimeTypes: [MimeType.docx],
             filenameExtensions: ["docx"])])
 
-        // No extractor wired → the gate closes, nothing runs.
-        await model.runDocxImportExtraction(sourceID: source.id)
+        // No provider wired → the gate closes, nothing runs.
+        await model.runImportExtraction(sourceID: source.id, kind: .docx)
         #expect(model.processedMarkdownHead(for: source) == nil)
 
         // With the registration's extractor wired, the import conversion
         // seeds the markdown head with the package producer.
-        model.docxImportExtractor = {
-            StubDocxExtractor(
+        model.importExtractorProvider = { _ in
+            .docx(StubDocxExtractor(
                 result: DocxExtractionResult(
                     markdown: "# Auto extracted\n",
                     warnings: []),
                 provenance: ExtractorPackageExecutionProvenance(
                     revision: ReviewedExtractorPackages.docx2md.revision,
                     registrationID: ProcessExtractionServices.reviewedDOCXLogical.registrationID,
-                    protocolRevision: .v1))
+                    protocolRevision: .v1)))
         }
-        await model.runDocxImportExtraction(sourceID: source.id)
+        await model.runImportExtraction(sourceID: source.id, kind: .docx)
 
         let head = try #require(model.processedMarkdownHead(for: source))
         #expect(head.content.contains("# Auto extracted"))

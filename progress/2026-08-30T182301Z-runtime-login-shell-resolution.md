@@ -46,6 +46,17 @@ startup timeout, shell exit, command absence, invalid shell output, unusable
 executable, identity change, spawn failure, nonzero exit, and protocol
 failure.
 
+Import-time auto-extraction is kind-neutral and package-driven. The import
+gate matches the source's stored MIME type or filename extension against the
+active registration claims, and the kinds that auto-convert at import are
+derived in the wiring: claimed kinds minus the host route catalog's built-in
+routes (package-only kinds). A future package-only kind converts on import
+with no host-policy change. The single typed dispatch lives behind
+`ExtractionCoordinator.prepareImportExtractor`. This is now a project tenet:
+"Extractor-kind policy comes from package data, not host branches" in
+AGENTS.md Modeling rules, with `ExtractorKindNeutralityContractTests` failing
+on kind comparisons or kind-named policy seams.
+
 ## Verification
 
 - `make build` passed.

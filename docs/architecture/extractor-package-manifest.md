@@ -53,6 +53,18 @@ The user's login shell selects the executable. The host asks the account's confi
 
 ### Registrations
 
+**Kind neutrality.** Extractor-kind policy comes from package data, not host
+branches. The manifest registrations declare what a package can extract, which
+MIME types and filename extensions it recognizes, and import-time
+auto-extraction follows that data: a kind converts on import when an active
+registration claims it and the host route catalog has no built-in route for it
+(package-only). Host code never compares against an extractor kind to decide
+recognition, selection, or import behavior, and never names a policy seam
+after a kind. Typed per-kind extractor protocols keep their kind names
+because their operation shapes differ; kind-to-value mapping tables (MIME
+fallbacks, labels) are data, not policy. `ExtractorKindNeutralityContractTests`
+enforces the boundary.
+
 | Field | Type | Rules |
 | --- | --- | --- |
 | `id` | string | 1 to 64 characters, lowercase ASCII letters, digits, hyphens. |

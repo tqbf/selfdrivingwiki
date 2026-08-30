@@ -352,16 +352,15 @@ public final class WikiStoreModel {
         didSet { store.registeredExtractionInputs = registeredExtractionInputs }
     }
 
-    /// Import-time DOCX auto-extraction, set at app wiring time with the
-    /// process `ExtractionCoordinator`. When a registered DOCX extraction is
-    /// active, a dropped Word document converts on import instead of waiting
-    /// for a manual Extract tap — the registration is what makes the content
-    /// extractable, so extraction follows it automatically. The closure
-    /// returns nil when the route cannot prepare an extractor (package
-    /// inactive, runtime missing); the Extract button remains the manual
-    /// retry. `nil` (the default) disables auto-extraction.
-    @ObservationIgnored public var docxImportExtractor:
-        (@Sendable () async -> (any DocxMarkdownExtractor)?)?
+    /// Import-time auto-extraction, wired at session boot. WHICH kinds
+    /// convert at import comes from package data, not host branches: the
+    /// wiring derives the kinds set from the active registration claims
+    /// minus the host catalog's built-in routes (package-only kinds), and
+    /// the provider resolves the typed extractor for whichever kind that
+    /// data selects. The model never names a kind.
+    @ObservationIgnored public var importAutoExtractionKinds: Set<ExtractorKind> = []
+    @ObservationIgnored public var importExtractorProvider:
+        (@Sendable (ExtractorKind) async -> PreparedImportExtractor?)?
     /// Sources whose import-time auto-extraction is currently running.
     /// Observable so the source detail can show the same "Extracting…"
     /// state the queue tracker drives, and disable the manual Extract
@@ -2230,7 +2229,7 @@ public final class WikiStoreModel {
                 // deliberately differs from the PR3 HTML posture: raw docx
                 // bytes are a binary zip with no fallback text path, so
                 // waiting for a manual tap leaves the source unusable.
-                autoExtractDocxIfRegistered(summary)
+                autoExtractIfRegistered(summary)
             } catch WikiStoreError.duplicateContent(let existing) {
                 // Byte-identical to an already-stored source — skip rather than
                 // abort the rest of the drop batch; report it so the user isn't
@@ -3592,30 +3591,33 @@ public final class WikiStoreModel {
         }
     }
 
-    /// Registration-driven auto-extraction: when an ACTIVE DOCX registration
-    /// recognized this source at import (its stored type is the registered
-    /// Word document type) and the app wiring injected an import extractor,
-    /// the conversion runs immediately after the source commits. The gate is
-    /// synchronous and pure-ish; the work is a detached main-actor task so
-    /// the drop itself never blocks on a conversion — best-effort, with the
+    /// Registration-driven auto-extraction: when an active package
+    /// registration's claims recognize this source at import (an unambiguous
+    /// claim on its stored MIME type or filename extension) and the wiring's
+    /// derived kinds set includes the claimed kind, the conversion runs
+    /// immediately after the source commits. Recognition and selection both
+    /// come from the registration data; this gate names no kind. The gate is
+    /// synchronous and cheap; the work is a detached main-actor task so the
+    /// drop itself never blocks on a conversion — best-effort, with the
     /// manual Extract button as the retry when preparation fails.
+    ///
     /// Public as the import-gate test seam (the fire-and-forget task itself
     /// cannot be awaited from a test).
-    public func autoExtractDocxIfRegistered(_ summary: SourceSummary) {
-        guard docxImportExtractor != nil,
-              ContentKind.resolve(
-                  mimeType: summary.mimeType,
-                  provider: nil,
-                  ext: summary.ext,
-                  registeredInputs: registeredExtractionInputs) == .docx
-        else { return }
+    public func autoExtractIfRegistered(_ summary: SourceSummary) {
+        guard importExtractorProvider != nil else { return }
+        let claimedKind = registeredExtractionInputs
+            .registeredMIME(forNormalizedMIME: summary.mimeType ?? "")?.kind
+            ?? registeredExtractionInputs
+                .registeredInput(forNormalizedExtension: summary.ext)?.kind
+        guard let claimedKind,
+              importAutoExtractionKinds.contains(claimedKind) else { return }
         let sourceID = summary.id
         // Mark in flight synchronously with the commit so the just-opened
         // source view shows the converting state immediately, not only
         // after the detached task starts.
         importExtractingSourceIDs.insert(sourceID)
         Task { @MainActor in
-            await self.runDocxImportExtraction(sourceID: sourceID)
+            await self.runImportExtraction(sourceID: sourceID, kind: claimedKind)
         }
     }
 
@@ -3626,24 +3628,29 @@ public final class WikiStoreModel {
     /// button is the retry that surfaces failures to the user. The readiness
     /// gate still skips a missing runtime with one clear log line instead of
     /// letting the managed spawn fail.
-    public func runDocxImportExtraction(sourceID: SourceID) async {
+    public func runImportExtraction(sourceID: SourceID, kind: ExtractorKind) async {
         // Every exit — including the early returns below — clears the
         // in-flight marker, so a skipped or failed import extraction always
         // restores the Extract button.
         defer { importExtractingSourceIDs.remove(sourceID) }
-        guard let prepare = docxImportExtractor,
-              let extractor = await prepare() else {
+        guard let provider = importExtractorProvider,
+              let prepared = await provider(kind) else {
             DebugLog.extraction(
-                "DOCX import auto-extraction skipped: no active extractor (source=\(sourceID.rawValue))")
+                "Import auto-extraction skipped: no active extractor for kind \(kind.rawValue) (source=\(sourceID.rawValue))")
             return
         }
-        let readiness = await extractor.readiness()
-        guard readiness.isReady else {
-            DebugLog.extraction(
-                "DOCX import auto-extraction skipped: not ready — \(String(describing: readiness)) (source=\(sourceID.rawValue))")
-            return
+        switch prepared {
+        // typed-kind-dispatch: import adapter — the single typed dispatch
+        // over the prepared extractor; policy never reaches this switch.
+        case .docx(let extractor):
+            let readiness = await extractor.readiness()
+            guard readiness.isReady else {
+                DebugLog.extraction(
+                    "Import auto-extraction skipped: not ready — \(String(describing: readiness)) (source=\(sourceID.rawValue))")
+                return
+            }
+            _ = await extractDocx(for: sourceID, extractor: extractor)
         }
-        _ = await extractDocx(for: sourceID, extractor: extractor)
     }
 
     /// **On-demand transcript dispatch** (issue #799 PR5): the unified entry

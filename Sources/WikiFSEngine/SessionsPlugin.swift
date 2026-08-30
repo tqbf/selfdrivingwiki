@@ -149,21 +149,23 @@ extension AppProcessProfileOwner {
         pair.launcher.pdf2mdScriptPathResolver = pdf2mdScriptPathResolver
         pair.launcher.onInteractiveUsage = interactiveUsageRecorder
         // Registration-driven recognition + auto-extraction: the active
-        // extractor registrations' declared inputs make registered
-        // zip-container content (a `.docx`) recognizable at ingestion, and a
-        // registered DOCX extraction converts on import instead of waiting
-        // for a manual Extract tap.
+        // registrations' declared inputs make registered zip-container
+        // content (a `.docx`) recognizable at ingestion, and package-only
+        // kinds convert on import instead of waiting for a manual Extract
+        // tap. The kinds set is DERIVED, never enumerated: an active
+        // registration claims the kind AND the host route catalog has no
+        // built-in route for it. A future package-only kind starts
+        // converting on import with no host-policy change — only its typed
+        // adapter joins `prepareImportExtractor`.
         let extractionCoordinator = ExtractionCoordinator(services: processServices.extraction)
-        model.registeredExtractionInputs = await processServices.extraction
+        let registeredInputs = await processServices.extraction
             .registeredExtractionInputs()
-        model.docxImportExtractor = { [extractionCoordinator] in
-            do {
-                return try await extractionCoordinator.prepareDOCX()
-            } catch {
-                DebugLog.extraction(
-                    "DOCX import auto-extraction could not prepare an extractor: \(error.localizedDescription)")
-                return nil
-            }
+        model.registeredExtractionInputs = registeredInputs
+        model.importAutoExtractionKinds = Set(registeredInputs.claims.map(\.kind))
+            .subtracting(
+                ExtractorRouteHostCatalog.descriptors.map(\.route.kind))
+        model.importExtractorProvider = { [extractionCoordinator] kind in
+            await extractionCoordinator.prepareImportExtractor(kind: kind)
         }
         return ProfileWikiSession(
             wikiID: wikiID,
