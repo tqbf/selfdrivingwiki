@@ -109,6 +109,9 @@ public struct ProcessExtractorProvider: Sendable {
     /// operation-configuration file, never the credential file.
     let operationConfiguration:
         (@Sendable (ExtractorPackageRevisionID) -> ExtractorOperationConfiguration?)?
+    /// The one extractor runtime locator. Preparation resolves each runtime
+    /// command through it exactly once and retains the outcome.
+    let runtimeLocator: any ExtractorRuntimeLocating
 
     /// The cache roots are host-owned. A package can use them only when its
     /// manifest declares the matching capability.
@@ -121,7 +124,8 @@ public struct ProcessExtractorProvider: Sendable {
         sharedRuntimeCacheRoot: URL? = nil,
         sharedModelCacheRoot: URL? = nil,
         operationCredentials: (any ExtractorOperationCredentialResolving)? = nil,
-        operationConfiguration: (@Sendable (ExtractorPackageRevisionID) -> ExtractorOperationConfiguration?)? = nil
+        operationConfiguration: (@Sendable (ExtractorPackageRevisionID) -> ExtractorOperationConfiguration?)? = nil,
+        runtimeLocator: (any ExtractorRuntimeLocating)? = nil
     ) {
         self.layout = layout
         self.catalogReader = catalogReader
@@ -133,6 +137,7 @@ public struct ProcessExtractorProvider: Sendable {
         self.sharedModelCacheRoot = sharedModelCacheRoot
         self.operationCredentials = operationCredentials
         self.operationConfiguration = operationConfiguration
+        self.runtimeLocator = runtimeLocator ?? RuntimeCommandLocator()
     }
 
     /// Convenience initializer for closure-backed admission checks.
@@ -279,6 +284,18 @@ public struct ProcessExtractorProvider: Sendable {
             throw ProcessPackagePreparationError.unknownRevision
         }
 
+        // Preparation is the single resolution boundary. A `runtime` launch
+        // resolves its command exactly once here; the outcome (success or
+        // typed failure) is retained and consumed by both readiness and
+        // every execute call. Failures are not cached globally — a new
+        // preparation resolves again.
+        let runtimeResolution: RuntimeCommandOutcome?
+        if case .runtime(let command, _) = manifest.launch {
+            runtimeResolution = await runtimeLocator.locate(command)
+        } else {
+            runtimeResolution = nil
+        }
+
         return PreparedProcessOperation(
             directoryRoot: operationRoot.standardizedFileURL,
             packageRoot: operationRoot
@@ -310,7 +327,7 @@ public struct ProcessExtractorProvider: Sendable {
             },
             operationCredentials: operationCredentials,
             operationConfiguration: operationConfiguration,
-            runtimeSearchPolicy: await ExtractorRuntimeSearchPolicyResolver.resolved())
+            runtimeResolution: runtimeResolution)
     }
 
     private static func isOwnerPrivateDirectory(_ url: URL) throws -> Bool {
@@ -365,7 +382,11 @@ public final class PreparedProcessOperation: Sendable {
     let operationCredentials: (any ExtractorOperationCredentialResolving)?
     let operationConfiguration:
         (@Sendable (ExtractorPackageRevisionID) -> ExtractorOperationConfiguration?)?
-    let runtimeSearchPolicy: ExtractorRuntimeSearchPolicy
+    /// The one retained runtime resolution. Nil for a `direct` launch; for a
+    /// `runtime` launch it holds the single success or typed failure resolved
+    /// at preparation. Readiness and every execute consume exactly this
+    /// value; neither performs another lookup.
+    let runtimeResolution: RuntimeCommandOutcome?
 
     init(
         directoryRoot: URL,
@@ -385,7 +406,7 @@ public final class PreparedProcessOperation: Sendable {
         launchGate: (@Sendable () async throws -> Void)?,
         operationCredentials: (any ExtractorOperationCredentialResolving)?,
         operationConfiguration: (@Sendable (ExtractorPackageRevisionID) -> ExtractorOperationConfiguration?)?,
-        runtimeSearchPolicy: ExtractorRuntimeSearchPolicy
+        runtimeResolution: RuntimeCommandOutcome?
     ) {
         self.directoryRoot = directoryRoot
         self.packageRoot = packageRoot
@@ -404,7 +425,7 @@ public final class PreparedProcessOperation: Sendable {
         self.launchGate = launchGate
         self.operationCredentials = operationCredentials
         self.operationConfiguration = operationConfiguration
-        self.runtimeSearchPolicy = runtimeSearchPolicy
+        self.runtimeResolution = runtimeResolution
     }
 
     deinit {
@@ -424,6 +445,36 @@ public final class PreparedProcessOperation: Sendable {
 
     private func mimeType(defaulting fallback: String) -> String {
         mimeTypes.first ?? fallback
+    }
+
+    /// The one operation-level readiness answer shared by every extractor
+    /// shell. It consumes only the retained runtime resolution — no lookup
+    /// happens here. A retained failure surfaces as `.needsSetup` with the
+    /// same typed failure the next execute would throw.
+    func readiness() -> ExtractionReadiness {
+        switch manifest.launch {
+        case .direct:
+            guard PackageExtractorProbes.entryIsExecutable(entryPointURL) else {
+                return .notInstalled("The installed extractor entry point is missing.")
+            }
+            return .ready
+        case .runtime(let command, _):
+            guard PackageExtractorProbes.entryIsPresent(entryPointURL) else {
+                return .notInstalled("The installed extractor entry point is missing.")
+            }
+            switch runtimeResolution {
+            case .resolved:
+                return .ready
+            case .failed(let failure):
+                return .needsSetup(
+                    PackageExtractorProbes.setupMessage(command: command, failure: failure))
+            case nil:
+                // Defensive: preparation always resolves a runtime launch.
+                // Fail closed with setup guidance rather than claiming ready.
+                return .needsSetup(
+                    "Runtime \(command.rawValue) is not installed. Install it to use this extractor.")
+            }
+        }
     }
 
     /// Runs exactly one one-shot conversion against the pinned snapshot and
@@ -467,6 +518,15 @@ public final class PreparedProcessOperation: Sendable {
         var configurationFilePath: ExtractorRelativePath?
         var credentialSubdirectory: URL?
         var configurationSubdirectory: URL?
+
+        // A retained resolution failure blocks execution with the matching
+        // typed managed-process error; readiness reports the same failure as
+        // setup guidance. No second lookup happens here.
+        if case .runtime(let command, _) = manifest.launch,
+           case .failed(let failure) = runtimeResolution {
+            throw ManagedExtractorProcessError.missingRuntime(command, cause: failure)
+        }
+
         if declaresRequirements {
             guard let resolver = operationCredentials else {
                 // Fail closed: a required requirement cannot be satisfied
@@ -554,6 +614,14 @@ public final class PreparedProcessOperation: Sendable {
         // Immutable snapshots of the request paths for the @Sendable body.
         let requestCredentialPath = credentialFilePath
         let requestConfigurationPath = configurationFilePath
+        // The retained success, consumed by the executor's launch. A retained
+        // failure never reaches this point (it threw above).
+        let retainedRuntimeResolution: RuntimeCommandResolution?
+        if case .runtime = manifest.launch, case .resolved(let resolution) = runtimeResolution {
+            retainedRuntimeResolution = resolution
+        } else {
+            retainedRuntimeResolution = nil
+        }
         return try await runManaged(
             redactor: redactor,
             onProgress: onProgress
@@ -597,7 +665,8 @@ public final class PreparedProcessOperation: Sendable {
                     temporaryRoot: self.temporaryRoot,
                     privateCacheRoot: self.cacheRoot,
                     sharedRuntimeCacheRoot: runtimeCacheRoot,
-                    sharedModelCacheRoot: modelCacheRoot))
+                    sharedModelCacheRoot: modelCacheRoot),
+                runtimeResolution: retainedRuntimeResolution)
             // Final launch-seam gate: the LAST thing before spawn, after the
             // request snapshot is fully constructed (PR 3 review HIGH-1).
             // Revision-1 prepared operations never re-consult admission
@@ -783,27 +852,13 @@ public struct ProcessPackagePDFExtractor: MarkdownExtractor, ProcessPackageProve
         self.operation = operation
     }
 
-    /// Mirrors the executor's launch rules: a `direct` entry point must be an
-    /// executable regular file; a `runtime` entry point is data for the
-    /// runtime (regular file, no exec bit) and the runtime command itself
-    /// must resolve in the search policy.
+    /// Mirrors the executor's launch rules through the one operation-level
+    /// readiness answer: a `direct` entry point must be an executable
+    /// regular file; a `runtime` entry point is data for the runtime
+    /// (regular file, no exec bit) and the retained login-shell resolution
+    /// decides readiness.
     public func readiness() async -> ExtractionReadiness {
-        switch operation.manifest.launch {
-        case .direct:
-            guard PackageExtractorProbes.entryIsExecutable(operation.entryPointURL) else {
-                return .notInstalled("The installed extractor entry point is missing.")
-            }
-            return .ready
-        case .runtime(let command, _):
-            guard PackageExtractorProbes.entryIsPresent(operation.entryPointURL) else {
-                return .notInstalled("The installed extractor entry point is missing.")
-            }
-            if PackageExtractorProbes.resolveRuntime(command, policy: operation.runtimeSearchPolicy) != nil {
-                return .ready
-            }
-            return .needsSetup(
-                "Runtime \(command.rawValue) is not installed. Install it to use this extractor.")
-        }
+        operation.readiness()
     }
 
     public func convert(
@@ -828,12 +883,13 @@ public struct ProcessPackagePDFExtractor: MarkdownExtractor, ProcessPackageProve
     }
 }
 
-/// Shared file probes for the package extractor shells' readiness checks.
-/// `entryIsExecutable` deliberately uses lstat and requires a regular file —
-/// package payload must not be a symlink (admission hardening). Runtime
-/// resolution, by contrast, resolves symlinks first because mise-style shims
-/// ARE symlinks (shims/bun -> /opt/homebrew/bin/mise); search directories are
-/// host PATH policy, not package payload.
+/// Shared file probes for the package extractor shells' readiness checks, and
+/// the safe setup-message mapping for retained runtime resolution failures.
+/// `entryIsExecutable` and `entryIsPresent` deliberately use lstat and
+/// require a regular file — package payload must not be a symlink (admission
+/// hardening). Host runtime executables are resolved separately by the
+/// `RuntimeCommandLocator`, whose probe may follow symlinks because host
+/// tools are not package payload.
 enum PackageExtractorProbes {
     static func entryIsExecutable(_ url: URL) -> Bool {
         var status = stat()
@@ -853,17 +909,31 @@ enum PackageExtractorProbes {
         return true
     }
 
-    static func resolveRuntime(
-        _ command: ExtractorRuntimeName,
-        policy: ExtractorRuntimeSearchPolicy
-    ) -> URL? {
-        for directory in policy.searchDirectories {
-            let resolved = directory.appendingPathComponent(command.rawValue)
-                .standardizedFileURL
-                .resolvingSymlinksInPath()
-            if entryIsExecutable(resolved) { return resolved }
+    /// Short, safe user-facing setup guidance for one typed resolution
+    /// failure. No executable paths, no shell output — actionable detail
+    /// lives in Console diagnostics.
+    static func setupMessage(
+        command: ExtractorRuntimeName,
+        failure: RuntimeCommandResolutionFailure
+    ) -> String {
+        switch failure {
+        case .accountShellUnavailable:
+            "The account login shell is unavailable. Set a login shell to use this extractor."
+        case .unsupportedShellFamily(let shellName):
+            "The login shell \(shellName) is not supported. Use zsh, bash, or fish."
+        case .loginShellLaunchFailure:
+            "Runtime \(command.rawValue) could not be resolved: the login shell did not start."
+        case .loginShellStartupTimeout:
+            "Runtime \(command.rawValue) could not be resolved: the login shell did not finish starting."
+        case .loginShellNonzeroExit:
+            "Runtime \(command.rawValue) could not be resolved: the login shell reported an error."
+        case .commandAbsent:
+            "Runtime \(command.rawValue) is not installed. Install it and make sure it runs in your login shell."
+        case .invalidShellOutput:
+            "Runtime \(command.rawValue) could not be resolved: the login shell printed unexpected output."
+        case .unusableExecutable:
+            "Runtime \(command.rawValue) resolved to an unusable executable."
         }
-        return nil
     }
 }
 
@@ -945,26 +1015,12 @@ public struct ProcessPackageDOCXExtractor: DocxMarkdownExtractor, ProcessPackage
         }
     }
 
-    /// Same launch-aware probe as the PDF sibling: a `runtime` entry point is
-    /// data for the runtime (regular file, no exec bit — the docx2md entry is
-    /// a `bun` script), and the runtime command itself must resolve. DOCX has
-    /// no built-in fallback, so this probe is the user's setup guidance.
+    /// The shared operation-level readiness answer: a `runtime` entry point
+    /// is data for the runtime (regular file, no exec bit — the docx2md
+    /// entry is a `bun` script), and the retained login-shell resolution
+    /// decides readiness. DOCX has no built-in fallback, so this probe is
+    /// the user's setup guidance.
     public func readiness() async -> ExtractionReadiness {
-        switch operation.manifest.launch {
-        case .direct:
-            guard PackageExtractorProbes.entryIsExecutable(operation.entryPointURL) else {
-                return .notInstalled("The installed extractor entry point is missing.")
-            }
-            return .ready
-        case .runtime(let command, _):
-            guard PackageExtractorProbes.entryIsPresent(operation.entryPointURL) else {
-                return .notInstalled("The installed extractor entry point is missing.")
-            }
-            if PackageExtractorProbes.resolveRuntime(command, policy: operation.runtimeSearchPolicy) != nil {
-                return .ready
-            }
-            return .needsSetup(
-                "Runtime \(command.rawValue) is not installed. Install it to use this extractor.")
-        }
+        operation.readiness()
     }
 }

@@ -43,7 +43,10 @@ public enum ExtractorFailureCause: String, Codable, CaseIterable, Hashable, Send
     case extractionFailure = "extraction-failure"
 }
 
-/// One command name. Host policy resolves this name against an immutable search list.
+/// One command name. The user's login shell selects the absolute executable
+/// for this name; the host retains that one resolution per prepared
+/// operation and launches exactly that executable.
+/// The host never searches directories and knows no tool manager.
 public struct ExtractorRuntimeName: RawRepresentable, Codable, Hashable, Sendable, Comparable {
     public let rawValue: String
 

@@ -86,7 +86,7 @@ struct OptionalRuntimeSetupSheet: View {
             .overlay { RoundedRectangle(cornerRadius: 8).stroke(.quaternary) }
 
             if !model.isComplete {
-                Text("You can install these tools with Homebrew, mise, or their official installers. The app will use them automatically when they are available on PATH.")
+                Text("You can install these tools with any method — Homebrew, an official installer, or a version manager. They work when your login shell can run them.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
