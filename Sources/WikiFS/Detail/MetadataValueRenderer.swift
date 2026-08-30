@@ -29,7 +29,10 @@ enum MetadataValueRenderer {
             formatter.locale = locale
             formatter.calendar = calendar
             formatter.dateStyle = .medium
-            formatter.timeStyle = .short
+            // Seconds, not minutes: extraction runs seconds apart must be
+            // distinguishable in the panel (two docx2md runs in one import
+            // session looked identical at `.short` precision).
+            formatter.timeStyle = .medium
             return .text(formatter.string(from: date), usesTabularDigits: false)
         case .byteCount(let count):
             let formatter = ByteCountFormatter()
