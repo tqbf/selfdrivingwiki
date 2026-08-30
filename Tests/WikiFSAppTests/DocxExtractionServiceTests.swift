@@ -107,6 +107,62 @@ struct DocxExtractionServiceTests {
         #expect(unregistered.mimeType == MimeType.zip)
     }
 
+    @Test("import auto-extraction tracks the in-flight state around the run")
+    @MainActor
+    func docxImportExtractionTracksInFlightState() async throws {
+        let (_, model, source) = try makeStoreWithDocxSource()
+        model.registeredExtractionInputs = RegisteredExtractionInputs(claims: [.init(
+            kind: .docx,
+            mimeTypes: [MimeType.docx],
+            filenameExtensions: ["docx"])])
+
+        // Direct invocation (the test seam) clears the marker on every exit,
+        // including the no-extractor skip.
+        await model.runDocxImportExtraction(sourceID: source.id)
+        #expect(model.importExtractingSourceIDs.isEmpty)
+
+        // The gated auto path marks the source in flight synchronously at
+        // commit time; the extractor preparation observes that marker; the
+        // marker clears when the conversion lands.
+        let observedInFlight = InFlightObservation()
+        model.docxImportExtractor = { @Sendable in
+            let inFlight = await MainActor.run {
+                model.importExtractingSourceIDs.contains(source.id)
+            }
+            observedInFlight.record(inFlight)
+            return StubDocxExtractor(result: DocxExtractionResult(
+                markdown: "# Auto tracked\n",
+                warnings: []))
+        }
+
+        model.autoExtractDocxIfRegistered(source)
+        #expect(model.importExtractingSourceIDs.contains(source.id))
+
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(5))
+        while model.processedMarkdownHead(for: source) == nil {
+            guard clock.now < deadline else {
+                Issue.record("auto extraction did not land within the time limit")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(model.importExtractingSourceIDs.isEmpty)
+        #expect(observedInFlight.value == true)
+    }
+
+    /// Records one boolean from a @Sendable closure.
+    private final class InFlightObservation: @unchecked Sendable {
+        private let lock = NSLock()
+        private var recorded = false
+
+        func record(_ value: Bool) {
+            lock.withLock { if value { recorded = true } }
+        }
+
+        var value: Bool { lock.withLock { recorded } }
+    }
+
     @Test("import auto-extraction seeds a markdown head when the registration is active")
     @MainActor
     func docxImportAutoExtractionSeedsHead() async throws {

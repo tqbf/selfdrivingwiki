@@ -362,6 +362,12 @@ public final class WikiStoreModel {
     /// retry. `nil` (the default) disables auto-extraction.
     @ObservationIgnored public var docxImportExtractor:
         (@Sendable () async -> (any DocxMarkdownExtractor)?)?
+    /// Sources whose import-time auto-extraction is currently running.
+    /// Observable so the source detail can show the same "Extracting…"
+    /// state the queue tracker drives, and disable the manual Extract
+    /// button for the duration — a fresh import otherwise shows its raw
+    /// state with no indication that a conversion is already in flight.
+    public private(set) var importExtractingSourceIDs: Set<SourceID> = []
     private var autosaveTask: Task<Void, Never>?
 
     deinit {
@@ -3593,7 +3599,9 @@ public final class WikiStoreModel {
     /// synchronous and pure-ish; the work is a detached main-actor task so
     /// the drop itself never blocks on a conversion — best-effort, with the
     /// manual Extract button as the retry when preparation fails.
-    func autoExtractDocxIfRegistered(_ summary: SourceSummary) {
+    /// Public as the import-gate test seam (the fire-and-forget task itself
+    /// cannot be awaited from a test).
+    public func autoExtractDocxIfRegistered(_ summary: SourceSummary) {
         guard docxImportExtractor != nil,
               ContentKind.resolve(
                   mimeType: summary.mimeType,
@@ -3602,6 +3610,10 @@ public final class WikiStoreModel {
                   registeredInputs: registeredExtractionInputs) == .docx
         else { return }
         let sourceID = summary.id
+        // Mark in flight synchronously with the commit so the just-opened
+        // source view shows the converting state immediately, not only
+        // after the detached task starts.
+        importExtractingSourceIDs.insert(sourceID)
         Task { @MainActor in
             await self.runDocxImportExtraction(sourceID: sourceID)
         }
@@ -3615,6 +3627,10 @@ public final class WikiStoreModel {
     /// gate still skips a missing runtime with one clear log line instead of
     /// letting the managed spawn fail.
     public func runDocxImportExtraction(sourceID: SourceID) async {
+        // Every exit — including the early returns below — clears the
+        // in-flight marker, so a skipped or failed import extraction always
+        // restores the Extract button.
+        defer { importExtractingSourceIDs.remove(sourceID) }
         guard let prepare = docxImportExtractor,
               let extractor = await prepare() else {
             DebugLog.extraction(

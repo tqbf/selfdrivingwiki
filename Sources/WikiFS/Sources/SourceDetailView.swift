@@ -785,7 +785,7 @@ struct SourceDetailView: View {
                         // sources dispatch to the inline package-only
                         // `runDocxExtraction` path for the same reason; PDF
                         // sources go through the queue as before.
-                        Button(isExtracting ? "Extracting…" : "Extract",
+                        Button(isExtracting || isThisFileExtracting ? "Extracting…" : "Extract",
                                systemImage: "doc.plaintext") {
                             DebugLog.extraction("SourceDetailView: Extract tapped — id=\(file.id.rawValue), html=\(SourceRendererPresentationPlanner.isHTMLSource(file)), docx=\(SourceRendererPresentationPlanner.isDOCXSource(file))")
                             Task {
