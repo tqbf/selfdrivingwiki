@@ -66,5 +66,9 @@ failure.
   operation, shared retained results, and retry after a new preparation.
 - `ExtractorRuntimeSourceContractTests` fail if extractor-host sources
   reintroduce tool-manager knowledge or a directory search.
+- Live machine evidence: the account shell is `/bin/zsh`, and
+  `zsh -lic 'whence -p bun'` resolves to the concrete install under
+  `~/.local/share/mise/installs/` — a real executable the user's own shell
+  configuration selected, not a shim and not a host directory search.
 - Manual DOCX extraction from `make run` was not run by this agent. The PR
   records it as the remaining manual check.

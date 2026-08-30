@@ -385,7 +385,7 @@ struct WikiFSApp: App {
         startStatusItem()
         applyAppKitAppearance()
         await localQueueRuntimeController.awaitSettled()
-        optionalRuntimeSetupModel.refresh()
+        await optionalRuntimeSetupModel.refresh()
         showingOptionalRuntimeSetup = !optionalRuntimeSetupModel.isComplete
         connectToDaemon()
     }

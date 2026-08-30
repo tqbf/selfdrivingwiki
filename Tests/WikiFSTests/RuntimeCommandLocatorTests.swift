@@ -262,7 +262,7 @@ struct RuntimeCommandLocatorTests {
 
     @Test func unusableExecutableVariantsAreTyped() async throws {
         let reasons: [RuntimeCommandResolutionFailure.UnusableExecutableReason] = [
-            .probeFailed, .notRegularFile, .multipleLinks, .notExecutable,
+            .probeFailed, .notRegularFile, .multipleLinks, .notExecutable, .notReadable,
         ]
         for reason in reasons {
             let (locator, _, sink) = makeLocator(probe: { _ in .unusable(reason) })

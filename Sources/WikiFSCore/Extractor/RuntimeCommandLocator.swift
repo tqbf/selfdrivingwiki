@@ -91,6 +91,7 @@ public enum RuntimeCommandResolutionFailure: Error, Sendable, Equatable {
         case notRegularFile
         case multipleLinks
         case notExecutable
+        case notReadable
     }
 
     /// The diagnostic category name for one-line Console events.
@@ -285,6 +286,11 @@ public enum RuntimeFileProbe {
         guard status.st_nlink == 1 else { return .unusable(.multipleLinks) }
         guard status.st_mode & S_IXUSR != 0 else {
             return .unusable(.notExecutable)
+        }
+        // Readability is required at resolution so the pre-spawn
+        // revalidation rule and the resolution rule agree.
+        guard status.st_mode & S_IRUSR != 0 else {
+            return .unusable(.notReadable)
         }
         return .identity(RuntimeExecutableIdentity(
             device: UInt64(status.st_dev),

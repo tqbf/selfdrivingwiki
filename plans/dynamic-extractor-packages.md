@@ -94,7 +94,7 @@ Primary touch points include:
    - queue and direct UI extraction;
    - readiness, setup progress, conversion progress, cancellation, and failure display;
    - backend, model, tool, and technique provenance.
-6. Build a signed-service feasibility harness before package or plugin implementation. Reuse the existing `wikid.xpc` precedent for spawning mise-managed pdf2md and agent CLIs. Test only these new boundaries:
+6. Build a signed-service feasibility harness before package or plugin implementation. Reuse the existing `wikid.xpc` precedent for spawning pdf2md and agent CLIs (historical note: runtime resolution now goes through the login shell; see `docs/architecture/extractor-package-manifest.md`). Test only these new boundaries:
    - add a no-dependency fixture executable that exchanges bounded standard-input and standard-output data and spawns a fixture child;
    - build and sign the real app with embedded `wikid.xpc`;
    - install and invoke the service through its production Mach service path;
