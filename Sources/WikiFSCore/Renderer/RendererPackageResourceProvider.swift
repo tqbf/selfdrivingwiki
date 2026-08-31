@@ -247,6 +247,7 @@ public enum RendererPackageMIMEType {
         "mjs": type("text/javascript"),
         "png": type("image/png"),
         "svg": type("image/svg+xml"),
+        "ttf": type("font/ttf"),
         "wasm": type("application/wasm"),
         "webp": type("image/webp"),
         "woff": type("font/woff"),

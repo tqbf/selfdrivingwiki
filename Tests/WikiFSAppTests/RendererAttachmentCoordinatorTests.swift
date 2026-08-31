@@ -777,7 +777,7 @@ struct RendererAttachmentCoordinatorTests {
             pageID: pageID,
             pageVersionID: pageVersionID,
             blockID: try #require(block.blockID),
-            fenceKind: .jsoncanvas,
+            fenceAlias: RendererFenceAlias(rawValue: "jsoncanvas")!,
             mimeType: try .init(validating: "application/json"),
             bytes: Self.jsonCanvasBytes)
         let placeholder = try RendererAttachmentPlaceholderID(validating: "admitted-json-canvas")
@@ -910,7 +910,7 @@ struct RendererAttachmentCoordinatorTests {
             pageID: identity.pageID,
             pageVersionID: identity.pageVersionID,
             blockID: try #require(block.blockID),
-            fenceKind: .excalidraw,
+            fenceAlias: RendererFenceAlias(rawValue: "excalidraw")!,
             mimeType: try .init(validating: "application/json"),
             bytes: bytes)
         let packageReference = RendererReference(
@@ -996,7 +996,7 @@ struct RendererAttachmentCoordinatorTests {
                 pageID: identity.pageID,
                 pageVersionID: identity.pageVersionID,
                 blockID: try #require(block.blockID),
-                fenceKind: .excalidraw,
+                fenceAlias: RendererFenceAlias(rawValue: "excalidraw")!,
                 mimeType: try .init(validating: "application/json"),
                 bytes: bytes)
             admission.register(context: .init(
@@ -1112,7 +1112,7 @@ struct RendererAttachmentCoordinatorTests {
             pageID: identity.pageID,
             pageVersionID: identity.pageVersionID,
             blockID: try #require(block.blockID),
-            fenceKind: .excalidraw,
+            fenceAlias: RendererFenceAlias(rawValue: "excalidraw")!,
             mimeType: try .init(validating: "application/json"),
             bytes: bytes)
         let reference = RendererReference(
@@ -1419,7 +1419,7 @@ struct RendererAttachmentCoordinatorTests {
             pageID: lifecycleIdentity.pageID,
             pageVersionID: lifecycleIdentity.pageVersionID,
             blockID: try #require(block.blockID),
-            fenceKind: .jsoncanvas,
+            fenceAlias: RendererFenceAlias(rawValue: "jsoncanvas")!,
             mimeType: try .init(validating: "application/json"),
             bytes: jsonCanvasBytes)
         admission.register(context: .init(

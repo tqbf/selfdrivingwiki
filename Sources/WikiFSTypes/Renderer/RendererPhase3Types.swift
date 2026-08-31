@@ -190,21 +190,86 @@ public struct RendererEventPolicy: Equatable, Sendable {
     )
 }
 
-/// The host-approved aliases that can request a richer fence presentation.
-/// Package manifests cannot extend this closed set.
-public enum MarkdownRichFenceAlias: String, Codable, CaseIterable, Hashable, Sendable {
-    case mermaid
-    case jsoncanvas
-    case excalidraw
+/// A rich-fence alias token. Aliases were a closed host enum; they are registry
+/// data now — the trusted built-in descriptor table and reviewed renderer
+/// package manifests claim them, and recognition is a claim-map lookup instead
+/// of host code. Token shape mirrors ``RendererFileExtension``: nonempty
+/// lowercase ASCII alphanumerics, at most 32 characters. Reversing the closed
+/// enum was an explicit product decision; see `plans/package-declared-fences.md`.
+public struct RendererFenceAlias: RawRepresentable, Codable, Hashable, Sendable, Comparable {
+    public static let maximumRawValueLength = 32
+
+    public let rawValue: String
+
+    public init?(rawValue: String) {
+        guard rawValue.isEmpty == false,
+              rawValue.count <= Self.maximumRawValueLength,
+              rawValue == rawValue.lowercased(),
+              rawValue.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) })
+        else { return nil }
+        self.rawValue = rawValue
+    }
+
+    public init(validating rawValue: String) throws {
+        guard let value = Self(rawValue: rawValue) else {
+            throw RendererValidationError.invalidFenceAlias(rawValue)
+        }
+        self = value
+    }
+
+    public init(from decoder: any Decoder) throws { try self.init(validating: String(from: decoder)) }
+    public func encode(to encoder: any Encoder) throws { var container = encoder.singleValueContainer(); try container.encode(rawValue) }
+
+    public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
 }
 
-/// The parsed host-approved metadata from a rich Markdown fence info string.
-/// Display metadata remains separate from the canonical renderer input.
+/// One alias a renderer descriptor claims for Markdown rich fences. A claim
+/// carries exactly one fact beyond the alias: the MIME type the fence bytes are
+/// handed to the renderer as. Every other presentation string derives from the
+/// declaring descriptor's display name.
+public struct RendererFenceClaim: Codable, Hashable, Sendable {
+    public let alias: RendererFenceAlias
+    public let inlineMIMEType: RendererMIMEType
+
+    public init(alias: RendererFenceAlias, inlineMIMEType: RendererMIMEType) {
+        self.alias = alias
+        self.inlineMIMEType = inlineMIMEType
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case alias, inlineMIMEType
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.alias = try container.decode(RendererFenceAlias.self, forKey: .alias)
+        self.inlineMIMEType = try container.decode(RendererMIMEType.self, forKey: .inlineMIMEType)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(alias, forKey: .alias)
+        try container.encode(inlineMIMEType, forKey: .inlineMIMEType)
+    }
+}
+
+/// The parsed metadata from a rich Markdown fence info string. Display metadata
+/// remains separate from the canonical renderer input. Parsing validates token
+/// *shape* only: recognizing whether any installed renderer claims the alias is
+/// a registry claim-map lookup, never a host-side closed set.
 public struct MarkdownFenceInfo: Codable, Hashable, Sendable {
-    public let alias: MarkdownRichFenceAlias
+    /// Info-string tokens that are ordinary programming-language fence labels.
+    /// They mirror `CodeLanguage.fromFenceInfo` (WikiFSCodeHighlighting): those
+    /// labels keep their plain highlighted presentation; no descriptor may
+    /// claim them. The pinned reader tests fail if the two lists drift.
+    public static let ordinaryLanguageTokens: Set<String> = [
+        "html", "xml", "scala", "java", "swift", "json", "jsonc",
+    ]
+
+    public let alias: RendererFenceAlias
     public let displayTitle: String?
 
-    public init(alias: MarkdownRichFenceAlias, displayTitle: String? = nil) {
+    public init(alias: RendererFenceAlias, displayTitle: String? = nil) {
         self.alias = alias
         self.displayTitle = displayTitle
     }
@@ -213,7 +278,10 @@ public struct MarkdownFenceInfo: Codable, Hashable, Sendable {
     /// metadata and therefore never participates in canonical fence identity.
     public var canonicalInfoString: String { alias.rawValue }
 
-    /// Parses one approved alias followed by an optional quoted title.
+    /// Parses one shape-valid alias followed by an optional quoted title. The
+    /// alias must satisfy ``RendererFenceAlias`` token rules and must not be a
+    /// reserved ordinary-language label; anything else is unrecognized or
+    /// malformed, exactly as when recognition was a closed enum.
     public static func parse(_ rawInfoString: String?) -> MarkdownFenceInfoParseResult {
         guard let rawInfoString else { return .empty }
         let trimmed = rawInfoString.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -222,7 +290,9 @@ public struct MarkdownFenceInfo: Codable, Hashable, Sendable {
         let components = trimmed.split(maxSplits: 1, whereSeparator: \.isWhitespace)
         guard let aliasComponent = components.first else { return .empty }
         let normalizedAlias = aliasComponent.lowercased()
-        guard let alias = MarkdownRichFenceAlias(rawValue: normalizedAlias) else {
+        guard let alias = RendererFenceAlias(rawValue: normalizedAlias),
+              ordinaryLanguageTokens.contains(normalizedAlias) == false
+        else {
             return components.count == 1
                 ? .unrecognizedAlias(normalizedAlias)
                 : .malformed
@@ -288,7 +358,7 @@ public enum MarkdownFenceFallbackReason: String, Codable, CaseIterable, Hashable
 /// Closed presentation policy for a fenced markdown block.
 public enum MarkdownFencePresentationPolicy: Codable, Hashable, Sendable {
     case ordinaryCode
-    case hostApprovedRichRequest(MarkdownRichFenceAlias)
+    case hostApprovedRichRequest(RendererFenceAlias)
     case typedRawCodeFallback(MarkdownFenceFallbackReason)
 }
 
@@ -386,7 +456,10 @@ public struct MarkdownFencedBlock: Codable, Hashable, Sendable {
         self.presentationPolicy = Self.presentationPolicy(for: parsedInfo)
     }
 
-    internal static func canonicalDigestInput(bytes: Data, normalizedInfoString: String?) -> Data {
+    /// The canonical digest input for a fence payload: domain tag, length-
+    /// prefixed bytes, then the length-prefensed canonical info string. Public
+    /// so cross-target tests can pin digest invariance independently.
+    public static func canonicalDigestInput(bytes: Data, normalizedInfoString: String?) -> Data {
         makeCanonicalDigestInput(bytes: bytes, normalizedInfoString: normalizedInfoString)
     }
 
@@ -394,7 +467,7 @@ public struct MarkdownFencedBlock: Codable, Hashable, Sendable {
         String(decoding: bytes, as: UTF8.self)
     }
 
-    public var richAlias: MarkdownRichFenceAlias? {
+    public var richAlias: RendererFenceAlias? {
         guard case .hostApprovedRichRequest(let alias) = presentationPolicy else { return nil }
         return alias
     }
@@ -538,7 +611,7 @@ public enum RendererEmbeddedContent: Codable, Hashable, Sendable {
         public let pageID: PageID
         public let pageVersionID: PageVersionID
         public let blockID: MarkdownBlockID
-        public let fenceKind: MarkdownRichFenceAlias
+        public let fenceAlias: RendererFenceAlias
         public let mimeType: RendererMIMEType
         public let digest: RendererSHA256Digest
         public let bytes: Data
@@ -547,28 +620,28 @@ public enum RendererEmbeddedContent: Codable, Hashable, Sendable {
             pageID: PageID,
             pageVersionID: PageVersionID,
             blockID: MarkdownBlockID,
-            fenceKind: MarkdownRichFenceAlias,
+            fenceAlias: RendererFenceAlias,
             mimeType: RendererMIMEType,
             bytes: Data
         ) throws {
             guard blockID.pageID == pageID, blockID.pageVersionID == pageVersionID else {
                 throw RendererValidationError.invalidIdentifier(kind: "renderer inline artifact", value: "page identity mismatch")
             }
-            let digest = RendererSHA256.digest(MarkdownFencedBlock.canonicalDigestInput(bytes: bytes, normalizedInfoString: fenceKind.rawValue))
+            let digest = RendererSHA256.digest(MarkdownFencedBlock.canonicalDigestInput(bytes: bytes, normalizedInfoString: fenceAlias.rawValue))
             guard digest == blockID.digest else {
                 throw RendererValidationError.invalidIdentifier(kind: "renderer inline artifact", value: "digest mismatch")
             }
             self.pageID = pageID
             self.pageVersionID = pageVersionID
             self.blockID = blockID
-            self.fenceKind = fenceKind
+            self.fenceAlias = fenceAlias
             self.mimeType = mimeType
             self.digest = digest
             self.bytes = bytes
         }
 
         public var canonicalDigestPayload: Data {
-            MarkdownFencedBlock.canonicalDigestInput(bytes: bytes, normalizedInfoString: fenceKind.rawValue)
+            MarkdownFencedBlock.canonicalDigestInput(bytes: bytes, normalizedInfoString: fenceAlias.rawValue)
         }
     }
 

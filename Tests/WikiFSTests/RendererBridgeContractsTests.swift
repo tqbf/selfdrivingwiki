@@ -102,7 +102,7 @@ struct RendererBridgeContractsTests {
             pageID: pageID,
             pageVersionID: pageVersionID,
             blockID: blockID,
-            fenceKind: .jsoncanvas,
+            fenceAlias: RendererFenceAlias(rawValue: "jsoncanvas")!,
             mimeType: .init(rawValue: "application/json")!,
             bytes: bytes)
         let input = RendererBridgeInput.inlineArtifact(artifact)
@@ -137,7 +137,7 @@ struct RendererBridgeContractsTests {
                     pageID: pageID,
                     pageVersionID: pageVersionID,
                     blockID: blockID,
-                    fenceKind: .jsoncanvas,
+                    fenceAlias: RendererFenceAlias(rawValue: "jsoncanvas")!,
                     mimeType: .init(rawValue: "application/json")!,
                     bytes: artifactBytes)
                 }
@@ -175,7 +175,7 @@ struct RendererBridgeContractsTests {
             pageID: pageID,
             pageVersionID: pageVersionID,
             blockID: blockID,
-            fenceKind: .jsoncanvas,
+            fenceAlias: RendererFenceAlias(rawValue: "jsoncanvas")!,
             mimeType: .init(rawValue: "application/json")!,
             bytes: bytes)
 

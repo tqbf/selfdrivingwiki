@@ -112,6 +112,40 @@ struct FormatMaterializerTests {
         #expect(String(data: plan.data, encoding: .utf8) == body)
     }
 
+    /// A plain-text file with a non-txt extension keeps that extension: the
+    /// sniff only says "this is text", and the extension is the format
+    /// declaration extension-fallback renderers match on (an `architecture.d2`
+    /// dropped into the wiki must not be silently rewritten to `.txt`).
+    @Test func plainTextKeepsUnknownExtensionHint() {
+        let plan = FormatMaterializer.dispatch(
+            data: Data("x -> y".utf8), contentType: "text/plain; charset=utf-8",
+            stem: "architecture", extensionHint: "d2")
+
+        #expect(plan.format == .text)
+        #expect(plan.filename == "architecture.d2")
+        #expect(String(data: plan.data, encoding: .utf8) == "x -> y")
+    }
+
+    @Test func plainTextWithoutHintFallsBackToTxt() {
+        let plan = FormatMaterializer.dispatch(
+            data: Data("no extension here".utf8), contentType: "text/plain; charset=utf-8",
+            stem: "notes", extensionHint: nil)
+
+        #expect(plan.format == .text)
+        #expect(plan.filename == "notes.txt")
+    }
+
+    @Test func plainTextHintMustBeACleanToken() {
+        // Weird "extensions" (punctuation) are not format declarations; they
+        // fall back to txt.
+        let plan = FormatMaterializer.dispatch(
+            data: Data("hello".utf8), contentType: "text/plain; charset=utf-8",
+            stem: "weird-file", extensionHint: "v1.backup")
+
+        #expect(plan.format == .text)
+        #expect(plan.filename == "weird-file.txt")
+    }
+
     @Test func markdownContentTypeKeepsMdExtension() {
         let plan = FormatMaterializer.dispatch(
             data: Data("# Heading\n\nbody".utf8), contentType: "text/markdown",

@@ -123,6 +123,37 @@ jobs:
         env:
           WIKIFS_APP_TESTS: "1"
         run: xcrun swift test --parallel --num-workers 1 --filter 'RendererPackageSchemeHandlerTests|RendererContentWorldBridgeTests|RendererExternalLinkRedemptionGateTests|WikiAppWebViewSessionTests|WikiAppWebViewTests'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.0'
+      - name: Generate and verify the D2 renderer package
+        # The D2 package is generated on demand (no vendored bytes in the repo).
+        # This is the main network-using test step: it downloads the pinned
+        # upstream source tarball, builds the WASM with the locked recipe
+        # (pure-Go layout engines, so no JS eval is needed), verifies the
+        # supply-chain gate (including a tamper leg), validates the generated
+        # package, and runs the offline D2 suites plus the CSP boundary pin.
+        # (setup-go above and the binaryen download below also fetch from the
+        # network.) Hosted WebKit D2 suites stay local-only by the same
+        # exclusion policy as the other WebKit suites above.
+        #
+        # wasm-opt comes from the binaryen release the lock pins (132), not
+        # brew: the runner's brew bottle resolves to a different binaryen for
+        # this macOS build (131), and the generator fails closed on any
+        # version mismatch. The tarball digest is pinned here so the CI
+        # toolchain is as reproducible as the lock's other pins.
+        timeout-minutes: 30
+        run: |
+          curl -fsSL -o /tmp/binaryen.tar.gz \
+            https://github.com/WebAssembly/binaryen/releases/download/version_132/binaryen-version_132-arm64-macos.tar.gz
+          echo "98aad827847af7ef990ed7098d885725c8e5b5aae75073403635617ae4e259aa  /tmp/binaryen.tar.gz" | shasum -a 256 -c -
+          tar -xzf /tmp/binaryen.tar.gz -C /tmp
+          echo "/tmp/binaryen-version_132/bin" >> "$GITHUB_PATH"
+          export PATH="/tmp/binaryen-version_132/bin:$PATH"
+          wasm-opt --version
+          make d2-renderer-package
+          make d2-renderer-package-check
+          xcrun swift test --parallel --num-workers 1 --filter 'D2RendererPackageMatchingTests|D2ViewerTemplateTests|D2GeneratedPackageValidationTests|D2PackageLockTests|D2SourceNeutralityTests|RendererCapabilityBoundaryPolicyTests'
 
   # Linux is not a supported product platform. The retained opt-in diagnostic
   # is `make test-linux`; it is not a pull-request or release gate. Keep this

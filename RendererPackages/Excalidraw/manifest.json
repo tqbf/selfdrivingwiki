@@ -1,12 +1,12 @@
 {
   "revision": 2,
   "packageID": "org.selfdrivingwiki.excalidraw-readonly",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "descriptors": [
     {
       "reference": {
         "packageID": "org.selfdrivingwiki.excalidraw-readonly",
-        "version": "1.0.3",
+        "version": "1.0.4",
         "registrationID": "excalidraw"
       },
       "displayName": "Excalidraw",
@@ -40,6 +40,12 @@
       "supportedEmbeddingRoles": [
         "inlineContent",
         "disclosureRow"
+      ],
+      "fenceClaims": [
+        {
+          "alias": "excalidraw",
+          "inlineMIMEType": "application/json"
+        }
       ],
       "approvedAssets": [
         {

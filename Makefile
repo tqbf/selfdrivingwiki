@@ -129,7 +129,7 @@ NOTARY_PROFILE ?= wikifs-notary
 PROVISION_PROFILE ?=
 NOTES_FILE       ?=
 
-.PHONY: all deps build check check-cordis check-release test test-watchdog test-fast test-fast-release test-linux test-linux-focus release run reload clean install uninstall register help prune-provider-registrations \
+.PHONY: all deps build check check-cordis check-release test test-watchdog test-fast test-fast-release test-linux test-linux-focus d2-renderer-package d2-renderer-package-check release run reload clean install uninstall register help prune-provider-registrations \
         signing-preflight signing-status signing-repair signing-repair-dry-run \
         check-version notary-setup sign zip-notary notarize staple zip-release \
         checksum verify-release dist github-release print-version icon prompts \
@@ -334,6 +334,23 @@ test-fast-release: deps prompts version keychain
 # toolchain or the macOS-only `deps` target.
 test-linux:
 	@scripts/test-linux.sh
+
+# Generate the D2 read-only renderer package from the pinned upstream tarball
+# (tools/d2/d2-package.lock.json) and validate it with RendererPackageTool.
+# Output goes to tmp/d2-renderer-package/D2 (gitignored); nothing D2 enters the
+# app bundle. Import manually through Settings → Renderers. Network is used
+# only for the pinned tarball download, which is cached across runs.
+d2-renderer-package:
+	scripts/make-d2-renderer-package.sh
+
+# Re-derive the package into a throwaway root and verify every digest against
+# the lock, then prove the supply-chain gate: corrupt the cached tarball and
+# require generation to fail.
+d2-renderer-package-check:
+	scripts/make-d2-renderer-package.sh --check
+	scripts/check-d2-supply-chain-gate.sh --expect-failure
+	@echo "✓ d2 renderer package derivation matches the lock and the tarball gate rejects tampering"
+
 
 test-linux-focus:
 	@[ -n "$(TEST_FILTER)" ] || { echo "✗ TEST_FILTER is required (example: make test-linux-focus TEST_FILTER=WikiFSCoreTests.RendererStoreTests)" >&2; exit 2; }

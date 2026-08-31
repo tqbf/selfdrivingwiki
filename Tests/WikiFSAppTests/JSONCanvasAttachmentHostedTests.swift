@@ -194,7 +194,7 @@ struct JSONCanvasAttachmentHostedTests {
             pageID: pageID,
             pageVersionID: pageVersionID,
             blockID: try #require(block.blockID),
-            fenceKind: .jsoncanvas,
+            fenceAlias: RendererFenceAlias(rawValue: "jsoncanvas")!,
             mimeType: try .init(validating: "application/json"),
             bytes: bytes)
     }

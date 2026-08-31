@@ -612,16 +612,8 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
             ? ""
             : " class=\"language-\(escapeAttribute(languageClass))\""
         switch fenced.presentationPolicy {
-        case .hostApprovedRichRequest(.mermaid):
-            return mermaidRendererCardHTML(block: fenced, fallbackHTML: plainCodeBlockHTML(codeBlock.code, cls: cls))
-        case .hostApprovedRichRequest(.jsoncanvas):
-            return rendererCardHTML(
-                plan: rendererEmbedPlan(for: fenced, alias: .jsoncanvas),
-                fallbackHTML: plainCodeBlockHTML(codeBlock.code, cls: cls))
-        case .hostApprovedRichRequest(.excalidraw):
-            return rendererCardHTML(
-                plan: rendererEmbedPlan(for: fenced, alias: .excalidraw),
-                fallbackHTML: plainCodeBlockHTML(codeBlock.code, cls: cls))
+        case .hostApprovedRichRequest(let alias):
+            return richFenceHTML(block: fenced, alias: alias, code: codeBlock.code, cls: cls)
         case .typedRawCodeFallback, .ordinaryCode:
             break
         }
@@ -756,11 +748,53 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         "<img src=\"\(escapeAttribute(src))\" alt=\"\(escape(altText))\">"
     }
 
-    private func mermaidRendererCardHTML(block: MarkdownFencedBlock, fallbackHTML: String) -> String {
-        guard let plan = rendererEmbedPlan(for: block, alias: .mermaid),
-              plan.fallbackReason != .oversizedInput else { return fallbackHTML }
+    /// One rich-fence alias, resolved through the projection's claim map. A
+    /// claimant that is not currently available (never installed, removed, or
+    /// safe-mode suppressed) keeps the typed raw-code fallback with the
+    /// unavailable-renderer notice; a projection-less render (chat transcripts)
+    /// degrades to inert code, as before.
+    private mutating func richFenceHTML(
+        block: MarkdownFencedBlock,
+        alias: RendererFenceAlias,
+        code: String,
+        cls: String
+    ) -> String {
+        guard let projection = rendererEmbedProjection else {
+            return plainCodeBlockHTML(code, cls: cls)
+        }
+        guard let claim = projection.fenceClaim(for: alias) else {
+            // Only an alias this render context has seen claimed explains its
+            // fallback; a token nothing ever claimed stays silent plain code
+            // (ordinary language fences like ```bash must not grow notices).
+            guard projection.unavailableFenceAliases.contains(alias) else {
+                return plainCodeBlockHTML(code, cls: cls)
+            }
+            return plainCodeBlockHTML(code, cls: cls)
+                + #"<p class="sdw-renderer-card__fallback">\#(escape(Self.fallbackNotice(for: .packageAliasDisallowed)))</p>"#
+        }
+        // Mermaid's native inline-SVG projection stays keyed to its built-in
+        // claim — a host renderer, not a package branch.
+        if claim.reference == BuiltInRendererReference.reference(for: .mermaid) {
+            return mermaidRendererCardHTML(
+                block: block,
+                claim: claim,
+                fallbackHTML: plainCodeBlockHTML(code, cls: cls))
+        }
+        return rendererCardHTML(
+            plan: rendererEmbedPlan(for: block, claim: claim),
+            fallbackHTML: plainCodeBlockHTML(code, cls: cls),
+            rendererName: claim.displayName)
+    }
+
+    private mutating func mermaidRendererCardHTML(
+        block: MarkdownFencedBlock,
+        claim: RendererFenceClaimAssignment,
+        fallbackHTML: String
+    ) -> String {
+        let plan = rendererEmbedPlan(for: block, claim: claim)
+        guard plan.fallbackReason != .oversizedInput else { return fallbackHTML }
         let reference = plan.rendererReference
-        let rendererName = Self.rendererDisplayName(for: reference)
+        let rendererName = claim.displayName
         let title = plan.displayTitle ?? rendererName
         let label = title == rendererName ? "\(rendererName) renderer" : "\(rendererName) renderer: \(title)"
         let placeholderID = Self.placeholderID(for: block)
@@ -865,7 +899,8 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
     private func rendererCardHTML(
         plan: RendererEmbedPlan?,
         fallbackHTML: String,
-        readableFallbackHTML: String? = nil
+        readableFallbackHTML: String? = nil,
+        rendererName: String? = nil
     ) -> String {
         guard let plan else { return fallbackHTML }
         if plan.fallbackReason == .oversizedInput {
@@ -873,11 +908,11 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         }
         let ref = plan.rendererReference
         let refValue = "\(ref.packageID.rawValue)/\(ref.version.rawValue)/\(ref.registrationID.rawValue)"
-        let rendererName = Self.rendererDisplayName(for: plan.rendererReference)
-        let title = plan.displayTitle ?? rendererName
-        let accessibilityLabel = title == rendererName
-            ? "\(rendererName) renderer"
-            : "\(rendererName) renderer: \(title)"
+        let resolvedRendererName = rendererName ?? Self.rendererDisplayName(for: plan.rendererReference)
+        let title = plan.displayTitle ?? resolvedRendererName
+        let accessibilityLabel = title == resolvedRendererName
+            ? "\(resolvedRendererName) renderer"
+            : "\(resolvedRendererName) renderer: \(title)"
         let placeholderID = escapeAttribute(plan.placeholderID)
         let expansionID = escapeAttribute("\(plan.placeholderID)-expansion")
         let titleText = escape(title)
@@ -984,11 +1019,13 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         }
     }
 
-    private func rendererEmbedPlan(for block: MarkdownFencedBlock, alias: MarkdownRichFenceAlias) -> RendererEmbedPlan? {
-        guard rendererEmbedProjection?.allowsRichFence(alias) == true else { return nil }
-        let reference = Self.rendererReference(for: alias)
+    private func rendererEmbedPlan(
+        for block: MarkdownFencedBlock,
+        claim: RendererFenceClaimAssignment
+    ) -> RendererEmbedPlan {
+        let reference = claim.reference
         let placeholderID = Self.placeholderID(for: block)
-        let summary = Self.semanticSummary(for: alias)
+        let summary = Self.semanticSummary(for: claim)
         let displayTitle = block.fenceInfo?.displayTitle
         guard block.bytes.count <= WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount else {
             return RendererEmbedPlan(
@@ -997,15 +1034,6 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
                 semanticContent: summary,
                 displayTitle: displayTitle,
                 fallbackReason: .oversizedInput,
-                activationMetadata: nil)
-        }
-        guard let mime = Self.inlineArtifactMIME(for: alias) else {
-            return RendererEmbedPlan(
-                placeholderID: placeholderID,
-                rendererReference: reference,
-                semanticContent: summary,
-                displayTitle: displayTitle,
-                fallbackReason: .missingDocumentIdentity,
                 activationMetadata: nil)
         }
         guard let identity = documentIdentity,
@@ -1024,8 +1052,8 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
                 pageID: identity.pageID,
                 pageVersionID: identity.pageVersionID,
                 blockID: blockID,
-                fenceKind: alias,
-                mimeType: mime,
+                fenceAlias: claim.alias,
+                mimeType: claim.inlineMIMEType,
                 bytes: block.bytes)
         } catch {
             return RendererEmbedPlan(
@@ -1055,87 +1083,91 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
             semanticContent: summary,
             displayTitle: displayTitle,
             fallbackReason: nil,
-            activationMetadata: Self.activationMetadata(for: alias))
+            activationMetadata: Self.activationMetadata(for: claim))
     }
 
     private static func placeholderID(for block: MarkdownFencedBlock) -> String {
         "sdw-renderer-\(block.digest.hex.prefix(16))-\(block.parserOrdinal)"
     }
 
-    private static func semanticSummary(for alias: MarkdownRichFenceAlias) -> String {
-        switch alias {
-        case .mermaid:
-            return "Mermaid diagram fence"
-        case .jsoncanvas:
-            return "JSON Canvas document fence"
-        case .excalidraw:
-            return "Excalidraw document fence"
-        }
+    /// Presentation phrases pinned for trusted host-known claimants (the
+    /// built-in renderers and the reviewed bundled package). These keep the
+    /// exact pre-conversion strings so their reader output is byte-identical;
+    /// every other claim derives its phrases from the declaring descriptor's
+    /// display name, because manifests deliberately carry no per-format
+    /// presentation strings beyond one MIME per claim.
+    private struct TrustedFencePresentation {
+        let semanticSummary: String
+        let controlLabel: String
+        let accessibilityLabel: String
+        let summary: String
     }
 
-    /// User-facing renderer names are centralized so untitled rows remain
-    /// readable without coupling presentation to raw registration identifiers.
-    private static func rendererDisplayName(for reference: RendererReference) -> String {
-        switch reference.registrationID.rawValue {
-        case "json-canvas": return "JSON Canvas"
-        case "excalidraw": return "Excalidraw"
-        case "mermaid": return "Mermaid"
-        default: return reference.registrationID.rawValue
-        }
-    }
-
-    private static func activationMetadata(for alias: MarkdownRichFenceAlias) -> RendererEmbedActivationMetadata {
-        switch alias {
-        case .mermaid:
-            return RendererEmbedActivationMetadata(
+    private static func trustedFencePresentation(
+        for reference: RendererReference
+    ) -> TrustedFencePresentation? {
+        if reference == BuiltInRendererReference.reference(for: .mermaid) {
+            return TrustedFencePresentation(
+                semanticSummary: "Mermaid diagram fence",
                 controlLabel: "Open",
                 accessibilityLabel: "Open mermaid renderer",
                 summary: "Preview diagram code in the renderer pane.")
-        case .jsoncanvas:
-            return RendererEmbedActivationMetadata(
+        }
+        if reference == BuiltInRendererReference.reference(for: .jsonCanvas) {
+            return TrustedFencePresentation(
+                semanticSummary: "JSON Canvas document fence",
                 controlLabel: "Open",
                 accessibilityLabel: "Open JSON Canvas renderer",
                 summary: "Open the static canvas in the renderer pane.")
-        case .excalidraw:
-            return RendererEmbedActivationMetadata(
+        }
+        if reference == RendererReference(
+            packageID: BundledRendererPackages.excalidrawPackageID,
+            version: BundledRendererPackages.excalidrawVersion,
+            registrationID: BundledRendererPackages.excalidrawRegistrationID) {
+            return TrustedFencePresentation(
+                semanticSummary: "Excalidraw document fence",
                 controlLabel: "Interact",
                 accessibilityLabel: "Open Excalidraw renderer",
                 summary: "Open the static Excalidraw card in the renderer pane.")
         }
+        return nil
     }
 
-    private static func inlineArtifactMIME(for alias: MarkdownRichFenceAlias) -> RendererMIMEType? {
-        switch alias {
-        case .mermaid:
-            return RendererMIMEType(rawValue: "text/mermaid")
-        case .jsoncanvas, .excalidraw:
-            return RendererMIMEType(rawValue: "application/json")
-        }
+    private static func semanticSummary(for claim: RendererFenceClaimAssignment) -> String {
+        trustedFencePresentation(for: claim.reference)?.semanticSummary
+            ?? "\(claim.displayName) fence"
     }
 
-    private static func rendererReference(for alias: MarkdownRichFenceAlias) -> RendererReference {
-        switch alias {
-        case .mermaid:
-            guard let packageID = RendererPackageID(rawValue: "org.selfdrivingwiki.builtin"),
-                  let version = RendererPackageVersion(rawValue: "1.0.0"),
-                  let registrationID = RendererRegistrationID(rawValue: "mermaid")
-            else { preconditionFailure("approved mermaid renderer reference must remain valid") }
-            return RendererReference(packageID: packageID, version: version, registrationID: registrationID)
-        case .jsoncanvas:
-            guard let packageID = RendererPackageID(rawValue: "org.selfdrivingwiki.builtin"),
-                  let version = RendererPackageVersion(rawValue: "1.0.0"),
-                  let registrationID = RendererRegistrationID(rawValue: "json-canvas")
-            else { preconditionFailure("approved jsoncanvas renderer reference must remain valid") }
-            return RendererReference(packageID: packageID, version: version, registrationID: registrationID)
-        case .excalidraw:
-            // Read from the bundled-package constants rather than repeating the
-            // literals: a card whose version drifts from the installed package
-            // resolves to no descriptor and presents nothing.
-            return RendererReference(
-                packageID: BundledRendererPackages.excalidrawPackageID,
-                version: BundledRendererPackages.excalidrawVersion,
-                registrationID: BundledRendererPackages.excalidrawRegistrationID)
+    /// User-facing renderer names stay centralized so untitled rows remain
+    /// readable without coupling presentation to raw registration identifiers.
+    /// Names come from the trusted tables; unknown references fall back to the
+    /// registration identifier.
+    private static func rendererDisplayName(for reference: RendererReference) -> String {
+        if let builtIn = BuiltInRendererDescriptors.all.first(where: { $0.reference == reference }) {
+            return builtIn.displayName
         }
+        if reference == RendererReference(
+            packageID: BundledRendererPackages.excalidrawPackageID,
+            version: BundledRendererPackages.excalidrawVersion,
+            registrationID: BundledRendererPackages.excalidrawRegistrationID) {
+            return BundledRendererPackages.excalidrawDisplayName
+        }
+        return reference.registrationID.rawValue
+    }
+
+    private static func activationMetadata(
+        for claim: RendererFenceClaimAssignment
+    ) -> RendererEmbedActivationMetadata {
+        if let trusted = trustedFencePresentation(for: claim.reference) {
+            return RendererEmbedActivationMetadata(
+                controlLabel: trusted.controlLabel,
+                accessibilityLabel: trusted.accessibilityLabel,
+                summary: trusted.summary)
+        }
+        return RendererEmbedActivationMetadata(
+            controlLabel: "Open",
+            accessibilityLabel: "Open \(claim.displayName) renderer",
+            summary: "Open the \(claim.displayName) card in the renderer pane.")
     }
 
     private static func rendererActionURL(

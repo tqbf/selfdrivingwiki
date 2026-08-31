@@ -80,17 +80,24 @@ public actor RendererMachineIndexStore {
     private let coordinator: RendererPackageStoreCoordinator
     private let derivedIndexWriter: any RendererMachineDerivedIndexWriting
     private let activationCleaner: any RendererPackageActivationCleaning
+    private let reservedFenceAliases: Set<RendererFenceAlias>
 
+    /// - Parameter reservedFenceAliases: aliases claimed by the trusted
+    ///   built-in descriptor table, injected by the app wiring (the table lives
+    ///   above this layer). Activation revalidation and the installed-collision
+    ///   check both consume it so a package can never take a built-in's fence.
     public init(
         layout: RendererPackageStoreLayout,
         coordinator: RendererPackageStoreCoordinator? = nil,
         derivedIndexWriter: any RendererMachineDerivedIndexWriting = FileRendererMachineDerivedIndexWriter(),
-        activationCleaner: any RendererPackageActivationCleaning = FileRendererPackageActivationCleaner()
+        activationCleaner: any RendererPackageActivationCleaning = FileRendererPackageActivationCleaner(),
+        reservedFenceAliases: Set<RendererFenceAlias> = []
     ) {
         self.layout = layout
         self.coordinator = coordinator ?? RendererPackageStoreCoordinator(layout: layout)
         self.derivedIndexWriter = derivedIndexWriter
         self.activationCleaner = activationCleaner
+        self.reservedFenceAliases = reservedFenceAliases
     }
 
     public func read() async throws -> RendererMachineIndex {
@@ -263,7 +270,10 @@ public actor RendererMachineIndexStore {
                     : nil
                 do {
                     try Task.checkCancellation()
-                    let validator = RendererPackageValidator(packageRoot: layout.root, stagingRoot: layout.stagingRoot)
+                    let validator = RendererPackageValidator(
+                        packageRoot: layout.root,
+                        stagingRoot: layout.stagingRoot,
+                        reservedFenceAliases: reservedFenceAliases)
                     let revalidated = try validator.revalidate(package)
                     guard revalidated.manifest.packageID == package.manifest.packageID,
                           revalidated.manifest.version == package.manifest.version,
@@ -295,6 +305,31 @@ public actor RendererMachineIndexStore {
                                 cleaner: activationCleaner)
                             cleanupTarget = nil
                             return current
+                        }
+                    }
+
+                    // Fence-alias exclusivity, under the coordinator lock:
+                    // reserved built-in aliases never install, and an alias
+                    // claimed by another *available* installed package stays
+                    // with its claimant until that package is removed. A newer
+                    // version of the same package may keep its own alias (the
+                    // superseded record drops out with its claims).
+                    for descriptor in revalidated.manifest.descriptors {
+                        for claim in descriptor.fenceClaims {
+                            if reservedFenceAliases.contains(claim.alias) {
+                                throw RendererMachineIndexStoreError.reservedFenceAlias(claim.alias)
+                            }
+                            let conflicting = current.records.contains { record in
+                                record.state == .validated
+                                    && record.isSafeModeSuppressed == false
+                                    && record.packageID != revalidated.manifest.packageID
+                                    && record.validatedDescriptors.contains { installed in
+                                        installed.fenceClaims.contains { $0.alias == claim.alias }
+                                    }
+                            }
+                            if conflicting {
+                                throw RendererMachineIndexStoreError.conflictingFenceAlias(claim.alias)
+                            }
                         }
                     }
 
@@ -363,6 +398,10 @@ public actor RendererMachineIndexStore {
                         try rendererMachineActivationCleanup(cleanupTarget, layout: layout, cleaner: activationCleaner)
                     }
                     if error is CancellationError { throw RendererMachineIndexStoreError.activationCancelled }
+                    if let validationError = error as? RendererPackageValidationError,
+                       case let .reservedFenceAlias(alias) = validationError {
+                        throw RendererMachineIndexStoreError.reservedFenceAlias(alias)
+                    }
                     if let error = error as? RendererMachineIndexStoreError { throw error }
                     throw RendererMachineIndexStoreError.activationFailed
                 }

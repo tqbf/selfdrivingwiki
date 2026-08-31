@@ -14,6 +14,12 @@ public enum RendererValidationError: Error, Equatable, Sendable, CustomStringCon
     case invalidCompatibilityRange
     case invalidPresentation
     case missingEmbeddingRoles
+    case invalidFenceAlias(String)
+    case fenceClaimMissingDisclosureRole(RendererFenceAlias)
+    case duplicateFenceClaim(RendererFenceAlias)
+    case fenceClaimsRequireCurrentRevision
+    case reservedFenceAlias(RendererFenceAlias)
+    case conflictingFenceAlias(RendererFenceAlias)
     case forbiddenCapability(RendererCapability)
     case missingRequiredCapability(RendererCapability)
     case duplicateRegistration(RendererRegistrationID)
@@ -41,6 +47,12 @@ public enum RendererValidationError: Error, Equatable, Sendable, CustomStringCon
         case .invalidCompatibilityRange: "invalid compatibility revision range"
         case .invalidPresentation: "invalid renderer presentation for implementation"
         case .missingEmbeddingRoles: "renderer must declare at least one supported embedding role"
+        case let .invalidFenceAlias(value): "invalid renderer fence alias: \(value)"
+        case let .fenceClaimMissingDisclosureRole(alias): "fence claim requires the disclosureRow embedding role: \(alias.rawValue)"
+        case let .duplicateFenceClaim(alias): "duplicate renderer fence claim: \(alias.rawValue)"
+        case .fenceClaimsRequireCurrentRevision: "renderer fence claims require manifest revision 2"
+        case let .reservedFenceAlias(alias): "renderer fence alias is reserved by a built-in renderer: \(alias.rawValue)"
+        case let .conflictingFenceAlias(alias): "renderer fence alias is already claimed by an installed package: \(alias.rawValue)"
         case let .forbiddenCapability(capability): "forbidden renderer capability: \(capability.rawValue)"
         case let .missingRequiredCapability(capability): "missing required renderer capability: \(capability.rawValue)"
         case let .duplicateRegistration(id): "duplicate renderer registration: \(id.rawValue)"

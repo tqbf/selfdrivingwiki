@@ -67,6 +67,8 @@ public enum RendererPackageToolFailure: Error, Equatable, Sendable {
             return "the SHA-256 digest does not match the final bytes for: \(path)"
         case .packageHashMismatch:
             return "the package hash does not match"
+        case .reservedFenceAlias(let alias):
+            return "a built-in renderer already owns the fence alias: \(alias.rawValue)"
         case .cleanupFailed:
             return "the validator could not remove temporary staging data"
         }

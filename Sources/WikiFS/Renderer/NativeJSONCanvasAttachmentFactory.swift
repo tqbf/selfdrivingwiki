@@ -134,7 +134,7 @@ struct NativeJSONCanvasAttachmentFactory {
     }
 
     private func document(for artifact: RendererEmbeddedContent.InlineArtifact) throws -> JSONCanvasDocument {
-        guard artifact.fenceKind == .jsoncanvas else {
+        guard BuiltInRendererDescriptors.fenceAliases(for: .jsonCanvas).contains(artifact.fenceAlias) else {
             throw NativeJSONCanvasAttachmentFailure.fenced(input: artifact, reason: .invalidFenceKind)
         }
         guard artifact.mimeType.rawValue == BuiltInRendererMIME.json else {
@@ -145,7 +145,7 @@ struct NativeJSONCanvasAttachmentFactory {
                 pageID: artifact.pageID,
                 pageVersionID: artifact.pageVersionID,
                 blockID: artifact.blockID,
-                fenceKind: artifact.fenceKind,
+                fenceAlias: artifact.fenceAlias,
                 mimeType: artifact.mimeType,
                 bytes: artifact.bytes)
         } catch {

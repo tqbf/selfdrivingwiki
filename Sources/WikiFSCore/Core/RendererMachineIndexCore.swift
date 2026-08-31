@@ -193,6 +193,12 @@ public enum RendererMachineIndexStoreError: Error, Equatable, Sendable {
     case packageRemovalFailed
     case packageRootAlreadyExists
     case installedRendererNotAvailable
+    /// The activating package claims a rich-fence alias reserved by a built-in
+    /// renderer. Typed so install-time rejection stays diagnosable.
+    case reservedFenceAlias(RendererFenceAlias)
+    /// The activating package claims a rich-fence alias another installed
+    /// package already claims. Removing that package frees the alias.
+    case conflictingFenceAlias(RendererFenceAlias)
 }
 
 func rendererMachineIndexValidatingPackagePaths(

@@ -32,7 +32,11 @@ Import accepts one local folder. It does not accept ZIP files, other archives, r
 
 Markdown syntax selects the renderer role. A package can fill a compatible role, but it cannot change the role.
 
-Approved rich fences use a disclosure row. The row starts collapsed and shows **Open in Window** at the trailing edge.
+A rich fence is named by the first word of its info string. That name is live registry data: the built-in renderers claim `mermaid` and `jsoncanvas`, the bundled Excalidraw package claims `excalidraw`, and an installed package can claim its own names through its manifest's `fenceClaims`. A fence renders through whichever available renderer claims its name, so installing or removing a package changes that answer on the next render without a restart.
+
+Approved rich fences use a disclosure row. The row starts collapsed and shows **Open in Window** at the trailing edge. When a renderer that has been drawing a fence becomes unavailable (its package was removed or suppressed), the fence falls back to typed raw code with a notice that the renderer is not available here; a fence nobody ever claimed stays plain code.
+
+A claim names one alias and one inline MIME type. The declaring renderer must already fill the disclosure-row role. One alias belongs to one renderer per Mac: an import that claims an alias a built-in or another installed package already owns is rejected, and removing that package frees the alias.
 
 Use a quoted title after an approved rich-fence name:
 
@@ -79,12 +83,17 @@ Most users only import packages. Package authors must define the full manifest, 
 
 Manifest revision 2 requires a nonempty `supportedEmbeddingRoles` array. Supported values are `inlineContent` and `disclosureRow`.
 
+A revision 2 manifest may also declare fence claims. A claim is one alias plus the inline MIME type the fence bytes are handed to the renderer as:
+
 ```json
 {
-  "manifestRevision": 2,
-  "supportedEmbeddingRoles": ["inlineContent"]
+  "revision": 2,
+  "supportedEmbeddingRoles": ["inlineContent", "disclosureRow"],
+  "fenceClaims": [{ "alias": "d2", "inlineMIMEType": "text/plain" }]
 }
 ```
+
+Claims require the `disclosureRow` role, must be unique inside the package, and cannot use an alias a built-in or another installed package already claims. Revision 1 packages never receive fence authority. Adding or changing claims changes the package bytes, so the reviewed version must bump with them.
 
 Declare only roles that the package can present safely. `inlineContent` must work without disclosure chrome and must preserve readable fallback content.
 

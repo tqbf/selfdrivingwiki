@@ -1046,7 +1046,7 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
     private static func html(for markdown: String, documentIdentity: MarkdownDocumentIdentity) -> String {
         let projection = RendererEmbedProjection(
             sourceEmbeds: [:],
-            richFenceAliases: [.jsoncanvas])
+            richFenceClaims: RendererFenceClaimResolver.resolve(builtInDescriptors: [BuiltInRendererDescriptors.descriptor(for: .jsonCanvas)]))
         let options = MarkdownRenderOptions(
             codeHighlighting: .disabled,
             rendererEmbedProjection: projection,

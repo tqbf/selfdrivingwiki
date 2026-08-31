@@ -4,14 +4,21 @@ import Foundation
 
 /// Restrictive package-document policy. This is a package-resource policy, not
 /// a navigation delegate and not a claim to intercept general subresources.
+///
+/// `script-src` admits `'wasm-unsafe-eval'` so a package may compile and run
+/// WebAssembly modules without enabling JavaScript `eval`. `connect-src`
+/// admits the package scheme so a package may fetch its own declared,
+/// hash-pinned assets through the scheme handler; every network origin stays
+/// blocked. Workers and frames remain forbidden.
 public enum RendererContentSecurityPolicy {
     public static let headerName = "Content-Security-Policy"
     public static let packageSource = "\(RendererPackageScheme.name):"
+    public static let wasmSource = "'wasm-unsafe-eval'"
     public static let headerValue = [
         "default-src 'none'",
-        "script-src \(packageSource)",
+        "script-src \(packageSource) \(wasmSource)",
         "style-src \(packageSource)",
-        "connect-src 'none'",
+        "connect-src \(packageSource)",
         "img-src \(packageSource)",
         "media-src \(packageSource)",
         "font-src \(packageSource)",

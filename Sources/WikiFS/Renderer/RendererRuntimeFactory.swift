@@ -126,7 +126,9 @@ struct RendererRuntimeFactory: Sendable {
                     let resolvedLayout = try await activation.require(Keys.packageStoreLayout)
                     _ = try await activation.supply(
                         Keys.machineIndexStore,
-                        value: RendererMachineIndexStore(layout: resolvedLayout))
+                        value: RendererMachineIndexStore(
+                            layout: resolvedLayout,
+                            reservedFenceAliases: BuiltInRendererDescriptors.reservedFenceAliases))
                 }
         case .packageValidatorFactory:
             return try ComponentDefinition(
@@ -134,10 +136,12 @@ struct RendererRuntimeFactory: Sendable {
                 dependencies: [ServiceDependency(Keys.packageStoreLayout)],
                 provisions: [ServiceDependency(Keys.packageValidatorFactory)]) { activation in
                     let resolvedLayout = try await activation.require(Keys.packageStoreLayout)
+                    let reservedFenceAliases = BuiltInRendererDescriptors.reservedFenceAliases
                     let factory: RendererRuntime.ValidatorFactory = {
                         RendererPackageValidator(
                             packageRoot: resolvedLayout.root,
-                            stagingRoot: resolvedLayout.stagingRoot)
+                            stagingRoot: resolvedLayout.stagingRoot,
+                            reservedFenceAliases: reservedFenceAliases)
                     }
                     _ = try await activation.supply(Keys.packageValidatorFactory, value: factory)
                 }

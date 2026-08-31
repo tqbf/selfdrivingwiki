@@ -41,6 +41,7 @@ enum RendererFixtures {
         matchers: [RendererMatcher] = [.artifactKind(.source)],
         embeddingRoles: Set<RendererEmbeddingRole> = [.disclosureRow],
         explicitEmbeddingRoles: Bool = false,
+        fenceClaims: [RendererFenceClaim] = [],
         priority: Int = 0
     ) throws -> RendererDescriptor {
         guard let entry = assets.first else { throw RendererValidationError.invalidPresentation }
@@ -52,6 +53,7 @@ enum RendererFixtures {
             presentations: [.web],
             supportedEmbeddingRoles: embeddingRoles,
             hasExplicitEmbeddingRoles: explicitEmbeddingRoles,
+            fenceClaims: fenceClaims,
             approvedAssets: assets,
             capabilities: [.inputRead],
             sizeLimits: try .init(maximumInputByteCount: 1_024, maximumDecodedByteCount: 2_048),
@@ -60,6 +62,15 @@ enum RendererFixtures {
             compatibility: try .init(minimumProtocolRevision: 1, maximumProtocolRevision: 1),
             priority: priority
         )
+    }
+
+    static func fenceClaim(
+        alias: String = "d2",
+        mime: String = "text/plain"
+    ) throws -> RendererFenceClaim {
+        RendererFenceClaim(
+            alias: try RendererFenceAlias(validating: alias),
+            inlineMIMEType: try RendererMIMEType(validating: mime))
     }
 
     static func webAsset(path: String = "index.html") -> RendererAsset {

@@ -29,6 +29,7 @@ public enum RendererPackageValidationError: Error, Equatable, Sendable {
     case undeclaredFile(String)
     case assetHashMismatch(String)
     case packageHashMismatch
+    case reservedFenceAlias(RendererFenceAlias)
     case cleanupFailed(String)
 }
 
@@ -52,17 +53,25 @@ public final class RendererPackageValidator {
     private let packageRoot: URL
     private let stagingRoot: URL
     private let fileManager: FileManager
+    private let reservedFenceAliases: Set<RendererFenceAlias>
     private let diagnose: @Sendable (String) -> Void
 
+    /// - Parameters:
+    ///   - reservedFenceAliases: aliases the trusted built-in descriptor table
+    ///     already claims. The built-in table lives in the app layer, so the
+    ///     app wiring injects it here — one place defines the built-in claims.
+    ///     A candidate package claiming one fails validation closed.
     public init(
         packageRoot: URL,
         stagingRoot: URL? = nil,
         fileManager: FileManager = .default,
+        reservedFenceAliases: Set<RendererFenceAlias> = [],
         diagnose: @escaping @Sendable (String) -> Void = { DebugLog.store($0) }
     ) {
         self.packageRoot = packageRoot.standardizedFileURL
         self.stagingRoot = (stagingRoot ?? packageRoot.appendingPathComponent(RendererPackageValidationLimits.stagingDirectoryName, isDirectory: true)).standardizedFileURL
         self.fileManager = fileManager
+        self.reservedFenceAliases = reservedFenceAliases
         self.diagnose = diagnose
     }
 
@@ -148,6 +157,11 @@ public final class RendererPackageValidator {
         catch { throw RendererPackageValidationError.malformedManifest }
         guard manifest.descriptors.allSatisfy({ $0.sizeLimits.maximumDecodedByteCount <= RendererPackageValidationLimits.maximumDecodedInputByteCount }) else {
             throw RendererPackageValidationError.decodedInputLimitExceeded
+        }
+        for descriptor in manifest.descriptors {
+            for claim in descriptor.fenceClaims where reservedFenceAliases.contains(claim.alias) {
+                throw RendererPackageValidationError.reservedFenceAlias(claim.alias)
+            }
         }
         let declared = Dictionary(uniqueKeysWithValues: manifest.assets.map { ($0.path, $0) })
         for (path, url) in files {

@@ -369,7 +369,7 @@ struct MarkdownHTMLRendererTests {
     @Test func richFenceCardsRenderStaticMarkupWhenProjectionAllowsThem() throws {
         let projection = RendererEmbedProjection(
             sourceEmbeds: [:],
-            richFenceAliases: Set(MarkdownRichFenceAlias.allCases))
+            richFenceClaims: PackageFenceTestSupport.builtInAndBundledClaims)
         let document = MarkdownDocumentIdentity(
             pageID: .init(rawValue: "01HTESTPAGE000000000000001"),
             pageVersionID: .init(rawValue: "01HTESTPV00000000000000001"))
@@ -399,7 +399,7 @@ struct MarkdownHTMLRendererTests {
             pageID: document.pageID,
             pageVersionID: document.pageVersionID,
             blockID: blockID,
-            fenceKind: .jsoncanvas,
+            fenceAlias: RendererFenceAlias(rawValue: "jsoncanvas")!,
             mimeType: .init(rawValue: "application/json")!,
             bytes: bytes)
         let expectedPackageID = try #require(RendererPackageID(rawValue: "org.selfdrivingwiki.builtin"))
@@ -478,7 +478,7 @@ struct MarkdownHTMLRendererTests {
     func excalidrawCardDelegatesToDynamicRenderer() throws {
         let projection = RendererEmbedProjection(
             sourceEmbeds: [:],
-            richFenceAliases: Set(MarkdownRichFenceAlias.allCases))
+            richFenceClaims: PackageFenceTestSupport.builtInAndBundledClaims)
         let document = MarkdownDocumentIdentity(
             pageID: .init(rawValue: "01HTESTPAGE000000000000001"),
             pageVersionID: .init(rawValue: "01HTESTPV00000000000000001"))
@@ -517,7 +517,7 @@ struct MarkdownHTMLRendererTests {
     func oversizedRichFencesUseEscapedFallbackWithoutRendererMetadata() {
         let projection = RendererEmbedProjection(
             sourceEmbeds: [:],
-            richFenceAliases: Set(MarkdownRichFenceAlias.allCases))
+            richFenceClaims: PackageFenceTestSupport.builtInAndBundledClaims)
         let document = MarkdownDocumentIdentity(
             pageID: .init(rawValue: "01HTESTPAGE000000000000001"),
             pageVersionID: .init(rawValue: "01HTESTPV00000000000000001"))
@@ -608,7 +608,7 @@ struct MarkdownHTMLRendererTests {
         let fixture = try makeRendererActivationFixture(bytes: Data("~~~\n".utf8))
         let projection = RendererEmbedProjection(
             sourceEmbeds: [:],
-            richFenceAliases: Set(MarkdownRichFenceAlias.allCases))
+            richFenceClaims: PackageFenceTestSupport.builtInAndBundledClaims)
         let document = MarkdownDocumentIdentity(
             pageID: .init(rawValue: "01HTESTPAGE000000000000001"),
             pageVersionID: .init(rawValue: "01HTESTPV00000000000000001"))
@@ -694,7 +694,7 @@ struct MarkdownHTMLRendererTests {
     func rendererActionURLStaysStaticWithoutAdmission() throws {
         let projection = RendererEmbedProjection(
             sourceEmbeds: [:],
-            richFenceAliases: [.jsoncanvas])
+            richFenceClaims: RendererFenceClaimResolver.resolve(builtInDescriptors: [BuiltInRendererDescriptors.descriptor(for: .jsonCanvas)]))
         let document = MarkdownDocumentIdentity(
             pageID: PageID(rawValue: "01HTESTPAGE000000000000001"),
             pageVersionID: PageVersionID(rawValue: "01HTESTPV00000000000000001"))
@@ -724,7 +724,7 @@ struct MarkdownHTMLRendererTests {
     func longRendererTitlesRetainAccessibleValueWhileVisuallyEllipsizing() {
         let projection = RendererEmbedProjection(
             sourceEmbeds: [:],
-            richFenceAliases: [.jsoncanvas])
+            richFenceClaims: RendererFenceClaimResolver.resolve(builtInDescriptors: [BuiltInRendererDescriptors.descriptor(for: .jsonCanvas)]))
         let document = MarkdownDocumentIdentity(
             pageID: PageID(rawValue: "01HTESTPAGE000000000000001"),
             pageVersionID: PageVersionID(rawValue: "01HTESTPV00000000000000001"))
@@ -1082,7 +1082,7 @@ private extension MarkdownHTMLRendererTests {
             pageID: pageID,
             pageVersionID: pageVersionID,
             blockID: blockID,
-            fenceKind: .jsoncanvas,
+            fenceAlias: RendererFenceAlias(rawValue: "jsoncanvas")!,
             mimeType: .init(rawValue: "application/json")!,
             bytes: bytes)
         let input = RendererBridgeInput.inlineArtifact(artifact)
