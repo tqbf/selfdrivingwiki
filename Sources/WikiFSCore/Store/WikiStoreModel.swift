@@ -137,7 +137,12 @@ public final class WikiStoreModel {
     /// installed-renderer host lives (the trusted table is app-layer data; this
     /// module cannot define it). Until injection, rich fences degrade to typed
     /// raw code — the same fail-closed posture as an unavailable claimant.
-    @ObservationIgnored public var rendererBuiltInDescriptors: [RendererDescriptor] = []
+    @ObservationIgnored public var rendererBuiltInDescriptors: [RendererDescriptor] = [] {
+        didSet {
+            guard rendererBuiltInDescriptors != oldValue else { return }
+            rendererMachineAvailabilityRevision &+= 1
+        }
+    }
 
     /// Enabled installed renderer descriptors from the app-scoped
     /// ``InstalledRendererHost`` snapshot, threaded in by the app wiring.

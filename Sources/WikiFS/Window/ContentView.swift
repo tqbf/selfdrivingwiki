@@ -82,6 +82,11 @@ struct ContentView: View {
         self.extractionProvider = extractionProvider
         self.installedRendererHost = installedRendererHost
         self.onRendererActivation = onRendererActivation
+        // Package-declared rich fences: the built-in claim table is app-layer
+        // data, so it lands here synchronously — before any reader, chat, or
+        // activity render can memoize a claim-less context. The enabled
+        // installed descriptors follow the host snapshot via onChange below.
+        store.rendererBuiltInDescriptors = BuiltInRendererDescriptors.all
     }
 
     var body: some View {
@@ -123,10 +128,9 @@ struct ContentView: View {
         // Package-declared rich fences: thread the registry state into the
         // store model so `renderContext()` — and therefore every reader, chat
         // transcript, and activity window — resolves fence claims from data.
-        // The built-in table is app-layer data; the enabled descriptors follow
-        // the host snapshot, and a change invalidates the memoized context.
+        // Built-ins land in init; the enabled descriptors follow the host
+        // snapshot, and a change invalidates the memoized context.
         .onChange(of: installedRendererHost.inputs.enabledDescriptors, initial: true) { _, descriptors in
-            store.rendererBuiltInDescriptors = BuiltInRendererDescriptors.all
             store.rendererEnabledDescriptors = descriptors
         }
         // "Show In List" reveal (issue #183): a detail-view button requested the
