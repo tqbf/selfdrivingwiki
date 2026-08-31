@@ -24,10 +24,12 @@ The overlay owns its complete source interval. The lowerer suppresses Swift Mark
 Syntax selects the presentation role:
 
 - Markdown images and media-capable wiki source embeds use `inlineContent`.
-- Approved rich fences use `disclosureRow`.
+- Rich fences use `disclosureRow`.
 - Page embeds and non-media source embeds use typed lazy transclusion.
 
 A renderer must support the required role. Renderer matching cannot change the role.
+
+A rich-fence alias is registry data. The built-in descriptor table and renderer package manifests (`fenceClaims`, revision 2) claim aliases; the reader resolves a fence through the registry claim map, so a package can add a fenced format by manifest data alone with no host Swift. Parse validates token shape only, and a fence whose claimant is unavailable falls back to typed raw code. See `plans/package-declared-fences.md`.
 
 Inline content never emits renderer-row disclosure markup. Rich fences keep the existing disclosure-row interaction.
 
@@ -45,7 +47,9 @@ Image syntax always remains in the reader DOM. Ordinary images use `<img>`. Merm
 
 Renderer descriptors declare `supportedEmbeddingRoles`. Registry matching filters by the required role before priority selection.
 
-Manifest revision 2 requires a nonempty role set. Revision 1 keeps its canonical bytes and hash. The runtime grants only the approved legacy disclosure role. Revision 1 never receives inline-content authority.
+Manifest revision 2 requires a nonempty role set. Revision 1 keeps its canonical bytes and hash. The runtime grants only the approved legacy disclosure role. Revision 1 never receives inline-content authority — and never receives fence-claim authority either: a revision 1 manifest declaring `fenceClaims` fails closed.
+
+Renderer package manifests claim rich-fence aliases through `fenceClaims` (one alias plus one inline MIME type per claim, unique per package, and requiring the disclosure-row role). The built-in descriptors declare their own claims the same way, and the registry resolves alias → claimant deterministically. See `plans/package-declared-fences.md`.
 
 Renderer activation uses exact document or source identity, version namespace and value, immutable bytes, recomputed digest, MIME type, renderer reference, role, capability, and generation.
 

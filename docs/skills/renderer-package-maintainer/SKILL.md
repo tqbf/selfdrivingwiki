@@ -45,5 +45,6 @@ A package with interactive controls needs its own keyboard and VoiceOver tests. 
 7. Keep source logical and exact preferences separate from installation and availability.
 8. Keep source fallback and native renderers available after every package failure.
 9. Update the guide reference and its documentation tests when package facts change.
+10. Declare fenced formats only through manifest `fenceClaims` (revision 2). The host has no format-specific fence Swift; keep it that way — the D2 neutrality scan enforces it.
 
 Do not add a catalog, signing, archives, remote distribution, network installation, destination selection, automatic source-preference changes, per-wiki enablement, or storage migration.

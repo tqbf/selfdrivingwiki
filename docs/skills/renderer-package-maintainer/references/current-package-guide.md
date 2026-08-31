@@ -12,6 +12,8 @@ A source can retain a logical or exact renderer preference. A logical preference
 
 A package is one local directory. It contains one normalized `manifest.json` and only the files declared in that manifest. The manifest has a revision, a typed package ID, a typed version, descriptors, and asset digests. Every descriptor has a typed registration ID, matchers, an implementation, approved assets, capabilities, input limits, link policy, accessibility values, compatibility values, and priority.
 
+A revision 2 descriptor may declare `fenceClaims`: one array entry per claimed Markdown rich-fence alias, each with the alias and the inline MIME type the fence bytes are handed to the renderer as. Claims require the `disclosureRow` role, must be unique inside the package, cannot use an alias a built-in or another installed package already claims, and revision 1 packages never receive fence authority. Claiming an alias changes the manifest bytes, so bump the reviewed version with the change. The fence card's display text derives from the descriptor `displayName`; manifests carry no other per-format presentation strings. See `plans/package-declared-fences.md`.
+
 Use a local directory for Advanced Local Renderer Package Import. The app accepts directories only. It does not accept archives, downloaded packages, a catalog, signing, network distribution, or a destination picker.
 
 `RendererPackageValidator` copies a candidate into machine staging. It rejects traversal, duplicate paths, symlinks, nonregular files, unsupported files, missing files, undeclared files, changed sources, and asset or package hash mismatches. The validator calculates SHA-256 digests over normalized package data. Do not construct a `ValidatedRendererPackage` outside the validator.
