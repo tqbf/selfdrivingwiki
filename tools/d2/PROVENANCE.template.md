@@ -22,15 +22,9 @@ manifest and in `tools/d2/d2-package.lock.json`.
 
 `d2.wasm` is built locally from the pinned source with the recipe recorded in
 `tools/d2/d2-package.lock.json`; the built artifact SHA-256 is
-@@D2WASMSHA256@@. The recipe:
+@@D2WASMSHA256@@. The recipe, rendered from the lock:
 
-```text
-GOOS=js GOARCH=wasm go build -ldflags='-s -w' -trimpath -buildvcs=false \
-    -o d2.wasm ./d2js
-wasm-opt -Oz --enable-nontrapping-float-to-int --enable-bulk-memory \
-    --enable-sign-ext --enable-simd --enable-reference-types \
-    -o d2.wasm d2.wasm
-```
+@@BUILDRECIPE@@
 
 The lock pins the Go toolchain and wasm-opt (binaryen) versions together with
 the expected built-artifact digest, so `make d2-renderer-package-check`

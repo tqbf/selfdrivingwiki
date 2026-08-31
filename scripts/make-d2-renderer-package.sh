@@ -250,14 +250,24 @@ cat "${SOURCE_ROOT}/d2js/js/THIRD_PARTY_NOTICES.txt" >> "${DEST}/THIRD_PARTY_NOT
 
 render_provenance() {
     python3 - "${TEMPLATE_DIR}/PROVENANCE.template.md" "${DEST}/PROVENANCE.md" \
+        "${LOCK_PATH}" \
         "${PACKAGE_ID}" "${PACKAGE_VERSION}" "${GENERATED_AT}" \
         "${UPSTREAM_SOURCE_URL}" "${UPSTREAM_NAME}" "${UPSTREAM_VERSION}" \
         "${UPSTREAM_COMMIT}" "${SOURCE_TARBALL_URL}" "${SOURCE_TARBALL_SHA}" \
         "${WASM_EXEC_SHA}" "${STAGING}/d2.wasm" <<'PY'
-import hashlib, sys
+import hashlib, json, sys
 
-source, dest = sys.argv[1], sys.argv[2]
-values = sys.argv[3:]
+source, dest, lock_path = sys.argv[1], sys.argv[2], sys.argv[3]
+values = sys.argv[4:]
+lock = json.load(open(lock_path))
+build = lock["build"]
+recipe = (
+    "```text\n"
+    + "GOOS=js GOARCH=wasm go build -ldflags='" + build["ldflags"]
+        + "' -trimpath -buildvcs=false -o d2.wasm " + build["sourcePackage"] + "\n"
+    + "wasm-opt " + " ".join(build["optimizeFlags"]) + " -o d2.wasm d2.wasm\n"
+    + "```"
+)
 text = open(source).read()
 placeholders = [
     "PACKAGEID", "PACKAGEVERSION", "GENERATEDAT", "SOURCEURL",
@@ -269,6 +279,9 @@ digest = hashlib.sha256(open(wasm_path, "rb").read()).hexdigest()
 values.append(digest)
 for name, value in zip(placeholders, values):
     text = text.replace("@@" + name + "@@", value)
+# The build recipe renders from the lock so a recipe edit can never leave
+# PROVENANCE.md describing stale flags.
+text = text.replace("@@BUILDRECIPE@@", recipe)
 open(dest, "w").write(text)
 PY
 }

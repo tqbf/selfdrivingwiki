@@ -104,7 +104,7 @@ Installed renderer packages are untrusted WebKit content. Protocol version 1 per
 
 External activation requires normalized HTTPS, a trusted user gesture, a one-shot nonce, and matching session, window, frame, and navigation state.
 
-The package policy keeps `default-src 'none'` and `connect-src 'none'`. Package navigation rejects unsupported schemes, cross-host requests, file URLs, popups, and arbitrary network access.
+The package policy keeps `default-src 'none'`. `script-src` serves package assets and permits WebAssembly compilation through `'wasm-unsafe-eval'`; `connect-src` admits the package scheme so a package can fetch its own declared, hash-pinned assets. Network origins, JavaScript `eval`, workers, and frames stay blocked. Package navigation rejects unsupported schemes, cross-host requests, file URLs, popups, and arbitrary network access.
 
 Native built-in renderers and host adapters are trusted application code. Shared built-in factory inputs do not expose `WikiStoreModel`. The Mermaid path receives a prepared view projection. JSON Canvas receives a closure for the closed `JSONCanvasHostAction` enum.
 
