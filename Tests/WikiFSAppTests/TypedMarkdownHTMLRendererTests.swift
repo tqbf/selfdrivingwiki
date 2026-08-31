@@ -50,7 +50,7 @@ struct TypedMarkdownHTMLRendererTests {
             projection: .init(),
             options: .init(
                 codeHighlighting: .disabled,
-                rendererEmbedProjection: .init(sourceEmbeds: [:], richFenceAliases: [.mermaid]),
+                rendererEmbedProjection: .init(sourceEmbeds: [:], richFenceClaims: RendererFenceClaimResolver.resolve(builtInDescriptors: [BuiltInRendererDescriptors.descriptor(for: .mermaid)])),
                 documentIdentity: identity,
                 rendererActivationAdmission: nil))
 

@@ -58,6 +58,10 @@ enum BuiltInRendererDescriptors {
                     .artifactKind(.markdown),
                 ],
                 maximumInputByteCount: BuiltInRendererLimits.markdownMaximumInputByteCount,
+                embeddingRoles: [.inlineContent, .disclosureRow],
+                fenceClaims: [
+                    RendererFenceClaim(alias: fenceAlias("mermaid"), inlineMIMEType: mime(BuiltInRendererMIME.mermaid)),
+                ],
                 priority: BuiltInRendererPriority.markdownDocument)
         case .media:
             return make(
@@ -76,6 +80,10 @@ enum BuiltInRendererDescriptors {
                     .boundedJSONArtifact(.jsonCanvas),
                 ],
                 maximumInputByteCount: JSONCanvasLimits.maximumInputByteCount,
+                embeddingRoles: [.inlineContent, .disclosureRow],
+                fenceClaims: [
+                    RendererFenceClaim(alias: fenceAlias("jsoncanvas"), inlineMIMEType: mime(BuiltInRendererMIME.json)),
+                ],
                 accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
                 priority: BuiltInRendererPriority.jsonCanvas)
         }
@@ -87,6 +95,7 @@ enum BuiltInRendererDescriptors {
         matchers: [RendererMatcher],
         maximumInputByteCount: Int,
         embeddingRoles: Set<RendererEmbeddingRole> = [.inlineContent],
+        fenceClaims: [RendererFenceClaim] = [],
         accessibility: RendererAccessibility = .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
         priority: Int
     ) -> RendererDescriptor {
@@ -99,6 +108,7 @@ enum BuiltInRendererDescriptors {
                 presentations: [.native],
                 supportedEmbeddingRoles: embeddingRoles,
                 hasExplicitEmbeddingRoles: true,
+                fenceClaims: fenceClaims,
                 approvedAssets: [],
                 capabilities: [.inputRead],
                 sizeLimits: try .init(
@@ -123,6 +133,25 @@ enum BuiltInRendererDescriptors {
     private static func fileExtension(_ rawValue: String) -> RendererFileExtension {
         do { return try RendererFileExtension(validating: rawValue) }
         catch { preconditionFailure("Invalid built-in renderer extension \\(rawValue): \\(error)") }
+    }
+
+    private static func fenceAlias(_ rawValue: String) -> RendererFenceAlias {
+        do { return try RendererFenceAlias(validating: rawValue) }
+        catch { preconditionFailure("Invalid built-in renderer fence alias \\(rawValue): \\(error)") }
+    }
+
+    /// Aliases the trusted built-in table claims for Markdown rich fences. This
+    /// is the single definition of built-in fence authority: the runtime wiring
+    /// injects it into package validation and activation, and host components
+    /// (e.g. the JSON Canvas attachment factory) derive their checks from it.
+    static var reservedFenceAliases: Set<RendererFenceAlias> {
+        Set(all.flatMap(\.fenceClaims).map(\.alias))
+    }
+
+    /// The aliases one built-in renderer claims, for host components that need
+    /// a data-derived answer instead of a format comparison.
+    static func fenceAliases(for id: BuiltInRendererID) -> Set<RendererFenceAlias> {
+        Set(descriptor(for: id).fenceClaims.map(\.alias))
     }
 
     private static func signature(_ value: String) -> RendererSignature {

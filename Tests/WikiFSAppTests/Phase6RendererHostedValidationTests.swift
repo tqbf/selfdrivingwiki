@@ -212,7 +212,7 @@ struct Phase6RendererHostedValidationTests {
             pageID: documentIdentity.pageID,
             pageVersionID: documentIdentity.pageVersionID,
             blockID: try #require(block.blockID),
-            fenceKind: .excalidraw,
+            fenceAlias: RendererFenceAlias(rawValue: "excalidraw")!,
             mimeType: try .init(validating: "application/json"),
             bytes: Self.excalidrawInput)
         let reader = RendererAuthorizedInputReader(

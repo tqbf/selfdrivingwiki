@@ -43,6 +43,12 @@ public struct RendererManifest: Codable, Hashable, Sendable {
                descriptor.hasExplicitEmbeddingRoles == false {
                 throw RendererValidationError.missingEmbeddingRoles
             }
+            // Fence authority is revision-2-only: a revision-1 manifest that
+            // declares claims fails closed rather than silently dropping them
+            // (same posture as the revision-2 embedding-roles requirement).
+            if revision == RendererManifestRevision.legacy, descriptor.hasFenceClaims {
+                throw RendererValidationError.fenceClaimsRequireCurrentRevision
+            }
             guard descriptor.reference.packageID == packageID, descriptor.reference.version == version else {
                 throw RendererValidationError.manifestIdentityMismatch
             }
@@ -52,6 +58,16 @@ public struct RendererManifest: Codable, Hashable, Sendable {
             let packageAssets = Set(sortedAssets)
             for asset in descriptor.approvedAssets where packageAssets.contains(asset) == false {
                 throw RendererValidationError.manifestAssetNotApproved(asset.path)
+            }
+        }
+        // One alias, one claimant, per manifest: two descriptors in the same
+        // package cannot both answer the same fence.
+        var claimedAliases = Set<RendererFenceAlias>()
+        for descriptor in sortedDescriptors {
+            for claim in descriptor.fenceClaims {
+                guard claimedAliases.insert(claim.alias).inserted else {
+                    throw RendererValidationError.duplicateFenceClaim(claim.alias)
+                }
             }
         }
         self.revision = revision
@@ -181,6 +197,9 @@ private struct CanonicalRendererDescriptorV2: Encodable {
     let matchers: [RendererMatcher]
     let presentations: [RendererPresentation]
     let supportedEmbeddingRoles: [RendererEmbeddingRole]
+    /// Emitted only when claims exist so every claim-less manifest keeps its
+    /// reviewed canonical bytes (and package hash) unchanged.
+    let fenceClaims: [RendererFenceClaim]?
     let approvedAssets: [RendererAsset]
     let capabilities: [RendererCapability]
     let sizeLimits: RendererSizeLimits
@@ -196,6 +215,9 @@ private struct CanonicalRendererDescriptorV2: Encodable {
         matchers = try Self.sortedCodable(descriptor.matchers)
         presentations = descriptor.presentations.sorted { $0.rawValue < $1.rawValue }
         supportedEmbeddingRoles = descriptor.supportedEmbeddingRoles.sorted { $0.rawValue < $1.rawValue }
+        fenceClaims = descriptor.hasFenceClaims
+            ? descriptor.fenceClaims.sorted { $0.alias < $1.alias }
+            : nil
         approvedAssets = descriptor.approvedAssets.sorted()
         capabilities = descriptor.capabilities.sorted { $0.rawValue < $1.rawValue }
         sizeLimits = descriptor.sizeLimits

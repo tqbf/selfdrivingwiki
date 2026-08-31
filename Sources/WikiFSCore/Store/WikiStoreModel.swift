@@ -127,6 +127,29 @@ public final class WikiStoreModel {
     /// that leaves the generation unchanged (e.g. a bookmark-only change) doesn't
     /// spuriously rebuild. Compared against ``renderContextGeneration``.
     @ObservationIgnored private var renderContextBuiltAtGeneration: UInt64 = .max
+    /// The machine availability revision captured at ``cachedRenderContext``
+    /// build time. A renderer-registry refresh bumps
+    /// ``rendererMachineAvailabilityRevision``; the next `renderContext()` call
+    /// rebuilds so new/removed fence claims apply with no restart.
+    @ObservationIgnored private var renderContextBuiltAtAvailabilityRevision: UInt64 = 0
+
+    /// Built-in renderer descriptors, injected once by the app wiring where the
+    /// installed-renderer host lives (the trusted table is app-layer data; this
+    /// module cannot define it). Until injection, rich fences degrade to typed
+    /// raw code — the same fail-closed posture as an unavailable claimant.
+    @ObservationIgnored public var rendererBuiltInDescriptors: [RendererDescriptor] = []
+
+    /// Enabled installed renderer descriptors from the app-scoped
+    /// ``InstalledRendererHost`` snapshot, threaded in by the app wiring.
+    /// Superseded and safe-mode-suppressed packages drop out here, so their
+    /// fence claims drop out of every render context. A change bumps the
+    /// renderer availability revision and invalidates the memoized context.
+    @ObservationIgnored public var rendererEnabledDescriptors: [RendererDescriptor] = [] {
+        didSet {
+            guard rendererEnabledDescriptors != oldValue else { return }
+            rendererMachineAvailabilityRevision &+= 1
+        }
+    }
 
     /// The sidebar selection: a page, the system-prompt document, or nothing.
     public var selection: WikiSelection?
@@ -3395,12 +3418,14 @@ public final class WikiStoreModel {
     /// render task; its closures are pure (no store access at render time).
     public func renderContext() -> WikiRenderContext {
         if let cached = cachedRenderContext,
-           renderContextBuiltAtGeneration == renderContextGeneration {
+           renderContextBuiltAtGeneration == renderContextGeneration,
+           renderContextBuiltAtAvailabilityRevision == rendererMachineAvailabilityRevision {
             return cached
         }
         let built = WikiRenderContext.build(from: self)
         cachedRenderContext = built
         renderContextBuiltAtGeneration = renderContextGeneration
+        renderContextBuiltAtAvailabilityRevision = rendererMachineAvailabilityRevision
         return built
     }
 

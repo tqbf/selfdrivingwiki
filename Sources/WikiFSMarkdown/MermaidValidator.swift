@@ -195,6 +195,16 @@ public final class MermaidValidator: @unchecked Sendable {
     /// every save. `let` → initialized exactly once (thread-safe dispatch_once).
     public static let shared: MermaidValidator? = MermaidValidator.loadDefault()
 
+    /// The built-in mermaid rich-fence alias this validator answers for. The
+    /// literal lives here because this is the trusted host mermaid component;
+    /// the registry-side claim lives in the built-in descriptor table.
+    public static let mermaidFenceAlias: RendererFenceAlias = {
+        guard let alias = RendererFenceAlias(rawValue: "mermaid") else {
+            fatalError("built-in mermaid fence alias must remain valid")
+        }
+        return alias
+    }()
+
     // MARK: - Block extraction (pure, testable)
 
     /// The inner source of each ` ```mermaid ` (or `~~~mermaid`) fenced block, in
@@ -215,7 +225,10 @@ public final class MermaidValidator: @unchecked Sendable {
         while i < lines.count {
             if let fence = fenceOpening(lines[i]) {
                 if case .rich(let fenceInfo) = MarkdownFenceInfo.parse(fence.infoString),
-                   fenceInfo.alias == .mermaid {
+                   // This component is the trusted host mermaid validator (it
+                   // embeds mermaid.js), so the built-in mermaid alias literal
+                   // lives with it — alias recognition itself is registry data.
+                   fenceInfo.alias.rawValue == MermaidValidator.mermaidFenceAlias.rawValue {
                     var inner: [String] = []
                     i += 1
                     while i < lines.count && !isClosingFence(lines[i], char: fence.char, minLength: fence.length) {

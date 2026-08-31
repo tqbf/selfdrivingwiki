@@ -507,7 +507,7 @@ struct JSONCanvasRendererTests {
             pageID: pageID,
             pageVersionID: pageVersionID,
             blockID: try #require(fence.blockID),
-            fenceKind: .jsoncanvas,
+            fenceAlias: RendererFenceAlias(rawValue: "jsoncanvas")!,
             mimeType: try RendererMIMEType(validating: "application/json"),
             bytes: bytes)
     }

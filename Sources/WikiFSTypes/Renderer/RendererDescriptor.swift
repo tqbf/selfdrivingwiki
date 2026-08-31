@@ -39,6 +39,15 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
     /// construction boundary. Revision-1 manifests may project the narrow
     /// legacy disclosure role without changing their canonical bytes.
     public let hasExplicitEmbeddingRoles: Bool
+    /// Aliases this renderer claims for Markdown rich fences. Claims are
+    /// registry data: the trusted built-in table declares its own, and renderer
+    /// package manifests may declare them at revision 2 (a revision-1 manifest
+    /// carrying claims fails closed in ``RendererManifest``).
+    public let fenceClaims: [RendererFenceClaim]
+    /// True only when at least one claim exists. Mirrors
+    /// ``hasExplicitEmbeddingRoles`` so canonical emission omits the key for
+    /// claim-less manifests and their canonical bytes stay stable.
+    public var hasFenceClaims: Bool { fenceClaims.isEmpty == false }
     public let approvedAssets: [RendererAsset]
     public let capabilities: Set<RendererCapability>
     public let sizeLimits: RendererSizeLimits
@@ -55,6 +64,7 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
         presentations: Set<RendererPresentation>,
         supportedEmbeddingRoles: Set<RendererEmbeddingRole> = [.disclosureRow],
         hasExplicitEmbeddingRoles: Bool = false,
+        fenceClaims: [RendererFenceClaim] = [],
         approvedAssets: [RendererAsset],
         capabilities: Set<RendererCapability>,
         sizeLimits: RendererSizeLimits,
@@ -70,6 +80,16 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
         }
         guard supportedEmbeddingRoles.isEmpty == false else {
             throw RendererValidationError.missingEmbeddingRoles
+        }
+        let claims = fenceClaims.sorted { $0.alias < $1.alias }
+        var seenClaims = Set<RendererFenceAlias>()
+        for claim in claims {
+            guard seenClaims.insert(claim.alias).inserted else {
+                throw RendererValidationError.duplicateFenceClaim(claim.alias)
+            }
+            guard supportedEmbeddingRoles.contains(.disclosureRow) else {
+                throw RendererValidationError.fenceClaimMissingDisclosureRole(claim.alias)
+            }
         }
         guard capabilities.contains(.inputRead) else {
             throw RendererValidationError.missingRequiredCapability(.inputRead)
@@ -105,6 +125,7 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
         self.presentations = presentations
         self.supportedEmbeddingRoles = supportedEmbeddingRoles
         self.hasExplicitEmbeddingRoles = hasExplicitEmbeddingRoles
+        self.fenceClaims = claims
         self.approvedAssets = assets
         self.capabilities = capabilities
         self.sizeLimits = sizeLimits
@@ -121,6 +142,7 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
         case matchers
         case presentations
         case supportedEmbeddingRoles
+        case fenceClaims
         case approvedAssets
         case capabilities
         case sizeLimits
@@ -139,6 +161,11 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
         try container.encode(presentations, forKey: .presentations)
         if hasExplicitEmbeddingRoles {
             try container.encode(supportedEmbeddingRoles, forKey: .supportedEmbeddingRoles)
+        }
+        // Claim-less manifests must not gain a key: canonical bytes and the
+        // package hash are stability contracts for already-reviewed packages.
+        if hasFenceClaims {
+            try container.encode(fenceClaims, forKey: .fenceClaims)
         }
         try container.encode(approvedAssets, forKey: .approvedAssets)
         try container.encode(capabilities, forKey: .capabilities)
@@ -162,6 +189,7 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
             presentations: container.decode(Set<RendererPresentation>.self, forKey: .presentations),
             supportedEmbeddingRoles: explicitRoles ?? [.disclosureRow],
             hasExplicitEmbeddingRoles: explicitRoles != nil,
+            fenceClaims: try container.decodeIfPresent([RendererFenceClaim].self, forKey: .fenceClaims) ?? [],
             approvedAssets: container.decode([RendererAsset].self, forKey: .approvedAssets),
             capabilities: container.decode(Set<RendererCapability>.self, forKey: .capabilities),
             sizeLimits: container.decode(RendererSizeLimits.self, forKey: .sizeLimits),

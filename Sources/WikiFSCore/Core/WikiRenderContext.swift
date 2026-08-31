@@ -108,7 +108,8 @@ public struct WikiRenderContext: Sendable {
         embedMap: [String: WikiLinkMarkdown.SourceEmbedInfo],
         sourceDerivedChain: [SourceID: [SourceMarkdownVersionID]],
         siblingMaps: [SourceID: [String: SourceID]],
-        blobScheme: String
+        blobScheme: String,
+        rendererFenceClaims: [RendererFenceAlias: RendererFenceClaimAssignment] = [:]
     ) {
         self.pageTitles = pageTitles
         self.pageIDToName = pageIDToName
@@ -122,7 +123,7 @@ public struct WikiRenderContext: Sendable {
         self.siblingMaps = siblingMaps
         self.rendererEmbedProjection = RendererEmbedProjection(
             sourceEmbeds: embedMap,
-            richFenceAliases: Set(MarkdownRichFenceAlias.allCases))
+            richFenceClaims: rendererFenceClaims)
         self.blobScheme = blobScheme
     }
 
@@ -229,6 +230,13 @@ public struct WikiRenderContext: Sendable {
 
         // --- Phase 6 chain + Phase 4 sibling maps (WRC-specific) ---
         let sourceDerivedChain = store.sourceDerivedChains()
+        // Registry-derived rich-fence claims. The descriptor lists are injected
+        // by the app wiring (the built-in table lives above this layer), so
+        // every `renderContext()` consumer — reader, chat transcripts, activity
+        // windows — sees the same claim map with no per-view wiring.
+        let rendererFenceClaims = RendererFenceClaimResolver.resolve(
+            builtInDescriptors: store.rendererBuiltInDescriptors,
+            enabledInstalledDescriptors: store.rendererEnabledDescriptors)
         return WikiRenderContext(
             pageTitles: pageTitles,
             pageIDToName: pageIDToName,
@@ -240,7 +248,8 @@ public struct WikiRenderContext: Sendable {
             embedMap: embedMap,
             sourceDerivedChain: sourceDerivedChain,
             siblingMaps: siblingMaps,
-            blobScheme: WikiLinkMarkdown.blobScheme)
+            blobScheme: WikiLinkMarkdown.blobScheme,
+            rendererFenceClaims: rendererFenceClaims)
     }
 
     // MARK: - Render closures (pure — derived from captured data)
@@ -315,24 +324,31 @@ public struct WikiRenderContext: Sendable {
 }
 
 /// Host-built projection of renderer-facing embed facts. It mirrors the source
-/// embed map and the closed rich-fence alias set.
+/// embed map and the registry-derived rich-fence claim map: an alias is rich
+/// exactly when some available descriptor claims it.
 public struct RendererEmbedProjection: Sendable {
     public let sourceEmbeds: [String: WikiLinkMarkdown.SourceEmbedInfo]
-    public let richFenceAliases: Set<MarkdownRichFenceAlias>
+    public let richFenceClaims: [RendererFenceAlias: RendererFenceClaimAssignment]
 
     public init(
         sourceEmbeds: [String: WikiLinkMarkdown.SourceEmbedInfo],
-        richFenceAliases: Set<MarkdownRichFenceAlias>
+        richFenceClaims: [RendererFenceAlias: RendererFenceClaimAssignment] = [:]
     ) {
         self.sourceEmbeds = sourceEmbeds
-        self.richFenceAliases = richFenceAliases
+        self.richFenceClaims = richFenceClaims
     }
 
     public func sourceEmbedInfo(for name: String) -> WikiLinkMarkdown.SourceEmbedInfo? {
         sourceEmbeds[name.lowercased()]
     }
 
-    public func allowsRichFence(_ alias: MarkdownRichFenceAlias) -> Bool {
-        richFenceAliases.contains(alias)
+    /// The claim answering one rich-fence alias, or `nil` when no available
+    /// descriptor claims it (never installed, removed, or safe-mode suppressed).
+    public func fenceClaim(for alias: RendererFenceAlias) -> RendererFenceClaimAssignment? {
+        richFenceClaims[alias]
+    }
+
+    public func allowsRichFence(_ alias: RendererFenceAlias) -> Bool {
+        fenceClaim(for: alias) != nil
     }
 }

@@ -16,8 +16,9 @@ enum BundledRendererPackages {
     static let excalidrawVersion: RendererPackageVersion = {
         // Bumped with the package bytes: an installed version pins its exact
         // hash, so a changed asset at the same version fails closed and the
-        // machine keeps the old package.
-        do { return try RendererPackageVersion(validating: "1.0.3") }
+        // machine keeps the old package. 1.0.4 adds the package-declared
+        // `excalidraw` fence claim (manifest data only — no host Swift).
+        do { return try RendererPackageVersion(validating: "1.0.4") }
         catch { preconditionFailure("Invalid bundled Excalidraw version: \(error)") }
     }()
 
@@ -25,6 +26,10 @@ enum BundledRendererPackages {
         do { return try RendererRegistrationID(validating: "excalidraw") }
         catch { preconditionFailure("Invalid bundled Excalidraw registration ID: \(error)") }
     }()
+
+    /// The reviewed package's display name, for host presentation paths that
+    /// know the bundled reference (reader cards, renderer windows).
+    static let excalidrawDisplayName = "Excalidraw"
 
     static func excalidrawResourceURL() -> URL? {
         Bundle.main.url(forResource: "Excalidraw", withExtension: nil, subdirectory: "RendererPackages")

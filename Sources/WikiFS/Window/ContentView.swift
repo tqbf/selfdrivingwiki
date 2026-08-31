@@ -1,6 +1,7 @@
 import SwiftUI
 import WikiFSEngine
 import WikiFSCore
+import WikiFSTypes
 
 // pattern: Mixed (unavoidable)
 
@@ -118,6 +119,15 @@ struct ContentView: View {
             case .none, .newChat, .changeLog, .bookmark:
                 rightInspector.updateRegistration(nil)
             }
+        }
+        // Package-declared rich fences: thread the registry state into the
+        // store model so `renderContext()` — and therefore every reader, chat
+        // transcript, and activity window — resolves fence claims from data.
+        // The built-in table is app-layer data; the enabled descriptors follow
+        // the host snapshot, and a change invalidates the memoized context.
+        .onChange(of: installedRendererHost.inputs.enabledDescriptors, initial: true) { _, descriptors in
+            store.rendererBuiltInDescriptors = BuiltInRendererDescriptors.all
+            store.rendererEnabledDescriptors = descriptors
         }
         // "Show In List" reveal (issue #183): a detail-view button requested the
         // sidebar reveal a page/source. Un-collapse the sidebar so the target list
