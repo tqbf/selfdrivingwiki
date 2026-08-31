@@ -327,6 +327,149 @@ struct D2RendererHostedValidationTests {
         try await handle.dispose()
     }
 
+    @Test("a d2 fence renders through the installed package's manifest-declared claim")
+    func d2FenceRendersThroughPackageClaim() async throws {
+        let fixture = try D2HostedFixture()
+        guard fixture.isGenerated else {
+            print("→ skip: no generated D2 package; run make d2-renderer-package first")
+            return
+        }
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        defer { lease.release() }
+        Self.prepareApplication()
+
+        let package = try fixture.validator.validate(directory: fixture.packageDirectory)
+        let descriptor = try #require(package.manifest.descriptors.only)
+
+        // The fence claim is manifest data: alias, MIME, and the disclosure
+        // role all arrive from the package. No host Swift knows the d2 format.
+        let claim = try #require(descriptor.fenceClaims.only)
+        #expect(claim.alias == RendererFenceAlias(rawValue: fixture.registrationID))
+        #expect(claim.inlineMIMEType.rawValue == "text/plain")
+
+        // Reader: the disclosure-row card resolves through the claim map.
+        let document = MarkdownDocumentIdentity(
+            pageID: PageID(rawValue: "01HTESTPAGE000000000000001"),
+            pageVersionID: PageVersionID(rawValue: "01HTESTPV00000000000000001"))
+        let claims = RendererFenceClaimResolver.resolve(
+            builtInDescriptors: BuiltInRendererDescriptors.all,
+            enabledInstalledDescriptors: [descriptor])
+        let admission = RendererEmbedActivationAdmission(
+            pageID: document.pageID,
+            pageVersionID: document.pageVersionID,
+            capability: .init(rawValue: UUID().uuidString),
+            generation: 1)
+        let options = MarkdownRenderOptions(
+            codeHighlighting: .disabled,
+            rendererEmbedProjection: RendererEmbedProjection(
+                sourceEmbeds: [:],
+                richFenceClaims: claims),
+            documentIdentity: document,
+            rendererActivationAdmission: admission)
+        let html = MarkdownHTMLRenderer.render("```d2\nx -> y\n```", options: options)
+        #expect(html.contains("sdw-renderer-card"))
+        #expect(html.contains("data-renderer-reference=\"\(descriptor.reference.packageID.rawValue)/\(descriptor.reference.version.rawValue)/\(descriptor.reference.registrationID.rawValue)\""))
+        #expect(html.contains("renderer-action://open"))
+
+        // Hosted: the fence's inline artifact renders through the real package
+        // session — the same authorized input.read path sources use.
+        let bytes = Data("x -> y".utf8)
+        let block = try MarkdownFencedBlock(
+            documentIdentity: document,
+            parserOrdinal: 0,
+            rawInfoString: "d2",
+            bytes: bytes)
+        let artifact = try RendererEmbeddedContent.InlineArtifact(
+            pageID: document.pageID,
+            pageVersionID: document.pageVersionID,
+            blockID: try #require(block.blockID),
+            fenceAlias: claim.alias,
+            mimeType: claim.inlineMIMEType,
+            bytes: bytes)
+        let input = RendererBridgeInput.inlineArtifact(artifact)
+        // Inline artifacts round-trip from the artifact payload itself; the
+        // store parameter is the seam the sibling source tests use.
+        let store = try GRDBWikiStore()
+        let reader = RendererAuthorizedInputReader(
+            store: store,
+            authorizedInput: input)
+
+        let entryPoint = try #require(descriptor.webEntryPoint)
+        let provider = try ValidatedRendererPackageResourceProvider(
+            packageID: descriptor.reference.packageID,
+            version: descriptor.reference.version,
+            expectedPackageHash: package.packageHash,
+            installedRoot: package.stagedRoot,
+            validatedPackage: package)
+        let entryURL = RendererPackageScheme.url(
+            packageID: descriptor.reference.packageID,
+            version: descriptor.reference.version,
+            path: entryPoint.path)
+        let identity = InstalledRendererWebViewIdentity(
+            rendererReference: descriptor.reference,
+            entryURL: entryURL)
+        var session: WikiAppWebViewSession?
+        let view = WikiAppWebView(
+            identity: identity,
+            makeSession: { _, reportFailure in
+                let value = WikiAppWebViewSession(
+                    entryURL: entryURL,
+                    resourceProvider: provider,
+                    installedPackage: RendererPackageReservation(
+                        packageID: descriptor.reference.packageID,
+                        version: descriptor.reference.version),
+                    lifecycleFailureHandler: reportFailure,
+                    bridgeFactory: { sessionID in
+                        RendererContentWorldBroker(
+                            sessionID: sessionID,
+                            capability: .init(rawValue: UUID().uuidString),
+                            inputReader: reader,
+                            expectedOrigin: entryURL)
+                    },
+                    externalActivationPolicy: .disabled)
+                session = value
+                return value
+            },
+            onFailure: { failure in
+                Issue.record("Hosted D2 fence session failed: \(failure.kind)")
+            })
+        let host = NSHostingController(rootView: AnyView(view))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 720, height: 480),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false)
+        window.contentViewController = host
+        window.orderFront(nil)
+        defer {
+            host.rootView = AnyView(EmptyView())
+            session?.close()
+            window.orderOut(nil)
+            window.contentView = nil
+        }
+
+        try await Self.waitFor(description: "hosted D2 fence session") { session != nil }
+        let liveSession = try #require(session)
+        try await Self.waitForReady(liveSession, description: "hosted D2 fence package session")
+        let webView = try #require(liveSession.webView)
+
+        let rendered = try await Self.waitForJavaScriptStringWithState(
+            "document.querySelector('#diagram svg') ? 'diagram-rendered' : 'pending'",
+            expectedValue: "diagram-rendered",
+            in: webView,
+            description: "fence-declared D2 diagram",
+            timeout: .seconds(45),
+            state: """
+            (function() {
+                const errorRegion = document.getElementById('error');
+                return JSON.stringify({
+                    error: errorRegion && errorRegion.hidden === false ? errorRegion.textContent : 'hidden'
+                });
+            })()
+            """)
+        _ = rendered
+    }
+
     private static func prepareApplication() {
         let application = NSApplication.shared
         application.setActivationPolicy(.accessory)
