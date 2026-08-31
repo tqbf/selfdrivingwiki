@@ -123,6 +123,24 @@ jobs:
         env:
           WIKIFS_APP_TESTS: "1"
         run: xcrun swift test --parallel --num-workers 1 --filter 'RendererPackageSchemeHandlerTests|RendererContentWorldBridgeTests|RendererExternalLinkRedemptionGateTests|WikiAppWebViewSessionTests|WikiAppWebViewTests'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.0'
+      - name: Generate and verify the D2 renderer package
+        # The D2 package is generated on demand (no vendored bytes in the repo).
+        # This is the only network-using step: it downloads the pinned upstream
+        # source tarball, builds the WASM with the locked recipe (pure-Go layout
+        # engines, so no JS eval is needed), verifies the supply-chain gate
+        # (including a tamper leg), validates the generated package, and runs
+        # the offline D2 suites plus the CSP boundary pin. Hosted WebKit D2
+        # suites stay local-only by the same exclusion policy as the other
+        # WebKit suites above.
+        timeout-minutes: 30
+        run: |
+          brew install binaryen
+          make d2-renderer-package
+          make d2-renderer-package-check
+          xcrun swift test --parallel --num-workers 1 --filter 'D2RendererPackageMatchingTests|D2ViewerTemplateTests|D2GeneratedPackageValidationTests|D2PackageLockTests|D2SourceNeutralityTests|RendererCapabilityBoundaryPolicyTests'
 
   # Linux is not a supported product platform. The retained opt-in diagnostic
   # is `make test-linux`; it is not a pull-request or release gate. Keep this

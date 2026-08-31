@@ -1,0 +1,27 @@
+<!--
+D2 renderer package entry document. Static and read-only.
+
+Loaded through the renderer-package scheme with a restrictive CSP: no inline
+style, no inline script, no network origins. The companion d2-viewer.js boots
+the pinned D2 WebAssembly module on the main thread, reads the authorized
+source once through the native input.read bridge, and mounts the rendered SVG.
+-->
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>D2 renderer</title>
+    <script src="wasm_exec.js" defer></script>
+    <script src="d2-viewer.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <h1>D2 diagram</h1>
+      <p id="status" role="status">Rendering the diagram.</p>
+      <p id="error" role="status" hidden></p>
+      <div id="diagram"></div>
+    </main>
+  </body>
+</html>
