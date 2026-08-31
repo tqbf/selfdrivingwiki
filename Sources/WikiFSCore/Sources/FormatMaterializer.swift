@@ -282,17 +282,25 @@ public enum FormatMaterializer {
     }
 
     /// Extension for a `text/*` response: map the common ones, else fall back to
-    /// `extensionHint`, else `txt`.
+    /// `extensionHint`, else `txt`. A plain-text file keeps its own extension
+    /// when it has one: the sniff says only "this is text", and the extension is
+    /// the user's format declaration — an `architecture.d2` must not be silently
+    /// rewritten to `architecture.txt`.
     static func textExtension(forMIME mime: String, extensionHint: String?) -> String {
         if let jsonExtension = jsonDocumentExtension(from: extensionHint) {
             return jsonExtension
         }
         switch mime {
         case MimeType.markdown, MimeType.markdownX: return "md"
-        case "text/plain": return "txt"
         case "text/csv": return "csv"
         case "text/css": return "css"
         case "text/javascript": return "js"
+        case "text/plain":
+            if let hint = extensionHint?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+               !hint.isEmpty, hint.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) {
+                return hint
+            }
+            return "txt"
         default:
             if let ext = extensionHint, !ext.isEmpty { return ext }
             return "txt"
