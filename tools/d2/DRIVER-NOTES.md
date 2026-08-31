@@ -33,7 +33,11 @@ wasm-opt -Oz --enable-nontrapping-float-to-int --enable-bulk-memory \
 ```
 
 - Go 1.27.0 and binaryen's wasm-opt 132 (versions pinned in the lock; the
-  generator hard-fails on a toolchain mismatch).
+  generator hard-fails on a toolchain mismatch). Get wasm-opt from the pinned
+  binaryen release — `binaryen-version_132-arm64-macos.tar.gz` at
+  https://github.com/WebAssembly/binaryen/releases/tag/version_132 — not brew:
+  brew's bottle version varies by macOS build (CI runners have resolved 131
+  against this lock's 132).
 - `-buildvcs=false` and `-trimpath` keep the build byte-reproducible; two
   consecutive builds produced identical SHA-256 digests, and the lock pins
   the optimized artifact digest (`bd11a89b…89ac9`, 33,349,990 bytes — just

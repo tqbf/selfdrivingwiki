@@ -65,7 +65,8 @@ done
 for tool in python3 curl shasum tar go wasm-opt; do
     command -v "${tool}" >/dev/null 2>&1 || {
         echo "error: required tool not found: ${tool}" >&2
-        echo "  go: https://go.dev/dl/  wasm-opt: brew install binaryen" >&2
+        echo "  go: https://go.dev/dl/  wasm-opt: the binaryen release the lock pins (see build.wasmOptVersion), e.g." >&2
+        echo "  https://github.com/WebAssembly/binaryen/releases/tag/version_132" >&2
         exit 1
     }
 done
