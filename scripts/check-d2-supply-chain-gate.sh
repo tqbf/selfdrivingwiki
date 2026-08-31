@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #
 # Proves the D2 package supply-chain gate end to end: corrupts the cached
-# pinned npm tarball by one byte, requires the generator to exit nonzero, and
-# restores the cache afterwards. Run via `make d2-renderer-package-check`.
+# pinned upstream source tarball by one byte, requires the generator to exit
+# nonzero, and restores the cache afterwards. Run via
+# `make d2-renderer-package-check`.
 
 set -euo pipefail
 
@@ -31,7 +32,6 @@ if [ -f "${BACKUP}" ]; then
     echo "→ restored a leftover tamper backup before starting"
 fi
 
-BACKUP="${TARBALL_PATH}.tamper-backup"
 cleanup() {
     if [ -f "${BACKUP}" ]; then
         mv "${BACKUP}" "${TARBALL_PATH}"
