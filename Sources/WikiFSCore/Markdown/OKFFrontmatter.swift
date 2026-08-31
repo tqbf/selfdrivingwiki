@@ -55,6 +55,18 @@ public struct OKFActor: Equatable, Sendable {
         }
     }
 
+    /// The artifact producer for a `sources` entry's `author` field (OKF v0.2
+    /// §5.1) — TRUTHFUL-WHERE-KNOWN: returns nil when no producer name is
+    /// recorded, so the emitter omits `author` entirely. Unlike
+    /// `sourceActor(producerName:producerVersion:fallbackOrigin:)`, this never
+    /// falls back to a derivation origin (`process:extraction` describes how
+    /// bytes were derived, not who authored the artifact — emitting it as an
+    /// author would fabricate a credibility signal).
+    public static func producerActor(name: String?, version: String?) -> OKFActor? {
+        guard let name, !name.isEmpty else { return nil }
+        return normalizedProducer(rawName: name, version: version)
+    }
+
     private static func normalizedProducer(rawName: String, version: String?) -> OKFActor {
         if rawName.hasPrefix("human:") || rawName.hasPrefix("process:") || rawName.contains("/") {
             return OKFActor(rawValue: rawName)
@@ -383,13 +395,53 @@ public enum OKFResource: Equatable, Sendable {
     }
 }
 
+/// The deterministic usage interval for one `sources` entry (OKF v0.2 §5.1):
+/// `[from, to]` = `[source.created_at, latest citing page's updated_at]`.
+/// Only emitted when the entry's `usageCount` is known and > 0.
+public struct OKFUsageWindow: Equatable, Sendable {
+    public let from: Date
+    public let to: Date
+
+    public init(from: Date, to: Date) {
+        self.from = from
+        self.to = to
+    }
+}
+
 public struct OKFSourceReference: Equatable, Sendable {
     public let resource: OKFResource
     public let title: String?
+    /// Stable attribution key — the `SourceID` raw value (OKF v0.2 §5.1 `id`).
+    /// Present on every projected entry.
+    public let id: String?
+    /// Producer of the artifact the entry points at (§5.1 `author`).
+    /// Nil = unknown → key omitted (truthful-omissive emission).
+    public let author: OKFActor?
+    /// Producer-defined usage measure: the number of DISTINCT pages citing the
+    /// source via a cite-role `source_links` row (NOT reads/views). Emitted
+    /// whenever known, including 0.
+    public let usageCount: Int?
+    /// The source row's `updated_at` (§5.1 `last_modified`).
+    public let lastModified: Date?
+    /// Usage interval; only emitted when `usageCount` is known and > 0.
+    public let usageWindow: OKFUsageWindow?
 
-    public init(resource: OKFResource, title: String? = nil) {
+    public init(
+        resource: OKFResource,
+        title: String? = nil,
+        id: String? = nil,
+        author: OKFActor? = nil,
+        usageCount: Int? = nil,
+        lastModified: Date? = nil,
+        usageWindow: OKFUsageWindow? = nil
+    ) {
         self.resource = resource
         self.title = title
+        self.id = id
+        self.author = author
+        self.usageCount = usageCount
+        self.lastModified = lastModified
+        self.usageWindow = usageWindow
     }
 }
 
@@ -464,9 +516,31 @@ enum OKFFrontmatter {
         if !sources.isEmpty {
             lines.append("sources:")
             for source in sources {
-                lines.append("  - resource: \(yamlString(source.resource.scalarValue))")
+                // Exact key order (frozen by exact-string serializer tests):
+                // id → resource → title → author → usage_count → last_modified
+                // → usage_window. `id` leads as the stable attribution key.
+                // Truthful-omissive: every key whose value is unknown is absent.
+                if let id = source.id {
+                    lines.append("  - id: \(yamlString(id))")
+                    lines.append("    resource: \(yamlString(source.resource.scalarValue))")
+                } else {
+                    lines.append("  - resource: \(yamlString(source.resource.scalarValue))")
+                }
                 if let title = source.title {
                     lines.append("    title: \(yamlString(title))")
+                }
+                if let author = source.author {
+                    lines.append("    author: \(yamlString(author.rawValue))")
+                }
+                if let usageCount = source.usageCount {
+                    lines.append("    usage_count: \(usageCount)")
+                }
+                if let lastModified = source.lastModified {
+                    lines.append("    last_modified: \(iso8601(lastModified))")
+                }
+                if let window = source.usageWindow, let usageCount = source.usageCount, usageCount > 0 {
+                    lines.append(
+                        "    usage_window: { from: \(iso8601(window.from)), to: \(iso8601(window.to)) }")
                 }
             }
         }

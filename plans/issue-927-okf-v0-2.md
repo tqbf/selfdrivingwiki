@@ -80,13 +80,47 @@ frontmatter family.
 
 ## Constraints and limits
 
-- No `verified` emission: there is no model-level verification history for
-  pages or source markdown versions.
-- No `status` or `stale_after`: the current page/source model does not encode
-  lifecycle state or freshness deadlines.
-- No source credibility signals (`author`, `usage_count`, `last_modified`):
-  the current store does not carry objective per-source credibility facts in a
-  shape that matches the OKF semantics.
+- Trust metadata (`verified`, `status`, `stale_after`) emits when an author has
+  recorded it (schema v52, issue #940). A key stays absent while no author has
+  recorded a claim.
+- Attested computation stays out of scope.
+
+### Source credibility signals (OKF v0.2 §5.1)
+
+The projection emits these signals from facts the store already holds. No
+schema change was needed.
+
+- `id` — the `SourceID` raw value. Every entry carries it. It is the stable
+  attribution key.
+- `last_modified` — the `sources.updated_at` timestamp. Every entry carries it.
+- `usage_count` — the number of distinct pages that cite the source through a
+  `cite`-role `source_links` row. This is a producer-defined meaning:
+  cited-by-N-pages, not reads and not views. A known count of zero is emitted.
+- `usage_window` — `{ from: <source.created_at>, to: <latest citing page's
+  updated_at> }`. The window is emitted only when `usage_count` is known and
+  greater than zero.
+- `author` — the producer recorded on the head markdown version, as
+  `<name>/<version>` or `process:<name>`. Page `sources` entries point at the
+  source concept, so they carry this producer when one is recorded. The
+  source-markdown self-reference points at the raw ingested artifact, and the
+  store does not know its author, so that entry omits `author`. A derivation
+  origin such as `process:extraction` tells how bytes were derived. The
+  projection never emits a derivation origin as an author, because that would
+  fabricate a claim.
+
+Truthful omission: a key whose value is unknown is absent from the YAML. The
+projection never emits a placeholder or a guessed value.
+
+Determinism: every signal value derives from stored rows. No signal reads the
+wall clock. Identical database state produces byte-identical projected bytes
+across reads and across process launches.
+
+Item-version coordination: page and source-markdown nodes append
+`:prov:<digest>` to their content versions on both node paths, leaf and
+enumerated. The digest folds every emitted signal, including `last_modified`.
+So a citation edit on one page, or a re-ingest of a cited source, advances the
+item versions of every co-citing concept. The global change token already
+covers the feeding row families through the pages and sources contributors.
 
 ## Implementation notes
 

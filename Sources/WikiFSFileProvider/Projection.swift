@@ -363,6 +363,16 @@ struct Projection {
         /// `cachedLinkMaps`.
         private var cachedHeads: [String: SourceMarkdownVersion]?
 
+        /// Per-scope credibility-signal caches (#927): cite-usage signals +
+        /// head producers, grow-only and token-invalidated like the caches
+        /// above. `cachedSignalIDs` tracks exactly which source ids the maps
+        /// COVER — an uncited source is legitimately absent from `signals`
+        /// (the aggregate omits it), but a not-yet-fetched id must trigger a
+        /// fetch, never a silent count 0.
+        private var cachedSignalIDs: Set<String>?
+        private var cachedUsageSignals: [String: GRDBWikiStore.SourceUsageSignal]?
+        private var cachedHeadProducers: [String: GRDBWikiStore.SourceHeadProducer]?
+
         init(databaseURL: URL?, wikiID: WikiID) {
             self.databaseURL = databaseURL
             self.wikiID = wikiID
@@ -397,6 +407,9 @@ struct Projection {
                 cachedToken = value
                 cachedLinkMaps = nil
                 cachedHeads = nil
+                cachedSignalIDs = nil
+                cachedUsageSignals = nil
+                cachedHeadProducers = nil
             }
         }
 
@@ -422,6 +435,43 @@ struct Projection {
         func cacheHeads(_ heads: [String: SourceMarkdownVersion]) {
             lock.lock(); defer { lock.unlock() }
             cachedHeads = heads
+        }
+
+        /// The source ids the credibility-signal caches cover (nil = nothing fetched yet).
+        var signalIDs: Set<String> {
+            lock.lock(); defer { lock.unlock() }
+            return cachedSignalIDs ?? []
+        }
+
+        /// The cached cite-usage signals, or nil if not yet fetched for this scope.
+        var usageSignals: [String: GRDBWikiStore.SourceUsageSignal]? {
+            lock.lock(); defer { lock.unlock() }
+            return cachedUsageSignals
+        }
+
+        /// The cached head producers, or nil if not yet fetched for this scope.
+        var headProducers: [String: GRDBWikiStore.SourceHeadProducer]? {
+            lock.lock(); defer { lock.unlock() }
+            return cachedHeadProducers
+        }
+
+        /// Merge one batched fetch into the credibility-signal caches, growing
+        /// the covered id set. Idempotent; callers pass the ids they asked for.
+        func mergeSignalCaches(
+            ids: [SourceID],
+            signals: [SourceID: GRDBWikiStore.SourceUsageSignal],
+            producers: [SourceID: GRDBWikiStore.SourceHeadProducer]
+        ) {
+            lock.lock(); defer { lock.unlock() }
+            var covered = cachedSignalIDs ?? []
+            for id in ids { covered.insert(id.rawValue) }
+            cachedSignalIDs = covered
+            var mergedSignals = cachedUsageSignals ?? [:]
+            for (id, signal) in signals { mergedSignals[id.rawValue] = signal }
+            cachedUsageSignals = mergedSignals
+            var mergedProducers = cachedHeadProducers ?? [:]
+            for (id, producer) in producers { mergedProducers[id.rawValue] = producer }
+            cachedHeadProducers = mergedProducers
         }
     }
 
@@ -570,22 +620,149 @@ struct Projection {
         return raw
     }
 
-    private func pageContent(for page: WikiPage, in store: GRDBWikiStore) throws -> (content: String, revision: Int64) {
+    /// Resolve cite-usage signals + head producers for `ids`, using the
+    /// read-scope cache for already-covered ids and fetching the remainder in
+    /// one batched pair of queries. Errors propagate: a broken aggregate must
+    /// degrade the node (like every other store failure in these paths), not
+    /// fabricate `usage_count: 0`. Without a read scope the fresh fetch result
+    /// is returned directly — the caller gets exactly the ids it asked about.
+    private func credibilitySignals(
+        for ids: [SourceID], in store: GRDBWikiStore
+    ) throws -> (signals: [String: GRDBWikiStore.SourceUsageSignal],
+                 producers: [String: GRDBWikiStore.SourceHeadProducer]) {
+        guard !ids.isEmpty else { return ([:], [:]) }
+        let covered = readStoreHolder?.signalIDs ?? []
+        let missing = ids.filter { !covered.contains($0.rawValue) }
+        if missing.isEmpty {
+            guard let scope = readStoreHolder else { return ([:], [:]) }
+            return (scope.usageSignals ?? [:], scope.headProducers ?? [:])
+        }
+        let signals = try store.sourceUsageSignals(sourceIDs: missing)
+        let producers = try store.sourceHeadProducers(sourceIDs: missing)
+        guard let scope = readStoreHolder else {
+            var signalMap: [String: GRDBWikiStore.SourceUsageSignal] = [:]
+            for (id, signal) in signals { signalMap[id.rawValue] = signal }
+            var producerMap: [String: GRDBWikiStore.SourceHeadProducer] = [:]
+            for (id, producer) in producers { producerMap[id.rawValue] = producer }
+            return (signalMap, producerMap)
+        }
+        scope.mergeSignalCaches(ids: missing, signals: signals, producers: producers)
+        return (scope.usageSignals ?? [:], scope.headProducers ?? [:])
+    }
+
+    /// Prefetch credibility signals for the read scope (one batched pair of
+    /// queries), mirroring the `cachedHeadsBySource()` scope cache. Called at
+    /// the top of `pageNodes` / `sourceNodes` so per-page content derivation
+    /// in the same enumeration pass never re-queries (#927). Pass the already-
+    /// fetched source rows when the caller has them (`sourceNodes` does);
+    /// `pageNodes` passes nil and the ids come from one `listAllSources` scan.
+    /// No-op without a scope or when the cache already covers every id. A
+    /// failure is logged, not thrown — the per-page fetches then surface the
+    /// real error if the aggregate is broken.
+    private func prefetchCredibilitySignals(
+        in store: GRDBWikiStore, sourceIDs allIDs: [SourceID]? = nil
+    ) {
+        guard readStoreHolder != nil else { return }
+        let ids = allIDs ?? ((DebugLog.trying("listAllSources", operation: { try store.listAllSourcesOrderedByID() })) ?? [])
+            .map { SourceID(rawValue: $0.id) }
+        do {
+            _ = try credibilitySignals(for: ids, in: store)
+        } catch {
+            DebugLog.fileprovider("credibility-signal prefetch failed: \(error)")
+        }
+    }
+
+    /// Deterministic digest over every emitted credibility signal, folded over
+    /// the entry list in its deterministic (deduped, ordered) sequence. Per
+    /// entry: `id:count:lastModified:from:to:author` (`-` for unknown parts).
+    /// Timestamps fold at FULL Double precision while the YAML emits
+    /// second-precision ISO-8601 — deliberately conservative: sub-second row
+    /// changes can churn the version without changing the bytes, but can never
+    /// leave changed bytes under a flat version. SHA-256 — NOT `hashValue`,
+    /// which is seeded per process and would churn item versions across daemon
+    /// launches.
+    static func provenanceDigest(_ references: [OKFSourceReference]) -> String {
+        let folded = references.map { ref -> String in
+            [
+                ref.id ?? "-",
+                ref.usageCount.map(String.init) ?? "-",
+                ref.lastModified.map { String($0.timeIntervalSince1970) } ?? "-",
+                ref.usageWindow.map { String($0.from.timeIntervalSince1970) } ?? "-",
+                ref.usageWindow.map { String($0.to.timeIntervalSince1970) } ?? "-",
+                ref.author?.rawValue ?? "-",
+            ].joined(separator: ":")
+        }.joined(separator: "|")
+        return RendererSHA256.digest(Data(folded.utf8)).hex
+    }
+
+    /// The `sources` entry for one CITED SOURCE CONCEPT (the derived `.md`):
+    /// carries every credibility signal, with `author` = the head markdown's
+    /// producer where one is recorded (nil otherwise — never a derivation
+    /// origin, which describes how bytes were derived, not who authored them).
+    static func sourceConceptReference(
+        source: SourceSummary,
+        signal: GRDBWikiStore.SourceUsageSignal?,
+        headProducer: GRDBWikiStore.SourceHeadProducer?
+    ) -> OKFSourceReference {
+        let citeCount = signal?.citeCount ?? 0
+        return OKFSourceReference(
+            resource: .bundlePath("/sources/by-id/\(FilenameEscaping.byIDSourceFilename(sourceID: source.id, ext: "md"))"),
+            title: source.effectiveName,
+            id: source.id.rawValue,
+            author: OKFActor.producerActor(
+                name: headProducer?.producerName,
+                version: headProducer?.producerVersion),
+            usageCount: citeCount,
+            lastModified: source.updatedAt,
+            usageWindow: signal?.latestCitingPageUpdatedAt.flatMap { latest in
+                citeCount > 0 ? OKFUsageWindow(from: source.createdAt, to: latest) : nil
+            }
+        )
+    }
+
+    /// The source-markdown SELF-reference: points at the RAW ingested artifact
+    /// (the source's own extension), whose author the store does not know —
+    /// `author` omitted (truthful-omissive). Carries `id`, `last_modified`,
+    /// `usage_count`, and `usage_window` when cited.
+    static func sourceSelfReference(
+        source: SourceSummary,
+        signal: GRDBWikiStore.SourceUsageSignal?
+    ) -> OKFSourceReference {
+        let citeCount = signal?.citeCount ?? 0
+        return OKFSourceReference(
+            resource: .bundlePath("/sources/by-id/\(FilenameEscaping.byIDSourceFilename(sourceID: source.id, ext: source.ext))"),
+            title: source.effectiveName,
+            id: source.id.rawValue,
+            author: nil,
+            usageCount: citeCount,
+            lastModified: source.updatedAt,
+            usageWindow: signal?.latestCitingPageUpdatedAt.flatMap { latest in
+                citeCount > 0 ? OKFUsageWindow(from: source.createdAt, to: latest) : nil
+            }
+        )
+    }
+
+    private func pageContent(for page: WikiPage, in store: GRDBWikiStore) throws -> (content: String, revision: Int64, provenanceDigest: String) {
         let links = (DebugLog.trying("sourceLinks", operation: { try store.sourceLinks(from: page.id) }) ?? [])
             .filter { $0.role == .cite }
-        var references: [OKFSourceReference] = []
-        references.reserveCapacity(links.count)
-        var seenSourceIDs = Set<SourceID>()
-        for link in links where seenSourceIDs.insert(link.sourceID).inserted {
+        var citedIDs: [SourceID] = []
+        var sourcesByID: [SourceID: SourceSummary] = [:]
+        for link in links where sourcesByID[link.sourceID] == nil {
             guard let source = DebugLog.trying("getSource", operation: { try store.getSource(id: link.sourceID) }) else {
                 continue
             }
-            references.append(
-                OKFSourceReference(
-                    resource: .bundlePath("/sources/by-id/\(FilenameEscaping.byIDSourceFilename(sourceID: source.id, ext: "md"))"),
-                    title: source.effectiveName
-                )
-            )
+            sourcesByID[link.sourceID] = source
+            citedIDs.append(link.sourceID)
+        }
+        let credibility = try credibilitySignals(for: citedIDs, in: store)
+        var references: [OKFSourceReference] = []
+        references.reserveCapacity(citedIDs.count)
+        for id in citedIDs {
+            guard let source = sourcesByID[id] else { continue }
+            references.append(Self.sourceConceptReference(
+                source: source,
+                signal: credibility.signals[id.rawValue],
+                headProducer: credibility.producers[id.rawValue]))
         }
 
         let generated = OKFGenerated(
@@ -601,28 +778,29 @@ struct Projection {
                 for: page,
                 metadata: PageOKFMetadata(generated: generated, sources: references, trust: trust)
             ),
-            trust.projectionRevision
+            trust.projectionRevision,
+            Self.provenanceDigest(references)
         )
     }
 
     private func sourceMarkdownContent(for source: SourceSummary,
                                        head: SourceMarkdownVersion,
-                                       in store: GRDBWikiStore) throws -> (content: String, revision: Int64) {
-        let producer = DebugLog.trying("processedMarkdownProducer", operation: {
-            try store.processedMarkdownProducer(versionID: head.id)
-        })
+                                       in store: GRDBWikiStore) throws -> (content: String, revision: Int64, provenanceDigest: String) {
+        let credibility = try credibilitySignals(for: [source.id], in: store)
+        // Same head resolution as the signals fetch, so the producer here is
+        // the one recorded on `head` — no separate per-leaf query needed.
+        let headProducer = credibility.producers[source.id.rawValue]
         let generated = OKFGenerated(
             by: OKFActor.sourceActor(
-                producerName: producer?.name,
-                producerVersion: producer?.version,
+                producerName: headProducer?.producerName,
+                producerVersion: headProducer?.producerVersion,
                 fallbackOrigin: head.origin
             ),
             at: head.createdAt
         )
-        let resource = OKFSourceReference(
-            resource: .bundlePath("/sources/by-id/\(FilenameEscaping.byIDSourceFilename(sourceID: source.id, ext: source.ext))"),
-            title: source.effectiveName
-        )
+        let resource = Self.sourceSelfReference(
+            source: source,
+            signal: credibility.signals[source.id.rawValue])
         let trust = try store.sourceMarkdownOKFMetadata(
             versionID: head.id, includeCorrected: false)?.metadata ?? OKFConceptMetadata()
         return (
@@ -635,7 +813,8 @@ struct Projection {
                     trust: trust
                 )
             ),
-            trust.projectionRevision
+            trust.projectionRevision,
+            Self.provenanceDigest([resource])
         )
     }
 
@@ -690,11 +869,13 @@ struct Projection {
                                                    baseDir: Self.pagesByTitleDir)
                 return Self.pageFileNode(
                     for: id, page: page, contentData: data,
-                    projectionRevision: projected.revision)
+                    projectionRevision: projected.revision,
+                    provenanceDigest: projected.provenanceDigest)
             }
             return Self.pageFileNode(
                 for: id, page: page, contentData: Data(projected.content.utf8),
-                projectionRevision: projected.revision)
+                projectionRevision: projected.revision,
+                provenanceDigest: projected.provenanceDigest)
         },
         contentForLeaf: { projection, id in
             guard let ulid = Identity.pageULID(from: id),
@@ -738,12 +919,14 @@ struct Projection {
                                                        baseDir: Self.sourcesByNameDir)
                     return Self.sourceMarkdownNode(
                         for: id, source: file, head: head, contentData: data,
-                        projectionRevision: projected.revision)
+                        projectionRevision: projected.revision,
+                        provenanceDigest: projected.provenanceDigest)
                 }
                 return Self.sourceMarkdownNode(
                     for: id, source: file, head: head,
                     contentData: Data(projected.content.utf8),
-                    projectionRevision: projected.revision)
+                    projectionRevision: projected.revision,
+                    provenanceDigest: projected.provenanceDigest)
             }
             if let ulid = Identity.fileULID(from: id) {
                 guard let store = projection.openReadStore(),
@@ -1094,8 +1277,15 @@ struct Projection {
                 }) else { return nil }
                 let body = rewriteLinks(projected.content, maps: maps, baseDir: baseDir)
                 let name = Self.sanitizeFilename(page.title) + ".md"
+                // The bookmarked page's bytes embed credibility signals that can
+                // move WITHOUT the change token moving (a standalone
+                // `replaceLinks` rewrites cite edges without bumping the pages
+                // row). Fold the digest in so these refs re-fetch in lockstep
+                // with the flat page items (#927).
+                let pageVersion = Data(
+                    (changeToken() + ":prov:" + projected.provenanceDigest).utf8)
                 return .file(id: id, parent: parent, name: name, size: body.count,
-                             version: version, metadataVersion: version,
+                             version: pageVersion, metadataVersion: version,
                              created: page.createdAt, modified: page.updatedAt)
             }
             let body = Data("# Stale reference\n\nThis bookmark points to a deleted page.".utf8)
@@ -1277,14 +1467,17 @@ struct Projection {
 
     /// Build a file node for a processed markdown head (the `.md` sibling of a
     /// verbatim source, projected under both `by-id` and `by-name` views).
-    /// Always has `ingestedExt:"md"`; versioned by the head's ULID so any
-    /// edit/revert bumps the item version and invalidates the daemon's cache.
+    /// Always has `ingestedExt:"md"`; versioned by the head's ULID (any
+    /// edit/revert bumps it), the trust revision when present, and the
+    /// credibility-signal digest (`:prov:`) so co-citing/usage changes
+    /// invalidate the daemon's materialized bytes (#927).
     static func sourceMarkdownNode(
         for id: NSFileProviderItemIdentifier,
         source: SourceSummary,
         head: SourceMarkdownVersion,
         contentData: Data? = nil,
-        projectionRevision: Int64 = 0
+        projectionRevision: Int64 = 0,
+        provenanceDigest: String? = nil
     ) -> ProjectedNode {
         let raw = id.rawValue
         let isByName = raw.hasPrefix(Identity.sourceMarkdownByNamePrefix)
@@ -1295,9 +1488,12 @@ struct Projection {
             : FilenameEscaping.byIDSourceFilename(sourceID: source.id, ext: "md")
         let parent = isByName ? Identity.sourcesByName : Identity.sourcesByID
         let size = contentData?.count ?? head.content.utf8.count
-        let contentVersion = projectionRevision == 0
+        var contentVersion = projectionRevision == 0
             ? head.id.rawValue
             : "\(head.id.rawValue):okf:\(projectionRevision)"
+        if let provenanceDigest {
+            contentVersion += ":prov:\(provenanceDigest)"
+        }
         return .file(
             id: id, parent: parent, name: name, size: size,
             version: Data(contentVersion.utf8),
@@ -1340,11 +1536,15 @@ struct Projection {
     /// Build a file node for a page row, under whichever view `id` belongs to.
     /// Pass `contentData` when the caller has already computed the rewritten
     /// bytes (by-title view) so the reported `documentSize` matches what
-    /// `contents(for:)` will serve — a mismatch truncates `cat`.
+    /// `contents(for:)` will serve — a mismatch truncates `cat`. The
+    /// credibility-signal digest (`:prov:`) advances the version when rows
+    /// OTHER than the page's own row change (cite links, co-citing pages,
+    /// cited sources' producer rows) — `page.version` alone misses those.
     static func pageFileNode(for id: NSFileProviderItemIdentifier,
                              page: WikiPage,
                              contentData: Data? = nil,
-                             projectionRevision: Int64 = 0) -> ProjectedNode {
+                             projectionRevision: Int64 = 0,
+                             provenanceDigest: String? = nil) -> ProjectedNode {
         let raw = id.rawValue
         let isByTitle = raw.hasPrefix(Identity.byTitlePrefix)
         let name = isByTitle
@@ -1352,9 +1552,12 @@ struct Projection {
             : FilenameEscaping.byIDFilename(pageID: page.id.rawValue)
         let parent = isByTitle ? Identity.pagesByTitle : Identity.pagesByID
         let fileData = contentData ?? Data(PageMarkdownFormat.fileContent(for: page).utf8)
-        let contentVersion = projectionRevision == 0
+        var contentVersion = projectionRevision == 0
             ? String(page.version)
             : "\(page.version):okf:\(projectionRevision)"
+        if let provenanceDigest {
+            contentVersion += ":prov:\(provenanceDigest)"
+        }
         return .file(
             id: id, parent: parent, name: name, size: fileData.count,
             version: Data(contentVersion.utf8),
@@ -1670,18 +1873,33 @@ struct Projection {
     }
 
     /// All page rows projected as file nodes under the given view, ordered by id
-    /// (ULID == creation order). For the by-title view, builds a title map once
-    /// and computes rewritten content per page so `documentSize` matches the
-    /// rewritten bytes that `contents(for:)` will serve.
+    /// (ULID == creation order). Derives each page's OKF content once (sized
+    /// from the same bytes `contents(for:)` serves — both views, so no
+    /// size/content mismatch) and threads the credibility-signal digest into
+    /// the version. The signal maps are prefetched once per scope so per-page
+    /// derivation never re-queries them (#927).
     private func pageNodes(byTitle: Bool) -> [ProjectedNode] {
         guard let store = openReadStore(),
               let pages = DebugLog.trying("listAllPages", operation: { try store.listAllPagesOrderedByID() }) else { return [] }
+        prefetchCredibilitySignals(in: store)
         let maps = byTitle ? cachedLinkMaps() : nil
         return pages.map { page in
             let id = byTitle ? Identity.pageByTitle(page.id.rawValue)
                              : Identity.pageByID(page.id.rawValue)
-            let contentData = maps.map { byTitleContent(for: page, maps: $0) }
-            return Self.pageFileNode(for: id, page: page, contentData: contentData)
+            guard let projected = DebugLog.trying("pageOKFContent", operation: {
+                try pageContent(for: page, in: store)
+            }) else {
+                // Failure fallback: keep the row listed (unlike the leaf path,
+                // which returns nil). `contents(for:)` runs the SAME queries,
+                // so a deterministic failure degrades both sides — there is no
+                // servable-but-mismatched pair. Only the unservable node keeps
+                // this pre-#927 size/shape.
+                return Self.pageFileNode(for: id, page: page)
+            }
+            let contentData = maps.map { rewriteLinks(projected.content, maps: $0, baseDir: Self.pagesByTitleDir) }
+                ?? Data(projected.content.utf8)
+            return Self.pageFileNode(for: id, page: page, contentData: contentData,
+                                     provenanceDigest: projected.provenanceDigest)
         }
     }
 
@@ -1696,6 +1914,9 @@ struct Projection {
         guard let store = openReadStore(),
               let files = DebugLog.trying("listAllSources", operation: { try store.listAllSourcesOrderedByID() }) else { return [] }
         let heads = cachedHeadsBySource()
+        prefetchCredibilitySignals(
+            in: store, sourceIDs: files.map { SourceID(rawValue: $0.id) })
+        let signals = readStoreHolder?.usageSignals ?? [:]
         // Build link maps once for by-name markdown sibling rewriting.
         let maps = byName ? cachedLinkMaps() : nil
         return files.flatMap { row in
@@ -1721,8 +1942,12 @@ struct Projection {
             let contentData = maps.map {
                 rewriteLinks(head.content, maps: $0, baseDir: Self.sourcesByNameDir)
             }
-            return [verbatimNode, Self.sourceMarkdownNode(for: markdownID, source: summary,
-                                                          head: head, contentData: contentData)]
+            // Same self-reference fold as `sourceMarkdownContent`, so enumerated
+            // versions and leaf versions advance together on the same inputs.
+            let selfReference = Self.sourceSelfReference(source: summary, signal: signals[row.id])
+            return [verbatimNode, Self.sourceMarkdownNode(
+                        for: markdownID, source: summary, head: head, contentData: contentData,
+                        provenanceDigest: Self.provenanceDigest([selfReference]))]
         }
     }
 
