@@ -158,6 +158,31 @@ public struct ExtractorRouteSettingsRow: Hashable, Sendable, Identifiable {
     public var id: String { descriptor.route.description }
 }
 
+/// Which well-known host adapter a raw adapter ID names (#1177).
+/// `HostExtractorID` intentionally carries no enum, so this role type is the
+/// single place that assigns presentation meaning to well-known IDs: display
+/// mappings and the recovery presenter ask the catalog instead of comparing
+/// raw values. Unknown IDs resolve to nil and callers take their generic
+/// fallback path.
+public enum ExtractorRouteHostRole: Hashable, Sendable {
+    /// The connected-service ACP adapter (the host's one PDF service choice).
+    case connectedServiceACP
+    /// Retired direct-API host names. Presentation folds both into their ACP
+    /// successor; the provider picker distinguishes them to prefill the
+    /// successor's provider draft. Execution never consults them.
+    case retiredDirectAnthropicAPI
+    case retiredDirectGeminiAPI
+    /// The Docling execution family: the reviewed installed lineage or the
+    /// retired Docling Serve host name. Both present and recover identically.
+    case doclingLineage
+    /// The reviewed pdf2md lineage, named by the retired local host id.
+    case pdf2mdLineage
+    /// The reviewed Defuddle lineage, named by the retired defuddle host id.
+    case defuddleLineage
+    /// The built-in tag-based HTML adapter.
+    case builtInTagBased
+}
+
 /// Host-owned route descriptors and non-package choices for the canonical
 /// routes. Package choices come from validated catalog records.
 public enum ExtractorRouteHostCatalog {
@@ -183,6 +208,41 @@ public enum ExtractorRouteHostCatalog {
             preconditionFailure("Invalid host adapter literal: \(rawValue)")
         }
         return .host(HostExtractorReference(adapterID: adapterID))
+    }
+
+    /// The one presentation map from well-known host adapter IDs to roles
+    /// (#1177). Every "which well-known adapter is this?" question routes
+    /// through here; no caller compares raw adapter values itself. An unknown
+    /// ID resolves to nil.
+    public static func role(forHostAdapterID adapterID: HostExtractorID) -> ExtractorRouteHostRole? {
+        switch adapterID.rawValue {
+        case ExtractionBackend.acp.rawValue: return .connectedServiceACP
+        case ExtractionBackend.anthropic.rawValue: return .retiredDirectAnthropicAPI
+        case ExtractionBackend.gemini.rawValue: return .retiredDirectGeminiAPI
+        case ExtractionBackend.doclingServe.rawValue: return .doclingLineage
+        case ExtractionBackend.localPdf2md.rawValue: return .pdf2mdLineage
+        case HtmlExtractionBackend.defuddle.rawValue: return .defuddleLineage
+        case HtmlExtractionBackend.tagBased.rawValue: return .builtInTagBased
+        default: return nil
+        }
+    }
+
+    /// Presentation role for a saved selection. Host names resolve through
+    /// `role(forHostAdapterID:)`; the Docling family additionally spans
+    /// namespaces, so the reviewed installed Docling lineage reports the same
+    /// role as the retired host name (the recovery presenter treats both as
+    /// one execution family). Every other reference — installed lineages and
+    /// the explicit no-default record — resolves to nil so callers take their
+    /// generic paths.
+    public static func role(for reference: ExtractionBackendReference?) -> ExtractorRouteHostRole? {
+        switch reference {
+        case .host(let host):
+            return role(forHostAdapterID: host.adapterID)
+        case .installed(let logical) where logical == ProcessExtractionServices.reviewedDoclingLogical:
+            return .doclingLineage
+        default:
+            return nil
+        }
     }
 
     /// Canonical routes in host display order (PDF first, then HTML, then
