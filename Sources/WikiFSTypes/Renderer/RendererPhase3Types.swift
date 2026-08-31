@@ -262,7 +262,7 @@ public struct MarkdownFenceInfo: Codable, Hashable, Sendable {
     /// They mirror `CodeLanguage.fromFenceInfo` (WikiFSCodeHighlighting): those
     /// labels keep their plain highlighted presentation; no descriptor may
     /// claim them. The pinned reader tests fail if the two lists drift.
-    static let ordinaryLanguageTokens: Set<String> = [
+    public static let ordinaryLanguageTokens: Set<String> = [
         "html", "xml", "scala", "java", "swift", "json", "jsonc",
     ]
 

@@ -59,16 +59,28 @@ host contains no format-specific fence knowledge. Design record:
   appear in `Sources/`), hosted D2 fence test. Docs: user guide, maintainer
   skill + guide, `plans/typed-markdown-embed-pipeline.md` correction, design
   record, PLAN.md row.
+- Implementation review (general-purpose subagent over the completed diff)
+  found no critical or high issues. Its two medium findings were both fixed:
+  the built-in claim injection moved into `ContentView.init` (the
+  `onChange(initial:)` placement could let a reader memoize a claim-less
+  context before injection, caught by the hosted production-root disclosure
+  test), and the unavailable-renderer notice now fires only for aliases the
+  store has actually seen claimed — ordinary language fences (`bash`,
+  `python`) stay silent plain code. The reserved set also folds in the
+  syntax-reserved ordinary-language labels so packages cannot claim them.
 
 ## Verification
 
-- `make test` (default graph): 4111 tests, 441 suites, all green.
+- `make test` (default graph): 4111 tests, 441 suites, all green — re-run
+  after the review fixes.
 - New suites pass: `PackageFenceClaimManifestTests` (11),
   `PackageFenceClaimRegistryTests` (5), `PackageFenceClaimAdmissionTests` (5),
-  `PackageFenceReaderPlanTests` (7), extended `MarkdownFenceInfoTests` +
+  `PackageFenceReaderPlanTests` (10), extended `MarkdownFenceInfoTests` +
   `RendererFenceClaimCodableTests`.
 - `WIKIFS_APP_TESTS=1 swift test` (opt-in app-tests target): the fence-related
-  suites pass, including `MarkdownHTMLRendererTests`,
+  suites pass, including `MarkdownHTMLRendererTests` (52 tests with the typed
+  markdown suite), `WikiAppWebViewTests` (15, including the hosted
+  production-root disclosure expansion), and
   `D2RendererHostedValidationTests.d2FenceRendersThroughPackageClaim`
   (real-window WebKit render of a `d2` fence through the generated package).
 - `scripts/check-cordis-boundaries`: verified. `uv run tools/validate_skills.py`:

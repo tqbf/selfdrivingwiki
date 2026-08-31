@@ -144,8 +144,16 @@ enum BuiltInRendererDescriptors {
     /// is the single definition of built-in fence authority: the runtime wiring
     /// injects it into package validation and activation, and host components
     /// (e.g. the JSON Canvas attachment factory) derive their checks from it.
+    /// Syntax-reserved ordinary-language labels are folded in so a package
+    /// cannot claim a programming-language label either.
     static var reservedFenceAliases: Set<RendererFenceAlias> {
-        Set(all.flatMap(\.fenceClaims).map(\.alias))
+        var reserved = Set(all.flatMap(\.fenceClaims).map(\.alias))
+        for token in MarkdownFenceInfo.ordinaryLanguageTokens {
+            if let alias = RendererFenceAlias(rawValue: token) {
+                reserved.insert(alias)
+            }
+        }
+        return reserved
     }
 
     /// The aliases one built-in renderer claims, for host components that need

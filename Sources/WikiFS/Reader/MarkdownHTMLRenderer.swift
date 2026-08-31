@@ -763,6 +763,12 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
             return plainCodeBlockHTML(code, cls: cls)
         }
         guard let claim = projection.fenceClaim(for: alias) else {
+            // Only an alias this render context has seen claimed explains its
+            // fallback; a token nothing ever claimed stays silent plain code
+            // (ordinary language fences like ```bash must not grow notices).
+            guard projection.unavailableFenceAliases.contains(alias) else {
+                return plainCodeBlockHTML(code, cls: cls)
+            }
             return plainCodeBlockHTML(code, cls: cls)
                 + #"<p class="sdw-renderer-card__fallback">\#(escape(Self.fallbackNotice(for: .packageAliasDisallowed)))</p>"#
         }

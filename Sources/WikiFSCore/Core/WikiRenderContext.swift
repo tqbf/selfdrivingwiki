@@ -109,7 +109,8 @@ public struct WikiRenderContext: Sendable {
         sourceDerivedChain: [SourceID: [SourceMarkdownVersionID]],
         siblingMaps: [SourceID: [String: SourceID]],
         blobScheme: String,
-        rendererFenceClaims: [RendererFenceAlias: RendererFenceClaimAssignment] = [:]
+        rendererFenceClaims: [RendererFenceAlias: RendererFenceClaimAssignment] = [:],
+        unavailableFenceAliases: Set<RendererFenceAlias> = []
     ) {
         self.pageTitles = pageTitles
         self.pageIDToName = pageIDToName
@@ -123,7 +124,8 @@ public struct WikiRenderContext: Sendable {
         self.siblingMaps = siblingMaps
         self.rendererEmbedProjection = RendererEmbedProjection(
             sourceEmbeds: embedMap,
-            richFenceClaims: rendererFenceClaims)
+            richFenceClaims: rendererFenceClaims,
+            unavailableFenceAliases: unavailableFenceAliases)
         self.blobScheme = blobScheme
     }
 
@@ -237,6 +239,12 @@ public struct WikiRenderContext: Sendable {
         let rendererFenceClaims = RendererFenceClaimResolver.resolve(
             builtInDescriptors: store.rendererBuiltInDescriptors,
             enabledInstalledDescriptors: store.rendererEnabledDescriptors)
+        // Remember every alias this store has seen claimed. A later registry
+        // refresh that drops a claimant (removal or safe-mode suppression)
+        // then explains its fences' fallback instead of rendering silently.
+        store.noteResolvedFenceAliases(Set(rendererFenceClaims.keys))
+        let unavailableFenceAliases = store.resolvedFenceAliases
+            .subtracting(rendererFenceClaims.keys)
         return WikiRenderContext(
             pageTitles: pageTitles,
             pageIDToName: pageIDToName,
@@ -249,7 +257,8 @@ public struct WikiRenderContext: Sendable {
             sourceDerivedChain: sourceDerivedChain,
             siblingMaps: siblingMaps,
             blobScheme: WikiLinkMarkdown.blobScheme,
-            rendererFenceClaims: rendererFenceClaims)
+            rendererFenceClaims: rendererFenceClaims,
+            unavailableFenceAliases: unavailableFenceAliases)
     }
 
     // MARK: - Render closures (pure — derived from captured data)
@@ -325,17 +334,23 @@ public struct WikiRenderContext: Sendable {
 
 /// Host-built projection of renderer-facing embed facts. It mirrors the source
 /// embed map and the registry-derived rich-fence claim map: an alias is rich
-/// exactly when some available descriptor claims it.
+/// exactly when some available descriptor claims it. Aliases this store has
+/// seen claimed but that are no longer available (package removed or
+/// safe-mode suppressed this session) ride along so their fences can explain
+/// the fallback instead of silently becoming plain code.
 public struct RendererEmbedProjection: Sendable {
     public let sourceEmbeds: [String: WikiLinkMarkdown.SourceEmbedInfo]
     public let richFenceClaims: [RendererFenceAlias: RendererFenceClaimAssignment]
+    public let unavailableFenceAliases: Set<RendererFenceAlias>
 
     public init(
         sourceEmbeds: [String: WikiLinkMarkdown.SourceEmbedInfo],
-        richFenceClaims: [RendererFenceAlias: RendererFenceClaimAssignment] = [:]
+        richFenceClaims: [RendererFenceAlias: RendererFenceClaimAssignment] = [:],
+        unavailableFenceAliases: Set<RendererFenceAlias> = []
     ) {
         self.sourceEmbeds = sourceEmbeds
         self.richFenceClaims = richFenceClaims
+        self.unavailableFenceAliases = unavailableFenceAliases
     }
 
     public func sourceEmbedInfo(for name: String) -> WikiLinkMarkdown.SourceEmbedInfo? {

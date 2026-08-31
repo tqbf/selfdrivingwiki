@@ -34,7 +34,7 @@ Markdown syntax selects the renderer role. A package can fill a compatible role,
 
 A rich fence is named by the first word of its info string. That name is live registry data: the built-in renderers claim `mermaid` and `jsoncanvas`, the bundled Excalidraw package claims `excalidraw`, and an installed package can claim its own names through its manifest's `fenceClaims`. A fence renders through whichever available renderer claims its name, so installing or removing a package changes that answer on the next render without a restart.
 
-Approved rich fences use a disclosure row. The row starts collapsed and shows **Open in Window** at the trailing edge. A fence whose claimant is not installed falls back to typed raw code with a notice that the renderer is not available here.
+Approved rich fences use a disclosure row. The row starts collapsed and shows **Open in Window** at the trailing edge. When a renderer that has been drawing a fence becomes unavailable (its package was removed or suppressed), the fence falls back to typed raw code with a notice that the renderer is not available here; a fence nobody ever claimed stays plain code.
 
 A claim names one alias and one inline MIME type. The declaring renderer must already fill the disclosure-row role. One alias belongs to one renderer per Mac: an import that claims an alias a built-in or another installed package already owns is rejected, and removing that package frees the alias.
 

@@ -47,9 +47,12 @@ stayed host-side (see Containment).
 - `MarkdownHTMLRenderer` resolves alias → claim → plan from the projection's
   claim map. The five per-alias switch tables and the hardcoded display-name
   cases are gone. Mermaid's native inline-SVG projection stays keyed to its
-  built-in claim (a reference comparison, not an alias branch). An alias that
-  parses with no available claimant produces the `packageAliasDisallowed`
-  typed raw-code fallback with the "renderer not available here" notice.
+  built-in claim (a reference comparison, not an alias branch). The store
+  remembers every alias it has served; when that claimant disappears (removal
+  or safe-mode suppression), the fence produces the `packageAliasDisallowed`
+  typed raw-code fallback with the "renderer not available here" notice. An
+  alias nothing ever claimed — an ordinary language label like `bash` — stays
+  silent plain code, so no unclaimed fence grows a notice.
 - `RendererEmbedProjection.richFenceAliases` (a closed `Set`) became
   `richFenceClaims` (the claim map). `WikiStoreModel` receives the built-in and
   enabled-installed descriptor lists from the app wiring (`ContentView`),

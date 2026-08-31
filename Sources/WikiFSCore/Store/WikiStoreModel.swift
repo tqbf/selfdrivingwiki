@@ -156,6 +156,17 @@ public final class WikiStoreModel {
         }
     }
 
+    /// Aliases every render-context build has seen claimed, available or not.
+    /// Memory is deliberately per-session: it lets a removed or suppressed
+    /// claimant's fences explain their fallback ("renderer not available
+    /// here") while fences nobody ever claimed stay silent plain code.
+    /// Internal: the render-context build reads and updates it.
+    @ObservationIgnored var resolvedFenceAliases: Set<RendererFenceAlias> = []
+
+    func noteResolvedFenceAliases(_ aliases: Set<RendererFenceAlias>) {
+        resolvedFenceAliases.formUnion(aliases)
+    }
+
     /// The sidebar selection: a page, the system-prompt document, or nothing.
     public var selection: WikiSelection?
 

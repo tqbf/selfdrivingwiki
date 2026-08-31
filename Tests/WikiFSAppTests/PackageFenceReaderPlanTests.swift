@@ -10,6 +10,7 @@ import WikiFSTypes
 /// without an available claimant degrades to the typed raw-code fallback, and
 /// the three pre-existing aliases keep byte-identical reader output.
 @Suite("Package fence reader plans")
+@MainActor
 struct PackageFenceReaderPlanTests {
     private static let document = MarkdownDocumentIdentity(
         pageID: PageID(rawValue: "01HTESTPAGE000000000000001"),
@@ -66,18 +67,67 @@ struct PackageFenceReaderPlanTests {
         #expect(html.contains("renderer-action://open"))
     }
 
-    @Test("a d2 fence without the package falls back to typed raw code with the notice")
-    func d2FenceWithoutClaimantFallsBack() {
+    @Test("an alias nothing ever claimed stays silent plain code")
+    func unclaimedAliasStaysSilentPlainCode() {
+        let claims = RendererFenceClaimResolver.resolve(
+            builtInDescriptors: BuiltInRendererDescriptors.all)
+        let options = Self.options(claims: claims)
+
+        for alias in ["d2", "bash", "python", "yaml"] {
+            let html = MarkdownHTMLRenderer.render(
+                "```\(alias)\nx -> y\n```",
+                options: options)
+            #expect(html.contains(#"<pre><code class="language-\#(alias)">"#), "plain code for \(alias)")
+            #expect(!html.contains("sdw-renderer-card__fallback"), "no fallback notice for \(alias)")
+            #expect(!html.contains("sdw-renderer-card\""), "no card for \(alias)")
+        }
+    }
+
+    @Test("a removed or suppressed claimant explains its typed fallback")
+    func unavailableClaimantFallsBackWithNotice() throws {
+        let d2 = try #require(RendererFenceAlias(rawValue: "d2"))
         let claims = RendererFenceClaimResolver.resolve(
             builtInDescriptors: BuiltInRendererDescriptors.all)
         let html = MarkdownHTMLRenderer.render(
             "```d2\nx -> y\n```",
-            options: Self.options(claims: claims))
+            options: MarkdownRenderOptions(
+                codeHighlighting: .disabled,
+                rendererEmbedProjection: RendererEmbedProjection(
+                    sourceEmbeds: [:],
+                    richFenceClaims: claims,
+                    unavailableFenceAliases: [d2]),
+                documentIdentity: Self.document,
+                rendererActivationAdmission: nil))
 
         #expect(html.contains(#"<pre><code class="language-d2">x -&gt; y"#))
         #expect(html.contains("sdw-renderer-card__fallback"))
         #expect(html.contains("The renderer for this block is not available here."))
         #expect(!html.contains("sdw-renderer-card\""))
+    }
+
+    @Test("the store remembers a claimant it has served and flags its removal")
+    func storeMarksRemovedClaimantUnavailable() throws {
+        let store = try GRDBWikiStore()
+        let model = WikiStoreModel(store: store)
+        model.rendererBuiltInDescriptors = BuiltInRendererDescriptors.all
+        model.rendererEnabledDescriptors = [PackageFenceTestSupport.d2Descriptor()]
+        let d2 = try #require(RendererFenceAlias(rawValue: "d2"))
+
+        let whileInstalled = model.renderContext()
+        #expect(whileInstalled.rendererEmbedProjection.fenceClaim(for: d2) != nil)
+        #expect(whileInstalled.rendererEmbedProjection.unavailableFenceAliases.isEmpty)
+
+        // Registry refresh drops the claimant; the next context flags it.
+        model.rendererEnabledDescriptors = []
+        let afterRemoval = model.renderContext()
+        #expect(afterRemoval.rendererEmbedProjection.fenceClaim(for: d2) == nil)
+        #expect(afterRemoval.rendererEmbedProjection.unavailableFenceAliases.contains(d2))
+
+        // Reinstall restores rendering from the same session state.
+        model.rendererEnabledDescriptors = [PackageFenceTestSupport.d2Descriptor()]
+        let reinstalled = model.renderContext()
+        #expect(reinstalled.rendererEmbedProjection.fenceClaim(for: d2) != nil)
+        #expect(!reinstalled.rendererEmbedProjection.unavailableFenceAliases.contains(d2))
     }
 
     @Test("a projection-less render keeps unclaimed fences inert")
@@ -172,6 +222,17 @@ struct PackageFenceReaderPlanTests {
                     bytes: bytes,
                     normalizedInfoString: alias))
             #expect(artifact.digest == independent, "digest must follow the alias raw value: \(alias)")
+        }
+    }
+
+    @Test("ordinary language labels cannot be claimed by packages")
+    func ordinaryLanguageLabelsCannotBeClaimedByPackages() throws {
+        // The app wiring folds the syntax-reserved labels into the injected
+        // reserved set alongside the built-in claims.
+        let reserved = BuiltInRendererDescriptors.reservedFenceAliases
+        for token in MarkdownFenceInfo.ordinaryLanguageTokens {
+            let alias = try #require(RendererFenceAlias(rawValue: token))
+            #expect(reserved.contains(alias), "packages cannot claim \(token)")
         }
     }
 
