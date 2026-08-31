@@ -10,7 +10,12 @@ Read [the current package guide](references/current-package-guide.md) before you
 ## Create a package
 
 1. Copy [`assets/minimal-renderer-package/`](assets/minimal-renderer-package/) to the requested local destination.
-2. Choose valid package, version, and registration identifiers.
+2. Choose valid package, version, and registration identifiers. The package
+   version is package identity. Do not tie it to an upstream project version.
+   Bump it whenever the package bytes change. The machine store reserves
+   package version to package hash permanently, and removal keeps the
+   reservation, so changed bytes under an already-used version can never
+   install.
 3. Add only static assets.
 4. Declare every asset in `manifest.json`.
 5. Choose bounded matchers, capabilities, limits, link policy, accessibility values, compatibility, and priority.

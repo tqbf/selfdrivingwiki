@@ -55,7 +55,7 @@ enum PackageFenceTestSupport {
         return try! RendererDescriptor(
             reference: RendererReference(
                 packageID: RendererPackageID(rawValue: "org.selfdrivingwiki.d2-readonly")!,
-                version: RendererPackageVersion(rawValue: "0.8.2")!,
+                version: RendererPackageVersion(rawValue: "1.0.0")!,
                 registrationID: RendererRegistrationID(rawValue: "d2")!),
             displayName: "D2",
             implementation: .webPackage(.init(path: asset.path)),

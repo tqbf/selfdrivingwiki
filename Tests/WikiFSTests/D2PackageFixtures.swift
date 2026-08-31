@@ -6,7 +6,11 @@ import Foundation
 /// cross-checks the two.
 enum D2PackageFixtures {
     static let packageID = "org.selfdrivingwiki.d2-readonly"
-    static let packageVersion = "0.8.2"
+    /// The package's own identity, which advances independently of upstream D2.
+    /// A package-only change (new wrapper bytes, a new manifest claim) has to
+    /// take a new version: the machine store reserves package/version -> hash
+    /// permanently, so re-importing changed bytes under a used version fails.
+    static let packageVersion = "1.0.0"
     static let upstreamVersion = "0.8.2"
     static let registrationID = "d2"
     static let displayName = "D2"
