@@ -33,7 +33,7 @@ struct D2PackageLockTests {
     @Test("the WASM build recipe is pinned with tool versions and flags")
     func buildRecipeIsPinned() throws {
         let build = try #require(lock["build"] as? [String: Any])
-        #expect(build["goVersion"] as? String == "go1.27.0")
+        #expect(build["goVersion"] as? String == D2PackageFixtures.buildGoVersion)
         #expect(build["sourcePackage"] as? String == "./d2js")
         let optimizeFlags = try #require(build["optimizeFlags"] as? [String])
         #expect(optimizeFlags.first == "-Oz")

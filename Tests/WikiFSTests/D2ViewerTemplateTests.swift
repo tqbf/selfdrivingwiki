@@ -31,6 +31,13 @@ struct D2ViewerTemplateTests {
             "WebSocket",
             "EventSource",
             "sendBeacon",
+            "import(",
+            "caches",
+            "window.open",
+            "RTCPeerConnection",
+            "navigator.storage",
+            "document.write",
+            "serviceWorker",
         ]
         for pattern in forbidden {
             #expect(!html.contains(pattern), "index.html must not contain \(pattern)")
@@ -77,17 +84,24 @@ struct D2ViewerTemplateTests {
         }
     }
 
-    @Test("the viewer fetches only declared package-relative assets")
+    @Test("the viewer fetches only the pinned module, by literal relative path")
     func fetchesArePackageRelative() {
-        let fetchArguments = viewer.components(separatedBy: "fetch(").dropFirst()
-        #expect(fetchArguments.isEmpty == false, "the viewer must fetch the wasm and fonts locally")
-        for argument in fetchArguments {
-            let quoted = argument.prefix(while: { $0 != ")" })
-            for schemePattern in ["http", "data:", "blob:", "/"] where quoted.hasPrefix("\"" + schemePattern) {
-                Issue.record("fetch target must be a package-relative path, got \(quoted)")
+        // All fetching funnels through fetchLocalBuffer, and its call sites
+        // must pass string literals. The total fetch surface is exactly the
+        // pinned module.
+        #expect(viewer.components(separatedBy: "fetch(").count - 1 == 1, "all fetching must funnel through fetchLocalBuffer")
+        let callArguments = Array(viewer.components(separatedBy: "fetchLocalBuffer(\"").dropFirst())
+        #expect(callArguments.isEmpty == false, "the viewer must fetch the wasm locally")
+        var fetchedPaths: Set<String> = []
+        for argument in callArguments {
+            let literal = argument.prefix(while: { $0 != "\"" })
+            #expect(!literal.hasPrefix("/"), "fetch target must be relative, got \(literal)")
+            for schemePattern in ["http:", "https:", "data:", "blob:"] where literal.hasPrefix(schemePattern) {
+                Issue.record("fetch target must be package-local, got \(literal)")
             }
+            fetchedPaths.insert(String(literal))
         }
-        #expect(viewer.contains("fetchLocalBuffer(\"d2.wasm\")") || viewer.contains("d2.wasm"))
+        #expect(fetchedPaths == ["d2.wasm"])
     }
 
     @Test("the viewer reads the authorized source exactly once through input.read")
@@ -101,7 +115,7 @@ struct D2ViewerTemplateTests {
     func mountPathIsStaticSVG() {
         #expect(viewer.contains("role\", \"img") || viewer.contains("setAttribute(\"role\""))
         #expect(viewer.contains("aria-label"))
-        #expect(viewer.contains("prefers") == false || viewer.contains("darkThemeID"))
+        #expect(viewer.contains("darkThemeID"))
         // The watchdog budget is a named constant.
         #expect(viewer.contains("renderBudgetMilliseconds"))
     }

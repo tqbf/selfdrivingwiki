@@ -177,6 +177,7 @@
         return;
       }
       window.addEventListener("message", function receive(event) {
+        if (event.source !== window) return;
         const response = event.data && event.data.rendererBridgeResponse;
         if (typeof response !== "string") return;
         try {

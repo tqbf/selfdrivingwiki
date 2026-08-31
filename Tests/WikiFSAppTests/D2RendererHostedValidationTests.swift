@@ -17,7 +17,7 @@ import WikiFSCore
 struct D2RendererHostedValidationTests {
     @Test("the package's own startup request renders x -> y as an adaptive SVG")
     func renderXToYProducesSVG() async throws {
-        let fixture = D2HostedFixture()
+        let fixture = try D2HostedFixture()
         guard fixture.isGenerated else {
             print("→ skip: no generated D2 package; run make d2-renderer-package first")
             return
@@ -171,7 +171,7 @@ struct D2RendererHostedValidationTests {
 
     @Test("a compile error surfaces the error region and the source stays intact")
     func compileErrorShowsErrorRegionAndKeepsSource() async throws {
-        let fixture = D2HostedFixture()
+        let fixture = try D2HostedFixture()
         guard fixture.isGenerated else {
             print("→ skip: no generated D2 package; run make d2-renderer-package first")
             return
@@ -273,7 +273,7 @@ struct D2RendererHostedValidationTests {
 
     @Test("install promotes the package without a restart and removal preserves source data")
     func installAndRemovePreserveAvailabilityAndSource() async throws {
-        let fixture = D2HostedFixture()
+        let fixture = try D2HostedFixture()
         guard fixture.isGenerated else {
             print("→ skip: no generated D2 package; run make d2-renderer-package first")
             return
@@ -303,19 +303,19 @@ struct D2RendererHostedValidationTests {
         #expect(installed == true)
         let indexAfterInstall = try await machineStore.read()
         #expect(indexAfterInstall.availableDescriptorProjection.contains {
-            $0.reference.registrationID.rawValue == D2HostedFixture.registrationID
-                && $0.reference.packageID.rawValue == D2HostedFixture.packageID
+            $0.reference.registrationID.rawValue == fixture.registrationID
+                && $0.reference.packageID.rawValue == fixture.packageID
         })
 
         // A live model reads this projection on every machine event; the
         // registry moved without any model recreation or restart.
         let removed = await host.removeRenderer(
-            packageID: try .init(validating: D2HostedFixture.packageID),
-            version: try .init(validating: D2HostedFixture.packageVersion))
+            packageID: try .init(validating: fixture.packageID),
+            version: try .init(validating: fixture.packageVersion))
         #expect(removed == true)
         let indexAfterRemoval = try await machineStore.read()
         #expect(indexAfterRemoval.availableDescriptorProjection.contains {
-            $0.reference.packageID.rawValue == D2HostedFixture.packageID
+            $0.reference.packageID.rawValue == fixture.packageID
         } == false)
 
         // Removal deletes the copied payload only; source data and its bytes
@@ -411,16 +411,26 @@ private enum D2HostedValidationError: LocalizedError {
 }
 
 private struct D2HostedFixture {
-    /// Mirrors `D2PackageFixtures` (different test target).
-    static let packageID = "org.selfdrivingwiki.d2-readonly"
-    static let packageVersion = "0.8.2"
-    static let registrationID = "d2"
+    /// Identity is read from the provenance lock at runtime so a regeneration
+    /// bump cannot pass the offline suites and silently break the hosted
+    /// assertions on a stale constant.
+    let packageID: String
+    let packageVersion: String
+    let registrationID: String
 
     let packageDirectory: URL
     let validator: RendererPackageValidator
     let isGenerated: Bool
 
-    init() {
+    init() throws {
+        let lockData = try Data(contentsOf: D2HostedFixture.repositoryRoot()
+            .appending(path: "tools/d2/d2-package.lock.json"))
+        let lock = try #require(try JSONSerialization.jsonObject(with: lockData) as? [String: Any])
+        let package = try #require(lock["package"] as? [String: Any])
+        packageID = try #require(package["packageID"] as? String)
+        packageVersion = try #require(package["version"] as? String)
+        registrationID = try #require(package["registrationID"] as? String)
+
         packageDirectory = D2HostedFixture.repositoryRoot()
             .appending(path: "tmp/d2-renderer-package/D2")
         isGenerated = FileManager.default.fileExists(
@@ -429,8 +439,6 @@ private struct D2HostedFixture {
             packageRoot: FileManager.default.temporaryDirectory
                 .appending(path: "D2HostedValidation-\(UUID().uuidString)"))
     }
-
-    func remove() {}
 
     static func repositoryRoot() -> URL {
         URL(fileURLWithPath: #filePath)

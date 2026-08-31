@@ -16,6 +16,7 @@ enum D2PackageFixtures {
     static let sourceTarballURL = "https://codeload.github.com/d2lang/d2/tar.gz/refs/tags/v0.8.2"
     static let sourceTarballSHA256 = "9d8b7276c9dd035233008f3a233054ecf5f3c133e89f658f759df6fe3faf6087"
     static let upstreamCommit = "1c0d93ba1abffe0d425d45d5c037d9474807e4f5"
+    static let buildGoVersion = "go1.27.0"
     static let d2WasmSHA256 = "bd11a89bc22d37788d8befabbf0dcbfec640257e69570c600d130a74a4289ac9"
     static let wasmExecSHA256 = "42c92bf26a564050862e648642f9dc529673fb257d8d96139122da317ac46274"
 

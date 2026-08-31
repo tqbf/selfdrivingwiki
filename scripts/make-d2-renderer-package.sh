@@ -71,10 +71,19 @@ for tool in python3 curl shasum tar go wasm-opt; do
 done
 
 if [ "${MODE}" = "check" ]; then
-    WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/d2-renderer-package-check.XXXXXX")"
-    DEST="${WORK_ROOT}/D2"
-    trap 'rm -rf "${WORK_ROOT}"' EXIT
+    CHECK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/d2-renderer-package-check.XXXXXX")"
+    DEST="${CHECK_ROOT}/D2"
 fi
+
+cleanup() {
+    if [ -n "${CHECK_ROOT:-}" ] && [ -d "${CHECK_ROOT}" ]; then
+        rm -rf "${CHECK_ROOT}"
+    fi
+    if [ -n "${STAGING:-}" ] && [ -d "${STAGING}" ]; then
+        rm -rf "${STAGING}"
+    fi
+}
+trap cleanup EXIT
 
 mkdir -p "${DEST}" "${CACHE_PARENT}"
 
@@ -163,7 +172,6 @@ echo "→ source tarball digest verified: ${SOURCE_TARBALL_SHA}"
 # --- Build the WASM with the locked recipe ------------------------------------
 
 STAGING="$(mktemp -d "${TMPDIR:-/tmp}/d2-renderer-package-stage.XXXXXX")"
-trap 'rm -rf "${STAGING}"' EXIT
 
 SOURCE_ROOT="${STAGING}/d2src"
 mkdir -p "${SOURCE_ROOT}"
@@ -188,6 +196,8 @@ echo "→ building ${SOURCE_PACKAGE} with the locked recipe"
     GOOS=js GOARCH=wasm go build -ldflags="${LDFLAGS}" -trimpath -buildvcs=false \
         -o "${STAGING}/d2.wasm" "${SOURCE_PACKAGE}"
 )
+# shellcheck disable=SC2086 — OPTIMIZE_FLAGS is a flag list by design; the
+# flags carry no arguments and are pinned in the lock.
 wasm-opt ${OPTIMIZE_FLAGS} "${STAGING}/d2.wasm" -o "${STAGING}/d2.wasm.opt"
 mv "${STAGING}/d2.wasm.opt" "${STAGING}/d2.wasm"
 echo "→ WASM built and optimized (digest is verified against the lock below)"
@@ -195,7 +205,26 @@ echo "→ WASM built and optimized (digest is verified against the lock below)"
 # --- Assemble the package ----------------------------------------------------
 
 # Start from a clean destination: a stale file from a previous run must never
-# enter the manifest.
+# enter the manifest. The destination is guarded because rm -rf must never
+# follow a mistaken --dest outside this repository's tmp/ tree (the --check
+# throwaway root is exempt).
+if [ "${MODE}" = "check" ]; then
+    case "${DEST}" in
+        "${CHECK_ROOT}"/*) ;;
+        *)
+            echo "error: --check destination must live under the check root" >&2
+            exit 2
+            ;;
+    esac
+else
+    case "${DEST}" in
+        "${REPO_ROOT}/tmp/"*|"${REPO_ROOT}/tmp") ;;
+        *)
+            echo "error: --dest must live under ${REPO_ROOT}/tmp/ (got ${DEST})" >&2
+            exit 2
+            ;;
+    esac
+fi
 rm -rf "${DEST}"
 mkdir -p "${DEST}"
 

@@ -16,12 +16,20 @@ if [ "${MODE}" != "--expect-failure" ]; then
     exit 2
 fi
 
-TARBALLS=("${CACHE_DIR}"/d2-source-*.tar.gz "${CACHE_DIR}"/d2-*.tgz)
+TARBALLS=("${CACHE_DIR}"/d2-source-*.tar.gz)
 [ -f "${TARBALLS[0]}" ] || {
     echo "error: no cached tarball under ${CACHE_DIR}; run make d2-renderer-package first" >&2
     exit 2
 }
 TARBALL_PATH="${TARBALLS[0]}"
+
+# A previous SIGKILLed run can leave the corrupted tarball in place with only
+# the backup holding good bytes; restore first so this run tampers a good copy.
+BACKUP="${TARBALL_PATH}.tamper-backup"
+if [ -f "${BACKUP}" ]; then
+    mv "${BACKUP}" "${TARBALL_PATH}"
+    echo "→ restored a leftover tamper backup before starting"
+fi
 
 BACKUP="${TARBALL_PATH}.tamper-backup"
 cleanup() {
