@@ -11560,6 +11560,124 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    // MARK: - Source credibility signals (OKF v0.2 §5.1, issue #927)
+
+    /// Cite-usage aggregate for one source: the number of DISTINCT pages
+    /// citing it via a cite-role `source_links` row, plus the newest
+    /// `updated_at` among those citing pages. Uncited sources are absent from
+    /// the returned map — callers treat "missing" as count 0.
+    public struct SourceUsageSignal: Equatable, Sendable {
+        public let sourceID: SourceID
+        public let citeCount: Int
+        /// Nil iff `citeCount == 0`.
+        public let latestCitingPageUpdatedAt: Date?
+
+        public init(sourceID: SourceID, citeCount: Int, latestCitingPageUpdatedAt: Date?) {
+            self.sourceID = sourceID
+            self.citeCount = citeCount
+            self.latestCitingPageUpdatedAt = latestCitingPageUpdatedAt
+        }
+    }
+
+    /// The producer recorded on one source's head markdown version, for the
+    /// OKF `author` signal. Nils when the head records no producer — the key
+    /// is then omitted from frontmatter (truthful-omissive emission).
+    public struct SourceHeadProducer: Equatable, Sendable {
+        public let sourceID: SourceID
+        public let producerName: String?
+        public let producerVersion: String?
+
+        public init(sourceID: SourceID, producerName: String?, producerVersion: String?) {
+            self.sourceID = sourceID
+            self.producerName = producerName
+            self.producerVersion = producerVersion
+        }
+    }
+
+    /// Batched read-only aggregate over `source_links` → `pages` for the
+    /// projection's `usage_count` / `usage_window` signals. One SELECT per
+    /// ≤500-id chunk (sorted, deduped input so results are deterministic); a
+    /// single value type crosses the method boundary — no statement handles,
+    /// no connection state.
+    public func sourceUsageSignals(sourceIDs: [SourceID]) throws -> [SourceID: SourceUsageSignal] {
+        let ids = Array(Set(sourceIDs)).sorted { $0.rawValue < $1.rawValue }
+        guard !ids.isEmpty else { return [:] }
+        var result: [SourceID: SourceUsageSignal] = [:]
+        result.reserveCapacity(ids.count)
+        try dbWriter.read { db in
+            for start in stride(from: 0, to: ids.count, by: 500) {
+                let chunk = ids[start..<min(start + 500, ids.count)]
+                let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ", ")
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: """
+                    SELECT sl.to_source_id AS source_id,
+                           COUNT(DISTINCT sl.from_page_id) AS cite_count,
+                           MAX(p.updated_at) AS latest_updated_at
+                    FROM source_links sl
+                    JOIN pages p ON p.id = sl.from_page_id
+                    WHERE sl.role = ? AND sl.to_source_id IN (\(placeholders))
+                    GROUP BY sl.to_source_id;
+                    """,
+                    arguments: StatementArguments([PageSourceLinkRole.cite.rawValue] + chunk.map(\.rawValue)))
+                for row in rows {
+                    let sourceID = SourceID(rawValue: row["source_id"])
+                    let latest: Double? = row["latest_updated_at"]
+                    result[sourceID] = SourceUsageSignal(
+                        sourceID: sourceID,
+                        citeCount: row["cite_count"],
+                        latestCitingPageUpdatedAt: latest.map { Date(timeIntervalSince1970: $0) })
+                }
+            }
+        }
+        return result
+    }
+
+    /// Batched head-producer lookup for the projection's `author` signal,
+    /// reusing the head-version resolution the `.md`-sibling serving path uses
+    /// (`processedMarkdownHeadsBySource`): ref-resolved first, else MAX(id) on
+    /// the version chain. One SELECT per ≤500-id chunk.
+    public func sourceHeadProducers(sourceIDs: [SourceID]) throws -> [SourceID: SourceHeadProducer] {
+        let ids = Array(Set(sourceIDs)).sorted { $0.rawValue < $1.rawValue }
+        guard !ids.isEmpty else { return [:] }
+        var result: [SourceID: SourceHeadProducer] = [:]
+        result.reserveCapacity(ids.count)
+        try dbWriter.read { db in
+            for start in stride(from: 0, to: ids.count, by: 500) {
+                let chunk = ids[start..<min(start + 500, ids.count)]
+                let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ", ")
+                let rows = try Row.fetchAll(
+                    db,
+                    sql: """
+                    WITH heads(source_id, head_id) AS (
+                        SELECT s.id,
+                               COALESCE(
+                                 (SELECT r.version_id FROM refs r
+                                  WHERE r.kind = 'source-derived' AND r.owner_id = s.id),
+                                 (SELECT MAX(id) FROM source_markdown_versions WHERE file_id = s.id)
+                               )
+                        FROM sources s
+                        WHERE s.id IN (\(placeholders))
+                    )
+                    SELECT heads.source_id AS source_id, a.name AS name, a.version AS version
+                    FROM heads
+                    LEFT JOIN source_markdown_versions smv ON smv.id = heads.head_id
+                    LEFT JOIN activities act ON act.id = smv.activity_id
+                    LEFT JOIN agents a ON a.id = act.agent_id;
+                    """,
+                    arguments: StatementArguments(chunk.map(\.rawValue)))
+                for row in rows {
+                    let sourceID = SourceID(rawValue: row["source_id"])
+                    let name: String? = row["name"]
+                    let version: String? = row["version"]
+                    result[sourceID] = SourceHeadProducer(
+                        sourceID: sourceID, producerName: name, producerVersion: version)
+                }
+            }
+        }
+        return result
+    }
+
     // MARK: - Ported from SQLiteWikiStore (test/protocol parity)
 
     /// The SQL fragment that selects the HEAD processed-markdown body text for a

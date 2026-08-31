@@ -243,4 +243,136 @@ import Foundation
         )
         #expect(actor.rawValue == "anthropic/claude-sonnet-4-5-20250929")
     }
+
+    // MARK: - Source credibility signals (OKF v0.2 §5.1, issue #927)
+
+    @Test func sourceEntriesCarryCredibilitySignalsInExactOrder() throws {
+        let page = samplePage()
+        let md = PageMarkdownFormat.fileContent(
+            for: page,
+            metadata: PageOKFMetadata(
+                generated: .init(by: OKFActor(rawValue: "human:user"),
+                                 at: Date(timeIntervalSince1970: 2000000000)),
+                sources: [
+                    .init(
+                        resource: .bundlePath("/sources/by-id/01SRC.md"),
+                        title: "Quarterly report",
+                        id: "01SRC",
+                        author: OKFActor(rawValue: "pdf-extractor/1.2.0"),
+                        usageCount: 3,
+                        lastModified: Date(timeIntervalSince1970: 1750000900),
+                        usageWindow: OKFUsageWindow(
+                            from: Date(timeIntervalSince1970: 1750000000),
+                            to: Date(timeIntervalSince1970: 2000000000))
+                    )
+                ]
+            )
+        )
+
+        #expect(md.contains("""
+        sources:
+          - id: "01SRC"
+            resource: "/sources/by-id/01SRC.md"
+            title: "Quarterly report"
+            author: "pdf-extractor/1.2.0"
+            usage_count: 3
+            last_modified: 2025-06-15T15:21:40Z
+            usage_window: { from: 2025-06-15T15:06:40Z, to: 2033-05-18T03:33:20Z }
+        """))
+    }
+
+    @Test func selfReferenceCarriesSignalsButNeverAuthor() throws {
+        let ver = sampleVersion()
+        let md = SourceMarkdownFormat.fileContent(
+            for: ver,
+            metadata: SourceOKFMetadata(
+                title: "Saturn V.pdf",
+                generated: .init(by: OKFActor(rawValue: "process:extraction"),
+                                 at: Date(timeIntervalSince1970: 1500000000)),
+                sources: [
+                    .init(
+                        resource: .bundlePath("/sources/by-id/01SRC.pdf"),
+                        title: "Saturn V.pdf",
+                        id: "01SRC",
+                        usageCount: 1,
+                        lastModified: Date(timeIntervalSince1970: 1750000900),
+                        usageWindow: OKFUsageWindow(
+                            from: Date(timeIntervalSince1970: 1750000000),
+                            to: Date(timeIntervalSince1970: 2000000000))
+                    )
+                ]
+            )
+        )
+        #expect(md.contains("""
+        sources:
+          - id: "01SRC"
+            resource: "/sources/by-id/01SRC.pdf"
+            title: "Saturn V.pdf"
+            usage_count: 1
+            last_modified: 2025-06-15T15:21:40Z
+            usage_window: { from: 2025-06-15T15:06:40Z, to: 2033-05-18T03:33:20Z }
+        """))
+        #expect(!md.contains("author:"))
+    }
+
+    @Test func unknownSignalsAreOmittedNotFabricated() throws {
+        let page = samplePage()
+        // Entry with NO recorded producer, NO window (count 0), and an unknown
+        // count (nil): each unknown key must be absent — no fabricated values.
+        let md = PageMarkdownFormat.fileContent(
+            for: page,
+            metadata: PageOKFMetadata(
+                generated: .init(by: OKFActor(rawValue: "human:user"),
+                                 at: Date(timeIntervalSince1970: 2000000000)),
+                sources: [
+                    .init(
+                        resource: .bundlePath("/sources/by-id/01SRC.md"),
+                        title: "Notes",
+                        id: "01SRC",
+                        usageCount: 0,
+                        lastModified: Date(timeIntervalSince1970: 1750000900)
+                    ),
+                    .init(
+                        resource: .bundlePath("/sources/by-id/01SRC2.md"),
+                        title: "Untracked"
+                    )
+                ]
+            )
+        )
+        // Known-zero count is emitted; its window is not (count == 0).
+        #expect(md.contains("""
+          - id: "01SRC"
+            resource: "/sources/by-id/01SRC.md"
+            title: "Notes"
+            usage_count: 0
+            last_modified: 2025-06-15T15:21:40Z
+        """))
+        #expect(!md.contains("usage_window:"))
+        #expect(!md.contains("author:"))
+        // A signal-less entry (pre-#927 shape) stays minimal.
+        #expect(md.contains("""
+          - resource: "/sources/by-id/01SRC2.md"
+            title: "Untracked"
+        """))
+    }
+
+    @Test func producerActorIsOmittedWithoutAName() {
+        #expect(OKFActor.producerActor(name: nil, version: "1.0") == nil)
+        #expect(OKFActor.producerActor(name: "", version: "1.0") == nil)
+        #expect(OKFActor.producerActor(name: nil, version: nil) == nil)
+    }
+
+    @Test func producerActorNormalizesLikeSourceActor() {
+        #expect(OKFActor.producerActor(name: "pdf-extractor", version: "1.2.0")?.rawValue
+                == "pdf-extractor/1.2.0")
+        #expect(OKFActor.producerActor(name: "pdf-extractor", version: nil)?.rawValue
+                == "process:pdf-extractor")
+        #expect(OKFActor.producerActor(name: "pdf-extractor", version: "")?.rawValue
+                == "process:pdf-extractor")
+        // Already-namespaced names pass through untouched (same rule as
+        // `sourceActor`'s `normalizedProducer`).
+        #expect(OKFActor.producerActor(name: "human:alice", version: nil)?.rawValue == "human:alice")
+        #expect(OKFActor.producerActor(name: "process:tool", version: "9")?.rawValue == "process:tool")
+        #expect(OKFActor.producerActor(name: "tool/1", version: "2")?.rawValue == "tool/1")
+    }
 }

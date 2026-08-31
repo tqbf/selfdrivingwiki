@@ -390,6 +390,211 @@ struct ProjectionTreeTests {
         #expect(ids.contains(Projection.Identity.indexSourcesJSONL))
     }
 
+    // MARK: - OKF credibility signals (#927)
+
+    /// Seed: page "Atlas" cites a pdf source whose head markdown records a
+    /// producer (technique "anthropic" → agent "claude"); page "Bolt" exists
+    /// but does NOT cite it yet. `uncited.txt` has a user-authored head (no
+    /// producer) and no citations.
+    private struct Credentialed {
+        let projection: Projection
+        let store: GRDBWikiStore
+        let atlas: WikiPage
+        let bolt: WikiPage
+        let pdf: SourceSummary
+        let txt: SourceSummary
+    }
+
+    private func seedCredibility() throws -> Credentialed {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wikifs-prov-\(UUID().uuidString).sqlite")
+        let store = try GRDBWikiStore(databaseURL: url)
+        let pdf = try store.addSource(
+            filename: "paper.pdf", data: Data("%PDF-1.4 fake".utf8), mimeType: "application/pdf")
+        // A tool producer WITH a version records agent (pdf2md, 1.2.0), so the
+        // author signal takes the slashed `<name>/<version>` shape.
+        _ = try store.appendDerivedMarkdown(
+            sourceID: pdf.id, content: "# Extracted", origin: .extraction,
+            producer: .tool(.pdf2md), toolVersion: "1.2.0")
+        let txt = try store.addSource(
+            filename: "uncited.txt", data: Data("plain".utf8), mimeType: "text/plain")
+        _ = try store.appendProcessedMarkdown(
+            sourceID: txt.id, content: "# Manual notes", origin: .user, note: nil, technique: nil)
+        let atlas = try store.createPage(title: "Atlas")
+        let atlasBody = "Atlas cites [[source:\(pdf.id.rawValue)|the paper]]."
+        try store.updatePage(id: atlas.id, title: "Atlas", body: atlasBody)
+        try store.replaceLinks(from: atlas.id, parsedLinks: WikiLinkParser.parse(atlasBody))
+        let bolt = try store.createPage(title: "Bolt")
+        let projection = Projection(
+            wikiID: WikiID(rawValue: "proj-prov-\(UUID().uuidString)"), databaseURL: url)
+        return Credentialed(projection: projection, store: store,
+                            atlas: atlas, bolt: bolt, pdf: pdf, txt: txt)
+    }
+
+    private func enumeratedNode(
+        _ id: NSFileProviderItemIdentifier, in children: [ProjectedNode]
+    ) -> ProjectedNode? {
+        children.first { $0.id == id }
+    }
+
+    @Test func pageFrontmatterCarriesFullCredibilitySignals() throws {
+        let f = try seedCredibility()
+        let id = Projection.Identity.pageByID(f.atlas.id.rawValue)
+        let bytes = try #require(f.projection.contents(for: id))
+        let text = String(decoding: bytes, as: UTF8.self)
+        // id leads the entry; usage_count counts distinct citing pages (1);
+        // author is the head markdown's producer in the slashed
+        // `<name>/<version>` shape; last_modified is the source row's
+        // updated_at; usage_window's `from` binds to the source's created_at.
+        let pdfRow = try #require(try f.store.listAllSourcesOrderedByID()
+            .first { $0.id == f.pdf.id.rawValue })
+        let iso = ISO8601DateFormatter()
+        iso.timeZone = TimeZone(secondsFromGMT: 0)
+        let createdAt = iso.string(from: pdfRow.createdAt)
+        #expect(text.contains("""
+        sources:
+          - id: "\(f.pdf.id.rawValue)"
+            resource: "/sources/by-id/\(f.pdf.id.rawValue).md"
+            title: "paper.pdf"
+            author: "pdf2md/1.2.0"
+            usage_count: 1
+        """))
+        #expect(text.contains("    last_modified: "))
+        #expect(text.contains("    usage_window: { from: \(createdAt), to: "))
+        // Enumerated nodes carry the same digest-coordinated version shape,
+        // sized from the very bytes contents(for:) serves.
+        let enumerated = try #require(enumeratedNode(
+            id, in: f.projection.children(of: Projection.Identity.pagesByID)))
+        #expect(String(decoding: enumerated.contentVersion, as: UTF8.self).contains(":prov:"))
+        #expect(enumerated.size == bytes.count)
+    }
+
+    @Test func sourceMarkdownSelfReferenceCarriesSignalsWithoutAuthor() throws {
+        let f = try seedCredibility()
+        let id = Projection.Identity.sourceMarkdownByID(f.pdf.id.rawValue)
+        let bytes = try #require(f.projection.contents(for: id))
+        let text = String(decoding: bytes, as: UTF8.self)
+        // The self-reference points at the RAW pdf artifact: id, last_modified,
+        // usage_count, usage_window — but NEVER an author (unknown for raw
+        // ingested bytes; emitting a derivation origin would fabricate one).
+        #expect(text.contains("""
+        sources:
+          - id: "\(f.pdf.id.rawValue)"
+            resource: "/sources/by-id/\(f.pdf.id.rawValue).pdf"
+            title: "paper.pdf"
+            usage_count: 1
+        """))
+        #expect(text.contains("    last_modified: "))
+        #expect(text.contains("    usage_window: { from: "))
+        #expect(!text.contains("author:"))
+        // The uncited, producer-less txt source emits count 0 and NO window.
+        let txtID = Projection.Identity.sourceMarkdownByID(f.txt.id.rawValue)
+        let txtBytes = try #require(f.projection.contents(for: txtID))
+        let txtText = String(decoding: txtBytes, as: UTF8.self)
+        #expect(txtText.contains("""
+          - id: "\(f.txt.id.rawValue)"
+            resource: "/sources/by-id/\(f.txt.id.rawValue).txt"
+            title: "uncited.txt"
+            usage_count: 0
+        """))
+        #expect(!txtText.contains("usage_window:"))
+        #expect(!txtText.contains("author:"))
+    }
+
+    @Test func projectedContentIsDeterministicAcrossReads() throws {
+        let f = try seedCredibility()
+        let id = Projection.Identity.pageByID(f.atlas.id.rawValue)
+        let first = try #require(f.projection.contents(for: id))
+        let second = try #require(f.projection.contents(for: id))
+        #expect(first == second)
+        let node = try #require(f.projection.node(for: id))
+        #expect(node.size == first.count)
+        // The .md sibling is deterministic too (its self-reference window
+        // derives from rows, not the wall clock).
+        let mdID = Projection.Identity.sourceMarkdownByID(f.pdf.id.rawValue)
+        #expect(f.projection.contents(for: mdID) == f.projection.contents(for: mdID))
+    }
+
+    @Test func coCitingEditAdvancesSiblingPageOnBothNodePaths() throws {
+        let f = try seedCredibility()
+        let p = f.projection
+        let byID = Projection.Identity.pageByID(f.atlas.id.rawValue)
+        let byTitle = Projection.Identity.pageByTitle(f.atlas.id.rawValue)
+
+        func snapshot() throws -> (content: Data, versions: [Data], token: String) {
+            let content = try #require(p.contents(for: byID))
+            let leafByID = try #require(p.node(for: byID)).contentVersion
+            let leafByTitle = try #require(p.node(for: byTitle)).contentVersion
+            let enumByID = try #require(enumeratedNode(
+                byID, in: p.children(of: Projection.Identity.pagesByID))).contentVersion
+            let enumByTitle = try #require(enumeratedNode(
+                byTitle, in: p.children(of: Projection.Identity.pagesByTitle))).contentVersion
+            return (content, [leafByID, leafByTitle, enumByID, enumByTitle],
+                    try f.store.changeToken().rawString)
+        }
+
+        let before = try snapshot()
+        // AC.7: the mutation family feeding the signals advances the token.
+        let boltBody = "Bolt now cites [[source:\(f.pdf.id.rawValue)|the paper]] too."
+        try f.store.updatePage(id: f.bolt.id, title: "Bolt", body: boltBody)
+        try f.store.replaceLinks(from: f.bolt.id, parsedLinks: WikiLinkParser.parse(boltBody))
+        let after = try snapshot()
+
+        #expect(after.token != before.token)
+        // Atlas's OWN row did not change — its projected bytes change because
+        // ANOTHER page's citation moved the shared signals (count 1 → 2)…
+        let text = String(decoding: after.content, as: UTF8.self)
+        #expect(text.contains("usage_count: 2"))
+        #expect(after.content != before.content)
+        // …on EVERY node path: leaf + enumerated, by-id + by-title aliases.
+        for (oldVersion, newVersion) in zip(before.versions, after.versions) {
+            #expect(newVersion != oldVersion)
+        }
+        // Both aliases of one path share a version; the two paths are distinct.
+        #expect(after.versions[0] == after.versions[1])
+        #expect(after.versions[2] == after.versions[3])
+    }
+
+    @Test func sourceRowBumpAdvancesCitingPageAndMarkdownSibling() throws {
+        let f = try seedCredibility()
+        let p = f.projection
+        let pageID = Projection.Identity.pageByID(f.atlas.id.rawValue)
+        let mdID = Projection.Identity.sourceMarkdownByID(f.pdf.id.rawValue)
+
+        let pageBefore = try #require(p.contents(for: pageID))
+        let mdBefore = try #require(p.contents(for: mdID))
+        let pageVersionBefore = try #require(p.node(for: pageID)).contentVersion
+        let mdVersionBefore = try #require(p.node(for: mdID)).contentVersion
+        let enumeratedPageBefore = try #require(enumeratedNode(
+            pageID, in: p.children(of: Projection.Identity.pagesByID))).contentVersion
+        let enumeratedMDBefore = try #require(enumeratedNode(
+            mdID, in: p.children(of: Projection.Identity.sourcesByID))).contentVersion
+        let tokenBefore = try f.store.changeToken().rawString
+
+        // Same-producer re-ingest family: the source row's updated_at + version
+        // bump with NO new markdown version and NO producer change — only
+        // last_modified moves, and the digest must move with it.
+        try f.store.renameSource(id: f.pdf.id, to: "paper-renamed.pdf")
+
+        #expect(try f.store.changeToken().rawString != tokenBefore)
+        let pageAfter = try #require(p.contents(for: pageID))
+        let mdAfter = try #require(p.contents(for: mdID))
+        #expect(pageAfter != pageBefore)
+        #expect(mdAfter != mdBefore)
+        #expect(try #require(p.node(for: pageID)).contentVersion != pageVersionBefore)
+        #expect(try #require(p.node(for: mdID)).contentVersion != mdVersionBefore)
+        #expect(try #require(enumeratedNode(
+            pageID, in: p.children(of: Projection.Identity.pagesByID))).contentVersion
+            != enumeratedPageBefore)
+        #expect(try #require(enumeratedNode(
+            mdID, in: p.children(of: Projection.Identity.sourcesByID))).contentVersion
+            != enumeratedMDBefore)
+        // The co-citing page's count did NOT move — only last_modified + title.
+        let text = String(decoding: pageAfter, as: UTF8.self)
+        #expect(text.contains("usage_count: 1"))
+        #expect(text.contains(#"title: "paper-renamed.pdf""#))
+    }
+
     // MARK: - Bookmarks projection (Phase D)
 
     /// Seed a wiki with a bookmark tree: a root folder "Research" holding a

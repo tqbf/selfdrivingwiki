@@ -251,5 +251,115 @@ struct ProjectionTests {
     @Test func sourceByIDPrefixMatchesAcrossModules() {
         #expect(Projection.Identity.sourceByIDPrefix == WikiFSContainerID.sourceByIDPrefix)
     }
+
+    // MARK: - Provenance digest + `:prov:` contentVersion formulas (#927)
+
+    @Test func provenanceDigestIsDeterministicAndSensitiveToEverySignal() {
+        let base = OKFSourceReference(
+            resource: .bundlePath("/sources/by-id/01SRC.md"),
+            title: "Report",
+            id: "01SRC",
+            author: OKFActor(rawValue: "pdf-extractor/1.2.0"),
+            usageCount: 3,
+            lastModified: Date(timeIntervalSince1970: 1750000900),
+            usageWindow: OKFUsageWindow(
+                from: Date(timeIntervalSince1970: 1750000000),
+                to: Date(timeIntervalSince1970: 2000000000)))
+        let digest = Projection.provenanceDigest([base])
+        // Deterministic: identical input → identical digest.
+        #expect(Projection.provenanceDigest([base]) == digest)
+        // Every signal family participates — mutating any one changes it.
+        #expect(Projection.provenanceDigest([OKFSourceReference(
+            resource: base.resource, title: base.title, id: "01OTHER",
+            author: base.author, usageCount: base.usageCount,
+            lastModified: base.lastModified, usageWindow: base.usageWindow)]) != digest)
+        #expect(Projection.provenanceDigest([OKFSourceReference(
+            resource: base.resource, title: base.title, id: base.id,
+            author: base.author, usageCount: 4,
+            lastModified: base.lastModified, usageWindow: base.usageWindow)]) != digest)
+        // last_modified participates: a same-producer re-ingest advances the
+        // digest by construction (AC.6) even when nothing else changes.
+        #expect(Projection.provenanceDigest([OKFSourceReference(
+            resource: base.resource, title: base.title, id: base.id,
+            author: base.author, usageCount: base.usageCount,
+            lastModified: base.lastModified!.addingTimeInterval(1),
+            usageWindow: base.usageWindow)]) != digest)
+        #expect(Projection.provenanceDigest([OKFSourceReference(
+            resource: base.resource, title: base.title, id: base.id,
+            author: base.author, usageCount: base.usageCount,
+            lastModified: base.lastModified,
+            usageWindow: OKFUsageWindow(from: base.usageWindow!.from,
+                                        to: base.usageWindow!.to.addingTimeInterval(1)))]) != digest)
+        #expect(Projection.provenanceDigest([OKFSourceReference(
+            resource: base.resource, title: base.title, id: base.id,
+            author: OKFActor(rawValue: "other-tool/2.0"),
+            usageCount: base.usageCount,
+            lastModified: base.lastModified, usageWindow: base.usageWindow)]) != digest)
+        // Entry ORDER participates (the fold is sequence-sensitive).
+        let second = OKFSourceReference(resource: .bundlePath("/sources/by-id/01SRC2.md"), title: "2")
+        #expect(Projection.provenanceDigest([base, second])
+                == Projection.provenanceDigest([base, second]))
+        #expect(Projection.provenanceDigest([second, base])
+                != Projection.provenanceDigest([base, second]))
+    }
+
+    @Test func pageProvDigestAppendsToBothRevisionShapes() {
+        let page = WikiPage(
+            id: .init(rawValue: "page"), title: "Page", slug: "page",
+            bodyMarkdown: "body", createdAt: .distantPast,
+            updatedAt: .distantPast, version: 7)
+        let digest = "abc123"
+        let byID = Projection.pageFileNode(
+            for: Projection.Identity.pageByID(page.id.rawValue), page: page,
+            provenanceDigest: digest)
+        let withRevision = Projection.pageFileNode(
+            for: Projection.Identity.pageByID(page.id.rawValue), page: page,
+            projectionRevision: 2, provenanceDigest: digest)
+        let byTitle = Projection.pageFileNode(
+            for: Projection.Identity.pageByTitle(page.id.rawValue), page: page,
+            projectionRevision: 2, provenanceDigest: digest)
+        let legacy = Projection.pageFileNode(
+            for: Projection.Identity.pageByID(page.id.rawValue), page: page)
+        #expect(byID.contentVersion == Data("7:prov:abc123".utf8))
+        #expect(withRevision.contentVersion == Data("7:okf:2:prov:abc123".utf8))
+        // Both aliases share the same version (same content path, same digest).
+        #expect(byTitle.contentVersion == withRevision.contentVersion)
+        #expect(legacy.contentVersion == Data("7".utf8))
+        // A different digest yields a different version — the coordination
+        // contract the staleness regression tests rely on.
+        let other = Projection.pageFileNode(
+            for: Projection.Identity.pageByID(page.id.rawValue), page: page,
+            provenanceDigest: "zzz999")
+        #expect(other.contentVersion != byID.contentVersion)
+    }
+
+    @Test func sourceMarkdownProvDigestAppendsToBothRevisionShapes() {
+        let source = SourceSummary(
+            id: .init(rawValue: "source"), filename: "source.pdf", ext: "pdf",
+            mimeType: "application/pdf", byteSize: 10,
+            createdAt: .distantPast, updatedAt: .distantPast, version: 1)
+        let head = SourceMarkdownVersion(
+            id: .init(rawValue: "markdown"), sourceID: source.id, parentID: nil,
+            content: "body", origin: .extraction, note: nil, createdAt: .distantPast)
+        let bare = Projection.sourceMarkdownNode(
+            for: Projection.Identity.sourceMarkdownByID(source.id.rawValue),
+            source: source, head: head, provenanceDigest: "d1")
+        let withRevision = Projection.sourceMarkdownNode(
+            for: Projection.Identity.sourceMarkdownByID(source.id.rawValue),
+            source: source, head: head, projectionRevision: 3, provenanceDigest: "d1")
+        let byName = Projection.sourceMarkdownNode(
+            for: Projection.Identity.sourceMarkdownByName(source.id.rawValue),
+            source: source, head: head, projectionRevision: 3, provenanceDigest: "d1")
+        let legacy = Projection.sourceMarkdownNode(
+            for: Projection.Identity.sourceMarkdownByID(source.id.rawValue),
+            source: source, head: head)
+        #expect(bare.contentVersion == Data("markdown:prov:d1".utf8))
+        #expect(withRevision.contentVersion == Data("markdown:okf:3:prov:d1".utf8))
+        #expect(byName.contentVersion == withRevision.contentVersion)
+        #expect(legacy.contentVersion == Data("markdown".utf8))
+        // metadataVersion stays pinned to the head id — the digest advances
+        // ONLY the content version (same convention as the :okf: revision).
+        #expect(bare.metadataVersion == Data("markdown".utf8))
+    }
 }
 #endif
