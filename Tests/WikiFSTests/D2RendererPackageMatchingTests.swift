@@ -44,13 +44,11 @@ struct D2RendererPackageMatchingTests {
 
     @Test("matching stays extension-only and claims no MIME type or signature")
     func matchersAreExtensionOnly() throws {
+        // Exactly one extension-fallback matcher: D2 has no registered MIME
+        // type, and a MIME claim like text/plain would annex every plain-text
+        // source.
         #expect(descriptor.matchers.count == 1)
         #expect(descriptor.matchers.first?.isExtensionFallback == true)
-        // A MIME claim like text/plain would annex every plain-text source.
-        for matcher in descriptor.matchers {
-            guard case .normalizedMIME = matcher else { continue }
-            Issue.record("D2 must not declare a MIME matcher")
-        }
     }
 
     @Test("a d2 source does not select Excalidraw-shaped or built-in descriptors")

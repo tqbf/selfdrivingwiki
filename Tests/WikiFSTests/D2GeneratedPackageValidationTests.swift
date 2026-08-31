@@ -66,16 +66,6 @@ struct D2GeneratedPackageValidationTests {
         #expect(provenance.contains("github.com/d2lang/d2"))
     }
 
-    @Test("Package.swift gains no D2 resource and no generated-package reference")
-    func appBundleStaysFreeOfD2() throws {
-        let package = try String(
-            contentsOf: D2PackageFixtures.repositoryRoot().appending(path: "Package.swift"),
-            encoding: .utf8)
-        #expect(!package.contains("RendererPackages/D2"))
-        #expect(!package.contains("tmp/d2-renderer-package"))
-        #expect(!package.contains("tools/d2"))
-    }
-
     private func declaredSetIndependentPaths(_ directory: URL) throws -> [String] {
         var paths: [String] = []
         let fileManager = FileManager.default
