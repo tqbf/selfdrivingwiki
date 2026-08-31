@@ -30,7 +30,9 @@ Safe mode suppresses one installed package version after qualifying renderer fai
 
 Web packages use a nonpersistent WebKit data store and the `renderer-package` scheme. The scheme handler serves only validated declared package bytes and adds restrictive CSP headers before WebKit parses content. Package HTML does not use a file URL, a network URL, or `loadHTMLString`.
 
-The package CSP permits package-local scripts, styles, images, media, and fonts. It blocks network connections, frames, workers, objects, forms, and base URLs. The navigation delegate separately cancels unsafe navigations. It does not claim to intercept all subresource requests.
+The package CSP permits package-local scripts, styles, images, media, and fonts. It permits WebAssembly compilation through `'wasm-unsafe-eval'`, without JavaScript `eval`. It permits a package to fetch its own declared, hash-pinned assets through the `renderer-package` scheme. It blocks network origins, frames, workers, objects, forms, and base URLs. The navigation delegate separately cancels unsafe navigations. It does not claim to intercept all subresource requests.
+
+Run WebAssembly on the main thread. A worker needs `worker-src`, and the CSP keeps that closed. Do not load WebAssembly bytes from a network origin.
 
 The native bridge runs in an isolated content world. Its only read method is `input.read`. Each request needs a per-session capability, a unique request ID, the expected session, the expected window, and the main frame. The host enforces message and payload limits. The bridge reads only the host-authorized pinned input. It cancels and removes handlers when the session closes.
 

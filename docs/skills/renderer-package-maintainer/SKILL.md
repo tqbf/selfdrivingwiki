@@ -26,9 +26,9 @@ The validation tool does not install or activate the package.
 ## Package HTML rules
 
 - Use package-local assets only.
-- Do not add a network dependency.
+- Do not add a network dependency. A package may fetch only its own declared assets through the `renderer-package` scheme.
 - Do not use file URLs.
-- Do not add frames, workers, objects, or forms.
+- Do not add frames, workers, objects, or forms. Run WebAssembly on the main thread; the CSP keeps `worker-src` closed.
 - Use the native bridge only through declared capabilities.
 - Read [Web package isolation](references/current-package-guide.md#web-package-isolation) before you add script or bridge access.
 

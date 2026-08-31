@@ -81,7 +81,7 @@ Manifest revision 2 requires a nonempty `supportedEmbeddingRoles` array. Support
 
 ```json
 {
-  "manifestRevision": 2,
+  "revision": 2,
   "supportedEmbeddingRoles": ["inlineContent"]
 }
 ```
