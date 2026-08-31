@@ -36,6 +36,12 @@
       "minimumProtocolRevision": 1
     },
     "displayName": "D2",
+    "fenceClaims": [
+      {
+        "alias": "d2",
+        "inlineMIMEType": "text/plain"
+      }
+    ],
     "linkPolicy": "none",
     "packageID": "org.selfdrivingwiki.d2-readonly",
     "priority": 100,

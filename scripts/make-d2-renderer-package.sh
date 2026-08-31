@@ -375,6 +375,13 @@ manifest = {
     ],
     "assets": asset_records,
 }
+
+# Fence claims are package data: the lock declares them, the manifest carries
+# them, and no host Swift learns the alias. Omit the key when a lock has no
+# claims so canonical bytes stay identical to claim-less packages.
+fence_claims = lock["package"].get("fenceClaims") or []
+if fence_claims:
+    manifest["descriptors"][0]["fenceClaims"] = fence_claims
 with open(os.path.join(dest, "manifest.json"), "w") as handle:
     json.dump(manifest, handle, indent=2, sort_keys=True)
     handle.write("\n")

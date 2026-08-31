@@ -52,4 +52,37 @@ struct D2SourceNeutralityTests {
         // The Excalidraw bundled package remains the only vendored renderer.
         #expect(package.contains("RendererPackages/Excalidraw"))
     }
+
+    @Test("Sources/ contains no fence-alias literal for any package-declared format")
+    func packageDeclaredFenceAliasesStayOutOfProductionSources() throws {
+        // Fence aliases are registry data. Whatever a package lock declares as
+        // its fence claim, the host must not need it: if this scan fails, a
+        // format-specific fence leaked back into production Swift.
+        let lockURL = D2PackageFixtures.repositoryRoot()
+            .appending(path: "tools/d2/d2-package.lock.json")
+        let lock = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: lockURL)) as? [String: Any])
+        let packageBlock = try #require(lock["package"] as? [String: Any])
+        let claims = try #require(packageBlock["fenceClaims"] as? [[String: Any]])
+        let aliases = try #require(claims.compactMap { $0["alias"] as? String })
+        #expect(aliases.isEmpty == false, "the D2 lock must keep declaring its fence claim")
+
+        let sourcesRoot = D2PackageFixtures.repositoryRoot().appending(path: "Sources")
+        let enumerator = try #require(
+            FileManager.default.enumerator(at: sourcesRoot, includingPropertiesForKeys: nil))
+        var scanned = 0
+        for case let url as URL in enumerator where url.pathExtension == "swift" {
+            scanned += 1
+            let source = try String(contentsOf: url, encoding: .utf8)
+            for alias in aliases {
+                #expect(
+                    !source.contains("\"\(alias)\""),
+                    "\(url.lastPathComponent) must not embed the package fence alias \"\(alias)\"")
+                #expect(
+                    !source.contains("fenceAlias: \"\(alias)\""),
+                    "\(url.lastPathComponent) must not claim the package fence alias \(alias)")
+            }
+        }
+        #expect(scanned > 100, "the scan must cover the real source tree")
+    }
 }
