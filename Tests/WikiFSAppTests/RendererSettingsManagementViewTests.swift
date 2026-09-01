@@ -30,7 +30,7 @@ struct RendererSettingsManagementViewTests {
         // Packages are a selectable table with a fixed height, so the pane
         // scrolls internally instead of growing the Settings window.
         #expect(source.contains("Table(model.rows, selection: $selectedPackageID)"))
-        #expect(source.contains(".frame(height: Metrics.tableHeight)"))
+        #expect(source.contains(".frame(height: RendererPackageTableMetrics.height(forRowCount: model.rows.count))"))
         // Add is a first-class control under the table, not a disclosure.
         #expect(source.contains("Button(\"Add Package…\", systemImage: \"plus\")"))
         #expect(source.contains("renderer-package-add-button"))
@@ -152,6 +152,28 @@ struct RendererSettingsManagementViewTests {
 
         #expect(host.view.fittingSize.width > 0)
         #expect(host.view.fittingSize.height > 0)
+    }
+
+    @Test("the table fits its rows between a floor and a ceiling")
+    func tableHeightFollowsRowCountWithinBounds() {
+        let metrics = RendererPackageTableMetrics.self
+
+        // No rows: the empty state needs more room than the row floor gives.
+        #expect(metrics.height(forRowCount: 0) == metrics.emptyHeight)
+
+        // Below the floor, a stray one-row strip is padded to two rows.
+        let floor = metrics.headerHeight + CGFloat(metrics.minimumVisibleRows) * metrics.rowHeight
+        #expect(metrics.height(forRowCount: 1) == floor)
+        #expect(metrics.height(forRowCount: metrics.minimumVisibleRows) == floor)
+
+        // Between the bounds the table fits its rows exactly, so a short list
+        // leaves no dead space.
+        #expect(metrics.height(forRowCount: 4) == metrics.headerHeight + 4 * metrics.rowHeight)
+
+        // Past the ceiling the height stops growing and the table scrolls.
+        let ceiling = metrics.headerHeight + CGFloat(metrics.maximumVisibleRows) * metrics.rowHeight
+        #expect(metrics.height(forRowCount: metrics.maximumVisibleRows) == ceiling)
+        #expect(metrics.height(forRowCount: 200) == ceiling)
     }
 
     @Test("status resolution keeps unavailable, safe mode, and rollback distinct")

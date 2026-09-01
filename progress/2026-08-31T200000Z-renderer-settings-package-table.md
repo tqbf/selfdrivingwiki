@@ -17,8 +17,13 @@ the bottom of the pane, far from the package they described.
 The pane now has three parts:
 
 * **A package table.** `Table` with four columns (Package, Version, Renders,
-  Status) and a fixed height. The table scrolls internally, so the package count
-  cannot stretch the window. This follows `ExtractionSettingsView.extractorRouteTable`.
+  Status). This follows `ExtractionSettingsView.extractorRouteTable`.
+  `RendererPackageTableMetrics.height(forRowCount:)` gives the height, because a
+  `Table` has no intrinsic content size. The height follows the row count
+  between a floor of two rows and a ceiling of eight. A short list leaves no
+  space below its rows, and a long list scrolls in the table's own scroll area.
+  The window height does not change with the package count. The row height and
+  the header height come from the accessibility geometry of the live pane.
 
 * **Inline diagnostics.** `RendererPackageStatus` resolves the three separate
   record fields — lifecycle state, safe-mode suppression, and the closed install
@@ -55,5 +60,8 @@ Two other changes follow from inline diagnostics:
 * A new hosted test puts `RendererSettingsView` in an `NSWindow` and checks that
   the table and the empty state lay out.
 * The full suite did not run locally. CI runs it.
-* The change was not seen in the running app. The app on this machine runs an
-  older build.
+* The pane was seen in the running app and captured. The accessibility tree
+  confirmed that the table has its own scroll area, and gave the row height
+  (24 pt) and the header height (28 pt) that the metrics use.
+* The content-driven height was not seen in the running app. It needs a new
+  install and a restart.
