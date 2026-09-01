@@ -173,7 +173,7 @@ struct TransclusionEmbedTests {
             pages: [(outer.id.rawValue, "Outer"), (embedded.id.rawValue, "Embedded")])
         let projection = RendererEmbedProjection(
             sourceEmbeds: [:],
-            richFenceClaims: PackageFenceTestSupport.builtInAndBundledClaims)
+            richFenceClaims: PackageFenceTestSupport.builtInAndInstalledClaims)
         let options = MarkdownRenderOptions(
             codeHighlighting: .disabled,
             rendererEmbedProjection: projection,
@@ -212,7 +212,7 @@ struct TransclusionEmbedTests {
             pages: [(firstPage.id.rawValue, "First"), (secondPage.id.rawValue, "Second")])
         let projection = RendererEmbedProjection(
             sourceEmbeds: [:],
-            richFenceClaims: PackageFenceTestSupport.builtInAndBundledClaims)
+            richFenceClaims: PackageFenceTestSupport.builtInAndInstalledClaims)
         let options = MarkdownRenderOptions(
             codeHighlighting: .disabled,
             rendererEmbedProjection: projection,

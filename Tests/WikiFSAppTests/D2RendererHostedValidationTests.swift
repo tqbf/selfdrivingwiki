@@ -286,14 +286,7 @@ struct D2RendererHostedValidationTests {
         }
         let layout = try RendererPackageStoreLayout(appGroupContainerRoot: root)
         let machineStore = RendererMachineIndexStore(layout: layout)
-        let handle = try await RendererRuntimeFactory(
-            layout: layout,
-            bundledPackageSource: { BundledRendererPackages.excalidrawResourceURL() },
-            reviewedBundledIdentity: .init(
-                packageID: BundledRendererPackages.excalidrawPackageID,
-                version: BundledRendererPackages.excalidrawVersion,
-                registrationID: BundledRendererPackages.excalidrawRegistrationID))
-            .assemble()
+        let handle = try await RendererRuntimeFactory(layout: layout).assemble()
         let host = InstalledRendererHost(services: handle.services)
 
         let store = try GRDBWikiStore()

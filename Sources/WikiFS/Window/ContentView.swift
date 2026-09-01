@@ -569,11 +569,7 @@ struct RendererActivationView: View {
     }
 
     private var title: String {
-        switch request.reference.registrationID.rawValue {
-        case "json-canvas": return "JSON Canvas"
-        case "excalidraw": return "Excalidraw"
-        default: return request.reference.registrationID.rawValue
-        }
+        rendererDescriptor?.displayName ?? "Renderer Unavailable"
     }
 
     private var rendererDescriptor: RendererDescriptor? {

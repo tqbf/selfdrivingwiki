@@ -239,9 +239,9 @@ struct MarkdownImageTargetProjectionTests {
 
         let descriptor = try excalidrawDescriptor(
             reference: .init(
-                packageID: BundledRendererPackages.excalidrawPackageID,
-                version: BundledRendererPackages.excalidrawVersion,
-                registrationID: BundledRendererPackages.excalidrawRegistrationID),
+                packageID: PackageFenceTestSupport.installedPackageID,
+                version: PackageFenceTestSupport.installedPackageVersion,
+                registrationID: PackageFenceTestSupport.installedRegistrationID),
             embeddingRoles: [.inlineContent])
         for authoredPath in [canonicalPath, "../../\(canonicalPath)"] {
             let markdown = "![Excalidraw architecture](\(authoredPath))"
@@ -261,7 +261,8 @@ struct MarkdownImageTargetProjectionTests {
                 projection: .init(markdownImages: targets),
                 options: .disabled)
 
-            #expect(html.contains("class=\"sdw-inline-renderer__svg\""))
+            #expect(html.contains("class=\"sdw-inline-renderer\""))
+            #expect(html.contains("data-renderer-reference=\"org.selfdrivingwiki.excalidraw-readonly/1.0.5/excalidraw\""))
             #expect(!html.contains("<img src=\"\(authoredPath)\""))
             #expect(!html.contains("data-renderer-admitted=\"true\""))
         }
@@ -469,10 +470,10 @@ struct MarkdownImageTargetProjectionTests {
         embeddingRoles: Set<RendererEmbeddingRole>,
         minimumProtocolRevision: Int = 1
     ) throws -> RendererDescriptor {
-        let resolvedReference = try reference ?? RendererReference(
-            packageID: RendererPackageID(validating: "org.example.excalidraw"),
-            version: RendererPackageVersion(validating: "1.0.0"),
-            registrationID: RendererRegistrationID(validating: "excalidraw"))
+        let resolvedReference = reference ?? RendererReference(
+            packageID: PackageFenceTestSupport.installedPackageID,
+            version: PackageFenceTestSupport.installedPackageVersion,
+            registrationID: PackageFenceTestSupport.installedRegistrationID)
         let entryAsset = RendererAsset(
             path: try RendererRelativePath(validating: "index.html"),
             digest: try RendererSHA256Digest(hex: String(repeating: "0", count: 64)))
@@ -483,7 +484,12 @@ struct MarkdownImageTargetProjectionTests {
                 path: try RendererRelativePath(validating: "index.html"))),
             matchers: [
                 .normalizedMIME(try RendererMIMEType(validating: "application/json")),
-                .boundedJSONArtifact(.excalidraw),
+                .boundedJSON(try RendererJSONConstraints(
+                    properties: [
+                        "type": .stringEquals("excalidraw"),
+                        "version": .integerEquals(2),
+                    ],
+                    arrays: ["elements": .object])),
             ],
             presentations: [.web],
             supportedEmbeddingRoles: embeddingRoles,

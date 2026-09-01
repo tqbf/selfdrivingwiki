@@ -49,8 +49,8 @@ struct D2SourceNeutralityTests {
         #expect(!package.contains("RendererPackages/D2"))
         #expect(!package.contains("tmp/d2-renderer-package"))
         #expect(!package.contains("tools/d2"))
-        // The Excalidraw bundled package remains the only vendored renderer.
-        #expect(package.contains("RendererPackages/Excalidraw"))
+        // Renderer packages install through the standard local-directory path.
+        #expect(!package.contains("RendererPackages/"))
     }
 
     @Test("Sources/ contains no fence-alias literal for any package-declared format")

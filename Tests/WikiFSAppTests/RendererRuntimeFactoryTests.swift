@@ -14,7 +14,6 @@ struct RendererRuntimeFactoryTests {
             "renderer.machine-index-store",
             "renderer.package-validator-factory",
             "renderer.resource-provider-factory",
-            "renderer.bundled-package-source",
             "renderer.runtime",
             "renderer.services",
         ])
@@ -26,10 +25,10 @@ struct RendererRuntimeFactoryTests {
         defer { fixture.cleanup() }
         let handle = try await fixture.assembly.assemble(
             registrationOrder: RendererRuntimeFactory.Component.allCases.reversed())
-        let preparation = try await handle.services.bootstrapBundledPackage()
+        let preparation = try await handle.services.prepareCurrentRegistry()
 
-        #expect(preparation.machineIndex.records.count == 1)
-        #expect(preparation.enabledDescriptors.count == 1)
+        #expect(preparation.machineIndex.records.isEmpty)
+        #expect(preparation.enabledDescriptors.isEmpty)
         try await handle.dispose()
     }
 
@@ -38,7 +37,7 @@ struct RendererRuntimeFactoryTests {
         let fixture = try Fixture(name: "generation")
         defer { fixture.cleanup() }
         let handle = try await fixture.assembly.assemble()
-        let preparation = try await handle.services.bootstrapBundledPackage()
+        let preparation = try await handle.services.prepareCurrentRegistry()
 
         #expect(preparation.machineIndex.availableDescriptorProjection == preparation.enabledDescriptors)
         for descriptor in preparation.enabledDescriptors {
@@ -56,7 +55,8 @@ struct RendererRuntimeFactoryTests {
         let fixture = try Fixture(name: "sendable")
         defer { fixture.cleanup() }
         let handle = try await fixture.assembly.assemble()
-        let preparation = try await handle.services.bootstrapBundledPackage()
+        let preparation = try await handle.services.installLocalDirectory(
+            PackageFenceTestSupport.packageDirectory)
         let returned = await PreparationRelay().relay(preparation)
         let descriptor = try #require(returned.enabledDescriptors.first)
         let reservation = RendererPackageReservation(
@@ -64,7 +64,7 @@ struct RendererRuntimeFactoryTests {
             version: descriptor.reference.version)
         let provider = try #require(returned.provider(for: reservation))
         guard case let .webPackage(entryPoint) = descriptor.implementation else {
-            Issue.record("Expected bundled renderer to be a web package.")
+            Issue.record("Expected installed renderer to be a web package.")
             return
         }
         let resource = try provider.resource(for: RendererPackageScheme.url(
@@ -170,13 +170,7 @@ private struct Fixture: Sendable {
     init(name: String) throws {
         root = URL.temporaryDirectory.appending(path: "renderer-runtime-\(name)-\(UUID().uuidString)")
         let layout = try RendererPackageStoreLayout(appGroupContainerRoot: root)
-        assembly = RendererRuntimeFactory(
-            layout: layout,
-            bundledPackageSource: { BundledRendererPackages.excalidrawResourceURL() },
-            reviewedBundledIdentity: .init(
-                packageID: BundledRendererPackages.excalidrawPackageID,
-                version: BundledRendererPackages.excalidrawVersion,
-                registrationID: BundledRendererPackages.excalidrawRegistrationID))
+        assembly = RendererRuntimeFactory(layout: layout)
     }
 
     func cleanup() {

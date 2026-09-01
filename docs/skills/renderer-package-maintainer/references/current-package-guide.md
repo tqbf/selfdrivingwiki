@@ -1,6 +1,6 @@
 ## Renderer packages
 
-Self Driving Wiki includes and manages the read-only Excalidraw renderer automatically. The app validates the bundled directory and installs it in the machine renderer store. The package ID is `org.selfdrivingwiki.excalidraw-readonly`. The version is `1.0.1`. The registration ID is `excalidraw`.
+The repository includes a reviewed read-only Excalidraw renderer package. The app does not bundle or install this package automatically. Import `RendererPackages/Excalidraw` through Settings → Renderers → Advanced Local Renderer Package Import. The package ID is `org.selfdrivingwiki.excalidraw-readonly`. The version is `1.0.5`. The registration ID is `excalidraw`.
 
 ### Scope and availability
 
@@ -20,7 +20,7 @@ Use a local directory for Advanced Local Renderer Package Import. The app accept
 
 `RendererMachineIndexStore.activate` revalidates the staged package while the package-store coordinator holds its cross-process lock. It checks the authoritative package ID, version, and expected hash before the no-replace move. An identical validated installed hash is an idempotent no-op. A different hash fails closed. A no-op does not create another install event. A removed tombstone with the same hash can restore the exact package through normal validation and activation.
 
-The machine index owns package payload state and safe-mode suppression. It is outside wiki databases and File Provider projections. Removal creates a machine tombstone and deletes only the payload. It preserves source preferences. A later bundled bootstrap restores the exact reviewed Excalidraw version when tombstone state permits it.
+The machine index owns package payload state and safe-mode suppression. It is outside wiki databases and File Provider projections. Removal creates a machine tombstone and deletes only the payload. It preserves source preferences. A later local import can restore a package when the tombstone hash matches.
 
 ### Matching, fallback, and safe mode
 
@@ -40,11 +40,11 @@ The native bridge runs in an isolated content world. Its only read method is `in
 
 An external link requires a declared link policy and a host-observed user gesture. The host authorizes only a normalized HTTP or HTTPS destination with a single-use session-bound nonce.
 
-### Bundled Excalidraw
+### Reviewed Excalidraw renderer package
 
-The bundled package root is `RendererPackages/Excalidraw` at build time. SwiftPM copies it into the app resource bundle. Runtime bootstrap reads the bundled resource, not the source checkout. The package has `LICENSE.md`, `PROVENANCE.md`, `index.html`, `viewer.css`, and `viewer.js`. The manifest pins each SHA-256 digest. Keep its manifest, hashes, license, and provenance exact when you package it.
+The reviewed package root is `RendererPackages/Excalidraw` in the repository. SwiftPM does not copy it into the app resource bundle. Users import the folder through Settings → Renderers → Advanced Local Renderer Package Import.
 
-Excalidraw matches `application/json`, the `excalidraw` extension, and the bounded Excalidraw JSON signature. It is a read-only Web renderer. It declares `input.read` and user-activated external links. It has 48,000-byte input and decoded-input limits. The viewer supports VoiceOver and keyboard navigation.
+The package version is `1.0.5`. Its manifest declares a bounded JSON matcher for complete objects with `type` equal to `excalidraw`, `version` equal to `2`, and an `elements` array of objects. It is a read-only Web renderer. It declares `input.read` and user-activated external links. It has 48,000-byte input and decoded-input limits. The viewer supports VoiceOver and keyboard navigation.
 
 ### Create and validate a package
 

@@ -2,6 +2,10 @@
 
 Last revised: 2026-08-01
 
+> Historical note: The original Excalidraw bundling and host-projection design in
+> this record is superseded by [`plans/excalidraw-renderer-package.md`](excalidraw-renderer-package.md).
+> Keep this record as historical evidence for the shared renderer runtime.
+
 Tracking issue: [#1026](https://github.com/tqbf/selfdrivingwiki/issues/1026)
 
 ## 1. Goal

@@ -35,16 +35,6 @@ final class InstalledRendererHost {
         }
     }
 
-    /// Preserved UI-facing name. Process startup normally performs this through
-    /// RendererCompositionOwner before the host receives its first preparation.
-    func bootstrapBundledRendererPackages() async {
-        do { apply(try await services.bootstrapBundledPackage()) }
-        catch {
-            DebugLog.store("Bundled Excalidraw renderer bootstrap failed; using Source fallback.")
-            applyUnavailable()
-        }
-    }
-
     @discardableResult
     func installRendererDirectory(_ directory: URL) async -> Bool {
         do {

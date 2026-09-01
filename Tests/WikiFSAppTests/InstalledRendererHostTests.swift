@@ -8,43 +8,119 @@ import WikiFSEngine
 @Suite("Installed renderer host")
 @MainActor
 struct InstalledRendererHostTests {
-    @Test("bundled Excalidraw is available as an app resource with its reviewed identity")
-    func bundledExcalidrawResourceHasReviewedIdentity() throws {
-        let packageURL = try #require(BundledRendererPackages.excalidrawResourceURL())
-        let root = URL.temporaryDirectory.appending(path: "bundled-excalidraw-resource-\(UUID().uuidString)")
-        defer {
-            do { try FileManager.default.removeItem(at: root) }
-            catch { Issue.record("Bundled Excalidraw resource fixture cleanup failed.") }
-        }
+    @Test("startup publishes an empty machine registry without installation")
+    func emptyStartupPublishesWithoutMutation() async throws {
+        let root = URL.temporaryDirectory.appending(path: "empty-renderer-startup-\(UUID().uuidString)")
+        defer { remove(root) }
+        let layout = try RendererPackageStoreLayout(appGroupContainerRoot: root)
+        let store = RendererMachineIndexStore(layout: layout)
+        let before = try await store.read()
+        let handle = try await makeRuntime(layout: layout)
+        let host = InstalledRendererHost(services: handle.services)
 
-        let package = try RendererPackageValidator(packageRoot: root).validate(directory: packageURL)
+        await host.refresh()
+        let after = try await store.read()
 
-        #expect(package.manifest.packageID == BundledRendererPackages.excalidrawPackageID)
-        #expect(package.manifest.version == BundledRendererPackages.excalidrawVersion)
-        #expect(package.manifest.descriptors.map(\.reference.registrationID) == [BundledRendererPackages.excalidrawRegistrationID])
+        #expect(after == before)
+        #expect(host.inputs.enabledDescriptors.isEmpty)
+        try await handle.dispose()
     }
 
-    @Test("bundled Excalidraw bootstrap installs once and remains available to every wiki")
-    func bundledExcalidrawBootstrapIsIdempotentAndMachineScoped() async throws {
-        let root = URL.temporaryDirectory.appending(path: "bundled-excalidraw-bootstrap-\(UUID().uuidString)")
-        defer {
-            do { try FileManager.default.removeItem(at: root) }
-            catch { Issue.record("Bundled Excalidraw bootstrap fixture cleanup failed.") }
-        }
+    @Test("local Excalidraw import and removal preserve source data")
+    func localExcalidrawImportAndRemovalPreserveSource() async throws {
+        let root = URL.temporaryDirectory.appending(path: "local-excalidraw-import-\(UUID().uuidString)")
+        defer { remove(root) }
         let layout = try RendererPackageStoreLayout(appGroupContainerRoot: root)
         let store = RendererMachineIndexStore(layout: layout)
         let handle = try await makeRuntime(layout: layout)
         let host = InstalledRendererHost(services: handle.services)
 
-        await host.bootstrapBundledRendererPackages()
-        let first = try await store.read()
-        await host.bootstrapBundledRendererPackages()
-        let repeated = try await store.read()
+        #expect(await host.installRendererDirectory(PackageFenceTestSupport.packageDirectory))
+        let installed = try await store.read()
+        #expect(installed.availableDescriptorProjection.contains {
+            $0.reference.packageID == PackageFenceTestSupport.installedPackageID
+        })
+        #expect(await host.installRendererDirectory(PackageFenceTestSupport.packageDirectory))
+        #expect(try await store.read() == installed)
 
-        #expect(first.records.count == 1)
-        #expect(first.availableDescriptorProjection.map(\.reference.registrationID) == [BundledRendererPackages.excalidrawRegistrationID])
-        #expect(repeated == first)
-        #expect(host.inputs.enabledDescriptors == first.availableDescriptorProjection)
+        #expect(await host.removeRenderer(
+            packageID: PackageFenceTestSupport.installedPackageID,
+            version: PackageFenceTestSupport.installedPackageVersion))
+        #expect(try await store.read().availableDescriptorProjection.isEmpty)
+        try await handle.dispose()
+    }
+
+    @Test("an unchanged 1.0.4 machine record prepares its provider")
+    func version104MachineStorePreparesProviderAndServesEntryResource() async throws {
+        let root = URL.temporaryDirectory.appending(path: "legacy-excalidraw-store-\(UUID().uuidString)")
+        defer { remove(root) }
+        let layout = try RendererPackageStoreLayout(appGroupContainerRoot: root)
+        let legacyPackageURL = root.appendingPathComponent("excalidraw-1.0.4", isDirectory: true)
+        try FileManager.default.createDirectory(at: legacyPackageURL, withIntermediateDirectories: true)
+        for assetName in ["LICENSE.md", "PROVENANCE.md", "index.html", "viewer.css", "viewer.js"] {
+            try FileManager.default.copyItem(
+                at: PackageFenceTestSupport.packageDirectory.appendingPathComponent(assetName),
+                to: legacyPackageURL.appendingPathComponent(assetName))
+        }
+        let legacyManifestURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/Excalidraw-1.0.4/manifest-1.0.4.txt")
+        let legacyManifest = try Data(contentsOf: legacyManifestURL)
+        try legacyManifest.write(
+            to: legacyPackageURL.appendingPathComponent("manifest.json"),
+            options: .atomic)
+        let legacyPackage = legacyPackageURL
+        let validator = RendererPackageValidator(
+            packageRoot: layout.root,
+            stagingRoot: layout.stagingRoot,
+            reservedFenceAliases: BuiltInRendererDescriptors.reservedFenceAliases)
+        let validated = try validator.validate(directory: legacyPackage)
+        let descriptor = try #require(validated.manifest.descriptors.count == 1 ? validated.manifest.descriptors.first : nil)
+        let destination = layout.packageURL(
+            packageID: validated.manifest.packageID,
+            version: validated.manifest.version)
+        try FileManager.default.createDirectory(
+            at: destination.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: validated.stagedRoot, to: destination)
+
+        let timestamp = try RFC3339Timestamp(validating: "2026-09-01T10:00:00+00:00")
+        let record = try RendererPackageInstallRecord(
+            packageID: validated.manifest.packageID,
+            version: validated.manifest.version,
+            expectedPackageHash: try RendererSHA256Digest(
+                hex: "3068dfdac9b8e8e31f8ac0704c944ef462238c55aa0bbc3bca86d5769e8c9243"),
+            state: .validated,
+            reservedAt: timestamp,
+            updatedAt: timestamp,
+            validatedDescriptors: [descriptor])
+        let machineStore = RendererMachineIndexStore(
+            layout: layout,
+            reservedFenceAliases: BuiltInRendererDescriptors.reservedFenceAliases)
+        let initial = try await machineStore.read()
+        _ = try await machineStore.mutate(expectedGeneration: initial.generation) { records, _ in
+            records = [record]
+        }
+
+        let handle = try await makeRuntime(layout: layout)
+        let preparation = try await handle.services.prepareCurrentRegistry()
+        let prepared = try #require(preparation.enabledDescriptors.count == 1 ? preparation.enabledDescriptors.first : nil)
+        guard case let .webPackage(entryPoint) = prepared.implementation else {
+            Issue.record("Expected the legacy package descriptor to remain a web package.")
+            return
+        }
+        let reservation = RendererPackageReservation(
+            packageID: prepared.reference.packageID,
+            version: prepared.reference.version)
+        let provider = try #require(preparation.provider(for: reservation))
+        let resource = try provider.resource(for: RendererPackageScheme.url(
+            packageID: reservation.packageID,
+            version: reservation.version,
+            path: entryPoint.path))
+
+        #expect(prepared.reference.version.rawValue == "1.0.4")
+        #expect(resource.isEntryDocument)
+        #expect(!resource.data.isEmpty)
         try await handle.dispose()
     }
 
@@ -54,7 +130,7 @@ struct InstalledRendererHostTests {
         let packageID = try RendererPackageID(validating: "org.example.host")
         let version = try RendererPackageVersion(validating: "1.0.0")
 
-        await host.bootstrapBundledRendererPackages()
+        await host.refresh()
 
         #expect(host.machineIndex == nil)
         #expect(host.inputs.enabledDescriptors.isEmpty)
@@ -77,7 +153,7 @@ struct InstalledRendererHostTests {
 
     @Test("materialized session configuration remains pinned across preparation change")
     func materializedSessionConfigurationRemainsPinnedAcrossPreparationChange() async throws {
-        let packageURL = try #require(BundledRendererPackages.excalidrawResourceURL())
+        let packageURL = PackageFenceTestSupport.packageDirectory
         let validationRoot = URL.temporaryDirectory.appending(path: "renderer-pinned-validation-\(UUID().uuidString)")
         defer {
             if FileManager.default.fileExists(atPath: validationRoot.path) {
@@ -88,7 +164,7 @@ struct InstalledRendererHostTests {
         let package = try RendererPackageValidator(packageRoot: validationRoot).validate(directory: packageURL)
         let descriptor = try #require(package.manifest.descriptors.first)
         guard case let .webPackage(entryPoint) = descriptor.implementation else {
-            Issue.record("Expected bundled renderer to be a web package.")
+            Issue.record("Expected the renderer package to be a web package.")
             return
         }
         let reservation = RendererPackageReservation(
@@ -129,16 +205,16 @@ struct InstalledRendererHostTests {
         #expect(host.inputs.configuration(for: descriptor, entryPoint: entryPoint) == nil)
     }
 
-    @Test("bundled bootstrap fails closed when an installed hash conflicts")
-    func bundledBootstrapRejectsConflictingInstalledHash() async throws {
-        let root = URL.temporaryDirectory.appending(path: "bundled-excalidraw-conflict-\(UUID().uuidString)")
+    @Test("ordinary import fails closed when an installed hash conflicts")
+    func ordinaryImportRejectsConflictingInstalledHash() async throws {
+        let root = URL.temporaryDirectory.appending(path: "renderer-package-conflict-\(UUID().uuidString)")
         defer {
             do { try FileManager.default.removeItem(at: root) }
-            catch { Issue.record("Bundled Excalidraw conflict fixture cleanup failed.") }
+            catch { Issue.record("Renderer package conflict fixture cleanup failed.") }
         }
         let layout = try RendererPackageStoreLayout(appGroupContainerRoot: root)
         let store = RendererMachineIndexStore(layout: layout)
-        let packageURL = try #require(BundledRendererPackages.excalidrawResourceURL())
+        let packageURL = PackageFenceTestSupport.packageDirectory
         let package = try RendererPackageValidator(packageRoot: root).validate(directory: packageURL)
         let timestamp = try RFC3339Timestamp(validating: "2026-08-08T17:00:00+00:00")
         let conflicting = try RendererPackageInstallRecord(
@@ -156,7 +232,7 @@ struct InstalledRendererHostTests {
 
         let handle = try await makeRuntime(layout: layout)
         let host = InstalledRendererHost(services: handle.services)
-        await host.bootstrapBundledRendererPackages()
+        await host.refresh()
 
         let index = try await store.read()
         #expect(index.records == [conflicting])
@@ -164,17 +240,15 @@ struct InstalledRendererHostTests {
         try await handle.dispose()
     }
 
+    private func remove(_ root: URL) {
+        do { try FileManager.default.removeItem(at: root) }
+        catch { Issue.record("Renderer host fixture cleanup failed: \(error)") }
+    }
+
     private func makeRuntime(
         layout: RendererPackageStoreLayout
     ) async throws -> RendererRuntimeHandle {
-        try await RendererRuntimeFactory(
-            layout: layout,
-            bundledPackageSource: { BundledRendererPackages.excalidrawResourceURL() },
-            reviewedBundledIdentity: .init(
-                packageID: BundledRendererPackages.excalidrawPackageID,
-                version: BundledRendererPackages.excalidrawVersion,
-                registrationID: BundledRendererPackages.excalidrawRegistrationID))
-            .assemble()
+        try await RendererRuntimeFactory(layout: layout).assemble()
     }
 }
 

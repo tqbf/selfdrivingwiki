@@ -156,7 +156,7 @@ struct DocumentEmbedResolverTests {
             return projection.wikiEmbed(at: embed.sourceRange)
         }
         let actionPlanIDs = embeds.compactMap { embed -> String? in
-            guard case .rendererDOMFallback(_, let role, let plan, _) = embed,
+            guard case .renderer(_, let role, let plan, _) = embed,
                   role == .inlineContent else { return nil }
             return plan.placeholderID
         }
@@ -169,90 +169,67 @@ struct DocumentEmbedResolverTests {
             projection: projection,
             options: .disabled)
         #expect(html.components(separatedBy: "<img src=\"wiki-blob://source/\(sourceID.rawValue)\"").count - 1 == 2)
-        #expect(html.components(separatedBy: "class=\"sdw-inline-renderer sdw-inline-renderer--dom\"").count - 1 == 2)
+        #expect(html.components(separatedBy: "class=\"sdw-inline-renderer\"").count - 1 == 2)
         #expect(!html.contains("data-renderer-admitted=\"true\""))
         #expect(!html.contains("id=\"sdw-inline-renderer-"))
     }
 
-    @Test func bundledExcalidrawProjectsToTypedInertDOMOutput() throws {
-        let bytes = Data(##"{"type":"excalidraw","version":2,"elements":[{"type":"rectangle","x":1,"y":2,"width":30,"height":40,"angle":0,"strokeColor":"#112233","backgroundColor":"#ffffff","strokeWidth":2,"opacity":100,"roundness":null,"isDeleted":false}]}"##.utf8)
+    @Test func installedRendererPlanUsesGenericInlineAttachmentFallback() throws {
+        let bytes = Data(##"{"type":"excalidraw","version":2,"elements":[]}"##.utf8)
         let source = try RendererEmbeddedContent.Source(
             sourceID: sourceID,
             sourceVersionID: SourceVersionID(rawValue: "01J00000000000000000000005"),
             mimeType: try .init(validating: "application/json"),
             bytes: bytes)
         let plan = RendererEmbedPlan(
-            placeholderID: "excalidraw-dom",
+            placeholderID: "installed-renderer",
             embeddingRole: .inlineContent,
-            rendererReference: .init(
-                packageID: BundledRendererPackages.excalidrawPackageID,
-                version: BundledRendererPackages.excalidrawVersion,
-                registrationID: BundledRendererPackages.excalidrawRegistrationID),
+            rendererReference: RendererReference(
+                packageID: PackageFenceTestSupport.installedPackageID,
+                version: PackageFenceTestSupport.installedPackageVersion,
+                registrationID: PackageFenceTestSupport.installedRegistrationID),
             input: .source(source),
-            semanticContent: "drawing")
+            semanticContent: "drawing",
+            activationMetadata: .init(
+                controlLabel: "Open",
+                accessibilityLabel: "Open inline source renderer",
+                summary: "Open the source in the renderer pane."))
 
-        guard case .vectorScene(let scene) = DocumentRendererDOMProjector.project(plan) else {
-            Issue.record("Expected a typed vector scene")
+        let resolved = DocumentEmbedResolver(inputs: .init()).resolveMarkdownImage(
+            source: "drawing.json",
+            altText: "Installed drawing",
+            target: .renderer(rendererReference: plan.rendererReference, source: source))
+        guard case .renderer(_, .inlineContent, let resolvedPlan, .media(let label, .blob(let resolvedSourceID))) = resolved else {
+            Issue.record("Expected a generic renderer attachment with a readable fallback")
             return
         }
-        #expect(scene.elements.count == 1)
-        #expect(scene.bounds.width == 78)
-        #expect(scene.bounds.height == 88)
+        #expect(resolvedPlan.rendererReference == plan.rendererReference)
+        #expect(label == "Installed drawing")
+        #expect(resolvedSourceID == sourceID)
     }
 
-    @Test func excalidrawDOMProjectionFailsClosedForUnsupportedOrWrongRendererInput() throws {
+    @Test func rendererFallbackKeepsReadableSourceWhenPackageOutputIsUnavailable() throws {
         let unsupportedBytes = Data(##"{"type":"excalidraw","version":2,"elements":[{"type":"image","x":0,"y":0,"width":10,"height":10,"angle":0,"strokeColor":"#000000","backgroundColor":"transparent","strokeWidth":1,"opacity":100,"roundness":null,"isDeleted":false}]}"##.utf8)
         let source = try RendererEmbeddedContent.Source(
             sourceID: sourceID,
             sourceVersionID: SourceVersionID(rawValue: "01J00000000000000000000006"),
             mimeType: try .init(validating: "application/json"),
             bytes: unsupportedBytes)
-        let exactPlan = RendererEmbedPlan(
-            placeholderID: "unsupported-excalidraw",
-            embeddingRole: .inlineContent,
-            rendererReference: .init(
-                packageID: BundledRendererPackages.excalidrawPackageID,
-                version: BundledRendererPackages.excalidrawVersion,
-                registrationID: BundledRendererPackages.excalidrawRegistrationID),
-            input: .source(source),
-            semanticContent: "drawing")
-        let wrongPackagePlan = RendererEmbedPlan(
-            placeholderID: "lookalike-excalidraw",
-            embeddingRole: .inlineContent,
-            rendererReference: try reference(),
-            input: .source(source),
-            semanticContent: "drawing")
-
-        #expect(DocumentRendererDOMProjector.project(exactPlan) == nil)
-        #expect(DocumentRendererDOMProjector.project(wrongPackagePlan) == nil)
-
+        let rendererReference = RendererReference(
+            packageID: PackageFenceTestSupport.installedPackageID,
+            version: PackageFenceTestSupport.installedPackageVersion,
+            registrationID: PackageFenceTestSupport.installedRegistrationID)
         let resolved = DocumentEmbedResolver(inputs: .init()).resolveMarkdownImage(
-            source: "unsupported.excalidraw",
+            source: "unsupported.json",
             altText: "Unsupported drawing",
-            target: .renderer(rendererReference: exactPlan.rendererReference, source: source))
-        guard case .rendererDOMFallback(
-            _, .inlineContent, let fallbackPlan,
-            .media(let label, .blob(let fallbackSourceID))) = resolved else {
-            Issue.record("Unsupported trusted Excalidraw input must keep a readable DOM source fallback")
+            target: .renderer(rendererReference: rendererReference, source: source))
+        guard case .renderer(_, .inlineContent, let fallbackPlan, .media(let label, .blob(let fallbackSourceID))) = resolved else {
+            Issue.record("An unavailable package must keep a readable source fallback")
             return
         }
-        #expect(fallbackPlan.rendererReference == exactPlan.rendererReference)
+        #expect(fallbackPlan.rendererReference == rendererReference)
         #expect(fallbackSourceID == sourceID)
         #expect(label == "Unsupported drawing")
-
-        let extremeBytes = Data(##"{"type":"excalidraw","version":2,"elements":[{"type":"rectangle","x":1000000,"y":0,"width":1,"height":1,"angle":0,"strokeColor":"#000000","backgroundColor":"transparent","strokeWidth":1,"opacity":100,"roundness":null,"isDeleted":false}]}"##.utf8)
-        let extremeSource = try RendererEmbeddedContent.Source(
-            sourceID: sourceID,
-            sourceVersionID: SourceVersionID(rawValue: "01J00000000000000000000007"),
-            mimeType: try .init(validating: "application/json"),
-            bytes: extremeBytes)
-        let extremePlan = RendererEmbedPlan(
-            placeholderID: "extreme-excalidraw",
-            embeddingRole: .inlineContent,
-            rendererReference: exactPlan.rendererReference,
-            input: .source(extremeSource),
-            semanticContent: "drawing")
-        #expect(DocumentRendererDOMProjector.project(extremePlan) == nil)
     }
 
     @Test func rendererMustKeepInlineRole() throws {

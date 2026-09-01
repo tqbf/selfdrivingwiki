@@ -99,13 +99,6 @@ actor RendererRuntime: RendererServices {
     typealias ProviderFactory = @Sendable (
         RendererPackageInstallRecord
     ) throws -> any RendererPackageResourceProviding
-    typealias BundledPackageSource = @Sendable () -> URL?
-
-    struct ReviewedBundledIdentity: Sendable {
-        let packageID: RendererPackageID
-        let version: RendererPackageVersion
-        let registrationID: RendererRegistrationID
-    }
 
     private enum RetryPolicy {
         static let installationAttemptLimit = 3
@@ -114,23 +107,17 @@ actor RendererRuntime: RendererServices {
     private let machineStore: RendererMachineIndexStore
     private let makeValidator: ValidatorFactory
     private let makeProvider: ProviderFactory
-    private let bundledPackageSource: BundledPackageSource
-    private let reviewedBundledIdentity: ReviewedBundledIdentity
     private let mutationGate = RendererMutationGate()
     private var admitted = true
 
     init(
         machineStore: RendererMachineIndexStore,
         makeValidator: @escaping ValidatorFactory,
-        makeProvider: @escaping ProviderFactory,
-        bundledPackageSource: @escaping BundledPackageSource,
-        reviewedBundledIdentity: ReviewedBundledIdentity
+        makeProvider: @escaping ProviderFactory
     ) {
         self.machineStore = machineStore
         self.makeValidator = makeValidator
         self.makeProvider = makeProvider
-        self.bundledPackageSource = bundledPackageSource
-        self.reviewedBundledIdentity = reviewedBundledIdentity
     }
 
     func prepareCurrentRegistry() async throws -> RendererPreparation {
@@ -142,15 +129,8 @@ actor RendererRuntime: RendererServices {
         return try prepare(index)
     }
 
-    func bootstrapBundledPackage() async throws -> RendererPreparation {
-        guard let directory = bundledPackageSource() else {
-            throw RendererServicesError.validationFailed
-        }
-        return try await mutateInstalling(directory, requiresReviewedIdentity: true)
-    }
-
     func installLocalDirectory(_ directory: URL) async throws -> RendererPreparation {
-        try await mutateInstalling(directory, requiresReviewedIdentity: false)
+        try await mutateInstalling(directory)
     }
 
     func removePackage(
@@ -194,8 +174,7 @@ actor RendererRuntime: RendererServices {
     }
 
     private func mutateInstalling(
-        _ directory: URL,
-        requiresReviewedIdentity: Bool
+        _ directory: URL
     ) async throws -> RendererPreparation {
         try await withMutationLease {
             for attempt in 0 ..< RetryPolicy.installationAttemptLimit {
@@ -203,15 +182,6 @@ actor RendererRuntime: RendererServices {
                 let package: ValidatedRendererPackage
                 do { package = try makeValidator().validate(directory: directory) }
                 catch { throw RendererServicesError.validationFailed }
-                if requiresReviewedIdentity {
-                    guard package.manifest.packageID == reviewedBundledIdentity.packageID,
-                          package.manifest.version == reviewedBundledIdentity.version,
-                          package.manifest.descriptors.contains(where: {
-                              $0.reference.registrationID == reviewedBundledIdentity.registrationID
-                          }) else {
-                        throw RendererServicesError.unexpectedBundledIdentity
-                    }
-                }
                 try requireAdmission()
                 let current: RendererMachineIndex
                 do { current = try await machineStore.read() }

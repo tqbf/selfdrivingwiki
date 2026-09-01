@@ -220,17 +220,9 @@ struct DocumentEmbedResolver: Sendable {
         plan: RendererEmbedPlan,
         fallback: DocumentEmbedFallback
     ) -> ResolvedDocumentEmbed {
-        if let output = DocumentRendererDOMProjector.project(plan) {
-            return .rendererDOM(
-                syntax: syntax,
-                role: .inlineContent,
-                plan: plan,
-                output: output,
-                fallback: fallback)
-        }
-        return .rendererDOMFallback(
+        .renderer(
             syntax: syntax,
-            role: .inlineContent,
+            role: plan.embeddingRole,
             plan: plan,
             fallback: fallback)
     }

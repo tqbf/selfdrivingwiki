@@ -77,7 +77,9 @@ enum BuiltInRendererDescriptors {
                 matchers: [
                     .normalizedMIME(mime(BuiltInRendererMIME.json)),
                     .extensionFallback(fileExtension("canvas")),
-                    .boundedJSONArtifact(.jsonCanvas),
+                    jsonConstraints(
+                        properties: [:],
+                        arrays: ["nodes": .object, "edges": .object]),
                 ],
                 maximumInputByteCount: JSONCanvasLimits.maximumInputByteCount,
                 embeddingRoles: [.inlineContent, .disclosureRow],
@@ -122,6 +124,17 @@ enum BuiltInRendererDescriptors {
                 priority: priority)
         } catch {
             preconditionFailure("Invalid built-in renderer descriptor for \\(id.rawValue): \\(error)")
+        }
+    }
+
+    private static func jsonConstraints(
+        properties: [String: RendererJSONConstraints.Scalar],
+        arrays: [String: RendererJSONConstraints.ArrayElement]
+    ) -> RendererMatcher {
+        do {
+            return .boundedJSON(try RendererJSONConstraints(properties: properties, arrays: arrays))
+        } catch {
+            preconditionFailure("Invalid built-in renderer JSON constraints: \\(error)")
         }
     }
 

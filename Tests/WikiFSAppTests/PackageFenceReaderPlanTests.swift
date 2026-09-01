@@ -39,9 +39,9 @@ struct PackageFenceReaderPlanTests {
     }
 
     /// The bundled Excalidraw descriptor as the shipped manifest declares it
-    /// (see ``PackageFenceTestSupport/bundledExcalidrawDescriptor()``).
-    private static func bundledExcalidrawDescriptor() throws -> RendererDescriptor {
-        PackageFenceTestSupport.bundledExcalidrawDescriptor()
+    /// (see ``PackageFenceTestSupport/installedExcalidrawDescriptor()``).
+    private static func installedExcalidrawDescriptor() throws -> RendererDescriptor {
+        PackageFenceTestSupport.installedExcalidrawDescriptor()
     }
 
     // MARK: - AC.1: the d2 fence renders through the installed package's claim
@@ -179,17 +179,17 @@ struct PackageFenceReaderPlanTests {
         }
     }
 
-    @Test("excalidraw fence plan carries its pinned presentation")
+    @Test("installed package fence plan derives presentation from its descriptor")
     func excalidrawGolden() throws {
         let claims = RendererFenceClaimResolver.resolve(
             builtInDescriptors: BuiltInRendererDescriptors.all,
-            enabledInstalledDescriptors: [try Self.bundledExcalidrawDescriptor()])
+            enabledInstalledDescriptors: [try Self.installedExcalidrawDescriptor()])
         let html = MarkdownHTMLRenderer.render(
             "```excalidraw\n{\"type\":\"excalidraw\",\"version\":2,\"elements\":[]}\n```",
             options: Self.options(claims: claims))
         #expect(html.contains(
-            "data-renderer-reference=\"org.selfdrivingwiki.excalidraw-readonly/\(BundledRendererPackages.excalidrawVersion.rawValue)/excalidraw\""))
-        #expect(html.contains("Excalidraw document fence"))
+            "data-renderer-reference=\"org.selfdrivingwiki.excalidraw-readonly/1.0.5/excalidraw\""))
+        #expect(html.contains("Excalidraw fence"))
         #expect(html.contains("aria-label=\"Excalidraw renderer\""))
         #expect(html.contains("aria-label=\"Expand Excalidraw renderer\""))
     }

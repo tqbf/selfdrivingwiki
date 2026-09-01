@@ -683,11 +683,6 @@ struct WikiReaderView: View {
             min-height: \(Int(RendererAttachmentHostPolicy.dynamicInlineRendererReservedHeight))px;
             margin: 0 0 1em; overflow: hidden; border-radius: 8px;
           }
-          .sdw-inline-renderer--dom { margin: 0 0 1em; }
-          .sdw-inline-renderer__svg {
-            display: block; width: 100%; height: auto; max-height: 640px;
-            border: 1px solid var(--border); border-radius: 8px;
-          }
           .sdw-inline-renderer__action { display: inline-block; margin-top: 0.45em; font-size: 0.9em; }
           mark.sdwhl { background: rgba(255, 213, 79, 0.8); border-radius: 2px; }
           \(MermaidRendererAssets.sharedCSS)
