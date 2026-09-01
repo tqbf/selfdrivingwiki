@@ -97,6 +97,19 @@ other.
 pane directly. It defaults to `.defaults`, so the production call site says
 nothing.
 
+### Help
+
+`ExtractorPackageHelp.swift` mirrors `RendererPackageHelp.swift`: a
+question-mark button in the section header opens a popover that explains what a
+package is, what the manifest declares, how a package runs, what import does,
+which sources are supported, how credentials are authorized, and what happens
+when a package cannot run.
+
+The popover states the executable-code risk near the top, before anything the
+reader might act on. That is the one thing that separates an extractor package
+from a renderer package. It reuses `ExtractionSettingsView.trustWarningMessage`,
+the same string the import footer shows, so the two cannot drift apart.
+
 ## Verification
 
 * `make build` passes.
@@ -118,6 +131,7 @@ nothing.
   (`streamProcessCapturesStderrLines`, then
   `malformedProtocolAndNonzeroExitAreTyped`); both pass in isolation, so they
   flake under parallel load rather than failing.
+* The help popover was opened in the running app and captured.
 * The pane was installed and seen in the running app. A clean launch opens on
   Defaults and shows all four rows, including the podcast transcript row. The
   Packages pane shows the package table, the add and remove controls, the

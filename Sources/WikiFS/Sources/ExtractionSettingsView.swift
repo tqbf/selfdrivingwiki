@@ -480,6 +480,7 @@ struct ExtractionSettingsView: View {
     // Installed-package lifecycle (dynamic-extractor-packages Phase 7).
     @State private var packageModel: ExtractorPackageSettingsModel
     @State private var showingImportPicker = false
+    @State private var showingPackageHelp = false
     @State private var removalCandidate: ExtractorPackageSettingsRow?
     @State private var selectedPackageID: ExtractorPackageTableRow.ID?
     /// Deliberately not persisted: Settings opens on the defaults every time,
@@ -1363,7 +1364,13 @@ struct ExtractionSettingsView: View {
         Section {
             packageTable
         } header: {
-            Text("Installed Extractor Packages")
+            HStack {
+                Text("Installed Extractor Packages")
+                Spacer()
+                ExtractorPackageHelpControl(isPresented: $showingPackageHelp)
+                    .buttonStyle(.borderless)
+                    .labelStyle(.iconOnly)
+            }
         } footer: {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Manage exact validated package revisions and their credential access. Choose defaults in the Default Extractors section above.")
