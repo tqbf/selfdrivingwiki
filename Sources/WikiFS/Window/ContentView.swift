@@ -583,8 +583,6 @@ struct RendererActivationView: View {
             sourceBytes: payload?.bytes,
             pdfQuote: nil,
             htmlSource: nil,
-            mermaidProjection: nil,
-            mermaidDiagramSource: payload.map { String(decoding: $0.bytes, as: UTF8.self) },
             mediaTarget: nil,
             jsonCanvasHostAction: JSONCanvasHostActionRouter.handler(for: store))
     }

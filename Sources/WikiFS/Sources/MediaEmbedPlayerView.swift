@@ -119,10 +119,6 @@ enum MediaEmbedPlayerHTML {
             return "<audio src=\"\(esc(target.url))\" controls class=\"wiki-embed\"></audio>"
         case .video:
             return "<video src=\"\(esc(target.url))\" controls class=\"wiki-embed\"></video>"
-        case .diagram:
-            // The typed reader lowers diagrams. The source detail media view
-            // does not show a player for Mermaid sources.
-            return ""
         }
     }
 

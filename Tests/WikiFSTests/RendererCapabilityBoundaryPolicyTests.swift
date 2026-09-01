@@ -15,7 +15,7 @@ struct RendererCapabilityBoundaryPolicyTests {
         ] {
             #expect(!inputs.contains(forbidden), "Shared built-in inputs must not expose \(forbidden)")
         }
-        #expect(inputs.contains("mermaidProjection: AnyView?"))
+        #expect(inputs.contains("mediaTarget: EmbedTarget?"))
         #expect(inputs.contains("jsonCanvasHostAction:"))
     }
 

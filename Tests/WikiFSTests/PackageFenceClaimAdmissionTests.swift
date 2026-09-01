@@ -18,6 +18,10 @@ struct PackageFenceClaimAdmissionTests {
         try RendererFenceAlias(validating: "mermaid")
     }
 
+    private static func jsonCanvasAlias() throws -> RendererFenceAlias {
+        try RendererFenceAlias(validating: "jsoncanvas")
+    }
+
     private final class Fixture {
         let root: URL
         let layout: RendererPackageStoreLayout
@@ -99,39 +103,57 @@ struct PackageFenceClaimAdmissionTests {
 
     @Test("a validator with the built-in reserved set rejects a reserved claim")
     func validatorRejectsReservedAlias() throws {
+        let jsoncanvas = try Self.jsonCanvasAlias()
         let fixture = try Fixture(
             packageIDRaw: "org.example.squatter",
             claims: [RendererFenceClaim(
-                alias: Self.mermaidAlias(),
-                inlineMIMEType: try RendererMIMEType(validating: "text/plain"))])
+                alias: jsoncanvas,
+                inlineMIMEType: try RendererMIMEType(validating: "application/json"))])
         defer { fixture.remove() }
 
-        let mermaid = try Self.mermaidAlias()
-        #expect(throws: RendererPackageValidationError.reservedFenceAlias(mermaid)) {
+        #expect(throws: RendererPackageValidationError.reservedFenceAlias(jsoncanvas)) {
             _ = try fixture.validate(
-                reservedFenceAliases: [mermaid, Self.d2Alias()])
+                reservedFenceAliases: [jsoncanvas, Self.d2Alias()])
         }
         // Without the reserved set the same package validates: the guard is
         // injected authority, not a hidden host table at this layer.
         _ = try fixture.validate()
     }
 
+    @Test("a package may claim the mermaid alias once no built-in reserves it")
+    func mermaidAliasIsClaimableByAPackage() throws {
+        // The regression guard this refactor exists for: the alias is
+        // ordinary registry data now. Validation against the REAL reserved
+        // set (jsoncanvas + ordinary-language tokens) must accept it.
+        let fixture = try Fixture(
+            packageIDRaw: "org.selfdrivingwiki.mermaid-readonly",
+            claims: [RendererFenceClaim(
+                alias: Self.mermaidAlias(),
+                inlineMIMEType: try RendererMIMEType(validating: "text/mermaid"))])
+        defer { fixture.remove() }
+
+        _ = try fixture.validate(
+            reservedFenceAliases: [
+                try RendererFenceAlias(validating: "jsoncanvas"),
+            ])
+    }
+
     @Test("activation rejects a reserved alias even without validator injection")
     func activationRejectsReservedAlias() async throws {
+        let jsoncanvas = try Self.jsonCanvasAlias()
         let fixture = try Fixture(
             packageIDRaw: "org.example.squatter",
             claims: [RendererFenceClaim(
-                alias: Self.mermaidAlias(),
-                inlineMIMEType: try RendererMIMEType(validating: "text/plain"))])
+                alias: jsoncanvas,
+                inlineMIMEType: try RendererMIMEType(validating: "application/json"))])
         defer { fixture.remove() }
         let package = try fixture.validate()
-        let reserved = try Self.mermaidAlias()
         let store = RendererMachineIndexStore(
             layout: fixture.layout,
-            reservedFenceAliases: [reserved])
+            reservedFenceAliases: [jsoncanvas])
         _ = try await store.read()
 
-        await #expect(throws: RendererMachineIndexStoreError.reservedFenceAlias(reserved)) {
+        await #expect(throws: RendererMachineIndexStoreError.reservedFenceAlias(jsoncanvas)) {
             _ = try await store.activate(package, expectedGeneration: 0, clock: Self.clock)
         }
         #expect(try await store.read().records.isEmpty)

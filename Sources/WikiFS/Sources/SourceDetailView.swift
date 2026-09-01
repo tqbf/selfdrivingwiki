@@ -182,26 +182,10 @@ struct SourceDetailView: View {
 
     private var rendererFactoryInputs: BuiltInRendererFactoryInputs {
         let bytes = sourceBytesSnapshot
-        let mermaidDiagramSource = currentMarkdownContent.flatMap(
-            MermaidSourceDetector.standaloneDiagramSource(from:))
-        let mermaidProjection = mermaidDiagramSource == nil
-            ? SourceRendererPresentationPlanner
-                .renderableMermaidMarkdown(currentMarkdownContent)
-                .map { markdown in
-                    AnyView(WikiReaderView(
-                        markdown: markdown,
-                        currentSelection: store.selection,
-                        store: store)
-                        .zoomShortcuts($readerZoom)
-                        .zoomScroll($readerZoom))
-                }
-            : nil
         return BuiltInRendererFactoryInputs(
             sourceBytes: bytes,
             pdfQuote: pdfQuote,
             htmlSource: SourceRendererPresentationPlanner.htmlSourceString(for: file, bytes: bytes),
-            mermaidProjection: mermaidProjection,
-            mermaidDiagramSource: mermaidDiagramSource,
             mediaTarget: SourceRendererPresentationPlanner.mediaTarget(for: file, origin: origin),
             jsonCanvasHostAction: JSONCanvasHostActionRouter.handler(for: store))
     }

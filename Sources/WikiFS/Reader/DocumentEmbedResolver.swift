@@ -246,17 +246,9 @@ struct DocumentEmbedResolver: Sendable {
         let title = embed.alias ?? source.displayName
         let display = DocumentEmbedDisplayMetadata(title: title, altText: title)
 
-        // Predicate order is load-bearing: Mermaid source first, then external
-        // media, then byteful MIME media, then non-media transclusion.
-        if source.isMermaidSource, let bytes = source.bytes,
-           let text = String(data: bytes, encoding: .utf8) {
-            return .inlineMedia(
-                syntax: syntax,
-                kind: .mermaidSource,
-                display: display,
-                target: .authored(text),
-                fallback: .code(language: "mermaid", source: text))
-        }
+        // Predicate order is load-bearing: external media, then byteful MIME
+        // media, then the generic source-renderer arm, then non-media
+        // transclusion.
         if let external = source.externalTarget,
            let resolved = externalMedia(external) {
             return .inlineMedia(
@@ -340,7 +332,6 @@ struct DocumentEmbedResolver: Sendable {
         case .audio: return (.audio, typed)
         case .video: return (.video, typed)
         case .iframe: return (.externalFrame, typed)
-        case .diagram: return nil
         }
     }
 }

@@ -85,14 +85,14 @@ struct D2RendererPackageMatchingTests {
         let input = try d2Input()
         #expect(excalidrawShaped.matchTier(for: input) == nil)
 
-        let mermaidBuiltIn = try RendererDescriptor(
+        let jsonCanvasBuiltIn = try RendererDescriptor(
             reference: .init(
                 packageID: try .init(validating: "org.selfdrivingwiki.built-in"),
                 version: try .init(validating: "1.0.0"),
-                registrationID: try .init(validating: "mermaid")),
-            displayName: "Mermaid",
-            implementation: .builtIn(.mermaid),
-            matchers: [.extensionFallback(try .init(validating: "mmd"))],
+                registrationID: try .init(validating: "json-canvas")),
+            displayName: "JSON Canvas",
+            implementation: .builtIn(.jsonCanvas),
+            matchers: [.extensionFallback(try .init(validating: "canvas"))],
             presentations: [.native],
             supportedEmbeddingRoles: [.disclosureRow],
             approvedAssets: [],
@@ -102,7 +102,7 @@ struct D2RendererPackageMatchingTests {
             accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
             compatibility: .init(minimumProtocolRevision: 1, maximumProtocolRevision: 1),
             priority: 100)
-        #expect(mermaidBuiltIn.matchTier(for: input) == nil)
+        #expect(jsonCanvasBuiltIn.matchTier(for: input) == nil)
     }
 
     @Test("capabilities, link policy, and embedding roles obey the read-only contract")

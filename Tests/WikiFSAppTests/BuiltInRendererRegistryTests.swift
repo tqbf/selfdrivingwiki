@@ -64,7 +64,6 @@ import WikiFSTypes
             sourceBytes: Data("%PDF".utf8),
             pdfQuote: "a retained quote",
             htmlSource: nil,
-            mermaidProjection: nil,
             mediaTarget: nil,
             jsonCanvasHostAction: { _ in })
 
@@ -181,34 +180,6 @@ import WikiFSTypes
         #expect(BuiltInRendererFactoryMap.makeView(
             for: descriptor,
             inputs: try Self.factoryInputs(sourceBytes: nil)) == nil)
-    }
-
-    @Test("Planner maps Mermaid extension/content to the Mermaid built-in")
-    func plannerMatchesMermaid() throws {
-        let source = fixtureSource(filename: "diagram.mmd", ext: "mmd", mimeType: nil, byteSize: 12)
-        let id = try SourceRendererPresentationPlanner.plannedBuiltInRenderer(
-            for: source,
-            boundedBytes: Data("flowchart LR".utf8),
-            currentMarkdown: "flowchart LR",
-            origin: nil)
-        #expect(id == .mermaid)
-    }
-
-    @Test("Mermaid factory prefers standalone diagram source over document projection")
-    @MainActor
-    func mermaidFactoryPrefersStandaloneDiagramSource() {
-        let descriptor = BuiltInRendererDescriptors.descriptor(for: .mermaid)
-        let inputs = BuiltInRendererFactoryInputs(
-            sourceBytes: nil,
-            pdfQuote: nil,
-            htmlSource: nil,
-            mermaidProjection: AnyView(Text("embedded section")),
-            mermaidDiagramSource: "flowchart LR\nA --> B",
-            mediaTarget: nil,
-            jsonCanvasHostAction: { _ in })
-
-        #expect(BuiltInRendererFactoryMap.makeView(for: descriptor, inputs: inputs) != nil)
-        #expect(inputs.mermaidDiagramSource == "flowchart LR\nA --> B")
     }
 
     @Test("Planner maps a complete JSON Canvas document to the native built-in")
@@ -390,7 +361,6 @@ import WikiFSTypes
             sourceBytes: nil,
             pdfQuote: nil,
             htmlSource: nil,
-            mermaidProjection: nil,
             mediaTarget: nil,
             jsonCanvasHostAction: { _ in })
         #expect(BuiltInRendererFactoryMap.makeView(for: descriptor, inputs: inputs) == nil)
@@ -582,7 +552,6 @@ import WikiFSTypes
             sourceBytes: sourceBytes,
             pdfQuote: nil,
             htmlSource: nil,
-            mermaidProjection: nil,
             mediaTarget: nil,
             jsonCanvasHostAction: { _ in })
     }
