@@ -48,8 +48,18 @@ No D2-specific branch exists anywhere in `Sources/`.
 
 ## Package identity and shape
 
-- packageID `org.selfdrivingwiki.d2-readonly`, version `0.8.2` (mirrors
-  upstream), registrationID `d2`, revision 2 manifest.
+- packageID `org.selfdrivingwiki.d2-readonly`, version `1.0.0`, registrationID
+  `d2`, revision 2 manifest.
+- **The package version is package identity. It does not mirror upstream D2.**
+  The lock keeps the two apart (`package.version` and `upstream.version`), and
+  the package version must advance on any package-only change — new wrapper
+  bytes, a new manifest claim — even when upstream D2 does not move. The
+  machine store reserves package/version to package hash permanently in
+  `renderer_machine_expected_hash_reservations`, and removal keeps that
+  reservation. Changed bytes under an already-used version therefore fail to
+  install with `conflictingExpectedHash`. The package first shipped as `0.8.2`,
+  mirroring upstream. Adding the `d2` fence claim changed the manifest bytes
+  with no upstream change, so it had nowhere to go. The version became `1.0.0`.
 - matchers: `extensionFallback("d2")` only — D2 has no registered MIME type
   and no magic bytes; a MIME claim like `text/plain` would annex every
   plain-text source.

@@ -51,9 +51,13 @@ struct D2PackageLockTests {
         #expect(package["registrationID"] as? String == D2PackageFixtures.registrationID)
         #expect(package["displayName"] as? String == D2PackageFixtures.displayName)
         #expect(package["priority"] as? Int == D2PackageFixtures.priority)
-        // Upstream and package versions move together: a regeneration bump is
-        // an explicit lock edit, never a silent drift.
-        #expect(package["version"] as? String == D2PackageFixtures.upstreamVersion)
+        // No assertion ties the package version to the upstream version. The
+        // package version is package identity: it has to advance on a
+        // package-only change (new wrapper bytes, a new manifest claim),
+        // because the machine store reserves package/version -> hash
+        // permanently and changed bytes under a used version cannot install.
+        // The two may coincide by chance; requiring either equality or
+        // inequality would be a false constraint.
         let sizeLimits = try #require(package["sizeLimits"] as? [String: Any])
         #expect(sizeLimits["maximumInputByteCount"] as? Int == D2PackageFixtures.maximumInputByteCount)
         let capabilities = try #require(package["capabilities"] as? [String])

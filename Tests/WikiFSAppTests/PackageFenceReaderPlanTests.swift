@@ -56,7 +56,7 @@ struct PackageFenceReaderPlanTests {
             options: Self.options(claims: claims))
 
         #expect(html.contains("sdw-renderer-card"))
-        #expect(html.contains("data-renderer-reference=\"org.selfdrivingwiki.d2-readonly/0.8.2/d2\""))
+        #expect(html.contains("data-renderer-reference=\"org.selfdrivingwiki.d2-readonly/1.0.0/d2\""))
         #expect(html.contains("aria-label=\"D2 renderer\""))
         // Derived presentation: display name, not a per-format host string.
         #expect(html.contains("D2 fence"))
