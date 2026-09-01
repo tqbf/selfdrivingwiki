@@ -128,6 +128,20 @@ struct ExtractionRouteTableHostedTests {
         return result
     }
 
+    /// The pane hosts two tables — routes and installed packages — so a
+    /// row-count assertion has to name the multiset it expects rather than
+    /// trust which one a depth-first walk reaches first.
+    private func tableViewRowCounts(_ window: NSWindow) -> [Int] {
+        guard let content = window.contentView else { return [] }
+        var tables: [NSTableView] = []
+        func walk(_ view: NSView) {
+            if let table = view as? NSTableView { tables.append(table) }
+            for subview in view.subviews { walk(subview) }
+        }
+        walk(content)
+        return tables.map(\.numberOfRows).sorted()
+    }
+
     @Test("the route table mounts, loads its snapshot, and scrolls internally")
     func rendersRouteTableWithoutCrash() async throws {
         let lease = await HostedAppKitTestGate.shared.acquire()
@@ -155,14 +169,45 @@ struct ExtractionRouteTableHostedTests {
         let window = mount(view)
 
         try await waitUntil {
-            self.firstTableView(window)?.numberOfRows == 4
+            self.tableViewRowCounts(window).contains(4)
         }
         // The hosted hierarchy contains a native table (row views) inside a
         // clip view — the scrollable, window-bounded layout.
         let content = try #require(window.contentView)
         #expect(containsDescendant(content) { $0 is NSClipView })
-        let table = try #require(firstTableView(window))
-        #expect(table.numberOfRows == 4)
+        // The four route rows, and the package table empty beside them.
+        #expect(tableViewRowCounts(window) == [0, 4])
+    }
+
+    @Test("the package table mounts active and failed revisions as rows")
+    func rendersPackageTableWithoutCrash() async throws {
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        defer { lease.release() }
+        let dir = try tempDirectory("package-table-render")
+        var loaded = snapshot(failedPackageIDs: ["org.example.broken"])
+        loaded.rows = [
+            ExtractorPackageSettingsRow(
+                kind: .pdf,
+                packageID: "org.example.pdf",
+                version: "1.0.0",
+                digestPrefix: String(repeating: "b", count: 12),
+                registrationID: "pdf",
+                revision: ExtractorPackageRevisionID(
+                    packageID: try ExtractorPackageID(validating: "org.example.pdf"),
+                    version: try ExtractorPackageVersion(validating: "1.0.0"),
+                    digest: try ExtractorPackageDigest(hex: String(repeating: "b", count: 64)))),
+        ]
+        let window = mount(makeView(directory: dir, snapshot: loaded))
+
+        // Three canonical route rows, and one active plus one failed revision
+        // folded into the package table.
+        try await waitUntil {
+            self.tableViewRowCounts(window) == [2, 3]
+        }
+
+        #expect(tableViewRowCounts(window) == [2, 3])
+        let content = try #require(window.contentView)
+        #expect(content.fittingSize.height > 0)
     }
 
     @Test("a non-ready route status dialog mounts with recovery controls")

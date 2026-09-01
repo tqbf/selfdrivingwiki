@@ -30,7 +30,7 @@ struct RendererSettingsManagementViewTests {
         // Packages are a selectable table with a fixed height, so the pane
         // scrolls internally instead of growing the Settings window.
         #expect(source.contains("Table(model.rows, selection: $selectedPackageID)"))
-        #expect(source.contains(".frame(height: RendererPackageTableMetrics.height(forRowCount: model.rows.count))"))
+        #expect(source.contains(".frame(height: SettingsPackageTableMetrics.height(forRowCount: model.rows.count))"))
         // Add is a first-class control under the table, not a disclosure.
         #expect(source.contains("Button(\"Add Package…\", systemImage: \"plus\")"))
         #expect(source.contains("renderer-package-add-button"))
@@ -132,9 +132,9 @@ struct RendererSettingsManagementViewTests {
         #expect(host.view.fittingSize.height > 0)
     }
 
-    @Test("the table fits its rows between a floor and a ceiling")
+    @Test("the shared package table fits its rows between a floor and a ceiling")
     func tableHeightFollowsRowCountWithinBounds() {
-        let metrics = RendererPackageTableMetrics.self
+        let metrics = SettingsPackageTableMetrics.self
 
         // No rows: the empty state needs more room than the row floor gives.
         #expect(metrics.height(forRowCount: 0) == metrics.emptyHeight)
