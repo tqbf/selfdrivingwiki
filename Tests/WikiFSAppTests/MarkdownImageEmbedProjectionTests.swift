@@ -180,34 +180,65 @@ struct MarkdownImageTargetProjectionTests {
 
         #expect(DocumentSourceRendererProjection.hasEligibleRenderer(
             mimeType: jsonMIME,
+            fileExtension: nil,
             registry: try RendererRegistrySnapshot(
                 builtInDescriptors: [],
                 enabledInstalledDescriptors: [inline]),
             inlineCapableReferences: [inline.reference]))
         #expect(!DocumentSourceRendererProjection.hasEligibleRenderer(
             mimeType: jsonMIME,
+            fileExtension: nil,
             registry: try RendererRegistrySnapshot(
                 builtInDescriptors: [],
                 enabledInstalledDescriptors: [rowOnly]),
             inlineCapableReferences: [rowOnly.reference]))
         #expect(!DocumentSourceRendererProjection.hasEligibleRenderer(
             mimeType: jsonMIME,
+            fileExtension: nil,
             registry: try RendererRegistrySnapshot(
                 builtInDescriptors: [],
                 enabledInstalledDescriptors: [inline]),
             inlineCapableReferences: []))
         #expect(!DocumentSourceRendererProjection.hasEligibleRenderer(
             mimeType: "image/png",
+            fileExtension: nil,
             registry: try RendererRegistrySnapshot(
                 builtInDescriptors: [],
                 enabledInstalledDescriptors: [inline]),
             inlineCapableReferences: [inline.reference]))
         #expect(!DocumentSourceRendererProjection.hasEligibleRenderer(
             mimeType: jsonMIME,
+            fileExtension: nil,
             registry: try RendererRegistrySnapshot(
                 builtInDescriptors: [],
                 enabledInstalledDescriptors: [incompatible]),
             inlineCapableReferences: [incompatible.reference]))
+        // The extension fallback tier: a NULL-MIME row matches an
+        // extension-fallback claim, and nothing matches when both are absent.
+        let extensionBacked = try excalidrawDescriptor(
+            embeddingRoles: [.inlineContent],
+            matchers: [.extensionFallback(try .init(validating: "mmd"))])
+        #expect(DocumentSourceRendererProjection.hasEligibleRenderer(
+            mimeType: nil,
+            fileExtension: "mmd",
+            registry: try RendererRegistrySnapshot(
+                builtInDescriptors: [],
+                enabledInstalledDescriptors: [extensionBacked]),
+            inlineCapableReferences: [extensionBacked.reference]))
+        #expect(!DocumentSourceRendererProjection.hasEligibleRenderer(
+            mimeType: nil,
+            fileExtension: nil,
+            registry: try RendererRegistrySnapshot(
+                builtInDescriptors: [],
+                enabledInstalledDescriptors: [extensionBacked]),
+            inlineCapableReferences: [extensionBacked.reference]))
+        #expect(!DocumentSourceRendererProjection.hasEligibleRenderer(
+            mimeType: nil,
+            fileExtension: "txt",
+            registry: try RendererRegistrySnapshot(
+                builtInDescriptors: [],
+                enabledInstalledDescriptors: [extensionBacked]),
+            inlineCapableReferences: [extensionBacked.reference]))
     }
 
     @Test("page canonical source image path uses typed renderer DOM output")
@@ -382,7 +413,7 @@ struct MarkdownImageTargetProjectionTests {
                 "mermaid": .init(
                     id: mermaidID,
                     mimeType: "text/mermaid",
-                    target: .init(kind: .diagram, url: mermaidID.rawValue, content: "flowchart LR")),
+                    target: nil),
                 "external": .init(
                     id: externalID,
                     mimeType: "video/youtube",
@@ -468,6 +499,7 @@ struct MarkdownImageTargetProjectionTests {
     private func excalidrawDescriptor(
         reference: RendererReference? = nil,
         embeddingRoles: Set<RendererEmbeddingRole>,
+        matchers: [RendererMatcher]? = nil,
         minimumProtocolRevision: Int = 1
     ) throws -> RendererDescriptor {
         let resolvedReference = reference ?? RendererReference(
@@ -482,7 +514,7 @@ struct MarkdownImageTargetProjectionTests {
             displayName: "Excalidraw",
             implementation: .webPackage(RendererWebEntryPoint(
                 path: try RendererRelativePath(validating: "index.html"))),
-            matchers: [
+            matchers: matchers ?? [
                 .normalizedMIME(try RendererMIMEType(validating: "application/json")),
                 .boundedJSON(try RendererJSONConstraints(
                     properties: [

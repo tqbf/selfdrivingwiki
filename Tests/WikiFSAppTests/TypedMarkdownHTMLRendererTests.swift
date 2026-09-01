@@ -20,20 +20,41 @@ struct TypedMarkdownHTMLRendererTests {
         #expect(!html.contains(">[[Page"))
     }
 
-    @Test func mermaidSourceEmbedRendersInlineWithoutRendererRow() throws {
+    @Test func mermaidSourceEmbedWithAPackageClaimRendersInlineRenderer() throws {
+        // A claimed .mmd source embed lowers through the generic inline
+        // renderer arm — the same markup as any other package source, with
+        // no host diagram markup.
         let prepared = ReaderMarkdown.preparedDocument("Diagram: ![[source:diagram.mmd]]")
         let embed = try firstEmbed(prepared)
-        let resolved = ResolvedDocumentEmbed.inlineMedia(
+        let source = try RendererEmbeddedContent.Source(
+            sourceID: SourceID(rawValue: "01JTYPMERMAIDSRC0000000001"),
+            sourceVersionID: SourceVersionID(rawValue: "01JTYPMERMAIDSRCVER0001"),
+            mimeType: try .init(validating: "text/mermaid"),
+            fileExtension: "mmd",
+            bytes: Data("graph TD; A-->B".utf8))
+        let resolved = ResolvedDocumentEmbed.renderer(
             syntax: .wikiSourceMedia(embed),
-            kind: .mermaidSource,
-            display: .init(title: "Diagram", altText: "Diagram"),
-            target: .authored("graph TD; A-->B"),
+            role: .inlineContent,
+            plan: RendererEmbedPlan(
+                placeholderID: "typed-mermaid-inline",
+                embeddingRole: .inlineContent,
+                rendererReference: RendererReference(
+                    packageID: PackageFenceTestSupport.installedMermaidDescriptor().reference.packageID,
+                    version: PackageFenceTestSupport.installedMermaidDescriptor().reference.version,
+                    registrationID: PackageFenceTestSupport.installedMermaidDescriptor().reference.registrationID),
+                input: .source(source),
+                semanticContent: "diagram",
+                activationMetadata: .init(
+                    controlLabel: "Open",
+                    accessibilityLabel: "Open inline source renderer",
+                    summary: "Open the source in the renderer pane.")),
             fallback: .code(language: "mermaid", source: "graph TD; A-->B"))
         let projection = ResolvedDocumentProjection(wikiEmbeds: [embed.sourceRange: resolved])
 
         let html = MarkdownHTMLRenderer.render(prepared, projection: projection, options: .disabled)
-        #expect(html.contains("sdw-inline-mermaid"))
-        #expect(html.contains("graph TD; A--&gt;B"))
+        #expect(html.contains("sdw-inline-renderer"))
+        #expect(html.contains("data-renderer-role=\"inlineContent\""))
+        #expect(!html.contains("sdw-inline-mermaid"))
         #expect(!html.contains("sdw-renderer-card__row"))
         #expect(!html.contains("sdw-renderer-card__disclosure"))
     }
@@ -50,7 +71,11 @@ struct TypedMarkdownHTMLRendererTests {
             projection: .init(),
             options: .init(
                 codeHighlighting: .disabled,
-                rendererEmbedProjection: .init(sourceEmbeds: [:], richFenceClaims: RendererFenceClaimResolver.resolve(builtInDescriptors: [BuiltInRendererDescriptors.descriptor(for: .mermaid)])),
+                rendererEmbedProjection: .init(
+                    sourceEmbeds: [:],
+                    richFenceClaims: RendererFenceClaimResolver.resolve(
+                        builtInDescriptors: [],
+                        enabledInstalledDescriptors: [PackageFenceTestSupport.installedMermaidDescriptor()])),
                 documentIdentity: identity,
                 rendererActivationAdmission: nil))
 

@@ -658,6 +658,10 @@ public enum RendererEmbeddedContent: Codable, Hashable, Sendable {
         public let sourceVersionID: SourceVersionID?
         public let sourceMarkdownVersionID: SourceMarkdownVersionID?
         public let mimeType: RendererMIMEType
+        /// The source's lowercased filename extension, when known. Extension
+        /// fallback matchers key on it when the stored MIME is absent (legacy
+        /// rows); `nil` never overrides a MIME match.
+        public let fileExtension: String?
         public let digest: RendererSHA256Digest
         public let bytes: Data
 
@@ -666,6 +670,7 @@ public enum RendererEmbeddedContent: Codable, Hashable, Sendable {
             sourceVersionID: SourceVersionID? = nil,
             sourceMarkdownVersionID: SourceMarkdownVersionID? = nil,
             mimeType: RendererMIMEType,
+            fileExtension: String? = nil,
             bytes: Data
         ) throws {
             guard sourceVersionID != nil || sourceMarkdownVersionID != nil else {
@@ -678,8 +683,33 @@ public enum RendererEmbeddedContent: Codable, Hashable, Sendable {
             self.sourceVersionID = sourceVersionID
             self.sourceMarkdownVersionID = sourceMarkdownVersionID
             self.mimeType = mimeType
+            if let fileExtension {
+                guard let extensionValue = RendererFileExtension(rawValue: fileExtension.lowercased()) else {
+                    throw RendererValidationError.invalidExtension(fileExtension)
+                }
+                self.fileExtension = extensionValue.rawValue
+            } else {
+                self.fileExtension = nil
+            }
             self.digest = RendererSHA256.digest(bytes)
             self.bytes = bytes
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case sourceID, sourceVersionID, sourceMarkdownVersionID, mimeType, fileExtension, digest, bytes
+        }
+
+        public init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            let sourceVersionID = try container.decodeIfPresent(SourceVersionID.self, forKey: .sourceVersionID)
+            let sourceMarkdownVersionID = try container.decodeIfPresent(SourceMarkdownVersionID.self, forKey: .sourceMarkdownVersionID)
+            try self.init(
+                sourceID: container.decode(SourceID.self, forKey: .sourceID),
+                sourceVersionID: sourceVersionID,
+                sourceMarkdownVersionID: sourceMarkdownVersionID,
+                mimeType: container.decode(RendererMIMEType.self, forKey: .mimeType),
+                fileExtension: try container.decodeIfPresent(String.self, forKey: .fileExtension),
+                bytes: container.decode(Data.self, forKey: .bytes))
         }
     }
 

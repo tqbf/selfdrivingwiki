@@ -4,10 +4,13 @@ import Testing
 @testable import WikiFS
 @testable import WikiFSCore
 
-/// Issue #670 — Mermaid diagram source embeds (`![[source:diagram.mmd]]`).
+/// Mermaid diagram source embeds (`![[source:diagram.mmd]]`) after the
+/// built-in renderer retirement.
 ///
-/// A `.mmd` or `text/mermaid` source resolves to exact Mermaid source facts.
-/// The typed document resolver lowers these facts as inline content. The
+/// A `.mmd` or `text/mermaid` source is ordinary byteful source data now:
+/// it resolves no special embed target, and its inline rendering comes from
+/// a matching renderer package through the generic source-renderer arm.
+/// With no package installed the embed stays a readable transclusion. The
 /// compatibility string bridge must keep embed syntax unchanged.
 @MainActor
 struct DiagramEmbedTests {
@@ -19,93 +22,66 @@ struct DiagramEmbedTests {
         return dir.appendingPathComponent("WikiFS.sqlite")
     }
 
-    // MARK: - EmbedTarget API surface (#670 §1)
+    // MARK: - EmbedTarget API surface
 
-    @Test func diagramKindExistsAndCarriesContent() throws {
-        // The new `.diagram` kind + `content` field are the public surface the
-        // renderer dispatches on. `url` is informational for diagrams.
-        let target = EmbedTarget(
-            kind: .diagram, url: "01HDIAGRAM0000000000000001",
-            content: "flowchart LR\n  A --> B")
-        #expect(target.kind == .diagram)
-        #expect(target.content == "flowchart LR\n  A --> B")
-        #expect(target.url == "01HDIAGRAM0000000000000001")
-    }
-
-    @Test func mediaTargetsKeepNilContentByDefault() throws {
-        // Existing media embed constructors (provider iframe, direct-remote
-        // audio/video) carry no content — backward compat: `content` defaults to
-        // nil so unchanged call sites stay clean.
+    @Test func mediaKindsCarryNoDiagramCase() throws {
+        // The media target union is closed: provider iframe, direct-remote
+        // audio, direct-remote video. A diagram is renderer-package data.
         let iframe = EmbedTarget(kind: .iframe, url: "https://player/1")
         let audio = EmbedTarget(kind: .audio, url: "https://x/ep.mp3")
         let video = EmbedTarget(kind: .video, url: "https://x/clip.mp4")
-        #expect(iframe.content == nil)
-        #expect(audio.content == nil)
-        #expect(video.content == nil)
+        #expect(iframe.kind != audio.kind)
+        #expect(audio.kind != video.kind)
+        #expect(iframe.kind != video.kind)
     }
 
-    @Test func allKindsDistinguishInEquality() throws {
-        // `.diagram` must be its own case — not blend into an existing one.
-        // Equality on `Kind` is what switch statements compile down to.
-        #expect(EmbedTarget.Kind.diagram != .iframe)
-        #expect(EmbedTarget.Kind.diagram != .audio)
-        #expect(EmbedTarget.Kind.diagram != .video)
-    }
+    // MARK: - WikiRenderContext resolution
 
-    // MARK: - WikiRenderContext resolution (#670 §2)
-
-    @Test func renderContextResolvesMmdSourceToDiagramTarget() throws {
-        // A `.mmd` source — the byteful case `embedDescriptors()` skips
-        // (`WHERE sv.blob_hash IS NULL`), so the diagram-resolution path
-        // in `WikiRenderContext.build(from:)` is what fills its embed entry.
+    @Test func renderContextResolvesMmdSourceNamesWithoutASpecialTarget() throws {
+        // A `.mmd` source — the byteful case `embedDescriptors()` skips —
+        // resolves its embed entries by name/id, but carries no special
+        // target: rendering is a renderer-package concern, not a host one.
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let model = WikiStoreModel(store: store)
         let diagram = "flowchart LR\n  A --> B\n  B --> C"
-        // .mmd extension → `text/mermaid` mime (via `MimeType.mime(forExtension:)`,
-        // the #620 fallback for extensions UTType can't resolve).
         let src = try store.addSource(
             filename: "Flow.mmd", data: Data(diagram.utf8))
         model.reloadFromStore()
 
         let ctx = WikiRenderContext.build(from: model)
 
-        // The source is a `.diagram` target carrying the raw mermaid text —
-        // resolved by filename (lowercased "flow.mmd"), by id, and by
-        // ext-stripped ("flow").
+        // Name resolution still works — resolved by filename (lowercased
+        // "flow.mmd"), by ext-stripped ("flow"), and by canonical id.
         let byName = try #require(ctx.embedInfo("flow.mmd"))
         #expect(byName.id == src.id)
-        let target = try #require(byName.target)
-        #expect(target.kind == .diagram)
-        #expect(target.content == diagram)
-        #expect(target.url == src.id.rawValue)  // informational
-        // By ext-stripped name.
+        #expect(byName.target == nil)
         let byStripped = try #require(ctx.embedInfo("flow"))
         #expect(byStripped.id == src.id)
-        // By canonical id (lowercased).
         let byID = try #require(ctx.embedInfo(src.id.rawValue.lowercased()))
         #expect(byID.id == src.id)
+        // The extension map carries the fallback matcher data.
+        #expect(ctx.sourceIDToExtension[src.id] == "mmd")
     }
 
-    @Test func renderContextResolvesTextMermaidMimeSource() throws {
-        // A source with the explicit `text/mermaid` mime (no `.mmd` extension)
-        // also resolves to a `.diagram` target — the detector's MIME arm fires.
+    @Test func renderContextResolvesTextMermaidMimeSourceWithoutASpecialTarget() throws {
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let model = WikiStoreModel(store: store)
         let diagram = "sequenceDiagram\n  Alice->>Bob: Hi"
-        let src = try store.addSource(
+        _ = try store.addSource(
             filename: "sequence.txt", data: Data(diagram.utf8),
             mimeType: "text/mermaid")
         model.reloadFromStore()
 
         let ctx = WikiRenderContext.build(from: model)
         let info = try #require(ctx.embedInfo("sequence.txt"))
-        let target = try #require(info.target)
-        #expect(target.kind == .diagram)
-        #expect(target.content == diagram)
-        #expect(info.id == src.id)
+        #expect(info.target == nil)
+        #expect(info.mimeType == "text/mermaid")
     }
 
-    @Test func canonicalAliasedMmdEmbedRendersInlineForCustomMime() throws {
+    @Test func canonicalAliasedMmdEmbedFallsBackToReadableCodeWithoutAPackage() throws {
+        // No package claims the format, so the embed lowers as a readable
+        // code fallback / transclusion — the same no-package contract as any
+        // other renderer-package format.
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let model = WikiStoreModel(store: store)
         let diagram = """
@@ -129,9 +105,11 @@ struct DiagramEmbedTests {
             projection: projection,
             options: .disabled)
 
-        #expect(html.contains("class=\"mermaid sdw-inline-mermaid\""))
-        #expect(html.contains("flowchart LR"))
-        #expect(!html.contains("sdw-transclusion"))
+        // No inline package session mounts, and no host-side mermaid markup
+        // exists at all — the reader owns no diagram DOM.
+        #expect(!html.contains("sdw-inline-mermaid"))
+        #expect(!html.contains("sdw-inline-renderer"))
+        #expect(!html.contains("class=\"mermaid\""))
         #expect(!html.contains("sdw-renderer-card"))
     }
 
@@ -151,6 +129,7 @@ struct DiagramEmbedTests {
         let projectedSource = try WikiReaderRep.Coordinator.pinnedImageSource(
             sourceID: source.id,
             version: pinnedVersion,
+            fileExtension: "json",
             inputByteCount: { input in try store.rendererInputByteCount(input) },
             readBytes: { versionID in try store.sourceContent(versionID: versionID) })
         let pinnedSource = try #require(projectedSource)
@@ -194,7 +173,7 @@ struct DiagramEmbedTests {
             prepared,
             projection: projection,
             options: options)
-        let html = WikiReaderView.documentHTML(body, mermaidLibrary: nil)
+        let html = WikiReaderView.documentHTML(body)
 
         #expect(body.contains("class=\"sdw-inline-renderer\""))
         #expect(body.contains("data-renderer-role=\"inlineContent\""))
@@ -210,11 +189,9 @@ struct DiagramEmbedTests {
         #expect(html.contains("data-renderer-role=\"inlineContent\""))
     }
 
-    @Test func renderContextDoesNotResolveNonMermaidTextSource() throws {
-        // A generic `.md` source with no fenced ```mermaid block does NOT
-        // produce a `.diagram` target — the cheap detector (mime + filename
-        // only, `content: nil`) returns false, so the source falls through to
-        // the byteful blob / cite-link path unchanged.
+    @Test func renderContextDoesNotResolveSpecialTargetsForTextSources() throws {
+        // Any byteful text source — markdown, notes, anything — resolves no
+        // special embed target; inline rendering is descriptor-driven.
         let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
         let model = WikiStoreModel(store: store)
         _ = try store.addSource(
@@ -223,27 +200,6 @@ struct DiagramEmbedTests {
 
         let ctx = WikiRenderContext.build(from: model)
         let info = try #require(ctx.embedInfo("notes.md"))
-        // No diagram target — the source's mime (text/markdown) does not match
-        // and the filename isn't `.mmd`.
-        #expect(info.target == nil)
-    }
-
-    @Test func renderContextEmptyOrUnencodableBytesFallsBackToNoTarget() throws {
-        // A `.mmd` source whose bytes couldn't be decoded as UTF-8 does NOT
-        // produce a `.diagram` target with garbage content — we refuse to emit
-        // a ```mermaid block against text we can't read. Falls back to nil
-        // (the renderer emits a cite link).
-        let store = try GRDBWikiStore(databaseURL: tempDatabaseURL())
-        let model = WikiStoreModel(store: store)
-        // Invalid UTF-8 — `String(data:encoding:.utf8)` returns nil.
-        let badBytes = Data([0xFF, 0xFE, 0xFD])
-        _ = try store.addSource(
-            filename: "broken.mmd", data: badBytes)
-        model.reloadFromStore()
-
-        let ctx = WikiRenderContext.build(from: model)
-        let info = try #require(ctx.embedInfo("broken.mmd"))
-        // bytes present but un-decodable as UTF-8 → no diagram target.
         #expect(info.target == nil)
     }
 
@@ -251,16 +207,13 @@ struct DiagramEmbedTests {
 
     @Test func compatibilityBridgePreservesDiagramEmbedSyntax() throws {
         let id = SourceID(rawValue: "01HDIAGRAM000000000000000A")
-        let target = EmbedTarget(
-            kind: .diagram, url: id.rawValue,
-            content: "flowchart LR\n  A --> B")
         let authored = "![[source:Flow]]"
         let out = WikiLinkMarkdown.linkified(
             authored,
             isResolved: { _, _ in true },
             embedInfo: { _ in
                 WikiLinkMarkdown.SourceEmbedInfo(
-                    id: id, mimeType: "text/mermaid", target: target)
+                    id: id, mimeType: "text/mermaid", target: nil)
             }
         )
 

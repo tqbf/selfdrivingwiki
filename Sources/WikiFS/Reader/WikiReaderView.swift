@@ -1479,6 +1479,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
             let markdownImageTargets = Self.markdownImageTargets(
                 siblingSourceMap: renderedSourceMap,
                 store: store?.internalStore,
+                sourceExtensions: context?.sourceIDToExtension ?? [:],
                 installedDescriptors: inlineRendererDescriptors)
             let documentRenderOptions = MarkdownRenderOptions(
                 codeHighlighting: .enabled(HighlightedCodeBlockBudget()),
@@ -1572,6 +1573,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                           let source = try pinnedImageSource(
                               sourceID: sourceID,
                               version: version,
+                              fileExtension: context.sourceIDToExtension[sourceID],
                               inputByteCount: { input in try store.rendererInputByteCount(input) },
                               readBytes: { versionID in try store.sourceContent(versionID: versionID) })
                     else { continue }
@@ -1621,6 +1623,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                       info.target == nil,
                       DocumentSourceRendererProjection.hasEligibleRenderer(
                           mimeType: info.mimeType,
+                          fileExtension: context.sourceIDToExtension[info.id],
                           registry: registry,
                           inlineCapableReferences: inlineCapableReferences)
                 else { return nil }
@@ -1648,6 +1651,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         static func markdownImageTargets(
             siblingSourceMap: [String: SourceID]?,
             store: WikiStore?,
+            sourceExtensions: [SourceID: String] = [:],
             installedDescriptors: [RendererDescriptor]
         ) -> [String: ResolvedMarkdownImageTarget] {
             guard let siblingSourceMap, siblingSourceMap.isEmpty == false else { return [:] }
@@ -1668,6 +1672,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                           let source = try Self.pinnedImageSource(
                               sourceID: sourceID,
                               version: version,
+                              fileExtension: sourceExtensions[sourceID],
                               inputByteCount: { input in try store.rendererInputByteCount(input) },
                               readBytes: { versionID in try store.sourceContent(versionID: versionID) })
                     else { continue }
@@ -1720,6 +1725,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         static func pinnedImageSource(
             sourceID: SourceID,
             version: SourceVersion,
+            fileExtension: String? = nil,
             inputByteCount: (RendererBridgeInput) throws -> Int?,
             readBytes: (SourceVersionID) throws -> Data
         ) throws -> RendererEmbeddedContent.Source? {
@@ -1741,6 +1747,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 sourceID: sourceID,
                 sourceVersionID: version.id,
                 mimeType: try RendererMIMEType(validating: mimeType),
+                fileExtension: fileExtension,
                 bytes: bytes)
         }
 

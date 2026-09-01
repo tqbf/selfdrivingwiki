@@ -91,8 +91,7 @@ struct TransclusionEmbedTests {
             displayName: name,
             mimeType: mime,
             bytes: nil,
-            externalTarget: nil,
-            isMermaidSource: false)
+            externalTarget: nil)
     }
 
     /// Build an in-memory store + a minimal hand-built WikiRenderContext that

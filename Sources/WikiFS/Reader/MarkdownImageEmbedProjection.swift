@@ -10,23 +10,39 @@ import WikiFSTypes
 enum DocumentSourceRendererProjection {
     static func hasEligibleRenderer(
         mimeType: String?,
+        fileExtension: String?,
         registry: RendererRegistrySnapshot,
         inlineCapableReferences: Set<RendererReference>
     ) -> Bool {
-        guard let mimeType else { return false }
-        let normalizedMIME: RendererMIMEType
-        do {
-            normalizedMIME = try RendererMIMEType(validating: mimeType)
-        } catch {
-            DebugLog.reader("Source renderer projection rejected an invalid MIME type.")
-            return false
+        let normalizedMIME: RendererMIMEType?
+        if let mimeType {
+            do {
+                normalizedMIME = try RendererMIMEType(validating: mimeType)
+            } catch {
+                DebugLog.reader("Source renderer projection rejected an invalid MIME type.")
+                return false
+            }
+        } else {
+            normalizedMIME = nil
         }
+        // Legacy rows can carry no MIME at all; the extension fallback tier
+        // exists for exactly that case.
+        guard normalizedMIME != nil || fileExtension != nil else { return false }
         return registry.descriptors.contains { descriptor in
             descriptor.compatibility.supports(hostProtocolRevision: registry.hostProtocolRevision) &&
                 descriptor.supportedEmbeddingRoles.contains(.inlineContent) &&
                 inlineCapableReferences.contains(descriptor.reference) &&
                 descriptor.capabilities.contains(.inputRead) &&
-                descriptor.matchers.contains(.normalizedMIME(normalizedMIME))
+                descriptor.matchers.contains(where: { matcher in
+                    switch matcher {
+                    case .normalizedMIME(let claimed):
+                        claimed == normalizedMIME && normalizedMIME != nil
+                    case .extensionFallback(let claimed):
+                        claimed.rawValue == fileExtension && fileExtension != nil
+                    default:
+                        false
+                    }
+                })
         }
     }
 
@@ -67,7 +83,7 @@ enum DocumentSourceRendererProjection {
         let sniffedBytes = Data(source.bytes.prefix(RendererMatchingLimits.maximumSniffByteCount))
         let input = try RendererMatchInput(
             mimeType: source.mimeType,
-            fileExtension: nil,
+            fileExtension: source.fileExtension.flatMap { try RendererFileExtension(validating: $0) },
             sniffedBytes: sniffedBytes,
             sniffedBytesAreComplete: sniffedBytes.count == source.bytes.count,
             artifactKind: .source)
@@ -244,14 +260,23 @@ enum MarkdownImageTargetProjection {
         let sniffedBytes = Data(source.bytes.prefix(RendererMatchingLimits.maximumSniffByteCount))
         let input = try RendererMatchInput(
             mimeType: source.mimeType,
-            fileExtension: nil,
+            fileExtension: source.fileExtension.flatMap { try RendererFileExtension(validating: $0) },
             sniffedBytes: sniffedBytes,
             sniffedBytesAreComplete: sniffedBytes.count == source.bytes.count,
             artifactKind: nil)
         return registry.matching(input, requiredEmbeddingRole: .inlineContent).first { descriptor in
             inlineCapableReferences.contains(descriptor.reference) &&
                 descriptor.capabilities.contains(.inputRead) &&
-                descriptor.matchers.contains(.normalizedMIME(source.mimeType)) &&
+                descriptor.matchers.contains(where: { matcher in
+                    switch matcher {
+                    case .normalizedMIME(let claimed):
+                        claimed == source.mimeType
+                    case .extensionFallback(let claimed):
+                        claimed.rawValue == source.fileExtension && source.fileExtension != nil
+                    default:
+                        false
+                    }
+                }) &&
                 source.bytes.count <= descriptor.sizeLimits.maximumInputByteCount &&
                 source.bytes.count <= descriptor.sizeLimits.maximumDecodedByteCount
         }

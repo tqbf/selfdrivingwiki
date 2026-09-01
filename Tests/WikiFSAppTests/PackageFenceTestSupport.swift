@@ -19,12 +19,60 @@ enum PackageFenceTestSupport {
             .appendingPathComponent("RendererPackages/Excalidraw", isDirectory: true)
     }
 
-    /// Claims for every host-known alias: the built-in table plus an installed
-    /// package's manifest-declared claim.
+    /// An installed Mermaid descriptor with a manifest-declared fence claim
+    /// plus its revision-3 validation contract — the stand-in mirrors the
+    /// shipped RendererPackages/Mermaid manifest.
+    static func installedMermaidDescriptor() -> RendererDescriptor {
+        let entry = RendererAsset(
+            path: RendererRelativePath(rawValue: "index.html")!,
+            digest: RendererSHA256.digest(Data("<html>mermaid</html>".utf8)))
+        let engine = RendererAsset(
+            path: RendererRelativePath(rawValue: "mermaid.min.js")!,
+            digest: RendererSHA256.digest(Data("engine".utf8)))
+        let wrapper = RendererAsset(
+            path: RendererRelativePath(rawValue: "validate.js")!,
+            digest: RendererSHA256.digest(Data("wrapper".utf8)))
+        return try! RendererDescriptor(
+            reference: RendererReference(
+                packageID: RendererPackageID(rawValue: "org.selfdrivingwiki.mermaid-readonly")!,
+                version: RendererPackageVersion(rawValue: "1.0.0")!,
+                registrationID: RendererRegistrationID(rawValue: "mermaid")!),
+            displayName: "Mermaid",
+            implementation: .webPackage(.init(path: entry.path)),
+            matchers: [
+                .normalizedMIME(RendererMIMEType(rawValue: "text/mermaid")!),
+                .extensionFallback(RendererFileExtension(rawValue: "mmd")!),
+            ],
+            presentations: [.web],
+            supportedEmbeddingRoles: [.inlineContent, .disclosureRow],
+            hasExplicitEmbeddingRoles: true,
+            fenceClaims: [
+                RendererFenceClaim(
+                    alias: RendererFenceAlias(rawValue: "mermaid")!,
+                    inlineMIMEType: RendererMIMEType(rawValue: "text/mermaid")!,
+                    validation: try! RendererFenceValidationDeclaration(
+                        engineAssetPath: engine.path,
+                        wrapperAssetPath: wrapper.path,
+                        entryFunction: "__sdw_validate_fence")),
+            ],
+            approvedAssets: [engine, entry, wrapper],
+            capabilities: [.inputRead],
+            sizeLimits: .init(maximumInputByteCount: 48_000, maximumDecodedByteCount: 48_000),
+            linkPolicy: .none,
+            accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
+            compatibility: .init(minimumProtocolRevision: 1, maximumProtocolRevision: 1),
+            priority: 90)
+    }
+
+    /// Claims for every host-known alias: the built-in table plus installed
+    /// package manifest-declared claims (Excalidraw and Mermaid).
     static var builtInAndInstalledClaims: [RendererFenceAlias: RendererFenceClaimAssignment] {
         RendererFenceClaimResolver.resolve(
             builtInDescriptors: BuiltInRendererDescriptors.all,
-            enabledInstalledDescriptors: [installedExcalidrawDescriptor()])
+            enabledInstalledDescriptors: [
+                installedExcalidrawDescriptor(),
+                installedMermaidDescriptor(),
+            ])
     }
 
     /// An installed Excalidraw descriptor with a manifest-declared fence claim.

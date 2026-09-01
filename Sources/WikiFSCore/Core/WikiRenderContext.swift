@@ -48,6 +48,10 @@ public struct WikiRenderContext: Sendable {
     /// `SourceID` → current display name (or filename fallback), for canonical
     /// `[[source:ULID|…]]` display-at-render.
     public let sourceIDToName: [SourceID: String]
+    /// `SourceID` → lowercased filename extension (`""` when none), for
+    /// renderer matching of sources whose MIME is absent (legacy NULL-MIME
+    /// rows). Data derived from source rows, not a format branch.
+    public let sourceIDToExtension: [SourceID: String]
     /// Lowercased chat titles — drives legacy/forward `[[chat:Name]]` existence.
     public let chatTitles: Set<String>
     /// `ChatID` → current title, for canonical `[[chat:ULID|…]]` display-at-render.
@@ -110,12 +114,14 @@ public struct WikiRenderContext: Sendable {
         siblingMaps: [SourceID: [String: SourceID]],
         blobScheme: String,
         rendererFenceClaims: [RendererFenceAlias: RendererFenceClaimAssignment] = [:],
-        unavailableFenceAliases: Set<RendererFenceAlias> = []
+        unavailableFenceAliases: Set<RendererFenceAlias> = [],
+        sourceIDToExtension: [SourceID: String] = [:]
     ) {
         self.pageTitles = pageTitles
         self.pageIDToName = pageIDToName
         self.sourceNames = sourceNames
         self.sourceIDToName = sourceIDToName
+        self.sourceIDToExtension = sourceIDToExtension
         self.chatTitles = chatTitles
         self.chatIDToName = chatIDToName
         self.uniqueLooseKeys = uniqueLooseKeys
@@ -220,6 +226,12 @@ public struct WikiRenderContext: Sendable {
         store.noteResolvedFenceAliases(Set(rendererFenceClaims.keys))
         let unavailableFenceAliases = store.resolvedFenceAliases
             .subtracting(rendererFenceClaims.keys)
+        // `SourceID` → lowercased filename extension, for extension-fallback
+        // renderer matching of legacy NULL-MIME rows. Derived from the same
+        // source rows as sourceIDToName — data, not a format branch.
+        let sourceIDToExtension: [SourceID: String] = Dictionary(
+            uniqueKeysWithValues:
+                index.sources.map { (SourceID(rawValue: $0.id), $0.ext.lowercased()) })
         return WikiRenderContext(
             pageTitles: pageTitles,
             pageIDToName: pageIDToName,
@@ -233,7 +245,8 @@ public struct WikiRenderContext: Sendable {
             siblingMaps: siblingMaps,
             blobScheme: WikiLinkMarkdown.blobScheme,
             rendererFenceClaims: rendererFenceClaims,
-            unavailableFenceAliases: unavailableFenceAliases)
+            unavailableFenceAliases: unavailableFenceAliases,
+            sourceIDToExtension: sourceIDToExtension)
     }
 
     // MARK: - Render closures (pure — derived from captured data)
