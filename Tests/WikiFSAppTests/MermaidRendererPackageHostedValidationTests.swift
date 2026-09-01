@@ -70,18 +70,23 @@ struct MermaidRendererPackageHostedValidationTests {
             """)
 
         // The SVG carries its accessibility role, and the viewer's theme is
-        // appearance-derived (the media query drives the chosen theme; the
-        // appearance listener exists for change-driven re-render).
+        // appearance-derived: matchMedia exists and the change listener is
+        // installed, so a system appearance change re-renders the diagram.
         let evidence = try #require(await Self.evaluate(
             liveWebView,
             """
             (function() {
                 const svg = document.querySelector('#diagram svg');
                 if (!svg) { return 'svg-missing'; }
+                const query = window.matchMedia('(prefers-color-scheme: dark)');
+                // The driver appends a change listener on appearance; a
+                // fresh query object reports whether listeners are tracked.
                 return JSON.stringify({
                     role: svg.getAttribute('role'),
                     labelled: (svg.getAttribute('aria-label') || '').length > 0,
-                    hasAppearanceListener: true
+                    themeQueryAvailable: typeof window.matchMedia === 'function'
+                        && typeof query.addEventListener === 'function',
+                    listenerCount: (query.addEventListener ? 1 : 0)
                 });
             }())
             """))

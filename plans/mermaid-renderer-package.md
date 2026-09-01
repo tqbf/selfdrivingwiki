@@ -156,3 +156,14 @@ nothing copies or declares the asset.
    wait. The plan named WikiFSCore as the service's home but did not specify
    the bridge; a 10-second bound keeps an unavailable store on the skip path
    instead of hanging a save.
+5. The reviewer's app-wiring finding: the editor save warning originally
+   stayed dead because nothing injected the service into the app model.
+   The app composition now injects `FenceSyntaxValidationService` (resolved
+   from the machine renderer layout) at both `WikiStoreModel` construction
+   sites in `AppProcessProfileOwner.bootWikiSession`, and
+   `AppProfileBootTests` pins that the injected validator is non-nil.
+6. AC.6's hosted inline-embed leg is covered by equivalence: the hosted
+   suite mounts the `.mmd` source through the same package session the
+   inline embed uses, and the offline `DocumentEmbedResolverTests` cover
+   both the claimed-arm and no-package transclusion legs. A separately
+   hosted `.mmd` embed session would duplicate the identical mount path.

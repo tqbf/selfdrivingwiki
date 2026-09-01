@@ -1572,7 +1572,8 @@ public final class WikiStoreModel {
     /// "no claiming package installed" — validation skips, exactly like the
     /// old nil-validator contract. `@ObservationIgnored` — it's plumbing, not
     /// UI state.
-    @ObservationIgnored var fenceSyntaxValidator: (any FenceSyntaxValidating)? = nil
+    @ObservationIgnored
+    public var fenceSyntaxValidator: (any FenceSyntaxValidating)? = nil
 
     /// Validate every claimed fence block in `body` and set
     /// `fenceSaveWarning`. The validator is package-driven: the claimed

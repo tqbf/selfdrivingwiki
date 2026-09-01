@@ -122,6 +122,11 @@ struct AppProfileBootTests {
         #expect(facade.wikiID == wikiID)
         #expect(facade.descriptor.displayName == "Profile Wiki")
         #expect(facade.store.readService != nil)
+        // The app wiring injects the live-resolving package-driven fence
+        // validator into the model so the editor's save warning is not dead
+        // code. The service resolves from the machine renderer layout rooted
+        // at the container directory.
+        #expect(facade.store.fenceSyntaxValidator != nil)
         #expect(facade.descriptor.homePageID != nil)
         let renamed = WikiDescriptor(
             id: wikiID,
