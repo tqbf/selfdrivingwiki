@@ -28,13 +28,14 @@ import JavaScriptCore
 /// whitespace; converts hard tabs to spaces; ensures a single trailing newline.
 /// It does NOT enforce structural rules (heading hierarchy, consistent list
 /// markers) or line length. The auto-fix is deterministic and respects fenced
-/// code blocks (```` ```mermaid ```` contents are never touched).
+/// code blocks (the contents of any fenced block are never touched — the
+/// guarantee is alias-agnostic by construction).
 ///
 /// **`[[wiki-links]]`** are inert text to markdownlint — no false positives.
 ///
-/// **Two write surfaces** (both mirror `MermaidValidator`):
+/// **Two write surfaces** (both mirror `FenceSyntaxValidator`):
 /// - **Agent path** — `wikictl page add`: `fix()` is applied BEFORE the write
-///   (markdown-fix → mermaid-validate → `PageUpsert`). Frictionless under the
+///   (markdown-fix → fence-validate → `PageUpsert`). Frictionless under the
 ///   cosmetic-only config (every rule is auto-fixable).
 /// - **In-app path** — `WikiStoreModel.save`: `lint()` computes findings and sets
 ///   a non-blocking `markdownSaveWarning`; the original text is saved (editor is
@@ -232,9 +233,8 @@ public final class MarkdownLinter: @unchecked Sendable {
     /// Resolve the vendored `markdownlint.js` for the current runtime and build a
     /// linter, or `nil` when unavailable (dev/`swift test`) so callers skip linting
     /// rather than failing. Tries the main-bundle resource first (in-app editor),
-    /// then `../Resources/markdownlint.js` relative to the executable — the same
-    /// resolution `MermaidValidator` uses for `merval.js` (the bundled `wikictl`
-    /// helper's executable lives in `Contents/Helpers`).
+    /// then `../Resources/markdownlint.js` relative to the executable (the
+    /// bundled `wikictl` helper's executable lives in `Contents/Helpers`).
     public static func loadDefault() -> MarkdownLinter? {
         if let url = Bundle.main.url(forResource: "markdownlint", withExtension: "js"),
            let src = DebugLog.trying("load markdownlint.js", operation: { try String(contentsOf: url, encoding: .utf8) }), !src.isEmpty {

@@ -9,13 +9,23 @@ import Foundation
 /// - its filename ends in `.mmd`, or
 /// - its content contains at least one fenced ` ```mermaid ` block.
 ///
-/// The fence scan reuses `MermaidValidator.mermaidBlocks(in:)` (a pure line
-/// scanner with no JS dependency), so this stays cheap and side-effect-free.
-/// Pure + unit-tested; the view threads in the resolved mime/filename/content.
+/// The fence scan reuses `FenceSyntaxValidator.blocks(in:alias:)` (a pure
+/// line scanner with no JS dependency), so this stays cheap and side-effect-
+/// free. Pure + unit-tested; the view threads in the resolved
+/// mime/filename/content. Interim: the fence-alias literal is data the
+/// reviewed renderer package claims; this detector retires with the
+/// SourceDetail presentation rework.
 public enum MermaidSourceDetector {
 
     /// `.mmd` — the conventional standalone Mermaid source extension.
     public static let mermaidExtension = "mmd"
+
+    private static let fenceAlias: RendererFenceAlias = {
+        guard let alias = RendererFenceAlias(rawValue: "mermaid") else {
+            fatalError("the mermaid fence alias must remain shape-valid")
+        }
+        return alias
+    }()
 
     /// Whether `(mimeType, filename, content)` describes a Mermaid source.
     ///
@@ -34,7 +44,7 @@ public enum MermaidSourceDetector {
                 return true
             }
         }
-        if let content, !MermaidValidator.mermaidBlocks(in: content).isEmpty {
+        if let content, !FenceSyntaxValidator.blocks(in: content, alias: Self.fenceAlias).isEmpty {
             return true
         }
         return false
@@ -44,7 +54,7 @@ public enum MermaidSourceDetector {
     /// source. Markdown documents with Mermaid fences keep their document reader.
     public static func standaloneDiagramSource(from content: String) -> String? {
         let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, MermaidValidator.mermaidBlocks(in: content).isEmpty else {
+        guard !trimmed.isEmpty, FenceSyntaxValidator.blocks(in: content, alias: Self.fenceAlias).isEmpty else {
             return nil
         }
         return trimmed
@@ -62,7 +72,7 @@ public enum MermaidSourceDetector {
         guard !trimmed.isEmpty else { return nil }
         // Already has a fenced mermaid block → render the document as-is so any
         // surrounding prose/headings stay intact (and the outline is meaningful).
-        if !MermaidValidator.mermaidBlocks(in: content).isEmpty { return content }
+        if !FenceSyntaxValidator.blocks(in: content, alias: Self.fenceAlias).isEmpty { return content }
         // Standalone source (`.mmd` or `text/mermaid`): wrap once in a fence so
         // the reader converts it to `<pre><code class="language-mermaid">` and
         // inlines the Mermaid library + bootstrap.

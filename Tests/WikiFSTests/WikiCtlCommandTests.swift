@@ -970,15 +970,33 @@ struct WikiCtlCommandTests {
         }
         return l
     }
-    private func repoMermaidValidator() throws -> MermaidValidator {
-        let url = URL(fileURLWithPath: #filePath)
+    private func repoMermaidValidator() throws -> any FenceSyntaxValidating {
+        let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
-            .appendingPathComponent("../../RendererPackages/Mermaid/mermaid.min.js")
-        guard let src = try? String(contentsOf: url, encoding: .utf8), !src.isEmpty,
-              let v = MermaidValidator(jsSource: src) else {
-            throw Failure("RendererPackages/Mermaid/mermaid.min.js unavailable")
+            .appendingPathComponent("../../RendererPackages/Mermaid")
+        guard let engine = try? String(contentsOf: root.appendingPathComponent("mermaid.min.js"), encoding: .utf8),
+              let wrapper = try? String(contentsOf: root.appendingPathComponent("validate.js"), encoding: .utf8),
+              let runner = FenceSyntaxValidator(jsSources: [wrapper, engine], entryFunction: "__sdw_validate_fence") else {
+            throw Failure("RendererPackages/Mermaid assets unavailable")
         }
-        return v
+        let alias = try RendererFenceAlias(validating: "mermaid")
+        return ScopedFenceValidator(runner: runner, coveredAliases: [alias])
+    }
+
+    /// The package-shaped seam: validates the aliases the claiming package
+    /// would declare, through the real package runner.
+    private struct ScopedFenceValidator: FenceSyntaxValidating {
+        let runner: FenceSyntaxValidator
+        let coveredAliases: Set<RendererFenceAlias>
+
+        func fenceSaveWarning(for markdown: String) -> String? {
+            guard let alias = coveredAliases.first else { return nil }
+            let invalid = runner.invalidBlocks(markdown: markdown, alias: alias)
+            let described = FenceSyntaxValidator.describe(alias: alias, invalid: invalid)
+            return described.isEmpty ? nil : described
+        }
+
+        func validationSkipNotice(for markdown: String) -> String? { nil }
     }
     private struct Failure: Error { let msg: String; init(_ s: String) { msg = s } }
 

@@ -70,7 +70,7 @@
         },
         {
           "path": "validate.js",
-          "digest": "6307b197b24903c3686042ede892a82a32848e3a8a0f06b3b94ce350bb69449c"
+          "digest": "76366e231d57ab0fcb764a98986e753e3adea6465f35c6784e6382369dacb086"
         },
         {
           "path": "viewer.js",
@@ -119,7 +119,7 @@
     },
     {
       "path": "validate.js",
-      "digest": "6307b197b24903c3686042ede892a82a32848e3a8a0f06b3b94ce350bb69449c"
+      "digest": "76366e231d57ab0fcb764a98986e753e3adea6465f35c6784e6382369dacb086"
     },
     {
       "path": "viewer.js",

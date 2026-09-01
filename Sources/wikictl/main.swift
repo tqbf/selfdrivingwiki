@@ -154,7 +154,14 @@ func execute(
             wikiID: wikiID,
             containerDirectory: containerDirectory,
             store: store)
-        let r = try PageCommand.run(action, in: store, bm25Leg: leg)
+        // The package-driven fence validator resolves from the machine
+        // renderer package store. An unresolvable layout skips validation
+        // (nil semantics) rather than failing the command.
+        let fenceValidator = DebugLog.trying("resolve fence validation service", operation: {
+            try FenceSyntaxValidationService(
+                layout: RendererPackageStoreLayout(appGroupContainerRoot: containerDirectory))
+        })
+        let r = try PageCommand.run(action, in: store, validator: fenceValidator, bm25Leg: leg)
         return SourceCommand.Result(
             payload: .text(r.output),
             didCommit: r.didCommit,

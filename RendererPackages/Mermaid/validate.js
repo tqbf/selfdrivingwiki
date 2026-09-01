@@ -1,15 +1,17 @@
 // Mermaid fence-syntax validation contract (manifest revision 3).
 //
-// The host's generic FenceSyntaxValidator evaluates the declared engine
-// asset (mermaid.min.js) and then this wrapper in a bare JavaScriptCore
-// context, and calls the declared entry function with the fence text. This
-// file owns all mermaid-specific validation knowledge:
+// The host's generic FenceSyntaxValidator evaluates this wrapper asset FIRST
+// and the declared engine asset (mermaid.min.js) SECOND, then resolves the
+// declared entry function. This file owns all mermaid-specific validation
+// knowledge:
 //
 //   1. A minimal DOM/timer polyfill, installed BEFORE the engine evaluates.
-//      mermaid v11 bundles DOMPurify, whose factory returns undefined
-//      without a DOM and then crashes on addHook; the stubs below are
-//      sufficient for the engine to load and for mermaid.parse() to run.
-//   2. The entry function itself: it drives mermaid.parse(text), attaches
+//      mermaid v11 bundles DOMPurify, whose factory captures DOM state at
+//      evaluation time — without a DOM present it returns undefined and the
+//      engine later crashes on addHook. The stubs below are sufficient for
+//      the engine to load and for mermaid.parse() to run.
+//   2. A one-time engine initialize (idempotent, wrapped in try/catch).
+//   3. The entry function itself: it drives mermaid.parse(text), attaches
 //      Promise callbacks that mutate a holder object, and returns the
 //      holder. The host flushes the JSC microtask queue after the call,
 //      then reads { done, isValid, diagramType, errors }.
@@ -195,10 +197,22 @@
   // The entry function. Returns a holder object; the host calls it, flushes
   // the microtask queue, then reads the holder back. The try/catch is
   // defensive against engine builds that throw synchronously (verified
-  // v11.16.0 always returns a Promise).
+  // v11.16.0 always returns a Promise). The holder is created fresh per
+  // call so a shared runner never leaks one block's result into the next.
   globalThis.__sdw_validate_fence = function (text) {
     var r = { done: false, isValid: false, diagramType: null, errors: [] };
     try {
+      // The engine asset has been evaluated by now (wrapper first, engine
+      // second). initialize is idempotent; a partly-initialized engine must
+      // not fail construction, so wrap defensively.
+      if (typeof mermaid !== "undefined" && mermaid.initialize) {
+        try {
+          mermaid.initialize({ startOnLoad: false, securityLevel: "strict" });
+        } catch (initializeError) {
+          // initialize is idempotent; a defensive no-op keeps the entry
+          // function installed for diagnosis.
+        }
+      }
       var firstLine = String(text || "").split(/\r?\n/)[0].trim();
       var m = firstLine.match(/^(\w+)/);
       if (m) r.diagramType = m[1];
