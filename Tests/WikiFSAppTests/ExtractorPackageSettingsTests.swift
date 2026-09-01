@@ -451,35 +451,41 @@ struct ExtractorPackageSettingsTests {
         #expect(viewSource.contains("extraction.packages.row"))
         #expect(viewSource.contains("extraction.packages.digest"))
         #expect(viewSource.contains("extraction.packages.registration"))
-        #expect(viewSource.contains(".accessibilityValue(\"Active\")"))
-        #expect(viewSource.contains(".accessibilityLabel(\"\\(row.packageID), version \\(row.version)"))
+        #expect(viewSource.contains("extraction.packages.status"))
+        #expect(viewSource.contains(".accessibilityValue(row.status.label)"))
+        #expect(viewSource.contains(".accessibilityLabel(\"Diagnostics for \\(row.packageID), version \\(row.version)\")"))
         #expect(viewSource.contains(".accessibilityAddTraits(.updatesFrequently)"))
 
         // Phase 7 import/removal/readiness controls keep derivable identifiers.
-        #expect(viewSource.contains("extraction.packages.import.disclosure"))
+        #expect(viewSource.contains("extraction.packages.table"))
         #expect(viewSource.contains("extraction.packages.import.button"))
         #expect(viewSource.contains("extraction.packages.import.trust"))
         #expect(viewSource.contains("extraction.packages.remove"))
-        #expect(viewSource.contains("extraction.packages.failure"))
-        #expect(viewSource.contains("extraction.packages.failure.message"))
         #expect(viewSource.contains("extraction.routes.table"))
         #expect(viewSource.contains("extraction.routes.picker"))
         #expect(viewSource.contains("progress"))
         #expect(viewSource.contains("extraction.packages.diagnostic"))
         #expect(viewSource.contains("extraction.packages.error"))
-        #expect(viewSource.contains(".accessibilityValue(\"Not ready\")"))
+        // A failed revision keeps a table row instead of a separate list, so
+        // its readiness is a status case rather than a hard-coded value.
+        #expect(viewSource.contains("case .notReady: \"Not ready\""))
+        #expect(!viewSource.contains("extraction.packages.failure"))
+        #expect(!viewSource.contains("failedPackageRow"))
 
-        // Local-directory-only import contract + executable-code trust warning.
-        #expect(viewSource.contains("Advanced Local Package Import"))
-        // Keep import controls in a separate top-level Form section from the
-        // installed package rows. The visible title is the disclosure label.
-        #expect(viewSource.contains("installedPackagesSection\n                if packageModel.canImport {\n                    packageImportSection"))
-        #expect(viewSource.contains("@ViewBuilder private var packageImportSection: some View {\n        Section {"))
-        #expect(viewSource.contains("Text(ExtractorSettingsPackagePicker.disclosureTitle)"))
+        // Packages are a selectable table with a computed height, so the pane
+        // scrolls internally instead of growing the Settings window.
+        #expect(viewSource.contains("Table(packageModel.tableRows, selection: $selectedPackageID)"))
+        #expect(viewSource.contains("SettingsTableMetrics.height("))
+        // Add is a first-class control under the table, not a disclosure.
+        #expect(viewSource.contains("Button(\"Add Package…\", systemImage: \"plus\")"))
+        #expect(!viewSource.contains("Advanced Local Package Import"))
+        #expect(!viewSource.contains("packageImportSection"))
+        // The package rows are a table now. The one remaining disclosure is the
+        // route status dialog's technical details, which is not a package row.
+        #expect(!viewSource.contains("DisclosureGroup {"))
         #expect(viewSource.contains(".frame(maxWidth: .infinity, alignment: .leading)"))
-        #expect(viewSource.contains(".contentShape(Rectangle())"))
-        #expect(viewSource.contains("            .contentShape(Rectangle())\n        }\n        .accessibilityIdentifier(\"\\(PackageAccessibility.rowPrefix).\\(row.id)\")"))
-        #expect(viewSource.contains("            .contentShape(Rectangle())\n        }\n        .accessibilityIdentifier(\"\\(PackageAccessibility.failurePrefix).\\(failure.id)\")"))
+        // Local-directory-only import contract + executable-code trust warning
+        // stay visible in the section footer rather than behind a disclosure.
         #expect(viewSource.contains("Import Extractor Package…"))
         #expect(viewSource.contains("Select one local extractor package folder as an import source."))
         #expect(viewSource.contains("Files and archives are not supported."))
@@ -490,7 +496,7 @@ struct ExtractorPackageSettingsTests {
         #expect(viewSource.contains("Default Extractors"))
         #expect(viewSource.contains("Built-in default") == false)
         #expect(viewSource.contains("ExtractorRouteSettingsMapping.write"))
-        #expect(viewSource.contains("Table(routeRows)"))
+        #expect(viewSource.contains("Table(defaultsRows)"))
         #expect(viewSource.contains("extractorOption(\"Claude\"") == false)
         #expect(viewSource.contains("extractorOption(\"Gemini\"") == false)
         #expect(viewSource.contains("Claude (Anthropic API)") == false)
@@ -558,6 +564,194 @@ struct ExtractorPackageSettingsTests {
             registrationID: try ExtractorRegistrationID(validating: "pdf"))
     }
 
+    // MARK: - Table rows and inline per-package diagnostics
+
+    @Test("the table folds active and failed revisions into one list, failures first")
+    func tableRowsFoldBothListsWithFailuresFirst() throws {
+        let row = try settingsRow()
+        let failure = ExtractorPackageFailureSummary(
+            packageID: "org.example.brokenpkg",
+            version: "2.0.0",
+            digestPrefix: String(repeating: "c", count: 12),
+            message: "package activation failed")
+
+        let rows = ExtractorPackageSettingsModel.tableRows(
+            from: ExtractorPackageSettingsSnapshot(rows: [row], failedPackages: [failure]))
+
+        #expect(rows.count == 2)
+        #expect(rows[0].packageID == failure.packageID)
+        #expect(rows[0].status == .notReady(failure.message))
+        // A failed revision registered nothing, so it has no registration and
+        // no installed row to remove or configure.
+        #expect(rows[0].registrationID == nil)
+        #expect(rows[0].installedRow == nil)
+        #expect(rows[1].packageID == row.packageID)
+        #expect(rows[1].status == .active)
+        #expect(rows[1].installedRow == row)
+        // The case tag keeps a failure id from colliding with a registration id.
+        #expect(rows[0].id != rows[1].id)
+    }
+
+    @Test("a revision waiting to activate is not judged on its credentials")
+    func waitingOutranksAuthorizationState() throws {
+        let row = try settingsRow()
+        let snapshot = ExtractorPackageSettingsSnapshot(
+            rows: [row],
+            waitingRevisionIDs: [row.revision],
+            credentialRequirements: [Self.requirement(for: row, isOptional: false, state: .needsAuthorization)])
+
+        #expect(ExtractorPackageSettingsModel.tableRows(from: snapshot).first?.status == .waitingForActivation)
+    }
+
+    @Test("an unauthorized required credential shows on the package, an optional one does not")
+    func authorizationStatusFollowsRequiredRequirements() throws {
+        let row = try settingsRow()
+
+        let required = ExtractorPackageSettingsSnapshot(
+            rows: [row],
+            credentialRequirements: [Self.requirement(for: row, isOptional: false, state: .needsAuthorization)])
+        #expect(ExtractorPackageSettingsModel.tableRows(from: required).first?.status == .needsAuthorization)
+
+        let changed = ExtractorPackageSettingsSnapshot(
+            rows: [row],
+            credentialRequirements: [Self.requirement(for: row, isOptional: false, state: .changedContract)])
+        #expect(ExtractorPackageSettingsModel.tableRows(from: changed).first?.status == .needsAuthorization)
+
+        // An optional requirement does not stop the package running, so it
+        // must not claim the package needs attention.
+        let optional = ExtractorPackageSettingsSnapshot(
+            rows: [row],
+            credentialRequirements: [Self.requirement(for: row, isOptional: true, state: .needsAuthorization)])
+        #expect(ExtractorPackageSettingsModel.tableRows(from: optional).first?.status == .active)
+
+        let authorized = ExtractorPackageSettingsSnapshot(
+            rows: [row],
+            credentialRequirements: [Self.requirement(for: row, isOptional: false, state: .authorized)])
+        #expect(ExtractorPackageSettingsModel.tableRows(from: authorized).first?.status == .active)
+    }
+
+    @Test("every status explains itself so a row never shows a bare state word")
+    func everyStatusCarriesAnExplanation() {
+        let statuses: [ExtractorPackageStatus] = [
+            .active, .waitingForActivation, .needsAuthorization, .notReady("activation failed")
+        ]
+
+        for status in statuses {
+            #expect(status.label.isEmpty == false)
+            #expect(status.explanation.isEmpty == false)
+            #expect(status.systemImage.isEmpty == false)
+        }
+        // A failed revision carries the reconciler's own redacted text.
+        #expect(ExtractorPackageStatus.notReady("activation failed").explanation == "activation failed")
+    }
+
+    @Test("an import that produced no row reports on the pane, not on a package")
+    func importFailureIsPaneScoped() async {
+        let model = ExtractorPackageSettingsModel(
+            loadSnapshot: { ExtractorPackageSettingsSnapshot.empty },
+            importPackage: { _ in .failed("Package validation failed.") })
+
+        await model.importPackage(from: URL(fileURLWithPath: "/tmp/import-source"))
+
+        #expect(model.paneNotice?.severity == .failure)
+        #expect(model.paneNotice?.message == "Package validation failed.")
+        #expect(model.lastError == "Package validation failed.")
+        #expect(model.lastDiagnostic == nil)
+    }
+
+    @Test("an import scopes its confirmation to the row it produced")
+    func importSuccessScopesToTheNewRow() async throws {
+        let row = try settingsRow()
+        let installed = Flag()
+        let model = ExtractorPackageSettingsModel(
+            loadSnapshot: {
+                await installed.isSet ? ExtractorPackageSettingsSnapshot(rows: [row]) : .empty
+            },
+            importPackage: { _ in
+                await installed.set()
+                return .succeeded(nil)
+            })
+
+        await model.refresh()
+        await model.importPackage(from: URL(fileURLWithPath: "/tmp/import-source"))
+
+        let expected = try #require(model.tableRows.first)
+        #expect(model.notice?.scope == .package(expected.id))
+        #expect(model.notice(for: expected)?.message == "Extractor package installed.")
+        #expect(model.paneNotice == nil)
+    }
+
+    @Test("a successful removal reports on the pane because its row is gone")
+    func removalSuccessIsPaneScoped() async throws {
+        let row = try settingsRow()
+        let removed = Flag()
+        let model = ExtractorPackageSettingsModel(
+            loadSnapshot: {
+                await removed.isSet ? .empty : ExtractorPackageSettingsSnapshot(rows: [row])
+            },
+            removePackage: { _ in
+                await removed.set()
+                return .succeeded(nil)
+            })
+
+        await model.refresh()
+        await model.remove(row)
+
+        #expect(model.tableRows.isEmpty)
+        #expect(model.paneNotice?.severity == .success)
+        #expect(model.lastDiagnostic == "Removed org.example.pdfpkg 1.0.0.")
+    }
+
+    @Test("a failed removal reports on the package it could not remove")
+    func removalFailureIsPackageScoped() async throws {
+        let row = try settingsRow()
+        let model = ExtractorPackageSettingsModel(
+            loadSnapshot: { ExtractorPackageSettingsSnapshot(rows: [row]) },
+            removePackage: { _ in .failed("The package could not be removed.") })
+
+        await model.refresh()
+        await model.remove(row)
+
+        let remaining = try #require(model.tableRows.first)
+        #expect(model.notice(for: remaining)?.severity == .failure)
+        #expect(model.paneNotice == nil)
+    }
+
+    @Test("one notice at a time: a later outcome replaces the one before it")
+    func oneNoticeAtATime() async {
+        let model = ExtractorPackageSettingsModel(
+            loadSnapshot: { ExtractorPackageSettingsSnapshot.empty },
+            importPackage: { _ in .succeeded("Extractor package installed.") })
+        model.reportFailure("Authorization failed.")
+        #expect(model.lastError == "Authorization failed.")
+
+        await model.importPackage(from: URL(fileURLWithPath: "/tmp/import-source"))
+
+        #expect(model.lastError == nil)
+        #expect(model.lastDiagnostic == "Extractor package installed.")
+    }
+
+    private static func requirement(
+        for row: ExtractorPackageSettingsRow,
+        isOptional: Bool,
+        state: ExtractorCredentialRequirementSummary.AuthorizationState
+    ) -> ExtractorCredentialRequirementSummary {
+        ExtractorCredentialRequirementSummary(
+            packageID: row.packageID,
+            packageName: row.packageID,
+            packageVersion: row.version,
+            registrationID: row.registrationID,
+            requirementID: "token",
+            label: "API token",
+            purpose: "Calls the extraction service",
+            isOptional: isOptional,
+            isConfigured: false,
+            sourceName: "Keychain",
+            authorizationState: state,
+            kinds: ["pdf"],
+            mimeTypes: ["application/pdf"])
+    }
+
     private func settingsRow() throws -> ExtractorPackageSettingsRow {
         let reference = try reference(
             packageID: "org.example.pdfpkg",
@@ -618,6 +812,13 @@ struct ExtractorPackageSettingsTests {
 private actor Counter {
     private(set) var value = 0
     func increment() { value += 1 }
+}
+
+/// Sendable latch letting a stub loader answer differently before and after the
+/// mutation the test is exercising.
+private actor Flag {
+    private(set) var isSet = false
+    func set() { isSet = true }
 }
 
 /// Sendable box capturing the revision a removal action received.

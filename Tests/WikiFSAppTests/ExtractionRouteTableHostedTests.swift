@@ -61,13 +61,15 @@ struct ExtractionRouteTableHostedTests {
 
     private func makeView(
         directory: URL,
-        snapshot: ExtractorPackageSettingsSnapshot
+        snapshot: ExtractorPackageSettingsSnapshot,
+        pane: ExtractionSettingsPane = .defaults
     ) -> ExtractionSettingsView {
         ExtractionSettingsView(
             containerDirectory: directory,
             launcher: AgentLauncher(),
             credentials: Self.stubCredentials,
-            packageSnapshot: { snapshot })
+            packageSnapshot: { snapshot },
+            initialPane: pane)
     }
 
     private func mount(_ view: ExtractionSettingsView) -> NSWindow {
@@ -128,7 +130,41 @@ struct ExtractionRouteTableHostedTests {
         return result
     }
 
-    @Test("the route table mounts, loads its snapshot, and scrolls internally")
+    /// The pane hosts two tables — routes and installed packages — so a
+    /// row-count assertion has to name the multiset it expects rather than
+    /// trust which one a depth-first walk reaches first.
+    private func tableViews(_ window: NSWindow) -> [NSTableView] {
+        guard let content = window.contentView else { return [] }
+        var tables: [NSTableView] = []
+        func walk(_ view: NSView) {
+            if let table = view as? NSTableView { tables.append(table) }
+            for subview in view.subviews { walk(subview) }
+        }
+        walk(content)
+        return tables
+    }
+
+    private func tableViewRowCounts(_ window: NSWindow) -> [Int] {
+        tableViews(window).map(\.numberOfRows).sorted()
+    }
+
+    /// Rows the table knows about but does not show, because its frame is
+    /// shorter than its content.
+    ///
+    /// `numberOfRows` counts a clipped row exactly like a visible one, so it
+    /// cannot catch a table sized with the wrong row height — the frame is one
+    /// row too short and the last row sits entirely below the fold. Each pane
+    /// computes its own height (a `Table` has no intrinsic content size), so
+    /// this is the assertion that keeps those numbers honest.
+    private func clippedRowCount(_ table: NSTableView) -> Int {
+        guard let clip = table.enclosingScrollView?.contentView else { return 0 }
+        let visibleHeight = clip.bounds.height
+        return (0..<table.numberOfRows).filter { row in
+            table.rect(ofRow: row).maxY > visibleHeight + 0.5
+        }.count
+    }
+
+    @Test("Settings opens on the defaults pane, which mounts the route table")
     func rendersRouteTableWithoutCrash() async throws {
         let lease = await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
@@ -155,14 +191,56 @@ struct ExtractionRouteTableHostedTests {
         let window = mount(view)
 
         try await waitUntil {
-            self.firstTableView(window)?.numberOfRows == 4
+            self.tableViewRowCounts(window).contains(5)
         }
         // The hosted hierarchy contains a native table (row views) inside a
         // clip view — the scrollable, window-bounded layout.
         let content = try #require(window.contentView)
         #expect(containsDescendant(content) { $0 is NSClipView })
-        let table = try #require(firstTableView(window))
-        #expect(table.numberOfRows == 4)
+        // Four route rows plus the podcast transcript row. The packages pane
+        // is a separate tab, so its table is not mounted here — which is also
+        // what pins the default pane.
+        #expect(tableViewRowCounts(window) == [5])
+        // Under the metrics ceiling every row has to be visible, not merely
+        // present. The transcript row is last, so a table sized one row short
+        // hides exactly it.
+        for table in tableViews(window) {
+            #expect(clippedRowCount(table) == 0)
+        }
+    }
+
+    @Test("the package table mounts active and failed revisions as rows")
+    func rendersPackageTableWithoutCrash() async throws {
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        defer { lease.release() }
+        let dir = try tempDirectory("package-table-render")
+        var loaded = snapshot(failedPackageIDs: ["org.example.broken"])
+        loaded.rows = [
+            ExtractorPackageSettingsRow(
+                kind: .pdf,
+                packageID: "org.example.pdf",
+                version: "1.0.0",
+                digestPrefix: String(repeating: "b", count: 12),
+                registrationID: "pdf",
+                revision: ExtractorPackageRevisionID(
+                    packageID: try ExtractorPackageID(validating: "org.example.pdf"),
+                    version: try ExtractorPackageVersion(validating: "1.0.0"),
+                    digest: try ExtractorPackageDigest(hex: String(repeating: "b", count: 64)))),
+        ]
+        let window = mount(makeView(directory: dir, snapshot: loaded, pane: .packages))
+
+        // One active plus one failed revision folded into one table. The
+        // defaults pane is a separate tab, so its route table is not mounted.
+        try await waitUntil {
+            self.tableViewRowCounts(window) == [2]
+        }
+
+        #expect(tableViewRowCounts(window) == [2])
+        for table in tableViews(window) {
+            #expect(clippedRowCount(table) == 0)
+        }
+        let content = try #require(window.contentView)
+        #expect(content.fittingSize.height > 0)
     }
 
     @Test("a non-ready route status dialog mounts with recovery controls")
@@ -250,8 +328,8 @@ struct ExtractionRouteTableHostedTests {
 
         // The height comes from a named metric, not a magic literal.
         let source = try sourceView()
-        #expect(source.contains("routeTableHeight"))
-        #expect(source.contains("Table(routeRows)"))
+        #expect(source.contains("rowHeight: SettingsTableMetrics.controlRowHeight"))
+        #expect(source.contains("Table(defaultsRows)"))
     }
 
     // MARK: - AC.8 / AC.11 / AC.12 / AC.14 / AC.15 contracts
@@ -263,7 +341,7 @@ struct ExtractionRouteTableHostedTests {
         let source = try sourceView()
 
         // The table and its columns.
-        #expect(source.contains("Table(routeRows)"))
+        #expect(source.contains("Table(defaultsRows)"))
         #expect(source.contains("TableColumn(\"Format\")"))
         #expect(source.contains("TableColumn(\"Default extractor\")"))
         #expect(source.contains("TableColumn(\"Status\")"))
@@ -319,14 +397,61 @@ struct ExtractionRouteTableHostedTests {
         #expect(source.contains("DoclingConfigurationDialog("))
 
         // Technical MIME identity stays out of the primary columns (help text).
-        #expect(source.contains("MIME type: \\(row.route.mimeType.rawValue)"))
-        #expect(source.contains("Text(\"\\(row.route.mimeType.rawValue)\")") == false)
+        #expect(source.contains("MIME type: \\(routeRow.route.mimeType.rawValue)"))
+        #expect(source.contains("Text(\"\\(routeRow.route.mimeType.rawValue)\")") == false)
 
-        // The podcast picker is its own section at the same level as the
-        // extractor routes, wired to the podcast binding.
+        // The podcast transcript default is a row of the same table, not its
+        // own section: it is a default extractor like any other, even though a
+        // host adapter resolves it rather than a package registration.
         #expect(source.contains("podcastBackendBinding"))
         #expect(source.contains("Picker(\"Podcast Transcript\", selection: podcastBackendBinding)"))
-        #expect(source.contains("Text(\"Transcripts\")"))
+        #expect(source.contains("case podcastTranscript(PodcastTranscriptionBackend?)"))
+        #expect(source.contains("extraction.routes.picker.podcast"))
+        #expect(source.contains("Podcast transcripts are not package-backed in protocol revision 1."))
+        #expect(!source.contains("Text(\"Transcripts\")"))
+    }
+
+    @Test("the pane switcher lists defaults first and opens on it")
+    func paneSwitcherDefaultsToTheDefaultsPane() throws {
+        // The order is what the segmented control renders, so defaults sits on
+        // the leading edge as well as being the initial selection.
+        #expect(ExtractionSettingsPane.allCases == [.defaults, .packages])
+        #expect(ExtractionSettingsPane.defaults.title == "Defaults")
+        #expect(ExtractionSettingsPane.packages.title == "Packages")
+
+        let source = try sourceView()
+        #expect(source.contains("initialPane: ExtractionSettingsPane = .defaults"))
+        #expect(source.contains(".pickerStyle(.segmented)"))
+        #expect(source.contains("extraction.pane.switcher"))
+        #expect(source.contains("case .defaults: defaultsPane"))
+        #expect(source.contains("case .packages: packagesPane"))
+        // Both panes can raise the service configuration sheet, so it is
+        // presented above the switcher rather than inside one pane.
+        #expect(source.contains(".sheet(item: $serviceConfigurationDialog) { dialog in\n            serviceConfigurationSheet(dialog)"))
+    }
+
+    @Test("the transcript row keeps its own id space and tracks its selection")
+    func transcriptRowIsItsOwnIdentity() throws {
+        let routeRow = ExtractorRouteSettingsRow(
+            descriptor: ExtractorRouteDescriptor(
+                route: .canonicalPDF,
+                displayName: "PDF",
+                systemImage: "doc.richtext"),
+            savedSelection: nil,
+            resolvedSelection: nil,
+            choices: [],
+            status: .ready)
+
+        let route = ExtractionDefaultsTableRow.route(routeRow)
+        let prompt = ExtractionDefaultsTableRow.podcastTranscript(nil)
+        let chosen = ExtractionDefaultsTableRow.podcastTranscript(.appleTranscript)
+
+        // A transcript is not a route, so it cannot collide with one.
+        #expect(route.id != prompt.id)
+        // The transcript row is one row whichever backend it names, so the
+        // table updates it in place instead of replacing it.
+        #expect(prompt.id == chosen.id)
+        #expect(prompt != chosen)
     }
 
     @Test("picker options show only extractor names")

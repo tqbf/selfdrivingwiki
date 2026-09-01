@@ -480,7 +480,12 @@ struct ExtractionSettingsView: View {
     // Installed-package lifecycle (dynamic-extractor-packages Phase 7).
     @State private var packageModel: ExtractorPackageSettingsModel
     @State private var showingImportPicker = false
+    @State private var showingPackageHelp = false
     @State private var removalCandidate: ExtractorPackageSettingsRow?
+    @State private var selectedPackageID: ExtractorPackageTableRow.ID?
+    /// Deliberately not persisted: Settings opens on the defaults every time,
+    /// because that is the question this pane exists to answer.
+    @State private var selectedPane: ExtractionSettingsPane
     /// Pending authorization confirmation (#1159). Non-nil shows the
     /// explicit confirmation with the inheritance rule.
     @State private var authorizationCandidate: ExtractorCredentialRequirementSummary?
@@ -520,8 +525,13 @@ struct ExtractionSettingsView: View {
             return pasteboard.setString(value, forType: .string)
         },
         importPackage: (@Sendable (URL) async -> ExtractorPackageMutationOutcome)? = nil,
-        removePackage: (@Sendable (ExtractorPackageRevisionID) async -> ExtractorPackageMutationOutcome)? = nil
+        removePackage: (@Sendable (ExtractorPackageRevisionID) async -> ExtractorPackageMutationOutcome)? = nil,
+        /// The pane Settings opens on. Defaults to the document-type defaults,
+        /// which is the question this pane exists to answer; hosted tests pass
+        /// the other pane to mount it directly.
+        initialPane: ExtractionSettingsPane = .defaults
     ) {
+        _selectedPane = State(initialValue: initialPane)
         self.containerDirectory = containerDirectory
         self.launcher = launcher
         self.credentials = credentials ?? KeychainCredentialService()
@@ -553,59 +563,55 @@ struct ExtractionSettingsView: View {
     }
 
     var body: some View {
-        Form {
-            Section {
-                extractorRouteTable
-            } header: {
-                Text("Default Extractors")
-            } footer: {
-                Text("Reviewed packages run outside the app through the extractor protocol. Installed packages are local additions. Connected services use host-managed providers.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            // Transcripts are a different operation domain (host adapters,
-            // not the package protocol), so the picker is its own section at
-            // the same level as the extractor routes.
-            Section {
-                Picker("Podcast Transcript", selection: podcastBackendBinding) {
-                    Text("Prompt me when transcribing").tag(nil as PodcastTranscriptionBackend?)
-                    ForEach(PodcastTranscriptionBackend.allCases, id: \.self) { backend in
-                        Text(backend.displayName).tag(backend as PodcastTranscriptionBackend?)
+        VStack(spacing: 0) {
+            // Two jobs, two panes: choosing what opens a document type, and
+            // managing the packages those choices draw from. Only one is
+            // needed at a time, and the defaults are what a user comes here
+            // for, so they open first.
+            if packageSnapshot != nil {
+                Picker("Extraction settings section", selection: $selectedPane) {
+                    ForEach(ExtractionSettingsPane.allCases) { pane in
+                        Text(pane.title).tag(pane)
                     }
                 }
-                .onChange(of: draftPodcastBackend) { persistAll() }
-                .accessibilityLabel("Default podcast transcript extractor")
-            } header: {
-                Text("Transcripts")
-            } footer: {
-                Text("Podcast transcripts are not package-backed in protocol revision 1.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: Metrics.paneSwitcherWidth)
+                .padding(.top, Metrics.paneSwitcherTopPadding)
+                .accessibilityIdentifier(PaneAccessibility.switcher)
+                .accessibilityLabel("Extraction settings section")
             }
 
-            // Installed extractor-package lifecycle (Phase 7): read-only list
-            // of exact registry admissions and app-only removal. Hidden when no
-            // snapshot loader was wired (tests, headless hosts).
-            if packageSnapshot != nil {
-                installedPackagesSection
-                if packageModel.canImport {
-                    packageImportSection
-                }
+            switch selectedPane {
+            case .defaults: defaultsPane
+            case .packages: packagesPane
             }
-
         }
-        .formStyle(.grouped)
         .frame(minWidth: Metrics.width, minHeight: Metrics.height)
+        // Both panes can raise the service configuration sheet — a route's
+        // Configure… and a package's Configure… — so it is presented above
+        // the switcher rather than inside either pane.
+        .sheet(item: $serviceConfigurationDialog) { dialog in
+            serviceConfigurationSheet(dialog)
+        }
         // Async model mutations stay on the main actor; the load closure hops
         // to the process registry off-main and returns a value snapshot.
         .task {
             doclingTokenConfigured = refreshDoclingTokenState()
             await packageModel.refresh()
             rebuildRouteRows()
+            selectFirstPackageIfNeeded()
         }
         .onChange(of: packageModel.snapshot) { _, _ in
             rebuildRouteRows()
+            selectFirstPackageIfNeeded()
+        }
+        // An outcome that belongs to one package selects it, so its inline
+        // diagnostic is the one on screen when the message appears.
+        .onChange(of: packageModel.notice) { _, notice in
+            if case .package(let id) = notice?.scope {
+                selectedPackageID = id
+            }
         }
         .alert("Couldn't Connect to Docling Serve", isPresented: doclingErrorBinding,
                presenting: doclingErrorMessage) { _ in
@@ -689,6 +695,34 @@ struct ExtractionSettingsView: View {
         }
     }
 
+    // MARK: - Panes
+
+    /// What opens each document type. The pane a user comes here for, so it
+    /// opens first.
+    private var defaultsPane: some View {
+        Form {
+            Section {
+                extractorRouteTable
+            } header: {
+                Text("Default Extractors")
+            } footer: {
+                Text("Reviewed packages run outside the app through the extractor protocol. Installed packages are local additions. Connected services use host-managed providers. Podcast transcripts are not package-backed in protocol revision 1.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    /// Installed extractor-package lifecycle (Phase 7): the exact registry
+    /// admissions, their inline diagnostics, and app-only import and removal.
+    private var packagesPane: some View {
+        Form {
+            installedPackagesSection
+        }
+        .formStyle(.grouped)
+    }
+
     // MARK: - Extractor route table
 
     /// The native, registration-driven route table: one row per extraction
@@ -696,26 +730,45 @@ struct ExtractionSettingsView: View {
     /// the live status. The fixed height keeps the Settings window bounded —
     /// the table scrolls internally when registrations add routes.
     private var extractorRouteTable: some View {
-        Table(routeRows) {
-            TableColumn("Format") { (row: ExtractorRouteSettingsRow) in
-                Label(row.descriptor.displayName, systemImage: row.descriptor.systemImage ?? "doc")
-                    // Technical MIME identity lives in help text, not a column.
-                    .help("MIME type: \(row.route.mimeType.rawValue)")
+        Table(defaultsRows) {
+            TableColumn("Format") { (row: ExtractionDefaultsTableRow) in
+                switch row {
+                case .route(let routeRow):
+                    Label(routeRow.descriptor.displayName, systemImage: routeRow.descriptor.systemImage ?? "doc")
+                        // Technical MIME identity lives in help text, not a column.
+                        .help("MIME type: \(routeRow.route.mimeType.rawValue)")
+                case .podcastTranscript:
+                    Label(Self.podcastTranscriptRowTitle, systemImage: "waveform")
+                        .help(Self.podcastTranscriptHelp)
+                }
             }
-            .width(min: 90, ideal: 120)
-            TableColumn("Default extractor") { (row: ExtractorRouteSettingsRow) in
-                routePicker(row)
+            // Wide enough for the longest format name in the table, which is
+            // the transcript row rather than one of the three-letter routes.
+            .width(min: 110, ideal: 160)
+            TableColumn("Default extractor") { (row: ExtractionDefaultsTableRow) in
+                switch row {
+                case .route(let routeRow): routePicker(routeRow)
+                case .podcastTranscript: podcastTranscriptPicker
+                }
             }
             .width(min: 220, ideal: 280)
-            TableColumn("Status") { (row: ExtractorRouteSettingsRow) in
-                statusLabel(row)
+            TableColumn("Status") { (row: ExtractionDefaultsTableRow) in
+                switch row {
+                case .route(let routeRow):
+                    statusLabel(routeRow)
+                case .podcastTranscript:
+                    // A host adapter has no package to install, activate, or
+                    // authorize, so the table builder's non-package answer
+                    // (ready) is the honest one here too.
+                    podcastTranscriptStatusBadge
+                }
             }
             // Status is a semantic-colored icon + short label — compact by
             // design (PR 4 review follow-up: the long phrase truncated, so
             // the icon carries the state and the short text never wraps).
             .width(min: 110, ideal: 120)
-            TableColumn("Configuration") { (row: ExtractorRouteSettingsRow) in
-                if let dialog = configurationDialog(for: row) {
+            TableColumn("Configuration") { (row: ExtractionDefaultsTableRow) in
+                if case .route(let routeRow) = row, let dialog = configurationDialog(for: routeRow) {
                     Button("Configure…") {
                         serviceConfigurationDialog = dialog
                     }
@@ -726,10 +779,20 @@ struct ExtractionSettingsView: View {
             }
             .width(min: 110, ideal: 130)
         }
-        .frame(height: Metrics.routeTableHeight)
+        // Every cell in this table holds a pop-up, so its rows are taller
+        // than the package table's text rows.
+        .frame(height: SettingsTableMetrics.height(
+            forRowCount: defaultsRows.count,
+            rowHeight: SettingsTableMetrics.controlRowHeight))
         .accessibilityIdentifier(RouteAccessibility.table)
         .accessibilityLabel("Default extractor routes")
-        .sheet(item: $serviceConfigurationDialog) { dialog in
+    }
+
+    /// The connected-service and package credential sheets. Both panes can
+    /// raise these, so the presenter lives above the pane switcher.
+    @ViewBuilder
+    private func serviceConfigurationSheet(_ dialog: ServiceConfigurationDialog) -> some View {
+        Group {
             switch dialog {
             case .acp:
                 ACPConfigurationDialog(
@@ -760,6 +823,47 @@ struct ExtractionSettingsView: View {
                     onCredentialMutation: { outcome in await handleMutationOutcome(outcome) })
             }
         }
+    }
+
+    static let podcastTranscriptRowTitle = "Podcast transcript"
+    static let podcastTranscriptHelp = "Podcast transcripts are not package-backed in protocol revision 1. They resolve through a host adapter."
+
+    /// Every default the table shows: the registration-driven extraction
+    /// routes, then the podcast transcript default.
+    private var defaultsRows: [ExtractionDefaultsTableRow] {
+        routeRows.map(ExtractionDefaultsTableRow.route)
+            + [.podcastTranscript(draftPodcastBackend)]
+    }
+
+    /// The transcript row's pop-up. It writes a `PodcastTranscriptionBackend`,
+    /// not an `ExtractorRouteSettingsSelection`, which is exactly why the row
+    /// is its own case rather than a synthesized route.
+    private var podcastTranscriptPicker: some View {
+        Picker("Podcast Transcript", selection: podcastBackendBinding) {
+            Text("Prompt me when transcribing").tag(nil as PodcastTranscriptionBackend?)
+            ForEach(PodcastTranscriptionBackend.allCases, id: \.self) { backend in
+                Text(backend.displayName).tag(backend as PodcastTranscriptionBackend?)
+            }
+        }
+        .labelsHidden()
+        .frame(maxWidth: 260)
+        .onChange(of: draftPodcastBackend) { persistAll() }
+        .accessibilityIdentifier(RouteAccessibility.podcastPicker)
+        .accessibilityLabel("Default podcast transcript extractor")
+        .accessibilityValue(draftPodcastBackend?.displayName ?? "Prompt me when transcribing")
+    }
+
+    private var podcastTranscriptStatusBadge: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+            Text("Ready")
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .lineLimit(1)
+        .help(Self.podcastTranscriptHelp)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Podcast transcript, ready")
     }
 
     /// One row's pop-up. Tags are the typed `ExtractorRouteSettingsSelection`
@@ -985,10 +1089,17 @@ struct ExtractionSettingsView: View {
         "\(route.kind.rawValue)-\(route.mimeType.rawValue.replacing("/", with: "-"))"
     }
 
+    private enum PaneAccessibility {
+        static let switcher = "extraction.pane.switcher"
+    }
+
     private enum RouteAccessibility {
         static let table = "extraction.routes.table"
         static let pickerPrefix = "extraction.routes.picker"
         static let statusPrefix = "extraction.routes.status"
+        /// The transcript row is not route-scoped, so its picker takes a fixed
+        /// identifier rather than a route-derived one.
+        static let podcastPicker = "extraction.routes.picker.podcast"
     }
 
     // MARK: - Extractor status recovery
@@ -1251,14 +1362,79 @@ struct ExtractionSettingsView: View {
     /// strings exist.
     @ViewBuilder private var installedPackagesSection: some View {
         Section {
-            Button {
-                Task { await packageModel.refresh() }
-            } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
+            packageTable
+        } header: {
+            HStack {
+                Text("Installed Extractor Packages")
+                Spacer()
+                ExtractorPackageHelpControl(isPresented: $showingPackageHelp)
+                    .buttonStyle(.borderless)
+                    .labelStyle(.iconOnly)
             }
-            .disabled(packageModel.isBusy)
-            .accessibilityIdentifier(PackageAccessibility.refreshButton)
-            .accessibilityLabel("Refresh installed extractor packages")
+        } footer: {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Manage exact validated package revisions and their credential access. Choose defaults in the Default Extractors section above.")
+                Text("\(ExtractorSettingsPackagePicker.localImportSourceMessage) \(ExtractorSettingsPackagePicker.localImportStorageMessage) \(ExtractorSettingsPackagePicker.localImportAfterMessage) \(ExtractorSettingsPackagePicker.filesUnsupportedMessage)")
+                Label(Self.trustWarningMessage, systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier(PackageAccessibility.trustWarning)
+                    .accessibilityLabel("Executable code warning. \(Self.trustWarningMessage)")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    /// The package table, its add/remove bar, and the inline detail for the
+    /// selected package. The table takes a computed height and scrolls
+    /// internally, so the installed package count cannot stretch the Settings
+    /// window.
+    @ViewBuilder private var packageTable: some View {
+        VStack(alignment: .leading, spacing: Metrics.packageSectionSpacing) {
+            Table(packageModel.tableRows, selection: $selectedPackageID) {
+                TableColumn("Package") { (row: ExtractorPackageTableRow) in
+                    Text(row.packageID)
+                        .help(row.packageID)
+                }
+                .width(min: 170, ideal: 240)
+                TableColumn("Version") { (row: ExtractorPackageTableRow) in
+                    Text(row.version)
+                        .monospacedDigit()
+                }
+                .width(min: 70, ideal: 90)
+                TableColumn("Handles") { (row: ExtractorPackageTableRow) in
+                    Text(row.kind.map(kindDisplayName) ?? "—")
+                        .foregroundStyle(.secondary)
+                }
+                .width(min: 80, ideal: 100)
+                // The status is the row's own diagnostic in short form. The
+                // full sentence renders in the detail below the table.
+                TableColumn("Status") { (row: ExtractorPackageTableRow) in
+                    Label(row.status.label, systemImage: row.status.systemImage)
+                        .foregroundStyle(row.status.tint)
+                        .help(row.status.explanation)
+                }
+                .width(min: 150, ideal: 170)
+            }
+            .frame(height: SettingsTableMetrics.height(
+                forRowCount: packageModel.tableRows.count))
+            .accessibilityIdentifier(PackageAccessibility.table)
+            .accessibilityLabel("Installed extractor packages")
+            .overlay {
+                if packageModel.tableRows.isEmpty {
+                    ContentUnavailableView(
+                        packageModel.hasLoaded
+                            ? "No extractor packages are installed on this Mac."
+                            : ExtractorPackageSettingsModel.checkingMessage,
+                        systemImage: "shippingbox",
+                        description: packageModel.canImport
+                            ? Text("Use Add to import a local extractor package folder.")
+                            : nil)
+                        .accessibilityIdentifier(PackageAccessibility.emptyState)
+                }
+            }
+
+            packageActionBar
 
             if packageModel.isBusy {
                 ProgressView(packageModel.busyMessage ?? ExtractorPackageSettingsModel.checkingMessage)
@@ -1268,154 +1444,124 @@ struct ExtractionSettingsView: View {
                     .accessibilityAddTraits(.updatesFrequently)
             }
 
-            if packageModel.snapshot.rows.isEmpty && packageModel.snapshot.failedPackages.isEmpty {
-                Text(packageModel.hasLoaded
-                    ? "No extractor packages are installed on this Mac."
-                    : "Checking installed extractor packages…")
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier(PackageAccessibility.emptyState)
-            } else {
-                ForEach(packageModel.snapshot.rows) { row in
-                    packageRow(row)
-                }
-                ForEach(packageModel.snapshot.failedPackages) { failure in
-                    failedPackageRow(failure)
-                }
+            if let row = selectedPackageRow {
+                packageDetail(row)
             }
 
-            if let diagnostic = packageModel.lastDiagnostic {
-                Label(diagnostic, systemImage: "checkmark.circle")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .accessibilityIdentifier(PackageAccessibility.diagnostic)
+            // Outcomes no row owns: a rejected import, or a removal whose row
+            // has already left the table.
+            if let notice = packageModel.paneNotice {
+                packageNoticeLabel(notice)
             }
-            if let error = packageModel.lastError {
-                Label(error, systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .accessibilityIdentifier(PackageAccessibility.error)
-                    .accessibilityLabel("Extractor package operation failed. \(error)")
-            }
-        } header: {
-            Text("Installed Extractor Packages")
-        } footer: {
-            Text("Manage exact validated package revisions and their credential access. Choose defaults in the Default Extractors section above.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
     }
 
-    /// A separate section for the app-only local package import workflow.
-    /// Keep the workflow behind a disclosure so installed package rows remain
-    /// the focus of the package section.
-    @ViewBuilder private var packageImportSection: some View {
-        Section {
-            DisclosureGroup {
-                importDisclosureContent
-            } label: {
-                HStack {
-                    Text(ExtractorSettingsPackagePicker.disclosureTitle)
-                    Spacer(minLength: 0)
+    /// The add/remove bar beneath the table, in the macOS table idiom: Add
+    /// creates a package, the destructive action applies to the selected row,
+    /// and registry refresh sits opposite them.
+    private var packageActionBar: some View {
+        HStack(spacing: Metrics.packageActionBarSpacing) {
+            if packageModel.canImport {
+                Button("Add Package…", systemImage: "plus") {
+                    showingImportPicker = true
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
+                .disabled(packageModel.isBusy)
+                .accessibilityIdentifier(PackageAccessibility.importButton)
+                .accessibilityLabel("Add a local extractor package folder")
+                .help("\(ExtractorSettingsPackagePicker.filesUnsupportedMessage) \(Self.trustWarningMessage)")
             }
-            .accessibilityIdentifier(PackageAccessibility.importDisclosure)
-            .accessibilityLabel("Advanced local extractor package import")
-        }
-    }
 
-    /// The import disclosure's body: the local-directory contract, the
-    /// executable-code trust warning, and the import button. Local directories
-    /// only — the panel refuses files, and the boundary revalidates every
-    /// accepted selection.
-    @ViewBuilder private var importDisclosureContent: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(ExtractorSettingsPackagePicker.localImportSourceMessage)
-            Text(ExtractorSettingsPackagePicker.localImportStorageMessage)
-            Text(ExtractorSettingsPackagePicker.localImportAfterMessage)
-            Text(ExtractorSettingsPackagePicker.filesUnsupportedMessage)
-            Label(Self.trustWarningMessage, systemImage: "exclamationmark.triangle")
-                .foregroundStyle(.orange)
-                .accessibilityIdentifier(PackageAccessibility.trustWarning)
-                .accessibilityLabel("Executable code warning. \(Self.trustWarningMessage)")
-            Button(ExtractorSettingsPackagePicker.importButtonTitle, systemImage: "square.and.arrow.down") {
-                showingImportPicker = true
+            if packageModel.canRemove {
+                Button("Remove Package…", systemImage: "minus", role: .destructive) {
+                    removalCandidate = selectedPackageRow?.installedRow
+                }
+                .disabled(packageModel.isBusy || selectedPackageRow?.installedRow == nil)
+                .accessibilityIdentifier(PackageAccessibility.removeButton)
+                .accessibilityLabel("Remove the selected extractor package")
+            }
+
+            Spacer()
+
+            Button("Refresh", systemImage: "arrow.clockwise") {
+                Task { await packageModel.refresh() }
             }
             .disabled(packageModel.isBusy)
-            .accessibilityIdentifier(PackageAccessibility.importButton)
-            .accessibilityLabel("Import a local extractor package folder")
+            .accessibilityIdentifier(PackageAccessibility.refreshButton)
+            .accessibilityLabel("Refresh installed extractor packages")
         }
-        .font(.caption)
+        .controlSize(.small)
     }
 
-    @ViewBuilder private func packageRow(_ row: ExtractorPackageSettingsRow) -> some View {
-        DisclosureGroup {
-            LabeledContent("Kind", value: kindDisplayName(row.kind))
-                .font(.caption)
+    /// The selected package's diagnostics, kept with the package they describe:
+    /// its status sentence first, then the exact bytes and registration that
+    /// identify the revision, then the latest outcome scoped to this package,
+    /// then the actions that apply to it.
+    @ViewBuilder private func packageDetail(_ row: ExtractorPackageTableRow) -> some View {
+        VStack(alignment: .leading, spacing: Metrics.packageDetailSpacing) {
+            Label(row.status.explanation, systemImage: row.status.systemImage)
+                .foregroundStyle(row.status.tint)
+                .textSelection(.enabled)
+                .accessibilityIdentifier("\(PackageAccessibility.statusPrefix).\(row.id)")
+                .accessibilityLabel("\(row.packageID), version \(row.version). \(row.status.label). \(row.status.explanation)")
+
+            if let kind = row.kind {
+                LabeledContent("Kind", value: kindDisplayName(kind))
+                    .font(.caption)
+            }
             LabeledContent("Digest", value: row.digestPrefix)
                 .font(.caption)
                 .accessibilityIdentifier("\(PackageAccessibility.digestPrefix).\(row.id)")
-            LabeledContent("Registration", value: row.registrationID)
-                .font(.caption)
-                .accessibilityIdentifier("\(PackageAccessibility.registrationPrefix).\(row.id)")
-            HStack {
-                Spacer()
-                if let package = packageConfigurationID(for: row) {
-                    Button("Configure…") {
-                        serviceConfigurationDialog = .package(package)
-                    }
-                    .disabled(packageModel.isBusy)
-                    .accessibilityIdentifier("\(PackageAccessibility.configurePrefix).\(row.id)")
-                    .accessibilityLabel("Configure credentials for \(row.packageID), version \(row.version)")
-                }
-                if packageModel.canRemove {
-                    Button("Remove Package…", role: .destructive) {
-                        removalCandidate = row
-                    }
-                    .disabled(packageModel.isBusy)
-                    .accessibilityIdentifier("\(PackageAccessibility.removePrefix).\(row.id)")
-                    .accessibilityLabel("Remove \(row.packageID), version \(row.version)")
-                }
-            }
-        } label: {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(row.packageID)
-                Text("version \(row.version), \(kindDisplayName(row.kind))")
+            if let registrationID = row.registrationID {
+                LabeledContent("Registration", value: registrationID)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("\(PackageAccessibility.registrationPrefix).\(row.id)")
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
+
+            if let notice = packageModel.notice(for: row) {
+                packageNoticeLabel(notice)
+            }
+
+            if let installed = row.installedRow,
+               let package = packageConfigurationID(for: installed) {
+                Button("Configure…") {
+                    serviceConfigurationDialog = .package(package)
+                }
+                .controlSize(.small)
+                .disabled(packageModel.isBusy)
+                .accessibilityIdentifier("\(PackageAccessibility.configurePrefix).\(row.id)")
+                .accessibilityLabel("Configure credentials for \(row.packageID), version \(row.version)")
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("\(PackageAccessibility.rowPrefix).\(row.id)")
-        .accessibilityLabel("\(row.packageID), version \(row.version), for \(kindDisplayName(row.kind))")
-        .accessibilityValue("Active")
+        .accessibilityLabel("Diagnostics for \(row.packageID), version \(row.version)")
+        .accessibilityValue(row.status.label)
     }
 
-    /// A catalog revision whose activation failed in this process. It occupies
-    /// the store but resolved to no backend, so it shows its redacted failure
-    /// message and a "Not ready" state instead of an Active row.
-    @ViewBuilder private func failedPackageRow(_ failure: ExtractorPackageFailureSummary) -> some View {
-        DisclosureGroup {
-            Text(failure.message)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-                .accessibilityIdentifier("\(PackageAccessibility.failureMessagePrefix).\(failure.id)")
-        } label: {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(failure.packageID)
-                Text("version \(failure.version), not ready")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
+    @ViewBuilder private func packageNoticeLabel(_ notice: ExtractorPackageNotice) -> some View {
+        Label(
+            notice.message,
+            systemImage: notice.severity == .failure ? "exclamationmark.triangle" : "checkmark.circle")
+            .font(.caption)
+            .foregroundStyle(notice.severity == .failure
+                ? AnyShapeStyle(Color.red)
+                : AnyShapeStyle(HierarchicalShapeStyle.secondary))
+            .textSelection(.enabled)
+            .accessibilityIdentifier(notice.severity == .failure
+                ? PackageAccessibility.error
+                : PackageAccessibility.diagnostic)
+    }
+
+    private var selectedPackageRow: ExtractorPackageTableRow? {
+        packageModel.tableRows.first { $0.id == selectedPackageID }
+    }
+
+    private func selectFirstPackageIfNeeded() {
+        guard packageModel.tableRows.contains(where: { $0.id == selectedPackageID }) == false else {
+            return
         }
-        .accessibilityIdentifier("\(PackageAccessibility.failurePrefix).\(failure.id)")
-        .accessibilityLabel("\(failure.packageID), version \(failure.version), failed to activate")
-        .accessibilityValue("Not ready")
+        selectedPackageID = packageModel.tableRows.first?.id
     }
 
     private func kindDisplayName(_ kind: ExtractionBackendKind) -> String {
@@ -1546,18 +1692,19 @@ struct ExtractionSettingsView: View {
     /// Row/digest/registration/remove/failure identifiers append the row's
     /// `id` so each exact revision has a unique, derivable identifier.
     private enum PackageAccessibility {
+        static let table = "extraction.packages.table"
         static let refreshButton = "extraction.packages.refresh"
         static let emptyState = "extraction.packages.empty"
         static let rowPrefix = "extraction.packages.row"
+        static let statusPrefix = "extraction.packages.status"
         static let digestPrefix = "extraction.packages.digest"
         static let registrationPrefix = "extraction.packages.registration"
-        static let importDisclosure = "extraction.packages.import.disclosure"
         static let importButton = "extraction.packages.import.button"
         static let trustWarning = "extraction.packages.import.trust"
         static let configurePrefix = "extraction.packages.configure"
-        static let removePrefix = "extraction.packages.remove"
-        static let failurePrefix = "extraction.packages.failure"
-        static let failureMessagePrefix = "extraction.packages.failure.message"
+        /// Removal targets the table's selection, so it is one control rather
+        /// than one per row.
+        static let removeButton = "extraction.packages.remove"
         static let progress = "extraction.packages.progress"
         static let diagnostic = "extraction.packages.diagnostic"
         static let error = "extraction.packages.error"
@@ -1920,10 +2067,11 @@ struct ExtractionSettingsView: View {
         /// switching backends (sections of different heights) doesn't resize
         /// the window. A short section just leaves space below it.
         static let height: CGFloat = 420
-        /// The route table's fixed height: the three canonical rows plus room
-        /// for a few registration-derived rows, with internal scrolling
-        /// beyond that so the Settings window never grows without bound.
-        static let routeTableHeight: CGFloat = 172
+        static let paneSwitcherWidth: CGFloat = 320
+        static let paneSwitcherTopPadding: CGFloat = 12
+        static let packageSectionSpacing: CGFloat = 10
+        static let packageActionBarSpacing: CGFloat = 6
+        static let packageDetailSpacing: CGFloat = 6
     }
 }
 
@@ -2214,6 +2362,186 @@ struct ExtractorCredentialRequirementSummary: Identifiable, Hashable, Sendable {
     }
 }
 
+/// The two jobs Settings → Extraction does. They are separate panes because
+/// only one is needed at a time: choosing what opens a document type, and
+/// managing the packages those choices draw from.
+enum ExtractionSettingsPane: String, CaseIterable, Identifiable, Hashable, Sendable {
+    case defaults
+    case packages
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .defaults: "Defaults"
+        case .packages: "Packages"
+        }
+    }
+}
+
+/// One row of the Default Extractors table. A packaged extraction route and the
+/// podcast transcript default are different operation domains: a route resolves
+/// through the package protocol's registrations and writes an
+/// `ExtractorRouteSettingsSelection`, while a transcript resolves through a host
+/// adapter and writes a `PodcastTranscriptionBackend`. They share a table but
+/// not a selection type and not an id space, so the case tag is what lets one
+/// table show both without either pretending to be the other.
+enum ExtractionDefaultsTableRow: Identifiable, Hashable, Sendable {
+    case route(ExtractorRouteSettingsRow)
+    /// Carries the current choice so the table diffs when the user changes it.
+    case podcastTranscript(PodcastTranscriptionBackend?)
+
+    var id: String {
+        switch self {
+        case .route(let row): "route/\(row.id)"
+        case .podcastTranscript: "transcript/podcast"
+        }
+    }
+}
+
+/// What one installed extractor package revision can do right now. The snapshot
+/// keeps the facts apart — active registrations, revisions whose activation
+/// failed, revisions still waiting, and per-requirement authorization state —
+/// but the table has to present one answer, so this resolves them in precedence
+/// order once and every column and explanation reads from it.
+enum ExtractorPackageStatus: Hashable, Sendable {
+    case active
+    /// The revision is installed but its plugin has not activated yet.
+    case waitingForActivation
+    /// Activation failed in this process. The payload is the reconciler's
+    /// already-redacted message.
+    case notReady(String)
+    /// Active, but a required credential has no grant, so the package cannot
+    /// run until the user authorizes it.
+    case needsAuthorization
+
+    /// The short Status column label. The icon carries the state, so the
+    /// sentence lives in ``explanation``.
+    var label: String {
+        switch self {
+        case .active: "Active"
+        case .waitingForActivation: "Waiting"
+        case .notReady: "Not ready"
+        case .needsAuthorization: "Needs authorization"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .active: "checkmark.circle.fill"
+        case .waitingForActivation: "clock"
+        case .notReady: "xmark.octagon.fill"
+        case .needsAuthorization: "key.fill"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .active: .green
+        case .waitingForActivation: .secondary
+        case .notReady: .red
+        case .needsAuthorization: .orange
+        }
+    }
+
+    /// The inline diagnostic shown with the package it belongs to. A failed
+    /// activation carries the reconciler's own text, which is why this is a
+    /// value and not a fixed table.
+    var explanation: String {
+        switch self {
+        case .active:
+            "This revision is active. Routes can select it."
+        case .waitingForActivation:
+            "This revision is installed and waiting to activate."
+        case .notReady(let message):
+            message
+        case .needsAuthorization:
+            "A required credential is not authorized yet. Configure the package to authorize it."
+        }
+    }
+}
+
+/// One row of the installed extractor package table. It folds the snapshot's
+/// two lists into one presentation identity: an active registration and a
+/// revision whose activation failed do not share an id space, so the case tag
+/// is what stops a failure id from colliding with a registration id.
+struct ExtractorPackageTableRow: Identifiable, Hashable, Sendable {
+    enum Subject: Hashable, Sendable {
+        case installed(ExtractorPackageSettingsRow)
+        case failed(ExtractorPackageFailureSummary)
+    }
+
+    let subject: Subject
+    let status: ExtractorPackageStatus
+
+    var id: String {
+        switch subject {
+        case .installed(let row): "installed/\(row.id)"
+        case .failed(let failure): "failed/\(failure.id)"
+        }
+    }
+
+    var packageID: String {
+        switch subject {
+        case .installed(let row): row.packageID
+        case .failed(let failure): failure.packageID
+        }
+    }
+
+    var version: String {
+        switch subject {
+        case .installed(let row): row.version
+        case .failed(let failure): failure.version
+        }
+    }
+
+    var digestPrefix: String {
+        switch subject {
+        case .installed(let row): row.digestPrefix
+        case .failed(let failure): failure.digestPrefix
+        }
+    }
+
+    /// Only an active registration has one. A failed revision resolved to no
+    /// backend, so it registered nothing.
+    var registrationID: String? {
+        guard case .installed(let row) = subject else { return nil }
+        return row.registrationID
+    }
+
+    /// The exact installed row, when this is one. Removal and credential
+    /// configuration both need it, and neither applies to a failed revision.
+    var installedRow: ExtractorPackageSettingsRow? {
+        guard case .installed(let row) = subject else { return nil }
+        return row
+    }
+
+    var kind: ExtractionBackendKind? {
+        installedRow?.kind
+    }
+}
+
+/// Where a package settings outcome belongs. A package-scoped outcome renders
+/// with the row it describes; the pane scope is for outcomes no row owns — an
+/// import that produced nothing, or a removal whose row has already gone.
+enum ExtractorPackageNoticeScope: Hashable, Sendable {
+    case pane
+    case package(ExtractorPackageTableRow.ID)
+}
+
+/// One package settings outcome, kept scoped so the message renders next to the
+/// package it is about rather than in a shared diagnostics area.
+struct ExtractorPackageNotice: Hashable, Sendable {
+    enum Severity: Hashable, Sendable {
+        case success
+        case failure
+    }
+
+    let severity: Severity
+    let message: String
+    let scope: ExtractorPackageNoticeScope
+}
+
 /// One failed package, copied out of the reconciler's public failure struct so
 /// the Settings surface depends on its own value type, not a live report.
 struct ExtractorPackageFailureSummary: Identifiable, Hashable, Sendable {
@@ -2355,7 +2683,6 @@ enum ExtractorPackageMutationMessage {
 /// workflow through another call path.
 @MainActor
 enum ExtractorSettingsPackagePicker {
-    static let disclosureTitle = "Advanced Local Package Import"
     static let importButtonTitle = "Import Extractor Package…"
     static let localImportSourceMessage = "Select one local extractor package folder as an import source."
     static let localImportStorageMessage = "Self Driving Wiki validates and copies it into the extractor store on this Mac."
@@ -2429,13 +2756,73 @@ final class ExtractorPackageSettingsModel {
     private(set) var isBusy = false
     private(set) var busyMessage: String?
     private(set) var hasLoaded = false
-    private(set) var lastError: String?
-    private(set) var lastDiagnostic: String?
+    /// The single latest outcome. Severity and scope are derived from it rather
+    /// than tracked as parallel fields, so an error cannot outlive the success
+    /// that replaced it.
+    private(set) var notice: ExtractorPackageNotice?
+
+    var lastError: String? {
+        guard let notice, notice.severity == .failure else { return nil }
+        return notice.message
+    }
+
+    var lastDiagnostic: String? {
+        guard let notice, notice.severity == .success else { return nil }
+        return notice.message
+    }
+
+    /// Every installed revision the snapshot holds, active and failed alike,
+    /// each carrying the status that explains it.
+    var tableRows: [ExtractorPackageTableRow] { Self.tableRows(from: snapshot) }
+
+    func notice(for row: ExtractorPackageTableRow) -> ExtractorPackageNotice? {
+        guard let notice, notice.scope == .package(row.id) else { return nil }
+        return notice
+    }
+
+    var paneNotice: ExtractorPackageNotice? {
+        guard let notice, notice.scope == .pane else { return nil }
+        return notice
+    }
 
     /// Surfaces a redacted failure from an app-owned authorization mutation
     /// (#1159) through the same diagnostics path as import/remove.
     func reportFailure(_ message: String) {
-        lastError = message
+        notice = ExtractorPackageNotice(severity: .failure, message: message, scope: .pane)
+    }
+
+    /// Folds the snapshot's active registrations and failed revisions into one
+    /// ordered list. Failed revisions sort first: they are the rows a user
+    /// opened this pane to understand.
+    static func tableRows(
+        from snapshot: ExtractorPackageSettingsSnapshot
+    ) -> [ExtractorPackageTableRow] {
+        let failed = snapshot.failedPackages.map { failure in
+            ExtractorPackageTableRow(subject: .failed(failure), status: .notReady(failure.message))
+        }
+        let installed = snapshot.rows.map { row in
+            ExtractorPackageTableRow(
+                subject: .installed(row),
+                status: status(for: row, in: snapshot))
+        }
+        return failed + installed
+    }
+
+    /// Precedence: a revision that has not activated cannot be judged on its
+    /// credentials, so waiting outranks authorization state.
+    private static func status(
+        for row: ExtractorPackageSettingsRow,
+        in snapshot: ExtractorPackageSettingsSnapshot
+    ) -> ExtractorPackageStatus {
+        if snapshot.waitingRevisionIDs.contains(row.revision) { return .waitingForActivation }
+        let unauthorized = snapshot.credentialRequirements.contains { requirement in
+            requirement.packageID == row.packageID
+                && requirement.packageVersion == row.version
+                && requirement.registrationID == row.registrationID
+                && requirement.isOptional == false
+                && requirement.authorizationState != .authorized
+        }
+        return unauthorized ? .needsAuthorization : .active
     }
 
     static let checkingMessage = "Checking installed extractor packages…"
@@ -2471,38 +2858,64 @@ final class ExtractorPackageSettingsModel {
         guard let importAction, !isBusy else { return }
         isBusy = true
         busyMessage = Self.importingMessage
-        lastError = nil
-        lastDiagnostic = nil
+        notice = nil
+        let known = Set(tableRows.map(\.id))
         let outcome = await importAction(directory)
-        apply(outcome, successDiagnostic: "Extractor package installed.")
         isBusy = false
         busyMessage = nil
         await refresh()
+        // Scope the outcome to the row the import produced, so the
+        // confirmation lands on the new package. An import that added no
+        // visible row falls back to the pane.
+        let added = tableRows.map(\.id).filter { known.contains($0) == false }
+        apply(
+            outcome,
+            successDiagnostic: "Extractor package installed.",
+            scope: added.count == 1 ? .package(added[0]) : .pane)
     }
 
     func remove(_ row: ExtractorPackageSettingsRow) async {
         guard let removeAction, !isBusy else { return }
         isBusy = true
         busyMessage = Self.removingMessage
-        lastError = nil
-        lastDiagnostic = nil
+        notice = nil
         let outcome = await removeAction(row.revision)
-        apply(outcome, successDiagnostic: "Removed \(row.packageID) \(row.version).")
         isBusy = false
         busyMessage = nil
         await refresh()
+        // A successful removal leaves no row to carry the message. A failure
+        // does, so it reports on the package it could not remove.
+        let scope: ExtractorPackageNoticeScope = {
+            guard case .failed = outcome else { return .pane }
+            let id = ExtractorPackageTableRow(subject: .installed(row), status: .active).id
+            return tableRows.contains { $0.id == id } ? .package(id) : .pane
+        }()
+        apply(
+            outcome,
+            successDiagnostic: "Removed \(row.packageID) \(row.version).",
+            scope: scope)
     }
 
     func reportImportSelectionError() {
-        lastError = ExtractorSettingsPackagePicker.selectionErrorMessage
+        notice = ExtractorPackageNotice(
+            severity: .failure,
+            message: ExtractorSettingsPackagePicker.selectionErrorMessage,
+            scope: .pane)
     }
 
-    private func apply(_ outcome: ExtractorPackageMutationOutcome, successDiagnostic: String) {
+    private func apply(
+        _ outcome: ExtractorPackageMutationOutcome,
+        successDiagnostic: String,
+        scope: ExtractorPackageNoticeScope
+    ) {
         switch outcome {
         case .succeeded(let diagnostic):
-            lastDiagnostic = diagnostic ?? successDiagnostic
+            notice = ExtractorPackageNotice(
+                severity: .success,
+                message: diagnostic ?? successDiagnostic,
+                scope: scope)
         case .failed(let message):
-            lastError = message
+            notice = ExtractorPackageNotice(severity: .failure, message: message, scope: scope)
         }
     }
 }
