@@ -560,27 +560,7 @@ struct ExtractionSettingsView: View {
             } header: {
                 Text("Default Extractors")
             } footer: {
-                Text("Reviewed packages run outside the app through the extractor protocol. Installed packages are local additions. Connected services use host-managed providers.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            // Transcripts are a different operation domain (host adapters,
-            // not the package protocol), so the picker is its own section at
-            // the same level as the extractor routes.
-            Section {
-                Picker("Podcast Transcript", selection: podcastBackendBinding) {
-                    Text("Prompt me when transcribing").tag(nil as PodcastTranscriptionBackend?)
-                    ForEach(PodcastTranscriptionBackend.allCases, id: \.self) { backend in
-                        Text(backend.displayName).tag(backend as PodcastTranscriptionBackend?)
-                    }
-                }
-                .onChange(of: draftPodcastBackend) { persistAll() }
-                .accessibilityLabel("Default podcast transcript extractor")
-            } header: {
-                Text("Transcripts")
-            } footer: {
-                Text("Podcast transcripts are not package-backed in protocol revision 1.")
+                Text("Reviewed packages run outside the app through the extractor protocol. Installed packages are local additions. Connected services use host-managed providers. Podcast transcripts are not package-backed in protocol revision 1.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -703,26 +683,43 @@ struct ExtractionSettingsView: View {
     /// the live status. The fixed height keeps the Settings window bounded —
     /// the table scrolls internally when registrations add routes.
     private var extractorRouteTable: some View {
-        Table(routeRows) {
-            TableColumn("Format") { (row: ExtractorRouteSettingsRow) in
-                Label(row.descriptor.displayName, systemImage: row.descriptor.systemImage ?? "doc")
-                    // Technical MIME identity lives in help text, not a column.
-                    .help("MIME type: \(row.route.mimeType.rawValue)")
+        Table(defaultsRows) {
+            TableColumn("Format") { (row: ExtractionDefaultsTableRow) in
+                switch row {
+                case .route(let routeRow):
+                    Label(routeRow.descriptor.displayName, systemImage: routeRow.descriptor.systemImage ?? "doc")
+                        // Technical MIME identity lives in help text, not a column.
+                        .help("MIME type: \(routeRow.route.mimeType.rawValue)")
+                case .podcastTranscript:
+                    Label(Self.podcastTranscriptRowTitle, systemImage: "waveform")
+                        .help(Self.podcastTranscriptHelp)
+                }
             }
             .width(min: 90, ideal: 120)
-            TableColumn("Default extractor") { (row: ExtractorRouteSettingsRow) in
-                routePicker(row)
+            TableColumn("Default extractor") { (row: ExtractionDefaultsTableRow) in
+                switch row {
+                case .route(let routeRow): routePicker(routeRow)
+                case .podcastTranscript: podcastTranscriptPicker
+                }
             }
             .width(min: 220, ideal: 280)
-            TableColumn("Status") { (row: ExtractorRouteSettingsRow) in
-                statusLabel(row)
+            TableColumn("Status") { (row: ExtractionDefaultsTableRow) in
+                switch row {
+                case .route(let routeRow):
+                    statusLabel(routeRow)
+                case .podcastTranscript:
+                    // A host adapter has no package to install, activate, or
+                    // authorize, so the table builder's non-package answer
+                    // (ready) is the honest one here too.
+                    podcastTranscriptStatusBadge
+                }
             }
             // Status is a semantic-colored icon + short label — compact by
             // design (PR 4 review follow-up: the long phrase truncated, so
             // the icon carries the state and the short text never wraps).
             .width(min: 110, ideal: 120)
-            TableColumn("Configuration") { (row: ExtractorRouteSettingsRow) in
-                if let dialog = configurationDialog(for: row) {
+            TableColumn("Configuration") { (row: ExtractionDefaultsTableRow) in
+                if case .route(let routeRow) = row, let dialog = configurationDialog(for: routeRow) {
                     Button("Configure…") {
                         serviceConfigurationDialog = dialog
                     }
@@ -733,7 +730,7 @@ struct ExtractionSettingsView: View {
             }
             .width(min: 110, ideal: 130)
         }
-        .frame(height: Metrics.routeTableHeight)
+        .frame(height: SettingsPackageTableMetrics.height(forRowCount: defaultsRows.count))
         .accessibilityIdentifier(RouteAccessibility.table)
         .accessibilityLabel("Default extractor routes")
         .sheet(item: $serviceConfigurationDialog) { dialog in
@@ -767,6 +764,47 @@ struct ExtractionSettingsView: View {
                     onCredentialMutation: { outcome in await handleMutationOutcome(outcome) })
             }
         }
+    }
+
+    static let podcastTranscriptRowTitle = "Podcast transcript"
+    static let podcastTranscriptHelp = "Podcast transcripts are not package-backed in protocol revision 1. They resolve through a host adapter."
+
+    /// Every default the table shows: the registration-driven extraction
+    /// routes, then the podcast transcript default.
+    private var defaultsRows: [ExtractionDefaultsTableRow] {
+        routeRows.map(ExtractionDefaultsTableRow.route)
+            + [.podcastTranscript(draftPodcastBackend)]
+    }
+
+    /// The transcript row's pop-up. It writes a `PodcastTranscriptionBackend`,
+    /// not an `ExtractorRouteSettingsSelection`, which is exactly why the row
+    /// is its own case rather than a synthesized route.
+    private var podcastTranscriptPicker: some View {
+        Picker("Podcast Transcript", selection: podcastBackendBinding) {
+            Text("Prompt me when transcribing").tag(nil as PodcastTranscriptionBackend?)
+            ForEach(PodcastTranscriptionBackend.allCases, id: \.self) { backend in
+                Text(backend.displayName).tag(backend as PodcastTranscriptionBackend?)
+            }
+        }
+        .labelsHidden()
+        .frame(maxWidth: 260)
+        .onChange(of: draftPodcastBackend) { persistAll() }
+        .accessibilityIdentifier(RouteAccessibility.podcastPicker)
+        .accessibilityLabel("Default podcast transcript extractor")
+        .accessibilityValue(draftPodcastBackend?.displayName ?? "Prompt me when transcribing")
+    }
+
+    private var podcastTranscriptStatusBadge: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+            Text("Ready")
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .lineLimit(1)
+        .help(Self.podcastTranscriptHelp)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Podcast transcript, ready")
     }
 
     /// One row's pop-up. Tags are the typed `ExtractorRouteSettingsSelection`
@@ -996,6 +1034,9 @@ struct ExtractionSettingsView: View {
         static let table = "extraction.routes.table"
         static let pickerPrefix = "extraction.routes.picker"
         static let statusPrefix = "extraction.routes.status"
+        /// The transcript row is not route-scoped, so its picker takes a fixed
+        /// identifier rather than a route-derived one.
+        static let podcastPicker = "extraction.routes.picker.podcast"
     }
 
     // MARK: - Extractor status recovery
@@ -1957,10 +1998,6 @@ struct ExtractionSettingsView: View {
         /// switching backends (sections of different heights) doesn't resize
         /// the window. A short section just leaves space below it.
         static let height: CGFloat = 420
-        /// The route table's fixed height: the three canonical rows plus room
-        /// for a few registration-derived rows, with internal scrolling
-        /// beyond that so the Settings window never grows without bound.
-        static let routeTableHeight: CGFloat = 172
         static let packageSectionSpacing: CGFloat = 10
         static let packageActionBarSpacing: CGFloat = 6
         static let packageDetailSpacing: CGFloat = 6
@@ -2250,6 +2287,26 @@ struct ExtractorCredentialRequirementSummary: Identifiable, Hashable, Sendable {
         case .authorized: return "Authorized"
         case .needsAuthorization: return "Needs authorization"
         case .changedContract: return "Changed — re-authorization needed"
+        }
+    }
+}
+
+/// One row of the Default Extractors table. A packaged extraction route and the
+/// podcast transcript default are different operation domains: a route resolves
+/// through the package protocol's registrations and writes an
+/// `ExtractorRouteSettingsSelection`, while a transcript resolves through a host
+/// adapter and writes a `PodcastTranscriptionBackend`. They share a table but
+/// not a selection type and not an id space, so the case tag is what lets one
+/// table show both without either pretending to be the other.
+enum ExtractionDefaultsTableRow: Identifiable, Hashable, Sendable {
+    case route(ExtractorRouteSettingsRow)
+    /// Carries the current choice so the table diffs when the user changes it.
+    case podcastTranscript(PodcastTranscriptionBackend?)
+
+    var id: String {
+        switch self {
+        case .route(let row): "route/\(row.id)"
+        case .podcastTranscript: "transcript/podcast"
         }
     }
 }

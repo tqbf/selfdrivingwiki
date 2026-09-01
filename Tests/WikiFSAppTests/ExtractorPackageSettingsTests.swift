@@ -496,7 +496,7 @@ struct ExtractorPackageSettingsTests {
         #expect(viewSource.contains("Default Extractors"))
         #expect(viewSource.contains("Built-in default") == false)
         #expect(viewSource.contains("ExtractorRouteSettingsMapping.write"))
-        #expect(viewSource.contains("Table(routeRows)"))
+        #expect(viewSource.contains("Table(defaultsRows)"))
         #expect(viewSource.contains("extractorOption(\"Claude\"") == false)
         #expect(viewSource.contains("extractorOption(\"Gemini\"") == false)
         #expect(viewSource.contains("Claude (Anthropic API)") == false)

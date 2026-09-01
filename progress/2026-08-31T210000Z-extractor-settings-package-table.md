@@ -50,6 +50,32 @@ uses.
   to the section footer, where they are always visible. This matters more here
   than for renderers: an extractor package contains executable code.
 
+### Podcast transcripts join the route table
+
+The podcast transcript default was its own section below the route table. It is
+a default extractor like PDF, HTML, and Word, so it is now a row of the same
+table.
+
+`ExtractionDefaultsTableRow` is the table's row type: `.route` or
+`.podcastTranscript`. The two are different operation domains. A route resolves
+through the package protocol's registrations and writes an
+`ExtractorRouteSettingsSelection`; a transcript resolves through a host adapter
+and writes a `PodcastTranscriptionBackend`. They share no selection type and no
+id space, so the case tag is what lets one table show both without either
+pretending to be the other. A synthesized route id for transcripts would have
+been a sentinel.
+
+The transcript row shows `Ready`, which is the same answer
+`ExtractorRouteTableBuilder` already gives every non-package selection: a host
+adapter has no package to install, activate, or authorize. The contract line
+"Podcast transcripts are not package-backed in protocol revision 1." moved to
+the table's section footer and the row's help text.
+
+The route table's fixed 172 pt height is gone. It uses
+`SettingsPackageTableMetrics.height(forRowCount:)` like the package table, so
+the added row cannot push a route out of view and a registration-derived route
+scrolls instead of growing the window.
+
 `SettingsPackageTableMetrics` is now shared by both panes. Both tables are the
 same control at the same control size, so the row height, the header height,
 and the floor and ceiling have one definition.
@@ -61,14 +87,20 @@ and the floor and ceiling have one definition.
 * `WIKIFS_APP_TESTS=1 swift test --filter 'ExtractorPackageSettingsTests'` — 32
   tests pass.
 * `WIKIFS_APP_TESTS=1 swift test --filter 'ExtractionRouteTableHostedTests'` —
-  15 tests pass, including a new hosted test that mounts the pane with one
-  active and one failed revision and confirms both tables render.
+  16 tests pass, including a new hosted test that mounts the pane with one
+  active and one failed revision and confirms both tables render. The hosted
+  row counts pin the transcript row: the route table holds one more row than
+  its routes.
 * New tests cover the row fold, the status precedence, the optional-requirement
   case, and the notice scope for import, removal, and failed removal.
-* `WIKIFS_APP_TESTS=1 swift test --filter 'Extract'` — 590 tests, 3 failures.
-  All three also fail on a clean tree and depend on this machine, not on this
-  change: two need reviewed packages that the test environment does not
-  install, and one needs a mise-managed `uv`.
+* `WIKIFS_APP_TESTS=1 swift test --filter 'Extract'` — 592 tests, 3 stable
+  failures plus one rotating failure. The three also fail on a clean tree and
+  depend on this machine, not on this change: two need reviewed packages that
+  the test environment does not install, and one needs a mise-managed `uv`. The
+  rotating one is a different subprocess-timing test on each run
+  (`streamProcessCapturesStderrLines`, then
+  `malformedProtocolAndNonzeroExitAreTyped`); both pass in isolation, so they
+  flake under parallel load rather than failing.
 * The change was not seen in the running app. The app on this machine runs an
   older build.
 * The full suite did not run locally. CI runs it.

@@ -169,14 +169,15 @@ struct ExtractionRouteTableHostedTests {
         let window = mount(view)
 
         try await waitUntil {
-            self.tableViewRowCounts(window).contains(4)
+            self.tableViewRowCounts(window).contains(5)
         }
         // The hosted hierarchy contains a native table (row views) inside a
         // clip view — the scrollable, window-bounded layout.
         let content = try #require(window.contentView)
         #expect(containsDescendant(content) { $0 is NSClipView })
-        // The four route rows, and the package table empty beside them.
-        #expect(tableViewRowCounts(window) == [0, 4])
+        // Four route rows plus the podcast transcript row, and the package
+        // table empty beside them.
+        #expect(tableViewRowCounts(window) == [0, 5])
     }
 
     @Test("the package table mounts active and failed revisions as rows")
@@ -199,13 +200,13 @@ struct ExtractionRouteTableHostedTests {
         ]
         let window = mount(makeView(directory: dir, snapshot: loaded))
 
-        // Three canonical route rows, and one active plus one failed revision
-        // folded into the package table.
+        // Three canonical route rows plus the podcast transcript row, and one
+        // active plus one failed revision folded into the package table.
         try await waitUntil {
-            self.tableViewRowCounts(window) == [2, 3]
+            self.tableViewRowCounts(window) == [2, 4]
         }
 
-        #expect(tableViewRowCounts(window) == [2, 3])
+        #expect(tableViewRowCounts(window) == [2, 4])
         let content = try #require(window.contentView)
         #expect(content.fittingSize.height > 0)
     }
@@ -295,8 +296,8 @@ struct ExtractionRouteTableHostedTests {
 
         // The height comes from a named metric, not a magic literal.
         let source = try sourceView()
-        #expect(source.contains("routeTableHeight"))
-        #expect(source.contains("Table(routeRows)"))
+        #expect(source.contains("SettingsPackageTableMetrics.height(forRowCount: defaultsRows.count)"))
+        #expect(source.contains("Table(defaultsRows)"))
     }
 
     // MARK: - AC.8 / AC.11 / AC.12 / AC.14 / AC.15 contracts
@@ -308,7 +309,7 @@ struct ExtractionRouteTableHostedTests {
         let source = try sourceView()
 
         // The table and its columns.
-        #expect(source.contains("Table(routeRows)"))
+        #expect(source.contains("Table(defaultsRows)"))
         #expect(source.contains("TableColumn(\"Format\")"))
         #expect(source.contains("TableColumn(\"Default extractor\")"))
         #expect(source.contains("TableColumn(\"Status\")"))
@@ -364,14 +365,42 @@ struct ExtractionRouteTableHostedTests {
         #expect(source.contains("DoclingConfigurationDialog("))
 
         // Technical MIME identity stays out of the primary columns (help text).
-        #expect(source.contains("MIME type: \\(row.route.mimeType.rawValue)"))
-        #expect(source.contains("Text(\"\\(row.route.mimeType.rawValue)\")") == false)
+        #expect(source.contains("MIME type: \\(routeRow.route.mimeType.rawValue)"))
+        #expect(source.contains("Text(\"\\(routeRow.route.mimeType.rawValue)\")") == false)
 
-        // The podcast picker is its own section at the same level as the
-        // extractor routes, wired to the podcast binding.
+        // The podcast transcript default is a row of the same table, not its
+        // own section: it is a default extractor like any other, even though a
+        // host adapter resolves it rather than a package registration.
         #expect(source.contains("podcastBackendBinding"))
         #expect(source.contains("Picker(\"Podcast Transcript\", selection: podcastBackendBinding)"))
-        #expect(source.contains("Text(\"Transcripts\")"))
+        #expect(source.contains("case podcastTranscript(PodcastTranscriptionBackend?)"))
+        #expect(source.contains("extraction.routes.picker.podcast"))
+        #expect(source.contains("Podcast transcripts are not package-backed in protocol revision 1."))
+        #expect(!source.contains("Text(\"Transcripts\")"))
+    }
+
+    @Test("the transcript row keeps its own id space and tracks its selection")
+    func transcriptRowIsItsOwnIdentity() throws {
+        let routeRow = ExtractorRouteSettingsRow(
+            descriptor: ExtractorRouteDescriptor(
+                route: .canonicalPDF,
+                displayName: "PDF",
+                systemImage: "doc.richtext"),
+            savedSelection: nil,
+            resolvedSelection: nil,
+            choices: [],
+            status: .ready)
+
+        let route = ExtractionDefaultsTableRow.route(routeRow)
+        let prompt = ExtractionDefaultsTableRow.podcastTranscript(nil)
+        let chosen = ExtractionDefaultsTableRow.podcastTranscript(.appleTranscript)
+
+        // A transcript is not a route, so it cannot collide with one.
+        #expect(route.id != prompt.id)
+        // The transcript row is one row whichever backend it names, so the
+        // table updates it in place instead of replacing it.
+        #expect(prompt.id == chosen.id)
+        #expect(prompt != chosen)
     }
 
     @Test("picker options show only extractor names")
