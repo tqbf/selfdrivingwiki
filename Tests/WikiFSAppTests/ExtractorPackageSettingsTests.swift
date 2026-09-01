@@ -475,7 +475,7 @@ struct ExtractorPackageSettingsTests {
         // Packages are a selectable table with a computed height, so the pane
         // scrolls internally instead of growing the Settings window.
         #expect(viewSource.contains("Table(packageModel.tableRows, selection: $selectedPackageID)"))
-        #expect(viewSource.contains("SettingsPackageTableMetrics.height("))
+        #expect(viewSource.contains("SettingsTableMetrics.height("))
         // Add is a first-class control under the table, not a disclosure.
         #expect(viewSource.contains("Button(\"Add Package…\", systemImage: \"plus\")"))
         #expect(!viewSource.contains("Advanced Local Package Import"))

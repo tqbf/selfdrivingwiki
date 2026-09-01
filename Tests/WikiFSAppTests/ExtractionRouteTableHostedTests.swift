@@ -131,7 +131,7 @@ struct ExtractionRouteTableHostedTests {
     /// The pane hosts two tables — routes and installed packages — so a
     /// row-count assertion has to name the multiset it expects rather than
     /// trust which one a depth-first walk reaches first.
-    private func tableViewRowCounts(_ window: NSWindow) -> [Int] {
+    private func tableViews(_ window: NSWindow) -> [NSTableView] {
         guard let content = window.contentView else { return [] }
         var tables: [NSTableView] = []
         func walk(_ view: NSView) {
@@ -139,7 +139,27 @@ struct ExtractionRouteTableHostedTests {
             for subview in view.subviews { walk(subview) }
         }
         walk(content)
-        return tables.map(\.numberOfRows).sorted()
+        return tables
+    }
+
+    private func tableViewRowCounts(_ window: NSWindow) -> [Int] {
+        tableViews(window).map(\.numberOfRows).sorted()
+    }
+
+    /// Rows the table knows about but does not show, because its frame is
+    /// shorter than its content.
+    ///
+    /// `numberOfRows` counts a clipped row exactly like a visible one, so it
+    /// cannot catch a table sized with the wrong row height — the frame is one
+    /// row too short and the last row sits entirely below the fold. Each pane
+    /// computes its own height (a `Table` has no intrinsic content size), so
+    /// this is the assertion that keeps those numbers honest.
+    private func clippedRowCount(_ table: NSTableView) -> Int {
+        guard let clip = table.enclosingScrollView?.contentView else { return 0 }
+        let visibleHeight = clip.bounds.height
+        return (0..<table.numberOfRows).filter { row in
+            table.rect(ofRow: row).maxY > visibleHeight + 0.5
+        }.count
     }
 
     @Test("the route table mounts, loads its snapshot, and scrolls internally")
@@ -178,6 +198,12 @@ struct ExtractionRouteTableHostedTests {
         // Four route rows plus the podcast transcript row, and the package
         // table empty beside them.
         #expect(tableViewRowCounts(window) == [0, 5])
+        // Under the metrics ceiling every row has to be visible, not merely
+        // present. The transcript row is last, so a table sized one row short
+        // hides exactly it.
+        for table in tableViews(window) {
+            #expect(clippedRowCount(table) == 0)
+        }
     }
 
     @Test("the package table mounts active and failed revisions as rows")
@@ -207,6 +233,9 @@ struct ExtractionRouteTableHostedTests {
         }
 
         #expect(tableViewRowCounts(window) == [2, 4])
+        for table in tableViews(window) {
+            #expect(clippedRowCount(table) == 0)
+        }
         let content = try #require(window.contentView)
         #expect(content.fittingSize.height > 0)
     }
@@ -296,7 +325,7 @@ struct ExtractionRouteTableHostedTests {
 
         // The height comes from a named metric, not a magic literal.
         let source = try sourceView()
-        #expect(source.contains("SettingsPackageTableMetrics.height(forRowCount: defaultsRows.count)"))
+        #expect(source.contains("rowHeight: SettingsTableMetrics.controlRowHeight"))
         #expect(source.contains("Table(defaultsRows)"))
     }
 

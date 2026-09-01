@@ -695,7 +695,9 @@ struct ExtractionSettingsView: View {
                         .help(Self.podcastTranscriptHelp)
                 }
             }
-            .width(min: 90, ideal: 120)
+            // Wide enough for the longest format name in the table, which is
+            // the transcript row rather than one of the three-letter routes.
+            .width(min: 110, ideal: 160)
             TableColumn("Default extractor") { (row: ExtractionDefaultsTableRow) in
                 switch row {
                 case .route(let routeRow): routePicker(routeRow)
@@ -730,7 +732,11 @@ struct ExtractionSettingsView: View {
             }
             .width(min: 110, ideal: 130)
         }
-        .frame(height: SettingsPackageTableMetrics.height(forRowCount: defaultsRows.count))
+        // Every cell in this table holds a pop-up, so its rows are taller
+        // than the package table's text rows.
+        .frame(height: SettingsTableMetrics.height(
+            forRowCount: defaultsRows.count,
+            rowHeight: SettingsTableMetrics.controlRowHeight))
         .accessibilityIdentifier(RouteAccessibility.table)
         .accessibilityLabel("Default extractor routes")
         .sheet(item: $serviceConfigurationDialog) { dialog in
@@ -1347,7 +1353,7 @@ struct ExtractionSettingsView: View {
                 }
                 .width(min: 150, ideal: 170)
             }
-            .frame(height: SettingsPackageTableMetrics.height(
+            .frame(height: SettingsTableMetrics.height(
                 forRowCount: packageModel.tableRows.count))
             .accessibilityIdentifier(PackageAccessibility.table)
             .accessibilityLabel("Installed extractor packages")
