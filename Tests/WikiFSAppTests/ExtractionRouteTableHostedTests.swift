@@ -61,13 +61,15 @@ struct ExtractionRouteTableHostedTests {
 
     private func makeView(
         directory: URL,
-        snapshot: ExtractorPackageSettingsSnapshot
+        snapshot: ExtractorPackageSettingsSnapshot,
+        pane: ExtractionSettingsPane = .defaults
     ) -> ExtractionSettingsView {
         ExtractionSettingsView(
             containerDirectory: directory,
             launcher: AgentLauncher(),
             credentials: Self.stubCredentials,
-            packageSnapshot: { snapshot })
+            packageSnapshot: { snapshot },
+            initialPane: pane)
     }
 
     private func mount(_ view: ExtractionSettingsView) -> NSWindow {
@@ -162,7 +164,7 @@ struct ExtractionRouteTableHostedTests {
         }.count
     }
 
-    @Test("the route table mounts, loads its snapshot, and scrolls internally")
+    @Test("Settings opens on the defaults pane, which mounts the route table")
     func rendersRouteTableWithoutCrash() async throws {
         let lease = await HostedAppKitTestGate.shared.acquire()
         defer { lease.release() }
@@ -195,9 +197,10 @@ struct ExtractionRouteTableHostedTests {
         // clip view — the scrollable, window-bounded layout.
         let content = try #require(window.contentView)
         #expect(containsDescendant(content) { $0 is NSClipView })
-        // Four route rows plus the podcast transcript row, and the package
-        // table empty beside them.
-        #expect(tableViewRowCounts(window) == [0, 5])
+        // Four route rows plus the podcast transcript row. The packages pane
+        // is a separate tab, so its table is not mounted here — which is also
+        // what pins the default pane.
+        #expect(tableViewRowCounts(window) == [5])
         // Under the metrics ceiling every row has to be visible, not merely
         // present. The transcript row is last, so a table sized one row short
         // hides exactly it.
@@ -224,15 +227,15 @@ struct ExtractionRouteTableHostedTests {
                     version: try ExtractorPackageVersion(validating: "1.0.0"),
                     digest: try ExtractorPackageDigest(hex: String(repeating: "b", count: 64)))),
         ]
-        let window = mount(makeView(directory: dir, snapshot: loaded))
+        let window = mount(makeView(directory: dir, snapshot: loaded, pane: .packages))
 
-        // Three canonical route rows plus the podcast transcript row, and one
-        // active plus one failed revision folded into the package table.
+        // One active plus one failed revision folded into one table. The
+        // defaults pane is a separate tab, so its route table is not mounted.
         try await waitUntil {
-            self.tableViewRowCounts(window) == [2, 4]
+            self.tableViewRowCounts(window) == [2]
         }
 
-        #expect(tableViewRowCounts(window) == [2, 4])
+        #expect(tableViewRowCounts(window) == [2])
         for table in tableViews(window) {
             #expect(clippedRowCount(table) == 0)
         }
@@ -406,6 +409,25 @@ struct ExtractionRouteTableHostedTests {
         #expect(source.contains("extraction.routes.picker.podcast"))
         #expect(source.contains("Podcast transcripts are not package-backed in protocol revision 1."))
         #expect(!source.contains("Text(\"Transcripts\")"))
+    }
+
+    @Test("the pane switcher lists defaults first and opens on it")
+    func paneSwitcherDefaultsToTheDefaultsPane() throws {
+        // The order is what the segmented control renders, so defaults sits on
+        // the leading edge as well as being the initial selection.
+        #expect(ExtractionSettingsPane.allCases == [.defaults, .packages])
+        #expect(ExtractionSettingsPane.defaults.title == "Defaults")
+        #expect(ExtractionSettingsPane.packages.title == "Packages")
+
+        let source = try sourceView()
+        #expect(source.contains("initialPane: ExtractionSettingsPane = .defaults"))
+        #expect(source.contains(".pickerStyle(.segmented)"))
+        #expect(source.contains("extraction.pane.switcher"))
+        #expect(source.contains("case .defaults: defaultsPane"))
+        #expect(source.contains("case .packages: packagesPane"))
+        // Both panes can raise the service configuration sheet, so it is
+        // presented above the switcher rather than inside one pane.
+        #expect(source.contains(".sheet(item: $serviceConfigurationDialog) { dialog in\n            serviceConfigurationSheet(dialog)"))
     }
 
     @Test("the transcript row keeps its own id space and tracks its selection")

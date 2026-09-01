@@ -80,6 +80,23 @@ scrolls instead of growing the window.
 same control at the same control size, so the row height, the header height,
 and the floor and ceiling have one definition.
 
+### Two panes
+
+Settings → Extraction does two jobs: it chooses what opens each document type,
+and it manages the packages those choices draw from. Only one is needed at a
+time, so a segmented switcher picks between them. `ExtractionSettingsPane` names
+the two, and Defaults opens first, because that is the question the pane exists
+to answer. The selection is not persisted for the same reason.
+
+The service configuration sheet moved from the route table to above the
+switcher. Both panes raise it — a route's `Configure…` and a package's
+`Configure…` — so a sheet attached to one pane would never present from the
+other.
+
+`initialPane` on `ExtractionSettingsView.init` lets a hosted test mount either
+pane directly. It defaults to `.defaults`, so the production call site says
+nothing.
+
 ## Verification
 
 * `make build` passes.
@@ -101,6 +118,12 @@ and the floor and ceiling have one definition.
   (`streamProcessCapturesStderrLines`, then
   `malformedProtocolAndNonzeroExitAreTyped`); both pass in isolation, so they
   flake under parallel load rather than failing.
-* The change was not seen in the running app. The app on this machine runs an
-  older build.
+* The pane was installed and seen in the running app. A clean launch opens on
+  Defaults and shows all four rows, including the podcast transcript row. The
+  Packages pane shows the package table, the add and remove controls, the
+  inline diagnostic, and the trust warning.
+* The transcript row was missing at first. The route table's rows are 32 pt
+  because every cell holds a pop-up, not the 24 pt a table of text rows uses,
+  so the computed height was one row short and the last row sat below the fold.
+  The accessibility geometry of the live pane gave both numbers.
 * The full suite did not run locally. CI runs it.

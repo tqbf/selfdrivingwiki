@@ -482,6 +482,9 @@ struct ExtractionSettingsView: View {
     @State private var showingImportPicker = false
     @State private var removalCandidate: ExtractorPackageSettingsRow?
     @State private var selectedPackageID: ExtractorPackageTableRow.ID?
+    /// Deliberately not persisted: Settings opens on the defaults every time,
+    /// because that is the question this pane exists to answer.
+    @State private var selectedPane: ExtractionSettingsPane
     /// Pending authorization confirmation (#1159). Non-nil shows the
     /// explicit confirmation with the inheritance rule.
     @State private var authorizationCandidate: ExtractorCredentialRequirementSummary?
@@ -521,8 +524,13 @@ struct ExtractionSettingsView: View {
             return pasteboard.setString(value, forType: .string)
         },
         importPackage: (@Sendable (URL) async -> ExtractorPackageMutationOutcome)? = nil,
-        removePackage: (@Sendable (ExtractorPackageRevisionID) async -> ExtractorPackageMutationOutcome)? = nil
+        removePackage: (@Sendable (ExtractorPackageRevisionID) async -> ExtractorPackageMutationOutcome)? = nil,
+        /// The pane Settings opens on. Defaults to the document-type defaults,
+        /// which is the question this pane exists to answer; hosted tests pass
+        /// the other pane to mount it directly.
+        initialPane: ExtractionSettingsPane = .defaults
     ) {
+        _selectedPane = State(initialValue: initialPane)
         self.containerDirectory = containerDirectory
         self.launcher = launcher
         self.credentials = credentials ?? KeychainCredentialService()
@@ -554,27 +562,37 @@ struct ExtractionSettingsView: View {
     }
 
     var body: some View {
-        Form {
-            Section {
-                extractorRouteTable
-            } header: {
-                Text("Default Extractors")
-            } footer: {
-                Text("Reviewed packages run outside the app through the extractor protocol. Installed packages are local additions. Connected services use host-managed providers. Podcast transcripts are not package-backed in protocol revision 1.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            // Installed extractor-package lifecycle (Phase 7): read-only list
-            // of exact registry admissions and app-only removal. Hidden when no
-            // snapshot loader was wired (tests, headless hosts).
+        VStack(spacing: 0) {
+            // Two jobs, two panes: choosing what opens a document type, and
+            // managing the packages those choices draw from. Only one is
+            // needed at a time, and the defaults are what a user comes here
+            // for, so they open first.
             if packageSnapshot != nil {
-                installedPackagesSection
+                Picker("Extraction settings section", selection: $selectedPane) {
+                    ForEach(ExtractionSettingsPane.allCases) { pane in
+                        Text(pane.title).tag(pane)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: Metrics.paneSwitcherWidth)
+                .padding(.top, Metrics.paneSwitcherTopPadding)
+                .accessibilityIdentifier(PaneAccessibility.switcher)
+                .accessibilityLabel("Extraction settings section")
             }
 
+            switch selectedPane {
+            case .defaults: defaultsPane
+            case .packages: packagesPane
+            }
         }
-        .formStyle(.grouped)
         .frame(minWidth: Metrics.width, minHeight: Metrics.height)
+        // Both panes can raise the service configuration sheet — a route's
+        // Configure… and a package's Configure… — so it is presented above
+        // the switcher rather than inside either pane.
+        .sheet(item: $serviceConfigurationDialog) { dialog in
+            serviceConfigurationSheet(dialog)
+        }
         // Async model mutations stay on the main actor; the load closure hops
         // to the process registry off-main and returns a value snapshot.
         .task {
@@ -676,6 +694,34 @@ struct ExtractionSettingsView: View {
         }
     }
 
+    // MARK: - Panes
+
+    /// What opens each document type. The pane a user comes here for, so it
+    /// opens first.
+    private var defaultsPane: some View {
+        Form {
+            Section {
+                extractorRouteTable
+            } header: {
+                Text("Default Extractors")
+            } footer: {
+                Text("Reviewed packages run outside the app through the extractor protocol. Installed packages are local additions. Connected services use host-managed providers. Podcast transcripts are not package-backed in protocol revision 1.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    /// Installed extractor-package lifecycle (Phase 7): the exact registry
+    /// admissions, their inline diagnostics, and app-only import and removal.
+    private var packagesPane: some View {
+        Form {
+            installedPackagesSection
+        }
+        .formStyle(.grouped)
+    }
+
     // MARK: - Extractor route table
 
     /// The native, registration-driven route table: one row per extraction
@@ -739,7 +785,13 @@ struct ExtractionSettingsView: View {
             rowHeight: SettingsTableMetrics.controlRowHeight))
         .accessibilityIdentifier(RouteAccessibility.table)
         .accessibilityLabel("Default extractor routes")
-        .sheet(item: $serviceConfigurationDialog) { dialog in
+    }
+
+    /// The connected-service and package credential sheets. Both panes can
+    /// raise these, so the presenter lives above the pane switcher.
+    @ViewBuilder
+    private func serviceConfigurationSheet(_ dialog: ServiceConfigurationDialog) -> some View {
+        Group {
             switch dialog {
             case .acp:
                 ACPConfigurationDialog(
@@ -1034,6 +1086,10 @@ struct ExtractionSettingsView: View {
     /// the separator flattened ("pdf-application-pdf", "html-text-html").
     static func accessibilityKey(_ route: ExtractorRouteID) -> String {
         "\(route.kind.rawValue)-\(route.mimeType.rawValue.replacing("/", with: "-"))"
+    }
+
+    private enum PaneAccessibility {
+        static let switcher = "extraction.pane.switcher"
     }
 
     private enum RouteAccessibility {
@@ -2004,6 +2060,8 @@ struct ExtractionSettingsView: View {
         /// switching backends (sections of different heights) doesn't resize
         /// the window. A short section just leaves space below it.
         static let height: CGFloat = 420
+        static let paneSwitcherWidth: CGFloat = 320
+        static let paneSwitcherTopPadding: CGFloat = 12
         static let packageSectionSpacing: CGFloat = 10
         static let packageActionBarSpacing: CGFloat = 6
         static let packageDetailSpacing: CGFloat = 6
@@ -2293,6 +2351,23 @@ struct ExtractorCredentialRequirementSummary: Identifiable, Hashable, Sendable {
         case .authorized: return "Authorized"
         case .needsAuthorization: return "Needs authorization"
         case .changedContract: return "Changed — re-authorization needed"
+        }
+    }
+}
+
+/// The two jobs Settings → Extraction does. They are separate panes because
+/// only one is needed at a time: choosing what opens a document type, and
+/// managing the packages those choices draw from.
+enum ExtractionSettingsPane: String, CaseIterable, Identifiable, Hashable, Sendable {
+    case defaults
+    case packages
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .defaults: "Defaults"
+        case .packages: "Packages"
         }
     }
 }
