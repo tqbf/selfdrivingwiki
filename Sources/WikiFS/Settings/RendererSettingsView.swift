@@ -119,18 +119,18 @@ struct RendererSettingsNotice: Hashable {
     let scope: RendererSettingsNoticeScope
 }
 
-/// Settings-facing adapter for machine package management and source-specific
-/// preferences. It deliberately owns no renderer-resolution state: the machine
-/// index and WikiStoreModel remain authoritative, while InstalledRendererHost
-/// refreshes only future registry snapshots. Existing panes retain their pinned
-/// reference.
+/// Settings-facing adapter for machine package management. It is wiki-agnostic
+/// by design: installed packages are machine-scoped, and a source's renderer
+/// preference is written where the user reads the source, not here. It owns no
+/// renderer-resolution state either — the machine index stays authoritative,
+/// and InstalledRendererHost refreshes only future registry snapshots, so
+/// existing panes retain their pinned reference.
 @MainActor
 @Observable
 final class RendererSettingsModel {
     static let installFailureMessage = "The renderer package could not be validated or installed."
 
     let host: InstalledRendererHost
-    private(set) var wiki: WikiStoreModel?
 
     private(set) var rows: [RendererSettingsRow] = []
     private(set) var isBusy = false
@@ -149,18 +149,8 @@ final class RendererSettingsModel {
         return notice.message
     }
 
-    init(host: InstalledRendererHost, wiki: WikiStoreModel?) {
+    init(host: InstalledRendererHost) {
         self.host = host
-        self.wiki = wiki
-        rebuildRows()
-    }
-
-    /// Settings is app-scoped, while source preferences are session-scoped.
-    /// Refresh the adapter whenever the active session changes so a long-lived
-    /// Settings scene never writes through a stale store.
-    func updateWiki(_ wiki: WikiStoreModel?) {
-        guard self.wiki !== wiki else { return }
-        self.wiki = wiki
         rebuildRows()
     }
 
@@ -248,55 +238,6 @@ final class RendererSettingsModel {
         notice = RendererSettingsNotice(severity: .failure, message: error, scope: .pane)
     }
 
-    /// Version selection is an exact preference on a source. This keeps
-    /// rollback scoped to the user's source choice rather than mutating the
-    /// machine registry or replacing an active pane pin.
-    func selectVersion(_ descriptor: RendererDescriptor, for source: SourceID) {
-        guard let wiki else {
-            notice = RendererSettingsNotice(
-                severity: .failure,
-                message: "Open a wiki before selecting a renderer version.",
-                scope: .pane)
-            return
-        }
-        wiki.setRendererSourcePreference(
-            sourceID: source,
-            preference: .exact(descriptor.reference))
-        notice = RendererSettingsNotice(
-            severity: .success,
-            message: "Selected \(descriptor.displayName) \(descriptor.reference.version.rawValue) for this source.",
-            scope: .pane)
-    }
-
-    /// Clearing the preference returns the source to automatic resolution. It
-    /// is a distinct operation from pinning, not a pin to a sentinel version.
-    func clearVersionSelection(for source: SourceID) {
-        guard let wiki else {
-            notice = RendererSettingsNotice(
-                severity: .failure,
-                message: "Open a wiki before selecting a renderer version.",
-                scope: .pane)
-            return
-        }
-        wiki.removeRendererSourcePreference(sourceID: source)
-        notice = RendererSettingsNotice(
-            severity: .success,
-            message: "Cleared the renderer for this source. It opens as Source until you choose one.",
-            scope: .pane)
-    }
-
-    func descriptors(for row: RendererSettingsRow) -> [RendererDescriptor] {
-        host.machineIndex?.records
-            .first(where: { $0.packageID == row.record.packageID && $0.version == row.record.version })?
-            .validatedDescriptors ?? []
-    }
-
-    /// Every renderer a source can be pinned to. Only validated records project
-    /// descriptors, so an unavailable package cannot become a pinned choice.
-    var selectableDescriptors: [RendererDescriptor] {
-        rows.filter { $0.record.state == .validated }.flatMap { descriptors(for: $0) }
-    }
-
     /// Every package version the machine index still holds, except removal
     /// tombstones. Unavailable versions stay in the table on purpose: their
     /// status is the only place a quarantine or a validation failure is
@@ -350,19 +291,14 @@ struct RendererSettingsView: View {
         static let actionBarSpacing: CGFloat = 6
     }
 
-    private let wiki: WikiStoreModel?
-    private let wikiID: WikiID?
     @State private var model: RendererSettingsModel
     @State private var showingPackageHelp = false
     @State private var showingPicker = false
     @State private var removalCandidate: RendererSettingsRow?
     @State private var selectedPackageID: RendererSettingsRow.ID?
-    @State private var selectedSourceID: SourceID?
 
-    init(host: InstalledRendererHost, wiki: WikiStoreModel?, wikiID: WikiID?) {
-        self.wiki = wiki
-        self.wikiID = wikiID
-        _model = State(initialValue: RendererSettingsModel(host: host, wiki: wiki))
+    init(host: InstalledRendererHost) {
+        _model = State(initialValue: RendererSettingsModel(host: host))
     }
 
     private var selectedRow: RendererSettingsRow? {
@@ -388,31 +324,10 @@ struct RendererSettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
-            Section {
-                if let wiki = model.wiki {
-                    if wiki.sources.isEmpty {
-                        Text("Add a source to choose an exact renderer version.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        sourceVersionControls(model: model)
-                    }
-                } else {
-                    Text("Open a wiki to choose an exact renderer version for a source.")
-                        .foregroundStyle(.secondary)
-                }
-            } header: {
-                Text("Source Renderer Preferences")
-            } footer: {
-                Text("Choose which installed renderer opens one source in this wiki. A source with no renderer opens as Source. This pins an exact version, so a source keeps the renderer you chose after a newer version is installed.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
         }
         .formStyle(.grouped)
         .padding()
-        .task(id: wikiID) {
-            model.updateWiki(wiki)
-            selectedSourceID = wiki?.sources.first?.id
+        .task {
             await model.refresh()
             selectFirstPackageIfNeeded()
         }
@@ -605,72 +520,6 @@ struct RendererSettingsView: View {
             .font(.callout)
             .foregroundStyle(notice.severity == .failure ? AnyShapeStyle(Color.red) : AnyShapeStyle(HierarchicalShapeStyle.secondary))
             .textSelection(.enabled)
-    }
-
-    // MARK: - Source renderer preferences
-
-    /// Two pop-ups instead of a list of one-shot buttons: pick the source, then
-    /// pick the renderer it is pinned to. `None` is a real choice here — it
-    /// clears the preference rather than pinning a sentinel. Clearing does not
-    /// hand the choice back to the matcher: `RendererResolution.preferred`
-    /// returns nil without a stored preference, so the source opens as Source.
-    @ViewBuilder
-    private func sourceVersionControls(model: RendererSettingsModel) -> some View {
-        if let source = model.wiki?.sources.first(where: { $0.id == selectedSourceID }) ?? model.wiki?.sources.first {
-            Picker("Source", selection: Binding(
-                get: {
-                    guard let selectedSourceID,
-                          model.wiki?.sources.contains(where: { $0.id == selectedSourceID }) == true else {
-                        return model.wiki?.sources.first?.id
-                    }
-                    return selectedSourceID
-                },
-                set: { selectedSourceID = $0 })) {
-                ForEach(model.wiki?.sources ?? []) { source in
-                    Text(source.effectiveName).tag(Optional(source.id))
-                }
-            }
-            .accessibilityLabel("Source for renderer version selection")
-
-            Picker("Renderer", selection: rendererBinding(for: source, model: model)) {
-                Text("None (show Source)").tag(RendererReference?.none)
-                ForEach(model.selectableDescriptors, id: \.reference) { descriptor in
-                    Text("\(descriptor.displayName) \(descriptor.reference.version.rawValue)")
-                        .tag(Optional(descriptor.reference))
-                }
-            }
-            .accessibilityLabel("Selected renderer version for \(source.effectiveName)")
-            .accessibilityValue(pinnedRendererDescription(for: source, model: model))
-        }
-    }
-
-    private func rendererBinding(
-        for source: SourceSummary,
-        model: RendererSettingsModel
-    ) -> Binding<RendererReference?> {
-        Binding(
-            get: {
-                guard case let .exact(reference) = model.wiki?.rendererSourcePreference(for: source.id) else {
-                    return nil
-                }
-                return reference
-            },
-            set: { reference in
-                guard let reference,
-                      let descriptor = model.selectableDescriptors.first(where: { $0.reference == reference })
-                else {
-                    model.clearVersionSelection(for: source.id)
-                    return
-                }
-                model.selectVersion(descriptor, for: source.id)
-            })
-    }
-
-    private func pinnedRendererDescription(for source: SourceSummary, model: RendererSettingsModel) -> String {
-        guard case let .exact(reference) = model.wiki?.rendererSourcePreference(for: source.id),
-              let descriptor = model.selectableDescriptors.first(where: { $0.reference == reference })
-        else { return "None, opens as Source" }
-        return "\(descriptor.displayName) \(reference.version.rawValue)"
     }
 
     private func selectFirstPackageIfNeeded() {

@@ -948,10 +948,7 @@ struct WikiFSApp: App {
                 AppearanceSettingsView()
                     .tag(SettingsTab.appearance)
                     .tabItem { Label("Appearance", systemImage: "paintbrush") }
-                RendererSettingsView(
-                    host: installedRendererHost,
-                    wiki: settingsWikiStore,
-                    wikiID: registry.activeWikiID)
+                RendererSettingsView(host: installedRendererHost)
                     .tag(SettingsTab.renderers)
                     .tabItem { Label("Renderers", systemImage: "square.stack.3d.up") }
             }
@@ -989,14 +986,6 @@ struct WikiFSApp: App {
             get: { SettingsTab(rawValue: settingsSelectedTabRaw) ?? .zotero },
             set: { settingsSelectedTabRaw = $0.rawValue }
         )
-    }
-
-    /// Settings is app-scoped, so it uses the current frontmost session when
-    /// one exists. A missing session keeps machine installation available while
-    /// correctly disabling wiki-scoped controls.
-    private var settingsWikiStore: WikiStoreModel? {
-        guard let wikiID = registry.activeWikiID else { return nil }
-        return sessionManager.sessions[wikiID]?.store
     }
 
     /// The `ColorScheme?` to apply via `.preferredColorScheme` on every scene.

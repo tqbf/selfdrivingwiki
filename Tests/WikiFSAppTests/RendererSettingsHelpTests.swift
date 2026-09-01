@@ -103,7 +103,6 @@ struct RendererSettingsHelpHostedTests {
         #expect(settingsSource.contains("Refresh Registry"))
         #expect(settingsSource.contains("Reset Safe Mode"))
         #expect(settingsSource.contains("Remove"))
-        #expect(settingsSource.contains("Source Renderer Preferences"))
     }
 
     private func repositoryRoot() -> URL {

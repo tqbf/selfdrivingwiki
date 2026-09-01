@@ -51,13 +51,17 @@ struct RendererSettingsManagementViewTests {
         #expect(source.contains("Source data and wiki preferences were preserved"))
         // Removal tombstones stay hidden, but a quarantined or unvalidated
         // record keeps its row: its status is the only place the failure is
-        // explained. Only validated records may be pinned to a source.
+        // explained.
         #expect(source.contains(".filter { $0.state != .removed }"))
-        #expect(source.contains(".filter { $0.record.state == .validated }"))
-        #expect(source.contains(".task(id: wikiID)"))
-        #expect(source.contains("model.updateWiki(wiki)"))
-        #expect(source.contains("rendererSourcePreference(for: source.id)"))
-        #expect(source.contains("Selected renderer version"))
+        // The pane is machine-scoped: installed packages are shared by every
+        // wiki, and a source's renderer preference is written where the user
+        // reads the source, not in Settings.
+        #expect(source.contains("init(host: InstalledRendererHost)"))
+        #expect(!source.contains("Source Renderer Preferences"))
+        #expect(!source.contains("WikiStoreModel"))
+        #expect(!source.contains("rendererSourcePreference"))
+        #expect(!source.contains("setRendererSourcePreference"))
+        #expect(!source.contains("removeRendererSourcePreference"))
         #expect(source.contains("Updating renderer packages"))
         #expect(source.contains("announcementRequested"))
         #expect(source.contains("Files and archives are not supported."))
@@ -74,8 +78,7 @@ struct RendererSettingsManagementViewTests {
     @Test("settings model reports install failure and clears busy state")
     func settingsModelReportsInstallFailure() async {
         let model = RendererSettingsModel(
-            host: InstalledRendererHost(services: UnavailableRendererServices()),
-            wiki: nil)
+            host: InstalledRendererHost(services: UnavailableRendererServices()))
 
         await model.install(directory: URL.temporaryDirectory.appending(path: "missing-renderer-package"))
 
@@ -100,7 +103,7 @@ struct RendererSettingsManagementViewTests {
                 registrationID: BundledRendererPackages.excalidrawRegistrationID))
             .assemble()
         let host = InstalledRendererHost(services: handle.services)
-        let model = RendererSettingsModel(host: host, wiki: nil)
+        let model = RendererSettingsModel(host: host)
         let packageURL = try #require(BundledRendererPackages.excalidrawResourceURL())
 
         await model.install(directory: packageURL)
@@ -112,36 +115,11 @@ struct RendererSettingsManagementViewTests {
         try await handle.dispose()
     }
 
-    @Test("settings model follows the current wiki store")
-    func settingsModelTracksCurrentWikiStore() throws {
-        let firstURL = URL.temporaryDirectory.appending(path: "renderer-settings-first-\\(UUID().uuidString).sqlite")
-        let secondURL = URL.temporaryDirectory.appending(path: "renderer-settings-second-\\(UUID().uuidString).sqlite")
-        defer {
-            for url in [firstURL, secondURL] {
-                do { try FileManager.default.removeItem(at: url) }
-                catch { Issue.record("Renderer settings model fixture cleanup failed.") }
-            }
-        }
-
-        let firstWiki = WikiStoreModel(store: try GRDBWikiStore(databaseURL: firstURL))
-        let secondWiki = WikiStoreModel(store: try GRDBWikiStore(databaseURL: secondURL))
-        let host = InstalledRendererHost(services: UnavailableRendererServices())
-        let model = RendererSettingsModel(host: host, wiki: firstWiki)
-
-        model.updateWiki(secondWiki)
-
-        #expect(model.wiki === secondWiki)
-    }
-
-    // MARK: - Inline per-package diagnostics
-
     @Test("the pane hosts its table and empty state in a macOS window")
     @MainActor
     func panelHostsTableAndEmptyState() {
         let view = RendererSettingsView(
-            host: InstalledRendererHost(services: UnavailableRendererServices()),
-            wiki: nil,
-            wikiID: nil)
+            host: InstalledRendererHost(services: UnavailableRendererServices()))
         let host = NSHostingController(rootView: view)
         let window = NSWindow(contentViewController: host)
         window.setContentSize(NSSize(width: 640, height: 560))
@@ -218,8 +196,7 @@ struct RendererSettingsManagementViewTests {
     @Test("an import that produced no row reports on the pane, not on a package")
     func installFailureIsPaneScoped() async {
         let model = RendererSettingsModel(
-            host: InstalledRendererHost(services: UnavailableRendererServices()),
-            wiki: nil)
+            host: InstalledRendererHost(services: UnavailableRendererServices()))
 
         await model.install(directory: URL.temporaryDirectory.appending(path: "missing-renderer-package"))
 
@@ -231,8 +208,7 @@ struct RendererSettingsManagementViewTests {
     @Test("one notice at a time: a refresh clears the outcome it replaced")
     func refreshClearsThePreviousNotice() async {
         let model = RendererSettingsModel(
-            host: InstalledRendererHost(services: UnavailableRendererServices()),
-            wiki: nil)
+            host: InstalledRendererHost(services: UnavailableRendererServices()))
         model.report(error: "Selection was rejected.")
         #expect(model.lastError == "Selection was rejected.")
 

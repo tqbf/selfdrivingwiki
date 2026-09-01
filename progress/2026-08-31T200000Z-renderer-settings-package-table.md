@@ -48,9 +48,16 @@ Two other changes follow from inline diagnostics:
   user got no reason. Only validated records still project descriptors, so an
   unavailable package cannot become a pinned source preference.
 
-* Source renderer preferences use two pop-ups instead of one button for each
-  installed descriptor. `Automatic` is a real choice: it calls
-  `removeRendererSourcePreference` instead of pinning a sentinel version.
+* The Source Renderer Preferences section is gone, and the pane is now
+  wiki-agnostic: `RendererSettingsView(host:)` takes no `WikiStoreModel` and no
+  `WikiID`. Installed packages are machine-scoped, so Settings no longer needs a
+  session. The section wrote an exact renderer pin for one source. The reading
+  UI already writes that pin when the user activates a renderer pane
+  (`SourceDetailView.persistRendererPreference`), and its Source/rendered
+  toggle changes presentation. What the section alone could do was roll a
+  source back to an older installed version of a package, and clear a pin.
+  `removeRendererSourcePreference` now has no caller in the app. The store API
+  stays.
 
 ## Verification
 
