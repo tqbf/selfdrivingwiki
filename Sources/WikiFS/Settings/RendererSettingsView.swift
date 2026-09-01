@@ -281,7 +281,7 @@ final class RendererSettingsModel {
         wiki.removeRendererSourcePreference(sourceID: source)
         notice = RendererSettingsNotice(
             severity: .success,
-            message: "This source now uses the automatically resolved renderer.",
+            message: "Cleared the renderer for this source. It opens as Source until you choose one.",
             scope: .pane)
     }
 
@@ -402,6 +402,10 @@ struct RendererSettingsView: View {
                 }
             } header: {
                 Text("Source Renderer Preferences")
+            } footer: {
+                Text("Choose which installed renderer opens one source in this wiki. A source with no renderer opens as Source. This pins an exact version, so a source keeps the renderer you chose after a newer version is installed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
@@ -606,8 +610,10 @@ struct RendererSettingsView: View {
     // MARK: - Source renderer preferences
 
     /// Two pop-ups instead of a list of one-shot buttons: pick the source, then
-    /// pick the version it is pinned to. "Automatic" is a real choice here — it
-    /// clears the preference rather than pinning a sentinel.
+    /// pick the renderer it is pinned to. `None` is a real choice here — it
+    /// clears the preference rather than pinning a sentinel. Clearing does not
+    /// hand the choice back to the matcher: `RendererResolution.preferred`
+    /// returns nil without a stored preference, so the source opens as Source.
     @ViewBuilder
     private func sourceVersionControls(model: RendererSettingsModel) -> some View {
         if let source = model.wiki?.sources.first(where: { $0.id == selectedSourceID }) ?? model.wiki?.sources.first {
@@ -627,7 +633,7 @@ struct RendererSettingsView: View {
             .accessibilityLabel("Source for renderer version selection")
 
             Picker("Renderer", selection: rendererBinding(for: source, model: model)) {
-                Text("Automatic").tag(RendererReference?.none)
+                Text("None (show Source)").tag(RendererReference?.none)
                 ForEach(model.selectableDescriptors, id: \.reference) { descriptor in
                     Text("\(descriptor.displayName) \(descriptor.reference.version.rawValue)")
                         .tag(Optional(descriptor.reference))
@@ -663,7 +669,7 @@ struct RendererSettingsView: View {
     private func pinnedRendererDescription(for source: SourceSummary, model: RendererSettingsModel) -> String {
         guard case let .exact(reference) = model.wiki?.rendererSourcePreference(for: source.id),
               let descriptor = model.selectableDescriptors.first(where: { $0.reference == reference })
-        else { return "Automatic" }
+        else { return "None, opens as Source" }
         return "\(descriptor.displayName) \(reference.version.rawValue)"
     }
 
