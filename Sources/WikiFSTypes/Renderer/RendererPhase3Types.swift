@@ -684,10 +684,18 @@ public enum RendererEmbeddedContent: Codable, Hashable, Sendable {
             self.sourceMarkdownVersionID = sourceMarkdownVersionID
             self.mimeType = mimeType
             if let fileExtension {
-                guard let extensionValue = RendererFileExtension(rawValue: fileExtension.lowercased()) else {
-                    throw RendererValidationError.invalidExtension(fileExtension)
+                let normalized = fileExtension.lowercased()
+                // An empty extension (extensionless source rows) is the
+                // absence of an extension, not an invalid one: normalize to
+                // nil so candidate construction never throws for it.
+                if normalized.isEmpty {
+                    self.fileExtension = nil
+                } else {
+                    guard let extensionValue = RendererFileExtension(rawValue: normalized) else {
+                        throw RendererValidationError.invalidExtension(fileExtension)
+                    }
+                    self.fileExtension = extensionValue.rawValue
                 }
-                self.fileExtension = extensionValue.rawValue
             } else {
                 self.fileExtension = nil
             }

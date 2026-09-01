@@ -60,6 +60,30 @@ struct MermaidRendererPackageMatchingTests {
         #expect(descriptor.matchTier(for: try input(mimeType: nil, fileExtension: "mmd")) == .extensionFallback)
     }
 
+    @Test("a source with an empty extension constructs without throwing or matching")
+    func emptyExtensionIsAbsenceOfExtension() throws {
+        // Extensionless source rows carry ext == "": that must be normalized
+        // to nil (an absent extension), never an invalid extension that drops
+        // the source from renderer candidates.
+        let source = try RendererEmbeddedContent.Source(
+            sourceID: SourceID(rawValue: "01JEMPTYEXTFIXTURE0000001"),
+            sourceVersionID: SourceVersionID(rawValue: "01JEMPTYEXTFIXTURE0000002"),
+            mimeType: try .init(validating: "text/plain"),
+            fileExtension: "",
+            bytes: Data("hello".utf8))
+        #expect(source.fileExtension == nil)
+        // With no real extension and no matching MIME, nothing resolves.
+        let snapshot = try RendererRegistrySnapshot(
+            builtInDescriptors: [],
+            enabledInstalledDescriptors: [descriptor])
+        let input = try RendererMatchInput(
+            mimeType: try RendererMIMEType(validating: "text/plain"),
+            fileExtension: source.fileExtension.flatMap { try RendererFileExtension(validating: $0) },
+            sniffedBytes: Data("hello".utf8),
+            artifactKind: .source)
+        #expect(snapshot.matching(input).isEmpty)
+    }
+
     @Test("unrelated text sources do not select the package")
     func unrelatedTextSourcesDoNotSelect() throws {
         #expect(descriptor.matchTier(for: try input(mimeType: "text/plain", fileExtension: "txt")) == nil)
