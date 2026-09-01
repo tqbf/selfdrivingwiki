@@ -1,0 +1,28 @@
+THIRD-PARTY NOTICES
+
+This package vendors one third-party asset: mermaid.min.js, the Mermaid
+diagram engine, version 11.16.0.
+
+  Name:    Mermaid
+  Version: 11.16.0
+  Source:  https://cdn.jsdelivr.net/npm/mermaid@11.16.0/dist/mermaid.min.js
+  License: MIT (see LICENSE.txt)
+  SHA-256: see the mermaid.min.js record in manifest.json
+
+Mermaid itself embeds further third-party runtime libraries. The
+mermaid.min.js bundle from the official distribution contains, among others:
+
+  - cytoscape (MIT) — used by some diagram types
+  - d3 (BSD-3-Clause) — used for rendering some diagram types
+  - dagre-d3 (MIT) — used by flowchart layout
+  - DOMPurify (Apache-2.0 OR MPL-2.0) — sanitizes rendered output
+  - katex (MIT) — math typesetting
+  - dayjs (MIT) — date handling for gantt charts
+
+The bundle is taken unmodified from the official Mermaid distribution; no
+library inside it is vendored separately, and none is loaded at runtime from
+any network origin. All bytes are package-local assets declared in
+manifest.json.
+
+No other third-party code is present in this package. index.html, viewer.js,
+and validate.js are original to this repository.

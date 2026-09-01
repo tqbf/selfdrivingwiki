@@ -4,9 +4,10 @@ import Testing
 
 /// In-app editor (non-blocking) warning path: `WikiStoreModel.save()` sets
 /// `mermaidSaveWarning` for a broken ```mermaid block, clears it once fixed, and
-/// clears it on a page switch. The validator is injected from the committed repo
-/// bundle (`Resources/mermaid.min.js`), so these run under `swift test` with no
-/// app bundle — the same JavaScriptCore-no-Node story as MermaidValidatorTests.
+/// clears it on a page switch. The validator is injected from the committed
+/// package bundle (`RendererPackages/Mermaid/mermaid.min.js`), so these run
+/// under `swift test` with no app bundle — the same JavaScriptCore-no-Node
+/// story as MermaidValidatorTests.
 @MainActor
 struct MermaidEditorWarningTests {
 
@@ -19,10 +20,10 @@ struct MermaidEditorWarningTests {
     private func repoValidator() throws -> MermaidValidator {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
-            .appendingPathComponent("../../Resources/mermaid.min.js")
+            .appendingPathComponent("../../RendererPackages/Mermaid/mermaid.min.js")
         guard let src = try? String(contentsOf: url, encoding: .utf8), !src.isEmpty,
               let v = MermaidValidator(jsSource: src) else {
-            throw Failure("Resources/mermaid.min.js unavailable or failed to load")
+            throw Failure("RendererPackages/Mermaid/mermaid.min.js unavailable or failed to load")
         }
         return v
     }

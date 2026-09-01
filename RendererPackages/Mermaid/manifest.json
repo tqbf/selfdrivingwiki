@@ -1,0 +1,129 @@
+{
+  "revision": 3,
+  "packageID": "org.selfdrivingwiki.mermaid-readonly",
+  "version": "1.0.0",
+  "descriptors": [
+    {
+      "reference": {
+        "packageID": "org.selfdrivingwiki.mermaid-readonly",
+        "version": "1.0.0",
+        "registrationID": "mermaid"
+      },
+      "displayName": "Mermaid",
+      "implementation": {
+        "webPackage": {
+          "_0": {
+            "path": "index.html"
+          }
+        }
+      },
+      "matchers": [
+        {
+          "normalizedMIME": {
+            "_0": "text/mermaid"
+          }
+        },
+        {
+          "extensionFallback": {
+            "_0": "mmd"
+          }
+        }
+      ],
+      "presentations": [
+        "web"
+      ],
+      "supportedEmbeddingRoles": [
+        "inlineContent",
+        "disclosureRow"
+      ],
+      "fenceClaims": [
+        {
+          "alias": "mermaid",
+          "inlineMIMEType": "text/mermaid",
+          "validation": {
+            "engineAssetPath": "mermaid.min.js",
+            "wrapperAssetPath": "validate.js",
+            "entryFunction": "__sdw_validate_fence"
+          }
+        }
+      ],
+      "approvedAssets": [
+        {
+          "path": "LICENSE.txt",
+          "digest": "e0a621a9d25d93083121345c0b6dc8f46cbcb06a86bd0d0a7f9b5d157c320178"
+        },
+        {
+          "path": "PROVENANCE.md",
+          "digest": "f70667fee6e5e3e6e7fa94bb093f2b50f09a73a035b9c9c035b89282fad6f046"
+        },
+        {
+          "path": "THIRD_PARTY_NOTICES.txt",
+          "digest": "0189070b611441265465da37f943c727f606f5a6e062475df098f7341ba9498a"
+        },
+        {
+          "path": "index.html",
+          "digest": "779f4d56ba0fe22006ddb47dfe9cd469538bb0608857cb286c08847f0e39619f"
+        },
+        {
+          "path": "mermaid.min.js",
+          "digest": "74d7c46dabca328c2294733910a8aa1ed0c37451776e8d5295da38a2b758fb9b"
+        },
+        {
+          "path": "validate.js",
+          "digest": "6307b197b24903c3686042ede892a82a32848e3a8a0f06b3b94ce350bb69449c"
+        },
+        {
+          "path": "viewer.js",
+          "digest": "38b15ea30916504b768e9ddde3d4dc3e0b967c2ae4d8bf8e37d1c4a24740275f"
+        }
+      ],
+      "capabilities": [
+        "inputRead"
+      ],
+      "sizeLimits": {
+        "maximumInputByteCount": 48000,
+        "maximumDecodedByteCount": 48000
+      },
+      "linkPolicy": "none",
+      "accessibility": {
+        "supportsVoiceOver": true,
+        "supportsKeyboardNavigation": true
+      },
+      "compatibility": {
+        "minimumProtocolRevision": 1,
+        "maximumProtocolRevision": 1
+      },
+      "priority": 90
+    }
+  ],
+  "assets": [
+    {
+      "path": "LICENSE.txt",
+      "digest": "e0a621a9d25d93083121345c0b6dc8f46cbcb06a86bd0d0a7f9b5d157c320178"
+    },
+    {
+      "path": "PROVENANCE.md",
+      "digest": "f70667fee6e5e3e6e7fa94bb093f2b50f09a73a035b9c9c035b89282fad6f046"
+    },
+    {
+      "path": "THIRD_PARTY_NOTICES.txt",
+      "digest": "0189070b611441265465da37f943c727f606f5a6e062475df098f7341ba9498a"
+    },
+    {
+      "path": "index.html",
+      "digest": "779f4d56ba0fe22006ddb47dfe9cd469538bb0608857cb286c08847f0e39619f"
+    },
+    {
+      "path": "mermaid.min.js",
+      "digest": "74d7c46dabca328c2294733910a8aa1ed0c37451776e8d5295da38a2b758fb9b"
+    },
+    {
+      "path": "validate.js",
+      "digest": "6307b197b24903c3686042ede892a82a32848e3a8a0f06b3b94ce350bb69449c"
+    },
+    {
+      "path": "viewer.js",
+      "digest": "38b15ea30916504b768e9ddde3d4dc3e0b967c2ae4d8bf8e37d1c4a24740275f"
+    }
+  ]
+}

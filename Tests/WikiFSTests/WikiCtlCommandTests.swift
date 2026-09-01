@@ -973,10 +973,10 @@ struct WikiCtlCommandTests {
     private func repoMermaidValidator() throws -> MermaidValidator {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
-            .appendingPathComponent("../../Resources/mermaid.min.js")
+            .appendingPathComponent("../../RendererPackages/Mermaid/mermaid.min.js")
         guard let src = try? String(contentsOf: url, encoding: .utf8), !src.isEmpty,
               let v = MermaidValidator(jsSource: src) else {
-            throw Failure("Resources/mermaid.min.js unavailable")
+            throw Failure("RendererPackages/Mermaid/mermaid.min.js unavailable")
         }
         return v
     }

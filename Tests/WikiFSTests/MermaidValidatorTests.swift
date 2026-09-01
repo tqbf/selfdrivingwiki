@@ -5,18 +5,19 @@ import Testing
 
 /// Tests for MermaidValidator — block extraction (pure) + live mermaid v11
 /// validation via JavaScriptCore. The validator loads the committed vendored
-/// mermaid bundle (`Resources/mermaid.min.js`) — the SAME library the reader
-/// uses to render — which is the proof the feature runs with NO Node installed:
-/// these tests execute in the `swift test` process, which has no app bundle and
-/// no Node — only the macOS JavaScriptCore system framework.
+/// mermaid bundle (`RendererPackages/Mermaid/mermaid.min.js`) — the SAME
+/// library the renderer package uses — which is the proof the feature runs
+/// with NO Node installed: these tests execute in the `swift test` process,
+/// which has no app bundle and no Node — only the macOS JavaScriptCore system
+/// framework.
 struct MermaidValidatorTests {
 
     /// Resolve the committed bundle relative to this test file
-    /// (Tests/WikiFSTests → ../../Resources/mermaid.min.js).
+    /// (Tests/WikiFSTests → ../../RendererPackages/Mermaid/mermaid.min.js).
     private func bundleSource() -> String? {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
-            .appendingPathComponent("../../Resources/mermaid.min.js")
+            .appendingPathComponent("../../RendererPackages/Mermaid/mermaid.min.js")
         return try? String(contentsOf: url, encoding: .utf8)
     }
 
