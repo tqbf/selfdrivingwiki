@@ -259,8 +259,8 @@ else
 fi
 # Semantic vector search is now pure Swift (`VectorCosine` in WikiFSSearch —
 # issue #628): no C extension to copy, no per-connection registration.
-# Mermaid is no longer bundled: it ships as the reviewed renderer package at
-# RendererPackages/Mermaid, imported per machine through Settings → Renderers.
+# Diagram formats are not bundled: they ship as reviewed renderer packages
+# under RendererPackages/, imported per machine through Settings → Renderers.
 # Vendored markdownlint (cosmetic markdown linter), bundled to a single
 # self-contained IIFE. Copied as markdownlint.js so the loader's name/ext lookup
 # is simple. Runs in a JavaScriptCore JSContext at save time — no Node at runtime.

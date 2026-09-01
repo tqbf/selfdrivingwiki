@@ -121,7 +121,7 @@ struct PageDetailView: View {
 
             Divider().opacity(PageEditorMetrics.dividerOpacity)
 
-            // Non-blocking hints: a saved draft with a broken ```mermaid block
+            // Non-blocking hints: a saved draft with a broken claimed fence
             // and/or cosmetic markdown issues. Surfaced on save; clear once the
             // issues are fixed and re-saved. Combined into a single banner when
             // both are present to avoid stacked notification noise.

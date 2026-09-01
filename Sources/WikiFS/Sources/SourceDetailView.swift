@@ -984,9 +984,9 @@ struct SourceDetailView: View {
     /// Mirrors the inline Zotero tag's styling.
     ///
     /// Two-dimensional labels (issue #644): the File branch becomes
-    /// "File / {content type}" (e.g. "File / Mermaid", "File / PDF") since a
-    /// drag-drop can carry anything. URL/media providers and markdown folders
-    /// imply their content type, so their labels stay single-dimensional.
+    /// "File / {content type}" (e.g. "File / PDF") since a drag-drop can
+    /// carry anything. URL/media providers and markdown folders imply their
+    /// content type, so their labels stay single-dimensional.
     ///
     /// The per-provider label/icon/helpVerb are sourced from
     /// `SourceProvider.displayLabel` / `.systemImage` / `.helpVerb` so the
@@ -1070,10 +1070,10 @@ struct SourceDetailView: View {
     /// `PageDetailView`'s `contentAndOutline` shape. Without it, the inner
     /// `WikiReaderView` (an `NSViewRepresentable` wrapping a `WKWebView`)
     /// reports no intrinsic content size and SwiftUI leaves the layout
-    /// indeterminate — for pure Mermaid sources, where PR #648's
-    /// `isOutlineApplicable` guard also removed the always-present
+    /// indeterminate — for sources whose outline is hidden (PR #648's
+    /// `isOutlineApplicable` guard removed the always-present
     /// `PageOutlineView` sibling that previously helped pin the `HStack`'s
-    /// vertical extent, the indeterminate layout leaks into the header area.
+    /// vertical extent), the indeterminate layout leaks into the header area.
     /// The header's Show in List / Share / Reveal in Finder buttons render
     /// above, but no longer receive their click. Issue #656.
     @ViewBuilder

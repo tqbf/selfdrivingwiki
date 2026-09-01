@@ -74,7 +74,7 @@
         },
         {
           "path": "viewer.js",
-          "digest": "38b15ea30916504b768e9ddde3d4dc3e0b967c2ae4d8bf8e37d1c4a24740275f"
+          "digest": "b0aa8c42f75a45261948ded1316405402440a65e3be22427d4808efbb9f318fe"
         }
       ],
       "capabilities": [
@@ -123,7 +123,7 @@
     },
     {
       "path": "viewer.js",
-      "digest": "38b15ea30916504b768e9ddde3d4dc3e0b967c2ae4d8bf8e37d1c4a24740275f"
+      "digest": "b0aa8c42f75a45261948ded1316405402440a65e3be22427d4808efbb9f318fe"
     }
   ]
 }

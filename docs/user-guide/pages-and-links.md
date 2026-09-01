@@ -17,7 +17,7 @@ Markdown. You see:
 - **Wiki links** — clickable, styled links that navigate within the app.
 - **External links** — open in your default browser (shown with a ↗ glyph).
 - **Images and embeds** — inline media (images, PDFs, videos, audio).
-- **Mermaid diagrams** — flowcharts and sequence diagrams rendered as SVG.
+- **Mermaid diagrams** — flowcharts and sequence diagrams rendered as SVG through the imported Mermaid renderer package.
 - **Footnotes** — superscript numbers that link to footnote definitions at the bottom.
 
 ### The outline

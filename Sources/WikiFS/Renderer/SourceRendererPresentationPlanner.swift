@@ -201,9 +201,8 @@ struct SourceRendererPresentationPlanner: Sendable {
 
     nonisolated static func standaloneDiagramSource(_ source: SourceSummary) -> Bool {
         // JSON Canvas keeps its native built-in renderer and the reader-
-        // projected presentation it needs; the Mermaid terms are gone with
-        // the built-in renderer (a .mmd source presents like any other
-        // renderer-package text source).
+        // projected presentation it needs; diagram text formats present like
+        // any other renderer-package text source.
         source.ext.lowercased() == "canvas"
     }
 

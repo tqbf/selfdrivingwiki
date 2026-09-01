@@ -1616,7 +1616,7 @@ public final class WikiStoreModel {
     @ObservationIgnored private var markdownWarningTask: Task<Void, Never>?
 
     /// Lint `body` for cosmetic markdown issues and set `markdownSaveWarning`.
-    /// Unlike the mermaid scan (a cheap fence line-scan), markdownlint runs all
+    /// Unlike the fence validation (a cheap line scan), markdownlint runs all
     /// ~20 cosmetic rules over the whole body — so the computation runs on a
     /// background `Task` (the linter's `NSLock` makes it thread-safe) and the
     /// result is set via a `@MainActor` hop to avoid UI jank on large pages.

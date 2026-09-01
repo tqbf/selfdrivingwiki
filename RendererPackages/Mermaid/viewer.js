@@ -2,9 +2,11 @@
 // source once and mounts the resulting static SVG.
 //
 // The pinned mermaid engine (mermaid.min.js) is a UMD/IIFE bundle loaded
-// before this file; it registers globalThis.mermaid. The engine is
-// initialized with startOnLoad disabled and the strict security level, then
-// asked to render the source into SVG bytes inside this document.
+// before this file; it registers globalThis.mermaid. The driver follows the
+// engine's own document contract: the diagram source is placed in a
+// `<div class="mermaid">` and handed to `mermaid.run({ nodes: [div] })`,
+// which measures and replaces the div's content with the rendered SVG. The
+// strict security level keeps the output inert.
 //
 // Appearance follows the system: the theme is chosen from the
 // prefers-color-scheme media query and the diagram is re-rendered when the
@@ -15,6 +17,7 @@
 
   const requestID = "mermaid-initial-input";
   const renderBudgetMilliseconds = 10000;
+  const diagramClass = "mermaid";
 
   const statusRegion = document.getElementById("status");
   const errorRegion = document.getElementById("error");
@@ -95,20 +98,22 @@
     });
   }
 
-  async function renderInto(element, engine, source, theme) {
-    const { svg } = await engine.render("diagram-render", source, {
-      theme: theme,
-      securityLevel: "strict",
+  // The engine's own document contract: seed a `<div class="mermaid">` with
+  // the source and let `run` replace its content with the measured SVG.
+  function renderDiagram(engine, source, theme) {
+    engine.initialize({ startOnLoad: false, securityLevel: "strict", theme: theme });
+    const holder = document.createElement("div");
+    holder.className = diagramClass;
+    holder.textContent = source;
+    diagramRegion.replaceChildren(holder);
+    return engine.run({ nodes: [holder] }).then(function () {
+      const svg = holder.querySelector("svg");
+      if (!svg) {
+        throw new Error("The rendered diagram did not contain an SVG.");
+      }
+      svg.setAttribute("role", "img");
+      svg.setAttribute("aria-label", "Mermaid diagram");
     });
-    const holder = document.createElement("template");
-    holder.innerHTML = svg;
-    const mounted = holder.content.firstElementChild;
-    if (!mounted || mounted.tagName.toLowerCase() !== "svg") {
-      throw new Error("The rendered diagram did not contain an SVG.");
-    }
-    mounted.setAttribute("role", "img");
-    mounted.setAttribute("aria-label", "Mermaid diagram");
-    element.replaceChildren(mounted);
   }
 
   async function run() {
@@ -116,16 +121,15 @@
       throw new Error("The mermaid engine is unavailable.");
     }
     const engine = globalThis.mermaid;
-    engine.initialize({ startOnLoad: false, securityLevel: "strict" });
     showStatus("Rendering the diagram.");
     const source = await readAuthorizedSource();
-    await renderInto(diagramRegion, engine, source, currentTheme());
+    await renderDiagram(engine, source, currentTheme());
 
     // Keep the pane in step with system appearance changes. The host has no
     // hand in this; the driver owns its theme lifecycle.
     const appearance = window.matchMedia("(prefers-color-scheme: dark)");
     appearance.addEventListener("change", () => {
-      renderInto(diagramRegion, engine, source, currentTheme()).catch(() => {
+      renderDiagram(engine, source, currentTheme()).catch(() => {
         // A theme re-render failure leaves the last successful diagram in
         // place; the original render already proved the source valid.
       });

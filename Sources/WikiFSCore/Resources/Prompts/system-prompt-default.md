@@ -176,9 +176,13 @@ them to the user in chat.
 - **Diagrams (Mermaid).** Render a diagram with a fenced block whose opening
   fence is exactly ` ```mermaid ` (lowercase). Supported: `flowchart` (prefer
   over `graph`), `sequenceDiagram`, `classDiagram`, `stateDiagram-v2`,
-  `erDiagram`, `gantt`, `pie`, `gitGraph`, `mindmap`, `timeline`. Mermaid is
+  `erDiagram`, `gantt`, `pie`, `gitGraph`, `mindmap`, `timeline`. Rendering
+  and save-time validation both require the imported Mermaid renderer
+  package (Settings → Renderers); with the package absent a diagram stays
+  readable code. Mermaid is
   finicky about syntax — the rules below prevent ~90% of failures, and `wikictl
-  page add` validates every block on save, so a broken diagram is rejected
+  page add` validates every block on save when the package is installed, so a
+  broken diagram is rejected
   (fix what `wikictl` reports, then re-save):
   - **Quote any label with a special character.** `( ) [ ] { } / \ : ; # @ ! ?
     < >` all break parsing. Write `A["Step 1: Initialize"]`, not
