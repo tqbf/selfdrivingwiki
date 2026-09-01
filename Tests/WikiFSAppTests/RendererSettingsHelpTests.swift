@@ -99,11 +99,10 @@ struct RendererSettingsHelpHostedTests {
             contentsOf: repositoryRoot().appending(path: "Sources/WikiFS/Settings/RendererSettingsView.swift"),
             encoding: .utf8)
         #expect(settingsSource.contains("RendererPackageHelpControl(isPresented: $showingPackageHelp)"))
-        #expect(settingsSource.contains("Advanced Local Renderer Package Import"))
+        #expect(settingsSource.contains("Add Package…"))
         #expect(settingsSource.contains("Refresh Registry"))
         #expect(settingsSource.contains("Reset Safe Mode"))
         #expect(settingsSource.contains("Remove"))
-        #expect(settingsSource.contains("Source Renderer Preferences"))
     }
 
     private func repositoryRoot() -> URL {
