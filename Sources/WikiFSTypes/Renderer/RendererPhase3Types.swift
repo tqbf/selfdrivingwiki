@@ -223,33 +223,109 @@ public struct RendererFenceAlias: RawRepresentable, Codable, Hashable, Sendable,
     public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
 }
 
-/// One alias a renderer descriptor claims for Markdown rich fences. A claim
-/// carries exactly one fact beyond the alias: the MIME type the fence bytes are
-/// handed to the renderer as. Every other presentation string derives from the
-/// declaring descriptor's display name.
-public struct RendererFenceClaim: Codable, Hashable, Sendable {
-    public let alias: RendererFenceAlias
-    public let inlineMIMEType: RendererMIMEType
+/// A package-declared fence-syntax validation contract (manifest revision 3).
+/// The engine asset provides the format's parser, the wrapper asset defines
+/// the entry function, and the host's generic validator calls
+/// `entryFunction(text)` — all format knowledge stays in package bytes.
+public struct RendererFenceValidationDeclaration: Codable, Hashable, Sendable {
+    public static let entryFunctionMaximumLength = 128
 
-    public init(alias: RendererFenceAlias, inlineMIMEType: RendererMIMEType) {
-        self.alias = alias
-        self.inlineMIMEType = inlineMIMEType
+    public let engineAssetPath: RendererRelativePath
+    public let wrapperAssetPath: RendererRelativePath
+    public let entryFunction: String
+
+    public init(
+        engineAssetPath: RendererRelativePath,
+        wrapperAssetPath: RendererRelativePath,
+        entryFunction: String
+    ) throws {
+        // The engine and the wrapper must be two distinct assets: one is the
+        // upstream engine, the other the reviewed entry contract, and folding
+        // them would let an engine edit masquerade as a reviewed wrapper.
+        guard engineAssetPath != wrapperAssetPath else {
+            throw RendererValidationError.fenceValidationAssetsNotDistinct
+        }
+        guard Self.isValidEntryFunction(entryFunction) else {
+            throw RendererValidationError.fenceValidationEntryFunctionInvalid
+        }
+        self.engineAssetPath = engineAssetPath
+        self.wrapperAssetPath = wrapperAssetPath
+        self.entryFunction = entryFunction
+    }
+
+    /// A JavaScript identifier: `^[A-Za-z_$][A-Za-z0-9_$]*$`. The entry
+    /// function is looked up by name on the evaluated global object, so a
+    /// dotted path or an expression here would be code injection surface.
+    public static func isValidEntryFunction(_ value: String) -> Bool {
+        value.isEmpty == false
+            && value.count <= entryFunctionMaximumLength
+            && value.range(of: "^[A-Za-z_$][A-Za-z0-9_$]*$", options: .regularExpression) != nil
     }
 
     private enum CodingKeys: String, CodingKey {
-        case alias, inlineMIMEType
+        case engineAssetPath, wrapperAssetPath, entryFunction
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            engineAssetPath: container.decode(RendererRelativePath.self, forKey: .engineAssetPath),
+            wrapperAssetPath: container.decode(RendererRelativePath.self, forKey: .wrapperAssetPath),
+            entryFunction: container.decode(String.self, forKey: .entryFunction))
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(engineAssetPath, forKey: .engineAssetPath)
+        try container.encode(wrapperAssetPath, forKey: .wrapperAssetPath)
+        try container.encode(entryFunction, forKey: .entryFunction)
+    }
+}
+
+/// One alias a renderer descriptor claims for Markdown rich fences. A claim
+/// carries the MIME type the fence bytes are handed to the renderer as, and
+/// at revision 3 may declare a fence-syntax validation contract. Every other
+/// presentation string derives from the declaring descriptor's display name.
+public struct RendererFenceClaim: Codable, Hashable, Sendable {
+    public let alias: RendererFenceAlias
+    public let inlineMIMEType: RendererMIMEType
+    /// Package-declared fence-syntax validation (revision-3 manifests only; a
+    /// pre-revision-3 manifest carrying one fails closed in ``RendererManifest``).
+    public let validation: RendererFenceValidationDeclaration?
+
+    public var hasValidation: Bool { validation != nil }
+
+    public init(
+        alias: RendererFenceAlias,
+        inlineMIMEType: RendererMIMEType,
+        validation: RendererFenceValidationDeclaration? = nil
+    ) {
+        self.alias = alias
+        self.inlineMIMEType = inlineMIMEType
+        self.validation = validation
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case alias, inlineMIMEType, validation
     }
 
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         self.alias = try container.decode(RendererFenceAlias.self, forKey: .alias)
         self.inlineMIMEType = try container.decode(RendererMIMEType.self, forKey: .inlineMIMEType)
+        self.validation = try container.decodeIfPresent(RendererFenceValidationDeclaration.self, forKey: .validation)
     }
 
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(alias, forKey: .alias)
         try container.encode(inlineMIMEType, forKey: .inlineMIMEType)
+        // Validation-less claims must not gain a key: revision-2 canonical
+        // bytes and package hashes are stability contracts for already-
+        // reviewed packages.
+        if let validation {
+            try container.encode(validation, forKey: .validation)
+        }
     }
 }
 

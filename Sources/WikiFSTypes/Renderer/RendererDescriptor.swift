@@ -48,6 +48,9 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
     /// ``hasExplicitEmbeddingRoles`` so canonical emission omits the key for
     /// claim-less manifests and their canonical bytes stay stable.
     public var hasFenceClaims: Bool { fenceClaims.isEmpty == false }
+    /// True when any claim declares a fence-syntax validation contract. The
+    /// manifest layer uses this for the revision-3 fail-closed gate.
+    public var hasFenceValidation: Bool { fenceClaims.contains { $0.hasValidation } }
     public let approvedAssets: [RendererAsset]
     public let capabilities: Set<RendererCapability>
     public let sizeLimits: RendererSizeLimits
@@ -109,6 +112,17 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
                 throw RendererValidationError.invalidRelativePath("duplicate asset validation")
             }
             throw RendererValidationError.duplicateAsset(duplicate)
+        }
+        // A declared fence-validation contract must point at assets this
+        // descriptor approves: the engine and wrapper are renderer inputs,
+        // so they live under the same approval discipline as every other
+        // package byte the descriptor consumes.
+        let approvedPaths = Set(assets.map(\.path))
+        for claim in claims {
+            guard let validation = claim.validation else { continue }
+            for path in [validation.engineAssetPath, validation.wrapperAssetPath] where approvedPaths.contains(path) == false {
+                throw RendererValidationError.fenceValidationAssetNotApproved(path)
+            }
         }
         switch implementation {
         case .builtIn:
