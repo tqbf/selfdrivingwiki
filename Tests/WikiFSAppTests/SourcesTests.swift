@@ -4,7 +4,7 @@ import CoreGraphics
 import Foundation
 import SQLite3
 import Testing
-import WikiFS
+@testable import WikiFS
 @testable import WikiFSCore
 
 /// Phase 5 file-ingestion tests: ingest/list/get/delete, byte-identical content
@@ -155,12 +155,12 @@ struct SourcesTests {
         #expect(source.mimeType == MimeType.mermaid)
     }
 
-    /// The gap that shipped #620: PR #601's pure-detector tests passed
-    /// (`isMermaidSource(mime: nil, filename: "flow.mmd", content: nil)` → true)
-    /// but no test wired the *content path* — a nil-MIME `.mmd` source going
-    /// through `addSource` → `sourceContent` → `String(data:encoding:)` →
-    /// `MermaidSourceDetector.renderableMarkdown` to produce a fence the
-    /// Rendered tab actually renders. This test closes that gap.
+    /// The gap that shipped #620: PR #601's pure-detector tests passed but no
+    /// test wired the *content path* — a nil-MIME `.mmd` source ingesting
+    /// with a resolvable MIME and readable bytes. This test closes that gap.
+    /// Post renderer-package refactor: the ingestion facts (MIME, bytes,
+    /// text presentability) are unchanged; the presentation is now the
+    /// format-neutral code-block wrap instead of a host-side diagram fence.
     @Test func nilMimeMmdSourceRoundTripsThroughViewContentPath() throws {
         let store = try tempStore()
         let rawDiagram = "flowchart TD\n    A --> B\n    B --> C\n"
@@ -169,7 +169,7 @@ struct SourcesTests {
 
         // 1. Fix #1 — stored mime is now `text/mermaid` (was NULL pre-fix),
         //    so `SourceDetailView.isMarkdownNative` (`MimeType.isText`) is
-        //    true and the existing `if isMarkdownNative` branch in
+        //    true and the `if isMarkdownNative` branch in
         //    `currentMarkdownContent` runs.
         #expect(summary.mimeType == MimeType.mermaid)
         #expect(MimeType.isText(summary.mimeType) == true)
@@ -180,37 +180,26 @@ struct SourcesTests {
         let decoded = try #require(String(data: bytes, encoding: .utf8))
         #expect(decoded == rawDiagram)
 
-        // 3. With content loaded, `MermaidSourceDetector.isMermaidSource`
-        //    (the view's `isMermaidSource` computed property — drives the
-        //    tab picker) returns true for this source.
-        #expect(MermaidSourceDetector.isMermaidSource(
-            mimeType: summary.mimeType,
-            filename: summary.filename,
-            content: decoded) == true)
+        // 3. The content-classification facts the view's presentation gates
+        //    derive from: text-presentable, not a Markdown document, and
+        //    byte-authoritative through the planner.
+        #expect(MimeType.isSourceTextPresentable(summary.mimeType))
+        #expect(!MimeType.isMarkdown(summary.mimeType))
+        #expect(SourceRendererPresentationPlanner.usesMarkdownSourcePresentation(
+            for: summary, boundedBytes: bytes, currentMarkdown: nil))
 
-        // 4. And the cheap mime+filename arms alone (no content) also return
-        //    true — this is the gate fix #2's defense-in-depth branch uses to
-        //    decide whether to read bytes for a source whose MIME is still
-        //    nil (e.g. a pre-fix row that wasn't re-ingested).
-        #expect(MermaidSourceDetector.isMermaidSource(
-            mimeType: summary.mimeType,
-            filename: summary.filename,
-            content: nil) == true)
-
-        // 5. `renderableMarkdown(from:)` must wrap the standalone diagram in a
-        //    fenced ```mermaid block so `WikiReaderView`'s render pipeline
-        //    inlines `mermaid.min.js` + the bootstrap. This is the exact
-        //    transform `SourceDetailView.renderedMermaidContent` feeds the
-        //    reader; without it, the Rendered tab shows "No Diagram".
-        let renderable = try #require(
-            MermaidSourceDetector.renderableMarkdown(from: decoded))
-        #expect(renderable == "```mermaid\nflowchart TD\n    A --> B\n    B --> C\n```")
-        #expect(renderable.contains("```mermaid\n") == true)
+        // 4. The Source tab presents the raw diagram bytes as a neutral code
+        //    block (4-backtick fence, no language tag, no renderer claim) —
+        //    the same wrap for every non-Markdown text source.
+        let sourceMarkdown = SourceRendererPresentationPlanner.sourceMarkdown(
+            for: summary, content: decoded)
+        #expect(sourceMarkdown == "````\nflowchart TD\n    A --> B\n    B --> C\n````")
     }
 
     /// Regression: `.md` sources carrying a fenced mermaid block are NOT
-    /// affected by fix #1 — they continue to resolve to a Markdown MIME via
-    /// UTType and stay on the existing `isMarkdownNative` path.
+    /// affected by the `.mmd` MIME map — they resolve to a Markdown MIME via
+    /// UTType and stay on the native-Markdown presentation path (the fence
+    /// renders as a claimed disclosure row in the reader).
     @Test func markdownWithEmbeddedMermaidRemainsUnaffected() throws {
         let store = try tempStore()
         let md = """
@@ -222,17 +211,14 @@ struct SourcesTests {
         ```
         """
         let source = try store.addSource(filename: "arch.md", data: Data(md.utf8))
-        // The `.md` extension resolves via UTType, NOT the new .mmd map.
+        // The `.md` extension resolves via UTType, NOT the .mmd map.
         #expect(source.mimeType?.hasPrefix("text/") == true)
         #expect(source.mimeType?.contains("markdown") == true)
         #expect(source.mimeType != MimeType.mermaid)
 
-        // Embedded-mermaid markdown is still detected (content-scan arm).
-        #expect(MermaidSourceDetector.isMermaidSource(
-            mimeType: source.mimeType, filename: source.filename, content: md) == true)
-        // And `renderableMarkdown` passes the doc through unchanged (so headings
-        // and outline survive).
-        #expect(MermaidSourceDetector.renderableMarkdown(from: md) == md)
+        // A native Markdown document keeps its rendered-document presentation
+        // (no code-block wrap), so headings and the outline survive.
+        #expect(SourceRendererPresentationPlanner.sourceMarkdown(for: source, content: md) == md)
     }
 
     // MARK: - Zotero provenance (v8 → v9)

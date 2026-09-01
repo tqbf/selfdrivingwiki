@@ -168,7 +168,7 @@ public final class FenceSyntaxValidator: @unchecked Sendable {
     public static func blocks(in markdown: String, alias: RendererFenceAlias) -> [String] {
         // Normalize line endings first: CRLF (and lone CR, e.g. from pasting)
         // would otherwise leave a trailing `\r` on each line, making the info
-        // string `"mermaid\r"` ≠ `"mermaid"` and silently skipping the block —
+        // string an exact-match miss and silently skipping the block —
         // evading the hard wikictl guarantee.
         let normalized = markdown
             .replacingOccurrences(of: "\r\n", with: "\n")

@@ -372,34 +372,51 @@ struct SourceDetailView: View {
         isMarkdownNative || hasMarkdown
     }
 
-    /// `true` when this source is a STANDALONE Mermaid diagram (`.mmd` /
-    /// `text/mermaid` / `text/x-mermaid`) — as opposed to a markdown document
-    /// that merely CONTAINS a fenced ```mermaid block. The outline parses
-    /// markdown headings, which a pure diagram source has none of; suppress
-    /// the outline sidebar and its toggle for these sources (issue #642).
-    /// Uses mime + extension (not a content scan) so it's stable before the
-    /// raw bytes load.
-    private var isPureMermaidSource: Bool {
-        if MimeType.isMermaid(file.mimeType) { return true }
-        let ext = file.ext.lowercased()
-        return ext == MermaidSourceDetector.mermaidExtension || ext == "mermaid"
+    /// Whether the Source tab presents a rendered Markdown document — the
+    /// only presentation whose parsed headings make an outline meaningful.
+    /// Derived from the presentation the planner produces, not a format
+    /// branch: native Markdown documents qualify; other text sources (JSON,
+    /// XML, diagrams, package text formats) render as code blocks with no
+    /// headings to outline.
+    private var isMarkdownDocumentPresentation: Bool {
+        Self.outlineApplicablePresentation(
+            mimeType: file.mimeType,
+            ext: file.ext,
+            hasMarkdown: hasMarkdown)
     }
 
-    /// JSON Canvas exposes its own spatial outline inside the native renderer.
-    /// Do not show an empty Markdown-heading outline beside it.
+    /// The format-neutral outline derivation: the outline parses Markdown
+    /// headings, so it applies only when the Source tab shows a rendered
+    /// Markdown document (native Markdown bytes or an extraction head). Pure
+    /// spatial-canvas sources carry their own outline inside the renderer.
+    nonisolated static func outlineApplicablePresentation(
+        mimeType: String?,
+        ext: String,
+        hasMarkdown: Bool
+    ) -> Bool {
+        if ext.lowercased() == "canvas" { return false }
+        return hasMarkdown || MimeType.isMarkdown(mimeType)
+    }
+
+    /// Spatial-canvas sources (still a native built-in renderer) expose their
+    /// own outline inside that renderer. Do not show an empty Markdown-heading
+    /// outline beside it.
     private var isPureJSONCanvasSource: Bool {
         file.ext.lowercased() == "canvas"
     }
 
-    /// `true` when the outline sidebar is meaningful for this source: there's
-    /// markdown content AND it isn't a pure Mermaid diagram. Gates both the
-    /// outline pane and its toggle button so a `.mmd` source never shows a
-    /// useless empty outline (and never gets stuck with the pane open and no
-    /// way to close it — `isOutlineExpanded` is persisted `@AppStorage`, so
-    /// without this guard it leaks from a previous markdown source).
+    /// `true` when the outline sidebar is meaningful for this source: the
+    /// Source tab shows a rendered Markdown document with parsed headings.
+    /// A `.mmd` source (or JSON, XML, any package text format) renders as a
+    /// code block with no headings, so the outline stays hidden — the same
+    /// derived path for every non-Markdown presentation. Gates both the
+    /// outline pane and its toggle button so a diagram source never shows a
+    /// useless empty outline (and never gets stuck with the pane open and
+    /// no way to close it — `isOutlineExpanded` is persisted `@AppStorage`,
+    /// so without this guard it leaks from a previous markdown source).
     /// Issue #642.
     private var isOutlineApplicable: Bool {
-        !isPureMermaidSource && !isPureJSONCanvasSource && isMarkdownEditable
+        !isPureJSONCanvasSource && isMarkdownDocumentPresentation
     }
 
     private var displayName: String {
@@ -1401,13 +1418,11 @@ struct SourceDetailView: View {
                 .zoomShortcuts($readerZoom)
                 .zoomScroll($readerZoom)
         } else if let content = currentMarkdownContent {
-            // A native text source with no processed-markdown head (e.g. a
-            // `.mmd` Mermaid diagram) renders its raw bytes as readable text —
-            // the source code for a diagram, or the body of a `.txt`. Binary
-            // sources never reach here (they hit `binaryFallback`).
-            let sourceMarkdown = SourceRendererPresentationPlanner.standaloneDiagramSource(file)
-                ? MermaidSourceDetector.codeBlockMarkdown(from: content) ?? content
-                : SourceRendererPresentationPlanner.sourceMarkdown(for: file, content: content)
+            // A native text source with no processed-markdown head renders its
+            // raw bytes as a readable code block — the source code for a
+            // diagram, the body of a `.txt`. Binary sources never reach here
+            // (they hit `binaryFallback`). The wrap is format-neutral.
+            let sourceMarkdown = SourceRendererPresentationPlanner.sourceMarkdown(for: file, content: content)
             WikiReaderView(markdown: sourceMarkdown,
                             currentSelection: store.selection,
                             store: store,

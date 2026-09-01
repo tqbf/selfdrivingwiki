@@ -143,9 +143,11 @@ import WikiFSTypes
         let sourceMarkdown = SourceRendererPresentationPlanner.sourceMarkdown(
             for: source,
             content: xml)
-        #expect(sourceMarkdown.hasPrefix("    <svg"))
-        #expect(sourceMarkdown.contains("\n      <circle"))
-        #expect(sourceMarkdown.hasSuffix("\n    </svg>"))
+        // Every non-Markdown text source renders as a neutral code block:
+        // the SVG markup is readable, inert, and never parsed as Markdown.
+        #expect(sourceMarkdown.hasPrefix("````\n<svg"))
+        #expect(sourceMarkdown.contains("<circle cx=\"5\" cy=\"5\" r=\"4\"/>"))
+        #expect(sourceMarkdown.hasSuffix("</svg>\n````"))
     }
 
     @Test("Generic XML uses source text presentation without a renderer")
@@ -229,7 +231,10 @@ import WikiFSTypes
             mimeType: MimeType.json,
             byteSize: content.utf8.count)
 
-        #expect(SourceRendererPresentationPlanner.standaloneDiagramSource(source))
+        // Excalidraw is a renderer-package source now: no reader-projected
+        // diagram tab, just the readable code-block presentation plus the
+        // package renderer pane from the generic lifecycle.
+        #expect(!SourceRendererPresentationPlanner.standaloneDiagramSource(source))
         #expect(SourceRendererPresentationPlanner.usesMarkdownSourcePresentation(
             for: source,
             boundedBytes: Data(content.utf8),
@@ -321,12 +326,17 @@ import WikiFSTypes
             inputs: try Self.factoryInputs(sourceBytes: unsafeLinkData)) == nil)
     }
 
-    @Test("Characterization: NULL-MIME standalone Mermaid uses Source markdown presentation")
-    func nullMIMEStandaloneMermaidUsesSourceMarkdownPresentation() {
+    @Test("Characterization: NULL-MIME standalone diagram bytes stay readable")
+    func nullMIMEStandaloneDiagramBytesStayReadable() {
+        // Pre-#620 rows can carry a NULL MIME; the readable Source
+        // presentation is byte-authoritative (the planner's text detector
+        // ignores the missing MIME), so the diagram bytes still render as a
+        // code block.
         let source = fixtureSource(filename: "diagram.mmd", ext: "mmd", mimeType: nil, byteSize: 12)
 
         #expect(SourceRendererPresentationPlanner.usesMarkdownSourcePresentation(
             for: source,
+            boundedBytes: Data("flowchart LR".utf8),
             currentMarkdown: nil))
     }
 
@@ -465,16 +475,23 @@ import WikiFSTypes
         #expect(result.tabs == [.html])
     }
 
-    @Test("Mermaid exposes Reader and Rendered tabs")
-    func characterizesMermaid() {
+    @Test("A standalone .mmd source presents like other package text sources")
+    func characterizesStandaloneDiagram() {
+        // No reader-projected diagram tab: the Source tab shows the code
+        // block, and the package renderer pane comes from the generic
+        // presentation lifecycle when the package is installed. The
+        // characterize helper keys its content area on stored metadata; a
+        // NULL-MIME legacy row falls to the binary fallback there, while the
+        // view's readable path is byte-authoritative (the other test pins
+        // that).
         let result = SourceDetailPresentationCharacterization.characterize(
             source: fixtureSource(filename: "diagram.mmd", ext: "mmd", mimeType: nil, byteSize: 12),
             boundedBytes: Data("flowchart LR".utf8),
             currentMarkdown: "flowchart LR",
             hasProcessedMarkdown: false,
             origin: nil)
-        #expect(result.contentArea == .tabbed)
-        #expect(result.tabs == [.reader, .rendered])
+        #expect(result.contentArea == .binaryFallback)
+        #expect(result.tabs == [])
     }
 
     @Test("Media with transcript exposes Reader and Media tabs")
