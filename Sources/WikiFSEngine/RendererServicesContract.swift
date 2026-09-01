@@ -35,7 +35,6 @@ public enum RendererServicesError: Error, Equatable, Sendable, LocalizedError {
     case unavailable
     case disposed
     case validationFailed
-    case unexpectedBundledIdentity
     case persistenceFailed
     case retryLimitReached
 
@@ -44,7 +43,6 @@ public enum RendererServicesError: Error, Equatable, Sendable, LocalizedError {
         case .unavailable: "Renderer services are unavailable."
         case .disposed: "The renderer runtime has stopped."
         case .validationFailed: "The renderer package could not be validated."
-        case .unexpectedBundledIdentity: "The bundled renderer identity was unexpected."
         case .persistenceFailed: "The renderer registry could not be updated."
         case .retryLimitReached: "The renderer registry changed too many times."
         }
@@ -53,7 +51,6 @@ public enum RendererServicesError: Error, Equatable, Sendable, LocalizedError {
 
 public protocol RendererServices: Sendable {
     func prepareCurrentRegistry() async throws -> RendererPreparation
-    func bootstrapBundledPackage() async throws -> RendererPreparation
     func installLocalDirectory(_ directory: URL) async throws -> RendererPreparation
     func removePackage(
         packageID: RendererPackageID,
@@ -69,10 +66,6 @@ public struct UnavailableRendererServices: RendererServices {
     public init() {}
 
     public func prepareCurrentRegistry() async throws -> RendererPreparation {
-        throw RendererServicesError.unavailable
-    }
-
-    public func bootstrapBundledPackage() async throws -> RendererPreparation {
         throw RendererServicesError.unavailable
     }
 

@@ -42,7 +42,7 @@ struct RendererSettingsManagementViewTests {
         #expect(source.contains("RendererSettingsPackagePicker.localImportAfterMessage"))
         #expect(source.contains("RendererSettingsPackagePicker.v1FormatMessage"))
         #expect(source.contains("The renderer package could not be validated or installed."))
-        #expect(!appSource.contains(".task { await installedRendererHost.bootstrapBundledRendererPackages() }"))
+        #expect(!appSource.contains("bootstrapBundledRendererPackages"))
         #expect(!source.contains("Install Renderer Directory"))
         #expect(!source.contains("No Renderer Directories"))
         #expect(!source.contains("The renderer directory could not be validated or installed."))
@@ -94,17 +94,10 @@ struct RendererSettingsManagementViewTests {
             catch { Issue.record("Renderer settings install fixture cleanup failed.") }
         }
         let layout = try RendererPackageStoreLayout(appGroupContainerRoot: root)
-        let handle = try await RendererRuntimeFactory(
-            layout: layout,
-            bundledPackageSource: { BundledRendererPackages.excalidrawResourceURL() },
-            reviewedBundledIdentity: .init(
-                packageID: BundledRendererPackages.excalidrawPackageID,
-                version: BundledRendererPackages.excalidrawVersion,
-                registrationID: BundledRendererPackages.excalidrawRegistrationID))
-            .assemble()
+        let handle = try await RendererRuntimeFactory(layout: layout).assemble()
         let host = InstalledRendererHost(services: handle.services)
         let model = RendererSettingsModel(host: host)
-        let packageURL = try #require(BundledRendererPackages.excalidrawResourceURL())
+        let packageURL = PackageFenceTestSupport.packageDirectory
 
         await model.install(directory: packageURL)
 

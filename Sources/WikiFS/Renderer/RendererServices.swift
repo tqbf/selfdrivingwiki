@@ -31,10 +31,6 @@ actor MutableRendererServices: RendererServices {
         try await installed.prepareCurrentRegistry()
     }
 
-    func bootstrapBundledPackage() async throws -> RendererPreparation {
-        try await installed.bootstrapBundledPackage()
-    }
-
     func installLocalDirectory(_ directory: URL) async throws -> RendererPreparation {
         try await installed.installLocalDirectory(directory)
     }

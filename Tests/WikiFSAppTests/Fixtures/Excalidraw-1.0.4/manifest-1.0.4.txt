@@ -1,12 +1,12 @@
 {
   "revision": 2,
   "packageID": "org.selfdrivingwiki.excalidraw-readonly",
-  "version": "1.0.5",
+  "version": "1.0.4",
   "descriptors": [
     {
       "reference": {
         "packageID": "org.selfdrivingwiki.excalidraw-readonly",
-        "version": "1.0.5",
+        "version": "1.0.4",
         "registrationID": "excalidraw"
       },
       "displayName": "Excalidraw",
@@ -29,21 +29,8 @@
           }
         },
         {
-          "boundedJSON": {
-            "_0": {
-              "root": "object",
-              "properties": {
-                "type": {
-                  "stringEquals": "excalidraw"
-                },
-                "version": {
-                  "integerEquals": 2
-                }
-              },
-              "arrays": {
-                "elements": "object"
-              }
-            }
+          "boundedJSONArtifact": {
+            "_0": "excalidraw"
           }
         }
       ],

@@ -10,6 +10,7 @@ public enum RendererValidationError: Error, Equatable, Sendable, CustomStringCon
     case invalidMIMEType(String)
     case invalidExtension(String)
     case invalidSignature
+    case invalidJSONMatcher
     case invalidSizeLimit(String)
     case invalidCompatibilityRange
     case invalidPresentation
@@ -43,6 +44,7 @@ public enum RendererValidationError: Error, Equatable, Sendable, CustomStringCon
         case let .invalidMIMEType(value): "invalid MIME type: \(value)"
         case let .invalidExtension(value): "invalid extension: \(value)"
         case .invalidSignature: "invalid bounded signature"
+        case .invalidJSONMatcher: "invalid bounded JSON matcher"
         case let .invalidSizeLimit(value): "invalid renderer size limit: \(value)"
         case .invalidCompatibilityRange: "invalid compatibility revision range"
         case .invalidPresentation: "invalid renderer presentation for implementation"

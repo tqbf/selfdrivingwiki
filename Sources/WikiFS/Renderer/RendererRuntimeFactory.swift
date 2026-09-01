@@ -17,7 +17,6 @@ struct RendererRuntimeFactory: Sendable {
         case machineIndexStore
         case packageValidatorFactory
         case resourceProviderFactory
-        case bundledPackageSource
         case runtime
         case services
     }
@@ -27,7 +26,6 @@ struct RendererRuntimeFactory: Sendable {
         static let machineIndexStore = "renderer.machine-index-store"
         static let packageValidatorFactory = "renderer.package-validator-factory"
         static let resourceProviderFactory = "renderer.resource-provider-factory"
-        static let bundledPackageSource = "renderer.bundled-package-source"
         static let runtime = "renderer.runtime"
         static let services = "renderer.services"
 
@@ -36,7 +34,6 @@ struct RendererRuntimeFactory: Sendable {
             machineIndexStore,
             packageValidatorFactory,
             resourceProviderFactory,
-            bundledPackageSource,
             runtime,
             services,
         ]
@@ -51,15 +48,11 @@ struct RendererRuntimeFactory: Sendable {
             label: ServiceLabels.packageValidatorFactory)
         static let resourceProviderFactory = ServiceKey<RendererRuntime.ProviderFactory>(
             label: ServiceLabels.resourceProviderFactory)
-        static let bundledPackageSource = ServiceKey<RendererRuntime.BundledPackageSource>(
-            label: ServiceLabels.bundledPackageSource)
         static let runtime = ServiceKey<RendererRuntime>(label: ServiceLabels.runtime)
         static let services = ServiceKey<any RendererServices>(label: ServiceLabels.services)
     }
 
     let layout: RendererPackageStoreLayout
-    let bundledPackageSource: RendererRuntime.BundledPackageSource
-    let reviewedBundledIdentity: RendererRuntime.ReviewedBundledIdentity
 
     func assemble() async throws -> RendererRuntimeHandle {
         try await assemble(registrationOrder: Component.allCases)
@@ -167,14 +160,6 @@ struct RendererRuntimeFactory: Sendable {
                     }
                     _ = try await activation.supply(Keys.resourceProviderFactory, value: factory)
                 }
-        case .bundledPackageSource:
-            return try ComponentDefinition(
-                label: component.rawValue,
-                provisions: [ServiceDependency(Keys.bundledPackageSource)]) { activation in
-                    _ = try await activation.supply(
-                        Keys.bundledPackageSource,
-                        value: bundledPackageSource)
-                }
         case .runtime:
             return try ComponentDefinition(
                 label: component.rawValue,
@@ -182,15 +167,12 @@ struct RendererRuntimeFactory: Sendable {
                     ServiceDependency(Keys.machineIndexStore),
                     ServiceDependency(Keys.packageValidatorFactory),
                     ServiceDependency(Keys.resourceProviderFactory),
-                    ServiceDependency(Keys.bundledPackageSource),
                 ],
                 provisions: [ServiceDependency(Keys.runtime)]) { activation in
                     let runtime = RendererRuntime(
                         machineStore: try await activation.require(Keys.machineIndexStore),
                         makeValidator: try await activation.require(Keys.packageValidatorFactory),
-                        makeProvider: try await activation.require(Keys.resourceProviderFactory),
-                        bundledPackageSource: try await activation.require(Keys.bundledPackageSource),
-                        reviewedBundledIdentity: reviewedBundledIdentity)
+                        makeProvider: try await activation.require(Keys.resourceProviderFactory))
                     _ = try await activation.supply(Keys.runtime, value: runtime)
                     _ = try await activation.effect { _ in await runtime.dispose() }
                 }

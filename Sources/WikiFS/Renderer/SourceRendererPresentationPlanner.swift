@@ -203,7 +203,6 @@ struct SourceRendererPresentationPlanner: Sendable {
             || source.ext.lowercased() == MermaidSourceDetector.mermaidExtension
             || source.ext.lowercased() == "mermaid"
             || source.ext.lowercased() == "canvas"
-            || source.ext.lowercased() == "excalidraw"
     }
 
     private enum MediaMIMECandidate: Sendable, Equatable {

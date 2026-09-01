@@ -69,12 +69,11 @@ public enum MermaidSourceDetector {
         return "```mermaid\n\(trimmed)\n```"
     }
 
-    /// The Reader-tab markdown for a STANDALONE diagram source (`.mmd` /
-    /// `text/mermaid`; future: `.excalidraw` / `.canvas`): the raw source text
-    /// wrapped in a plain (no-language) CommonMark code fence so the reader
-    /// renders `<pre><code>` — monospace, newlines preserved, no markdown
-    /// parsing of the body. Diagram DSLs confuse the markdown pipeline (mermaid
-    /// `flowchart LR` parsed as prose, `.excalidraw` JSON as flat text), so the
+    /// The Reader-tab markdown for a standalone diagram source (`.mmd` /
+    /// `text/mermaid`): the raw source text wrapped in a plain (no-language)
+    /// CommonMark code fence so the reader renders `<pre><code>` — monospace,
+    /// newlines preserved, no markdown parsing of the body. Mermaid DSL confuses
+    /// the Markdown pipeline because `flowchart LR` parses as prose, so the
     /// Reader tab shows them as the code they are while the Rendered tab still
     /// renders the diagram (issue #662).
     ///

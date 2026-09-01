@@ -32,7 +32,7 @@ Import accepts one local folder. It does not accept ZIP files, other archives, r
 
 Markdown syntax selects the renderer role. A package can fill a compatible role, but it cannot change the role.
 
-A rich fence is named by the first word of its info string. That name is live registry data: the built-in renderers claim `mermaid` and `jsoncanvas`, the bundled Excalidraw package claims `excalidraw`, and an installed package can claim its own names through its manifest's `fenceClaims`. A fence renders through whichever available renderer claims its name, so installing or removing a package changes that answer on the next render without a restart.
+A rich fence is named by the first word of its info string. That name is live registry data. The built-in renderers claim `mermaid` and `jsoncanvas`. The optional Excalidraw renderer package claims `excalidraw` when you install it. An installed package can claim its own names through its manifest's `fenceClaims`. A fence uses the available renderer that claims its name. Installing or removing a package changes that result on the next render without a restart.
 
 Approved rich fences use a disclosure row. The row starts collapsed and shows **Open in Window** at the trailing edge. When a renderer that has been drawing a fence becomes unavailable (its package was removed or suppressed), the fence falls back to typed raw code with a notice that the renderer is not available here; a fence nobody ever claimed stays plain code.
 
@@ -57,7 +57,7 @@ Use Markdown image syntax for a renderer-claimed sibling source:
 
 Image syntax always stays inline and remains part of the reader document. A compatible renderer cannot replace it with a native attachment or promote it to a disclosure row.
 
-The reader uses a DOM image fallback. Mermaid and approved typed projectors can create inert DOM SVG. A renderer-backed image can also show **Open interactive renderer** when exact admission succeeds.
+The reader keeps a DOM fallback for renderer-backed images. An installed renderer package can also show **Open in Window** when exact admission succeeds.
 
 The alt text remains available to accessibility tools and fallback content. Interactive image input has a 48,384-byte limit.
 

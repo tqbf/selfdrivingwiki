@@ -1,6 +1,6 @@
 ---
 name: renderer-package-maintainer
-description: Create and maintain Self Driving Wiki static renderer packages. Use when adding, authoring, reviewing, importing, updating, removing, or documenting a renderer package, including bundled Excalidraw.
+description: Create and maintain Self Driving Wiki static renderer packages. Use when adding, authoring, reviewing, importing, updating, removing, or documenting a renderer package, including the reviewed Excalidraw package.
 ---
 
 # Renderer package maintainer

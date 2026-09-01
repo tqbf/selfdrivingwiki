@@ -369,7 +369,7 @@ struct MarkdownHTMLRendererTests {
     @Test func richFenceCardsRenderStaticMarkupWhenProjectionAllowsThem() throws {
         let projection = RendererEmbedProjection(
             sourceEmbeds: [:],
-            richFenceClaims: PackageFenceTestSupport.builtInAndBundledClaims)
+            richFenceClaims: PackageFenceTestSupport.builtInAndInstalledClaims)
         let document = MarkdownDocumentIdentity(
             pageID: .init(rawValue: "01HTESTPAGE000000000000001"),
             pageVersionID: .init(rawValue: "01HTESTPV00000000000000001"))
@@ -478,7 +478,7 @@ struct MarkdownHTMLRendererTests {
     func excalidrawCardDelegatesToDynamicRenderer() throws {
         let projection = RendererEmbedProjection(
             sourceEmbeds: [:],
-            richFenceClaims: PackageFenceTestSupport.builtInAndBundledClaims)
+            richFenceClaims: PackageFenceTestSupport.builtInAndInstalledClaims)
         let document = MarkdownDocumentIdentity(
             pageID: .init(rawValue: "01HTESTPAGE000000000000001"),
             pageVersionID: .init(rawValue: "01HTESTPV00000000000000001"))
@@ -517,7 +517,7 @@ struct MarkdownHTMLRendererTests {
     func oversizedRichFencesUseEscapedFallbackWithoutRendererMetadata() {
         let projection = RendererEmbedProjection(
             sourceEmbeds: [:],
-            richFenceClaims: PackageFenceTestSupport.builtInAndBundledClaims)
+            richFenceClaims: PackageFenceTestSupport.builtInAndInstalledClaims)
         let document = MarkdownDocumentIdentity(
             pageID: .init(rawValue: "01HTESTPAGE000000000000001"),
             pageVersionID: .init(rawValue: "01HTESTPV00000000000000001"))
@@ -553,12 +553,13 @@ struct MarkdownHTMLRendererTests {
     @Test("renderer-backed image syntax stays in the DOM and preserves exact action admission", arguments: [false, true])
     func rendererBackedImageSyntaxStaysInDOMWithExactAction(useMarkdownVersion: Bool) throws {
         let fixture = try makeImageRendererActivationFixture(useMarkdownVersion: useMarkdownVersion)
-        #expect(fixture.html.contains("class=\"sdw-inline-renderer sdw-inline-renderer--dom\""))
+        #expect(fixture.html.contains("class=\"sdw-inline-renderer\""))
         #expect(fixture.html.contains("<a href=\"wiki-blob://source/"))
         #expect(!fixture.html.contains("<img"))
-        #expect(fixture.html.contains("Open interactive renderer"))
-        #expect(!fixture.html.contains("data-renderer-admitted=\"true\""))
-        #expect(!fixture.html.contains("id=\"sdw-inline-renderer-"))
+        #expect(fixture.html.contains("data-renderer-admitted=\"true\""))
+        #expect(fixture.html.contains("id=\"sdw-inline-renderer-"))
+        #expect(!fixture.html.contains("sdw-inline-renderer--dom"))
+        #expect(!fixture.html.contains("Open interactive renderer"))
         #expect(!fixture.html.contains("sdw-renderer-card__row"))
         #expect(fixture.context.rendererReference == fixture.reference)
         #expect(fixture.context.input == fixture.input)
@@ -608,7 +609,7 @@ struct MarkdownHTMLRendererTests {
         let fixture = try makeRendererActivationFixture(bytes: Data("~~~\n".utf8))
         let projection = RendererEmbedProjection(
             sourceEmbeds: [:],
-            richFenceClaims: PackageFenceTestSupport.builtInAndBundledClaims)
+            richFenceClaims: PackageFenceTestSupport.builtInAndInstalledClaims)
         let document = MarkdownDocumentIdentity(
             pageID: .init(rawValue: "01HTESTPAGE000000000000001"),
             pageVersionID: .init(rawValue: "01HTESTPV00000000000000001"))

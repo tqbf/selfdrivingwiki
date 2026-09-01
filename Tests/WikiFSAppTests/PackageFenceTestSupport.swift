@@ -6,29 +6,48 @@ import WikiFSTypes
 /// Shared package-fence test fixtures: claim maps as the app resolves them,
 /// and stand-in descriptors mirroring the shipped manifests.
 enum PackageFenceTestSupport {
-    /// Claims for every host-known alias: the built-in table plus the bundled
-    /// package's manifest-declared claim. This is what the app wiring resolves
-    /// for a fresh install with the reviewed bundled package.
-    static var builtInAndBundledClaims: [RendererFenceAlias: RendererFenceClaimAssignment] {
-        RendererFenceClaimResolver.resolve(
-            builtInDescriptors: BuiltInRendererDescriptors.all,
-            enabledInstalledDescriptors: [bundledExcalidrawDescriptor()])
+    static let installedPackageID = RendererPackageID(rawValue: "org.selfdrivingwiki.excalidraw-readonly")!
+    static let installedPackageVersion = RendererPackageVersion(rawValue: "1.0.5")!
+    static let installedRegistrationID = RendererRegistrationID(rawValue: "excalidraw")!
+    static let installedDisplayName = "Excalidraw"
+
+    static var packageDirectory: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("RendererPackages/Excalidraw", isDirectory: true)
     }
 
-    /// The bundled Excalidraw descriptor as the shipped 1.0.4 manifest
-    /// declares it, including its package-declared fence claim.
-    static func bundledExcalidrawDescriptor() -> RendererDescriptor {
+    /// Claims for every host-known alias: the built-in table plus an installed
+    /// package's manifest-declared claim.
+    static var builtInAndInstalledClaims: [RendererFenceAlias: RendererFenceClaimAssignment] {
+        RendererFenceClaimResolver.resolve(
+            builtInDescriptors: BuiltInRendererDescriptors.all,
+            enabledInstalledDescriptors: [installedExcalidrawDescriptor()])
+    }
+
+    /// An installed Excalidraw descriptor with a manifest-declared fence claim.
+    static func installedExcalidrawDescriptor() -> RendererDescriptor {
         let asset = RendererAsset(
             path: RendererRelativePath(rawValue: "index.html")!,
             digest: RendererSHA256.digest(Data("<html>excalidraw</html>".utf8)))
         return try! RendererDescriptor(
             reference: RendererReference(
-                packageID: BundledRendererPackages.excalidrawPackageID,
-                version: BundledRendererPackages.excalidrawVersion,
-                registrationID: BundledRendererPackages.excalidrawRegistrationID),
-            displayName: BundledRendererPackages.excalidrawDisplayName,
+                packageID: installedPackageID,
+                version: installedPackageVersion,
+                registrationID: installedRegistrationID),
+            displayName: installedDisplayName,
             implementation: .webPackage(.init(path: asset.path)),
-            matchers: [.extensionFallback(RendererFileExtension(rawValue: "excalidraw")!)],
+            matchers: [
+                .normalizedMIME(RendererMIMEType(rawValue: "application/json")!),
+                .boundedJSON(try! RendererJSONConstraints(
+                    properties: [
+                        "type": .stringEquals("excalidraw"),
+                        "version": .integerEquals(2),
+                    ],
+                    arrays: ["elements": .object])),
+            ],
             presentations: [.web],
             supportedEmbeddingRoles: [.inlineContent, .disclosureRow],
             hasExplicitEmbeddingRoles: true,

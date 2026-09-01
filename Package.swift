@@ -407,12 +407,6 @@ let package = Package(
                 .product(name: "Markdown", package: "swift-markdown"),
             ],
             path: "Sources/WikiFS",
-            resources: [
-                // The reviewed package is copied into the executable resource
-                // bundle. Runtime bootstrap reads only this bundled location,
-                // never the source checkout.
-                .copy("../../RendererPackages/Excalidraw"),
-            ],
             // WKWebView for the reader path (Sources/WikiFS/WikiReaderView.swift)
             // — the single markdown reader (replaced the vendored Textual).
             swiftSettings: strictSwiftSettings,

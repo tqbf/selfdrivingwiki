@@ -63,7 +63,12 @@ struct D2RendererPackageMatchingTests {
             matchers: [
                 .normalizedMIME(try .init(validating: "application/json")),
                 .extensionFallback(try .init(validating: "excalidraw")),
-                .boundedJSONArtifact(.excalidraw),
+                .boundedJSON(try RendererJSONConstraints(
+                    properties: [
+                        "type": .stringEquals("excalidraw"),
+                        "version": .integerEquals(2),
+                    ],
+                    arrays: ["elements": .object])),
             ],
             presentations: [.web],
             supportedEmbeddingRoles: [.disclosureRow, .inlineContent],

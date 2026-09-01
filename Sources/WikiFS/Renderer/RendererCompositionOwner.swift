@@ -39,7 +39,7 @@ struct RendererStartupPublication: Sendable {
     }
 }
 
-/// Owns renderer assembly, bundled bootstrap, publication admission, and shutdown.
+/// Owns renderer assembly, registry publication admission, and shutdown.
 actor RendererCompositionOwner {
     typealias AssemblyFactory = @Sendable () async throws -> any RendererRuntimeOwning
 
@@ -130,7 +130,7 @@ actor RendererCompositionOwner {
                 await dispose(handle, late: true)
                 return
             }
-            let preparation = try await handle.services.bootstrapBundledPackage()
+            let preparation = try await handle.services.prepareCurrentRegistry()
             guard isAdmitted(installation) else {
                 await services.invalidate(installation)
                 await dispose(handle, late: true)
@@ -231,14 +231,7 @@ final class AppProcessPluginCatalog {
             preconditionFailure("Resolved app-group renderer layout was invalid: \(error)")
         }
         let rendererOwner = RendererCompositionOwner {
-            try await RendererRuntimeFactory(
-                layout: rendererLayout,
-                bundledPackageSource: { BundledRendererPackages.excalidrawResourceURL() },
-                reviewedBundledIdentity: .init(
-                    packageID: BundledRendererPackages.excalidrawPackageID,
-                    version: BundledRendererPackages.excalidrawVersion,
-                    registrationID: BundledRendererPackages.excalidrawRegistrationID))
-                .assemble()
+            try await RendererRuntimeFactory(layout: rendererLayout).assemble()
         }
 
         self.providerServices = providerServices

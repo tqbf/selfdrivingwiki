@@ -310,28 +310,28 @@ struct RendererAttachmentCoordinatorTests {
         let projection = ResolvedDocumentProjection(markdownImages: [
             "drawing.excalidraw": .renderer(
                 rendererReference: .init(
-                    packageID: BundledRendererPackages.excalidrawPackageID,
-                    version: BundledRendererPackages.excalidrawVersion,
-                    registrationID: BundledRendererPackages.excalidrawRegistrationID),
+                    packageID: PackageFenceTestSupport.installedPackageID,
+                    version: PackageFenceTestSupport.installedPackageVersion,
+                    registrationID: PackageFenceTestSupport.installedRegistrationID),
                 source: source),
             "generic.svg": .renderer(
                 rendererReference: BuiltInRendererDescriptors.descriptor(for: .jsonCanvas).reference,
                 source: fallbackSource),
         ])
         let body = MarkdownHTMLRenderer.render(prepared, projection: projection, options: .disabled)
-        #expect(body.contains("class=\"sdw-inline-renderer__svg\""))
+        #expect(body.contains("class=\"sdw-inline-renderer\""))
         #expect(body.contains("alt=\"Generic image\""))
-        #expect(body.components(separatedBy: "class=\"sdw-inline-renderer sdw-inline-renderer--dom\"").count - 1 == 2)
+        #expect(body.components(separatedBy: "class=\"sdw-inline-renderer\"").count - 1 == 2)
         #expect(!body.contains("data-renderer-admitted=\"true\""))
         webView.loadHTMLString(WikiReaderView.documentHTML(body, mermaidLibrary: nil), baseURL: WikiReaderOrigin.url)
         try await Self.waitUntil("inert renderer document") { webView.isLoading == false }
 
         let initialY = try await Self.javaScriptDouble(
-            "document.querySelector('.sdw-inline-renderer__svg').getBoundingClientRect().y",
+            "document.querySelector('.sdw-inline-renderer').getBoundingClientRect().y",
             in: webView)
         try await Self.runJS("window.scrollTo(0, 180)", in: webView)
         let scrolledY = try await Self.javaScriptDouble(
-            "document.querySelector('.sdw-inline-renderer__svg').getBoundingClientRect().y",
+            "document.querySelector('.sdw-inline-renderer').getBoundingClientRect().y",
             in: webView)
         let genericImageY = try await Self.javaScriptDouble(
             "document.querySelector('img[alt=\\\"Generic image\\\"]').getBoundingClientRect().y",
@@ -340,7 +340,7 @@ struct RendererAttachmentCoordinatorTests {
         #expect(scrolledY < initialY - 100)
         #expect(genericImageY.isFinite)
         #expect(try await Self.javaScriptBoolean(
-            "document.querySelectorAll('.sdw-inline-renderer--dom').length === 2",
+            "document.querySelectorAll('.sdw-inline-renderer').length === 2",
             in: webView))
         #expect(try await Self.javaScriptBoolean(
             "document.querySelector('.sdw-inline-renderer[data-renderer-admitted=\\\"true\\\"]') === null",
@@ -1116,9 +1116,9 @@ struct RendererAttachmentCoordinatorTests {
             mimeType: try .init(validating: "application/json"),
             bytes: bytes)
         let reference = RendererReference(
-            packageID: BundledRendererPackages.excalidrawPackageID,
-            version: BundledRendererPackages.excalidrawVersion,
-            registrationID: BundledRendererPackages.excalidrawRegistrationID)
+            packageID: PackageFenceTestSupport.installedPackageID,
+            version: PackageFenceTestSupport.installedPackageVersion,
+            registrationID: PackageFenceTestSupport.installedRegistrationID)
         let placeholder = try RendererAttachmentPlaceholderID(validating: "admitted-excalidraw")
         admission.register(context: .init(
             pageID: identity.pageID,

@@ -360,24 +360,12 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
                 display: display,
                 target: target,
                 fallback: fallback)
-        case .renderer(let syntax, let role, let plan, let fallback):
+        case .renderer(_, let role, let plan, let fallback):
             guard role == plan.embeddingRole else { return fallbackHTML(fallback) }
-            if syntax.requiresDOMOwnership {
-                return rendererDOMFallbackHTML(fallbackHTML(fallback), plan: plan)
-            }
             if role == .inlineContent {
                 return inlineRendererHTML(plan: plan, fallback: fallbackHTML(fallback))
             }
             return rendererCardHTML(plan: plan, fallbackHTML: fallbackHTML(fallback), readableFallbackHTML: fallbackHTML(fallback))
-        case .rendererDOM(_, let role, let plan, let output, let fallback):
-            guard role == .inlineContent,
-                  role == plan.embeddingRole,
-                  DocumentRendererDOMProjector.project(plan) == output
-            else { return fallbackHTML(fallback) }
-            return rendererDOMOutputHTML(output, plan: plan)
-        case .rendererDOMFallback(_, let role, let plan, let fallback):
-            guard role == .inlineContent, role == plan.embeddingRole else { return fallbackHTML(fallback) }
-            return rendererDOMFallbackHTML(fallbackHTML(fallback), plan: plan)
         case .transclusion(let target, let display, let fragment, let ancestors):
             return transclusionHTML(target: target, display: display, fragment: fragment, ancestors: ancestors)
         case .missing(_, let fallback), .fallback(let fallback):
@@ -416,81 +404,6 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         }
     }
 
-    private func rendererDOMOutputHTML(_ output: DocumentRendererDOMOutput, plan: RendererEmbedPlan) -> String {
-        switch output {
-        case .vectorScene(let scene):
-            return vectorSceneHTML(scene, plan: plan)
-        }
-    }
-
-    private func vectorSceneHTML(_ scene: DocumentVectorScene, plan: RendererEmbedPlan) -> String {
-        let bounds = scene.bounds
-        let viewBox = [bounds.minimumX, bounds.minimumY, bounds.width, bounds.height]
-            .map(Self.svgNumber).joined(separator: " ")
-        let background: String = scene.backgroundColor.map { color in
-            #"<rect x="\#(Self.svgNumber(bounds.minimumX))" y="\#(Self.svgNumber(bounds.minimumY))" width="\#(Self.svgNumber(bounds.width))" height="\#(Self.svgNumber(bounds.height))" fill="\#(color)"/>"#
-        } ?? ""
-        let markerID = "sdw-arrow-\(plan.placeholderID)"
-        let elements = scene.elements.map { vectorElementHTML($0, markerID: markerID) }.joined()
-        let title = escapeAttribute(plan.displayTitle ?? scene.accessibilityLabel)
-        let content = """
-        <svg class="sdw-inline-renderer__svg" viewBox="\(viewBox)" role="img" aria-label="\(title)" preserveAspectRatio="xMidYMid meet">
-          <defs><marker id="\(escapeAttribute(markerID))" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L8,4 L0,8 z" fill="context-stroke"/></marker></defs>
-          \(background)\(elements)
-        </svg>
-        """
-        return rendererDOMContainerHTML(content: content, plan: plan)
-    }
-
-    private func rendererDOMFallbackHTML(_ fallback: String, plan: RendererEmbedPlan) -> String {
-        rendererDOMContainerHTML(
-            content: "<span class=\"sdw-inline-renderer__fallback\">\(fallback)</span>",
-            plan: plan)
-    }
-
-    private func rendererDOMContainerHTML(content: String, plan: RendererEmbedPlan) -> String {
-        """
-        <figure class="sdw-inline-renderer sdw-inline-renderer--dom" data-renderer-role="inlineContent">
-          \(content)
-          \(rendererActionHTML(for: plan))
-        </figure>
-        """
-    }
-
-    private func rendererActionHTML(for plan: RendererEmbedPlan) -> String {
-        guard let actionURL = rendererActionURL(for: plan) else { return "" }
-        return #"<a class="sdw-inline-renderer__action" data-renderer-action="open-window" href="\#(escapeAttribute(actionURL))">Open interactive renderer</a>"#
-    }
-
-    private func vectorElementHTML(_ element: DocumentVectorScene.Element, markerID: String) -> String {
-        switch element {
-        case .rectangle(let x, let y, let width, let height, let cornerRadius, let style):
-            return #"<rect x="\#(Self.svgNumber(x))" y="\#(Self.svgNumber(y))" width="\#(Self.svgNumber(width))" height="\#(Self.svgNumber(height))" rx="\#(Self.svgNumber(cornerRadius))" \#(vectorStyleAttributes(style))/>"#
-        case .ellipse(let x, let y, let width, let height, let style):
-            return #"<ellipse cx="\#(Self.svgNumber(x + width / 2))" cy="\#(Self.svgNumber(y + height / 2))" rx="\#(Self.svgNumber(width / 2))" ry="\#(Self.svgNumber(height / 2))" \#(vectorStyleAttributes(style))/>"#
-        case .diamond(let x, let y, let width, let height, let style):
-            let points = "\(Self.svgNumber(x + width / 2)),\(Self.svgNumber(y)) \(Self.svgNumber(x + width)),\(Self.svgNumber(y + height / 2)) \(Self.svgNumber(x + width / 2)),\(Self.svgNumber(y + height)) \(Self.svgNumber(x)),\(Self.svgNumber(y + height / 2))"
-            return #"<polygon points="\#(points)" \#(vectorStyleAttributes(style))/>"#
-        case .text(let x, let y, let text, let fontSize, let style):
-            return #"<text x="\#(Self.svgNumber(x))" y="\#(Self.svgNumber(y + fontSize))" font-size="\#(Self.svgNumber(fontSize))" font-family="-apple-system, BlinkMacSystemFont, sans-serif" fill="\#(style.strokeColor)" opacity="\#(Self.svgNumber(style.opacity))">\#(escape(text))</text>"#
-        case .polyline(let x, let y, let points, let arrowhead, let style):
-            let values = points.map { "\(Self.svgNumber(x + $0.x)),\(Self.svgNumber(y + $0.y))" }.joined(separator: " ")
-            let marker = arrowhead ? #" marker-end="url(#\#(escapeAttribute(markerID)))""# : ""
-            return #"<polyline points="\#(values)" fill="none" \#(vectorStyleAttributes(style))\#(marker)/>"#
-        }
-    }
-
-    private func vectorStyleAttributes(_ style: DocumentVectorScene.Style) -> String {
-        let fill = style.fillColor ?? "none"
-        return #"stroke="\#(style.strokeColor)" fill="\#(fill)" stroke-width="\#(Self.svgNumber(style.strokeWidth))" opacity="\#(Self.svgNumber(style.opacity))" vector-effect="non-scaling-stroke""#
-    }
-
-    private static func svgNumber(_ value: Double) -> String {
-        guard value.isFinite else { return "0" }
-        return String(format: "%.4f", locale: Locale(identifier: "en_US_POSIX"), value)
-            .replacingOccurrences(of: #"\.?0+$"#, with: "", options: .regularExpression)
-    }
-
     private func rendererActionURL(for plan: RendererEmbedPlan) -> String? {
         guard let context = registerActivationContext(for: plan),
               let mimeType = plan.input.map({ input -> String in
@@ -503,7 +416,7 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         do {
             inputJSON = String(decoding: try JSONEncoder().encode(context.input), as: UTF8.self)
         } catch {
-            DebugLog.reader("inline DOM renderer action encoding failed: \(error.localizedDescription)")
+            DebugLog.reader("inline renderer action encoding failed: \(error.localizedDescription)")
             return nil
         }
         return Self.rendererActionURL(
@@ -1090,12 +1003,8 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         "sdw-renderer-\(block.digest.hex.prefix(16))-\(block.parserOrdinal)"
     }
 
-    /// Presentation phrases pinned for trusted host-known claimants (the
-    /// built-in renderers and the reviewed bundled package). These keep the
-    /// exact pre-conversion strings so their reader output is byte-identical;
-    /// every other claim derives its phrases from the declaring descriptor's
-    /// display name, because manifests deliberately carry no per-format
-    /// presentation strings beyond one MIME per claim.
+    /// Presentation phrases pinned for host-native claimants. Package claims
+    /// derive their phrases from the declaring descriptor's display name.
     private struct TrustedFencePresentation {
         let semanticSummary: String
         let controlLabel: String
@@ -1120,16 +1029,6 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
                 accessibilityLabel: "Open JSON Canvas renderer",
                 summary: "Open the static canvas in the renderer pane.")
         }
-        if reference == RendererReference(
-            packageID: BundledRendererPackages.excalidrawPackageID,
-            version: BundledRendererPackages.excalidrawVersion,
-            registrationID: BundledRendererPackages.excalidrawRegistrationID) {
-            return TrustedFencePresentation(
-                semanticSummary: "Excalidraw document fence",
-                controlLabel: "Interact",
-                accessibilityLabel: "Open Excalidraw renderer",
-                summary: "Open the static Excalidraw card in the renderer pane.")
-        }
         return nil
     }
 
@@ -1145,12 +1044,6 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
     private static func rendererDisplayName(for reference: RendererReference) -> String {
         if let builtIn = BuiltInRendererDescriptors.all.first(where: { $0.reference == reference }) {
             return builtIn.displayName
-        }
-        if reference == RendererReference(
-            packageID: BundledRendererPackages.excalidrawPackageID,
-            version: BundledRendererPackages.excalidrawVersion,
-            registrationID: BundledRendererPackages.excalidrawRegistrationID) {
-            return BundledRendererPackages.excalidrawDisplayName
         }
         return reference.registrationID.rawValue
     }

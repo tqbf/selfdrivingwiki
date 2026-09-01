@@ -116,11 +116,26 @@ enum Phase6RendererArtifactFixtures {
 
     static let malformedJSON = Data("{".utf8)
 
+    static func excalidrawConstraints() throws -> RendererJSONConstraints {
+        try RendererJSONConstraints(
+            properties: [
+                "type": .stringEquals("excalidraw"),
+                "version": .integerEquals(2),
+            ],
+            arrays: ["elements": .object])
+    }
+
+    static func jsonCanvasConstraints() throws -> RendererJSONConstraints {
+        try RendererJSONConstraints(
+            properties: [:],
+            arrays: ["nodes": .object, "edges": .object])
+    }
+
     static func descriptor(
         packageID: String,
         registrationID: String,
         fileExtension: String,
-        artifact: RendererJSONArtifact
+        constraints: RendererJSONConstraints
     ) throws -> RendererDescriptor {
         try RendererFixtures.webDescriptor(
             packageID: try .init(validating: packageID),
@@ -128,7 +143,7 @@ enum Phase6RendererArtifactFixtures {
             matchers: [
                 .normalizedMIME(try .init(validating: "application/json")),
                 .extensionFallback(try .init(validating: fileExtension)),
-                .boundedJSONArtifact(artifact),
+                .boundedJSON(constraints),
             ])
     }
 
