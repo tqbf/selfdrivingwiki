@@ -58,6 +58,22 @@ The manifest is revision 3. Its claim carries a fence-syntax validation declarat
 
 A revision 3 claim may declare `validation` with `engineAssetPath`, `wrapperAssetPath`, and `entryFunction`. The two asset paths must be distinct, approved by the declaring descriptor, and declared in the top-level asset list. The entry function must be one JavaScript identifier. A revision 1 or 2 manifest that carries a `validation` object is rejected.
 
+### Reviewed JSON Canvas renderer package
+
+The reviewed package root is `RendererPackages/JSONCanvas` in the repository. SwiftPM does not copy it into the app resource bundle. Users import the folder through Settings → Renderers → Advanced Local Renderer Package Import. The package ID is `org.selfdrivingwiki.json-canvas-readonly`. The version is `1.0.0`. The registration ID is `json-canvas`. The manifest is revision 4.
+
+The package matches `application/json` sources with a bounded JSON matcher requiring root-object `nodes` and `edges` arrays of objects, plus the `.canvas` extension fallback. It claims the `jsoncanvas` fence alias with the inline MIME type `application/json`. It fills both embedding roles, has priority 110, and 48,000-byte input and decoded-input limits.
+
+The package declares `inputRead`, `externalLink`, and `hostNavigation` capabilities with a `hostNavigation` declaration that allows page, source, and named-content target kinds. It uses the user-activated external-link policy and protocol revision 1.
+
+### Manifest revision 4 and host navigation
+
+A revision 4 manifest may declare the optional `hostNavigation` capability and a `hostNavigation` object with `allowedTargetKinds` (a nonempty set of `page`, `source`, and `namedContent`).
+
+The capability requires the declaration, and the declaration requires the capability. Built-in or native declarations are rejected. Revisions 1 to 3 that carry a navigation capability or declaration fail closed. Older hosts cannot decode the capability and reject the manifest.
+
+Package code may request only the declared, typed target kinds through the isolated bridge. Named-content references are validated relative paths with an optional `#subpath`; the trusted host normalizes basename, extension removal, and anchor before routing. Every internal navigation request requires a fresh host-observed, single-use, purpose-bound user activation, and the bridge returns only a uniform acknowledgement. External HTTP(S) links continue through the separate external-link activation flow.
+
 ### Create and validate a package
 
 Use the tested package in [`../assets/minimal-renderer-package/`](../assets/minimal-renderer-package/) as the starting point. It contains `manifest.json` and one semantic, read-only `index.html` file.

@@ -225,7 +225,7 @@ The pointer wheel now controls renderer zoom while the pointer is over a diagram
 - Mermaid SVG uses a bounded 0.5–3.0 viewport transform in an expanded row. The transform keeps the diagram point below the pointer fixed.
 - Generic SVG sources use the built-in inert SVG renderer in Rendered, Split, and separate-window presentations. JavaScript and navigation are disabled, and wheel zoom is bounded to 0.5–3.0.
 - The Mermaid window uses the shared app wheel-step monitor and the same 0.5–3.0 scale bounds.
-- JSON Canvas uses its shared native view in both presentations. Wheel input changes the renderer viewport and keeps the viewport center fixed.
+- JSON Canvas now uses its reviewed Web renderer package in both presentations. The package owns bounded wheel zoom and keeps renderer viewport state separate from reader zoom. See [`json-canvas-renderer-package.md`](json-canvas-renderer-package.md).
 - Excalidraw uses its shared reviewed package in both presentations. Its existing 0.25–4.0 scale now keeps the diagram point below the pointer fixed.
 - Reader page zoom remains separate. It changes attachment presentation size but does not change renderer viewport state.
 - Trackpad magnification and keyboard zoom controls remain available where they existed before this update.

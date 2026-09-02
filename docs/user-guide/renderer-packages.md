@@ -32,7 +32,7 @@ Import accepts one local folder. It does not accept ZIP files, other archives, r
 
 Markdown syntax selects the renderer role. A package can fill a compatible role, but it cannot change the role.
 
-A rich fence is named by the first word of its info string. That name is live registry data. The built-in renderers claim `jsoncanvas`. The optional Mermaid and Excalidraw renderer packages claim `mermaid` and `excalidraw` when you install them. An installed package can claim its own names through its manifest's `fenceClaims`. A fence uses the available renderer that claims its name. Installing or removing a package changes that result on the next render without a restart.
+A rich fence is named by the first word of its info string. That name is live registry data. An optional JSON Canvas renderer package claims `jsoncanvas` when you install it. The optional Mermaid and Excalidraw renderer packages claim `mermaid` and `excalidraw` when you install them. An installed package can claim its own names through its manifest's `fenceClaims`. A fence uses the available renderer that claims its name. Installing or removing a package changes that result on the next render without a restart.
 
 Approved rich fences use a disclosure row. The row starts collapsed and shows **Open in Window** at the trailing edge. When a renderer that has been drawing a fence becomes unavailable (its package was removed or suppressed), the fence falls back to typed raw code with a notice that the renderer is not available here; a fence nobody ever claimed stays plain code.
 
@@ -66,6 +66,14 @@ An unclaimed, unresolved, external, data, oversized, or failed image keeps its o
 A reader can keep four native or installed disclosure rows expanded. A fifth row stays collapsed until another row closes.
 
 Mermaid is a renderer package, not a built-in renderer. Before you import it, a ` ```mermaid ` fence falls back to typed raw code with the unavailable-renderer notice. After you import it, the fence uses the generic disclosure row. The same rule applies to a `.mmd` source and to a `![[source:…mmd]]` embed: with no package, the reader shows readable code or transclusion; with the package, the reader mounts an inline package session that uses the inline budget.
+
+## JSON Canvas
+
+JSON Canvas is a renderer package, not a built-in renderer. It renders `.canvas` JSON documents as a read-only, accessible canvas. Before you import `RendererPackages/JSONCanvas`, a `.canvas` source or ` ```jsoncanvas ` fence stays readable source/raw code. After you import the folder through **Settings → Renderers → Advanced Local Renderer Package Import**, matching sources and the `jsoncanvas` fence use the generic renderer surface. Removed or suppressed packages restore the readable fallback.
+
+Canvases at or below 48,000 bytes render. Larger canvases keep the readable Source/raw-code fallback. This is an accepted limit: the package bridge shares the same byte ceiling as every other renderer package.
+
+JSON Canvas links are typed. Canonical `[[page:<ULID>]]` and `[[source:<ULID>]]` nodes navigate to the matching page or source after a real user activation. A relative file node (with an optional `#subpath`) resolves to the matching page or source by name — never to an arbitrary filesystem path. HTTP(S) link nodes open in your browser through the same trusted external-link flow as other packages.
 
 ## Preferences and fallback
 
