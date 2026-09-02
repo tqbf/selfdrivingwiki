@@ -1,0 +1,137 @@
+{
+  "revision": 4,
+  "packageID": "org.selfdrivingwiki.json-canvas-readonly",
+  "version": "1.0.0",
+  "descriptors": [
+    {
+      "reference": {
+        "packageID": "org.selfdrivingwiki.json-canvas-readonly",
+        "version": "1.0.0",
+        "registrationID": "json-canvas"
+      },
+      "displayName": "JSON Canvas",
+      "implementation": {
+        "webPackage": {
+          "_0": {
+            "path": "index.html"
+          }
+        }
+      },
+      "matchers": [
+        {
+          "normalizedMIME": {
+            "_0": "application/json"
+          }
+        },
+        {
+          "extensionFallback": {
+            "_0": "canvas"
+          }
+        },
+        {
+          "boundedJSON": {
+            "_0": {
+              "root": "object",
+              "properties": {},
+              "arrays": {
+                "nodes": "object",
+                "edges": "object"
+              }
+            }
+          }
+        }
+      ],
+      "presentations": [
+        "web"
+      ],
+      "supportedEmbeddingRoles": [
+        "inlineContent",
+        "disclosureRow"
+      ],
+      "fenceClaims": [
+        {
+          "alias": "jsoncanvas",
+          "inlineMIMEType": "application/json"
+        }
+      ],
+      "approvedAssets": [
+        {
+          "path": "PROVENANCE.md",
+          "digest": "cc87da7b882ce8416fcc399535118b4956a1f2b36bf24e32954363bb4038c82d"
+        },
+        {
+          "path": "LICENSE.md",
+          "digest": "081e33340d0eb36d193ee4cab8446bb08c0566878b55f72aa3643d65b38d959d"
+        },
+        {
+          "path": "JSONCanvasSpec.md",
+          "digest": "6dfed8c48fb09a4b5942b478852cf179069db929de92987dd3be3556cb6d5650"
+        },
+        {
+          "path": "index.html",
+          "digest": "b05ad791c251df13fce6b614f0dd5d8a6232565be472cb2378ef9c8ec3c42975"
+        },
+        {
+          "path": "viewer.js",
+          "digest": "55c12399e9062e4a2c3c75cfd98fda0afb69b9edbf0bd7e219499c6e85b05c2f"
+        },
+        {
+          "path": "viewer.css",
+          "digest": "53341647562316e5d7e81a978989c85ff8a93ccf1ab2c29fe70d838c75bc4ef9"
+        }
+      ],
+      "capabilities": [
+        "inputRead",
+        "externalLink",
+        "hostNavigation"
+      ],
+      "hostNavigation": {
+        "allowedTargetKinds": [
+          "namedContent",
+          "page",
+          "source"
+        ]
+      },
+      "sizeLimits": {
+        "maximumInputByteCount": 48000,
+        "maximumDecodedByteCount": 48000
+      },
+      "linkPolicy": "userActivatedExternal",
+      "accessibility": {
+        "supportsVoiceOver": true,
+        "supportsKeyboardNavigation": true
+      },
+      "compatibility": {
+        "minimumProtocolRevision": 1,
+        "maximumProtocolRevision": 1
+      },
+      "priority": 110
+    }
+  ],
+  "assets": [
+    {
+      "path": "PROVENANCE.md",
+      "digest": "cc87da7b882ce8416fcc399535118b4956a1f2b36bf24e32954363bb4038c82d"
+    },
+    {
+      "path": "LICENSE.md",
+      "digest": "081e33340d0eb36d193ee4cab8446bb08c0566878b55f72aa3643d65b38d959d"
+    },
+    {
+      "path": "JSONCanvasSpec.md",
+      "digest": "6dfed8c48fb09a4b5942b478852cf179069db929de92987dd3be3556cb6d5650"
+    },
+    {
+      "path": "index.html",
+      "digest": "b05ad791c251df13fce6b614f0dd5d8a6232565be472cb2378ef9c8ec3c42975"
+    },
+    {
+      "path": "viewer.js",
+      "digest": "55c12399e9062e4a2c3c75cfd98fda0afb69b9edbf0bd7e219499c6e85b05c2f"
+    },
+    {
+      "path": "viewer.css",
+      "digest": "53341647562316e5d7e81a978989c85ff8a93ccf1ab2c29fe70d838c75bc4ef9"
+    }
+  ]
+}

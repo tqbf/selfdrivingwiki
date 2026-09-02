@@ -1,0 +1,107 @@
+:root {
+  color-scheme: light dark;
+  --canvas-background: light-dark(#f5f4f2, #1e1e1e);
+  --canvas-text: light-dark(#1a1a1a, #e8e8e8);
+  --node-stroke: light-dark(#3a3a3a, #b0b0b0);
+  --edge-stroke: light-dark(#888888, #6a6a6a);
+  --focus-ring: light-dark(#0a84ff, #0a84ff);
+}
+
+html, body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  background: var(--canvas-background);
+  color: var(--canvas-text);
+}
+
+#viewer {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  outline: none;
+  position: relative;
+}
+
+#viewer:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.scene {
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+  cursor: grab;
+}
+
+.scene:active {
+  cursor: grabbing;
+}
+
+.node {
+  stroke-width: 1.5;
+}
+
+.node:focus,
+.node-anchor:focus {
+  stroke-width: 3;
+  stroke: var(--focus-ring);
+  outline: none;
+}
+
+.node-anchor:hover,
+.node-anchor:focus-visible {
+  stroke: var(--focus-ring);
+}
+
+.node-text {
+  fill: var(--canvas-text);
+  font-size: 13px;
+  line-height: 1.3;
+  pointer-events: none;
+  user-select: none;
+}
+
+.node-label {
+  fill: var(--canvas-text);
+  font-size: 12px;
+  pointer-events: none;
+  user-select: none;
+}
+
+.edge {
+  stroke: var(--edge-stroke);
+  stroke-width: 1.5;
+  pointer-events: none;
+  fill: none;
+}
+
+.edge-label {
+  fill: var(--edge-stroke);
+  font-size: 11px;
+  pointer-events: none;
+  user-select: none;
+}
+
+.message {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 1rem;
+  text-align: center;
+  color: var(--canvas-text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scene {
+    transition: none;
+  }
+}
