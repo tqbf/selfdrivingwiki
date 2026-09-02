@@ -150,12 +150,33 @@ public struct RendererAccessibility: Codable, Hashable, Sendable {
 }
 
 /// Capability names parsed from package metadata. Validation admits only the
-/// two read-only host operations in this phase.
+/// bounded host operations listed by ``RendererDescriptor``.
 public enum RendererCapability: String, Codable, CaseIterable, Hashable, Sendable {
     case inputRead
     case externalLink
+    case hostNavigation
     case network
     case credentials
     case worker
     case contentWrite
+}
+
+/// Closed target namespaces that a Web package may request through the
+/// user-activated host-navigation bridge.
+public enum RendererHostNavigationTargetKind: String, Codable, CaseIterable, Hashable, Sendable {
+    case page
+    case source
+    case namedContent
+}
+
+/// Explicit, bounded authority paired with the `hostNavigation` capability.
+public struct RendererHostNavigationDeclaration: Codable, Hashable, Sendable {
+    public let allowedTargetKinds: Set<RendererHostNavigationTargetKind>
+
+    public init(allowedTargetKinds: Set<RendererHostNavigationTargetKind>) throws {
+        guard allowedTargetKinds.isEmpty == false else {
+            throw RendererValidationError.emptyHostNavigationDeclaration
+        }
+        self.allowedTargetKinds = allowedTargetKinds
+    }
 }

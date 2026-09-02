@@ -218,6 +218,103 @@ public struct RendererExternalActivationAuthorizer {
     }
 }
 
+public protocol RendererNavigationActivationNonceGenerating {
+    func makeNavigationNonce() -> RendererNavigationActivationNonce
+}
+
+public struct SystemRendererNavigationActivationNonceGenerator: RendererNavigationActivationNonceGenerating {
+    public init() {}
+
+    public func makeNavigationNonce() -> RendererNavigationActivationNonce {
+        let external = SystemRendererActivationNonceGenerator().makeNonce()
+        return .init(rawValue: external.rawValue)
+    }
+}
+
+public struct RendererNavigationActivationAuthorizer {
+    private struct PendingActivation {
+        let target: RendererNavigationTarget
+        let context: RendererExternalActivationContext
+        let expiresAt: Date
+    }
+
+    private let clock: any RendererActivationClock
+    private let nonceGenerator: any RendererNavigationActivationNonceGenerating
+    private var pending: [RendererNavigationActivationNonce: PendingActivation] = [:]
+    private var invalidated: Set<RendererNavigationActivationNonce> = []
+
+    public init(
+        clock: any RendererActivationClock = SystemRendererActivationClock(),
+        nonceGenerator: any RendererNavigationActivationNonceGenerating = SystemRendererNavigationActivationNonceGenerator()
+    ) {
+        self.clock = clock
+        self.nonceGenerator = nonceGenerator
+    }
+
+    public mutating func recordTrustedActivation(
+        target: RendererNavigationTarget,
+        context: RendererExternalActivationContext
+    ) -> RendererNavigationActivationNonce {
+        removeExpired()
+        while pending.count >= WikiAppWebViewPolicy.maximumPendingExternalActivationNonces,
+              let nonce = pending.keys.first {
+            pending.removeValue(forKey: nonce)
+            invalidated.insert(nonce)
+        }
+        let nonce = nonceGenerator.makeNavigationNonce()
+        pending[nonce] = .init(
+            target: target,
+            context: context,
+            expiresAt: clock.now().addingTimeInterval(WikiAppWebViewPolicy.externalActivationNonceLifetime.timeInterval))
+        return nonce
+    }
+
+    public mutating func redeem(
+        nonce: RendererNavigationActivationNonce?,
+        target: RendererNavigationTarget,
+        context: RendererExternalActivationContext
+    ) throws {
+        guard let nonce else { throw RendererExternalActivationError.absentNonce }
+        guard invalidated.contains(nonce) == false,
+              let activation = pending.removeValue(forKey: nonce)
+        else { throw RendererExternalActivationError.replayedNonce }
+        invalidated.insert(nonce)
+        guard clock.now() < activation.expiresAt else { throw RendererExternalActivationError.expiredNonce }
+        guard activation.context.sessionID == context.sessionID else { throw RendererExternalActivationError.wrongSession }
+        guard activation.context.windowID == context.windowID else { throw RendererExternalActivationError.wrongWindow }
+        guard activation.context.frameID == activation.context.mainFrameID,
+              context.frameID == context.mainFrameID else { throw RendererExternalActivationError.nonMainFrame }
+        guard activation.context.navigationID == context.navigationID else {
+            throw RendererExternalActivationError.navigationInvalidated
+        }
+        guard activation.target == target else { throw RendererExternalActivationError.destinationMismatch }
+        retainBoundedInvalidated()
+    }
+
+    public mutating func invalidateAll() {
+        invalidated.formUnion(pending.keys)
+        pending.removeAll()
+        retainBoundedInvalidated()
+    }
+
+    private mutating func removeExpired() {
+        let now = clock.now()
+        let expired = pending.compactMap { $0.value.expiresAt <= now ? $0.key : nil }
+        for nonce in expired {
+            pending.removeValue(forKey: nonce)
+            invalidated.insert(nonce)
+        }
+        retainBoundedInvalidated()
+    }
+
+    private mutating func retainBoundedInvalidated() {
+        let overflow = invalidated.count - WikiAppWebViewPolicy.maximumInvalidatedExternalActivationNonces
+        if overflow > 0 {
+            for nonce in invalidated.prefix(overflow) { invalidated.remove(nonce) }
+        }
+    }
+}
+
 private extension Duration {
     var timeInterval: TimeInterval {
         let components = self.components

@@ -208,6 +208,120 @@ struct RendererBridgeContractsTests {
         }
     }
 
+    @Test("host navigation validates typed targets and shares replay IDs with input reads")
+    func hostNavigationAuthorizationIsTypedAndReplayShared() throws {
+        let capability = RendererSessionCapability(rawValue: "capability")
+        let input = RendererBridgeInput.source(versionID: .init(rawValue: "version-1"))
+        let requestID = RendererBridgeRequestID(rawValue: "shared-request")
+        let pageID = PageID(rawValue: "01HXXXXXXXXXXXXXXXXXXXXXXX")
+        let navigation = RendererNavigationRequest(
+            id: requestID,
+            capability: capability,
+            target: .page(pageID),
+            activationNonce: .init(rawValue: "navigation-nonce"))
+        var authorizer = RendererBridgeAuthorizer(
+            capability: capability,
+            authorizedInput: input,
+            allowedNavigationTargetKinds: [.page])
+
+        #expect(try authorizer.authorizeNavigation(
+            envelope: RendererBridgeEnvelope.encode(navigation),
+            context: nil,
+            sessionIsReady: true,
+            sessionIsClosed: false) == navigation)
+
+        let inputRequest = RendererBridgeRequest(
+            id: requestID,
+            method: .inputRead,
+            capability: capability,
+            input: input)
+        #expect(throws: RendererBridgeAuthorizationError.duplicateRequestID) {
+            try authorizer.authorize(
+                envelope: RendererBridgeEnvelope.encode(inputRequest),
+                context: nil,
+                sessionIsReady: true,
+                sessionIsClosed: false)
+        }
+    }
+
+    @Test("host navigation requires declared kind and activation")
+    func hostNavigationRequiresDeclaredKindAndActivation() throws {
+        let capability = RendererSessionCapability(rawValue: "capability")
+        let reference = try RendererNamedContentReference(path: "notes/Readme.md", subpath: "#Details")
+        let missingActivation = RendererNavigationRequest(
+            id: .init(rawValue: "missing-activation"),
+            capability: capability,
+            target: .namedContent(reference),
+            activationNonce: nil)
+        var authorizer = RendererBridgeAuthorizer(
+            capability: capability,
+            allowedNavigationTargetKinds: [.namedContent])
+        #expect(throws: RendererBridgeAuthorizationError.missingNavigationActivation) {
+            try authorizer.authorizeNavigation(
+                envelope: RendererBridgeEnvelope.encode(missingActivation),
+                context: nil,
+                sessionIsReady: true,
+                sessionIsClosed: false)
+        }
+
+        let undeclared = RendererNavigationRequest(
+            id: .init(rawValue: "undeclared"),
+            capability: capability,
+            target: .source(SourceID(rawValue: "01HYYYYYYYYYYYYYYYYYYYYYYY")),
+            activationNonce: .init(rawValue: "nonce"))
+        #expect(throws: RendererBridgeAuthorizationError.undeclaredNavigationTarget) {
+            try authorizer.authorizeNavigation(
+                envelope: RendererBridgeEnvelope.encode(undeclared),
+                context: nil,
+                sessionIsReady: true,
+                sessionIsClosed: false)
+        }
+    }
+
+    @Test("named content rejects ambient authority syntax")
+    func namedContentRejectsUnsafeSyntax() throws {
+        let invalidPaths = ["", "/absolute", "../escape", "a/../b", "https:example", "a?b", "a%2Fb", "a#b", "a\\b", "user@host"]
+        for path in invalidPaths {
+            #expect(throws: RendererBridgeAuthorizationError.invalidNavigationTarget) {
+                _ = try RendererNamedContentReference(path: path)
+            }
+        }
+        #expect(try RendererNamedContentReference(path: "folder/Board.canvas", subpath: "#Node") ==
+            RendererNamedContentReference(path: "folder/Board.canvas", subpath: "#Node"))
+    }
+
+    @Test("navigation activation is single-use target-bound and purpose-separated")
+    func navigationActivationIsBoundedAndPurposeSeparated() throws {
+        let sessionID = RendererSessionID(rawValue: UUID())
+        let windowID = UUID()
+        let frameID = UUID()
+        let context = RendererExternalActivationContext(
+            sessionID: sessionID,
+            windowID: windowID,
+            frameID: frameID,
+            mainFrameID: frameID,
+            navigationID: 1)
+        let page = RendererNavigationTarget.page(PageID(rawValue: "01HXXXXXXXXXXXXXXXXXXXXXXX"))
+        let source = RendererNavigationTarget.source(SourceID(rawValue: "01HYYYYYYYYYYYYYYYYYYYYYYY"))
+        var authorizer = RendererNavigationActivationAuthorizer()
+        let nonce = authorizer.recordTrustedActivation(target: page, context: context)
+
+        #expect(throws: RendererExternalActivationError.destinationMismatch) {
+            try authorizer.redeem(nonce: nonce, target: source, context: context)
+        }
+        #expect(throws: RendererExternalActivationError.replayedNonce) {
+            try authorizer.redeem(nonce: nonce, target: page, context: context)
+        }
+
+        let fresh = authorizer.recordTrustedActivation(target: page, context: context)
+        try authorizer.redeem(nonce: fresh, target: page, context: context)
+        #expect(throws: RendererExternalActivationError.replayedNonce) {
+            try authorizer.redeem(nonce: fresh, target: page, context: context)
+        }
+        let externalNonce = RendererExternalActivationNonce(rawValue: fresh.rawValue)
+        #expect(externalNonce.rawValue == fresh.rawValue)
+    }
+
     @Test("replay retention has a deterministic bound")
     func replayRetentionHasDeterministicBound() throws {
         let capability = RendererSessionCapability(rawValue: "capability")

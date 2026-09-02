@@ -16,6 +16,7 @@ public struct RendererBridgeRequestID: RawRepresentable, Hashable, Sendable, Cod
 
 public enum RendererBridgeMethod: String, Codable, Sendable {
     case inputRead = "input.read"
+    case hostNavigate = "host.navigate"
 }
 
 /// The only bridge input targets. A page cannot name a source, file path, URL,
@@ -25,6 +26,164 @@ public enum RendererBridgeInput: Codable, Equatable, Sendable {
     case source(versionID: SourceVersionID)
     case markdown(versionID: SourceMarkdownVersionID)
     case inlineArtifact(RendererEmbeddedContent.InlineArtifact)
+}
+
+public struct RendererNamedContentReference: Codable, Equatable, Hashable, Sendable {
+    public let path: String
+    public let subpath: String?
+
+    public init(path: String, subpath: String? = nil) throws {
+        guard Self.isValidPath(path) else { throw RendererBridgeAuthorizationError.invalidNavigationTarget }
+        if let subpath {
+            guard Self.isValidSubpath(subpath) else { throw RendererBridgeAuthorizationError.invalidNavigationTarget }
+        }
+        self.path = path
+        self.subpath = subpath
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            path: container.decode(String.self, forKey: .path),
+            subpath: container.decodeIfPresent(String.self, forKey: .subpath))
+    }
+
+    private enum CodingKeys: String, CodingKey { case path, subpath }
+
+    private static func isValidPath(_ value: String) -> Bool {
+        guard value.isEmpty == false,
+              value == value.trimmingCharacters(in: .whitespacesAndNewlines),
+              value.utf8.count <= WikiAppWebViewPolicy.maximumNamedContentPathByteCount,
+              value.hasPrefix("/") == false,
+              value.hasPrefix("~") == false,
+              value.contains("\\") == false,
+              value.contains(":") == false,
+              value.contains("@") == false,
+              value.contains("?") == false,
+              value.contains("#") == false,
+              value.contains("%") == false,
+              value.unicodeScalars.allSatisfy({ $0.properties.generalCategory != .control })
+        else { return false }
+        let components = value.split(separator: "/", omittingEmptySubsequences: false)
+        return components.allSatisfy { $0.isEmpty == false && $0 != "." && $0 != ".." }
+    }
+
+    private static func isValidSubpath(_ value: String) -> Bool {
+        value.isEmpty == false &&
+            value == value.trimmingCharacters(in: .whitespacesAndNewlines) &&
+            value.utf8.count <= WikiAppWebViewPolicy.maximumNamedContentSubpathByteCount &&
+            value.hasPrefix("#") &&
+            value.dropFirst().isEmpty == false &&
+            value.contains("?") == false &&
+            value.contains("%") == false &&
+            value.unicodeScalars.allSatisfy { $0.properties.generalCategory != .control }
+    }
+}
+
+public enum RendererNavigationTarget: Codable, Equatable, Hashable, Sendable {
+    case page(PageID)
+    case source(SourceID)
+    case namedContent(RendererNamedContentReference)
+
+    public var kind: RendererHostNavigationTargetKind {
+        switch self {
+        case .page: .page
+        case .source: .source
+        case .namedContent: .namedContent
+        }
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let value = try Self.synthesizedDecode(from: decoder)
+        switch value {
+        case let .page(id):
+            guard Self.isCanonicalULID(id.rawValue) else { throw RendererBridgeAuthorizationError.invalidNavigationTarget }
+        case let .source(id):
+            guard Self.isCanonicalULID(id.rawValue) else { throw RendererBridgeAuthorizationError.invalidNavigationTarget }
+        case .namedContent:
+            break
+        }
+        self = value
+    }
+
+    private static func synthesizedDecode(from decoder: any Decoder) throws -> Self {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        guard container.allKeys.count == 1, let key = container.allKeys.first else {
+            throw RendererBridgeAuthorizationError.invalidNavigationTarget
+        }
+        let nested = try container.nestedContainer(keyedBy: PayloadKey.self, forKey: key)
+        switch key {
+        case .page:
+            return .page(try nested.decode(PageID.self, forKey: .value))
+        case .source:
+            return .source(try nested.decode(SourceID.self, forKey: .value))
+        case .namedContent:
+            return .namedContent(try nested.decode(RendererNamedContentReference.self, forKey: .value))
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey { case page, source, namedContent }
+    private enum PayloadKey: String, CodingKey { case value = "_0" }
+
+    private static func isCanonicalULID(_ value: String) -> Bool {
+        value.utf8.count == 26 && value.unicodeScalars.allSatisfy(ULID.allowedCharacters.contains)
+    }
+}
+
+public struct RendererNavigationActivationNonce: RawRepresentable, Codable, Equatable, Hashable, Sendable {
+    public let rawValue: String
+    public init(rawValue: String) { self.rawValue = rawValue }
+}
+
+public struct RendererNavigationRequest: Codable, Equatable, Sendable {
+    public let id: RendererBridgeRequestID
+    public let method: RendererBridgeMethod
+    public let capability: RendererSessionCapability
+    public let target: RendererNavigationTarget
+    public let activationNonce: RendererNavigationActivationNonce?
+
+    public init(
+        id: RendererBridgeRequestID,
+        method: RendererBridgeMethod = .hostNavigate,
+        capability: RendererSessionCapability,
+        target: RendererNavigationTarget,
+        activationNonce: RendererNavigationActivationNonce?
+    ) {
+        self.id = id
+        self.method = method
+        self.capability = capability
+        self.target = target
+        self.activationNonce = activationNonce
+    }
+}
+
+public struct RendererNavigationPageRequest: Codable, Equatable, Sendable {
+    public let id: RendererBridgeRequestID
+    public let method: RendererBridgeMethod
+    public let target: RendererNavigationTarget
+    public let activationNonce: RendererNavigationActivationNonce?
+
+    public init(
+        id: RendererBridgeRequestID,
+        method: RendererBridgeMethod = .hostNavigate,
+        target: RendererNavigationTarget,
+        activationNonce: RendererNavigationActivationNonce? = nil
+    ) {
+        self.id = id
+        self.method = method
+        self.target = target
+        self.activationNonce = activationNonce
+    }
+}
+
+public struct RendererNavigationAcknowledgement: Codable, Equatable, Sendable {
+    public let id: RendererBridgeRequestID
+    public let authorized: Bool
+
+    public init(id: RendererBridgeRequestID) {
+        self.id = id
+        authorized = true
+    }
 }
 
 public struct RendererBridgeRequest: Codable, Equatable, Sendable {
@@ -55,6 +214,11 @@ public struct RendererBridgePageRequest: Codable, Equatable, Sendable {
     }
 }
 
+public enum RendererBridgePageEnvelope: Codable, Equatable, Sendable {
+    case input(RendererBridgePageRequest)
+    case navigation(RendererNavigationPageRequest)
+}
+
 public struct RendererBridgeInputPayload: Codable, Equatable, Sendable {
     public let mimeType: String
     public let bytes: Data
@@ -69,9 +233,14 @@ public struct RendererBridgeResponse: Codable, Equatable, Sendable {
 
 public enum RendererBridgeEnvelope {
     public static func encode(_ request: RendererBridgeRequest) throws -> Data { try JSONEncoder().encode(request) }
+    public static func encode(_ request: RendererNavigationRequest) throws -> Data { try JSONEncoder().encode(request) }
+    public static func encode(_ envelope: RendererBridgePageEnvelope) throws -> Data { try JSONEncoder().encode(envelope) }
     public static func decodeRequest(from data: Data) throws -> RendererBridgeRequest { try JSONDecoder().decode(RendererBridgeRequest.self, from: data) }
+    public static func decodeNavigationRequest(from data: Data) throws -> RendererNavigationRequest { try JSONDecoder().decode(RendererNavigationRequest.self, from: data) }
     public static func decodePageRequest(from data: Data) throws -> RendererBridgePageRequest { try JSONDecoder().decode(RendererBridgePageRequest.self, from: data) }
+    public static func decodePageEnvelope(from data: Data) throws -> RendererBridgePageEnvelope { try JSONDecoder().decode(RendererBridgePageEnvelope.self, from: data) }
     public static func encode(_ response: RendererBridgeResponse) throws -> Data { try JSONEncoder().encode(response) }
+    public static func encode(_ acknowledgement: RendererNavigationAcknowledgement) throws -> Data { try JSONEncoder().encode(acknowledgement) }
 }
 
 public struct RendererBridgeAuthorizationContext: Equatable, Sendable {
@@ -89,6 +258,7 @@ public enum RendererBridgeAuthorizationError: Error, Equatable, Sendable {
     case malformedEnvelope, oversizedEnvelope, capabilityMismatch, wrongSession, wrongWindow, nonMainFrame
     case sessionNotReady, sessionClosed, invalidRequestID, duplicateRequestID, replayCapacityExceeded
     case unauthorizedInput, oversizedPayload, unavailablePinnedInput
+    case hostNavigationUnavailable, undeclaredNavigationTarget, invalidNavigationTarget, missingNavigationActivation
 }
 
 /// Session-local authorization gate. Every session has an independent replay
@@ -98,10 +268,21 @@ public struct RendererBridgeAuthorizer: Sendable {
     private let sessionID: RendererSessionID?
     private let windowID: UUID?
     private let authorizedInput: RendererBridgeInput?
+    private let allowedNavigationTargetKinds: Set<RendererHostNavigationTargetKind>
     private var seenRequestIDs: Set<RendererBridgeRequestID> = []
 
-    public init(capability: RendererSessionCapability, sessionID: RendererSessionID? = nil, windowID: UUID? = nil, authorizedInput: RendererBridgeInput? = nil) {
-        self.capability = capability; self.sessionID = sessionID; self.windowID = windowID; self.authorizedInput = authorizedInput
+    public init(
+        capability: RendererSessionCapability,
+        sessionID: RendererSessionID? = nil,
+        windowID: UUID? = nil,
+        authorizedInput: RendererBridgeInput? = nil,
+        allowedNavigationTargetKinds: Set<RendererHostNavigationTargetKind> = []
+    ) {
+        self.capability = capability
+        self.sessionID = sessionID
+        self.windowID = windowID
+        self.authorizedInput = authorizedInput
+        self.allowedNavigationTargetKinds = allowedNavigationTargetKinds
     }
 
     public mutating func authorize(envelope: Data, sessionIsReady: Bool) throws -> RendererBridgeRequest {
@@ -116,19 +297,58 @@ public struct RendererBridgeAuthorizer: Sendable {
         do { request = try RendererBridgeEnvelope.decodeRequest(from: envelope) }
         catch { throw RendererBridgeAuthorizationError.malformedEnvelope }
         guard request.capability == capability else { throw RendererBridgeAuthorizationError.capabilityMismatch }
+        try validate(context: context)
+        guard request.method == .inputRead else { throw RendererBridgeAuthorizationError.malformedEnvelope }
+        guard authorizedInput == nil || request.input == authorizedInput else { throw RendererBridgeAuthorizationError.unauthorizedInput }
+        try consume(request.id)
+        return request
+    }
+
+    public mutating func authorizeNavigation(
+        envelope: Data,
+        context: RendererBridgeAuthorizationContext?,
+        sessionIsReady: Bool,
+        sessionIsClosed: Bool
+    ) throws -> RendererNavigationRequest {
+        guard envelope.count <= WikiAppWebViewPolicy.maximumBridgeMessageByteCount else {
+            throw RendererBridgeAuthorizationError.oversizedEnvelope
+        }
+        guard sessionIsClosed == false else { throw RendererBridgeAuthorizationError.sessionClosed }
+        guard sessionIsReady else { throw RendererBridgeAuthorizationError.sessionNotReady }
+        let request: RendererNavigationRequest
+        do { request = try RendererBridgeEnvelope.decodeNavigationRequest(from: envelope) }
+        catch { throw RendererBridgeAuthorizationError.malformedEnvelope }
+        guard request.method == .hostNavigate else { throw RendererBridgeAuthorizationError.malformedEnvelope }
+        guard request.capability == capability else { throw RendererBridgeAuthorizationError.capabilityMismatch }
+        try validate(context: context)
+        guard allowedNavigationTargetKinds.isEmpty == false else {
+            throw RendererBridgeAuthorizationError.hostNavigationUnavailable
+        }
+        guard allowedNavigationTargetKinds.contains(request.target.kind) else {
+            throw RendererBridgeAuthorizationError.undeclaredNavigationTarget
+        }
+        guard request.activationNonce != nil else {
+            throw RendererBridgeAuthorizationError.missingNavigationActivation
+        }
+        try consume(request.id)
+        return request
+    }
+
+    private func validate(context: RendererBridgeAuthorizationContext?) throws {
         if let sessionID, let context {
             guard context.sessionID == sessionID else { throw RendererBridgeAuthorizationError.wrongSession }
             guard context.windowID == windowID else { throw RendererBridgeAuthorizationError.wrongWindow }
             guard context.frameID == context.mainFrameID else { throw RendererBridgeAuthorizationError.nonMainFrame }
         }
-        guard authorizedInput == nil || request.input == authorizedInput else { throw RendererBridgeAuthorizationError.unauthorizedInput }
-        let requestIDByteCount = request.id.rawValue.utf8.count
+    }
+
+    private mutating func consume(_ id: RendererBridgeRequestID) throws {
+        let requestIDByteCount = id.rawValue.utf8.count
         guard requestIDByteCount > 0,
               requestIDByteCount <= WikiAppWebViewPolicy.maximumBridgeRequestIDByteCount
         else { throw RendererBridgeAuthorizationError.invalidRequestID }
         guard seenRequestIDs.count < WikiAppWebViewPolicy.maximumRetainedBridgeRequestIDs
         else { throw RendererBridgeAuthorizationError.replayCapacityExceeded }
-        guard seenRequestIDs.insert(request.id).inserted else { throw RendererBridgeAuthorizationError.duplicateRequestID }
-        return request
+        guard seenRequestIDs.insert(id).inserted else { throw RendererBridgeAuthorizationError.duplicateRequestID }
     }
 }

@@ -551,3 +551,147 @@ struct RendererStableOrderingTests {
         #expect(RendererMatchTier.extensionFallback < .strong)
     }
 }
+
+struct RendererHostNavigationManifestTests {
+    private func declaration(
+        _ kinds: Set<RendererHostNavigationTargetKind> = [.page, .source, .namedContent]
+    ) throws -> RendererHostNavigationDeclaration {
+        try .init(allowedTargetKinds: kinds)
+    }
+
+    private func descriptor(
+        capabilities: Set<RendererCapability> = [.inputRead, .hostNavigation],
+        hostNavigation: RendererHostNavigationDeclaration? = nil
+    ) throws -> RendererDescriptor {
+        try RendererFixtures.webDescriptor(
+            explicitEmbeddingRoles: true,
+            capabilities: capabilities,
+            hostNavigation: hostNavigation ?? declaration())
+    }
+
+    private func manifest(revision: Int, descriptor: RendererDescriptor) throws -> RendererManifest {
+        try RendererManifest(
+            revision: revision,
+            packageID: descriptor.reference.packageID,
+            version: descriptor.reference.version,
+            descriptors: [descriptor],
+            assets: descriptor.approvedAssets)
+    }
+
+    @Test func revision4CanonicalizesDeclaredTargetKindsDeterministically() throws {
+        let descriptor = try descriptor(hostNavigation: declaration([.source, .namedContent, .page]))
+        let value = try manifest(revision: RendererManifestRevision.hostNavigation, descriptor: descriptor)
+        let canonical = try value.canonicalJSON()
+        let text = String(decoding: canonical, as: UTF8.self)
+
+        #expect(value.revision == 4)
+        #expect(descriptor.capabilities.contains(.hostNavigation))
+        #expect(descriptor.hostNavigation?.allowedTargetKinds == [.page, .source, .namedContent])
+        #expect(text.contains(#""allowedTargetKinds":["namedContent","page","source"]"#))
+        #expect(try value.canonicalJSON() == canonical)
+        #expect(try value.packageHash() == value.packageHash())
+    }
+
+    @Test func preRevision4NavigationFailsClosed() throws {
+        let descriptor = try descriptor()
+        for revision in RendererManifestRevision.legacy ... RendererManifestRevision.fenceValidation {
+            #expect(throws: RendererValidationError.hostNavigationRequiresRevision4) {
+                try manifest(revision: revision, descriptor: descriptor)
+            }
+        }
+    }
+
+    @Test func capabilityAndDeclarationMustBePaired() throws {
+        #expect(throws: RendererValidationError.hostNavigationCapabilityRequiresDeclaration) {
+            let asset = RendererFixtures.webAsset()
+            _ = try RendererDescriptor(
+                reference: .init(
+                    packageID: RendererFixtures.packageID,
+                    version: RendererFixtures.version,
+                    registrationID: RendererFixtures.registrationID),
+                displayName: "Web",
+                implementation: .webPackage(.init(path: asset.path)),
+                matchers: [.artifactKind(.source)],
+                presentations: [.web],
+                supportedEmbeddingRoles: [.disclosureRow],
+                hasExplicitEmbeddingRoles: true,
+                approvedAssets: [asset],
+                capabilities: [.inputRead, .hostNavigation],
+                sizeLimits: try .init(maximumInputByteCount: 1_024, maximumDecodedByteCount: 1_024),
+                linkPolicy: .none,
+                accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
+                compatibility: try .init(minimumProtocolRevision: 1, maximumProtocolRevision: 1),
+                priority: 0)
+        }
+        #expect(throws: RendererValidationError.hostNavigationDeclarationRequiresCapability) {
+            _ = try RendererFixtures.webDescriptor(
+                explicitEmbeddingRoles: true,
+                capabilities: [.inputRead],
+                hostNavigation: try declaration())
+        }
+        #expect(throws: RendererValidationError.emptyHostNavigationDeclaration) {
+            _ = try declaration([])
+        }
+    }
+
+    @Test func builtInNavigationDeclarationIsRejected() throws {
+        #expect(throws: RendererValidationError.hostNavigationRequiresWebPackage) {
+            _ = try RendererDescriptor(
+                reference: .init(
+                    packageID: RendererFixtures.packageID,
+                    version: RendererFixtures.version,
+                    registrationID: RendererFixtures.registrationID),
+                displayName: "Native",
+                implementation: .builtIn(.pdf),
+                matchers: [.normalizedMIME(try .init(validating: "application/pdf"))],
+                presentations: [.native],
+                approvedAssets: [],
+                capabilities: [.inputRead, .hostNavigation],
+                hostNavigation: declaration([.page]),
+                sizeLimits: try .init(maximumInputByteCount: 1_024, maximumDecodedByteCount: 1_024),
+                linkPolicy: .none,
+                accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
+                compatibility: try .init(minimumProtocolRevision: 1, maximumProtocolRevision: 1),
+                priority: 0)
+        }
+    }
+
+    @Test func unknownCapabilityAndTargetKindFailDecode() {
+        let capability = Data(#"\"arbitraryNavigation\""#.utf8)
+        let target = Data(#"\"filesystemPath\""#.utf8)
+        #expect(throws: DecodingError.self) {
+            _ = try JSONDecoder().decode(RendererCapability.self, from: capability)
+        }
+        #expect(throws: DecodingError.self) {
+            _ = try JSONDecoder().decode(RendererHostNavigationTargetKind.self, from: target)
+        }
+    }
+
+    @Test func descriptorEncodingOmitsAbsentNavigationDeclaration() throws {
+        let descriptor = try RendererFixtures.webDescriptor(explicitEmbeddingRoles: true)
+        let text = String(decoding: try JSONEncoder().encode(descriptor), as: UTF8.self)
+        #expect(text.contains("hostNavigation") == false)
+    }
+
+    @Test func reviewedRevision2And3PackageHashesRemainStable() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let fixtures: [(path: String, revision: Int, hash: String)] = [
+            ("RendererPackages/Excalidraw/manifest.json", RendererManifestRevision.fenceClaims,
+             "7580e5195a43ee677a795c2a4591c3dcebf528d3dbfadba7001f659e9c328999"),
+            ("RendererPackages/Mermaid/manifest.json", RendererManifestRevision.fenceValidation,
+             "714bb2a23a33bbe45ab9507137c2784d844fee32220ae6248ea78a60e2acda6f"),
+        ]
+        for fixture in fixtures {
+            let data = try Data(contentsOf: root.appendingPathComponent(fixture.path))
+            let manifest = try JSONDecoder().decode(RendererManifest.self, from: data)
+            #expect(manifest.revision == fixture.revision)
+            #expect(try manifest.packageHash().hex == fixture.hash)
+            #expect(manifest.descriptors.allSatisfy {
+                $0.compatibility.supports(hostProtocolRevision: RendererRegistrySnapshotDefaults.hostProtocolRevision)
+            })
+        }
+    }
+}

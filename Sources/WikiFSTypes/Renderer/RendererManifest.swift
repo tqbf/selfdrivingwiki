@@ -4,10 +4,13 @@ import Foundation
 
 public enum RendererManifestRevision {
     public static let legacy = 1
-    /// Revision 2 added fence claims; revision 3 added per-claim fence-syntax
-    /// validation declarations (``RendererFenceValidationDeclaration``).
+    /// Revision 2 added package-declared Markdown fence claims.
     public static let fenceClaims = 2
-    public static let current = 3
+    /// Revision 3 added per-claim fence-syntax validation declarations.
+    public static let fenceValidation = 3
+    /// Revision 4 added explicit, typed host-navigation authority.
+    public static let hostNavigation = 4
+    public static let current = hostNavigation
     public static let supported: ClosedRange<Int> = legacy ... current
 }
 
@@ -50,8 +53,12 @@ public struct RendererManifest: Codable, Hashable, Sendable {
             // same fail-closed posture, evaluated before the claims gate so a
             // pre-revision-3 manifest cannot smuggle a validation contract in
             // via its claims.
-            if revision < RendererManifestRevision.current, descriptor.hasFenceValidation {
+            if revision < RendererManifestRevision.fenceValidation, descriptor.hasFenceValidation {
                 throw RendererValidationError.fenceValidationRequiresCurrentRevision
+            }
+            if revision < RendererManifestRevision.hostNavigation,
+               descriptor.capabilities.contains(.hostNavigation) || descriptor.hasHostNavigationDeclaration {
+                throw RendererValidationError.hostNavigationRequiresRevision4
             }
             // Fence authority is revision-2-and-later only: a revision-1
             // manifest that declares claims fails closed rather than silently
@@ -111,8 +118,12 @@ public struct RendererManifest: Codable, Hashable, Sendable {
             // Byte-for-byte the revision-2 path: reviewed revision-2 package
             // hashes are stability contracts and must not move.
             return try encoder.encode(CanonicalManifestV2(self))
-        case RendererManifestRevision.current:
+        case RendererManifestRevision.fenceValidation:
+            // Byte-for-byte the revision-3 path: reviewed revision-3 package
+            // hashes are stability contracts and must not move.
             return try encoder.encode(CanonicalManifestV3(self))
+        case RendererManifestRevision.hostNavigation:
+            return try encoder.encode(CanonicalManifestV4(self))
         default:
             throw RendererValidationError.unsupportedManifestRevision(revision)
         }
@@ -178,6 +189,22 @@ private struct CanonicalManifestV3: Encodable {
         packageID = manifest.packageID
         version = manifest.version
         descriptors = try manifest.descriptors.map(CanonicalRendererDescriptorV3.init)
+        assets = manifest.assets.sorted()
+    }
+}
+
+private struct CanonicalManifestV4: Encodable {
+    let revision: Int
+    let packageID: RendererPackageID
+    let version: RendererPackageVersion
+    let descriptors: [CanonicalRendererDescriptorV4]
+    let assets: [RendererAsset]
+
+    init(_ manifest: RendererManifest) throws {
+        revision = manifest.revision
+        packageID = manifest.packageID
+        version = manifest.version
+        descriptors = try manifest.descriptors.map(CanonicalRendererDescriptorV4.init)
         assets = manifest.assets.sorted()
     }
 }
@@ -250,6 +277,60 @@ private struct CanonicalRendererDescriptorV3: Encodable {
             : nil
         approvedAssets = descriptor.approvedAssets.sorted()
         capabilities = descriptor.capabilities.sorted { $0.rawValue < $1.rawValue }
+        sizeLimits = descriptor.sizeLimits
+        linkPolicy = descriptor.linkPolicy
+        accessibility = descriptor.accessibility
+        compatibility = descriptor.compatibility
+        priority = descriptor.priority
+    }
+
+    private static func sortedCodable<T: Encodable>(_ values: [T]) throws -> [T] {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return try values.map { (value: $0, key: try encoder.encode($0)) }
+            .sorted { $0.key.lexicographicallyPrecedes($1.key) }
+            .map(\.value)
+    }
+}
+
+private struct CanonicalRendererDescriptorV4: Encodable {
+    private struct CanonicalHostNavigation: Encodable {
+        let allowedTargetKinds: [RendererHostNavigationTargetKind]
+
+        init(_ declaration: RendererHostNavigationDeclaration) {
+            allowedTargetKinds = declaration.allowedTargetKinds.sorted { $0.rawValue < $1.rawValue }
+        }
+    }
+
+    let reference: RendererReference
+    let displayName: String
+    let implementation: RendererImplementation
+    let matchers: [RendererMatcher]
+    let presentations: [RendererPresentation]
+    let supportedEmbeddingRoles: [RendererEmbeddingRole]
+    let fenceClaims: [RendererFenceClaim]?
+    let approvedAssets: [RendererAsset]
+    let capabilities: [RendererCapability]
+    private let hostNavigation: CanonicalHostNavigation?
+    let sizeLimits: RendererSizeLimits
+    let linkPolicy: RendererLinkPolicy
+    let accessibility: RendererAccessibility
+    let compatibility: RendererCompatibility
+    let priority: Int
+
+    init(_ descriptor: RendererDescriptor) throws {
+        reference = descriptor.reference
+        displayName = descriptor.displayName
+        implementation = descriptor.implementation
+        matchers = try Self.sortedCodable(descriptor.matchers)
+        presentations = descriptor.presentations.sorted { $0.rawValue < $1.rawValue }
+        supportedEmbeddingRoles = descriptor.supportedEmbeddingRoles.sorted { $0.rawValue < $1.rawValue }
+        fenceClaims = descriptor.hasFenceClaims
+            ? descriptor.fenceClaims.sorted { $0.alias < $1.alias }
+            : nil
+        approvedAssets = descriptor.approvedAssets.sorted()
+        capabilities = descriptor.capabilities.sorted { $0.rawValue < $1.rawValue }
+        hostNavigation = descriptor.hostNavigation.map(CanonicalHostNavigation.init)
         sizeLimits = descriptor.sizeLimits
         linkPolicy = descriptor.linkPolicy
         accessibility = descriptor.accessibility
