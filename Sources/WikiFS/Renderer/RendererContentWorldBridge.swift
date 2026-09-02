@@ -30,6 +30,7 @@ struct RendererBridgeScriptMessage {
 final class RendererContentWorldBroker {
     private var authorizer: RendererBridgeAuthorizer
     private let inputReader: RendererAuthorizedInputReader
+    private let assetReader: RendererAuthorizedAssetReader?
     private let allowedNavigationTargetKinds: Set<RendererHostNavigationTargetKind>
     private let routeNavigation: @MainActor (RendererNavigationTarget) -> Void
     private var navigationActivationAuthorizer = RendererNavigationActivationAuthorizer()
@@ -46,6 +47,7 @@ final class RendererContentWorldBroker {
         sessionID: RendererSessionID,
         capability: RendererSessionCapability,
         inputReader: RendererAuthorizedInputReader,
+        assetReader: RendererAuthorizedAssetReader? = nil,
         allowedNavigationTargetKinds: Set<RendererHostNavigationTargetKind> = [],
         routeNavigation: @escaping @MainActor (RendererNavigationTarget) -> Void = { _ in },
         expectedOrigin: URL = URL(string: "renderer-package://package")!
@@ -54,6 +56,7 @@ final class RendererContentWorldBroker {
         windowID = UUID()
         self.capability = capability
         self.inputReader = inputReader
+        self.assetReader = assetReader
         self.allowedNavigationTargetKinds = allowedNavigationTargetKinds
         self.routeNavigation = routeNavigation
         self.expectedOrigin = (expectedOrigin.scheme ?? "", expectedOrigin.host ?? "")
@@ -62,7 +65,8 @@ final class RendererContentWorldBroker {
             sessionID: sessionID,
             windowID: windowID,
             authorizedInput: inputReader.authorizedInput,
-            allowedNavigationTargetKinds: allowedNavigationTargetKinds
+            allowedNavigationTargetKinds: allowedNavigationTargetKinds,
+            admittedAssetReferences: assetReader?.admittedReferences ?? []
         )
     }
 
@@ -139,6 +143,24 @@ final class RendererContentWorldBroker {
                 context: navigationActivationContext())
             routeNavigation(request.target)
             response = try RendererBridgeEnvelope.encode(RendererNavigationAcknowledgement(id: request.id))
+        case let .asset(pageRequest):
+            // Asset requests never pass through the primary input reader, and
+            // asset replies never expose primary source bytes.
+            guard let assetReader, assetReader.admittedReferences.contains(pageRequest.reference) else {
+                throw RendererBridgeAuthorizationError.assetReadUnavailable
+            }
+            let request = RendererAssetRequest(
+                id: pageRequest.id,
+                method: pageRequest.method,
+                capability: capability,
+                reference: pageRequest.reference)
+            _ = try authorizer.authorizeAsset(
+                envelope: RendererBridgeEnvelope.encode(request),
+                context: context,
+                sessionIsReady: sessionIsReady,
+                sessionIsClosed: isClosed)
+            let payload = try assetReader.read(request.reference)
+            response = try RendererBridgeEnvelope.encode(RendererAssetResponse(id: request.id, payload: payload))
         }
         guard response.count <= WikiAppWebViewPolicy.maximumBridgeMessageByteCount else {
             throw RendererBridgeAuthorizationError.oversizedPayload
@@ -164,6 +186,7 @@ final class RendererContentWorldBroker {
         isClosed = true
         invalidateNavigationActivations()
         inputReader.close()
+        assetReader?.close()
     }
 
     private func navigationActivationContext() -> RendererExternalActivationContext {

@@ -21,6 +21,9 @@ public enum WikiAppWebViewPolicy {
     public static let maximumRetainedBridgeRequestIDs = 1_024
     public static let maximumNamedContentPathByteCount = 256
     public static let maximumNamedContentSubpathByteCount = 16 * 1_024
+    /// Max byte count of a single validated asset reference (the `asset.read`
+    /// key). Bounded so admission lookups and replay budgets stay small.
+    public static let maximumAssetReferenceByteCount = 256
     public static let externalActivationNonceByteCount = 32
     public static let externalActivationNonceLifetime: Duration = .seconds(15)
     /// Per-session cap for active external activation capabilities.

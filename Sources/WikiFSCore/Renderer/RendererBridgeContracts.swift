@@ -17,6 +17,7 @@ public struct RendererBridgeRequestID: RawRepresentable, Hashable, Sendable, Cod
 public enum RendererBridgeMethod: String, Codable, Sendable {
     case inputRead = "input.read"
     case hostNavigate = "host.navigate"
+    case assetRead = "asset.read"
 }
 
 /// The only bridge input targets. A page cannot name a source, file path, URL,
@@ -200,6 +201,65 @@ public struct RendererBridgeRequest: Codable, Equatable, Sendable {
     }
 }
 
+/// The only asset-read target: an exact validated relative reference that the
+/// host admitted into this session (pinned `SourceVersionID`). Requesting a
+/// raw SourceID, path, URL, or arbitrary artifact is impossible at the type
+/// level.
+public struct RendererAssetPageRequest: Codable, Equatable, Sendable {
+    public let id: RendererBridgeRequestID
+    public let method: RendererBridgeMethod
+    public let reference: RendererAssetReference
+
+    public init(id: RendererBridgeRequestID, method: RendererBridgeMethod = .assetRead, reference: RendererAssetReference) {
+        self.id = id
+        self.method = method
+        self.reference = reference
+    }
+}
+
+/// Native-side asset request: the broker injects the session capability after
+/// postMessage, so package code cannot read or replay the token.
+public struct RendererAssetRequest: Codable, Equatable, Sendable {
+    public let id: RendererBridgeRequestID
+    public let method: RendererBridgeMethod
+    public let capability: RendererSessionCapability
+    public let reference: RendererAssetReference
+
+    public init(id: RendererBridgeRequestID, method: RendererBridgeMethod = .assetRead, capability: RendererSessionCapability, reference: RendererAssetReference) {
+        self.id = id
+        self.method = method
+        self.capability = capability
+        self.reference = reference
+    }
+}
+
+/// The payload returned to package code for one admitted asset: only the
+/// request ID, the approved MIME type, and the bounded bytes (plus an
+/// optional content digest for package-side cache identity). No paths, IDs,
+/// or existence details are exposed.
+public struct RendererAssetPayload: Codable, Equatable, Sendable {
+    public let mimeType: String
+    public let bytes: Data
+    public let contentDigest: String?
+
+    public init(mimeType: String, bytes: Data, contentDigest: String? = nil) {
+        self.mimeType = mimeType
+        self.bytes = bytes
+        self.contentDigest = contentDigest
+    }
+}
+
+/// Asset-read response: request ID + approved payload.
+public struct RendererAssetResponse: Codable, Equatable, Sendable {
+    public let id: RendererBridgeRequestID
+    public let payload: RendererAssetPayload
+
+    public init(id: RendererBridgeRequestID, payload: RendererAssetPayload) {
+        self.id = id
+        self.payload = payload
+    }
+}
+
 /// Page-visible envelope. The isolated broker converts this to a native request
 /// and injects the capability, so package code cannot read or replay the token.
 public struct RendererBridgePageRequest: Codable, Equatable, Sendable {
@@ -217,6 +277,7 @@ public struct RendererBridgePageRequest: Codable, Equatable, Sendable {
 public enum RendererBridgePageEnvelope: Codable, Equatable, Sendable {
     case input(RendererBridgePageRequest)
     case navigation(RendererNavigationPageRequest)
+    case asset(RendererAssetPageRequest)
 }
 
 public struct RendererBridgeInputPayload: Codable, Equatable, Sendable {
@@ -234,12 +295,15 @@ public struct RendererBridgeResponse: Codable, Equatable, Sendable {
 public enum RendererBridgeEnvelope {
     public static func encode(_ request: RendererBridgeRequest) throws -> Data { try JSONEncoder().encode(request) }
     public static func encode(_ request: RendererNavigationRequest) throws -> Data { try JSONEncoder().encode(request) }
+    public static func encode(_ request: RendererAssetRequest) throws -> Data { try JSONEncoder().encode(request) }
     public static func encode(_ envelope: RendererBridgePageEnvelope) throws -> Data { try JSONEncoder().encode(envelope) }
     public static func decodeRequest(from data: Data) throws -> RendererBridgeRequest { try JSONDecoder().decode(RendererBridgeRequest.self, from: data) }
     public static func decodeNavigationRequest(from data: Data) throws -> RendererNavigationRequest { try JSONDecoder().decode(RendererNavigationRequest.self, from: data) }
+    public static func decodeAssetRequest(from data: Data) throws -> RendererAssetRequest { try JSONDecoder().decode(RendererAssetRequest.self, from: data) }
     public static func decodePageRequest(from data: Data) throws -> RendererBridgePageRequest { try JSONDecoder().decode(RendererBridgePageRequest.self, from: data) }
     public static func decodePageEnvelope(from data: Data) throws -> RendererBridgePageEnvelope { try JSONDecoder().decode(RendererBridgePageEnvelope.self, from: data) }
     public static func encode(_ response: RendererBridgeResponse) throws -> Data { try JSONEncoder().encode(response) }
+    public static func encode(_ response: RendererAssetResponse) throws -> Data { try JSONEncoder().encode(response) }
     public static func encode(_ acknowledgement: RendererNavigationAcknowledgement) throws -> Data { try JSONEncoder().encode(acknowledgement) }
 }
 
@@ -259,6 +323,7 @@ public enum RendererBridgeAuthorizationError: Error, Equatable, Sendable {
     case sessionNotReady, sessionClosed, invalidRequestID, duplicateRequestID, replayCapacityExceeded
     case unauthorizedInput, oversizedPayload, unavailablePinnedInput
     case hostNavigationUnavailable, undeclaredNavigationTarget, invalidNavigationTarget, missingNavigationActivation
+    case assetReadUnavailable, unauthorizedAsset, invalidAssetReference, assetNotAdmitted
 }
 
 /// Session-local authorization gate. Every session has an independent replay
@@ -269,6 +334,7 @@ public struct RendererBridgeAuthorizer: Sendable {
     private let windowID: UUID?
     private let authorizedInput: RendererBridgeInput?
     private let allowedNavigationTargetKinds: Set<RendererHostNavigationTargetKind>
+    private let admittedAssetReferences: Set<RendererAssetReference>
     private var seenRequestIDs: Set<RendererBridgeRequestID> = []
 
     public init(
@@ -276,13 +342,15 @@ public struct RendererBridgeAuthorizer: Sendable {
         sessionID: RendererSessionID? = nil,
         windowID: UUID? = nil,
         authorizedInput: RendererBridgeInput? = nil,
-        allowedNavigationTargetKinds: Set<RendererHostNavigationTargetKind> = []
+        allowedNavigationTargetKinds: Set<RendererHostNavigationTargetKind> = [],
+        admittedAssetReferences: Set<RendererAssetReference> = []
     ) {
         self.capability = capability
         self.sessionID = sessionID
         self.windowID = windowID
         self.authorizedInput = authorizedInput
         self.allowedNavigationTargetKinds = allowedNavigationTargetKinds
+        self.admittedAssetReferences = admittedAssetReferences
     }
 
     public mutating func authorize(envelope: Data, sessionIsReady: Bool) throws -> RendererBridgeRequest {
@@ -329,6 +397,39 @@ public struct RendererBridgeAuthorizer: Sendable {
         }
         guard request.activationNonce != nil else {
             throw RendererBridgeAuthorizationError.missingNavigationActivation
+        }
+        try consume(request.id)
+        return request
+    }
+
+    /// Authorize an `asset.read` envelope. Asset reads require the declared
+    /// `assetRead` authority (the call site passes a non-empty admission set)
+    /// and share the same session/window/frame/readiness and request-ID replay
+    /// ledger as input and navigation. No user activation is required: asset
+    /// reads are bounded reads from a host-pinned allowlist, not
+    /// user-initiated navigation.
+    public mutating func authorizeAsset(
+        envelope: Data,
+        context: RendererBridgeAuthorizationContext?,
+        sessionIsReady: Bool,
+        sessionIsClosed: Bool
+    ) throws -> RendererAssetRequest {
+        guard admittedAssetReferences.isEmpty == false else {
+            throw RendererBridgeAuthorizationError.assetReadUnavailable
+        }
+        guard envelope.count <= WikiAppWebViewPolicy.maximumBridgeMessageByteCount else {
+            throw RendererBridgeAuthorizationError.oversizedEnvelope
+        }
+        guard sessionIsClosed == false else { throw RendererBridgeAuthorizationError.sessionClosed }
+        guard sessionIsReady else { throw RendererBridgeAuthorizationError.sessionNotReady }
+        let request: RendererAssetRequest
+        do { request = try RendererBridgeEnvelope.decodeAssetRequest(from: envelope) }
+        catch { throw RendererBridgeAuthorizationError.malformedEnvelope }
+        guard request.method == .assetRead else { throw RendererBridgeAuthorizationError.malformedEnvelope }
+        guard request.capability == capability else { throw RendererBridgeAuthorizationError.capabilityMismatch }
+        try validate(context: context)
+        guard admittedAssetReferences.contains(request.reference) else {
+            throw RendererBridgeAuthorizationError.assetNotAdmitted
         }
         try consume(request.id)
         return request
