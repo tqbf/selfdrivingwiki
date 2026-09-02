@@ -26,7 +26,7 @@ struct JSONCanvasRendererPackageHostedValidationTests {
             packageID: descriptor.reference.packageID,
             version: descriptor.reference.version,
             path: entry.path)
-        let bytes = Data(#"{"nodes":[{"id":"note","type":"link","x":0,"y":0,"width":160,"height":80,"url":"[[page:01HXXXXXXXXXXXXXXXXXXXXXXX]]"}],"edges":[]}"#.utf8)
+        let bytes = Data(#"{"nodes":[{"id":"note","type":"link","x":0,"y":0,"width":160,"height":80,"url":"[[page:01HXXXXXXXXXXXXXXXXXXXXXXX]]"},{"id":"external","type":"link","x":200,"y":0,"width":160,"height":80,"url":"https://example.com"}],"edges":[]}"#.utf8)
         let document = MarkdownDocumentIdentity(
             pageID: PageID(rawValue: "01JHOSTEDJSONCANVASP000001"),
             pageVersionID: PageVersionID(rawValue: "01JHOSTEDJSONCANVASV0000001"))
@@ -73,7 +73,9 @@ struct JSONCanvasRendererPackageHostedValidationTests {
           wrapperChildren: document.querySelector('.node-wrapper')?.children.length,
           wrapperRole: document.querySelector('.node-wrapper')?.getAttribute('role'),
           wrapperTabIndex: document.querySelector('.node-wrapper')?.getAttribute('tabindex'),
-          navigation: !!document.querySelector('.node-wrapper')?.dataset.rendererHostNavigation
+          navigation: !!document.querySelector('.node-wrapper')?.dataset.rendererHostNavigation,
+          externalAnchor: document.querySelector('a.node-anchor')?.getAttribute('href'),
+          externalHasInternalTarget: !!document.querySelector('a.node-anchor')?.dataset.rendererHostNavigation
         })
         """)
         #expect(semantics?.contains("\"role\":\"group\"") == true)
@@ -83,11 +85,16 @@ struct JSONCanvasRendererPackageHostedValidationTests {
         #expect(semantics?.contains("\"wrapperRole\":\"link\"") == true)
         #expect(semantics?.contains("\"wrapperTabIndex\":\"0\"") == true)
         #expect(semantics?.contains("\"navigation\":true") == true)
+        #expect(semantics?.contains("\"externalAnchor\":\"https://example.com\"") == true)
+        #expect(semantics?.contains("\"externalHasInternalTarget\":false") == true)
 
         let interaction = await evaluateJavaScriptWithTimeout(webView, """
         (function() {
           const viewer = document.getElementById('viewer');
+          const internalLink = document.querySelector('.node-wrapper');
           const scene = document.querySelector('svg.scene g');
+          internalLink.focus();
+          if (document.activeElement !== internalLink) return 'focus-missing';
           const before = scene.getAttribute('transform');
           viewer.dispatchEvent(new KeyboardEvent('keydown', { key: '+', bubbles: true }));
           const zoomed = scene.getAttribute('transform');
