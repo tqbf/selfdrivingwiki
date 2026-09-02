@@ -121,6 +121,28 @@ struct MarkdownEditorWarningTests {
         #expect(model.markdownSaveWarning == nil)
     }
 
+    @Test func pageSwitchClearsStaleWarning() async throws {
+        let store = try StoreBackend.current.makeStore(databaseURL: tempURL())
+        let model = WikiStoreModel(store: store)
+        model.markdownLinter = try repoLinter()
+        model.newPage(title: "Messy")
+        model.draftBody = "#No space after hash"
+        model.save()
+        // The markdown warning is computed on a background Task — poll briefly.
+        try await pollFor { model.markdownSaveWarning != nil }
+        #expect(model.markdownSaveWarning?.contains("MD018") == true)
+        // Selecting another page reloads drafts, which must clear the stale
+        // banner — mirroring the mermaid/fence warning behaviour. It must NOT
+        // reappear: page B is clean, so nothing re-lints, and a cancelled
+        // in-flight lint can't write page A's findings onto page B.
+        model.newPage(title: "Clean")
+        #expect(model.markdownSaveWarning == nil)
+        // Give any cancelled-but-started lint a chance to land and confirm it
+        // doesn't resurrect the stale banner on the new page.
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(model.markdownSaveWarning == nil)
+    }
+
     @Test func noCrashWhenLinterUnavailable() throws {
         // The unbundled path: nil linter → no warning, no crash.
         let store = try StoreBackend.current.makeStore(databaseURL: tempURL())
