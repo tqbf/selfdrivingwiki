@@ -155,10 +155,20 @@ public enum RendererCapability: String, Codable, CaseIterable, Hashable, Sendabl
     case inputRead
     case externalLink
     case hostNavigation
+    case assetRead
     case network
     case credentials
     case worker
     case contentWrite
+}
+
+/// The closed roles a Web package may request through the revision-5
+/// `assetRead` capability. Each role describes where an extracted reference
+/// appears in the package's own document model; the host stores no format
+/// knowledge beyond the role name.
+public enum RendererAssetRole: String, Codable, CaseIterable, Hashable, Sendable {
+    case imageNode
+    case groupBackground
 }
 
 /// Closed target namespaces that a Web package may request through the
@@ -179,4 +189,122 @@ public struct RendererHostNavigationDeclaration: Codable, Hashable, Sendable {
         }
         self.allowedTargetKinds = allowedTargetKinds
     }
+}
+
+/// Explicit, bounded authority paired with the `assetRead` capability
+/// (manifest revision 5, Web packages only). It declares the closed roles and
+/// approved image MIME types the package may read, the extractor contract
+/// bounds, and the single hash-approved package-local reference-extractor
+/// asset (`{role, reference}` records) that derives the allowed references
+/// from the pinned primary input before any session exists.
+public struct RendererAssetReadDeclaration: Codable, Hashable, Sendable {
+    public let allowedRoles: Set<RendererAssetRole>
+    public let allowedMIMETypes: Set<RendererMIMEType>
+    public let maximumExtractedReferenceCount: Int
+    public let maximumExtractorInputBytes: Int
+    public let maximumExtractorOutputBytes: Int
+    public let maximumExtractorExecutionSeconds: Int
+    public let maximumBytesPerAsset: Int
+    public let maximumAggregateSessionBytes: Int
+    public let extractorAsset: RendererRelativePath
+    public let extractorEntryFunction: String
+
+    public init(
+        allowedRoles: Set<RendererAssetRole>,
+        allowedMIMETypes: Set<RendererMIMEType>,
+        maximumExtractedReferenceCount: Int,
+        maximumExtractorInputBytes: Int,
+        maximumExtractorOutputBytes: Int,
+        maximumExtractorExecutionSeconds: Int,
+        maximumBytesPerAsset: Int,
+        maximumAggregateSessionBytes: Int,
+        extractorAsset: RendererRelativePath,
+        extractorEntryFunction: String
+    ) throws {
+        guard allowedRoles.isEmpty == false else {
+            throw RendererValidationError.emptyAssetReadDeclaration
+        }
+        guard allowedMIMETypes.isEmpty == false else {
+            throw RendererValidationError.emptyAssetReadDeclaration
+        }
+        let supportedMIMEs: Set<RendererMIMEType> = [
+            try .init(validating: "image/png"),
+            try .init(validating: "image/jpeg"),
+            try .init(validating: "image/gif"),
+            try .init(validating: "image/svg+xml"),
+            try .init(validating: "image/webp"),
+        ]
+        guard allowedMIMETypes.isSubset(of: supportedMIMEs) else {
+            throw RendererValidationError.unsupportedAssetMIMEType
+        }
+        guard maximumExtractedReferenceCount > 0,
+              maximumExtractedReferenceCount <= RendererAssetReadLimits.maximumExtractedReferenceCount else {
+            throw RendererValidationError.invalidAssetReadLimit("maximumExtractedReferenceCount=\(maximumExtractedReferenceCount)")
+        }
+        guard maximumExtractorInputBytes > 0,
+              maximumExtractorInputBytes <= RendererAssetReadLimits.maximumExtractorInputBytes else {
+            throw RendererValidationError.invalidAssetReadLimit("maximumExtractorInputBytes=\(maximumExtractorInputBytes)")
+        }
+        guard maximumExtractorOutputBytes > 0,
+              maximumExtractorOutputBytes <= RendererAssetReadLimits.maximumExtractorOutputBytes else {
+            throw RendererValidationError.invalidAssetReadLimit("maximumExtractorOutputBytes=\(maximumExtractorOutputBytes)")
+        }
+        guard maximumExtractorExecutionSeconds > 0,
+              maximumExtractorExecutionSeconds <= RendererAssetReadLimits.maximumExtractorExecutionSeconds else {
+            throw RendererValidationError.invalidAssetReadLimit("maximumExtractorExecutionSeconds=\(maximumExtractorExecutionSeconds)")
+        }
+        guard maximumBytesPerAsset > 0,
+              maximumBytesPerAsset <= RendererAssetReadLimits.maximumBytesPerAsset else {
+            throw RendererValidationError.invalidAssetReadLimit("maximumBytesPerAsset=\(maximumBytesPerAsset)")
+        }
+        guard maximumAggregateSessionBytes > 0,
+              maximumAggregateSessionBytes <= RendererAssetReadLimits.maximumAggregateSessionBytes else {
+            throw RendererValidationError.invalidAssetReadLimit("maximumAggregateSessionBytes=\(maximumAggregateSessionBytes)")
+        }
+        guard rendererJavaScriptIdentifier(extractorEntryFunction) else {
+            throw RendererValidationError.invalidAssetReadLimit("extractorEntryFunction=\(extractorEntryFunction)")
+        }
+        self.allowedRoles = allowedRoles
+        self.allowedMIMETypes = allowedMIMETypes
+        self.maximumExtractedReferenceCount = maximumExtractedReferenceCount
+        self.maximumExtractorInputBytes = maximumExtractorInputBytes
+        self.maximumExtractorOutputBytes = maximumExtractorOutputBytes
+        self.maximumExtractorExecutionSeconds = maximumExtractorExecutionSeconds
+        self.maximumBytesPerAsset = maximumBytesPerAsset
+        self.maximumAggregateSessionBytes = maximumAggregateSessionBytes
+        self.extractorAsset = extractorAsset
+        self.extractorEntryFunction = extractorEntryFunction
+    }
+}
+
+/// The named ceilings for renderer asset-read declarations. These clamp what a
+/// package may request so a hostile or corrupt manifest cannot expand host
+/// budget beyond a bounded, documentable cap.
+public enum RendererAssetReadLimits {
+    public static let maximumExtractedReferenceCount = 256
+    public static let maximumExtractorInputBytes = 256 * 1_024
+    public static let maximumExtractorOutputBytes = 256 * 1_024
+    public static let maximumExtractorExecutionSeconds = 10
+    public static let maximumBytesPerAsset = 16 * 1_024 * 1_024
+    public static let maximumAggregateSessionBytes = 64 * 1_024 * 1_024
+}
+
+/// True when `value` is a valid JavaScript identifier (the extractor entry
+/// function name and the fence-validation entry function share the same
+/// identifier-safety requirement).
+func rendererJavaScriptIdentifier(_ value: String) -> Bool {
+    guard value.isEmpty == false,
+          value.first == "_" || value.first?.isLetter == true,
+          value.allSatisfy({ $0 == "_" || $0 == "$" || $0.isLetter || $0.isNumber })
+    else { return false }
+    // Reject reserved words so a package cannot alias a host intrinsic.
+    let reserved: Set<String> = [
+        "await", "break", "case", "catch", "class", "const", "continue",
+        "debugger", "default", "delete", "do", "else", "enum", "export",
+        "extends", "false", "finally", "for", "function", "if", "import",
+        "in", "instanceof", "let", "new", "null", "return", "static",
+        "super", "switch", "this", "throw", "true", "try", "typeof", "var",
+        "void", "while", "with", "yield", "null", "undefined", "NaN", "Infinity",
+    ]
+    return reserved.contains(value) == false
 }

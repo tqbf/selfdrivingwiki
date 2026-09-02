@@ -32,6 +32,14 @@ public enum RendererValidationError: Error, Equatable, Sendable, CustomStringCon
     case hostNavigationDeclarationRequiresCapability
     case hostNavigationRequiresWebPackage
     case hostNavigationRequiresRevision4
+    case emptyAssetReadDeclaration
+    case unsupportedAssetMIMEType
+    case invalidAssetReadLimit(String)
+    case assetReadCapabilityRequiresDeclaration
+    case assetReadDeclarationRequiresCapability
+    case assetReadRequiresWebPackage
+    case assetReadRequiresRevision5
+    case extractorAssetNotApproved(RendererRelativePath)
     case duplicateRegistration(RendererRegistrationID)
     case duplicatePath(RendererRelativePath)
     case duplicateAsset(RendererRelativePath)
@@ -75,6 +83,14 @@ public enum RendererValidationError: Error, Equatable, Sendable, CustomStringCon
         case .hostNavigationDeclarationRequiresCapability: "renderer navigation declaration requires the hostNavigation capability"
         case .hostNavigationRequiresWebPackage: "renderer host navigation is available only to Web packages"
         case .hostNavigationRequiresRevision4: "renderer host navigation requires manifest revision 4"
+        case .emptyAssetReadDeclaration: "renderer asset read must declare at least one role and one approved MIME type"
+        case .unsupportedAssetMIMEType: "renderer asset read declares an unsupported asset MIME type"
+        case let .invalidAssetReadLimit(value): "invalid renderer asset read limit: \(value)"
+        case .assetReadCapabilityRequiresDeclaration: "renderer assetRead capability requires an asset read declaration"
+        case .assetReadDeclarationRequiresCapability: "renderer asset read declaration requires the assetRead capability"
+        case .assetReadRequiresWebPackage: "renderer asset read is available only to Web packages"
+        case .assetReadRequiresRevision5: "renderer asset read requires manifest revision 5"
+        case let .extractorAssetNotApproved(path): "renderer reference-extractor asset is not approved by the declaring descriptor: \(path.rawValue)"
         case let .duplicateRegistration(id): "duplicate renderer registration: \(id.rawValue)"
         case let .duplicatePath(path): "duplicate renderer path: \(path.rawValue)"
         case let .duplicateAsset(path): "duplicate renderer asset: \(path.rawValue)"
