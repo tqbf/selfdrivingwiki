@@ -73,6 +73,10 @@ JSON Canvas is a renderer package, not a built-in renderer. It renders `.canvas`
 
 Canvases at or below 48,000 bytes render. Larger canvases keep the readable Source/raw-code fallback. This is an accepted limit: the package bridge shares the same byte ceiling as every other renderer package.
 
+JSON Canvas 1.1.0 renders the full JSON Canvas 1.0 visual model: text, file, link, and group nodes; preset and hex colors; edges with automatic or explicit sides and `none`/`arrow` endpoints (JSON Canvas defaults: `fromEnd = none`, `toEnd = arrow`); edge labels; multiline Markdown text (paragraphs, newlines, emphasis, strong, inline code, links) wrapped and clipped; image file nodes; and group background images with `cover`, `ratio`, or `repeat`. The scene fits the window on load; pointer and keyboard pan/zoom are supported, with light/dark appearance and Reduce Motion.
+
+Image file nodes and group background images read only from exact host-pinned wiki source versions through the isolated `asset.read` bridge — the package cannot browse your wiki, read arbitrary files, or load images from the network. Supported image types are PNG, JPEG, GIF, and WebP. A missing, denied, unsupported, or unreadable image keeps a readable node fallback (the filename label or the group's tinted fill); it never breaks the whole canvas. SVG images are currently treated as unsupported (readable fallback) pending a stricter isolation gate.
+
 JSON Canvas links are typed. Canonical `[[page:<ULID>]]` and `[[source:<ULID>]]` nodes navigate to the matching page or source after a real user activation. A relative file node (with an optional `#subpath`) resolves to the matching page or source by name — never to an arbitrary filesystem path. HTTP(S) link nodes open in your browser through the same trusted external-link flow as other packages.
 
 ## Preferences and fallback

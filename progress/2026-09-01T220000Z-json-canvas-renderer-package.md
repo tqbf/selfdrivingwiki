@@ -56,3 +56,7 @@ design: plans/json-canvas-renderer-package.md
 - The JSON Canvas package cap is 48,000 bytes (the current shared bridge ceiling), lower than the former native 256 KiB. Canvases above the cap keep the readable Source/raw-fence fallback. This is an accepted user-visible migration limit; global bridge limits were not widened.
 - The pure parser runs under the normal suite via a bounded non-blocking `node` subprocess; real WebKit rendering/accessibility/appearance/interaction remains hosted and opt-in (`WIKIFS_APP_TESTS=1`).
 - `plans/dynamic-renderers-phase6-json-canvas-test-inventory.json` and its progress record describe the superseded native design; they are historical evidence, not current.
+
+## Superseded by 1.1.0 (2026-09-02)
+
+The rendering claims in this record (center-to-center edges, single-line text, no fit, no images) are superseded by package version 1.1.0 (manifest revision 5, `assetRead` authority, repaired scene model). See `plans/json-canvas-renderer-package.md` and `progress/2026-09-02T093000Z-json-canvas-renderer-repair.md`. The 1.0.1 package bytes and hash remain a stability contract in repository history.

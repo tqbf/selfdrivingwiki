@@ -57,7 +57,7 @@
       "approvedAssets": [
         {
           "path": "PROVENANCE.md",
-          "digest": "6baa2c89d22ffd41a2685c917069df06ec19b4206c64fd60db745a2308f6add9"
+          "digest": "fc6295bcfae2293347288fad94510937b8d438acf8c5a444d91bd32318074b11"
         },
         {
           "path": "LICENSE.md",
@@ -65,7 +65,7 @@
         },
         {
           "path": "JSONCanvasSpec.md",
-          "digest": "6dfed8c48fb09a4b5942b478852cf179069db929de92987dd3be3556cb6d5650"
+          "digest": "15f0cc8356cd168df2ce211112a7699f0185373320c179e8fc83d1f922cc7e10"
         },
         {
           "path": "extractor.js",
@@ -136,7 +136,7 @@
   "assets": [
     {
       "path": "PROVENANCE.md",
-      "digest": "6baa2c89d22ffd41a2685c917069df06ec19b4206c64fd60db745a2308f6add9"
+      "digest": "fc6295bcfae2293347288fad94510937b8d438acf8c5a444d91bd32318074b11"
     },
     {
       "path": "LICENSE.md",
@@ -144,7 +144,7 @@
     },
     {
       "path": "JSONCanvasSpec.md",
-      "digest": "6dfed8c48fb09a4b5942b478852cf179069db929de92987dd3be3556cb6d5650"
+      "digest": "15f0cc8356cd168df2ce211112a7699f0185373320c179e8fc83d1f922cc7e10"
     },
     {
       "path": "extractor.js",

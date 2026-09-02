@@ -870,13 +870,16 @@ struct RendererModelTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-        // JSON Canvas 1.0.1 is the reviewed revision-4 package. Its canonical
-        // bytes, digests, and package hash are a stability contract: adding a
-        // manifest revision must not move any already-reviewed package hash.
+        // The on-disk package is 1.1.0 (revision 5). Its package hash is a
+        // stability contract: adding a manifest revision or changing assets
+        // must produce a NEW immutable version and never mutate an existing
+        // reviewed package hash. The prior 1.0.1 (revision 4) package hash
+        // `8b4ba221c48a3232d4e5355c64170b3da942f003fd7072747712922def9d576d`
+        // is preserved in repository history, not on disk.
         let data = try Data(contentsOf: root.appendingPathComponent("RendererPackages/JSONCanvas/manifest.json"))
         let manifest = try JSONDecoder().decode(RendererManifest.self, from: data)
-        #expect(manifest.revision == RendererManifestRevision.hostNavigation)
-        #expect(try manifest.packageHash().hex == "8b4ba221c48a3232d4e5355c64170b3da942f003fd7072747712922def9d576d")
+        #expect(manifest.revision == RendererManifestRevision.current)
+        #expect(try manifest.packageHash().hex == "64b5ce26748e876bc11ab4c450641ada61bda31bab8a03ace77124e1abeddb97")
         #expect(manifest.descriptors.allSatisfy {
             $0.compatibility.supports(hostProtocolRevision: RendererRegistrySnapshotDefaults.hostProtocolRevision)
         })

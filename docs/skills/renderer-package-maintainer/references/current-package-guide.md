@@ -60,15 +60,29 @@ A revision 3 claim may declare `validation` with `engineAssetPath`, `wrapperAsse
 
 ### Reviewed JSON Canvas renderer package
 
-The reviewed package root is `RendererPackages/JSONCanvas` in the repository. SwiftPM does not copy it into the app resource bundle. Users import the folder through Settings → Renderers → Advanced Local Renderer Package Import. The package ID is `org.selfdrivingwiki.json-canvas-readonly`. The version is `1.0.1`. The registration ID is `json-canvas`. The manifest is revision 4.
+The reviewed package root is `RendererPackages/JSONCanvas` in the repository. SwiftPM does not copy it into the app resource bundle. Users import the folder through Settings → Renderers → Advanced Local Renderer Package Import. The package ID is `org.selfdrivingwiki.json-canvas-readonly`. The version is `1.1.0`. The registration ID is `json-canvas`. The manifest is revision 5.
 
 The package matches `application/json` sources with a bounded JSON matcher requiring root-object `nodes` and `edges` arrays of objects, plus the `.canvas` extension fallback. It claims the `jsoncanvas` fence alias with the inline MIME type `application/json`. It fills both embedding roles, has priority 110, and 48,000-byte input and decoded-input limits.
 
-The package declares `inputRead`, `externalLink`, and `hostNavigation` capabilities with a `hostNavigation` declaration that allows page, source, and named-content target kinds. It uses the user-activated external-link policy and protocol revision 1.
+The package declares `inputRead`, `externalLink`, `hostNavigation`, and `assetRead` capabilities with a `hostNavigation` declaration that allows page, source, and named-content target kinds, and an `assetRead` declaration (roles `imageNode` + `groupBackground`; MIME `image/png`, `image/jpeg`, `image/gif`, `image/webp`; one reviewed `extractor.js` with entry `__sdw_extract_canvas_assets`; bounded extractor and session limits). It uses the user-activated external-link policy and protocol revision 1.
+
+### Manifest revision 5 and asset read
+
+A revision 5 manifest may declare the optional `assetRead` capability plus an `assetRead` object with:
+
+- `allowedRoles`: a nonempty closed set (`imageNode`, `groupBackground`).
+- `allowedMIMETypes`: a nonempty subset of `image/png`, `image/jpeg`, `image/gif`, `image/svg+xml`, `image/webp`. SVG stays excluded from the JSON Canvas declaration until a hostile-SVG image-surface isolation gate passes.
+- `maximumExtractedReferenceCount`, `maximumExtractorInputBytes`, `maximumExtractorOutputBytes`, `maximumExtractorExecutionSeconds`, `maximumBytesPerAsset`, `maximumAggregateSessionBytes`: bounded ceilings.
+- `extractorAsset`: a package-local asset (hash-approved, declared in both the descriptor and top-level assets) that derives `{role, reference}` records from the pinned primary input.
+- `extractorEntryFunction`: an identifier-safe entry name.
+
+The capability requires the declaration, and the declaration requires the capability. Built-in/native declarations are rejected, and the extractor asset must be approved by the declaring descriptor. Revisions 1 to 4 that carry asset-read authority fail closed.
+
+The host runs the reviewed extractor in a single-invocation helper (fresh JavaScriptCore context, bounded framed stdin/stdout, enforced deadline + output caps, process-group terminate/reap) before any WebKit session exists, resolves each record against the exact sibling/File Provider projection, and pins each to `SourceID` + exact `SourceVersionID` + MIME + size + digest. The session asset reader returns only bounded approved bytes through `asset.read`; every miss is a uniform redacted denial. The package cannot enumerate the wiki, request arbitrary SourceIDs, read the primary canvas through `asset.read`, or fetch network/file URLs.
 
 ### Manifest revision 4 and host navigation
 
-A revision 4 manifest may declare the optional `hostNavigation` capability and a `hostNavigation` object with `allowedTargetKinds` (a nonempty set of `page`, `source`, and `namedContent`).
+A revision 4 (or later) manifest may declare the optional `hostNavigation` capability and a `hostNavigation` object with `allowedTargetKinds` (a nonempty set of `page`, `source`, and `namedContent`).
 
 The capability requires the declaration, and the declaration requires the capability. Built-in or native declarations are rejected. Revisions 1 to 3 that carry a navigation capability or declaration fail closed. Older hosts cannot decode the capability and reject the manifest.
 
