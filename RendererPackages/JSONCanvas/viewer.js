@@ -247,7 +247,7 @@
       if (bounds.right === Number.NEGATIVE_INFINITY) bounds.right = bounds.x + 1;
       if (bounds.bottom === Number.NEGATIVE_INFINITY) bounds.bottom = bounds.y + 1;
     }
-    return { nodeById: nodeById, bounds: bounds };
+    return { doc: doc, nodeById: nodeById, bounds: bounds };
   }
 
   // Rectangle-boundary anchor for an explicit side (or a deterministic
@@ -478,7 +478,7 @@
     var arrow = makeSVG("path", { d: "M0,0 L6,3 L0,6 z", class: "edge-arrow", fill: "currentColor" });
     marker.append(arrow);
     defs.append(marker);
-    var sceneG = makeSVG("g");
+    var sceneG = makeSVG("g", { class: "scene-layer" });
 
     // Edge labels + paths beneath nodes, in array order.
     scene.doc.edges.forEach(function (edge) {
@@ -506,7 +506,10 @@
 
     // Nodes in ascending z-order.
     scene.doc.nodes.forEach(function (node) {
-      var wrapped = makeSVG("g", { class: "node-wrapper" });
+      var href = externalHref(node);
+      var wrapped = href
+        ? makeSVG("a", { href: href, class: "node-anchor" })
+        : makeSVG("g", { class: "node-wrapper" });
       // Group background first (behind contained content), then frame.
       if (node.type === "group" && node.backgroundReference) {
         var bgImage = makeSVG("image", {
@@ -608,7 +611,6 @@
       }
 
       var target = nodeTarget(node);
-      var href = externalHref(node);
       if (target) {
         wrapped.setAttribute("data-renderer-host-navigation", JSON.stringify(target));
         wrapped.setAttribute("tabindex", "0");

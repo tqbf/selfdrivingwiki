@@ -1,12 +1,12 @@
 {
-  "revision": 4,
+  "revision": 5,
   "packageID": "org.selfdrivingwiki.json-canvas-readonly",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "descriptors": [
     {
       "reference": {
         "packageID": "org.selfdrivingwiki.json-canvas-readonly",
-        "version": "1.0.1",
+        "version": "1.1.0",
         "registrationID": "json-canvas"
       },
       "displayName": "JSON Canvas",
@@ -68,22 +68,27 @@
           "digest": "6dfed8c48fb09a4b5942b478852cf179069db929de92987dd3be3556cb6d5650"
         },
         {
+          "path": "extractor.js",
+          "digest": "59ac5ecd690409da74295743f53df3299e7b6092b5982167b40761f33f54f82e"
+        },
+        {
           "path": "index.html",
           "digest": "b05ad791c251df13fce6b614f0dd5d8a6232565be472cb2378ef9c8ec3c42975"
         },
         {
           "path": "viewer.js",
-          "digest": "eff0f5c56bab89853cddf043d04983d2b49620111435f85da502f44319e26726"
+          "digest": "6c812ec1156a962dea7a66596d1e4279de8aec149b43ec21d14653aadb925ab9"
         },
         {
           "path": "viewer.css",
-          "digest": "53341647562316e5d7e81a978989c85ff8a93ccf1ab2c29fe70d838c75bc4ef9"
+          "digest": "7235aace2880513d127441d91a2adc565a4f3e8fca1d94e934381c761c588186"
         }
       ],
       "capabilities": [
         "inputRead",
         "externalLink",
-        "hostNavigation"
+        "hostNavigation",
+        "assetRead"
       ],
       "hostNavigation": {
         "allowedTargetKinds": [
@@ -91,6 +96,26 @@
           "page",
           "source"
         ]
+      },
+      "assetRead": {
+        "allowedRoles": [
+          "imageNode",
+          "groupBackground"
+        ],
+        "allowedMIMETypes": [
+          "image/gif",
+          "image/jpeg",
+          "image/png",
+          "image/webp"
+        ],
+        "maximumExtractedReferenceCount": 256,
+        "maximumExtractorInputBytes": 262144,
+        "maximumExtractorOutputBytes": 262144,
+        "maximumExtractorExecutionSeconds": 5,
+        "maximumBytesPerAsset": 8388608,
+        "maximumAggregateSessionBytes": 33554432,
+        "extractorAsset": "extractor.js",
+        "extractorEntryFunction": "__sdw_extract_canvas_assets"
       },
       "sizeLimits": {
         "maximumInputByteCount": 48000,
@@ -122,16 +147,20 @@
       "digest": "6dfed8c48fb09a4b5942b478852cf179069db929de92987dd3be3556cb6d5650"
     },
     {
+      "path": "extractor.js",
+      "digest": "59ac5ecd690409da74295743f53df3299e7b6092b5982167b40761f33f54f82e"
+    },
+    {
       "path": "index.html",
       "digest": "b05ad791c251df13fce6b614f0dd5d8a6232565be472cb2378ef9c8ec3c42975"
     },
     {
       "path": "viewer.js",
-      "digest": "eff0f5c56bab89853cddf043d04983d2b49620111435f85da502f44319e26726"
+      "digest": "6c812ec1156a962dea7a66596d1e4279de8aec149b43ec21d14653aadb925ab9"
     },
     {
       "path": "viewer.css",
-      "digest": "53341647562316e5d7e81a978989c85ff8a93ccf1ab2c29fe70d838c75bc4ef9"
+      "digest": "7235aace2880513d127441d91a2adc565a4f3e8fca1d94e934381c761c588186"
     }
   ]
 }

@@ -11,25 +11,44 @@ import WikiFSTypes
 /// `swift test`.
 @Suite("JSON Canvas installed renderer package", .serialized, .timeLimit(.minutes(1)))
 struct JSONCanvasRendererPackageTests {
-    @Test("reviewed package validates and declares the revision-4 navigation contract")
-    func reviewedPackageValidatesAndDeclaresRevision4Contract() throws {
+    @Test("reviewed package validates and declares the revision-5 asset-read contract")
+    func reviewedPackageValidatesAndDeclaresRevision5Contract() throws {
         let fixture = try PackageFixture()
         defer { fixture.remove() }
 
         let package = try fixture.validator.validate(directory: fixture.packageDirectory)
         let descriptor = try #require(package.manifest.descriptors.only)
 
-        #expect(package.manifest.revision == RendererManifestRevision.hostNavigation)
+        #expect(package.manifest.revision == RendererManifestRevision.assetRead)
         #expect(package.manifest.revision == RendererManifestRevision.current)
         #expect(package.packageHash.hex.isEmpty == false)
 
         #expect(descriptor.capabilities.contains(.inputRead))
         #expect(descriptor.capabilities.contains(.externalLink))
         #expect(descriptor.capabilities.contains(.hostNavigation))
+        #expect(descriptor.capabilities.contains(.assetRead))
         #expect(descriptor.linkPolicy == .userActivatedExternal)
         let navigation = try #require(descriptor.hostNavigation)
         #expect(navigation.allowedTargetKinds == [.page, .source, .namedContent])
         #expect(descriptor.hasHostNavigationDeclaration)
+
+        // Revision 5 asset-read authority: closed roles + approved image
+        // MIME types + one reviewed extractor asset.
+        let assetRead = try #require(descriptor.assetRead)
+        let gif = try RendererMIMEType(validating: "image/gif")
+        let jpeg = try RendererMIMEType(validating: "image/jpeg")
+        let png = try RendererMIMEType(validating: "image/png")
+        let webp = try RendererMIMEType(validating: "image/webp")
+        let svg = try RendererMIMEType(validating: "image/svg+xml")
+        #expect(assetRead.allowedRoles == [.imageNode, .groupBackground])
+        #expect(assetRead.allowedMIMETypes == [gif, jpeg, png, webp])
+        #expect(assetRead.allowedMIMETypes.contains(svg) == false)
+        #expect(assetRead.extractorAsset.rawValue == "extractor.js")
+        #expect(assetRead.extractorEntryFunction == "__sdw_extract_canvas_assets")
+        // The extractor asset is declared in both descriptor + top-level assets.
+        #expect(package.manifest.assets.contains { $0.path.rawValue == "extractor.js" })
+        #expect(descriptor.approvedAssets.contains { $0.path.rawValue == "extractor.js" })
+        #expect(descriptor.hasAssetReadDeclaration)
     }
 
     @Test("descriptor matches JSON Canvas sources and fence")
@@ -111,15 +130,16 @@ struct JSONCanvasRendererPackageTests {
             encoding: .utf8)
 
         #expect(package.packageHash == manifestHash)
-        #expect(declaredPaths.count == 6)
+        #expect(declaredPaths.count == 7)
         #expect(entrySource.contains("viewer.js"))
         #expect(entrySource.contains("viewer.css"))
         #expect(viewerSource.contains("method: \"input.read\""))
+        #expect(viewerSource.contains("asset.read"))
         #expect(viewerSource.contains("host.navigate") == false)
         #expect(viewerSource.contains("__sdw_parse_canvas"))
         #expect(viewerSource.contains("makeSVG(\"g\", { class: \"node-wrapper\" })"))
-        #expect(viewerSource.contains("wrapper.setAttribute(\"tabindex\", \"0\")"))
-        #expect(viewerSource.contains("wrapper.setAttribute(\"role\", \"link\")"))
+        #expect(viewerSource.contains("wrapped.setAttribute(\"tabindex\", \"0\")"))
+        #expect(viewerSource.contains("wrapped.setAttribute(\"role\", \"link\")"))
         #expect(viewerSource.contains("minimumScale"))
         #expect(viewerSource.contains("maximumScale"))
         #expect(viewerSource.contains("ArrowUp"))

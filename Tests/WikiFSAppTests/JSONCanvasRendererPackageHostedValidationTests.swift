@@ -105,6 +105,90 @@ struct JSONCanvasRendererPackageHostedValidationTests {
         #expect(interaction == "ok")
     }
 
+    @Test("multi-node canvas renders bezier edges, markers, text, and z-order")
+    func rendersGeometryMarkersAndText() async throws {
+        let fixture = try JSONCanvasHostedFixture()
+        defer { fixture.remove() }
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        defer { lease.release() }
+        NSApplication.shared.setActivationPolicy(.accessory)
+
+        let package = try fixture.validator.validate(directory: fixture.directory)
+        let descriptor = try #require(package.manifest.descriptors.first)
+        let entry = try #require(descriptor.webEntryPoint)
+        let entryURL = RendererPackageScheme.url(
+            packageID: descriptor.reference.packageID,
+            version: descriptor.reference.version,
+            path: entry.path)
+        // Text nodes + an edge with implicit sides/ends (defaults toEnd=arrow)
+        // + a disabled-style file node referencing a host-denied asset.
+        let bytes = Data(#"{"nodes":[{"id":"a","type":"text","x":0,"y":0,"width":100,"height":50,"text":"**Bold** line"},{"id":"b","type":"text","x":200,"y":0,"width":100,"height":50,"text":"Second"},{"id":"f","type":"file","x":400,"y":0,"width":100,"height":60,"file":"absent.png"}],"edges":[{"id":"e","fromNode":"a","toNode":"b"}]}"#.utf8)
+        let document = MarkdownDocumentIdentity(
+            pageID: PageID(rawValue: "01JHOSTEDJSONCANVASP000001"),
+            pageVersionID: PageVersionID(rawValue: "01JHOSTEDJSONCANVASV0000001"))
+        let block = try MarkdownFencedBlock(
+            documentIdentity: document,
+            parserOrdinal: 0,
+            rawInfoString: "jsoncanvas",
+            bytes: bytes)
+        let artifact = try RendererEmbeddedContent.InlineArtifact(
+            pageID: document.pageID,
+            pageVersionID: document.pageVersionID,
+            blockID: try #require(block.blockID),
+            fenceAlias: try RendererFenceAlias(validating: "jsoncanvas"),
+            mimeType: try RendererMIMEType(validating: "application/json"),
+            bytes: bytes)
+        let reader = RendererAuthorizedInputReader(
+            store: try GRDBWikiStore(),
+            authorizedInput: .inlineArtifact(artifact))
+        let mount = try Self.makeMount(
+            package: package,
+            descriptor: descriptor,
+            entryURL: entryURL,
+            reader: reader)
+        defer { mount.teardown() }
+
+        try await Self.wait("session") { mount.session() != nil }
+        let session = try #require(mount.session())
+        try await Self.wait("ready") {
+            if case .ready = session.state { return true }
+            return false
+        }
+        let webView = try #require(session.webView)
+        try await Self.waitForJavaScript(
+            "document.querySelector('svg.scene path.edge') ? 'ok' : 'pending'",
+            expected: "ok",
+            webView: webView,
+            description: "geometry path")
+
+        let semantics = await evaluateJavaScriptWithTimeout(webView, """
+        JSON.stringify({
+          edges: document.querySelectorAll('svg.scene path.edge').length,
+          nodes: document.querySelectorAll('svg.scene .node-wrapper').length,
+          hasMarkerEnd: !!document.querySelector('svg.scene path.edge')?.getAttribute('marker-end'),
+          hasMarkerStart: !!document.querySelector('svg.scene path.edge')?.getAttribute('marker-start'),
+          textFo: !!document.querySelector('svg.scene .node-text-fo'),
+          bold: !!document.querySelector('svg.scene .node-text strong'),
+          fileFallbackLabel: document.querySelector('[data-asset-reference="absent.png"]') ? 'image-requested' : 'none',
+          transform: document.querySelector('svg.scene g.scene-layer')?.getAttribute('transform') || ''
+        })
+        """)
+        #expect(semantics?.contains("\"edges\":1") == true)
+        #expect(semantics?.contains("\"nodes\":3") == true)
+        // toEnd defaults to arrow -> marker-end set, marker-start absent.
+        #expect(semantics?.contains("\"hasMarkerEnd\":true") == true)
+        #expect(semantics?.contains("\"hasMarkerStart\":false") == true)
+        // Markdown text renders as strong inside the foreignObject.
+        #expect(semantics?.contains("\"textFo\":true") == true)
+        #expect(semantics?.contains("\"bold\":true") == true)
+        // The file node references a host-denied asset; the image element is
+        // present (fallback label remains).
+        #expect(semantics?.contains("\"fileFallbackLabel\":\"image-requested\"") == true)
+        // Initial fit sets a non-identity transform (fit-to-window). The
+        // literal empty-value form `"transform":""` must NOT be present.
+        #expect(semantics?.contains("\"transform\":\"\"") == false, "transform was not applied; semantics: \(semantics ?? "nil")")
+    }
+
     @Test("malformed input shows an in-view message and preserves source bytes")
     func malformedInputPreservesSource() async throws {
         let fixture = try JSONCanvasHostedFixture()
