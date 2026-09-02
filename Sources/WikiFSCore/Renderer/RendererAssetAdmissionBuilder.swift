@@ -7,10 +7,10 @@ import WikiFSTypes
 /// revision-5 `assetRead` authority, from the reference-extractor records and
 /// the page/source's established sibling/File Provider projection.
 ///
-/// This is renderer-neutral: it never tests for a JSON Canvas identity,
-/// MIME, extension, node type, or package ID. It only resolves validated
-/// relative references against the sibling context, requires a UNIQUE match,
-/// and pins each to its typed `SourceID` and the EXACT active
+/// This is renderer-neutral: it never tests for a specific canvas-format
+/// identity, MIME, extension, node type, or package ID. It only resolves
+/// validated relative references against the sibling context, requires a
+/// UNIQUE match, and pins each to its typed `SourceID` and the EXACT active
 /// `SourceVersionID` (plus MIME, byte count, and digest) before any session
 /// exists.
 public enum RendererAssetAdmissionBuilder {

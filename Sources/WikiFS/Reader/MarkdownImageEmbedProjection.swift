@@ -311,9 +311,9 @@ enum MarkdownImageTargetProjection {
 /// `RendererAssetAdmissionBuilder`: it consumes the same sibling maps as the
 /// image embed projection (never a loose all-sources lookup), requires a
 /// UNIQUE match, and pins the active `SourceVersionID` + MIME + size + digest
-/// before session creation. No production branch here names JSON Canvas (or
-/// any package): the input is only validated relative references and the
-/// declared role set.
+/// before session creation. No production branch here names a specific canvas
+/// format (or any package); the input is only validated relative references
+/// and the declared role set.
 enum RendererAssetAdmissionProjection {
     /// Resolve extractor records into exact pinned admissions.
     ///

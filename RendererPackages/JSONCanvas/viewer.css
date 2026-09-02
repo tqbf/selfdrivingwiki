@@ -5,6 +5,8 @@
   --node-stroke: light-dark(#3a3a3a, #b0b0b0);
   --edge-stroke: light-dark(#888888, #6a6a6a);
   --focus-ring: light-dark(#0a84ff, #0a84ff);
+  --node-fill: light-dark(rgba(255, 255, 255, 0.6), rgba(40, 40, 40, 0.6));
+  --edge-label-bg: light-dark(rgba(245, 244, 242, 0.9), rgba(30, 30, 30, 0.9));
 }
 
 html, body {
@@ -46,6 +48,7 @@ body {
 
 .node {
   stroke-width: 1.5;
+  fill: var(--node-fill);
 }
 
 .node:focus,
@@ -60,12 +63,43 @@ body {
   stroke: var(--focus-ring);
 }
 
+/* Text nodes: semantic HTML inside a node-bounded foreignObject. */
+.node-text-fo {
+  overflow: hidden;
+  pointer-events: none;
+}
+
 .node-text {
-  fill: var(--canvas-text);
+  margin: 0;
   font-size: 13px;
   line-height: 1.3;
-  pointer-events: none;
-  user-select: none;
+  color: var(--canvas-text);
+  overflow: hidden;
+}
+
+.node-text p {
+  margin: 0 0 2px;
+  overflow-wrap: break-word;
+}
+
+.node-text code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.92em;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  border-radius: 3px;
+  padding: 0 3px;
+}
+
+.node-text .markdown-link {
+  color: var(--focus-ring);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.node-text .overflow-cue {
+  font-size: 11px;
+  color: var(--edge-stroke);
+  margin: 0;
 }
 
 .node-label {
@@ -75,6 +109,15 @@ body {
   user-select: none;
 }
 
+.node-file-image {
+  pointer-events: none;
+  border-radius: 4px;
+}
+
+.node-group-bg {
+  border-radius: 4px;
+}
+
 .edge {
   stroke: var(--edge-stroke);
   stroke-width: 1.5;
@@ -82,11 +125,17 @@ body {
   fill: none;
 }
 
+.edge-label-bg {
+  fill: var(--edge-label-bg);
+  stroke: none;
+}
+
 .edge-label {
-  fill: var(--edge-stroke);
+  fill: var(--canvas-text);
   font-size: 11px;
   pointer-events: none;
   user-select: none;
+  text-anchor: middle;
 }
 
 .message {

@@ -1,45 +1,52 @@
 import Foundation
 import Testing
+#if canImport(JavaScriptCore)
+import JavaScriptCore
+#endif
 
 /// Normal-suite execution of the JSON Canvas package parser. It runs the exact
 /// `__sdw_parse_canvas` entry that `viewer.js` exposes (the same function the
-/// package renderer calls) inside a bounded, non-blocking `node` subprocess.
-/// The test skips cleanly when `node` is not on PATH, so hosted WebKit remains
-/// the authoritative renderer surface while this gives every `swift test`
-/// deterministic at-cap/one-byte-over-cap parity for the pure parser.
+/// package renderer calls) inside a fresh JavaScriptCore context — mandatory,
+/// Node-free, no DOM/filesystem/network/native objects. This replaces the old
+/// `nodeAvailable`/`Thread.sleep` optional node-subprocess path with a
+/// deterministic in-process JSC evaluation that FAILS (not skips) when the
+/// asset or entry is unavailable.
+#if canImport(JavaScriptCore)
 @Suite(.serialized, .timeLimit(.minutes(2)))
 struct JSONCanvasRendererPackageParserTests {
     private static let packageRoot = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         .appendingPathComponent("RendererPackages/JSONCanvas", isDirectory: true)
 
-    @Test("node harness executes the package parser entry (smoke)")
-    func nodeHarnessExecutesPackageParserEntry() async throws {
-        try await runParserCase(label: "smoke", payload: Data(Self.validCanvas.utf8), expectOK: true)
+    @Test("JavaScriptCore harness executes the package parser entry")
+    func jscHarnessExecutesPackageParserEntry() throws {
+        let runner = try Self.loadRunner()
+        let result = try runner.parse(Data(Self.validCanvas.utf8))
+        #expect(result.ok)
+        #expect(result.nodes == 2)
+        #expect(result.edges == 1)
     }
 
     @Test("parser accepts canvas at the declared cap and rejects one byte over")
-    func acceptsAtPackageCapAndRejectsOneByteOverCap() async throws {
-        // The package declares 48,000 bytes. Build a valid document padded with
-        // whitespace up to exactly the cap, then one byte over.
-        let base = try #require(Self.validCanvas.data(using: .utf8))
-        let cap = 48_000
+    func acceptsAtPackageCapAndRejectsOneByteOverCap() throws {
+        let runner = try Self.loadRunner()
         let target = Data("{\"nodes\":[],\"edges\":[]}".utf8)
+        let cap = 48_000
         let padding = cap - target.count
         let atCap = target + Data(repeating: 0x20, count: padding)
         let overCap = target + Data(repeating: 0x20, count: padding + 1)
 
-        try await runParserCase(label: "at-cap", payload: atCap, expectOK: true)
-        try await runParserCase(label: "over-cap", payload: overCap, expectOK: false)
-        _ = base
+        #expect(try runner.parse(atCap).ok)
+        let over = try runner.parse(overCap)
+        #expect(over.ok == false)
     }
 
     @Test("parser rejects malformed, bounded, and unsafe documents")
-    func rejectsMalformedBoundedAndUnsafeDocuments() async throws {
+    func rejectsMalformedBoundedAndUnsafeDocuments() throws {
+        let runner = try Self.loadRunner()
         let textNode = #"{"id":"note","type":"text","x":0,"y":0,"width":120,"height":60,"text":"Note"}"#
         let edge = #"{"id":"edge","fromNode":"note","toNode":"note2"}"#
         let malformed = Data("{\"nodes\":[]".utf8)
-        let missingEdges = Data("{\"nodes\":[\(textNode)]}".utf8)
         let unknownEndpoint = Data("{\"nodes\":[\(textNode)],\"edges\":[\(edge)]}".utf8)
         let traversal = Data(#"""{"nodes":[{"id":"file","type":"file","x":0,"y":0,"width":120,"height":60,"file":"../secret"}],"edges":[]}"""#.utf8)
         let scheme = Data(#"""{"nodes":[{"id":"file","type":"file","x":0,"y":0,"width":120,"height":60,"file":"https:example"}],"edges":[]}"""#.utf8)
@@ -47,20 +54,35 @@ struct JSONCanvasRendererPackageParserTests {
         let oversizeText = Data(#"""{"nodes":[{"id":"note","type":"text","x":0,"y":0,"width":120,"height":60,"text":"""#.utf8)
             + Data("\"\(String(repeating: "x", count: 8_193))\"".utf8)
             + Data(#"""}],"edges":[]}"""#.utf8)
+        // Unknown node types and closed-field violations.
+        let unknownType = Data(#"{"nodes":[{"id":"n","type":"table","x":0,"y":0,"width":10,"height":10}],"edges":[]}"#.utf8)
+        let invalidSide = Data(#"{"nodes":[{"id":"a","type":"text","x":0,"y":0,"width":10,"height":10,"text":"x"},{"id":"b","type":"text","x":20,"y":0,"width":10,"height":10,"text":"y"}],"edges":[{"id":"e","fromNode":"a","toNode":"b","fromSide":"diagonal"}]}"#.utf8)
+        let invalidEnd = Data(#"{"nodes":[{"id":"a","type":"text","x":0,"y":0,"width":10,"height":10,"text":"x"},{"id":"b","type":"text","x":20,"y":0,"width":10,"height":10,"text":"y"}],"edges":[{"id":"e","fromNode":"a","toNode":"b","fromEnd":"circle"}]}"#.utf8)
+        let invalidBackgroundStyle = Data(#"{"nodes":[{"id":"g","type":"group","x":0,"y":0,"width":10,"height":10,"label":"g","background":"bg.png","backgroundStyle":"stretch"}],"edges":[]}"#.utf8)
 
-        try await runParserCase(label: "malformed", payload: malformed, expectOK: false)
-        try await runParserCase(label: "missingEdges", payload: missingEdges, expectOK: false)
-        try await runParserCase(label: "unknownEndpoint", payload: unknownEndpoint, expectOK: false)
-        try await runParserCase(label: "traversal", payload: traversal, expectOK: false)
-        try await runParserCase(label: "scheme", payload: scheme, expectOK: false)
-        try await runParserCase(label: "percent", payload: percent, expectOK: false)
-        try await runParserCase(label: "oversizeText", payload: oversizeText, expectOK: false)
+        // A canvas with nodes but no edges is VALID per JSON Canvas 1.0 (both
+        // top-level arrays are optional).
+        let noEdges = Data("{\"nodes\":[\(textNode)]}".utf8)
+        #expect(try runner.parse(noEdges).ok)
 
-        // Groups are supported: a bounded label and CSS color background.
-        let groupValid = Data("{\"nodes\":[{\"id\":\"g\",\"type\":\"group\",\"x\":0,\"y\":0,\"width\":200,\"height\":100,\"label\":\"Group\",\"background\":\"#25c2a0\"}],\"edges\":[]}".utf8)
-        let groupInvalidColor = Data("{\"nodes\":[{\"id\":\"g\",\"type\":\"group\",\"x\":0,\"y\":0,\"width\":200,\"height\":100,\"label\":\"Group\",\"background\":\"../secret\"}],\"edges\":[]}".utf8)
-        try await runParserCase(label: "group-valid", payload: groupValid, expectOK: true)
-        try await runParserCase(label: "group-invalid-color", payload: groupInvalidColor, expectOK: false)
+        for (label, payload) in [
+            ("malformed", malformed),
+            ("unknownEndpoint", unknownEndpoint), ("traversal", traversal),
+            ("scheme", scheme), ("percent", percent), ("oversizeText", oversizeText),
+            ("unknownType", unknownType), ("invalidSide", invalidSide),
+            ("invalidEnd", invalidEnd), ("invalidBackgroundStyle", invalidBackgroundStyle),
+        ] {
+            let result = try runner.parse(payload)
+            #expect(result.ok == false, "expected rejection for \(label)")
+        }
+
+        // Groups are supported.
+        let groupValid = Data("{\"nodes\":[{\"id\":\"g\",\"type\":\"group\",\"x\":0,\"y\":0,\"width\":200,\"height\":100,\"label\":\"Group\",\"background\":\"bg.png\",\"backgroundStyle\":\"cover\"}],\"edges\":[]}".utf8)
+        #expect(try runner.parse(groupValid).ok)
+
+        // Unknown top-level properties are ignored (forward-compatible).
+        let unknownTopLevel = Data("{\"nodes\":[],\"edges\":[],\"vendor\":{\"custom\":true}}".utf8)
+        #expect(try runner.parse(unknownTopLevel).ok)
     }
 
     // MARK: - Helpers
@@ -69,117 +91,78 @@ struct JSONCanvasRendererPackageParserTests {
         #"{"nodes":[{"id":"note","type":"text","x":20,"y":10,"width":160,"height":80,"text":"First note"},{"id":"note2","type":"text","x":220,"y":10,"width":160,"height":80,"text":"Second note"}],"edges":[{"id":"edge","fromNode":"note","toNode":"note2"}]}"#
     }
 
-    /// Executes `viewer.js` with the global test entry and the given base64
-    /// payload inside a bounded `node` subprocess, without blocking the
-    /// cooperative thread pool. Skips quietly when `node` is unavailable.
-    private func runParserCase(label: String, payload: Data, expectOK: Bool) async throws {
-        guard Self.nodeAvailable else {
-            Issue.record("node is not available on PATH; parser subprocess test skipped")
-            return
+    private static func loadRunner() throws -> ParserRunner {
+        let viewerURL = packageRoot.appendingPathComponent("viewer.js")
+        let sourceData = try Data(contentsOf: viewerURL)
+        guard let source = String(data: sourceData, encoding: .utf8) else {
+            throw ParserHarnessError.missingAsset
         }
-        let viewerURL = Self.packageRoot.appendingPathComponent("viewer.js")
-        guard FileManager.default.fileExists(atPath: viewerURL.path) else {
-            Issue.record("viewer.js is not present in the reviewed package; parser test skipped")
-            return
-        }
-        let harness = """
-        const viewer = require(process.env.JSONCANVAS_VIEWER);
-        const result = viewer.parseCanvas(process.env.JSONCANVAS_PAYLOAD);
-        process.stdout.write(result);
-        """
-        var environment = ProcessInfo.processInfo.environment
-        environment["JSONCANVAS_VIEWER"] = viewerURL.path
-        environment["JSONCANVAS_PAYLOAD"] = payload.base64EncodedString()
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["node", "-e", harness]
-        process.environment = environment
-        let output = Pipe()
-        let error = Pipe()
-        process.standardOutput = output
-        process.standardError = error
-        try process.run()
+        return try ParserRunner(viewerSource: source)
+    }
+}
 
-        try await asyncWaitUntilExit(process, timeout: .seconds(10))
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        let text = String(decoding: data, as: UTF8.self)
-        let parsed = try #require(try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
-        let ok = (parsed["ok"] as? Bool) ?? false
-        if expectOK {
-            #expect(ok == true, "expected parser success for \(label), got: \(text)")
-        } else {
-            #expect(ok == false, "expected parser rejection for \(label), got: \(text)")
-        }
+struct ParseOutcome {
+    let ok: Bool
+    let nodes: Int
+    let edges: Int
+}
+
+// Thread-confined: one ParserRunner per test, suite serialized — the same
+// invariant as FenceSyntaxValidator (each runner uses its JSContext on one
+// thread at a time).
+// swiftlint:disable:next unchecked_sendable
+private final class ParserRunner: @unchecked Sendable {
+    private let context: JSContext
+
+    init(viewerSource: String) throws {
+        guard let context = JSContext() else { throw ParserHarnessError.contextUnavailable }
+        context.exceptionHandler = { _, _ in }
+        context.evaluateScript(viewerSource)
+        self.context = context
     }
 
-    private static var nodeAvailable: Bool {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["node", "--version"]
-        process.standardOutput = Pipe()
-        process.standardError = Pipe()
-        do {
-            try process.run()
-        } catch {
-            return false
+    func parse(_ payload: Data) throws -> ParseOutcome {
+        guard let fn = context.objectForKeyedSubscript("__sdw_parse_canvas" as NSString), fn.isObject else {
+            throw ParserHarnessError.entryUnavailable
         }
-        // Avoid `waitUntilExit`; a short timeout still returns quickly.
-        Thread.sleep(forTimeInterval: 0.5)
-        return process.isRunning == false && process.terminationStatus == 0
+        let base64 = payload.base64EncodedString()
+        guard let result = fn.call(withArguments: [base64]),
+              let text = result.toString() else {
+            throw ParserHarnessError.malformedResult
+        }
+        guard let data = text.data(using: .utf8),
+              let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ParserHarnessError.malformedResult
+        }
+        let ok = (dict["ok"] as? Bool) ?? false
+        let nodes = (dict["nodes"] as? Int) ?? 0
+        let edges = (dict["edges"] as? Int) ?? 0
+        return ParseOutcome(ok: ok, nodes: nodes, edges: edges)
     }
+}
 
-    /// Non-blocking `terminationHandler` + `CheckedContinuation` with a timeout
-    /// safety net (never parks the cooperative thread pool).
-    private func asyncWaitUntilExit(_ process: Process, timeout: Duration) async throws {
-        let waiter = ProcessExitWaiter()
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            group.addTask {
-                try await withTaskCancellationHandler {
-                    try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-                        waiter.install(cont)
-                        process.terminationHandler = { _ in _ = waiter.finish(.success(())) }
-                        if !process.isRunning { _ = waiter.finish(.success(())) }
-                    }
-                } onCancel: {
-                    if waiter.finish(.failure(CancellationError())), process.isRunning {
-                        process.terminate()
-                    }
-                }
-            }
-            group.addTask {
-                do { try await Task.sleep(for: timeout) } catch { return }
-                if process.isRunning { process.terminate() }
-                _ = waiter.finish(.failure(ProcessExitWaitError.timedOut))
-                throw ProcessExitWaitError.timedOut
-            }
-            _ = try await group.next()
-            group.cancelAll()
+private enum ParserHarnessError: Error, CustomStringConvertible {
+    case missingAsset
+    case contextUnavailable
+    case entryUnavailable
+    case malformedResult
+
+    var description: String {
+        switch self {
+        case .missingAsset: "viewer.js is missing or not readable"
+        case .contextUnavailable: "JavaScriptCore context unavailable"
+        case .entryUnavailable: "package parser entry __sdw_parse_canvas is unavailable"
+        case .malformedResult: "package parser entry returned a malformed result"
         }
     }
 }
 
-private enum ProcessExitWaitError: Error {
-    case timedOut
-}
-
-private final class ProcessExitWaiter: @unchecked Sendable {
-    private let lock = NSLock()
-    private var continuation: CheckedContinuation<Void, Error>?
-
-    func install(_ continuation: CheckedContinuation<Void, Error>) {
-        lock.withLock {
-            self.continuation = continuation
-        }
-    }
-
-    @discardableResult
-    func finish(_ result: Result<Void, Error>) -> Bool {
-        let existing: CheckedContinuation<Void, Error>? = lock.withLock {
-            let value = continuation
-            continuation = nil
-            return value
-        }
-        existing?.resume(with: result)
-        return existing != nil
+#else
+@Suite(.serialized, .timeLimit(.minutes(2)))
+struct JSONCanvasRendererPackageParserTests {
+    @Test("JavaScriptCore is required for the JSON Canvas parser harness")
+    func requiresJavaScriptCore() throws {
+        Issue.record("JavaScriptCore is unavailable; JSON Canvas parser harness cannot run.")
     }
 }
+#endif
