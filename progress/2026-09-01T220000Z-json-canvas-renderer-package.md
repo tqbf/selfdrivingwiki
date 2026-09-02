@@ -32,10 +32,18 @@ design: plans/json-canvas-renderer-package.md
 
 - `swift run RendererPackageTool validate RendererPackages/JSONCanvas` — passes.
 - Focused normal-suite filters passed: manifest revision 4, bridge contracts, parser, neutrality, reviewed package.
-- Full normal `swift test` passed: 4,146 tests in 448 suites.
-- `make build` and bare `swift build` passed.
+- `WIKIFS_APP_TESTS=1 swift test --filter RendererAttachmentCoordinatorTests` passed: 37 tests.
+- `WIKIFS_APP_TESTS=1 swift test --filter RendererContentWorldBridgeTests` passed: 7 tests.
+- `WIKIFS_APP_TESTS=1 swift test --filter RendererAttachmentSpikeHostedTests` passed: 4 tests.
+- `WIKIFS_APP_TESTS=1 swift test --filter Phase6RendererHostedValidationTests` passed: 2 tests.
+- `WIKIFS_APP_TESTS=1 swift test --filter JSONCanvasRendererPackageTests` passed: 6 tests.
+- `WIKIFS_APP_TESTS=1 swift test --filter JSONCanvasRendererPackageHostedValidationTests` passed: 2 real-WebKit tests.
+- `scripts/test-with-watchdog.sh` passed the full suite with no unfinished tests.
+- Bare `swift build` and `swift test` passed. The test run completed 4,146 tests in 448 suites.
+- `make build` passed. Two `make test` runs each found one unrelated extractor-package concurrency failure. Each failed test then passed three focused reruns, and the watchdog full suite passed.
 - Built-app inspection found no bundled JSON Canvas package assets.
-- Remaining before delivery: complete the opt-in hosted coordinator and related WebKit suites, rerun final full gates, run implementation review, and record the exact evidence in this entry and the pull request.
+- `scripts/validate-skills` is not present in this checkout, so that planned check could not run.
+- Remaining before delivery: complete implementation review, resolve its findings, and record the pull request.
 
 ## Notes / honest limits
 
