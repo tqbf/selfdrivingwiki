@@ -19,6 +19,10 @@ public enum RendererValidationError: Error, Equatable, Sendable, CustomStringCon
     case fenceClaimMissingDisclosureRole(RendererFenceAlias)
     case duplicateFenceClaim(RendererFenceAlias)
     case fenceClaimsRequireCurrentRevision
+    case fenceValidationRequiresCurrentRevision
+    case fenceValidationAssetNotApproved(RendererRelativePath)
+    case fenceValidationAssetsNotDistinct
+    case fenceValidationEntryFunctionInvalid
     case reservedFenceAlias(RendererFenceAlias)
     case conflictingFenceAlias(RendererFenceAlias)
     case forbiddenCapability(RendererCapability)
@@ -53,6 +57,10 @@ public enum RendererValidationError: Error, Equatable, Sendable, CustomStringCon
         case let .fenceClaimMissingDisclosureRole(alias): "fence claim requires the disclosureRow embedding role: \(alias.rawValue)"
         case let .duplicateFenceClaim(alias): "duplicate renderer fence claim: \(alias.rawValue)"
         case .fenceClaimsRequireCurrentRevision: "renderer fence claims require manifest revision 2"
+        case .fenceValidationRequiresCurrentRevision: "renderer fence validation declarations require manifest revision 3"
+        case let .fenceValidationAssetNotApproved(path): "renderer fence validation asset is not approved by the declaring descriptor: \(path.rawValue)"
+        case .fenceValidationAssetsNotDistinct: "renderer fence validation engine and wrapper assets must be distinct paths"
+        case .fenceValidationEntryFunctionInvalid: "renderer fence validation entry function must be a JavaScript identifier"
         case let .reservedFenceAlias(alias): "renderer fence alias is reserved by a built-in renderer: \(alias.rawValue)"
         case let .conflictingFenceAlias(alias): "renderer fence alias is already claimed by an installed package: \(alias.rawValue)"
         case let .forbiddenCapability(capability): "forbidden renderer capability: \(capability.rawValue)"

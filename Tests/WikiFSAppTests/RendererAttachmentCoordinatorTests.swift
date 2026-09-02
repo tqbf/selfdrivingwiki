@@ -323,7 +323,7 @@ struct RendererAttachmentCoordinatorTests {
         #expect(body.contains("alt=\"Generic image\""))
         #expect(body.components(separatedBy: "class=\"sdw-inline-renderer\"").count - 1 == 2)
         #expect(!body.contains("data-renderer-admitted=\"true\""))
-        webView.loadHTMLString(WikiReaderView.documentHTML(body, mermaidLibrary: nil), baseURL: WikiReaderOrigin.url)
+        webView.loadHTMLString(WikiReaderView.documentHTML(body), baseURL: WikiReaderOrigin.url)
         try await Self.waitUntil("inert renderer document") { webView.isLoading == false }
 
         let initialY = try await Self.javaScriptDouble(

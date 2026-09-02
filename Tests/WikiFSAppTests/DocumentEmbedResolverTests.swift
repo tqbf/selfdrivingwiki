@@ -62,28 +62,72 @@ struct DocumentEmbedResolverTests {
         #expect(resolvedID == sourceID)
     }
 
-    @Test func mermaidSourceIsInlineWithoutRendererRolePromotion() throws {
+    @Test func mermaidSourceResolvesThroughTheGenericRendererArmWhenClaimed() throws {
+        // A .mmd source with a matching inline package plan resolves through
+        // the generic source-renderer arm — the same path as any other
+        // renderer-package source, with no host format branch.
+        let embed = try sourceEmbed("![[source:diagram.mmd]]")
+        let bytes = Data("graph TD; A-->B".utf8)
+        let source = DocumentSourceResolution(
+            sourceID: sourceID,
+            version: .source(SourceVersionID(rawValue: "01J00000000000000000000004")),
+            displayName: "diagram.mmd",
+            mimeType: "text/mermaid",
+            bytes: nil,
+            externalTarget: nil)
+        let pinnedSource = try RendererEmbeddedContent.Source(
+            sourceID: sourceID,
+            sourceVersionID: SourceVersionID(rawValue: "01J00000000000000000000004"),
+            mimeType: try .init(validating: "text/mermaid"),
+            fileExtension: "mmd",
+            bytes: bytes)
+        let plan = RendererEmbedPlan(
+            placeholderID: "diagram-plan",
+            embeddingRole: .inlineContent,
+            rendererReference: RendererReference(
+                packageID: PackageFenceTestSupport.installedPackageID,
+                version: PackageFenceTestSupport.installedPackageVersion,
+                registrationID: PackageFenceTestSupport.installedRegistrationID),
+            input: .source(pinnedSource),
+            semanticContent: "diagram",
+            activationMetadata: .init(
+                controlLabel: "Open",
+                accessibilityLabel: "Open inline source renderer",
+                summary: "Open the source in the renderer pane."))
+        let resolver = DocumentEmbedResolver(inputs: .init(
+            sourceByName: ["diagram.mmd": source],
+            sourceNamesByID: [sourceID: "diagram.mmd"],
+            sourceRendererCandidates: [sourceID: plan]))
+
+        guard case .renderer(let syntax, .inlineContent, let resolvedPlan, _) = resolver.resolveWikiEmbed(embed) else {
+            Issue.record("Expected a claimed diagram source to resolve through the generic renderer arm")
+            return
+        }
+        #expect(syntax.requiredEmbeddingRole == .inlineContent)
+        #expect(resolvedPlan.rendererReference == plan.rendererReference)
+        #expect(resolvedPlan.input == .source(pinnedSource))
+    }
+
+    @Test func mermaidSourceFallsBackToTransclusionWhenNoPackageClaimsIt() throws {
+        // The no-package leg: nothing claims the format, so the embed stays a
+        // readable tagged transclusion of the source bytes.
         let embed = try sourceEmbed("![[source:diagram.mmd]]")
         let source = DocumentSourceResolution(
             sourceID: sourceID,
             version: .source(SourceVersionID(rawValue: "01J00000000000000000000004")),
             displayName: "diagram.mmd",
             mimeType: "text/mermaid",
-            bytes: Data("graph TD; A-->B".utf8),
-            externalTarget: nil,
-            isMermaidSource: true)
+            bytes: nil,
+            externalTarget: nil)
         let resolver = DocumentEmbedResolver(inputs: .init(
             sourceByName: ["diagram.mmd": source],
             sourceNamesByID: [sourceID: "diagram.mmd"]))
 
-        guard case .inlineMedia(let syntax, .mermaidSource, _, .authored(let text), .code(let language, let fallback)) = resolver.resolveWikiEmbed(embed) else {
-            Issue.record("Expected inline Mermaid source")
+        guard case .transclusion(.source(let resolvedID), _, _, _) = resolver.resolveWikiEmbed(embed) else {
+            Issue.record("Expected an unclaimed diagram source to resolve as transclusion")
             return
         }
-        #expect(syntax.requiredEmbeddingRole == .inlineContent)
-        #expect(text == "graph TD; A-->B")
-        #expect(language == "mermaid")
-        #expect(fallback == text)
+        #expect(resolvedID == sourceID)
     }
 
     @Test func nonMediaSourceUsesTaggedTransclusion() throws {
@@ -274,8 +318,7 @@ struct DocumentEmbedResolverTests {
             displayName: "Media",
             mimeType: mime,
             bytes: Data("bytes".utf8),
-            externalTarget: nil,
-            isMermaidSource: false)
+            externalTarget: nil)
     }
 
     private func reference() throws -> RendererReference {

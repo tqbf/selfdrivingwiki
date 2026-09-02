@@ -32,7 +32,7 @@ Import accepts one local folder. It does not accept ZIP files, other archives, r
 
 Markdown syntax selects the renderer role. A package can fill a compatible role, but it cannot change the role.
 
-A rich fence is named by the first word of its info string. That name is live registry data. The built-in renderers claim `mermaid` and `jsoncanvas`. The optional Excalidraw renderer package claims `excalidraw` when you install it. An installed package can claim its own names through its manifest's `fenceClaims`. A fence uses the available renderer that claims its name. Installing or removing a package changes that result on the next render without a restart.
+A rich fence is named by the first word of its info string. That name is live registry data. The built-in renderers claim `jsoncanvas`. The optional Mermaid and Excalidraw renderer packages claim `mermaid` and `excalidraw` when you install them. An installed package can claim its own names through its manifest's `fenceClaims`. A fence uses the available renderer that claims its name. Installing or removing a package changes that result on the next render without a restart.
 
 Approved rich fences use a disclosure row. The row starts collapsed and shows **Open in Window** at the trailing edge. When a renderer that has been drawing a fence becomes unavailable (its package was removed or suppressed), the fence falls back to typed raw code with a notice that the renderer is not available here; a fence nobody ever claimed stays plain code.
 
@@ -65,7 +65,7 @@ An unclaimed, unresolved, external, data, oversized, or failed image keeps its o
 
 A reader can keep four native or installed disclosure rows expanded. A fifth row stays collapsed until another row closes.
 
-Mermaid source embeds stay inline. Authored Mermaid fences use disclosure rows. Inline Mermaid SVG does not use native or installed renderer budgets.
+Mermaid is a renderer package, not a built-in renderer. Before you import it, a ` ```mermaid ` fence falls back to typed raw code with the unavailable-renderer notice. After you import it, the fence uses the generic disclosure row. The same rule applies to a `.mmd` source and to a `![[source:…mmd]]` embed: with no package, the reader shows readable code or transclusion; with the package, the reader mounts an inline package session that uses the inline budget.
 
 ## Preferences and fallback
 
@@ -94,6 +94,35 @@ A revision 2 manifest may also declare fence claims. A claim is one alias plus t
 ```
 
 Claims require the `disclosureRow` role, must be unique inside the package, and cannot use an alias a built-in or another installed package already claims. Revision 1 packages never receive fence authority. Adding or changing claims changes the package bytes, so the reviewed version must bump with them.
+
+Manifest revision 3 adds an optional fence-syntax validation declaration to a claim. The declaration names two package assets and one JavaScript function. The host runs a format-neutral validator: it evaluates the wrapper asset first, then the engine asset, then calls the entry function with each claimed fence's text. The wrapper must define the entry function on the global object and return a holder object with `done`, `isValid`, `diagramType`, and `errors`. The engine that renders is the engine that validates, so no version skew can occur.
+
+```json
+{
+  "revision": 3,
+  "supportedEmbeddingRoles": ["inlineContent", "disclosureRow"],
+  "fenceClaims": [
+    {
+      "alias": "mermaid",
+      "inlineMIMEType": "text/mermaid",
+      "validation": {
+        "engineAssetPath": "mermaid.min.js",
+        "wrapperAssetPath": "validate.js",
+        "entryFunction": "__sdw_validate_fence"
+      }
+    }
+  ]
+}
+```
+
+The declaration rules are:
+
+- The engine and wrapper paths must be two distinct assets. Each must be approved by the declaring descriptor and declared in the top-level asset list.
+- The entry function must be one JavaScript identifier.
+- A revision 1 or 2 manifest that carries a `validation` object is rejected.
+- The wrapper asset runs first so it can install anything the engine needs before the engine loads.
+
+Save-time validation runs only where the declaring package is installed. In the app, the editor shows a non-blocking warning banner. In `wikictl page save`, an invalid claimed fence aborts the save before the write. When a claimed-looking fence has no installed declaring package, the save continues and `wikictl` prints a one-line notice that validation was skipped.
 
 Declare only roles that the package can present safely. `inlineContent` must work without disclosure chrome and must preserve readable fallback content.
 

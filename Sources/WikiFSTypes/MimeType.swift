@@ -139,10 +139,8 @@ public enum MimeType {
     /// This is the last-resort fallback in `GRDBWikiStore.addSource`'s MIME
     /// chain — without it, a standalone `.mmd` Mermaid source ingests with
     /// `mime_type = NULL`, which breaks `SourceDetailView.isMarkdownNative`
-    /// (`MimeType.isText(nil) == false`) and leaves every Mermaid tab empty
-    /// (issue #620). The canonical extension string is
-    /// `MermaidSourceDetector.mermaidExtension` (kept here as a literal because
-    /// `WikiFSTypes` can't depend on `WikiFSCore`).
+    /// (`MimeType.isText(nil) == false`) and leaves its tabs empty
+    /// (issue #620).
     ///
     /// Lowercased input is assumed (callers lower-case extensions); the switch
     /// is case-insensitive anyway. Returns `nil` for unrecognized extensions.

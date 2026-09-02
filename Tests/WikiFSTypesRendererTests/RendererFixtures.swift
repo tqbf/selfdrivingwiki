@@ -66,11 +66,17 @@ enum RendererFixtures {
 
     static func fenceClaim(
         alias: String = "d2",
-        mime: String = "text/plain"
+        mime: String = "text/plain",
+        validation: RendererFenceValidationDeclaration? = nil
     ) throws -> RendererFenceClaim {
         RendererFenceClaim(
             alias: try RendererFenceAlias(validating: alias),
-            inlineMIMEType: try RendererMIMEType(validating: mime))
+            inlineMIMEType: try RendererMIMEType(validating: mime),
+            validation: validation)
+    }
+
+    static var zeroDigest: RendererSHA256Digest {
+        try! RendererSHA256Digest(bytes: Array(repeating: 0, count: RendererSHA256Digest.byteCount))
     }
 
     static func webAsset(path: String = "index.html") -> RendererAsset {

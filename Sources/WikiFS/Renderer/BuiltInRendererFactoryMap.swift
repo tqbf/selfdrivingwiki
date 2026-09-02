@@ -19,7 +19,6 @@ enum BuiltInRendererFactoryMap {
         .pdf: makePDF,
         .html: makeHTML,
         .svg: makeSVG,
-        .mermaid: makeMermaid,
         .media: makeMedia,
         .jsonCanvas: makeJSONCanvas,
     ]
@@ -71,22 +70,6 @@ enum BuiltInRendererFactoryMap {
         return AnyView(SVGRendererView(bytes: bytes))
     }
 
-    private static func makeMermaid(_ inputs: BuiltInRendererFactoryInputs) -> AnyView? {
-        AnyView(Group {
-            if let source = inputs.mermaidDiagramSource {
-                MermaidRendererView(source: source)
-            } else if let mermaidProjection = inputs.mermaidProjection {
-                mermaidProjection
-            } else {
-                ContentUnavailableView {
-                    Label("No Diagram", systemImage: "flowchart.fill")
-                } description: {
-                    Text("This source has no Mermaid diagram to render yet.")
-                }
-            }
-        })
-    }
-
     private static func makeMedia(_ inputs: BuiltInRendererFactoryInputs) -> AnyView? {
         AnyView(Group {
             if let target = inputs.mediaTarget {
@@ -121,8 +104,6 @@ struct BuiltInRendererFactoryInputs {
     let sourceBytes: Data?
     let pdfQuote: String?
     let htmlSource: String?
-    let mermaidProjection: AnyView?
-    let mermaidDiagramSource: String?
     let mediaTarget: EmbedTarget?
     let jsonCanvasHostAction: @MainActor @Sendable (JSONCanvasHostAction) -> Void
 
@@ -130,16 +111,12 @@ struct BuiltInRendererFactoryInputs {
         sourceBytes: Data?,
         pdfQuote: String?,
         htmlSource: String?,
-        mermaidProjection: AnyView?,
-        mermaidDiagramSource: String? = nil,
         mediaTarget: EmbedTarget?,
         jsonCanvasHostAction: @escaping @MainActor @Sendable (JSONCanvasHostAction) -> Void
     ) {
         self.sourceBytes = sourceBytes
         self.pdfQuote = pdfQuote
         self.htmlSource = htmlSource
-        self.mermaidProjection = mermaidProjection
-        self.mermaidDiagramSource = mermaidDiagramSource
         self.mediaTarget = mediaTarget
         self.jsonCanvasHostAction = jsonCanvasHostAction
     }

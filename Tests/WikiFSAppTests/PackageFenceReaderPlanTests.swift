@@ -17,13 +17,15 @@ struct PackageFenceReaderPlanTests {
         pageVersionID: PageVersionID(rawValue: "01HTESTPV00000000000000001"))
 
     private static func options(
-        claims: [RendererFenceAlias: RendererFenceClaimAssignment]
+        claims: [RendererFenceAlias: RendererFenceClaimAssignment],
+        unavailableFenceAliases: Set<RendererFenceAlias> = []
     ) -> MarkdownRenderOptions {
         MarkdownRenderOptions(
             codeHighlighting: .disabled,
             rendererEmbedProjection: RendererEmbedProjection(
                 sourceEmbeds: [:],
-                richFenceClaims: claims),
+                richFenceClaims: claims,
+                unavailableFenceAliases: unavailableFenceAliases),
             documentIdentity: document,
             rendererActivationAdmission: RendererEmbedActivationAdmission(
                 pageID: document.pageID,
@@ -142,22 +144,43 @@ struct PackageFenceReaderPlanTests {
         #expect(html == "<pre><code class=\"language-d2\">x -&gt; y\n</code></pre>")
     }
 
-    // MARK: - AC.3: golden output for the three pre-existing aliases
+    // MARK: - AC.3: golden output for the remaining built-in and package aliases
 
-    @Test("mermaid fence output is byte-stable")
-    func mermaidGolden() {
+    @Test("a claimed mermaid fence renders the generic package card")
+    func mermaidGoldenThroughPackageClaim() {
+        // The built-in claim is gone; the reviewed package claims the alias
+        // now, so the fence renders the generic card path — the same markup
+        // D2 and Excalidraw produce — with presentation strings derived from
+        // descriptor data.
         let claims = RendererFenceClaimResolver.resolve(
-            builtInDescriptors: BuiltInRendererDescriptors.all)
+            builtInDescriptors: BuiltInRendererDescriptors.all,
+            enabledInstalledDescriptors: [PackageFenceTestSupport.installedMermaidDescriptor()])
         let html = MarkdownHTMLRenderer.render(
             "```mermaid\ngraph TD\nA-->B\n```",
             options: Self.options(claims: claims))
-        // The trusted built-in presentation strings are pinned: the card keeps
-        // its exact pre-conversion markup.
-        #expect(html.contains("data-renderer-kind=\"mermaid\""))
-        #expect(html.contains("data-renderer-reference=\"org.selfdrivingwiki.builtin/1.0.0/mermaid\""))
+        #expect(html.contains("sdw-renderer-card__row"))
+        #expect(html.contains("data-renderer-reference=\"org.selfdrivingwiki.mermaid-readonly/1.0.0/mermaid\""))
         #expect(html.contains("aria-label=\"Mermaid renderer\""))
-        #expect(html.contains("<div class=\"mermaid sdw-mermaid-row__diagram\"></div>"))
-        #expect(html.contains(#"<code class="language-mermaid">graph TD"#))
+        #expect(html.contains("aria-label=\"Expand Mermaid renderer\""))
+        #expect(html.contains("Mermaid renderer"))
+        // No host mermaid markup exists.
+        #expect(html.contains("sdw-mermaid-row__diagram") == false)
+        #expect(html.contains("data-mermaid-disclosure") == false)
+        #expect(html.contains("data-renderer-kind=\"mermaid\"") == false)
+    }
+
+    @Test("an unclaimed mermaid fence falls back to typed raw code with the notice")
+    func unclaimedMermaidFenceFallsBackWithNotice() {
+        // Nothing claims the alias: the fence keeps its typed raw-code
+        // presentation. The generic unavailable-claim fallback adds the
+        // notice once the store has seen the alias claimed.
+        let html = MarkdownHTMLRenderer.render(
+            "```mermaid\ngraph TD\nA-->B\n```",
+            options: Self.options(claims: [:], unavailableFenceAliases: [
+                RendererFenceAlias(rawValue: "mermaid")!,
+            ]))
+        #expect(html.contains(#"<pre><code class="language-mermaid">graph TD"#))
+        #expect(html.contains("sdw-renderer-card__fallback"))
     }
 
     @Test("jsoncanvas fence plan carries its pinned presentation")

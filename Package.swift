@@ -275,13 +275,14 @@ let package = Package(
             swiftSettings: strictSwiftSettings
         ),
         // Markdown/content-transformation cluster — linter, extractors, diffs,
-        // HTML↔markdown converters, slug utils, mermaid validator. Depends on
-        // WikiFSTypes (DebugLog/PageID/etc.) and WikiFSLinks (WikiLinkFixer/
-        // WikiLinkSpan). Extracted from WikiFSCore in module restructuring
-        // Phase 2 (#532). Re-exported by WikiFSCore via ModuleExports.swift.
-        // Previously Sources/WikiFSCore/Markdown/.
-        // JavaScriptCore: MarkdownLinter runs vendored markdownlint JS; Mermaid
-        // validation uses the bundled Mermaid v11 library (no Node at runtime).
+        // HTML↔markdown converters, slug utils, the format-neutral fence
+        // validator runner. Depends on WikiFSTypes (DebugLog/PageID/etc.)
+        // and WikiFSLinks (WikiLinkFixer/WikiLinkSpan). Extracted from
+        // WikiFSCore in module restructuring Phase 2 (#532). Re-exported by
+        // WikiFSCore via ModuleExports.swift. Previously
+        // Sources/WikiFSCore/Markdown/.
+        // JavaScriptCore: MarkdownLinter runs vendored markdownlint JS; fence
+        // validation evaluates renderer-package assets (no Node at runtime).
         .target(
             name: "WikiFSMarkdown",
             dependencies: ["WikiFSTypes", "WikiFSLinks"],

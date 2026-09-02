@@ -164,6 +164,11 @@ public final class RendererPackageValidator {
             }
         }
         let declared = Dictionary(uniqueKeysWithValues: manifest.assets.map { ($0.path, $0) })
+        // Every file in the tree must be a declared asset and match its digest
+        // by construction. Fence-validation engine/wrapper assets are members
+        // of approvedAssets (enforced in RendererDescriptor.init) and of the
+        // manifest assets (enforced in RendererManifest.init), so they pass
+        // the same regular-file + digest checks as every other asset.
         for (path, url) in files {
             guard let asset = declared[path] else { throw RendererPackageValidationError.undeclaredFile(path.rawValue) }
             let digest = RendererSHA256.digest(try Data(contentsOf: url, options: [.mappedIfSafe]))

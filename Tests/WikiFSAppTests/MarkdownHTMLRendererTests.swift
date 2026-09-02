@@ -340,17 +340,14 @@ struct MarkdownHTMLRendererTests {
 
     @Test("inline Mermaid SVG installs bounded pointer-anchored scroll zoom")
     func mermaidBootstrapInstallsScrollZoom() {
-        let source = WikiReaderView.mermaidBootstrapJS
-
-        #expect(source.contains("__sdwInstallMermaidScrollZoom"))
-        #expect(source.contains("addEventListener('wheel'"))
-        #expect(source.contains("{ passive: false }"))
-        #expect(source.contains("event.ctrlKey || event.metaKey || event.altKey || event.shiftKey"))
-        #expect(source.contains("var minimumScale = 0.5"))
-        #expect(source.contains("var maximumScale = 3"))
-        #expect(source.contains("var pointerX = event.clientX - bounds.left"))
-        #expect(source.contains("view.x = pointerX - documentX * view.scale"))
-        #expect(source.contains("window.__sdwInstallMermaidScrollZoom(diagram)"))
+        // The reader carries no diagram engine: the bootstrap and its zoom
+        // plumbing are gone, and claimed fences render through package
+        // sessions. Pan/zoom lives in each package's own viewer.
+        let html = WikiReaderView.documentHTML("<p>Body</p>")
+        #expect(html.contains("__sdwInstallMermaidScrollZoom") == false)
+        #expect(html.contains("__sdwRenderMermaidRow") == false)
+        #expect(html.contains("sdw-mermaid-row") == false)
+        #expect(html.contains("mermaid") == false)
     }
 
     @Test("a Mermaid fence title remains presentation metadata")
@@ -456,22 +453,27 @@ struct MarkdownHTMLRendererTests {
         #expect(excalidraw.contains("Open in Window"))
 
         let mermaid = MarkdownHTMLRenderer.render("```mermaid\ngraph TD\nA-->B\n```", options: options)
-        #expect(mermaid.contains("data-renderer-kind=\"mermaid\""))
+        // A claimed mermaid fence renders through the SAME generic card path
+        // as Excalidraw — the disclosure row mounts a package session on
+        // activation. No host mermaid markup exists.
+        #expect(mermaid.contains("sdw-renderer-card"))
         #expect(mermaid.contains("data-renderer-expanded=\"false\""))
         #expect(mermaid.contains("aria-expanded=\"false\""))
-        #expect(mermaid.contains("data-mermaid-disclosure=\"true\""))
-        #expect(mermaid.contains("sdw-mermaid-row__expansion"))
-        #expect(mermaid.contains("A--&gt;B"))
+        #expect(mermaid.contains("sdw-renderer-card__expansion"))
+        #expect(mermaid.contains("data-renderer-kind=\"mermaid\"") == false)
+        #expect(mermaid.contains("data-mermaid-disclosure") == false)
+        #expect(mermaid.contains("sdw-mermaid-row") == false)
+        // The fence bytes travel as the inline-artifact bridge input
+        // (base64), never as host-side escaped diagram text.
+        #expect(mermaid.contains("fenceAlias&quot;:&quot;mermaid"))
+        #expect(mermaid.contains("text&quot;:&quot;mermaid") || mermaid.contains("mimeType&quot;"))
+        #expect(mermaid.contains("A--&gt;B") == false)
         #expect(mermaid.contains("Open in Window"))
-        #expect(!mermaid.contains("data-renderer-action=\"expand\""))
-        #expect(WikiReaderWebView.rendererAttachmentGeometryJS.contains("data-mermaid-disclosure"))
-        #expect(WikiReaderWebView.rendererAttachmentGeometryJS.contains("if(!expanded&&window.__sdwRenderMermaidRow)"))
-        #expect(WikiReaderView.mermaidBootstrapJS.contains("data-mermaid-rendering') === 'true'"))
-        #expect(WikiReaderView.mermaidBootstrapJS.contains("setAttribute('data-mermaid-rendering', 'true')"))
-        #expect(WikiReaderView.mermaidBootstrapJS.contains("removeAttribute('data-mermaid-rendering')"))
-        #expect(WikiReaderView.mermaidBootstrapJS.contains("code.parentElement.hidden = false"))
-        #expect(WikiReaderView.mermaidBootstrapJS.contains("diagram.textContent = ''"))
-        #expect(!WikiReaderView.mermaidBootstrapJS.contains("querySelectorAll('code.language-mermaid')"))
+        // The generic disclosure posts an expand action that the attachment
+        // coordinator answers by mounting the package session.
+        #expect(mermaid.contains("data-renderer-action=\"expand\""))
+        #expect(WikiReaderWebView.rendererAttachmentGeometryJS.contains("data-mermaid-disclosure") == false)
+        #expect(WikiReaderWebView.rendererAttachmentGeometryJS.contains("__sdwRenderMermaidRow") == false)
     }
 
     @Test("an Excalidraw card delegates drawing to the dynamic renderer")
@@ -760,64 +762,6 @@ struct MarkdownHTMLRendererTests {
         #expect(html.contains("sdw-renderer-card") == false)
     }
 
-    @Test("standalone Mermaid renderer contains no inline card chrome")
-    func standaloneMermaidRendererOmitsInlineCardChrome() {
-        let source = "flowchart LR\nA[Start <&>] --> B[Finish]"
-        let html = MermaidRendererWebView.Coordinator.documentHTML(
-            source: source,
-            library: "window.mermaid = window.mermaid || {};",
-            theme: .dark)
-
-        #expect(html.contains(#"id="diagram" class="mermaid""#))
-        #expect(html.contains(#"data-mermaid-theme="dark""#))
-        #expect(html.contains("theme:'dark'"))
-        #expect(html.contains(#"rendered.\n\n' + String(reason)"#))
-        #expect(html.contains("width: \(Int(PageEditorMetrics.readableContentWidth))px"))
-        #expect(html.contains(MermaidRendererAssets.sharedCSS))
-        #expect(html.contains(#"id="source" hidden"#) == false)
-        #expect(html.contains(#"id="error" role="alert" hidden"#))
-        #expect(html.contains("securityLevel:'strict'"))
-        #expect(html.contains("default-src 'none'"))
-        #expect(html.contains("flowchart LR"))
-        #expect(html.contains("Start &lt;&amp;&gt;"))
-        #expect(html.contains("sdw-renderer-card") == false)
-        #expect(html.contains("sdw-renderer-card__row") == false)
-        #expect(html.contains("data-mermaid-disclosure") == false)
-        #expect(html.contains("data-renderer-action") == false)
-        #expect(html.contains("Open in Window") == false)
-    }
-
-    @Test("standalone Mermaid renderer uses the explicit app theme")
-    func standaloneMermaidRendererUsesExplicitTheme() {
-        let source = "flowchart LR\nA --> B"
-        let library = "window.mermaid = window.mermaid || {};"
-        let lightHTML = MermaidRendererWebView.Coordinator.documentHTML(
-            source: source,
-            library: library,
-            theme: .light)
-        let darkHTML = MermaidRendererWebView.Coordinator.documentHTML(
-            source: source,
-            library: library,
-            theme: .dark)
-
-        #expect(lightHTML.contains(#"data-mermaid-theme="default""#))
-        #expect(lightHTML.contains("theme:'default'"))
-        #expect(darkHTML.contains(#"data-mermaid-theme="dark""#))
-        #expect(darkHTML.contains("theme:'dark'"))
-        #expect(lightHTML.contains("matchMedia") == false)
-        #expect(darkHTML.contains("matchMedia") == false)
-
-        let lightIdentity = MermaidRendererWebView.Coordinator.contentIdentity(
-            source: source,
-            library: library,
-            theme: .light)
-        let darkIdentity = MermaidRendererWebView.Coordinator.contentIdentity(
-            source: source,
-            library: library,
-            theme: .dark)
-        #expect(lightIdentity != darkIdentity)
-    }
-
     @Test("renderer row stylesheet stays compact, relative, focus-visible, and motion-aware")
     func rendererRowStylesUseNativeReaderScaleAndFocus() {
         let html = WikiReaderView.documentHTML("<p>Body</p>")
@@ -872,8 +816,7 @@ struct MarkdownHTMLRendererTests {
             displayName: "img.png",
             mimeType: "image/png",
             bytes: nil,
-            externalTarget: nil,
-            isMermaidSource: false)
+            externalTarget: nil)
         let resolver = DocumentEmbedResolver(inputs: .init(
             sourceByName: ["img.png": source],
             sourceNamesByID: [id: "img.png"]))
@@ -887,75 +830,36 @@ struct MarkdownHTMLRendererTests {
         #expect(!prepared.normalizedMarkdown.contains("<img"))
     }
 
-    // MARK: - Mermaid embed survives the markdown→HTML pipeline (#736).
+    // MARK: - Mermaid embeds after the built-in renderer retirement.
 
-    /// A `.mmd` source embed (`![[source:diagram.mmd]]`) must survive the
-    /// reader's `MarkdownHTMLRenderer` as a single intact
-    /// `<pre><code class="language-mermaid">…</code></pre>` whose
-    /// `textContent` CSS-decodes back to the original diagram source —
-    /// otherwise the reader's `mermaidBootstrapJS` reads garbled
-    /// `code.textContent` and `mermaid.parse()` fails with
-    /// "Syntax error in text". This checks the four contexts that broke the
-    /// previous raw-`<div>` emit: paragraph surrounds, a blank line inside
-    /// the diagram, the embed inside a list item, and the embed mid-paragraph.
-    @Test func mermaidEmbedSurvivesMarkdownRendererInAllContexts() {
+    /// A `.mmd` source embed (`![[source:diagram.mmd]]`) with no claiming
+    /// package lowers as a readable tagged transclusion in every syntactic
+    /// context — the same no-package contract as any renderer-package
+    /// format, with no host diagram markup.
+    @Test func mermaidEmbedLowersAsTransclusionInAllContexts() {
         let id = SourceID(rawValue: "01HTESTMERMAID0000000000001")
-        let cases: [(String, String, String)] = [
-            ("paragraph-surround",
-             "intro.\n\n![[source:diagram.mmd]]\n\noutro.",
-             "graph TD\n    A --> B\n    B --> C\n"),
-            ("blank-line-in-diagram",
-             "intro.\n\n![[source:diagram.mmd]]\n\noutro.",
-             "graph TD\n    A --> B\n\n    B --> C\n"),
-            ("inside-list",
-             "- before\n- ![[source:diagram.mmd]]\n- after",
-             "graph TD\n    A --> B\n    B --> C\n"),
-            ("mid-paragraph",
-             "text ![[source:diagram.mmd]] more text",
-             "graph TD\n    A --> B\n    B --> C\n"),
+        let cases: [(String, String)] = [
+            ("paragraph-surround", "intro.\n\n![[source:diagram.mmd]]\n\noutro."),
+            ("inside-list", "- before\n- ![[source:diagram.mmd]]\n- after"),
+            ("mid-paragraph", "text ![[source:diagram.mmd]] more text"),
         ]
-        for (label, body, diagramSource) in cases {
-            let html = typedMermaidHTML(markdown: body, sourceID: id, source: diagramSource)
-            let mermaidCount = html.components(
-                separatedBy: "class=\"mermaid sdw-inline-mermaid\"").count - 1
-            #expect(mermaidCount == 1,
-                    "\(label): expected one inline Mermaid container, got \(mermaidCount). HTML:\n\(html)")
-            // visitCodeBlock escapes `>` exactly ONCE → `&gt;`. The previous
-            // raw-div path double-escaped to `&amp;gt;` (literal `&gt;`) in
-            // some contexts, tripping mermaid's parser.
-            #expect(html.contains("A --&gt; B"),
-                    "\(label): expected `A --&gt; B` in HTML:\n\(html)")
-            #expect(!html.contains("&amp;gt;"),
-                    "\(label): double-escaped `&amp;gt;` (literal `&gt;`) in HTML:\n\(html)")
-            #expect(html.contains("sdw-inline-mermaid__fallback"),
-                    "\(label): missing the readable Mermaid fallback. HTML:\n\(html)")
-            #expect(html.contains("<code class=\"language-mermaid\">"),
-                    "\(label): missing the Mermaid code fallback. HTML:\n\(html)")
-            #expect(!html.contains("sdw-renderer-card__row"),
-                    "\(label): inline Mermaid was promoted to a disclosure row. HTML:\n\(html)")
+        for (label, body) in cases {
+            let html = typedMermaidHTML(markdown: body, sourceID: id)
+            let transclusionCount = html.components(
+                separatedBy: "sdw-transclusion").count - 1
+            #expect(transclusionCount == 1,
+                    "\(label): expected one transclusion, got \(transclusionCount). HTML:\n\(html)")
+            // No host diagram markup exists at all.
+            #expect(!html.contains("sdw-inline-mermaid"),
+                    "\(label): host diagram markup must not appear. HTML:\n\(html)")
+            #expect(!html.contains("class=\"mermaid\""),
+                    "\(label): host diagram class must not appear. HTML:\n\(html)")
         }
-    }
-
-    /// Mermaid source containing a triple-backtick run must remain exact in
-    /// typed inline content and its readable fallback.
-    @Test func mermaidEmbedPreservesBackticksWithoutSyntheticFence() {
-        let id = SourceID(rawValue: "01HTESTMERMAID0000000000002")
-        let diagram = "graph TD\n    A[\"has ``` triple backticks\"] --> B"
-        let html = typedMermaidHTML(
-            markdown: "![[source:diagram.mmd]]",
-            sourceID: id,
-            source: diagram)
-
-        #expect(html.contains("\"has ``` triple backticks\""))
-        #expect(html.contains("class=\"mermaid sdw-inline-mermaid\""))
-        #expect(html.contains("class=\"language-mermaid\""))
-        #expect(!html.contains("sdw-renderer-card__row"))
     }
 
     private func typedMermaidHTML(
         markdown: String,
-        sourceID: SourceID,
-        source: String
+        sourceID: SourceID
     ) -> String {
         let prepared = ReaderMarkdown.preparedDocument(markdown)
         let resolution = DocumentSourceResolution(
@@ -963,12 +867,8 @@ struct MarkdownHTMLRendererTests {
             version: nil,
             displayName: "diagram.mmd",
             mimeType: MimeType.mermaid,
-            bytes: Data(source.utf8),
-            externalTarget: EmbedTarget(
-                kind: .diagram,
-                url: sourceID.rawValue,
-                content: source),
-            isMermaidSource: true)
+            bytes: nil,
+            externalTarget: nil)
         let resolver = DocumentEmbedResolver(inputs: .init(
             sourceByName: ["diagram.mmd": resolution],
             sourceNamesByID: [sourceID: "diagram.mmd"]))

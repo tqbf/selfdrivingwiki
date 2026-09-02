@@ -397,10 +397,6 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
             return "<iframe class=\"wiki-embed-pdf\" src=\"\(escapeAttribute(source))\" title=\"\(escapeAttribute(alt))\" loading=\"lazy\"></iframe>"
         case .externalFrame:
             return "<iframe class=\"wiki-embed\" src=\"\(escapeAttribute(source))\" title=\"\(escapeAttribute(alt))\" loading=\"lazy\"></iframe>"
-        case .mermaidSource:
-            let sourceText: String
-            if case .authored(let value) = target { sourceText = value } else { return fallbackHTML(fallback) }
-            return "<div class=\"mermaid sdw-inline-mermaid\">\(escape(sourceText))</div><pre class=\"sdw-inline-mermaid__fallback\"><code class=\"language-mermaid\">\(escape(sourceText))</code></pre>"
         }
     }
 
@@ -685,77 +681,10 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
             return plainCodeBlockHTML(code, cls: cls)
                 + #"<p class="sdw-renderer-card__fallback">\#(escape(Self.fallbackNotice(for: .packageAliasDisallowed)))</p>"#
         }
-        // Mermaid's native inline-SVG projection stays keyed to its built-in
-        // claim — a host renderer, not a package branch.
-        if claim.reference == BuiltInRendererReference.reference(for: .mermaid) {
-            return mermaidRendererCardHTML(
-                block: block,
-                claim: claim,
-                fallbackHTML: plainCodeBlockHTML(code, cls: cls))
-        }
         return rendererCardHTML(
             plan: rendererEmbedPlan(for: block, claim: claim),
             fallbackHTML: plainCodeBlockHTML(code, cls: cls),
             rendererName: claim.displayName)
-    }
-
-    private mutating func mermaidRendererCardHTML(
-        block: MarkdownFencedBlock,
-        claim: RendererFenceClaimAssignment,
-        fallbackHTML: String
-    ) -> String {
-        let plan = rendererEmbedPlan(for: block, claim: claim)
-        guard plan.fallbackReason != .oversizedInput else { return fallbackHTML }
-        let reference = plan.rendererReference
-        let rendererName = claim.displayName
-        let title = plan.displayTitle ?? rendererName
-        let label = title == rendererName ? "\(rendererName) renderer" : "\(rendererName) renderer: \(title)"
-        let placeholderID = Self.placeholderID(for: block)
-        let expansionID = "\(placeholderID)-expansion"
-        let refValue = "\(reference.packageID.rawValue)/\(reference.version.rawValue)/\(reference.registrationID.rawValue)"
-        var actionHTML = ""
-        if let input = plan.input,
-           let admission = rendererActivationAdmission,
-           case .inlineArtifact(let artifact) = input,
-           plan.activationMetadata != nil,
-           admission.pageID == artifact.pageID,
-           admission.pageVersionID == artifact.pageVersionID {
-            let context = RendererEmbedActivationContext(
-                pageID: artifact.pageID, pageVersionID: artifact.pageVersionID,
-                blockID: artifact.blockID, embeddingRole: plan.embeddingRole,
-                rendererReference: reference,
-                input: .inlineArtifact(artifact), capability: admission.capability,
-                generation: admission.generation, displayTitle: title)
-            let placeholder = RendererAttachmentPlaceholderID.validatedOrNil(placeholderID)
-            admission.register(context: context, attachmentPlaceholderID: placeholder)
-            do {
-                let encoded = try String(decoding: JSONEncoder().encode(input), as: UTF8.self)
-                let url = Self.rendererActionURL(
-                    packageID: reference.packageID.rawValue, version: reference.version.rawValue,
-                    registrationID: reference.registrationID.rawValue, inputJSON: encoded,
-                    capability: context.capability.rawValue, generation: context.generation,
-                    pageID: context.pageID.rawValue, pageVersionID: context.pageVersionID.rawValue,
-                    identity: .block(artifact.blockID), embeddingRole: context.embeddingRole,
-                    mimeType: artifact.mimeType.rawValue)
-                actionHTML = "<a class=\"sdw-renderer-card__action\" data-renderer-action=\"open-window\" href=\"\(escapeAttribute(url))\" aria-label=\"Open \(escapeAttribute(label)) in Window\" style=\"flex:0 0 auto\">Open in Window</a>"
-            } catch {
-                DebugLog.reader("Mermaid renderer action encoding failed: \(error.localizedDescription)")
-            }
-        }
-        let raw = escape(block.rawText)
-        return """
-        <section class="sdw-renderer-card" id="\(escapeAttribute(placeholderID))" role="group" aria-label="\(escapeAttribute(label))" data-renderer-kind="mermaid" data-renderer-expanded="false" data-renderer-reference="\(escapeAttribute(refValue))">
-          <div class="sdw-renderer-card__row" style="display:flex;align-items:center;min-width:0">
-            <button class="sdw-renderer-card__disclosure" data-mermaid-disclosure="true" type="button" aria-expanded="false" aria-controls="\(escapeAttribute(expansionID))" aria-label="Expand \(escapeAttribute(label))"><span aria-hidden="true">▸</span></button>
-            <span class="sdw-renderer-card__title sdw-renderer-card__title--truncated" title="\(escapeAttribute(title))" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1 1 auto">\(escape(title))</span>
-            \(actionHTML)
-          </div>
-          <div class="sdw-renderer-card__expansion sdw-mermaid-row__expansion" id="\(escapeAttribute(expansionID))" role="region" aria-label="\(escapeAttribute(label)) details" hidden aria-hidden="true">
-            <div class="mermaid sdw-mermaid-row__diagram"></div>
-            <pre><code class="language-mermaid">\(raw)</code></pre>
-          </div>
-        </section>
-        """
     }
 
     private func registerActivationContext(
@@ -1015,13 +944,6 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
     private static func trustedFencePresentation(
         for reference: RendererReference
     ) -> TrustedFencePresentation? {
-        if reference == BuiltInRendererReference.reference(for: .mermaid) {
-            return TrustedFencePresentation(
-                semanticSummary: "Mermaid diagram fence",
-                controlLabel: "Open",
-                accessibilityLabel: "Open mermaid renderer",
-                summary: "Preview diagram code in the renderer pane.")
-        }
         if reference == BuiltInRendererReference.reference(for: .jsonCanvas) {
             return TrustedFencePresentation(
                 semanticSummary: "JSON Canvas document fence",

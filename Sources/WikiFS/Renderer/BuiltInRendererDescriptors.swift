@@ -48,21 +48,6 @@ enum BuiltInRendererDescriptors {
                 ],
                 maximumInputByteCount: BuiltInRendererLimits.svgMaximumInputByteCount,
                 priority: BuiltInRendererPriority.bytefulDocument)
-        case .mermaid:
-            return make(
-                id: .mermaid,
-                displayName: "Mermaid",
-                matchers: [
-                    .normalizedMIME(mime(BuiltInRendererMIME.mermaid)),
-                    .extensionFallback(fileExtension("mmd")),
-                    .artifactKind(.markdown),
-                ],
-                maximumInputByteCount: BuiltInRendererLimits.markdownMaximumInputByteCount,
-                embeddingRoles: [.inlineContent, .disclosureRow],
-                fenceClaims: [
-                    RendererFenceClaim(alias: fenceAlias("mermaid"), inlineMIMEType: mime(BuiltInRendererMIME.mermaid)),
-                ],
-                priority: BuiltInRendererPriority.markdownDocument)
         case .media:
             return make(
                 id: .media,
@@ -208,21 +193,18 @@ enum BuiltInRendererReference {
 enum BuiltInRendererPriority {
     static let jsonCanvas = 110
     static let bytefulDocument = 100
-    static let markdownDocument = 90
     static let media = 80
 }
 
 enum BuiltInRendererLimits {
     static let bytefulMaximumInputByteCount = 512 * 1_024 * 1_024
     static let svgMaximumInputByteCount = 16 * 1_024 * 1_024
-    static let markdownMaximumInputByteCount = 64 * 1_024 * 1_024
     static let bytelessMaximumInputByteCount = 1
 }
 
 enum BuiltInRendererMIME {
     static let json = "application/json"
     static let svg = "image/svg+xml"
-    static let mermaid = "text/mermaid"
     static let youtube = "video/youtube"
     static let vimeo = "video/vimeo"
     static let applePodcast = "audio/apple-podcast"

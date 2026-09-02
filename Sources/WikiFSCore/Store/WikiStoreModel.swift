@@ -1395,9 +1395,9 @@ public final class WikiStoreModel {
 
     private func loadDrafts(for newValue: WikiSelection?) {
         loadedSelection = newValue
-        // A page switch invalidates the prior page's mermaid warning so a stale
+        // A page switch invalidates the prior page's fence warning so a stale
         // banner doesn't bleed onto an unrelated page (it's recomputed on save).
-        mermaidSaveWarning = nil
+        fenceSaveWarning = nil
         var restoredFromPendingDraft = false
         switch newValue {
         case .newChat, .bookmark, .chat:
@@ -1539,10 +1539,10 @@ public final class WikiStoreModel {
             // the next save CAS-expects the version we just wrote.
             loadedPageHeadVersionID = DebugLog.trying("pageHeadVersionID", operation: { try store.pageHeadVersionID(pageID: id) })
             // No manual reload — the bus fires reloadFromStore() async after the upsert.
-            // Non-blocking mermaid lint: the in-app save still succeeds (the
-            // editor is the human escape from wikictl's hard block), but a broken
-            // diagram is flagged so the author can fix it.
-            updateMermaidWarning(for: draftBody)
+            // Non-blocking fence lint: the in-app save still succeeds (the
+            // editor is the human escape from wikictl's hard block), but a
+            // broken claimed fence is flagged so the author can fix it.
+            updateFenceWarning(for: draftBody)
             // Non-blocking markdown lint: same pattern — save succeeds with the
             // original text, cosmetic issues are flagged as informational.
             updateMarkdownWarning(for: draftBody)
@@ -1559,28 +1559,33 @@ public final class WikiStoreModel {
         }
     }
 
-    /// The last mermaid validation warning for the saved draft, or `nil`. Surfaced
-    /// in the page editor as a non-blocking hint. Set on save (debounced), so it
-    /// refreshes shortly after the author stops typing and re-saves.
-    public var mermaidSaveWarning: String?
+    /// The last fence-syntax validation warning for the saved draft, or `nil`.
+    /// Surfaced in the page editor as a non-blocking hint. Set on save
+    /// (debounced), so it refreshes shortly after the author stops typing and
+    /// re-saves.
+    public var fenceSaveWarning: String?
 
-    /// The Mermaid validator used for the non-blocking save warning. Defaults to
-    /// the process-wide bundled validator; injectable (e.g. from a repo bundle)
-    /// so the warning path is testable without a bundle. `@ObservationIgnored` —
-    /// it's plumbing, not UI state.
-    @ObservationIgnored var mermaidValidator: MermaidValidator? = MermaidValidator.shared
+    /// The package-driven fence-syntax validation used for the non-blocking
+    /// save warning. Defaults to nil: the service depends on the machine
+    /// renderer package store, which the app layer owns, so the app wiring
+    /// injects a live-resolving service at composition time. Nil means
+    /// "no claiming package installed" — validation skips, exactly like the
+    /// old nil-validator contract. `@ObservationIgnored` — it's plumbing, not
+    /// UI state.
+    @ObservationIgnored
+    public var fenceSyntaxValidator: (any FenceSyntaxValidating)? = nil
 
-    /// Validate ```mermaid blocks in `body` and set `mermaidSaveWarning`. Uses
-    /// the extractor as the source of truth (so it agrees with `wikictl`'s
-    /// hard block on `~~~mermaid`/any case, not just ```mermaid). Non-mermaid
-    /// pages pay only a cheap line scan.
-    private func updateMermaidWarning(for body: String) {
-        guard let validator = mermaidValidator else {
-            mermaidSaveWarning = nil
+    /// Validate every claimed fence block in `body` and set
+    /// `fenceSaveWarning`. The validator is package-driven: the claimed
+    /// aliases and validation contracts come from installed renderer package
+    /// manifests, not host format knowledge. Pages without a claimed fence
+    /// pay only a cheap line scan.
+    private func updateFenceWarning(for body: String) {
+        guard let validator = fenceSyntaxValidator else {
+            fenceSaveWarning = nil
             return
         }
-        let bad = validator.invalidBlocks(markdown: body)
-        mermaidSaveWarning = bad.isEmpty ? nil : MermaidValidator.describe(bad)
+        fenceSaveWarning = validator.fenceSaveWarning(for: body)
     }
 
     /// The last markdown lint warning for the saved draft, or `nil`. Surfaced in
@@ -1612,7 +1617,7 @@ public final class WikiStoreModel {
     @ObservationIgnored private var markdownWarningTask: Task<Void, Never>?
 
     /// Lint `body` for cosmetic markdown issues and set `markdownSaveWarning`.
-    /// Unlike the mermaid scan (a cheap fence line-scan), markdownlint runs all
+    /// Unlike the fence validation (a cheap line scan), markdownlint runs all
     /// ~20 cosmetic rules over the whole body — so the computation runs on a
     /// background `Task` (the linter's `NSLock` makes it thread-safe) and the
     /// result is set via a `@MainActor` hop to avoid UI jank on large pages.

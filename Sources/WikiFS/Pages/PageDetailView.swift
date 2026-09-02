@@ -121,7 +121,7 @@ struct PageDetailView: View {
 
             Divider().opacity(PageEditorMetrics.dividerOpacity)
 
-            // Non-blocking hints: a saved draft with a broken ```mermaid block
+            // Non-blocking hints: a saved draft with a broken claimed fence
             // and/or cosmetic markdown issues. Surfaced on save; clear once the
             // issues are fixed and re-saved. Combined into a single banner when
             // both are present to avoid stacked notification noise.
@@ -623,14 +623,14 @@ struct PageDetailView: View {
 
     @ViewBuilder private var saveWarningBanner: some View {
         let hasFrontmatter = store.draftBody.hasPrefix("---")
-        if store.mermaidSaveWarning != nil || store.markdownSaveWarning != nil || hasFrontmatter {
+        if store.fenceSaveWarning != nil || store.markdownSaveWarning != nil || hasFrontmatter {
             VStack(alignment: .leading, spacing: 6) {
                 if hasFrontmatter {
                     Text("Frontmatter (---) is generated automatically and will be stripped from this field on next load. Set the title using the field above.")
                         .foregroundStyle(.orange)
                 }
-                if let mermaid = store.mermaidSaveWarning {
-                    Text(mermaid)
+                if let fence = store.fenceSaveWarning {
+                    Text(fence)
                         .foregroundStyle(.orange)
                 }
                 if let md = store.markdownSaveWarning {

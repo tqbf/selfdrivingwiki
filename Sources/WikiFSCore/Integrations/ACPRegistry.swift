@@ -145,7 +145,7 @@ struct ACPRegistryClient: Sendable {
         .appendingPathComponent("Self Driving Wiki/acp-registry.json")
 
     /// Bundled snapshot (offline fallback when no cache + no network).
-    /// Resolved the same way the bundled `mermaid.js` / `merval.js` are.
+    /// Resolved the same way the bundled `markdownlint.js` resource is.
     static let bundledURL = Bundle.main.url(forResource: "acp-registry", withExtension: "json")
 
     /// Cache TTL: 24 hours. A fresh fetch is performed only when the cache is

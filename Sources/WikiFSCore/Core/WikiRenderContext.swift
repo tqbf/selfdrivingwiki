@@ -48,6 +48,10 @@ public struct WikiRenderContext: Sendable {
     /// `SourceID` → current display name (or filename fallback), for canonical
     /// `[[source:ULID|…]]` display-at-render.
     public let sourceIDToName: [SourceID: String]
+    /// `SourceID` → lowercased filename extension (`""` when none), for
+    /// renderer matching of sources whose MIME is absent (legacy NULL-MIME
+    /// rows). Data derived from source rows, not a format branch.
+    public let sourceIDToExtension: [SourceID: String]
     /// Lowercased chat titles — drives legacy/forward `[[chat:Name]]` existence.
     public let chatTitles: Set<String>
     /// `ChatID` → current title, for canonical `[[chat:ULID|…]]` display-at-render.
@@ -110,12 +114,14 @@ public struct WikiRenderContext: Sendable {
         siblingMaps: [SourceID: [String: SourceID]],
         blobScheme: String,
         rendererFenceClaims: [RendererFenceAlias: RendererFenceClaimAssignment] = [:],
-        unavailableFenceAliases: Set<RendererFenceAlias> = []
+        unavailableFenceAliases: Set<RendererFenceAlias> = [],
+        sourceIDToExtension: [SourceID: String] = [:]
     ) {
         self.pageTitles = pageTitles
         self.pageIDToName = pageIDToName
         self.sourceNames = sourceNames
         self.sourceIDToName = sourceIDToName
+        self.sourceIDToExtension = sourceIDToExtension
         self.chatTitles = chatTitles
         self.chatIDToName = chatIDToName
         self.uniqueLooseKeys = uniqueLooseKeys
@@ -174,23 +180,12 @@ public struct WikiRenderContext: Sendable {
 
         // --- Embed map (reader lines ~848–873; WRC-specific — per-source) ---
         //
-        // Two resolution paths compose here, in priority order:
-        //   1. **Mermaid diagram** (#670): a source carrying `.mmd` /
-        //      `text/mermaid` / `text/x-mermaid` (cheap detector arms —
-        //      mime + filename only, no content scan) resolves to a `.diagram`
-        //      EmbedTarget carrying the raw source text. The renderer emits
-        //      a fenced ```mermaid code block (#736 changed it from a raw div
-        //      that broke under markdown conversion); the reader's
-        //      `mermaidBootstrapJS` turns it into a `<div class="mermaid">`
-        //      before invoking mermaid.min.js (v11). Diagram takes precedence
-        //      over the descriptor path because a `.mmd` source is byteful (it
-        //      carries real text bytes) and therefore absent from
-        //      `embedDescriptors()` (which is `WHERE sv.blob_hash IS NULL`) —
-        //      a diagram source would otherwise fall through to the byteful
-        //      blob branch and emit nothing (no image/audio/video/pdf).
-        //   2. **Byteless external media** (Phase 4b): synthetic provider mimes
-        //      + Apple Podcasts + direct-remote media, dispatched through
-        //      `ExternalEmbed.target(for:)` as before.
+        // One resolution path: byteless external media (synthetic provider
+        // mimes + Apple Podcasts + direct-remote media) dispatched through
+        // `ExternalEmbed.target(for:)` as before. Byteful sources (text,
+        // diagrams, documents) never resolve an embed target here — the
+        // generic source-renderer and transclusion arms handle them, keyed
+        // by descriptor data rather than a host-side format branch.
         let embedDescriptorMap = store.embedDescriptors()
         let normalizedEmbedNamesBySource: [SourceID: Set<String>] = Dictionary(
             uniqueKeysWithValues: store.sources.map { source in
@@ -205,22 +200,8 @@ public struct WikiRenderContext: Sendable {
 
         var embedMap: [String: WikiLinkMarkdown.SourceEmbedInfo] = [:]
         for source in store.sources {
-            let target: EmbedTarget? = {
-                // 1. Mermaid diagram — #670.
-                if MermaidSourceDetector.isMermaidSource(
-                    mimeType: source.mimeType,
-                    filename: source.filename,
-                    content: nil),
-                   let bytes = store.sourceBytes(id: source.id),
-                   let text = String(data: bytes, encoding: .utf8) {
-                    return EmbedTarget(
-                        kind: .diagram, url: source.id.rawValue, content: text)
-                }
-                // 2. Byteless external media (provider iframes, direct-remote,
-                //    Apple Podcasts).
-                return embedDescriptorMap[source.id]
-                    .flatMap { ExternalEmbed.target(for: $0) }
-            }()
+            let target: EmbedTarget? = embedDescriptorMap[source.id]
+                .flatMap { ExternalEmbed.target(for: $0) }
             let info = WikiLinkMarkdown.SourceEmbedInfo(
                 id: source.id, mimeType: source.mimeType, target: target)
             for name in normalizedEmbedNamesBySource[source.id] ?? []
@@ -245,6 +226,12 @@ public struct WikiRenderContext: Sendable {
         store.noteResolvedFenceAliases(Set(rendererFenceClaims.keys))
         let unavailableFenceAliases = store.resolvedFenceAliases
             .subtracting(rendererFenceClaims.keys)
+        // `SourceID` → lowercased filename extension, for extension-fallback
+        // renderer matching of legacy NULL-MIME rows. Derived from the same
+        // source rows as sourceIDToName — data, not a format branch.
+        let sourceIDToExtension: [SourceID: String] = Dictionary(
+            uniqueKeysWithValues:
+                index.sources.map { (SourceID(rawValue: $0.id), $0.ext.lowercased()) })
         return WikiRenderContext(
             pageTitles: pageTitles,
             pageIDToName: pageIDToName,
@@ -258,7 +245,8 @@ public struct WikiRenderContext: Sendable {
             siblingMaps: siblingMaps,
             blobScheme: WikiLinkMarkdown.blobScheme,
             rendererFenceClaims: rendererFenceClaims,
-            unavailableFenceAliases: unavailableFenceAliases)
+            unavailableFenceAliases: unavailableFenceAliases,
+            sourceIDToExtension: sourceIDToExtension)
     }
 
     // MARK: - Render closures (pure — derived from captured data)

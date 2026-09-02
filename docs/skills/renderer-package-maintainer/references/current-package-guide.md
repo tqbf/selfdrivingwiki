@@ -12,7 +12,7 @@ A source can retain a logical or exact renderer preference. A logical preference
 
 A package is one local directory. It contains one normalized `manifest.json` and only the files declared in that manifest. The manifest has a revision, a typed package ID, a typed version, descriptors, and asset digests. Every descriptor has a typed registration ID, matchers, an implementation, approved assets, capabilities, input limits, link policy, accessibility values, compatibility values, and priority.
 
-A revision 2 descriptor may declare `fenceClaims`: one array entry per claimed Markdown rich-fence alias, each with the alias and the inline MIME type the fence bytes are handed to the renderer as. Claims require the `disclosureRow` role, must be unique inside the package, cannot use an alias a built-in or another installed package already claims, and revision 1 packages never receive fence authority. Claiming an alias changes the manifest bytes, so bump the reviewed version with the change. The fence card's display text derives from the descriptor `displayName`; manifests carry no other per-format presentation strings. See `plans/package-declared-fences.md`.
+A revision 2 descriptor may declare `fenceClaims`: one array entry per claimed Markdown rich-fence alias, each with the alias and the inline MIME type the fence bytes are handed to the renderer as. Claims require the `disclosureRow` role, must be unique inside the package, cannot use an alias a built-in or another installed package already claims, and revision 1 packages never receive fence authority. Claiming an alias changes the manifest bytes, so bump the reviewed version with the change. The fence card's display text derives from the descriptor `displayName`; manifests carry no other per-format presentation strings. A revision 3 claim may add a `validation` declaration for save-time fence-syntax validation; see the reviewed Mermaid package section below. See `plans/package-declared-fences.md`.
 
 Use a local directory for Advanced Local Renderer Package Import. The app accepts directories only. It does not accept archives, downloaded packages, a catalog, signing, network distribution, or a destination picker.
 
@@ -45,6 +45,18 @@ An external link requires a declared link policy and a host-observed user gestur
 The reviewed package root is `RendererPackages/Excalidraw` in the repository. SwiftPM does not copy it into the app resource bundle. Users import the folder through Settings → Renderers → Advanced Local Renderer Package Import.
 
 The package version is `1.0.5`. Its manifest declares a bounded JSON matcher for complete objects with `type` equal to `excalidraw`, `version` equal to `2`, and an `elements` array of objects. It is a read-only Web renderer. It declares `input.read` and user-activated external links. It has 48,000-byte input and decoded-input limits. The viewer supports VoiceOver and keyboard navigation.
+
+### Reviewed Mermaid renderer package
+
+The reviewed package root is `RendererPackages/Mermaid` in the repository. SwiftPM does not copy it into the app resource bundle. Users import the folder through Settings → Renderers → Advanced Local Renderer Package Import. The package ID is `org.selfdrivingwiki.mermaid-readonly`. The version is `1.0.0`. The registration ID is `mermaid`.
+
+The package claims the `mermaid` fence alias with the inline MIME type `text/mermaid`, and it matches `text/mermaid` sources plus the `.mmd` extension fallback. It is a read-only Web renderer. It declares `input.read` only, no external links, and 48,000-byte input and decoded-input limits. It has priority 90 and fills both embedding roles.
+
+The package carries one vendored engine asset, `mermaid.min.js`, from the upstream Mermaid 11.16.0 MIT distribution. `PROVENANCE.md` records the source URL and the asset digest. The same engine asset serves rendering and validation.
+
+The manifest is revision 3. Its claim carries a fence-syntax validation declaration: the engine asset `mermaid.min.js`, the wrapper asset `validate.js`, and the entry function `__sdw_validate_fence`. The wrapper asset installs a minimal DOM and timer environment before the engine loads, because the bundled engine captures DOM state when it loads. The host evaluates the wrapper first, then the engine, then calls the entry function.
+
+A revision 3 claim may declare `validation` with `engineAssetPath`, `wrapperAssetPath`, and `entryFunction`. The two asset paths must be distinct, approved by the declaring descriptor, and declared in the top-level asset list. The entry function must be one JavaScript identifier. A revision 1 or 2 manifest that carries a `validation` object is rejected.
 
 ### Create and validate a package
 

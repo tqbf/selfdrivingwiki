@@ -76,8 +76,9 @@ public enum PageCommand {
     /// `delete` do. Output mirrors the doc's command surface (TSV or JSON for
     /// `list`; the raw body for `get`; the resulting id for `upsert`).
     ///
-    /// `validator` injects the Mermaid validator (defaults to the bundled one) so
-    /// the abort-before-write path is end-to-end testable without a bundle.
+    /// `validator` injects the package-driven fence-syntax validation (defaults
+    /// to the machine-store service) so the abort-before-write path is
+    /// end-to-end testable without an installed package.
     /// `linter` injects the Markdown linter (defaults to the bundled one) so
     /// the auto-fix-before-write path is testable without a bundle.
     ///
@@ -89,7 +90,7 @@ public enum PageCommand {
     public static func run(
         _ action: Action,
         in store: WikiStore,
-        validator: MermaidValidator? = MermaidValidator.loadDefault(),
+        validator: (any FenceSyntaxValidating)? = nil,
         linter: MarkdownLinter? = MarkdownLinter.loadDefault(),
         bm25Leg: [WikiPageSummary]? = nil
     ) throws -> Result {
@@ -302,7 +303,7 @@ public enum PageCommand {
         author: String? = nil,
         provenance: [PageVersionSourceInput] = [],
         in store: WikiStore,
-        validator: MermaidValidator?,
+        validator: (any FenceSyntaxValidating)?,
         linter: MarkdownLinter?
     ) throws -> Result {
         guard !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -318,10 +319,12 @@ public enum PageCommand {
         //    finding can't be auto-fixed, abort (inert under the cosmetic-only
         //    config — every enabled rule is auto-fixable).
         let fixed = try autoFixMarkdown(body, linter: linter)
-        // 2. Validate ```mermaid blocks in the FIXED text (so the linter's
-        //    whitespace fixes don't disturb a fence boundary). Skipped silently
-        //    when the validator is nil.
-        try abortOnInvalidMermaid(fixed, validator: validator)
+        // 2. Validate claimed rich fences in the FIXED text (so the linter's
+        //    whitespace fixes don't disturb a fence boundary). A nil validator
+        //    skips; when a validator is present but no installed package
+        //    declares the fence's alias, the save proceeds with a stderr
+        //    notice instead of a silent pass.
+        let notice = try abortOnInvalidFence(fixed, validator: validator)
 
         // Phase 7: workspace routing. When --workspace is set, route to
         // workspaceWritePage (main is untouched until merge). The page ID is
@@ -344,7 +347,7 @@ public enum PageCommand {
             let resultID = try store.workspaceWritePage(
                 workspaceID: WorkspaceID(rawValue: workspace), pageID: pageID, title: title, body: fixed,
                 author: author, provenance: provenance)
-            return Result(output: resultID?.rawValue ?? "", didCommit: true)
+            return Result(output: resultID?.rawValue ?? "", didCommit: true, stderrOutput: notice)
         }
 
         // 3. The SHARED seam: identical create-or-update + `[[link]]` reparse as
@@ -353,7 +356,7 @@ public enum PageCommand {
         let outcome = try PageUpsert.upsert(in: store, id: id, title: title, body: fixed,
                                              expectedHeadVersionID: expectHead, author: author,
                                              provenance: provenance)
-        return Result(output: outcome.id.rawValue, didCommit: true)
+        return Result(output: outcome.id.rawValue, didCommit: true, stderrOutput: notice)
     }
 
     /// Apply `MarkdownLinter.fix` to `body`, returning the normalized text. When
@@ -369,15 +372,21 @@ public enum PageCommand {
         return outcome.fixed
     }
 
-    /// Abort the save when `body` contains any invalid ```mermaid block, throwing
-    /// a `.message` with a multi-line report the agent can act on. Pure over the
-    /// injected validator (testable): pass `nil` to skip (the unbundled path).
-    static func abortOnInvalidMermaid(_ body: String, validator: MermaidValidator?) throws {
-        guard let validator else { return }
-        let bad = validator.invalidBlocks(markdown: body)
-        if !bad.isEmpty {
-            throw Failure.message(MermaidValidator.describe(bad))
+    /// Abort the save when `body` contains any invalid claimed rich fence,
+    /// throwing a `.message` with a multi-line report the agent can act on.
+    /// Pure over the injected validator (testable): pass `nil` to skip (the
+    /// no-package path). Returns a one-line notice when a claimed-looking
+    /// fence has no installed validating package, so the operator sees the
+    /// save guarantee is package-conditional instead of a silent pass.
+    static func abortOnInvalidFence(
+        _ body: String,
+        validator: (any FenceSyntaxValidating)?
+    ) throws -> String? {
+        guard let validator else { return nil }
+        if let warning = validator.fenceSaveWarning(for: body) {
+            throw Failure.message(warning)
         }
+        return validator.validationSkipNotice(for: body)
     }
 
     // MARK: - delete

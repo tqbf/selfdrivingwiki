@@ -27,10 +27,10 @@ public enum WikiLinkMarkdown {
     /// The render decision for one `![[source:…]]` embed: the source id + its
     /// MIME type (for the byteful `wiki-blob://` dispatch) and an optional
     /// external `EmbedTarget` (for byteless external media — provider iframes,
-    /// direct-remote `<audio>`/`<video>`, Apple Podcasts player — or an inline
-    /// Mermaid diagram, #670). When `target` is non-nil the renderer emits the
-    /// element for the target's `kind`; otherwise it falls back to the byteful
-    /// blob dispatch (Phase 4a), then to a cite link.
+    /// direct-remote `<audio>`/`<video>`, Apple Podcasts players). When
+    /// `target` is non-nil the renderer emits the element for the target's
+    /// `kind`; otherwise it falls back to the byteful blob dispatch
+    /// (Phase 4a), then to a cite link.
     public struct SourceEmbedInfo: Sendable, Equatable {
         /// Source entity identity. Rendering crosses to raw text only when it
         /// constructs a `wiki-blob` or wiki-link representation.

@@ -88,6 +88,13 @@ extension ProfileWikiSession {
         if FileManager.default.fileExists(atPath: databaseURL.path) {
             model.readService = WikiReadService(databaseURL: databaseURL)
         }
+        // The package-driven fence validator resolves from the machine
+        // renderer package store. An unresolvable layout skips validation
+        // (nil semantics), matching the no-package contract.
+        model.fenceSyntaxValidator = DebugLog.trying("resolve fence validation service", operation: {
+            FenceSyntaxValidationService(
+                layout: try RendererPackageStoreLayout(appGroupContainerRoot: containerDirectory))
+        })
         let searchOwner = SearchCompositionOwner(
             registry: SearchRuntimeRegistry(),
             identity: SearchRuntimeIdentity(wikiID: wikiID, containerDirectory: containerDirectory),
@@ -142,6 +149,10 @@ extension AppProcessProfileOwner {
                 databaseURL: databaseURL, wikiID: wikiID, homeDirectory: containerDirectory))])
         let model = WikiStoreModel(store: childServices.store)
         model.readService = childServices.readService
+        model.fenceSyntaxValidator = DebugLog.trying("resolve fence validation service", operation: {
+            FenceSyntaxValidationService(
+                layout: try RendererPackageStoreLayout(appGroupContainerRoot: containerDirectory))
+        })
         let searchOwner = childServices.searchFactory.makeOwner(registry: searchRuntimeRegistry)
         model.searchServices = searchOwner.services
         searchOwner.start()

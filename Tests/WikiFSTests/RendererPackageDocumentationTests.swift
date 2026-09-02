@@ -104,7 +104,7 @@ struct RendererPackageDocumentationTests {
         #expect(index.contains("[Renderer packages](renderer-packages.md)"))
         #expect(plan.contains("[`docs/user-guide/`](docs/user-guide/README.md)"))
         #expect(guide.contains("The app does not use the selected source folder after import."))
-        #expect(guide.contains("The optional Excalidraw renderer package claims `excalidraw` when you install it."))
+        #expect(guide.contains("The optional Mermaid and Excalidraw renderer packages claim `mermaid` and `excalidraw` when you install them."))
         #expect(guide.contains("Every compatible installed renderer is available to every wiki on this Mac."))
         #expect(guide.contains("It does not accept ZIP files, other archives, remote catalogs, signing services, or network installation."))
         #expect(guide.contains("It does not delete source data or source preferences."))

@@ -121,11 +121,6 @@ struct SourceRendererPresentationPlanner: Sendable {
         return source.ext.lowercased() == "docx"
     }
 
-    nonisolated static func renderableMermaidMarkdown(_ markdown: String?) -> String? {
-        guard let markdown else { return nil }
-        return MermaidSourceDetector.renderableMarkdown(from: markdown)
-    }
-
     /// Returns strict UTF-8 source text only when the canonical bounded detector
     /// agrees that the complete byte body is textual. Binary signatures and NUL
     /// bytes therefore fail closed even when metadata claims a text type.
@@ -146,9 +141,15 @@ struct SourceRendererPresentationPlanner: Sendable {
 
     /// Makes raw source bytes inert in the Markdown reader while preserving
     /// whitespace and punctuation. Native Markdown remains a rendered document.
+    /// The wrap is format-neutral: non-Markdown text always renders as a code
+    /// block in the Source tab, whatever renderer package may claim it.
     nonisolated static func sourceMarkdown(for source: SourceSummary, content: String) -> String {
         guard !MimeType.isMarkdown(source.mimeType) else { return content }
-        return MermaidSourceDetector.codeBlockMarkdown(from: content) ?? content
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return content }
+        // A 4-backtick fence keeps any 3-backtick runs inside the content
+        // from terminating the wrapper early.
+        return "````\n\(trimmed)\n````"
     }
 
     nonisolated static func hasPresentableSource(
@@ -199,10 +200,10 @@ struct SourceRendererPresentationPlanner: Sendable {
     }
 
     nonisolated static func standaloneDiagramSource(_ source: SourceSummary) -> Bool {
-        MimeType.isMermaid(source.mimeType)
-            || source.ext.lowercased() == MermaidSourceDetector.mermaidExtension
-            || source.ext.lowercased() == "mermaid"
-            || source.ext.lowercased() == "canvas"
+        // JSON Canvas keeps its native built-in renderer and the reader-
+        // projected presentation it needs; diagram text formats present like
+        // any other renderer-package text source.
+        source.ext.lowercased() == "canvas"
     }
 
     private enum MediaMIMECandidate: Sendable, Equatable {
@@ -243,12 +244,6 @@ struct SourceRendererPresentationPlanner: Sendable {
         origin: SourceOrigin?
     ) -> RendererArtifactKind? {
         if renderableMediaMIME(for: source, origin: origin) != nil { return .source }
-        if MermaidSourceDetector.isMermaidSource(
-            mimeType: source.mimeType,
-            filename: source.filename,
-            content: currentMarkdown) {
-            return .markdown
-        }
         if let mime = source.mimeType?.lowercased(), mime.hasPrefix("image/") { return .image }
         if source.byteSize > 0 { return .binary }
         return nil
@@ -327,10 +322,6 @@ enum SourceDetailPresentationCharacterization {
         let isPDF = MimeType.isPDF(source.mimeType)
         let isHTMLSource = htmlSource(source)
         let htmlString = htmlSourceString(isHTMLSource: isHTMLSource, boundedBytes: boundedBytes)
-        let mermaidSource = MermaidSourceDetector.isMermaidSource(
-            mimeType: source.mimeType,
-            filename: source.filename,
-            content: currentMarkdown)
         let hasMediaPlayer = mediaPlayerAvailable(source: source, origin: origin)
 
         let tabs: [Presentation]
@@ -340,7 +331,11 @@ enum SourceDetailPresentationCharacterization {
             tabs = [.reader, .pdf]
         } else if isHTMLSource && (hasProcessedMarkdown || htmlString != nil) {
             tabs = hasProcessedMarkdown ? [.reader, .html] : [.html]
-        } else if mermaidSource {
+        } else if SourceRendererPresentationPlanner.standaloneDiagramSource(source) {
+            // JSON Canvas only: the native built-in still projects a reader
+            // tab. A .mmd source presents like any renderer-package text
+            // source — Source tab plus the package renderer pane — so no
+            // reader-projected tab is added for it.
             tabs = [.reader, .rendered]
         } else {
             tabs = []

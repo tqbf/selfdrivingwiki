@@ -406,116 +406,18 @@ struct WikiReaderView: View {
         }
     }
 
-    /// Bootstrap that initializes Mermaid for the system appearance. It renders
-    /// typed inline containers on load and disclosure-row containers on demand.
-    /// Each path keeps readable source visible until Mermaid renders an SVG.
-    /// Errors leave that source visible and do not break the page.
-    nonisolated static let mermaidBootstrapJS = """
-    (function(){
-      try {
-        var dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-        if (!window.__sdwMermaidInitialized) {
-          mermaid.initialize({ startOnLoad:false, securityLevel:'strict', theme: dark ? 'dark' : 'default' });
-          window.__sdwMermaidInitialized = true;
-        }
-        window.__sdwInstallMermaidScrollZoom = function(diagram) {
-          var svg = diagram && diagram.querySelector('svg');
-          if (!svg || svg.getAttribute('data-scroll-zoom-installed') === 'true') return;
-          svg.setAttribute('data-scroll-zoom-installed', 'true');
-          var viewport = svg.querySelector('g');
-          if (!viewport) return;
-          var view = { scale: 1, x: 0, y: 0 };
-          var minimumScale = 0.5;
-          var maximumScale = 3;
-          var zoomFactor = 1.1;
-          function applyView() {
-            viewport.style.transformOrigin = '0 0';
-            viewport.style.transform = 'translate(' + view.x + 'px,' + view.y + 'px) scale(' + view.scale + ')';
-          }
-          svg.addEventListener('wheel', function(event) {
-            if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
-            event.preventDefault();
-            var bounds = svg.getBoundingClientRect();
-            var pointerX = event.clientX - bounds.left;
-            var pointerY = event.clientY - bounds.top;
-            var previousScale = view.scale;
-            var nextScale = event.deltaY < 0 ? previousScale * zoomFactor : previousScale / zoomFactor;
-            view.scale = Math.min(maximumScale, Math.max(minimumScale, nextScale));
-            if (view.scale === previousScale) return;
-            var documentX = (pointerX - view.x) / previousScale;
-            var documentY = (pointerY - view.y) / previousScale;
-            view.x = pointerX - documentX * view.scale;
-            view.y = pointerY - documentY * view.scale;
-            applyView();
-            if (window.__sdwRendererAttachmentReport) window.__sdwRendererAttachmentReport();
-          }, { passive: false });
-        };
-        window.__sdwRenderInlineMermaid = function(diagram) {
-          if (!diagram || !diagram.classList.contains('sdw-inline-mermaid')) return;
-          var fallback = diagram.nextElementSibling;
-          if (!fallback || !fallback.classList.contains('sdw-inline-mermaid__fallback') || diagram.getAttribute('data-mermaid-rendered') === 'true' || diagram.getAttribute('data-mermaid-rendering') === 'true') return;
-          diagram.setAttribute('data-mermaid-rendering', 'true');
-          try {
-            mermaid.run({ nodes: [diagram] }).then(function(){
-              diagram.removeAttribute('data-mermaid-rendering');
-              diagram.setAttribute('data-mermaid-rendered', 'true');
-              fallback.hidden = true;
-              window.__sdwInstallMermaidScrollZoom(diagram);
-              if (window.__sdwRendererAttachmentReport) window.__sdwRendererAttachmentReport();
-            }).catch(function(e){ diagram.removeAttribute('data-mermaid-rendering'); diagram.textContent = ''; fallback.hidden = false; console.error('inline mermaid render failed', e); });
-          } catch(e) { diagram.removeAttribute('data-mermaid-rendering'); diagram.textContent = ''; fallback.hidden = false; console.error('inline mermaid render failed', e); }
-        };
-        document.querySelectorAll('.sdw-inline-mermaid').forEach(window.__sdwRenderInlineMermaid);
-        window.__sdwRenderMermaidRow = function(row) {
-          if (!row || row.getAttribute('data-renderer-kind') !== 'mermaid') return;
-          var expansion = row.querySelector('.sdw-mermaid-row__expansion');
-          var code = expansion && expansion.querySelector('code.language-mermaid');
-          var diagram = expansion && expansion.querySelector('.sdw-mermaid-row__diagram');
-          if (!expansion || !code || !diagram || diagram.getAttribute('data-mermaid-rendered') === 'true' || diagram.getAttribute('data-mermaid-rendering') === 'true') return;
-          diagram.setAttribute('data-mermaid-rendering', 'true');
-          diagram.textContent = code.textContent;
-          try {
-            mermaid.run({ nodes: [diagram] }).then(function(){
-              diagram.removeAttribute('data-mermaid-rendering');
-              diagram.setAttribute('data-mermaid-rendered', 'true');
-              code.parentElement.hidden = true;
-              window.__sdwInstallMermaidScrollZoom(diagram);
-              if (window.__sdwRendererAttachmentReport) window.__sdwRendererAttachmentReport();
-            }).catch(function(e){ diagram.removeAttribute('data-mermaid-rendering'); diagram.textContent = ''; code.parentElement.hidden = false; console.error('mermaid row render failed', e); });
-          } catch(e) { diagram.removeAttribute('data-mermaid-rendering'); diagram.textContent = ''; code.parentElement.hidden = false; console.error('mermaid row render failed', e); }
-        };
-      } catch(e) { console.error('mermaid init failed', e); }
-    })();
-    """
-
     /// Full HTML document string built around `body` (the converted markdown).
     /// Pure / callable off the main actor. The theme mirrors the native reader's
     /// geometry (760pt column, 12pt inset from `PageEditorMetrics`) and uses CSS
     /// variables + `color-scheme` so light/dark match the app appearance. A CSS
-    /// rule colors unresolved `wiki://missing` links red (ghost links). When the
-    /// body contains a mermaid block and the library is bundled, the Mermaid lib
-    /// + bootstrap are appended at the end of `<body>` so they run after the DOM
-    /// exists without blocking first paint.
+    /// rule colors unresolved `wiki://missing` links red (ghost links). Rich
+    /// fences render through package sessions mounted by the attachment
+    /// coordinator; this document carries no diagram engine of its own.
     nonisolated static func documentHTML(
-        _ body: String,
-        mermaidLibrary: String? = MermaidRendererAssets.library
+        _ body: String
     ) -> String {
         let width = Int(PageEditorMetrics.readableContentWidth)
         let inset = Int(PageEditorMetrics.contentInset)
-        // Embed the vendored Mermaid library + bootstrap only when the page
-        // actually contains a mermaid block: `class="language-mermaid"` (the
-        // class `visitCodeBlock` emits for both ``` ```mermaid ``` fences AND
-        // `![[source:…]]` diagram embeds since #736) OR a `<div class="mermaid">`
-        // (the fallback path emitted directly by the old div-emit contract).
-        // Otherwise the block stays a normal `<pre><code>` — graceful
-        // degradation for swift test / dev runs with no bundle, and no ~3 MB
-        // parse cost for diagram-free pages.
-        var mermaidScripts = ""
-        if (body.contains("class=\"language-mermaid\"")
-                || body.contains("class=\"mermaid\"")),
-           let lib = mermaidLibrary {
-            mermaidScripts = "<script>\(lib)</script>\n<script>\(mermaidBootstrapJS)</script>"
-        }
         return """
         <!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
         <meta name="color-scheme" content="light dark">
@@ -685,15 +587,11 @@ struct WikiReaderView: View {
           }
           .sdw-inline-renderer__action { display: inline-block; margin-top: 0.45em; font-size: 0.9em; }
           mark.sdwhl { background: rgba(255, 213, 79, 0.8); border-radius: 2px; }
-          \(MermaidRendererAssets.sharedCSS)
-          .sdw-mermaid-row__expansion { margin-top:0.6em; }
-          .sdw-mermaid-row__diagram { min-height:0; }
-          .sdw-mermaid-row__expansion[aria-hidden="true"] { display:none; }
           @media (prefers-reduced-motion: reduce) {
             .sdw-renderer-card__disclosure span { transition:none; }
           }
         </style></head>
-        <body><article>\(body)</article>\(mermaidScripts)</body></html>
+        <body><article>\(body)</article></body></html>
         """
     }
 }
@@ -838,7 +736,7 @@ final class WikiReaderWebView: WKWebView {
       window.__sdwRendererAttachmentReport=function(g){window.__sdwRendererAttachmentGeneration=g;window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();};
       window.__sdwRendererAttachmentReserve=function(id,height){var card=document.getElementById(id);if(!card||!Number.isFinite(height))return;var target=card.classList.contains('sdw-inline-renderer')?card:card.querySelector('.sdw-renderer-card__expansion');if(!target)return;target.style.minHeight=height+'px';window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();};
       window.__sdwRendererAttachmentState=function(id,expanded,status){var card=document.getElementById(id);if(!card)return;card.dataset.rendererExpanded=expanded?'true':'false';var disclosure=card.querySelector('.sdw-renderer-card__disclosure');if(disclosure)disclosure.setAttribute('aria-expanded',expanded?'true':'false');var expansion=card.querySelector('.sdw-renderer-card__expansion');if(expansion){expansion.hidden=!expanded;expansion.setAttribute('aria-hidden',expanded?'false':'true');}var prior=card.querySelector('.sdw-renderer-card__status');if(prior)prior.remove();if(status&&expansion){var node=document.createElement('p');node.className='sdw-renderer-card__status';node.setAttribute('role','status');node.textContent=status;expansion.appendChild(node);}window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();};
-      document.addEventListener('click',function(event){if(event.target.closest('[data-renderer-action="open-window"]'))return;var rowHeader=event.target.closest('.sdw-renderer-card__row');if(!rowHeader)return;var card=rowHeader.closest('.sdw-renderer-card[id]');if(!card)return;event.preventDefault();if(card.dataset.rendererKind==='mermaid'){var mermaid=card.querySelector('[data-mermaid-disclosure="true"]');var expanded=card.dataset.rendererExpanded==='true';card.dataset.rendererExpanded=expanded?'false':'true';if(mermaid)mermaid.setAttribute('aria-expanded',expanded?'false':'true');var region=card.querySelector('.sdw-mermaid-row__expansion');if(region){region.hidden=expanded;region.setAttribute('aria-hidden',expanded?'true':'false');}if(!expanded&&window.__sdwRenderMermaidRow)window.__sdwRenderMermaidRow(card);report();return;}window.webkit.messageHandlers.rendererAttachmentAction.postMessage({action:card.dataset.rendererExpanded==='true'?'collapse':'activate',placeholderID:card.id});});
+      document.addEventListener('click',function(event){if(event.target.closest('[data-renderer-action="open-window"]'))return;var rowHeader=event.target.closest('.sdw-renderer-card__row');if(!rowHeader)return;var card=rowHeader.closest('.sdw-renderer-card[id]');if(!card)return;event.preventDefault();window.webkit.messageHandlers.rendererAttachmentAction.postMessage({action:card.dataset.rendererExpanded==='true'?'collapse':'activate',placeholderID:card.id});});
       addEventListener('scroll',report,{passive:true});addEventListener('resize',report);new MutationObserver(function(){window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();}).observe(document.documentElement,{childList:true,subtree:true,attributes:true});
     })();
     """
@@ -1581,6 +1479,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
             let markdownImageTargets = Self.markdownImageTargets(
                 siblingSourceMap: renderedSourceMap,
                 store: store?.internalStore,
+                sourceExtensions: context?.sourceIDToExtension ?? [:],
                 installedDescriptors: inlineRendererDescriptors)
             let documentRenderOptions = MarkdownRenderOptions(
                 codeHighlighting: .enabled(HighlightedCodeBlockBudget()),
@@ -1674,6 +1573,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                           let source = try pinnedImageSource(
                               sourceID: sourceID,
                               version: version,
+                              fileExtension: context.sourceIDToExtension[sourceID],
                               inputByteCount: { input in try store.rendererInputByteCount(input) },
                               readBytes: { versionID in try store.sourceContent(versionID: versionID) })
                     else { continue }
@@ -1723,6 +1623,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                       info.target == nil,
                       DocumentSourceRendererProjection.hasEligibleRenderer(
                           mimeType: info.mimeType,
+                          fileExtension: context.sourceIDToExtension[info.id],
                           registry: registry,
                           inlineCapableReferences: inlineCapableReferences)
                 else { return nil }
@@ -1750,6 +1651,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         static func markdownImageTargets(
             siblingSourceMap: [String: SourceID]?,
             store: WikiStore?,
+            sourceExtensions: [SourceID: String] = [:],
             installedDescriptors: [RendererDescriptor]
         ) -> [String: ResolvedMarkdownImageTarget] {
             guard let siblingSourceMap, siblingSourceMap.isEmpty == false else { return [:] }
@@ -1770,6 +1672,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                           let source = try Self.pinnedImageSource(
                               sourceID: sourceID,
                               version: version,
+                              fileExtension: sourceExtensions[sourceID],
                               inputByteCount: { input in try store.rendererInputByteCount(input) },
                               readBytes: { versionID in try store.sourceContent(versionID: versionID) })
                     else { continue }
@@ -1822,6 +1725,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         static func pinnedImageSource(
             sourceID: SourceID,
             version: SourceVersion,
+            fileExtension: String? = nil,
             inputByteCount: (RendererBridgeInput) throws -> Int?,
             readBytes: (SourceVersionID) throws -> Data
         ) throws -> RendererEmbeddedContent.Source? {
@@ -1843,6 +1747,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 sourceID: sourceID,
                 sourceVersionID: version.id,
                 mimeType: try RendererMIMEType(validating: mimeType),
+                fileExtension: fileExtension,
                 bytes: bytes)
         }
 

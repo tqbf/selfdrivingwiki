@@ -59,7 +59,6 @@ enum DocumentMediaKind: Hashable, Sendable {
     case video
     case pdf
     case externalFrame
-    case mermaidSource
 }
 
 enum DocumentInlineTarget: Hashable, Sendable {
@@ -124,7 +123,6 @@ struct DocumentSourceResolution: Sendable {
     let mimeType: String?
     let bytes: Data?
     let externalTarget: EmbedTarget?
-    let isMermaidSource: Bool
 }
 
 struct ResolvedDocumentLink: Hashable, Sendable {

@@ -28,6 +28,19 @@ struct RendererPackageToolSubprocessTests {
         #expect(diagnostic.contains("RendererPackageTool: validation failed: the package path does not exist"))
     }
 
+    @Test("validate command accepts the reviewed mermaid package and reports its registration")
+    func validateCommandAcceptsReviewedMermaidPackage() async throws {
+        let result = try await run(arguments: ["validate", Self.mermaidPackageRoot.path])
+        let output = try JSONDecoder().decode(RendererPackageValidationOutput.self, from: result.stdout)
+
+        #expect(result.status == 0)
+        #expect(output.packageID == "org.selfdrivingwiki.mermaid-readonly")
+        #expect(output.version == "1.0.0")
+        #expect(output.registrationIDs == ["mermaid"])
+        #expect(!output.packageHash.isEmpty)
+        #expect(result.stderr.isEmpty)
+    }
+
     private func run(arguments: [String]) async throws -> ProcessResult {
         let process = Process()
         process.executableURL = try executableURL()
@@ -123,6 +136,8 @@ struct RendererPackageToolSubprocessTests {
         .deletingLastPathComponent()
     private static let templateRoot = repositoryRoot
         .appending(path: "docs/skills/renderer-package-maintainer/assets/minimal-renderer-package")
+    private static let mermaidPackageRoot = repositoryRoot
+        .appending(path: "RendererPackages/Mermaid")
 }
 
 private struct ProcessResult {
