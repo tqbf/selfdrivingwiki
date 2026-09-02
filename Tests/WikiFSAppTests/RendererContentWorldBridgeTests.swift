@@ -89,6 +89,81 @@ struct RendererContentWorldBridgeTests {
         #expect(handler.response(for: wrongOrigin).1 == "request denied")
     }
 
+    @Test("host navigation routes only a declared activated target and returns a uniform acknowledgement")
+    func hostNavigationRoutesActivatedTargetWithUniformAcknowledgement() throws {
+        let store = try GRDBWikiStore()
+        let source = try store.addSource(filename: "input.txt", data: Data("ok".utf8))
+        let version = try #require(try store.activeContentVersion(sourceID: source.id))
+        let input = RendererBridgeInput.source(versionID: version.id)
+        let target = RendererNavigationTarget.page(PageID(rawValue: "01HXXXXXXXXXXXXXXXXXXXXXXX"))
+        var routed: [RendererNavigationTarget] = []
+        let broker = RendererContentWorldBroker(
+            sessionID: .init(rawValue: UUID()),
+            capability: .init(rawValue: "secret"),
+            inputReader: .init(store: store, authorizedInput: input),
+            allowedNavigationTargetKinds: [.page],
+            routeNavigation: { routed.append($0) })
+        let webView = NSObject()
+        broker.bind(webViewID: ObjectIdentifier(webView))
+        let nonce = try #require(broker.recordTrustedNavigationActivation(for: target))
+        let envelope = RendererBridgePageEnvelope.navigation(.init(
+            id: .init(rawValue: "navigation-1"),
+            target: target,
+            activationNonce: nonce))
+        let handler = RendererScriptMessageHandler(
+            broker: broker, expectedContentWorld: .page, sessionIsReady: { true })
+        let message = RendererBridgeScriptMessage(
+            body: try String(decoding: RendererBridgeEnvelope.encode(envelope), as: UTF8.self),
+            isExpectedContentWorld: true,
+            provenance: .init(
+                webViewID: ObjectIdentifier(webView), originScheme: "renderer-package",
+                originHost: "package", isMainFrame: true))
+
+        let (reply, error) = handler.response(for: message)
+        #expect(error == nil)
+        let replyText = try #require(reply as? String)
+        let acknowledgement = try JSONDecoder().decode(
+            RendererNavigationAcknowledgement.self, from: Data(replyText.utf8))
+        #expect(acknowledgement == .init(id: .init(rawValue: "navigation-1")))
+        #expect(routed == [target])
+        #expect(handler.response(for: message).1 == "request denied")
+        #expect(routed == [target])
+    }
+
+    @Test("denied host navigation never invokes the router")
+    func deniedHostNavigationNeverRoutes() throws {
+        let store = try GRDBWikiStore()
+        let source = try store.addSource(filename: "input.txt", data: Data())
+        let version = try #require(try store.activeContentVersion(sourceID: source.id))
+        let input = RendererBridgeInput.source(versionID: version.id)
+        var routeCount = 0
+        let broker = RendererContentWorldBroker(
+            sessionID: .init(rawValue: UUID()), capability: .init(rawValue: "secret"),
+            inputReader: .init(store: store, authorizedInput: input),
+            allowedNavigationTargetKinds: [.page],
+            routeNavigation: { _ in routeCount += 1 })
+        let webView = NSObject()
+        broker.bind(webViewID: ObjectIdentifier(webView))
+        let undeclared = RendererNavigationTarget.source(SourceID(rawValue: "01HYYYYYYYYYYYYYYYYYYYYYYY"))
+        let envelope = RendererBridgePageEnvelope.navigation(.init(
+            id: .init(rawValue: "navigation-denied"), target: undeclared,
+            activationNonce: .init(rawValue: "untrusted")))
+        let handler = RendererScriptMessageHandler(
+            broker: broker, expectedContentWorld: .page, sessionIsReady: { true })
+        let message = RendererBridgeScriptMessage(
+            body: try String(decoding: RendererBridgeEnvelope.encode(envelope), as: UTF8.self),
+            isExpectedContentWorld: true,
+            provenance: .init(
+                webViewID: ObjectIdentifier(webView), originScheme: "renderer-package",
+                originHost: "package", isMainFrame: true))
+
+        #expect(handler.response(for: message).1 == "request denied")
+        #expect(routeCount == 0)
+        broker.close()
+        #expect(handler.response(for: message).1 == "request denied")
+        #expect(routeCount == 0)
+    }
+
     @Test("bridge rejects nil WebView provenance when no WebView is bound")
     func rejectsNilWebViewProvenanceWithoutBinding() throws {
         let (handler, message) = try makeHandlerAndMessage(binding: nil, observedWebViewID: nil)

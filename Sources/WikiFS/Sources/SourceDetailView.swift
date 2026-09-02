@@ -180,14 +180,17 @@ struct SourceDetailView: View {
             set: { rendererPresentationLifecycle.replaceState($0) })
     }
 
+    private var routedInstalledRendererFactoryInputs: InstalledRendererFactory.Inputs {
+        installedRendererFactoryInputs.withHostNavigationRouting(.store(store))
+    }
+
     private var rendererFactoryInputs: BuiltInRendererFactoryInputs {
         let bytes = sourceBytesSnapshot
         return BuiltInRendererFactoryInputs(
             sourceBytes: bytes,
             pdfQuote: pdfQuote,
             htmlSource: SourceRendererPresentationPlanner.htmlSourceString(for: file, bytes: bytes),
-            mediaTarget: SourceRendererPresentationPlanner.mediaTarget(for: file, origin: origin),
-            jsonCanvasHostAction: JSONCanvasHostActionRouter.handler(for: store))
+            mediaTarget: SourceRendererPresentationPlanner.mediaTarget(for: file, origin: origin))
     }
 
     private var rendererAuthorizedInputResolver: any RendererAuthorizedInputResolving { store }
@@ -394,15 +397,7 @@ struct SourceDetailView: View {
         ext: String,
         hasMarkdown: Bool
     ) -> Bool {
-        if ext.lowercased() == "canvas" { return false }
-        return hasMarkdown || MimeType.isMarkdown(mimeType)
-    }
-
-    /// Spatial-canvas sources (still a native built-in renderer) expose their
-    /// own outline inside that renderer. Do not show an empty Markdown-heading
-    /// outline beside it.
-    private var isPureJSONCanvasSource: Bool {
-        file.ext.lowercased() == "canvas"
+        hasMarkdown || MimeType.isMarkdown(mimeType)
     }
 
     /// `true` when the outline sidebar is meaningful for this source: the
@@ -416,7 +411,7 @@ struct SourceDetailView: View {
     /// so without this guard it leaks from a previous markdown source).
     /// Issue #642.
     private var isOutlineApplicable: Bool {
-        !isPureJSONCanvasSource && isMarkdownDocumentPresentation
+        isMarkdownDocumentPresentation
     }
 
     private var displayName: String {
@@ -1236,7 +1231,7 @@ struct SourceDetailView: View {
         guard failedInstalledRendererReference != descriptor.reference else { return nil }
         return installedRendererFactory.makeView(
             for: descriptor,
-            inputs: installedRendererFactoryInputs,
+            inputs: routedInstalledRendererFactoryInputs,
             inputReader: rendererAuthorizedInputResolver.rendererAuthorizedInputReader(for: file.id)) { _ in
                 // The representable already deferred this callback out of its
                 // AppKit/WebKit stack. Keep the detail-state mutation deferred
@@ -1411,8 +1406,7 @@ struct SourceDetailView: View {
                             inlineAttachmentResolver: RendererInlineAttachmentResolverFactory.make(
                                 store: store.internalStore,
                                 installedRendererFactory: installedRendererFactory,
-                                installedRendererFactoryInputs: installedRendererFactoryInputs,
-                                onJSONCanvasHostAction: JSONCanvasHostActionRouter.handler(for: store)),
+                                installedRendererFactoryInputs: routedInstalledRendererFactoryInputs),
                             inlineRendererDescriptors: installedRendererFactoryInputs.enabledDescriptors,
                             findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
                 .zoomShortcuts($readerZoom)
@@ -1430,8 +1424,7 @@ struct SourceDetailView: View {
                             inlineAttachmentResolver: RendererInlineAttachmentResolverFactory.make(
                                 store: store.internalStore,
                                 installedRendererFactory: installedRendererFactory,
-                                installedRendererFactoryInputs: installedRendererFactoryInputs,
-                                onJSONCanvasHostAction: JSONCanvasHostActionRouter.handler(for: store)),
+                                installedRendererFactoryInputs: routedInstalledRendererFactoryInputs),
                             inlineRendererDescriptors: installedRendererFactoryInputs.enabledDescriptors,
                             findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
                 .zoomShortcuts($readerZoom)

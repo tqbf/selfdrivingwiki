@@ -19,6 +19,10 @@ struct PageDetailView: View {
     let onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)?
     let installedRendererFactory: InstalledRendererFactory
     let installedRendererFactoryInputs: InstalledRendererFactory.Inputs
+    private var routedInstalledRendererFactoryInputs: InstalledRendererFactory.Inputs {
+        installedRendererFactoryInputs.withHostNavigationRouting(.store(store))
+    }
+
     @State private var isEditing = false
     /// Pending scroll-to-heading for the editor (outline click while editing).
     @State private var editorScrollRequest: EditorScrollRequest?
@@ -523,8 +527,7 @@ struct PageDetailView: View {
                         inlineAttachmentResolver: RendererInlineAttachmentResolverFactory.make(
                             store: store.internalStore,
                             installedRendererFactory: installedRendererFactory,
-                            installedRendererFactoryInputs: installedRendererFactoryInputs,
-                            onJSONCanvasHostAction: JSONCanvasHostActionRouter.handler(for: store)),
+                            installedRendererFactoryInputs: routedInstalledRendererFactoryInputs),
                         inlineRendererDescriptors: installedRendererFactoryInputs.enabledDescriptors,
                         findText: findText, findVersion: findVersion,
                         findOccurrence: findOccurrence)

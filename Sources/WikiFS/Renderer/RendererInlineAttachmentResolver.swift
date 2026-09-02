@@ -31,8 +31,7 @@ enum RendererInlineAttachmentResolverFactory {
     static func make(
         store: WikiStore,
         installedRendererFactory: InstalledRendererFactory,
-        installedRendererFactoryInputs: InstalledRendererFactory.Inputs,
-        onJSONCanvasHostAction: @escaping (JSONCanvasHostAction) -> Void
+        installedRendererFactoryInputs: InstalledRendererFactory.Inputs
     ) -> RendererInlineAttachmentResolver {
         { context, placeholderID, onSessionFailure in
             resolve(
@@ -41,8 +40,7 @@ enum RendererInlineAttachmentResolverFactory {
                 onSessionFailure: onSessionFailure,
                 store: store,
                 installedRendererFactory: installedRendererFactory,
-                installedRendererFactoryInputs: installedRendererFactoryInputs,
-                onJSONCanvasHostAction: onJSONCanvasHostAction)
+                installedRendererFactoryInputs: installedRendererFactoryInputs)
         }
     }
 
@@ -52,7 +50,7 @@ enum RendererInlineAttachmentResolverFactory {
         placeholderID: RendererAttachmentPlaceholderID,
         onSessionFailure: @escaping @MainActor (RendererSessionFailure) -> Void
     ) -> RendererInlineAttachmentResolution {
-        resolveBuiltIn(context: context, placeholderID: placeholderID)
+        .unsupported
     }
 
     @MainActor
@@ -62,15 +60,8 @@ enum RendererInlineAttachmentResolverFactory {
         onSessionFailure: @escaping @MainActor (RendererSessionFailure) -> Void,
         store: WikiStore,
         installedRendererFactory: InstalledRendererFactory,
-        installedRendererFactoryInputs: InstalledRendererFactory.Inputs,
-        onJSONCanvasHostAction: @escaping (JSONCanvasHostAction) -> Void
+        installedRendererFactoryInputs: InstalledRendererFactory.Inputs
     ) -> RendererInlineAttachmentResolution {
-        let builtIn = resolveBuiltIn(
-            context: context,
-            placeholderID: placeholderID,
-            onJSONCanvasHostAction: onJSONCanvasHostAction)
-        guard case .unsupported = builtIn else { return builtIn }
-
         guard let descriptor = installedRendererFactoryInputs.enabledDescriptors.first(where: {
             $0.reference == context.rendererReference
         }), descriptor.supportedEmbeddingRoles.contains(context.embeddingRole) else {
@@ -104,52 +95,6 @@ enum RendererInlineAttachmentResolverFactory {
             return .failed
         }
         return .content(view)
-    }
-
-    @MainActor
-    private static func resolveBuiltIn(
-        context: RendererEmbedActivationContext,
-        placeholderID: RendererAttachmentPlaceholderID,
-        onJSONCanvasHostAction: @escaping (JSONCanvasHostAction) -> Void = { _ in }
-    ) -> RendererInlineAttachmentResolution {
-        guard context.rendererReference == BuiltInRendererReference.reference(for: .jsonCanvas) else {
-            return .unsupported
-        }
-        do {
-            let factory: NativeJSONCanvasAttachmentFactory
-            let input: NativeJSONCanvasAttachmentInput
-            switch (context.identity, context.input) {
-            case (.block, .inlineArtifact(let artifact)):
-                factory = .fencedOnly()
-                input = .fenced(artifact)
-            case (.source(let source), .source(let versionID)) where source.sourceVersionID == versionID:
-                let pin = try NativeJSONCanvasAttachmentInput.SourcePin(validating: source)
-                factory = NativeJSONCanvasAttachmentFactory { requestedPin in
-                    guard requestedPin == pin else {
-                        throw NativeJSONCanvasAttachmentFailure.invalidSourceIdentity
-                    }
-                    return source.bytes
-                }
-                input = .source(pin)
-            case (.source(let source), .markdown(let versionID)) where source.sourceMarkdownVersionID == versionID:
-                let pin = try NativeJSONCanvasAttachmentInput.SourcePin(validating: source)
-                factory = NativeJSONCanvasAttachmentFactory { requestedPin in
-                    guard requestedPin == pin else {
-                        throw NativeJSONCanvasAttachmentFailure.invalidSourceIdentity
-                    }
-                    return source.bytes
-                }
-                input = .source(pin)
-            default:
-                return .unsupported
-            }
-            return .content(try factory.makeView(
-                for: input,
-                onHostAction: onJSONCanvasHostAction))
-        } catch {
-            DebugLog.reader("native JSON Canvas attachment failed for \(placeholderID.rawValue): \(error)")
-            return .failed
-        }
     }
 }
 #endif
