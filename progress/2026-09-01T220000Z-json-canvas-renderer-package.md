@@ -2,7 +2,7 @@
 timestamp: 2026-09-01T220000Z
 title: JSON Canvas renderer package migration
 branch: feature/json-canvas-renderer-package
-status: in-progress
+status: complete
 ---
 
 # JSON Canvas renderer package migration
@@ -47,8 +47,9 @@ design: plans/json-canvas-renderer-package.md
 - An operator-selected DeepSeek Flash review found a stale hosted fixture and a post-reload navigation request-ID collision. Commits `b94d39b4` and `2139950d` fix both. The focused DeepSeek follow-up found no remaining issue.
 - The host applies `RendererContentSecurityPolicy` headers to package resources. The package does not duplicate this trusted CSP in document markup.
 - Two GLM-family review attempts stalled without reports. DeepSeek contributed to implementation, so its review is not a model-family-independent review.
+- The operator waived the independent-family review gate after all review findings were fixed.
+- Final CI passed at commit `6a563cdd`: Swift, lint, skills, and Python.
 - Pull request: https://github.com/tqbf/selfdrivingwiki/pull/1195
-- Remaining before merge: confirm final CI and explicitly accept or waive the independent-family review gate.
 
 ## Notes / honest limits
 
