@@ -38,7 +38,7 @@ struct RendererAttachmentCoordinatorTests {
 
     @Test("reserved height follows the syntax-owned embedding role")
     func reservedHeightFollowsEmbeddingRole() throws {
-        let descriptor = BuiltInRendererDescriptors.descriptor(for: .jsonCanvas)
+        let descriptor = BuiltInRendererDescriptors.all[0]
 
         #expect(RendererAttachmentHostPolicy.preferredReservedHeight(
             for: descriptor.reference,
@@ -117,7 +117,7 @@ struct RendererAttachmentCoordinatorTests {
     @Test("dynamic inline renderers reserve a full viewer surface")
     func dynamicInlineRenderersReserveViewerSurface() throws {
         #expect(RendererAttachmentHostPolicy.preferredReservedHeight(
-            for: BuiltInRendererReference.reference(for: .jsonCanvas),
+            for: BuiltInRendererDescriptors.all[0].reference,
             role: .inlineContent) == 480)
         let installed = RendererReference(
             packageID: try RendererPackageID(validating: "org.example.viewer"),
@@ -315,7 +315,10 @@ struct RendererAttachmentCoordinatorTests {
                     registrationID: PackageFenceTestSupport.installedRegistrationID),
                 source: source),
             "generic.svg": .renderer(
-                rendererReference: BuiltInRendererDescriptors.descriptor(for: .jsonCanvas).reference,
+                rendererReference: RendererReference(
+                    packageID: try RendererPackageID(validating: "org.selfdrivingwiki.json-canvas-readonly"),
+                    version: try RendererPackageVersion(validating: "1.0.0"),
+                    registrationID: try RendererRegistrationID(validating: "json-canvas")),
                 source: fallbackSource),
         ])
         let body = MarkdownHTMLRenderer.render(prepared, projection: projection, options: .disabled)
@@ -348,7 +351,7 @@ struct RendererAttachmentCoordinatorTests {
         #expect(container.mountedAttachmentCount == 0)
     }
 
-    @Test("removing an inactive placeholder preserves the active native attachment")
+    @Test("removing an inactive placeholder preserves the active package attachment")
     @MainActor
     func removingInactivePlaceholderPreservesActiveAttachment() throws {
         let webView = WikiReaderWebView()
@@ -390,7 +393,7 @@ struct RendererAttachmentCoordinatorTests {
         #expect((window.firstResponder as? NSView)?.accessibilityIdentifier() == "renderer-attachment-active-canvas")
     }
 
-    @Test("collapse and failure for another placeholder preserve the active native attachment")
+    @Test("collapse and failure for another placeholder preserve the active package attachment")
     @MainActor
     func wrongPlaceholderCollapseAndFailurePreserveActiveAttachment() throws {
         let webView = WikiReaderWebView()
@@ -510,7 +513,7 @@ struct RendererAttachmentCoordinatorTests {
         coordinator.handleAttachmentGeometry(.init(generation: firstGeneration, placeholderID: placeholder, cssRect: .init(x: 20, y: 20, width: 160, height: 96), visible: true, revision: 2))
         #expect(coordinator.attachmentState(for: placeholder) == .unresolved)
     }
-    @Test("real WebKit reload removes an admitted native child")
+    @Test("real WebKit reload removes an admitted package child")
     @MainActor
     func reloadClosesAttachmentAndRestoresReaderFocus() async throws {
         let webView = WikiReaderWebView()
@@ -711,9 +714,9 @@ struct RendererAttachmentCoordinatorTests {
         #expect(container.hitTest(center) !== webView)
     }
 
-    @Test("hosted JSON Canvas attachment mounts the factory's native SwiftUI view")
+    @Test("hosted renderer attachment mounts an installed package view")
     @MainActor
-    func hostedJSONCanvasAttachmentMountsNativeView() throws {
+    func hostedRendererAttachmentMountsInstalledView() throws {
         let webView = WikiReaderWebView()
         let container = WikiReaderContainerView(webView: webView)
         container.frame = .init(x: 0, y: 0, width: 400, height: 300)
@@ -722,17 +725,11 @@ struct RendererAttachmentCoordinatorTests {
         window.makeKeyAndOrderFront(nil)
         defer { container.teardown(); window.orderOut(nil) }
 
-        let source = try RendererEmbeddedContent.Source(
-            sourceID: .init(rawValue: "01JATTACHMENTSOURCE0000000001"),
-            sourceVersionID: .init(rawValue: "01JATTACHMENTVERSION000000001"),
-            mimeType: try .init(validating: "application/json"),
-            bytes: Self.jsonCanvasBytes)
-        let input = NativeJSONCanvasAttachmentInput.source(try .init(validating: source))
-        let factory = NativeJSONCanvasAttachmentFactory { _ in Self.jsonCanvasBytes }
         let placeholder = try RendererAttachmentPlaceholderID(validating: "mounted-json-canvas")
         container.updateAttachmentViewport(.init(x: 40, y: 80, width: 160, height: 96), for: placeholder)
 
-        container.activateAttachment(named: placeholder, content: try factory.makeView(for: input))
+        let content = AnyView(Text("Read-only JSON Canvas").accessibilityIdentifier("installed-json-canvas-content"))
+        container.activateAttachment(named: placeholder, content: content)
         container.layoutSubtreeIfNeeded()
 
         let child = try #require(container.subviews.flatMap(\.subviews).first {
@@ -745,7 +742,7 @@ struct RendererAttachmentCoordinatorTests {
         #expect(window.firstResponder === child)
     }
 
-    @Test("admitted JSON Canvas fence mounts the native factory view through the reader lifecycle")
+    @Test("admitted package fence mounts a generic view through the reader lifecycle")
     @MainActor
     func admittedJSONCanvasFenceMountsThroughReaderLifecycle() throws {
         let webView = WikiReaderWebView()
@@ -764,6 +761,9 @@ struct RendererAttachmentCoordinatorTests {
         coordinator.attachmentContainer = container
         webView.coordinator = coordinator
         webView.onRendererActivation = { _, _ in }
+        coordinator.inlineAttachmentResolver = { _, _, _ in
+            .content(AnyView(Text("installed-fence-renderer")))
+        }
         coordinator.startLoad(markdown: "# Reader", documentIdentity: identity, isLoading: .constant(true))
 
         let generation = try #require(coordinator.attachmentGeneration)
@@ -785,7 +785,7 @@ struct RendererAttachmentCoordinatorTests {
             pageID: pageID,
             pageVersionID: pageVersionID,
             blockID: artifact.blockID,
-            rendererReference: BuiltInRendererReference.reference(for: .jsonCanvas),
+            rendererReference: try Self.jsonCanvasPackageReference(),
             input: .inlineArtifact(artifact),
             capability: admission.capability,
             generation: generation), attachmentPlaceholderID: placeholder)
@@ -1372,6 +1372,16 @@ struct RendererAttachmentCoordinatorTests {
             isLoading: .constant(true))
     }
 
+    /// The reviewed JSON Canvas renderer package reference. JSON Canvas is an
+    /// installed Web package only; these lifecycle tests exercise the generic
+    /// installed attachment path with a real review-scoped reference.
+    private static func jsonCanvasPackageReference() throws -> RendererReference {
+        RendererReference(
+            packageID: try RendererPackageID(validating: "org.selfdrivingwiki.json-canvas-readonly"),
+            version: try RendererPackageVersion(validating: "1.0.0"),
+            registrationID: try RendererRegistrationID(validating: "json-canvas"))
+    }
+
     @MainActor
     private static func admitInlineJSONCanvasPlaceholder(
         _ placeholderID: RendererAttachmentPlaceholderID,
@@ -1380,6 +1390,9 @@ struct RendererAttachmentCoordinatorTests {
     ) throws {
         let generation = try #require(coordinator.attachmentGeneration)
         let admission = try #require(webView.rendererActivationAdmission)
+        coordinator.inlineAttachmentResolver = { _, _, _ in
+            .content(AnyView(Text("installed-inline-renderer")))
+        }
         let source = try RendererEmbeddedContent.Source(
             sourceID: SourceID(rawValue: "01JINLINECANVASSOURCE00000001"),
             sourceVersionID: SourceVersionID(rawValue: "01JINLINECANVASVERSION000001"),
@@ -1390,17 +1403,16 @@ struct RendererAttachmentCoordinatorTests {
             pageVersionID: lifecycleIdentity.pageVersionID,
             identity: .source(source),
             embeddingRole: .inlineContent,
-            rendererReference: BuiltInRendererReference.reference(for: .jsonCanvas),
+            rendererReference: try Self.jsonCanvasPackageReference(),
             input: .source(versionID: try #require(source.sourceVersionID)),
             capability: admission.capability,
             generation: generation), attachmentPlaceholderID: placeholderID)
     }
 
-    /// Admit `placeholderID` as a JSON Canvas fence — the one renderer with a
-    /// native inline attachment. Activation mounts the factory's SwiftUI view,
-    /// so these lifecycle tests exercise the same path production takes rather
-    /// than an unadmitted placeholder. `parserOrdinal` keeps sibling
-    /// placeholders on distinct block identities.
+    /// Admit `placeholderID` with the reviewed package reference and a generic
+    /// inline resolver. These tests exercise coordinator lifecycle behavior.
+    /// The installed-renderer hosted suites cover the real Web renderer session.
+    /// `parserOrdinal` keeps sibling placeholders on distinct block identities.
     @MainActor
     private static func admitJSONCanvasPlaceholder(
         _ placeholderID: RendererAttachmentPlaceholderID,
@@ -1410,6 +1422,9 @@ struct RendererAttachmentCoordinatorTests {
     ) throws {
         let generation = try #require(coordinator.attachmentGeneration)
         let admission = try #require(webView.rendererActivationAdmission)
+        coordinator.inlineAttachmentResolver = { _, _, _ in
+            .content(AnyView(Text("installed-fence-renderer")))
+        }
         let block = try MarkdownFencedBlock(
             documentIdentity: lifecycleIdentity,
             parserOrdinal: parserOrdinal,
@@ -1426,7 +1441,7 @@ struct RendererAttachmentCoordinatorTests {
             pageID: lifecycleIdentity.pageID,
             pageVersionID: lifecycleIdentity.pageVersionID,
             blockID: artifact.blockID,
-            rendererReference: BuiltInRendererReference.reference(for: .jsonCanvas),
+            rendererReference: try Self.jsonCanvasPackageReference(),
             input: .inlineArtifact(artifact),
             capability: admission.capability,
             generation: generation), attachmentPlaceholderID: placeholderID)

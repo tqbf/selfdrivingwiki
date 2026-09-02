@@ -218,9 +218,6 @@ import WikiFSTypes
             updatedAt: .distantPast,
             version: 1)
 
-        // standaloneDiagramSource is now format-neutral: a .canvas source is a
-        // renderer-package text source with no reader-projected diagram tab.
-        #expect(!SourceRendererPresentationPlanner.standaloneDiagramSource(source))
         #expect(SourceRendererPresentationPlanner.usesMarkdownSourcePresentation(
             for: source,
             currentMarkdown: "{\"nodes\":[],\"edges\":[]}"))
@@ -235,10 +232,8 @@ import WikiFSTypes
             mimeType: MimeType.json,
             byteSize: content.utf8.count)
 
-        // Excalidraw is a renderer-package source now: no reader-projected
-        // diagram tab, just the readable code-block presentation plus the
-        // package renderer pane from the generic lifecycle.
-        #expect(!SourceRendererPresentationPlanner.standaloneDiagramSource(source))
+        // Excalidraw uses the readable code-block presentation. The generic
+        // installed-package lifecycle provides its renderer pane.
         #expect(SourceRendererPresentationPlanner.usesMarkdownSourcePresentation(
             for: source,
             boundedBytes: Data(content.utf8),

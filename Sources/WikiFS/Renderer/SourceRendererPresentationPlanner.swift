@@ -199,13 +199,6 @@ struct SourceRendererPresentationPlanner: Sendable {
         return extractionPath != .pdfBackend
     }
 
-    nonisolated static func standaloneDiagramSource(_ source: SourceSummary) -> Bool {
-        // Diagram text formats (.mmd, .canvas JSON, and other JSON diagram
-        // formats) present like any renderer-package text source. The
-        // reader-projected tab is not a renderer decision.
-        false
-    }
-
     private enum MediaMIMECandidate: Sendable, Equatable {
         case notMediaOrigin
         case rejected
@@ -331,11 +324,6 @@ enum SourceDetailPresentationCharacterization {
             tabs = [.reader, .pdf]
         } else if isHTMLSource && (hasProcessedMarkdown || htmlString != nil) {
             tabs = hasProcessedMarkdown ? [.reader, .html] : [.html]
-        } else if SourceRendererPresentationPlanner.standaloneDiagramSource(source) {
-            // Legacy native built-ins no longer add a reader tab; a .mmd or
-            // .canvas JSON source presents like any renderer-package text
-            // source — Source tab plus the package renderer pane.
-            tabs = []
         } else {
             tabs = []
         }
