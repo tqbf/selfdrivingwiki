@@ -117,12 +117,17 @@ struct JSONCanvasRendererPackageTests {
         #expect(viewerSource.contains("method: \"input.read\""))
         #expect(viewerSource.contains("host.navigate") == false)
         #expect(viewerSource.contains("__sdw_parse_canvas"))
+        #expect(viewerSource.contains("makeSVG(\"g\", { class: \"node-wrapper\" })"))
+        #expect(viewerSource.contains("wrapper.setAttribute(\"tabindex\", \"0\")"))
+        #expect(viewerSource.contains("wrapper.setAttribute(\"role\", \"link\")"))
         #expect(viewerSource.contains("minimumScale"))
         #expect(viewerSource.contains("maximumScale"))
         #expect(viewerSource.contains("ArrowUp"))
         #expect(viewerSource.contains("prefers-reduced-motion") == false)
         #expect(styleSource.contains(":focus-visible"))
         #expect(styleSource.contains("prefers-reduced-motion"))
+        #expect(RendererContentSecurityPolicy.headerValue.contains("default-src 'none'"))
+        #expect(RendererContentSecurityPolicy.headerValue.contains("connect-src renderer-package:"))
 
         for prohibitedPattern in [
             "window.open", "fetch(", "XMLHttpRequest", "WebSocket", "Worker(",

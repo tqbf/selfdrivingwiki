@@ -14,13 +14,13 @@ design: plans/json-canvas-renderer-package.md
 - Removed the native JSON Canvas built-in renderer and all JSON Canvas-specific production Swift:
   - `BuiltInRendererID.jsonCanvas`, the built-in descriptor/fence/priority, the factory map entry and `BuiltInRendererFactoryInputs.jsonCanvasHostAction`, the native decoder/view/viewport (`JSONCanvasDocument`, `JSONCanvasRendererView`, `JSONCanvasViewportState`), the native attachment factory, the reader fence presentation branch, the inline-capable reference special case, and the source outline/diagram-tab branches.
 - Added the reviewed, immutable JSON Canvas Web renderer package at `RendererPackages/JSONCanvas`:
-  - Package ID `org.selfdrivingwiki.json-canvas-readonly`, version `1.0.0`, registration `json-canvas`.
+  - Package ID `org.selfdrivingwiki.json-canvas-readonly`, version `1.0.1`, registration `json-canvas`.
   - Manifest revision 4. Bounded `application/json` + `.canvas` matcher requiring root-object `nodes`/`edges` object arrays; `jsoncanvas` fence claim; `inlineContent` + `disclosureRow` roles; 48,000-byte input/decoded limits; protocol revision 1; priority 110.
   - Read-only accessible SVG renderer (text/file/link/group nodes, edge labels/arrowheads, deterministic z-order, pan/zoom/fit, keyboard, light/dark, Reduce Motion) with bounded parsing and typed navigation.
-  - Validated package hash: `46d005a5441fbefd6136933c5cb314cd5149ee09ae72370167e669a9be560eb1` (final assets).
+  - Package version `1.0.1` fixes the reviewed text-node hit area and keyboard semantics. Validated package hash: `8b4ba221c48a3232d4e5355c64170b3da942f003fd7072747712922def9d576d`.
 - Added renderer manifest revision 4 with capability-gated `hostNavigation` authority and a closed `hostNavigation.allowedTargetKinds` declaration (page/source/namedContent). Host protocol revision stays 1. Revisions 1–3 fail closed if they carry navigation. Reviewed Excalidraw (rev 2) and Mermaid (rev 3) package hashes remain unchanged:
   - Excalidraw 1.0.5: `7580e5195a43ee677a795c2a4591c3dcebf528d3dbfadba7001f659e9c328999`
-  - Mermaid 1.0.0: `714bb2a23a33bbe45ab9507137c2784d844fee32220ae6248ea78a60e2acda6f`
+  - Mermaid 1.0.1: `714bb2a23a33bbe45ab9507137c2784d844fee32220ae6248ea78a60e2acda6f`
 - Added the generic package-to-host navigation bridge:
   - Typed `.page(PageID)` / `.source(SourceID)` / `.namedContent(rawRelativeReference)` targets with canonical-ULID and relative-path validation.
   - Discriminated page envelope; `host.navigate` never reads source bytes. Shared request-ID replay ledger with `input.read`.
@@ -43,7 +43,10 @@ design: plans/json-canvas-renderer-package.md
 - `make build` passed. Two `make test` runs each found one unrelated extractor-package concurrency failure. Each failed test then passed three focused reruns, and the watchdog full suite passed.
 - Built-app inspection found no bundled JSON Canvas package assets.
 - `scripts/validate-skills` is not present in this checkout, so that planned check could not run.
-- Remaining before delivery: complete implementation review, resolve its findings, and record the pull request.
+- An OpenAI-family review found a lost text-node hit rectangle and missing focusable internal-link semantics. Version 1.0.1 fixes both and adds static plus real-WebKit regression checks.
+- The host applies `RendererContentSecurityPolicy` headers to package resources. The package does not duplicate this trusted CSP in document markup.
+- Two GLM-family review attempts stalled without reports. A completed non-author-family review remains required before delivery.
+- Remaining before delivery: complete the independent review, resolve its findings, and record the pull request.
 
 ## Notes / honest limits
 

@@ -121,7 +121,7 @@ struct RendererAttachmentCoordinatorTests {
             role: .inlineContent) == 480)
         let installed = RendererReference(
             packageID: try RendererPackageID(validating: "org.example.viewer"),
-            version: try RendererPackageVersion(validating: "1.0.0"),
+            version: try RendererPackageVersion(validating: "1.0.1"),
             registrationID: try RendererRegistrationID(validating: "viewer"))
         #expect(RendererAttachmentHostPolicy.preferredReservedHeight(
             for: installed,
@@ -317,7 +317,7 @@ struct RendererAttachmentCoordinatorTests {
             "generic.svg": .renderer(
                 rendererReference: RendererReference(
                     packageID: try RendererPackageID(validating: "org.selfdrivingwiki.json-canvas-readonly"),
-                    version: try RendererPackageVersion(validating: "1.0.0"),
+                    version: try RendererPackageVersion(validating: "1.0.1"),
                     registrationID: try RendererRegistrationID(validating: "json-canvas")),
                 source: fallbackSource),
         ])
@@ -915,7 +915,7 @@ struct RendererAttachmentCoordinatorTests {
             bytes: bytes)
         let packageReference = RendererReference(
             packageID: try .init(validating: "org.example.package-renderer"),
-            version: try .init(validating: "1.0.0"),
+            version: try .init(validating: "1.0.1"),
             registrationID: try .init(validating: "package-viewer"))
         let placeholder = try RendererAttachmentPlaceholderID(validating: "package-inline-renderer")
         admission.register(context: .init(
@@ -979,7 +979,7 @@ struct RendererAttachmentCoordinatorTests {
 
         let reference = RendererReference(
             packageID: try .init(validating: "org.example.package-renderer"),
-            version: try .init(validating: "1.0.0"),
+            version: try .init(validating: "1.0.1"),
             registrationID: try .init(validating: "package-viewer"))
         let placeholder = try RendererAttachmentPlaceholderID(validating: "stale-package-placeholder")
         let admitAndReport: () throws -> Void = {
@@ -1378,7 +1378,7 @@ struct RendererAttachmentCoordinatorTests {
     private static func jsonCanvasPackageReference() throws -> RendererReference {
         RendererReference(
             packageID: try RendererPackageID(validating: "org.selfdrivingwiki.json-canvas-readonly"),
-            version: try RendererPackageVersion(validating: "1.0.0"),
+            version: try RendererPackageVersion(validating: "1.0.1"),
             registrationID: try RendererRegistrationID(validating: "json-canvas"))
     }
 

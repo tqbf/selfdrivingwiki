@@ -26,7 +26,7 @@ struct JSONCanvasRendererPackageHostedValidationTests {
             packageID: descriptor.reference.packageID,
             version: descriptor.reference.version,
             path: entry.path)
-        let bytes = Data(#"{"nodes":[{"id":"note","type":"text","x":0,"y":0,"width":160,"height":80,"text":"Hosted canvas"}],"edges":[]}"#.utf8)
+        let bytes = Data(#"{"nodes":[{"id":"note","type":"link","x":0,"y":0,"width":160,"height":80,"url":"[[page:01HXXXXXXXXXXXXXXXXXXXXXXX]]"}],"edges":[]}"#.utf8)
         let document = MarkdownDocumentIdentity(
             pageID: PageID(rawValue: "01JHOSTEDJSONCANVASP000001"),
             pageVersionID: PageVersionID(rawValue: "01JHOSTEDJSONCANVASV0000001"))
@@ -69,12 +69,20 @@ struct JSONCanvasRendererPackageHostedValidationTests {
         JSON.stringify({
           role: document.querySelector('svg.scene')?.getAttribute('role'),
           label: !!document.querySelector('svg.scene')?.getAttribute('aria-label'),
-          node: !!document.querySelector('.node-text, rect.node')
+          node: !!document.querySelector('.node-text, rect.node'),
+          wrapperChildren: document.querySelector('.node-wrapper')?.children.length,
+          wrapperRole: document.querySelector('.node-wrapper')?.getAttribute('role'),
+          wrapperTabIndex: document.querySelector('.node-wrapper')?.getAttribute('tabindex'),
+          navigation: !!document.querySelector('.node-wrapper')?.dataset.rendererHostNavigation
         })
         """)
         #expect(semantics?.contains("\"role\":\"group\"") == true)
         #expect(semantics?.contains("\"label\":true") == true)
         #expect(semantics?.contains("\"node\":true") == true)
+        #expect(semantics?.contains("\"wrapperChildren\":2") == true)
+        #expect(semantics?.contains("\"wrapperRole\":\"link\"") == true)
+        #expect(semantics?.contains("\"wrapperTabIndex\":\"0\"") == true)
+        #expect(semantics?.contains("\"navigation\":true") == true)
 
         let interaction = await evaluateJavaScriptWithTimeout(webView, """
         (function() {

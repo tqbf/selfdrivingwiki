@@ -204,15 +204,16 @@
       }
     });
     documentValue.nodes.forEach(function (node) {
-      var rect = makeSVG("rect", { class: "node", x: node.x, y: node.y, width: node.width, height: node.height, fill: "transparent", stroke: nodeStroke(node) });
       var href = externalHref(node);
-      var wrapper = href ? makeSVG("a", { href: href, class: "node-anchor" }) : rect;
-      if (href) wrapper.append(rect);
+      var wrapper = href
+        ? makeSVG("a", { href: href, class: "node-anchor" })
+        : makeSVG("g", { class: "node-wrapper" });
+      var rect = makeSVG("rect", { class: "node", x: node.x, y: node.y, width: node.width, height: node.height, fill: "transparent", stroke: nodeStroke(node) });
+      wrapper.append(rect);
       if (node.type === "text") {
         var textNode = makeSVG("text", { class: "node-text", x: node.x + 8, y: node.y + 20 });
         textNode.textContent = node.text;
         wrapper.append(textNode);
-        if (!href) wrapper = textNode;
       }
       if (node.type === "group") {
         // Group background fill from the bounded CSS color; the label is the
@@ -229,7 +230,15 @@
         wrapper.append(label);
       }
       var target = nodeTarget(node);
-      if (target) wrapper.setAttribute("data-renderer-host-navigation", JSON.stringify(target));
+      if (target) {
+        wrapper.setAttribute("data-renderer-host-navigation", JSON.stringify(target));
+        wrapper.setAttribute("tabindex", "0");
+        wrapper.setAttribute("role", "link");
+        wrapper.setAttribute("aria-label", node.text || node.label || "Open canvas node");
+      }
+      if (href) {
+        wrapper.setAttribute("aria-label", node.text || "Open external link");
+      }
       scene.append(wrapper);
     });
     svg.append(defs, scene);

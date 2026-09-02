@@ -400,7 +400,7 @@ struct MarkdownHTMLRendererTests {
             mimeType: .init(rawValue: "application/json")!,
             bytes: bytes)
         let expectedPackageID = try #require(RendererPackageID(rawValue: "org.selfdrivingwiki.json-canvas-readonly"))
-        let expectedVersion = try #require(RendererPackageVersion(rawValue: "1.0.0"))
+        let expectedVersion = try #require(RendererPackageVersion(rawValue: "1.0.1"))
         let expectedRegistrationID = try #require(RendererRegistrationID(rawValue: "json-canvas"))
         let expectedReference = RendererReference(
             packageID: expectedPackageID,
@@ -924,7 +924,7 @@ private extension MarkdownHTMLRendererTests {
         return try RendererDescriptor(
             reference: .init(
                 packageID: try RendererPackageID(validating: "org.selfdrivingwiki.json-canvas-readonly"),
-                version: try RendererPackageVersion(validating: "1.0.0"),
+                version: try RendererPackageVersion(validating: "1.0.1"),
                 registrationID: try RendererRegistrationID(validating: "json-canvas")),
             displayName: "JSON Canvas",
             implementation: .webPackage(.init(path: entry)),
@@ -1025,7 +1025,7 @@ private extension MarkdownHTMLRendererTests {
             capability: .init(rawValue: "capability"),
             generation: 7)
         let packageID = try #require(RendererPackageID(rawValue: "org.selfdrivingwiki.json-canvas-readonly"))
-        let version = try #require(RendererPackageVersion(rawValue: "1.0.0"))
+        let version = try #require(RendererPackageVersion(rawValue: "1.0.1"))
         let registrationID = try #require(RendererRegistrationID(rawValue: "json-canvas"))
         let reference = RendererReference(
             packageID: packageID,
@@ -1045,7 +1045,7 @@ private extension MarkdownHTMLRendererTests {
         components.host = "open"
         components.queryItems = [
             URLQueryItem(name: "package", value: "org.selfdrivingwiki.json-canvas-readonly"),
-            URLQueryItem(name: "version", value: "1.0.0"),
+            URLQueryItem(name: "version", value: "1.0.1"),
             URLQueryItem(name: "registration", value: "json-canvas"),
             URLQueryItem(name: "input", value: encodedInput),
             URLQueryItem(name: "capability", value: admission.capability.rawValue),

@@ -11,7 +11,7 @@ Users import the package through Settings → Renderers → Advanced Local Rende
 ## Package identity
 
 - Package ID: `org.selfdrivingwiki.json-canvas-readonly`
-- Version: `1.0.0`
+- Version: `1.0.1`
 - Registration ID: `json-canvas`
 - Manifest revision: 4
 - Compatibility range: protocol revision 1 to 1

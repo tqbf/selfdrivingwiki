@@ -48,7 +48,7 @@ The package version is `1.0.5`. Its manifest declares a bounded JSON matcher for
 
 ### Reviewed Mermaid renderer package
 
-The reviewed package root is `RendererPackages/Mermaid` in the repository. SwiftPM does not copy it into the app resource bundle. Users import the folder through Settings → Renderers → Advanced Local Renderer Package Import. The package ID is `org.selfdrivingwiki.mermaid-readonly`. The version is `1.0.0`. The registration ID is `mermaid`.
+The reviewed package root is `RendererPackages/Mermaid` in the repository. SwiftPM does not copy it into the app resource bundle. Users import the folder through Settings → Renderers → Advanced Local Renderer Package Import. The package ID is `org.selfdrivingwiki.mermaid-readonly`. The version is `1.0.1`. The registration ID is `mermaid`.
 
 The package claims the `mermaid` fence alias with the inline MIME type `text/mermaid`, and it matches `text/mermaid` sources plus the `.mmd` extension fallback. It is a read-only Web renderer. It declares `input.read` only, no external links, and 48,000-byte input and decoded-input limits. It has priority 90 and fills both embedding roles.
 
@@ -60,7 +60,7 @@ A revision 3 claim may declare `validation` with `engineAssetPath`, `wrapperAsse
 
 ### Reviewed JSON Canvas renderer package
 
-The reviewed package root is `RendererPackages/JSONCanvas` in the repository. SwiftPM does not copy it into the app resource bundle. Users import the folder through Settings → Renderers → Advanced Local Renderer Package Import. The package ID is `org.selfdrivingwiki.json-canvas-readonly`. The version is `1.0.0`. The registration ID is `json-canvas`. The manifest is revision 4.
+The reviewed package root is `RendererPackages/JSONCanvas` in the repository. SwiftPM does not copy it into the app resource bundle. Users import the folder through Settings → Renderers → Advanced Local Renderer Package Import. The package ID is `org.selfdrivingwiki.json-canvas-readonly`. The version is `1.0.1`. The registration ID is `json-canvas`. The manifest is revision 4.
 
 The package matches `application/json` sources with a bounded JSON matcher requiring root-object `nodes` and `edges` arrays of objects, plus the `.canvas` extension fallback. It claims the `jsoncanvas` fence alias with the inline MIME type `application/json`. It fills both embedding roles, has priority 110, and 48,000-byte input and decoded-input limits.
 

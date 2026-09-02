@@ -88,7 +88,7 @@ struct D2RendererPackageMatchingTests {
         let jsonCanvasInstalled = try RendererDescriptor(
             reference: .init(
                 packageID: try .init(validating: "org.selfdrivingwiki.json-canvas-readonly"),
-                version: try .init(validating: "1.0.0"),
+                version: try .init(validating: "1.0.1"),
                 registrationID: try .init(validating: "json-canvas")),
             displayName: "JSON Canvas",
             implementation: .webPackage(.init(path: try .init(validating: "index.html"))),
@@ -150,7 +150,7 @@ struct D2RendererPackageMatchingTests {
         let builtIn = try RendererDescriptor(
             reference: .init(
                 packageID: builtInPackageID,
-                version: try .init(validating: "1.0.0"),
+                version: try .init(validating: "1.0.1"),
                 registrationID: try .init(validating: "svg")),
             displayName: "SVG",
             implementation: .builtIn(.svg),

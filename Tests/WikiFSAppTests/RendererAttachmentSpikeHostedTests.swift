@@ -1050,7 +1050,7 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
         return try RendererDescriptor(
             reference: .init(
                 packageID: try RendererPackageID(validating: "org.selfdrivingwiki.json-canvas-readonly"),
-                version: try RendererPackageVersion(validating: "1.0.0"),
+                version: try RendererPackageVersion(validating: "1.0.1"),
                 registrationID: try RendererRegistrationID(validating: "json-canvas")),
             displayName: "JSON Canvas",
             implementation: .webPackage(.init(path: entry)),

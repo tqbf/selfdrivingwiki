@@ -35,7 +35,7 @@ enum PackageFenceTestSupport {
         return try! RendererDescriptor(
             reference: RendererReference(
                 packageID: RendererPackageID(rawValue: "org.selfdrivingwiki.mermaid-readonly")!,
-                version: RendererPackageVersion(rawValue: "1.0.0")!,
+                version: RendererPackageVersion(rawValue: "1.0.1")!,
                 registrationID: RendererRegistrationID(rawValue: "mermaid")!),
             displayName: "Mermaid",
             implementation: .webPackage(.init(path: entry.path)),
@@ -86,7 +86,7 @@ enum PackageFenceTestSupport {
         return try! RendererDescriptor(
             reference: RendererReference(
                 packageID: RendererPackageID(rawValue: "org.selfdrivingwiki.json-canvas-readonly")!,
-                version: RendererPackageVersion(rawValue: "1.0.0")!,
+                version: RendererPackageVersion(rawValue: "1.0.1")!,
                 registrationID: RendererRegistrationID(rawValue: "json-canvas")!),
             displayName: "JSON Canvas",
             implementation: .webPackage(.init(path: asset.path)),
@@ -159,7 +159,7 @@ enum PackageFenceTestSupport {
         return try! RendererDescriptor(
             reference: RendererReference(
                 packageID: RendererPackageID(rawValue: "org.selfdrivingwiki.d2-readonly")!,
-                version: RendererPackageVersion(rawValue: "1.0.0")!,
+                version: RendererPackageVersion(rawValue: "1.0.1")!,
                 registrationID: RendererRegistrationID(rawValue: "d2")!),
             displayName: "D2",
             implementation: .webPackage(.init(path: asset.path)),
