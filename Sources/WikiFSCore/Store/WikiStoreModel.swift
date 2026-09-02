@@ -1395,9 +1395,15 @@ public final class WikiStoreModel {
 
     private func loadDrafts(for newValue: WikiSelection?) {
         loadedSelection = newValue
-        // A page switch invalidates the prior page's fence warning so a stale
-        // banner doesn't bleed onto an unrelated page (it's recomputed on save).
+        // A page switch invalidates the prior page's lint warnings so a stale
+        // banner doesn't bleed onto an unrelated page (they're recomputed on
+        // save). The markdown lint is computed on a background Task, so also
+        // cancel the in-flight lint — otherwise page A's findings can land
+        // after the switch and write the stale banner onto page B.
         fenceSaveWarning = nil
+        markdownSaveWarning = nil
+        markdownWarningTask?.cancel()
+        markdownWarningTask = nil
         var restoredFromPendingDraft = false
         switch newValue {
         case .newChat, .bookmark, .chat:
