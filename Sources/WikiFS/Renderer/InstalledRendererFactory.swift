@@ -46,6 +46,7 @@ struct InstalledRendererSessionConfiguration {
     let resourceProvider: any RendererPackageResourceProviding
     let failureRecorder: RendererSessionFailureRecording?
     let inputReader: RendererAuthorizedInputReader?
+    let assetReader: RendererAuthorizedAssetReader?
     let externalActivationPolicy: RendererExternalActivationPolicy
     let hostNavigationTargetKinds: Set<RendererHostNavigationTargetKind>
     let hostNavigationRouting: RendererHostNavigationRouting
@@ -56,6 +57,7 @@ struct InstalledRendererSessionConfiguration {
         resourceProvider: any RendererPackageResourceProviding,
         failureRecorder: RendererSessionFailureRecording?,
         inputReader: RendererAuthorizedInputReader?,
+        assetReader: RendererAuthorizedAssetReader? = nil,
         externalActivationPolicy: RendererExternalActivationPolicy,
         hostNavigationTargetKinds: Set<RendererHostNavigationTargetKind> = [],
         hostNavigationRouting: RendererHostNavigationRouting = .unavailable
@@ -65,6 +67,7 @@ struct InstalledRendererSessionConfiguration {
         self.resourceProvider = resourceProvider
         self.failureRecorder = failureRecorder
         self.inputReader = inputReader
+        self.assetReader = assetReader
         self.externalActivationPolicy = externalActivationPolicy
         self.hostNavigationTargetKinds = hostNavigationTargetKinds
         self.hostNavigationRouting = hostNavigationRouting
@@ -97,6 +100,7 @@ struct InstalledRendererFactory {
         for descriptor: RendererDescriptor,
         inputs: Inputs,
         inputReader: RendererAuthorizedInputReader?,
+        assetReader: RendererAuthorizedAssetReader? = nil,
         onFailure: @escaping @MainActor (RendererSessionFailure) -> Void
     ) -> AnyView? {
         guard case let .webPackage(entryPoint) = descriptor.implementation,
@@ -129,6 +133,7 @@ struct InstalledRendererFactory {
             resourceProvider: configuration.resourceProvider,
             failureRecorder: configuration.failureRecorder,
             inputReader: inputReader,
+            assetReader: assetReader,
             externalActivationPolicy: descriptor.linkPolicy == .userActivatedExternal ? .enabled : .disabled,
             hostNavigationTargetKinds: descriptor.hostNavigation?.allowedTargetKinds ?? [],
             hostNavigationRouting: inputs.hostNavigationRouting)
@@ -158,6 +163,7 @@ struct InstalledRendererFactory {
                         sessionID: sessionID,
                         capability: .init(rawValue: UUID().uuidString),
                         inputReader: inputReader,
+                        assetReader: configuration.assetReader,
                         allowedNavigationTargetKinds: configuration.hostNavigationTargetKinds,
                         routeNavigation: configuration.hostNavigationRouting.route,
                         expectedOrigin: identity.entryURL)

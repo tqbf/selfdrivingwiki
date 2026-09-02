@@ -302,3 +302,90 @@ enum MarkdownImageTargetProjection {
         return components[rootIndex...].allSatisfy({ $0 != "." && $0 != ".." })
     }
 }
+
+/// Builds the per-session asset admission allowlist for the revision-5
+/// `assetRead` authority from the reference-extractor records and the exact
+/// sibling/File Provider projection established for the current page/source.
+///
+/// This is the concrete WikiFS-side resolver for
+/// `RendererAssetAdmissionBuilder`: it consumes the same sibling maps as the
+/// image embed projection (never a loose all-sources lookup), requires a
+/// UNIQUE match, and pins the active `SourceVersionID` + MIME + size + digest
+/// before session creation. No production branch here names JSON Canvas (or
+/// any package): the input is only validated relative references and the
+/// declared role set.
+enum RendererAssetAdmissionProjection {
+    /// Resolve extractor records into exact pinned admissions.
+    ///
+    /// - Parameters:
+    ///   - records: validated `{role, reference}` records from the
+    ///     reference-extractor helper.
+    ///   - siblingSourceMap: the established sibling/File Provider projection
+    ///     (`[relativeKey: SourceID]`) for this page/source context.
+    ///   - store: the wiki store used to pin active versions.
+    ///   - sourceExtensions: `[SourceID: String]` extension map for MIME.
+    ///   - allowedRoles: the declared asset roles (imageNode/groupBackground).
+    ///   - maximumBytesPerAsset: the declared per-asset byte cap.
+    /// - Returns: the immutable allowlist for the session's
+    ///   `RendererAuthorizedAssetReader`, or `[]` when nothing resolves
+    ///   (the caller fails closed to non-image rendering + source/raw
+    ///   fallback).
+    static func buildAdmissions(
+        records: [RendererAssetReferenceExtractorClient.ExtractedRecord],
+        siblingSourceMap: [String: SourceID],
+        store: any WikiStore,
+        sourceExtensions: [SourceID: String],
+        allowedRoles: Set<RendererAssetRole>,
+        maximumBytesPerAsset: Int
+    ) throws -> [RendererAuthorizedAssetReader.Admission] {
+        // Normalize the comparison key ONCE at admission. Package requests
+        // must match this exact key; no basename-only or extension-stripped
+        // fallback for byte reads.
+        let normalized: [String: SourceID] = Dictionary(
+            uniqueKeysWithValues: siblingSourceMap.map { key, sourceID in
+                (key.trimmingCharacters(in: .whitespacesAndNewlines), sourceID)
+            })
+
+        func resolveFacts(_ rawReference: String) throws -> (
+            sourceID: SourceID,
+            sourceVersionID: SourceVersionID,
+            mimeType: String,
+            byteCount: Int,
+            digest: String
+        )? {
+            guard let sourceID = normalized[rawReference],
+                  let version = try store.activeContentVersion(sourceID: sourceID)
+            else { return nil }
+            // A failed source read means the admission is simply unavailable
+            // (the reference falls back) — it is not a crash. `try?` is
+            // intentional; the caller does not need a typed denial here.
+            // swiftlint:disable:next silent_try_optional
+            guard let bytes = try? store.sourceContent(versionID: version.id) else { return nil }
+            let extensionKey = sourceExtensions[sourceID]
+            let mime = version.mimeType ?? Self.mimeType(for: extensionKey)
+            return (
+                sourceID: sourceID,
+                sourceVersionID: version.id,
+                mimeType: mime,
+                byteCount: bytes.count,
+                digest: RendererSHA256.digest(bytes).hex)
+        }
+
+        return try RendererAssetAdmissionBuilder.buildAdmissions(
+            records: records,
+            resolveSourceFacts: resolveFacts,
+            allowedRoles: allowedRoles,
+            maximumBytesPerAsset: maximumBytesPerAsset)
+    }
+
+    private static func mimeType(for fileExtension: String?) -> String {
+        switch fileExtension?.lowercased() {
+        case "png": "image/png"
+        case "jpg", "jpeg": "image/jpeg"
+        case "gif": "image/gif"
+        case "svg": "image/svg+xml"
+        case "webp": "image/webp"
+        default: "application/octet-stream"
+        }
+    }
+}

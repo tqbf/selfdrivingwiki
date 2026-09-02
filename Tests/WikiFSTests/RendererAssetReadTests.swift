@@ -333,3 +333,100 @@ struct RendererAuthorizedAssetReaderTests {
         }
     }
 }
+
+// MARK: - RendererAssetAdmissionBuilderTests
+
+@Suite(.serialized, .timeLimit(.minutes(2)))
+struct RendererAssetAdmissionBuilderTests {
+    /// The builder resolves only exact reference keys (the caller supplies the
+    /// sibling-scoped `resolveSourceFacts` seam), pins the exact active
+    /// SourceVersionID, and bails when a source is missing or its version is
+    /// unavailable.
+    @Test("resolves exact references and pins active versions")
+    func resolvesExactReferencesAndPinsVersions() async throws {
+        let store = try GRDBWikiStore()
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x01, 0x02])
+        let summary = try store.addSource(filename: "diagram.png", data: png)
+        let version = try #require(try store.activeContentVersion(sourceID: summary.id))
+
+        let records = [RendererAssetReferenceExtractorClient.ExtractedRecord(
+            role: .imageNode, reference: "diagram.png")]
+        let admissions = try RendererAssetAdmissionBuilder.buildAdmissions(
+            records: records,
+            resolveSourceFacts: { rawReference in
+                guard rawReference == "diagram.png" else { return nil }
+                let bytes = try store.sourceContent(versionID: version.id)
+                return (
+                    sourceID: summary.id,
+                    sourceVersionID: version.id,
+                    mimeType: "image/png",
+                    byteCount: bytes.count,
+                    digest: RendererSHA256.digest(bytes).hex)
+            },
+            allowedRoles: [.imageNode],
+            maximumBytesPerAsset: 4096)
+        #expect(admissions.count == 1)
+        let admission = try #require(admissions.first)
+        #expect(admission.sourceID == summary.id)
+        #expect(admission.sourceVersionID == version.id)
+        #expect(admission.mimeType == "image/png")
+        #expect(admission.expectedByteCount == png.count)
+        #expect(admission.expectedDigest == RendererSHA256.digest(png).hex)
+    }
+
+    @Test("does not broaden admission scope to unrelated sources")
+    func doesNotBroadenSiblingScope() async throws {
+        let store = try GRDBWikiStore()
+        let png = Data([0x89, 0x50, 0x4E, 0x47])
+        let summary = try store.addSource(filename: "diagram.png", data: png)
+        let version = try #require(try store.activeContentVersion(sourceID: summary.id))
+        // The seam only resolves `diagram.png`; a reference to another key
+        // must NOT resolve even though the source EXISTS in the store — the
+        // sibling scope is exact, never broadened.
+        let records = [RendererAssetReferenceExtractorClient.ExtractedRecord(
+            role: .imageNode, reference: "other-diagram.png")]
+        let admissions = try RendererAssetAdmissionBuilder.buildAdmissions(
+            records: records,
+            resolveSourceFacts: { rawReference in
+                guard rawReference == "diagram.png" else { return nil }
+                let bytes = try store.sourceContent(versionID: version.id)
+                return (
+                    sourceID: summary.id,
+                    sourceVersionID: version.id,
+                    mimeType: "image/png",
+                    byteCount: bytes.count,
+                    digest: RendererSHA256.digest(bytes).hex)
+            },
+            allowedRoles: [.imageNode],
+            maximumBytesPerAsset: 4096)
+        #expect(admissions.isEmpty)
+    }
+
+    @Test("role gating admits only declared roles")
+    func roleGatingAdmitsOnlyDeclaredRoles() async throws {
+        let store = try GRDBWikiStore()
+        let png = Data([0x89, 0x50, 0x4E, 0x47])
+        let summary = try store.addSource(filename: "diagram.png", data: png)
+        let version = try #require(try store.activeContentVersion(sourceID: summary.id))
+        let records = [
+            RendererAssetReferenceExtractorClient.ExtractedRecord(role: .imageNode, reference: "diagram.png"),
+            RendererAssetReferenceExtractorClient.ExtractedRecord(role: .groupBackground, reference: "diagram.png"),
+        ]
+        // Only imageNode is declared -> groupBackground record is skipped.
+        let admissions = try RendererAssetAdmissionBuilder.buildAdmissions(
+            records: records,
+            resolveSourceFacts: { _ in
+                let bytes = try store.sourceContent(versionID: version.id)
+                return (
+                    sourceID: summary.id,
+                    sourceVersionID: version.id,
+                    mimeType: "image/png",
+                    byteCount: bytes.count,
+                    digest: RendererSHA256.digest(bytes).hex)
+            },
+            allowedRoles: [.imageNode],
+            maximumBytesPerAsset: 4096)
+        #expect(admissions.count == 1)
+        #expect(admissions.first?.reference.rawValue == "diagram.png")
+    }
+}
