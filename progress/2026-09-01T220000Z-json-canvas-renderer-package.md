@@ -46,7 +46,8 @@ design: plans/json-canvas-renderer-package.md
 - An OpenAI-family review found a lost text-node hit rectangle and missing focusable internal-link semantics. Version 1.0.1 fixes both and adds static plus real-WebKit regression checks.
 - The host applies `RendererContentSecurityPolicy` headers to package resources. The package does not duplicate this trusted CSP in document markup.
 - Two GLM-family review attempts stalled without reports. A completed non-author-family review remains required before delivery.
-- Remaining before delivery: complete the independent review, resolve its findings, and record the pull request.
+- Pull request: https://github.com/tqbf/selfdrivingwiki/pull/1195
+- Remaining before delivery: complete or explicitly waive the non-author-family review gate.
 
 ## Notes / honest limits
 
