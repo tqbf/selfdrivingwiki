@@ -126,4 +126,19 @@ enum JSONCanvasFixtures {
               {"id":"2000000000000004","type":"link","x":440,"y":320,"width":300,"height":160,"url":"https://obsidian.md","color":"#7c3aed"}],
      "edges":[{"id":"2e00000000000001","fromNode":"2000000000000001","fromSide":"right","toNode":"2000000000000003","toSide":"top","toEnd":"arrow","label":"file to specification"}]}
     """
+
+    /// The Testbed "Edges and Endpoints" fixture: every edge side, both
+    /// endpoint shapes, labels, preset + hex colors, and one default edge.
+    static let edgesAndEndpoints: String = """
+    {"nodes":[{"id":"4000000000000001","type":"text","x":0,"y":180,"width":220,"height":100,"text":"Left"},
+              {"id":"4000000000000002","type":"text","x":340,"y":180,"width":240,"height":100,"color":"3","text":"Center"},
+              {"id":"4000000000000003","type":"text","x":700,"y":180,"width":220,"height":100,"text":"Right"},
+              {"id":"4000000000000004","type":"text","x":340,"y":0,"width":240,"height":100,"text":"Top"},
+              {"id":"4000000000000005","type":"text","x":340,"y":360,"width":240,"height":100,"text":"Bottom"}],
+     "edges":[{"id":"4e00000000000001","fromNode":"4000000000000001","fromSide":"right","fromEnd":"none","toNode":"4000000000000002","toSide":"left","toEnd":"arrow","color":"1","label":"right to left"},
+              {"id":"4e00000000000002","fromNode":"4000000000000004","fromSide":"bottom","fromEnd":"arrow","toNode":"4000000000000002","toSide":"top","toEnd":"none","color":"2","label":"bottom to top"},
+              {"id":"4e00000000000003","fromNode":"4000000000000002","fromSide":"bottom","fromEnd":"none","toNode":"4000000000000005","toSide":"top","toEnd":"arrow","color":"#059669","label":"downward"},
+              {"id":"4e00000000000004","fromNode":"4000000000000002","fromSide":"right","fromEnd":"arrow","toNode":"4000000000000003","toSide":"left","toEnd":"arrow","color":"6","label":"two arrows"},
+              {"id":"4e00000000000005","fromNode":"4000000000000001","toNode":"4000000000000005"}]}
+    """
 }

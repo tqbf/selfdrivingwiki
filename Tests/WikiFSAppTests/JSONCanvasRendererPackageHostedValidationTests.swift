@@ -189,6 +189,72 @@ struct JSONCanvasRendererPackageHostedValidationTests {
         #expect(semantics?.contains("\"transform\":\"\"") == false, "transform was not applied; semantics: \(semantics ?? "nil")")
     }
 
+    @Test("colored edges render with matching stroke and colored arrowhead markers")
+    func coloredEdgesRenderWithColorAndMarkers() async throws {
+        let fixture = try JSONCanvasHostedFixture()
+        defer { fixture.remove() }
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        defer { lease.release() }
+        NSApplication.shared.setActivationPolicy(.accessory)
+
+        let package = try fixture.validator.validate(directory: fixture.directory)
+        let descriptor = try #require(package.manifest.descriptors.first)
+        let entry = try #require(descriptor.webEntryPoint)
+        let entryURL = RendererPackageScheme.url(
+            packageID: descriptor.reference.packageID,
+            version: descriptor.reference.version,
+            path: entry.path)
+        // One colored edge (preset "1" red) with an arrow; one hex-colored
+        // edge with both-arrow; one default edge.
+        let bytes = Data(##"{"nodes":[{"id":"a","type":"text","x":0,"y":0,"width":100,"height":50,"text":"A"},{"id":"b","type":"text","x":250,"y":0,"width":100,"height":50,"text":"B"},{"id":"c","type":"text","x":500,"y":0,"width":100,"height":50,"text":"C"}],"edges":[{"id":"red","fromNode":"a","toNode":"b","fromSide":"right","toSide":"left","toEnd":"arrow","color":"1"},{"id":"hex","fromNode":"b","toNode":"c","fromSide":"right","toSide":"left","fromEnd":"arrow","toEnd":"arrow","color":"#059669"},{"id":"plain","fromNode":"a","toNode":"c","label":"plain"}]}"##.utf8)
+        let document = MarkdownDocumentIdentity(
+            pageID: PageID(rawValue: "01JHOSTEDJSONCANVASP000001"),
+            pageVersionID: PageVersionID(rawValue: "01JHOSTEDJSONCANVASV0000001"))
+        let block = try MarkdownFencedBlock(
+            documentIdentity: document, parserOrdinal: 0, rawInfoString: "jsoncanvas", bytes: bytes)
+        let artifact = try RendererEmbeddedContent.InlineArtifact(
+            pageID: document.pageID,
+            pageVersionID: document.pageVersionID,
+            blockID: try #require(block.blockID),
+            fenceAlias: try RendererFenceAlias(validating: "jsoncanvas"),
+            mimeType: try RendererMIMEType(validating: "application/json"),
+            bytes: bytes)
+        let reader = RendererAuthorizedInputReader(
+            store: try GRDBWikiStore(), authorizedInput: .inlineArtifact(artifact))
+        let mount = try Self.makeMount(
+            package: package, descriptor: descriptor, entryURL: entryURL, reader: reader)
+        defer { mount.teardown() }
+
+        try await Self.wait("session") { mount.session() != nil }
+        let session = try #require(mount.session())
+        try await Self.wait("ready") { if case .ready = session.state { return true }; return false }
+        let webView = try #require(session.webView)
+        try await Self.waitForJavaScript(
+            "document.querySelectorAll('svg.scene path.edge').length === 3 ? 'ok' : 'pending'",
+            expected: "ok", webView: webView, description: "three edges")
+
+        let semantics = await evaluateJavaScriptWithTimeout(webView, """
+        JSON.stringify({
+          colors: Array.from(document.querySelectorAll('svg.scene path.edge')).map(function (p) {
+            return p.getAttribute('style') || 'css-default';
+          }),
+          markers: Array.from(document.querySelectorAll('svg.scene path.edge')).map(function (p) {
+            return (p.getAttribute('marker-end') || '') + (p.getAttribute('marker-start') || '');
+          }),
+          markerDefs: Array.from(document.querySelectorAll('svg.scene defs marker')).map(function (m) {
+            return (m.getAttribute('color') || 'css-default') + ':' + m.id;
+          })
+        })
+        """)
+        #expect(semantics?.contains("stroke: #e03131") == true)          // preset 1 -> red
+        #expect(semantics?.contains("stroke: #059669") == true)          // hex edge
+        #expect(semantics?.contains("css-default") == true)              // default edge keeps CSS gray
+        // The hex dual-arrow edge must reference the SAME marker at both ends.
+        #expect(semantics?.contains("url(#sdw-arrowhead-") == true)
+        // The colored marker defs carry the resolved color.
+        #expect(semantics?.contains("#059669:sdw-arrowhead") == true)
+    }
+
     @Test("malformed input shows an in-view message and preserves source bytes")
     func malformedInputPreservesSource() async throws {
         let fixture = try JSONCanvasHostedFixture()

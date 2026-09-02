@@ -879,7 +879,7 @@ struct RendererModelTests {
         let data = try Data(contentsOf: root.appendingPathComponent("RendererPackages/JSONCanvas/manifest.json"))
         let manifest = try JSONDecoder().decode(RendererManifest.self, from: data)
         #expect(manifest.revision == RendererManifestRevision.current)
-        #expect(try manifest.packageHash().hex == "696c50ebdd66dbe88f364ffa6d96e663804c1ec7c1ca955380fe10bc54ef5045")
+        #expect(try manifest.packageHash().hex == "2e17de05a9cb367752aa27021bd15ca4f858828015d307bb0ebb188bda5a3f96")
         #expect(manifest.descriptors.allSatisfy {
             $0.compatibility.supports(hostProtocolRevision: RendererRegistrySnapshotDefaults.hostProtocolRevision)
         })

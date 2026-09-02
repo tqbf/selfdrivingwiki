@@ -204,6 +204,50 @@ struct JSONCanvasJavaScriptHarnessTests {
         #expect(references.contains("SVG"))
     }
 
+    @Test("colored edges and arrowheads carry their color; default edges share the CSS marker")
+    func edgesAndArrowheadsCarryColors() throws {
+        let runner = try loadRunner()
+        let fixture = JSONCanvasFixtures.edgesAndEndpoints
+        let result = try runner.call("edgeMarkers", arg: fixture)
+        let value = try decodeObject(result)
+        let edges = try #require(value["edges"] as? [String: Any])
+        let markers = try #require(value["markers"] as? [String: String])
+
+        // Edge 1: fromEnd none, toEnd arrow, color "1" (red) -> only a 'to'
+        // marker, and that marker's color maps to the preset red.
+        let e1 = try #require(edges["4e00000000000001"] as? [String: Any])
+        #expect(e1["from"] as? String == nil)
+        let e1To = try #require(e1["to"] as? String)
+        #expect(markers[e1To] == "1")
+
+        // Edge 2: fromEnd arrow, toEnd none, color "2" -> only a 'from' marker.
+        let e2 = try #require(edges["4e00000000000002"] as? [String: Any])
+        let e2From = try #require(e2["from"] as? String)
+        #expect(e2["to"] as? String == nil)
+        #expect(markers[e2From] == "2")
+
+        // Edge 3: color "#059669" (hex) -> its 'to' marker resolves to that hex.
+        let e3 = try #require(edges["4e00000000000003"] as? [String: Any])
+        let e3To = try #require(e3["to"] as? String)
+        #expect(markers[e3To] == "#059669")
+
+        // Edge 4: both ends arrow, color "6" -> both markers use preset purple.
+        let e4 = try #require(edges["4e00000000000004"] as? [String: Any])
+        #expect(markers[e4["from"] as? String ?? ""] == "6")
+        #expect(markers[e4["to"] as? String ?? ""] == "6")
+
+        // Edge 5 (no color): toEnd defaults to arrow -> a 'to' marker using
+        // the shared default marker (color "default"), no 'from' marker.
+        let e5 = try #require(edges["4e00000000000005"] as? [String: Any])
+        #expect(e5["from"] as? String == nil)
+        let e5To = try #require(e5["to"] as? String)
+        #expect(markers[e5To] == "default")
+
+        // The default arrowhead maps to the "default" sentinel handled by CSS;
+        // every colored edge maps to its own color key.
+        #expect(markers.values.contains("default"))
+    }
+
     // MARK: - JSC harness
 
     private func loadRunner() throws -> JSCRunner {
@@ -275,6 +319,7 @@ private final class JSCRunner: @unchecked Sendable {
         case "layoutText": globalName = "__sdw_layout_text"
         case "resolveAssets": globalName = "__sdw_resolve_assets"
         case "parseEdges": globalName = "__sdw_parse_edges"
+        case "edgeMarkers": globalName = "__sdw_edge_markers"
         default: globalName = "__sdw_\(function)"
         }
         guard let fn = context.objectForKeyedSubscript(globalName as NSString),

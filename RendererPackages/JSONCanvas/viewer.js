@@ -467,17 +467,60 @@
 
   function edgeColor(color) { return isValidColor(color) ? (presetColors[color] || color) : "currentColor"; }
 
+  /// Pure marker assignment: returns {edgeId: {from: markerId|null, to: markerId|null}}
+  /// and {markerId: colorKey} for the given scene. No DOM. Colored edges get a
+  /// per-color marker; default (no-color) arrowheads share the "default"
+  /// marker whose color is driven by CSS.
+  function computeEdgeMarkers(doc) {
+    var markerByColor = Object.create(null);
+    var markers = Object.create(null);
+    var edges = Object.create(null);
+    function markerFor(color) {
+      if (color == null) color = "default";
+      if (markerByColor[color]) return markerByColor[color];
+      var id = "sdw-arrowhead-" + (Object.keys(markerByColor).length + 1);
+      markerByColor[color] = id;
+      markers[id] = color;
+      return id;
+    }
+    doc.edges.forEach(function (edge) {
+      edges[edge.id] = {
+        from: edge.fromEnd === "arrow" ? markerFor(edge.color) : null,
+        to: edge.toEnd === "arrow" ? markerFor(edge.color) : null
+      };
+    });
+    return { edges: edges, markers: markers };
+  }
+
+  /// DOM wrapper: build the `defs` <marker> elements per the pure assignment.
+  function makeEdgeMarkers(scene) {
+    var assignment = computeEdgeMarkers(scene.doc);
+    var defs = makeSVG("defs");
+    Object.keys(assignment.markers).forEach(function (id) {
+      var color = assignment.markers[id];
+      var marker = makeSVG("marker", { id: id, markerWidth: "8", markerHeight: "8", refX: "6", refY: "3", orient: "auto", markerUnits: "strokeWidth" });
+      if (color !== "default") marker.setAttribute("color", edgeColor(color));
+      else marker.setAttribute("class", "edge-arrow-default");
+      var arrow = makeSVG("path", { d: "M0,0 L6,3 L0,6 z", class: "edge-arrow", fill: "currentColor" });
+      marker.append(arrow);
+      defs.append(marker);
+    });
+    scene.doc.edges.forEach(function (edge) {
+      var e = assignment.edges[edge.id];
+      edge.__markerFrom = e.from;
+      edge.__markerTo = e.to;
+    });
+    defs.__sdwMarkerInfo = assignment.markers;
+    return defs;
+  }
+
   // Stage 6: render semantic SVG/HTML. Nodes in ascending z-order (first
   // lowest, last highest); edges beneath nodes; group backgrounds behind
   // contained content; readable text; image nodes via asset.read; fallbacks
   // for denied/unavailable images.
   function render(scene, layout, callback) {
     var svg = makeSVG("svg", { class: "scene", role: "group", "aria-label": "Read-only JSON Canvas, use arrow keys to pan and plus or minus to zoom" });
-    var defs = makeSVG("defs");
-    var marker = makeSVG("marker", { id: "sdw-arrowhead", markerWidth: "8", markerHeight: "8", refX: "6", refY: "3", orient: "auto", markerUnits: "strokeWidth" });
-    var arrow = makeSVG("path", { d: "M0,0 L6,3 L0,6 z", class: "edge-arrow", fill: "currentColor" });
-    marker.append(arrow);
-    defs.append(marker);
+    var defs = makeEdgeMarkers(scene);
     var sceneG = makeSVG("g", { class: "scene-layer" });
 
     // Edge labels + paths beneath nodes, in array order.
@@ -490,14 +533,19 @@
         stroke: edge.color ? edgeColor(edge.color) : "currentColor",
         fill: "none"
       });
-      if (edge.toEnd === "arrow") path.setAttribute("marker-end", "url(#sdw-arrowhead)");
-      if (edge.fromEnd === "arrow") path.setAttribute("marker-start", "url(#sdw-arrowhead)");
+      // CSS `.edge { stroke: var(--edge-stroke) }` would override the stroke
+      // presentation attribute, so colored edges get an inline style (which
+      // beats the class rule). Default edges keep the CSS gray line.
+      if (edge.color) path.setAttribute("style", "stroke: " + edgeColor(edge.color));
+      if (edge.toEnd === "arrow" && edge.__markerTo) path.setAttribute("marker-end", "url(#" + edge.__markerTo + ")");
+      if (edge.fromEnd === "arrow" && edge.__markerFrom) path.setAttribute("marker-start", "url(#" + edge.__markerFrom + ")");
       sceneG.append(path);
       if (edge.label) {
         var mid = bezierMidpoint(geometry);
         var labelG = makeSVG("g", { class: "edge-label-wrap", transform: "translate(" + mid.x + " " + mid.y + ")" });
         var bg = makeSVG("rect", { class: "edge-label-bg", x: -30, y: -10, width: 60, height: 20, rx: 4 });
         var labelNode = makeSVG("text", { class: "edge-label", x: 0, y: 3, "text-anchor": "middle" });
+        if (edge.color) labelNode.setAttribute("style", "fill: " + edgeColor(edge.color));
         labelNode.textContent = edge.label;
         labelG.append(bg, labelNode);
         sceneG.append(labelG);
@@ -1004,6 +1052,20 @@
       } catch (error) {
         return JSON.stringify({ ok: false, reason: String(error.message || "error") });
       }
+    },
+    // Per-edge marker assignments: {edgeId: {from: markerId|null, to: markerId|null}}
+    // plus the marker color info map, so tests can assert that colored edges
+    // get a per-color arrowhead and default edges share the CSS-driven marker.
+    edgeMarkers: function (docJSON) {
+      try {
+        var doc = parseWire(utf8Encode(docJSON));
+        var assignment = computeEdgeMarkers(doc);
+        // Make every marker present even when a color is used by no edge
+        // arrow; tests assert the per-edge assignment and the marker colors.
+        return JSON.stringify({ edges: assignment.edges, markers: assignment.markers });
+      } catch (error) {
+        return JSON.stringify({ ok: false, reason: String(error.message || "error") });
+      }
     }
   };
   if (typeof module !== "undefined" && typeof module.exports !== "undefined") {
@@ -1013,7 +1075,8 @@
       edge: testSeam.computeEdge,
       layoutText: testSeam.layoutText,
       resolveAssets: testSeam.resolveAssets,
-      parseEdges: testSeam.parseEdges
+      parseEdges: testSeam.parseEdges,
+      edgeMarkers: testSeam.edgeMarkers
     };
   }
   // Expose the seam as globals in BOTH a DOM context (window) and a plain
@@ -1027,5 +1090,6 @@
     globalThis.__sdw_layout_text = testSeam.layoutText;
     globalThis.__sdw_resolve_assets = testSeam.resolveAssets;
     globalThis.__sdw_parse_edges = testSeam.parseEdges;
+    globalThis.__sdw_edge_markers = testSeam.edgeMarkers;
   }
 }());

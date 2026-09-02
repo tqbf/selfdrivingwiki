@@ -11,14 +11,14 @@ Users import the package through Settings → Renderers → Advanced Local Rende
 ## Package identity
 
 - Package ID: `org.selfdrivingwiki.json-canvas-readonly`
-- Version: `1.1.1`
+- Version: `1.1.2`
 - Registration ID: `json-canvas`
 - Manifest revision: 5
 - Compatibility range: protocol revision 1 to 1
 - Priority: 110
 - Limits: 48,000 bytes input and decoded (the current base64 bridge ceiling), not the former native 256 KiB limit
 
-The viewer is read-only, package-local, and accessible. It supports text, file, link, and group nodes; node and edge colors; edge labels with arrowheads; deterministic order and z-order; pan, zoom, fit, selection, and keyboard traversal; light and dark appearance; and Reduce Motion. Version 1.1.1 repairs the rendering model: correct side-aware Bézier edge geometry, full JSON Canvas 1.0 field parsing with defaults, bounded Markdown text layout, image file nodes and group background images through the host-pinned `asset.read` allowlist, and initial fit-to-window.
+The viewer is read-only, package-local, and accessible. It supports text, file, link, and group nodes; node and edge colors; edge labels with arrowheads; deterministic order and z-order; pan, zoom, fit, selection, and keyboard traversal; light and dark appearance; and Reduce Motion. Version 1.1.2 repairs the rendering model: correct side-aware Bézier edge geometry, full JSON Canvas 1.0 field parsing with defaults, bounded Markdown text layout, image file nodes and group background images through the host-pinned `asset.read` allowlist, and initial fit-to-window.
 
 ## Manifest revision 5
 

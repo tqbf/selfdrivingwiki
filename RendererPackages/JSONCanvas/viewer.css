@@ -125,6 +125,13 @@ body {
   fill: none;
 }
 
+/* Default (no-color) edge arrowheads inherit the edge-stroke custom property
+   so they match the uncolored edge line. Colored edges get a per-color marker
+   with an explicit `color` attribute (see makeEdgeMarkers). */
+marker.edge-arrow-default {
+  color: var(--edge-stroke);
+}
+
 .edge-label-bg {
   fill: var(--edge-label-bg);
   stroke: none;

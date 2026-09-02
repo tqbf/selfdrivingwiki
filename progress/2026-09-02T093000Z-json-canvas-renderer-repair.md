@@ -37,7 +37,7 @@ Version 1.1.0 of the reviewed JSON Canvas renderer package replaced the lossy 1.
 - Hosted WebKit tests (`JSONCanvasRendererPackageHostedValidationTests`, 3): real-window rendering of bezier edges, default `marker-end`, Markdown `strong` inside `foreignObject`, asset fallback, fit transform, malformed-input message + source-byte preservation.
 - Package tests (6): revision-5 declaration, roles/MIME/extractor, 7 assets, `asset.read`, viewer static restrictions, tamper rejection.
 - Asset-read chain: manifest V5 tests (6), extractor helper + location (7), authorized asset reader (5), bridge contracts incl. asset.read (17), admission builder (3) — 38 focused tests.
-- Normal suite: 4181 tests pass. `swift run RendererPackageTool validate RendererPackages/JSONCanvas` passes: version 1.1.0, package hash `696c50ebdd66dbe88f364ffa6d96e663804c1ec7c1ca955380fe10bc54ef5045`.
+- Normal suite: 4181 tests pass. `swift run RendererPackageTool validate RendererPackages/JSONCanvas` passes: version 1.1.0, package hash `2e17de05a9cb367752aa27021bd15ca4f858828015d307bb0ebb188bda5a3f96`.
 ## Supersedes
 
 Version 1.0.1's rendering claims (center-to-center edges, single-line text, no fit, no images) are superseded by 1.1.0 and fixed in 1.1.1; the 1.0.1 package bytes and hash remain a stability contract in repository history.
@@ -57,4 +57,21 @@ Root cause: the subpath validator in `viewer.js` used `/[?#%]/.test(wire.subpath
 
 Regression: `JSONCanvasFixtures.fileAndLinkNodes` (the exact Testbed canvas) + `JSONCanvasJavaScriptHarnessTests.acceptsFileSubpathsAndNamedSpaces` assert the canvas parses, its scene bounds are correct (`740×480`), and both file nodes resolve as imageNode asset requests. This also fixed a latent harness bug where `parseCanvas` was passed raw JSON instead of base64 (the traversal-rejection test now *actually* exercises the parser).
 
-Package version bumped to `1.1.1` (immutable; viewer bytes changed). Hash `696c50ebdd66dbe88f364ffa6d96e663804c1ec7c1ca955380fe10bc54ef5045`.
+Package version bumped to `1.1.1` (immutable; viewer bytes changed). Hash `2e17de05a9cb367752aa27021bd15ca4f858828015d307bb0ebb188bda5a3f96`.
+
+## 1.1.2 bugfix — edge and arrowhead colors missing
+
+Reported from the Testbed wiki page `01M0GBMFH3DFK674K4QN8P56DW` ("JSON Canvas — Edges and Endpoints"): arrows (and full edge lines) were missing their declared colors.
+
+Root cause (two parts):
+1. SVG `<marker>` elements do NOT inherit `currentColor` from the referencing path; the single shared arrowhead marker had no `color`, so every arrowhead rendered in the default text color instead of the edge color.
+2. CSS `.edge { stroke: var(--edge-stroke) }` overrode the colored edge path's `stroke` presentation attribute, so even the line was gray; labels were gray too.
+
+Fix:
+- `computeEdgeMarkers(doc)` (pure, testable): assign one arrowhead marker per distinct edge color; the DOM `makeEdgeMarkers` sets each colored marker's `color` attribute to the edge color (so `currentColor` in the arrowhead resolves to it). Default (no-color) arrowheads share a marker whose `color` is driven by CSS `--edge-stroke`.
+- Colored edge paths and labels get an inline `stroke`/`fill` style (beats the CSS class); default edges keep the CSS gray line/label.
+- `undefined` edge.color (absent) now maps to the "default" marker (loose `== null`), so the shared default marker is correctly recorded.
+
+Regression: `JSONCanvasFixtures.edgesAndEndpoints` (the exact Testbed canvas) + `JSONCanvasJavaScriptHarnessTests.edgesAndArrowheadsCarryColors` assert per-color marker assignment for preset (`1`, `2`, `6`) and hex (`#059669`), no-arrow/none-arrow ends, both-arrow edges, and the default edge's `toEnd=arrow` marker with the "default" sentinel.
+
+Package version `1.1.2` (viewer.js + viewer.css changed). Hash `2e17de05a9cb367752aa27021bd15ca4f858828015d307bb0ebb188bda5a3f96`.
