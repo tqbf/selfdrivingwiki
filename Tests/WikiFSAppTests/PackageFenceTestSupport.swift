@@ -65,14 +65,51 @@ enum PackageFenceTestSupport {
     }
 
     /// Claims for every host-known alias: the built-in table plus installed
-    /// package manifest-declared claims (Excalidraw and Mermaid).
+    /// package manifest-declared claims (Excalidraw, Mermaid, and JSON Canvas).
     static var builtInAndInstalledClaims: [RendererFenceAlias: RendererFenceClaimAssignment] {
         RendererFenceClaimResolver.resolve(
             builtInDescriptors: BuiltInRendererDescriptors.all,
             enabledInstalledDescriptors: [
                 installedExcalidrawDescriptor(),
                 installedMermaidDescriptor(),
+                installedJSONCanvasDescriptor(),
             ])
+    }
+
+    /// An installed JSON Canvas descriptor with a manifest-declared fence claim.
+    /// JSON Canvas is a Web package only; the reviewed package claims
+    /// `jsoncanvas` at install time.
+    static func installedJSONCanvasDescriptor() -> RendererDescriptor {
+        let asset = RendererAsset(
+            path: RendererRelativePath(rawValue: "index.html")!,
+            digest: RendererSHA256.digest(Data("<html>json canvas</html>".utf8)))
+        return try! RendererDescriptor(
+            reference: RendererReference(
+                packageID: RendererPackageID(rawValue: "org.selfdrivingwiki.json-canvas-readonly")!,
+                version: RendererPackageVersion(rawValue: "1.0.0")!,
+                registrationID: RendererRegistrationID(rawValue: "json-canvas")!),
+            displayName: "JSON Canvas",
+            implementation: .webPackage(.init(path: asset.path)),
+            matchers: [
+                .normalizedMIME(RendererMIMEType(rawValue: "application/json")!),
+                .extensionFallback(RendererFileExtension(rawValue: "canvas")!),
+            ],
+            presentations: [.web],
+            supportedEmbeddingRoles: [.inlineContent, .disclosureRow],
+            hasExplicitEmbeddingRoles: true,
+            fenceClaims: [
+                RendererFenceClaim(
+                    alias: RendererFenceAlias(rawValue: "jsoncanvas")!,
+                    inlineMIMEType: RendererMIMEType(rawValue: "application/json")!),
+            ],
+            approvedAssets: [asset],
+            capabilities: [.inputRead, .externalLink, .hostNavigation],
+            hostNavigation: try! .init(allowedTargetKinds: [.page, .source, .namedContent]),
+            sizeLimits: .init(maximumInputByteCount: 48_000, maximumDecodedByteCount: 48_000),
+            linkPolicy: .userActivatedExternal,
+            accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
+            compatibility: .init(minimumProtocolRevision: 1, maximumProtocolRevision: 1),
+            priority: 110)
     }
 
     /// An installed Excalidraw descriptor with a manifest-declared fence claim.

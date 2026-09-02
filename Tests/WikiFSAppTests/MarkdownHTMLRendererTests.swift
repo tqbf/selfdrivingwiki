@@ -399,7 +399,7 @@ struct MarkdownHTMLRendererTests {
             fenceAlias: RendererFenceAlias(rawValue: "jsoncanvas")!,
             mimeType: .init(rawValue: "application/json")!,
             bytes: bytes)
-        let expectedPackageID = try #require(RendererPackageID(rawValue: "org.selfdrivingwiki.builtin"))
+        let expectedPackageID = try #require(RendererPackageID(rawValue: "org.selfdrivingwiki.json-canvas-readonly"))
         let expectedVersion = try #require(RendererPackageVersion(rawValue: "1.0.0"))
         let expectedRegistrationID = try #require(RendererRegistrationID(rawValue: "json-canvas"))
         let expectedReference = RendererReference(
@@ -435,7 +435,7 @@ struct MarkdownHTMLRendererTests {
         #expect(jsonCanvas.contains("renderer-action://open"))
         #expect(jsonCanvas.contains("sdw-renderer-card__action"))
         #expect(jsonCanvas.contains(">Open in Window</a>"))
-        #expect(jsonCanvas.contains("package=org.selfdrivingwiki.builtin"))
+        #expect(jsonCanvas.contains("package=org.selfdrivingwiki.json-canvas-readonly"))
         #expect(jsonCanvas.contains("registration=json-canvas"))
         #expect(jsonCanvas.contains("input="))
         #expect(jsonCanvas.contains("data-renderer-input=\"{"))
@@ -697,7 +697,7 @@ struct MarkdownHTMLRendererTests {
     func rendererActionURLStaysStaticWithoutAdmission() throws {
         let projection = RendererEmbedProjection(
             sourceEmbeds: [:],
-            richFenceClaims: RendererFenceClaimResolver.resolve(builtInDescriptors: [BuiltInRendererDescriptors.descriptor(for: .jsonCanvas)]))
+            richFenceClaims: RendererFenceClaimResolver.resolve(builtInDescriptors: [], enabledInstalledDescriptors: [try Self.jsonCanvasInstalledDescriptor()]))
         let document = MarkdownDocumentIdentity(
             pageID: PageID(rawValue: "01HTESTPAGE000000000000001"),
             pageVersionID: PageVersionID(rawValue: "01HTESTPV00000000000000001"))
@@ -716,7 +716,7 @@ struct MarkdownHTMLRendererTests {
         #expect(!html.contains("renderer-action://open"))
         #expect(!html.contains("data-renderer-input="))
         #expect(!html.contains("data-renderer-action=\"expand\""))
-        #expect(html.contains(#"<p class="sdw-renderer-card__summary">JSON Canvas document fence</p>"#))
+        #expect(html.contains(#"<p class="sdw-renderer-card__summary">JSON Canvas fence</p>"#))
         #expect(html.contains("disabled aria-disabled=\"true\""))
         #expect(html.contains("aria-hidden=\"false\""))
         #expect(html.contains("hidden aria-hidden=\"true\"") == false)
@@ -727,7 +727,7 @@ struct MarkdownHTMLRendererTests {
     func longRendererTitlesRetainAccessibleValueWhileVisuallyEllipsizing() {
         let projection = RendererEmbedProjection(
             sourceEmbeds: [:],
-            richFenceClaims: RendererFenceClaimResolver.resolve(builtInDescriptors: [BuiltInRendererDescriptors.descriptor(for: .jsonCanvas)]))
+            richFenceClaims: RendererFenceClaimResolver.resolve(builtInDescriptors: [], enabledInstalledDescriptors: [try! Self.jsonCanvasInstalledDescriptor()]))
         let document = MarkdownDocumentIdentity(
             pageID: PageID(rawValue: "01HTESTPAGE000000000000001"),
             pageVersionID: PageVersionID(rawValue: "01HTESTPV00000000000000001"))
@@ -917,12 +917,43 @@ private struct InlineRendererActivationFixture {
 }
 
 private extension MarkdownHTMLRendererTests {
+    /// Installed JSON Canvas renderer package descriptor (reviewed). JSON Canvas
+    /// is a Web package only; fence/image tests use its package claim.
+    static func jsonCanvasInstalledDescriptor() throws -> RendererDescriptor {
+        let entry = try RendererRelativePath(validating: "index.html")
+        return try RendererDescriptor(
+            reference: .init(
+                packageID: try RendererPackageID(validating: "org.selfdrivingwiki.json-canvas-readonly"),
+                version: try RendererPackageVersion(validating: "1.0.0"),
+                registrationID: try RendererRegistrationID(validating: "json-canvas")),
+            displayName: "JSON Canvas",
+            implementation: .webPackage(.init(path: entry)),
+            matchers: [
+                .normalizedMIME(try .init(validating: "application/json")),
+                .extensionFallback(try .init(validating: "canvas")),
+            ],
+            presentations: [.web],
+            supportedEmbeddingRoles: [.inlineContent, .disclosureRow],
+            hasExplicitEmbeddingRoles: true,
+            fenceClaims: [.init(
+                alias: try RendererFenceAlias(validating: "jsoncanvas"),
+                inlineMIMEType: try RendererMIMEType(validating: "application/json"))],
+            approvedAssets: [RendererAsset(path: entry, digest: try .init(hex: "aa0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0a"))],
+            capabilities: [.inputRead, .externalLink, .hostNavigation],
+            hostNavigation: try .init(allowedTargetKinds: [.page, .source, .namedContent]),
+            sizeLimits: .init(maximumInputByteCount: 48_000, maximumDecodedByteCount: 48_000),
+            linkPolicy: .userActivatedExternal,
+            accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
+            compatibility: .init(minimumProtocolRevision: 1, maximumProtocolRevision: 1),
+            priority: 110)
+    }
+
     func makeImageRendererActivationFixture(useMarkdownVersion: Bool) throws -> InlineRendererActivationFixture {
         let pageID = PageID(rawValue: "01HTESTPAGE000000000000001")
         let pageVersionID = PageVersionID(rawValue: "01HTESTPV00000000000000001")
         let sourceID = SourceID(rawValue: "01HTESTSOURCE0000000000001")
         let bytes = Data(#"{"nodes":[],"edges":[]}"#.utf8)
-        let descriptor = BuiltInRendererDescriptors.descriptor(for: .jsonCanvas)
+        let descriptor = try Self.jsonCanvasInstalledDescriptor()
         let mimeType = try RendererMIMEType(validating: "application/json")
         let source = try RendererEmbeddedContent.Source(
             sourceID: sourceID,
@@ -934,7 +965,7 @@ private extension MarkdownHTMLRendererTests {
         let imageTargets = try MarkdownImageTargetProjection.build(
             siblingSources: ["image.png": source],
             siblingSourceIDs: ["image.png": sourceID],
-            registry: try RendererRegistrySnapshot(builtInDescriptors: [descriptor]),
+            registry: try RendererRegistrySnapshot(builtInDescriptors: [], enabledInstalledDescriptors: [descriptor]),
             inlineCapableReferences: [reference])
         let admission = RendererEmbedActivationAdmission(
             pageID: pageID,
@@ -993,7 +1024,7 @@ private extension MarkdownHTMLRendererTests {
             pageVersionID: pageVersionID,
             capability: .init(rawValue: "capability"),
             generation: 7)
-        let packageID = try #require(RendererPackageID(rawValue: "org.selfdrivingwiki.builtin"))
+        let packageID = try #require(RendererPackageID(rawValue: "org.selfdrivingwiki.json-canvas-readonly"))
         let version = try #require(RendererPackageVersion(rawValue: "1.0.0"))
         let registrationID = try #require(RendererRegistrationID(rawValue: "json-canvas"))
         let reference = RendererReference(
@@ -1013,7 +1044,7 @@ private extension MarkdownHTMLRendererTests {
         components.scheme = "renderer-action"
         components.host = "open"
         components.queryItems = [
-            URLQueryItem(name: "package", value: "org.selfdrivingwiki.builtin"),
+            URLQueryItem(name: "package", value: "org.selfdrivingwiki.json-canvas-readonly"),
             URLQueryItem(name: "version", value: "1.0.0"),
             URLQueryItem(name: "registration", value: "json-canvas"),
             URLQueryItem(name: "input", value: encodedInput),

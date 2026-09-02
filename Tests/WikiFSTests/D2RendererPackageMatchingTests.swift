@@ -85,24 +85,29 @@ struct D2RendererPackageMatchingTests {
         let input = try d2Input()
         #expect(excalidrawShaped.matchTier(for: input) == nil)
 
-        let jsonCanvasBuiltIn = try RendererDescriptor(
+        let jsonCanvasInstalled = try RendererDescriptor(
             reference: .init(
-                packageID: try .init(validating: "org.selfdrivingwiki.built-in"),
+                packageID: try .init(validating: "org.selfdrivingwiki.json-canvas-readonly"),
                 version: try .init(validating: "1.0.0"),
                 registrationID: try .init(validating: "json-canvas")),
             displayName: "JSON Canvas",
-            implementation: .builtIn(.jsonCanvas),
-            matchers: [.extensionFallback(try .init(validating: "canvas"))],
-            presentations: [.native],
-            supportedEmbeddingRoles: [.disclosureRow],
-            approvedAssets: [],
+            implementation: .webPackage(.init(path: try .init(validating: "index.html"))),
+            matchers: [
+                .normalizedMIME(try .init(validating: "application/json")),
+                .extensionFallback(try .init(validating: "canvas")),
+            ],
+            presentations: [.web],
+            supportedEmbeddingRoles: [.disclosureRow, .inlineContent],
+            approvedAssets: [RendererAsset(
+                path: try .init(validating: "index.html"),
+                digest: try .init(hex: "bb0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"))],
             capabilities: [.inputRead],
             sizeLimits: .init(maximumInputByteCount: 48_000, maximumDecodedByteCount: 48_000),
             linkPolicy: .none,
             accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
             compatibility: .init(minimumProtocolRevision: 1, maximumProtocolRevision: 1),
             priority: 100)
-        #expect(jsonCanvasBuiltIn.matchTier(for: input) == nil)
+        #expect(jsonCanvasInstalled.matchTier(for: input) == nil)
     }
 
     @Test("capabilities, link policy, and embedding roles obey the read-only contract")

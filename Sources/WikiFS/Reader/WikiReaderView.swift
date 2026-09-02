@@ -1711,9 +1711,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         private static func inlineCapableReferences(
             installedDescriptors: [RendererDescriptor]
         ) -> Set<RendererReference> {
-            Set(BuiltInRendererID.allCases.compactMap { id in
-                id == .jsonCanvas ? BuiltInRendererReference.reference(for: id) : nil
-            }).union(installedDescriptors.compactMap { descriptor in
+            Set(installedDescriptors.compactMap { descriptor in
                 if case .webPackage = descriptor.implementation { return descriptor.reference }
                 return nil
             })

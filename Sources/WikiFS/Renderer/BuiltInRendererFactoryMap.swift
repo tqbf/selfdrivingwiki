@@ -20,7 +20,6 @@ enum BuiltInRendererFactoryMap {
         .html: makeHTML,
         .svg: makeSVG,
         .media: makeMedia,
-        .jsonCanvas: makeJSONCanvas,
     ]
 
     static func factory(for id: BuiltInRendererID) -> Factory? {
@@ -85,18 +84,6 @@ enum BuiltInRendererFactoryMap {
             }
         })
     }
-
-    private static func makeJSONCanvas(_ inputs: BuiltInRendererFactoryInputs) -> AnyView? {
-        do {
-            let document = try JSONCanvasDocument.decode(inputs.sourceBytes)
-            return AnyView(JSONCanvasRendererView(
-                document: document,
-                onHostAction: inputs.jsonCanvasHostAction))
-        } catch {
-            DebugLog.tabs("BuiltInRendererFactoryMap: JSON Canvas decode failed: \(error)")
-            return nil
-        }
-    }
 }
 
 /// Renderer inputs assembled at the SourceDetailView boundary.
@@ -105,20 +92,17 @@ struct BuiltInRendererFactoryInputs {
     let pdfQuote: String?
     let htmlSource: String?
     let mediaTarget: EmbedTarget?
-    let jsonCanvasHostAction: @MainActor @Sendable (JSONCanvasHostAction) -> Void
 
     init(
         sourceBytes: Data?,
         pdfQuote: String?,
         htmlSource: String?,
-        mediaTarget: EmbedTarget?,
-        jsonCanvasHostAction: @escaping @MainActor @Sendable (JSONCanvasHostAction) -> Void
+        mediaTarget: EmbedTarget?
     ) {
         self.sourceBytes = sourceBytes
         self.pdfQuote = pdfQuote
         self.htmlSource = htmlSource
         self.mediaTarget = mediaTarget
-        self.jsonCanvasHostAction = jsonCanvasHostAction
     }
 }
 #endif

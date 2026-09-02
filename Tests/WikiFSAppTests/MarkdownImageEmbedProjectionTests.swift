@@ -6,14 +6,43 @@ import WikiFSCore
 import WikiFSTypes
 
 struct MarkdownImageTargetProjectionTests {
+    /// Installed JSON Canvas renderer package reference (reviewed). JSON Canvas
+    /// is a Web package only now; these image-projection tests use the package
+    /// descriptor as the claimed renderer.
+    private static func jsonCanvasInstalledDescriptor() throws -> RendererDescriptor {
+        let entry = try RendererRelativePath(validating: "index.html")
+        return try RendererDescriptor(
+            reference: .init(
+                packageID: try RendererPackageID(validating: "org.selfdrivingwiki.json-canvas-readonly"),
+                version: try RendererPackageVersion(validating: "1.0.0"),
+                registrationID: try RendererRegistrationID(validating: "json-canvas")),
+            displayName: "JSON Canvas",
+            implementation: .webPackage(.init(path: entry)),
+            matchers: [
+                .normalizedMIME(try .init(validating: "application/json")),
+                .extensionFallback(try .init(validating: "canvas")),
+            ],
+            presentations: [.web],
+            supportedEmbeddingRoles: [.inlineContent, .disclosureRow],
+            hasExplicitEmbeddingRoles: true,
+            approvedAssets: [RendererAsset(path: entry, digest: try .init(hex: "aa0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0a"))],
+            capabilities: [.inputRead, .externalLink, .hostNavigation],
+            hostNavigation: try .init(allowedTargetKinds: [.page, .source, .namedContent]),
+            sizeLimits: .init(maximumInputByteCount: 48_000, maximumDecodedByteCount: 48_000),
+            linkPolicy: .userActivatedExternal,
+            accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
+            compatibility: .init(minimumProtocolRevision: 1, maximumProtocolRevision: 1),
+            priority: 110)
+    }
+
     @Test("an exact sibling target projects pinned image facts")
     func exactSiblingTargetProjectsPinnedImageFacts() throws {
         let source = try imageSource(bytes: Self.jsonCanvasBytes)
-        let descriptor = BuiltInRendererDescriptors.descriptor(for: .jsonCanvas)
+        let descriptor = try Self.jsonCanvasInstalledDescriptor()
         let targets = try MarkdownImageTargetProjection.build(
             siblingSources: ["images/board.canvas": source],
             siblingSourceIDs: ["images/board.canvas": source.sourceID],
-            registry: try RendererRegistrySnapshot(builtInDescriptors: [descriptor]),
+            registry: try RendererRegistrySnapshot(builtInDescriptors: [], enabledInstalledDescriptors: [descriptor]),
             inlineCapableReferences: [descriptor.reference])
 
         guard case let .renderer(reference, pinnedSource) = targets["images/board.canvas"] else {
@@ -31,11 +60,11 @@ struct MarkdownImageTargetProjectionTests {
     @Test("external unresolved and nonexact paths stay ordinary")
     func untrustedPathsStayOrdinary() throws {
         let source = try imageSource(bytes: Self.jsonCanvasBytes)
-        let descriptor = BuiltInRendererDescriptors.descriptor(for: .jsonCanvas)
+        let descriptor = try Self.jsonCanvasInstalledDescriptor()
         let targets = try MarkdownImageTargetProjection.build(
             siblingSources: ["images/board.canvas": source],
             siblingSourceIDs: ["images/board.canvas": source.sourceID],
-            registry: try RendererRegistrySnapshot(builtInDescriptors: [descriptor]),
+            registry: try RendererRegistrySnapshot(builtInDescriptors: [], enabledInstalledDescriptors: [descriptor]),
             inlineCapableReferences: [descriptor.reference])
 
         for target in [
@@ -51,8 +80,8 @@ struct MarkdownImageTargetProjectionTests {
 
     @Test("descriptor capability MIME and size failures stay ordinary")
     func failedEligibilityFactsStayOrdinary() throws {
-        let descriptor = BuiltInRendererDescriptors.descriptor(for: .jsonCanvas)
-        let registry = try RendererRegistrySnapshot(builtInDescriptors: [descriptor])
+        let descriptor = try Self.jsonCanvasInstalledDescriptor()
+        let registry = try RendererRegistrySnapshot(builtInDescriptors: [], enabledInstalledDescriptors: [descriptor])
         let validSource = try imageSource(bytes: Self.jsonCanvasBytes)
         let siblingIDs = ["images/board.canvas": validSource.sourceID]
         let unclaimed = try MarkdownImageTargetProjection.build(
@@ -91,11 +120,11 @@ struct MarkdownImageTargetProjectionTests {
     @Test("claimed images stay inline and preserve escaped fallback alt text")
     func claimedImagesStayInlineWithReadableFallback() throws {
         let source = try imageSource(bytes: Self.jsonCanvasBytes)
-        let descriptor = BuiltInRendererDescriptors.descriptor(for: .jsonCanvas)
+        let descriptor = try Self.jsonCanvasInstalledDescriptor()
         let targets = try MarkdownImageTargetProjection.build(
             siblingSources: ["images/board.canvas": source],
             siblingSourceIDs: ["images/board.canvas": source.sourceID],
-            registry: try RendererRegistrySnapshot(builtInDescriptors: [descriptor]),
+            registry: try RendererRegistrySnapshot(builtInDescriptors: [], enabledInstalledDescriptors: [descriptor]),
             inlineCapableReferences: [descriptor.reference])
         let prepared = ReaderMarkdown.preparedDocument("![System <&>](images/board.canvas)")
         let projection = ResolvedDocumentProjection(markdownImages: targets)

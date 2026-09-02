@@ -200,10 +200,10 @@ struct SourceRendererPresentationPlanner: Sendable {
     }
 
     nonisolated static func standaloneDiagramSource(_ source: SourceSummary) -> Bool {
-        // JSON Canvas keeps its native built-in renderer and the reader-
-        // projected presentation it needs; diagram text formats present like
-        // any other renderer-package text source.
-        source.ext.lowercased() == "canvas"
+        // Diagram text formats (.mmd, .canvas JSON, and other JSON diagram
+        // formats) present like any renderer-package text source. The
+        // reader-projected tab is not a renderer decision.
+        false
     }
 
     private enum MediaMIMECandidate: Sendable, Equatable {
@@ -332,11 +332,10 @@ enum SourceDetailPresentationCharacterization {
         } else if isHTMLSource && (hasProcessedMarkdown || htmlString != nil) {
             tabs = hasProcessedMarkdown ? [.reader, .html] : [.html]
         } else if SourceRendererPresentationPlanner.standaloneDiagramSource(source) {
-            // JSON Canvas only: the native built-in still projects a reader
-            // tab. A .mmd source presents like any renderer-package text
-            // source — Source tab plus the package renderer pane — so no
-            // reader-projected tab is added for it.
-            tabs = [.reader, .rendered]
+            // Legacy native built-ins no longer add a reader tab; a .mmd or
+            // .canvas JSON source presents like any renderer-package text
+            // source — Source tab plus the package renderer pane.
+            tabs = []
         } else {
             tabs = []
         }

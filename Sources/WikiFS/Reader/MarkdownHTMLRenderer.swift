@@ -944,14 +944,7 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
     private static func trustedFencePresentation(
         for reference: RendererReference
     ) -> TrustedFencePresentation? {
-        if reference == BuiltInRendererReference.reference(for: .jsonCanvas) {
-            return TrustedFencePresentation(
-                semanticSummary: "JSON Canvas document fence",
-                controlLabel: "Open",
-                accessibilityLabel: "Open JSON Canvas renderer",
-                summary: "Open the static canvas in the renderer pane.")
-        }
-        return nil
+        nil
     }
 
     private static func semanticSummary(for claim: RendererFenceClaimAssignment) -> String {
