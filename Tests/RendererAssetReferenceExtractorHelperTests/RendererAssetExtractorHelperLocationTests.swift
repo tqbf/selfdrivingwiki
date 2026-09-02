@@ -3,6 +3,11 @@ import Testing
 import WikiFSCore
 import WikiFSTypes
 
+/// Repository root, resolved from this file's path (Tests/…/…).
+private let RendererPackagesRoot = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    .appendingPathComponent("RendererPackages", isDirectory: true)
+
 // MARK: - RendererAssetExtractorHelperLocationTests
 
 @Suite(.serialized, .timeLimit(.minutes(2)))
@@ -171,6 +176,42 @@ struct RendererAssetExtractorHelperLocationTests {
         #expect(outcome.failureReason != nil)
     }
 
+    @Test("reviewed JSON Canvas extractor returns only file and group background values")
+    func reviewedJSONCanvasExtractorReturnsOnlyDeclaredRoles() async throws {
+        let helper = try locateHelper()
+        // Load the ACTUAL reviewed package extractor.js bytes (the asset the
+        // manifest approves) and run them through the real helper against a
+        // canvas exercising file nodes, group backgrounds, escaped JSON
+        // strings, and non-file/background fields.
+        let extractorURL = RendererPackagesRoot.appendingPathComponent("JSONCanvas/extractor.js")
+        let extractor = try Data(contentsOf: extractorURL)
+        let primaryInput = Data(#"""
+        {"nodes":[
+          {"id":"n1","type":"file","x":0,"y":0,"width":10,"height":10,"file":"img/a.png"},
+          {"id":"n2","type":"text","x":0,"y":0,"width":10,"height":10,"text":"ignore me"},
+          {"id":"n3","type":"group","x":0,"y":0,"width":10,"height":10,"label":"g","background":"img/bg.png"},
+          {"id":"n4","type":"file","x":0,"y":0,"width":10,"height":10,"file":"img/esc\u0022aped.png"},
+          {"id":"n5","type":"link","x":0,"y":0,"width":10,"height":10,"url":"https://x.com"}
+        ],"edges":[]}
+        """#.utf8)
+        let request = Self.request(
+            helper: helper,
+            extractor: extractor,
+            primaryInput: primaryInput,
+            entryFunction: "__sdw_extract_canvas_assets")
+        let outcome = try await RendererAssetReferenceExtractorClient.run(request)
+        #expect(outcome.failureReason == nil)
+        let references = outcome.records.map(\.reference)
+        #expect(references.contains("img/a.png"))       // file node
+        #expect(references.contains("img/bg.png"))       // group background
+        #expect(references.contains("img/esc\"aped.png")) // escaped JSON string decodes
+        // Text/link nodes and their fields are NOT extracted.
+        #expect(outcome.records.contains { $0.reference == "ignore me" } == false)
+        #expect(outcome.records.contains { $0.reference == "https://x.com" } == false)
+        // Only the two declared roles appear.
+        #expect(outcome.records.allSatisfy { $0.role == .imageNode || $0.role == .groupBackground })
+    }
+
     // MARK: - Fixtures/helpers
 
     private func locateHelper() throws -> URL {
@@ -209,6 +250,7 @@ struct RendererAssetExtractorHelperLocationTests {
         helper: URL,
         extractor: Data,
         primaryInput: Data,
+        entryFunction: String = "__sdw_extract",
         maxExtractorInputBytes: Int = 256 * 1_024,
         maxExtractorOutputBytes: Int = 256 * 1_024,
         maxReferenceCount: Int = 256,
@@ -219,7 +261,7 @@ struct RendererAssetExtractorHelperLocationTests {
         .init(
             helperURL: helper,
             extractorBytes: extractor,
-            entryFunction: "__sdw_extract",
+            entryFunction: entryFunction,
             primaryInput: primaryInput,
             maxExtractorInputBytes: maxExtractorInputBytes,
             maxExtractorOutputBytes: maxExtractorOutputBytes,
