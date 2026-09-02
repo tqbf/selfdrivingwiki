@@ -758,6 +758,14 @@
     var layout = layoutDocument(doc, scene);
     var assetRequests = resolveAssets(doc);
     var assetURLs = Object.create(null);
+    // Revoke a Blob URL on replacement, failure, or teardown.
+    function revokeAsset(reference) {
+      var url = assetURLs[reference];
+      if (url) {
+        try { URL.revokeObjectURL(url); } catch (_) {}
+        delete assetURLs[reference];
+      }
+    }
     // Request admitted assets through asset.read and render when images
     // arrive; unavailable assets keep the readable fallback.
     if (hasDOM && assetRequests.length > 0) {
@@ -765,11 +773,23 @@
         try {
           var blob = new Blob([bytes], { type: mime });
           var url = URL.createObjectURL(blob);
+          // Replace any prior URL for the same reference.
+          if (assetURLs[reference]) revokeAsset(reference);
           assetURLs[reference] = url;
           var images = viewer.querySelectorAll('[data-asset-reference="' + CSS.escape(reference) + '"]');
           images.forEach(function (image) { image.setAttribute("href", url); });
-        } catch (_) { /* fallback stays */ }
+        } catch (_) {
+          revokeAsset(reference); // fallback stays
+        }
       });
+    }
+    if (hasDOM) {
+      // Teardown: revoke every Blob URL when the session page goes away.
+      var onUnload = function () {
+        Object.keys(assetURLs).forEach(function (reference) { revokeAsset(reference); });
+      };
+      window.addEventListener("pagehide", onUnload);
+      window.addEventListener("beforeunload", onUnload);
     }
     render(scene, layout, {
       imageURLFor: function (reference) { return assetURLs[reference] || null; }
@@ -795,18 +815,28 @@
     // replay ledger accepts fresh IDs only.
     requests.forEach(function (request, index) {
       var assetRequestID = requestID + "-asset-" + index;
+      var settled = false;
+      function cleanup() {
+        if (settled) return;
+        settled = true;
+        window.removeEventListener("message", listener);
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+      }
+      var timeoutHandle = setTimeout(cleanup, 5000);
       var listener = function (event) {
         var response = event.data && event.data.rendererBridgeResponse;
         if (typeof response !== "string") return;
         try {
           var decoded = JSON.parse(response);
           if (decoded.id !== assetRequestID) return;
-          window.removeEventListener("message", listener);
+          cleanup(); // remove on EVERY terminal matching-ID response
           var payload = decoded.payload;
           if (!payload || typeof payload.bytes !== "string" || typeof payload.mimeType !== "string") return;
           var bytes = Uint8Array.from(atob(payload.bytes), function (c) { return c.charCodeAt(0); });
           onAsset(request.reference, payload.mimeType, bytes);
-        } catch (_) { /* fallback stays */ }
+        } catch (_) {
+          cleanup(); // malformed payload: stop listening, keep the fallback
+        }
       };
       window.addEventListener("message", listener);
       window.postMessage({ rendererBridge: JSON.stringify({

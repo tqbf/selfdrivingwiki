@@ -306,6 +306,39 @@ struct RendererAuthorizedAssetReaderTests {
         _ = otherVersion
     }
 
+    @Test("metadata lookup failure denies uniformly instead of substituting stored MIME")
+    func metadataLookupFailureDeniesInsteadOfSubstitutingStoredMIME() async throws {
+        let store = try GRDBWikiStore()
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+        let summary = try store.addSource(filename: "diagram.png", data: png)
+        let digest = RendererSHA256.digest(png).hex
+
+        // Admit an entry whose SourceVersionID has NO metadata row (a
+        // version that does not exist in the store). Bytes + digest cannot be
+        // cross-checked against live metadata, so the read MUST deny (fail
+        // closed) rather than substitute the admission's stored MIME.
+        let missingVersionID = SourceVersionID(rawValue: "01HXXXXXXXXXXXXXXXXXXXXXXX")
+        let admission = RendererAuthorizedAssetReader.Admission(
+            reference: try RendererAssetReference(validating: "diagram.png"),
+            sourceID: summary.id,
+            sourceVersionID: missingVersionID,
+            mimeType: "image/png",
+            expectedByteCount: png.count,
+            expectedDigest: digest)
+        let reader = try RendererAuthorizedAssetReader(
+            admissions: [admission],
+            maximumBytesPerAsset: 4096,
+            maximumAggregateSessionBytes: 8192,
+            maximumPerRequestReadCount: 4,
+            store: store)
+        defer { reader.close() }
+        // sourceContent(versionID:) for the missing version throws, and even
+        // if it did not, the MIME metadata lookup fails -> uniform denial.
+        #expect(throws: RendererAuthorizedAssetReader.ReaderError.self) {
+            try reader.read(try RendererAssetReference(validating: "diagram.png"))
+        }
+    }
+
     @Test("validates asset reference syntax strictly")
     func validatesAssetReferenceSyntax() {
         let valid: [(String, Bool)] = [

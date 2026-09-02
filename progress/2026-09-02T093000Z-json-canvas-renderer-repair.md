@@ -37,7 +37,7 @@ Version 1.1.0 of the reviewed JSON Canvas renderer package replaces the lossy 1.
 - Hosted WebKit tests (`JSONCanvasRendererPackageHostedValidationTests`, 3): real-window rendering of bezier edges, default `marker-end`, Markdown `strong` inside `foreignObject`, asset fallback, fit transform, malformed-input message + source-byte preservation.
 - Package tests (6): revision-5 declaration, roles/MIME/extractor, 7 assets, `asset.read`, viewer static restrictions, tamper rejection.
 - Asset-read chain: manifest V5 tests (6), extractor helper + location (7), authorized asset reader (5), bridge contracts incl. asset.read (17), admission builder (3) — 38 focused tests.
-- Normal suite: 4181 tests pass. `swift run RendererPackageTool validate RendererPackages/JSONCanvas` passes: version 1.1.0, package hash `64b5ce26748e876bc11ab4c450641ada61bda31bab8a03ace77124e1abeddb97`.
+- Normal suite: 4181 tests pass. `swift run RendererPackageTool validate RendererPackages/JSONCanvas` passes: version 1.1.0, package hash `01865a21c632a697409b0b1b7cb2a1af78006a4dd8f820c4231a02dcd2429fde`.
 ## Supersedes
 
 Version 1.0.1's rendering claims (center-to-center edges, single-line text, no fit, no images) are superseded by 1.1.0; the 1.0.1 package bytes and hash remain a stability contract in repository history.

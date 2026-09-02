@@ -151,8 +151,13 @@ public final class RendererAuthorizedAssetReader {
         guard bytes.count <= maximumBytesPerAsset else {
             throw ReaderError.oversizedAsset
         }
-        let mime = try pinnedMime(admission.sourceVersionID) ?? admission.mimeType
-        guard mime == admission.mimeType else {
+        // Verify the live pinned version's MIME. A failed metadata lookup is
+        // a uniform denial (fail closed): the exact-version/MIME/size/digest
+        // authorization must be fully cross-checked before any byte is
+        // returned — never substitute the admission's stored MIME when the
+        // live version cannot be verified.
+        guard let mime = try pinnedMime(admission.sourceVersionID),
+              mime == admission.mimeType else {
             throw ReaderError.changedAsset
         }
 

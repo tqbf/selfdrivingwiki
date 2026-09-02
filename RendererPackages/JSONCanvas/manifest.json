@@ -77,7 +77,7 @@
         },
         {
           "path": "viewer.js",
-          "digest": "6c812ec1156a962dea7a66596d1e4279de8aec149b43ec21d14653aadb925ab9"
+          "digest": "500c162c95920b3f809c9fc1d0eeb2b1ceaafdc232ab53045516ff4aeb55bf9e"
         },
         {
           "path": "viewer.css",
@@ -156,7 +156,7 @@
     },
     {
       "path": "viewer.js",
-      "digest": "6c812ec1156a962dea7a66596d1e4279de8aec149b43ec21d14653aadb925ab9"
+      "digest": "500c162c95920b3f809c9fc1d0eeb2b1ceaafdc232ab53045516ff4aeb55bf9e"
     },
     {
       "path": "viewer.css",
