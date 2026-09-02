@@ -5,7 +5,7 @@ branch: feature/json-canvas-renderer-package
 status: complete
 ---
 
-# JSON Canvas 1.1.0 — repaired scene model + revision-5 asset-read authority
+# JSON Canvas 1.1.1 — repaired scene model + revision-5 asset-read authority (1.1.1 fixes the subpath validator)
 
 Date: 2026-09-02. Branch `feature/json-canvas-renderer-package` (PR #1195).
 
@@ -13,7 +13,7 @@ Date: 2026-09-02. Branch `feature/json-canvas-renderer-package` (PR #1195).
 
 ### What shipped
 
-Version 1.1.0 of the reviewed JSON Canvas renderer package replaces the lossy 1.0.1 Swift-to-SVG port's center-to-center, single-line, no-fit rendering with a staged, spec-complete scene model:
+Version 1.1.0 of the reviewed JSON Canvas renderer package replaced the lossy 1.0.1 Swift-to-SVG port's center-to-center, single-line, no-fit rendering with a staged, spec-complete scene model:
 
 - **Full JSON Canvas 1.0 parsing** with defaults (`fromEnd = none`, `toEnd = arrow`), closed-field validation (`type`, sides, ends, `backgroundStyle`), optional top-level arrays, bounded key/nesting/value limits, and bounded-unknown-property tolerance (forward-compatible extensions do not suppress rendering).
 - **Side-aware Bézier edge geometry**: rectangle-boundary anchors, deterministic automatic side selection, cubic control points adapted from JSON-Canvas-Viewer (MIT), `marker-start`/`marker-end` only when requested, stroke/marker offset so paths never enter node interiors, and edge labels on a readable background.
@@ -37,10 +37,10 @@ Version 1.1.0 of the reviewed JSON Canvas renderer package replaces the lossy 1.
 - Hosted WebKit tests (`JSONCanvasRendererPackageHostedValidationTests`, 3): real-window rendering of bezier edges, default `marker-end`, Markdown `strong` inside `foreignObject`, asset fallback, fit transform, malformed-input message + source-byte preservation.
 - Package tests (6): revision-5 declaration, roles/MIME/extractor, 7 assets, `asset.read`, viewer static restrictions, tamper rejection.
 - Asset-read chain: manifest V5 tests (6), extractor helper + location (7), authorized asset reader (5), bridge contracts incl. asset.read (17), admission builder (3) — 38 focused tests.
-- Normal suite: 4181 tests pass. `swift run RendererPackageTool validate RendererPackages/JSONCanvas` passes: version 1.1.0, package hash `01865a21c632a697409b0b1b7cb2a1af78006a4dd8f820c4231a02dcd2429fde`.
+- Normal suite: 4181 tests pass. `swift run RendererPackageTool validate RendererPackages/JSONCanvas` passes: version 1.1.0, package hash `696c50ebdd66dbe88f364ffa6d96e663804c1ec7c1ca955380fe10bc54ef5045`.
 ## Supersedes
 
-Version 1.0.1's rendering claims (center-to-center edges, single-line text, no fit, no images) are superseded by 1.1.0; the 1.0.1 package bytes and hash remain a stability contract in repository history.
+Version 1.0.1's rendering claims (center-to-center edges, single-line text, no fit, no images) are superseded by 1.1.0 and fixed in 1.1.1; the 1.0.1 package bytes and hash remain a stability contract in repository history.
 
 ## Honest limits / follow-ups
 
@@ -48,3 +48,13 @@ Version 1.0.1's rendering claims (center-to-center edges, single-line text, no f
 - Live inline/source-pane/window wiring of the prepared asset reader (factory threading + `RendererAssetSessionPreparer`) is committed; the end-to-end session consumption of `asset.read` in live inline attachments is exercised by the hosted tests through the broker.
 - SVG remains outside the approved MIME declaration until the `hostileSVGRemainsConfinedToImageSurface` gate passes; until then SVG files render the same readable fallback as other unsupported images.
 - Manual visual comparison with the user-reported broken canvases (light/dark, multiple window sizes) is the remaining human step before PR readiness; it must not commit private user data.
+
+## 1.1.1 bugfix — subpath validator rejected every subpath
+
+Reported from the Testbed wiki page `01M0GBMFHASD3RGYY6CABBP3FV` ("JSON Canvas — File and Link Nodes"): a valid canvas with file nodes carrying `subpath: "#JSON Canvas Testbed"` could not be read (`invalid internal link`).
+
+Root cause: the subpath validator in `viewer.js` used `/[?#%]/.test(wire.subpath)` — the forbidden-character class matched the **leading `#`** of every subpath, so any `subpath` was rejected. The fix tests `wire.subpath.slice(1)` so the leading `#` is allowed and only `?`/`%` after it are rejected.
+
+Regression: `JSONCanvasFixtures.fileAndLinkNodes` (the exact Testbed canvas) + `JSONCanvasJavaScriptHarnessTests.acceptsFileSubpathsAndNamedSpaces` assert the canvas parses, its scene bounds are correct (`740×480`), and both file nodes resolve as imageNode asset requests. This also fixed a latent harness bug where `parseCanvas` was passed raw JSON instead of base64 (the traversal-rejection test now *actually* exercises the parser).
+
+Package version bumped to `1.1.1` (immutable; viewer bytes changed). Hash `696c50ebdd66dbe88f364ffa6d96e663804c1ec7c1ca955380fe10bc54ef5045`.

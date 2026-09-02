@@ -114,4 +114,16 @@ enum JSONCanvasFixtures {
               {"id":"fileNode","type":"file","x":480,"y":0,"width":140,"height":50,"file":"report.md"}],
      "edges":[]}
     """
+
+    /// The real-world Testbed fixture ("JSON Canvas — File and Link Nodes"):
+    /// file nodes with spaced names and a subpath, plus external link nodes
+    /// and one side-labeled edge. Regressed in 1.1.0 when the subpath
+    /// validator rejected its own leading '#'.
+    static let fileAndLinkNodes: String = """
+    {"nodes":[{"id":"2000000000000001","type":"file","x":0,"y":0,"width":360,"height":240,"file":"JSON Canvas","subpath":"#JSON Canvas Testbed","color":"5"},
+              {"id":"2000000000000002","type":"file","x":440,"y":0,"width":300,"height":220,"file":"SVG","color":"#f59e0b"},
+              {"id":"2000000000000003","type":"link","x":0,"y":320,"width":360,"height":160,"url":"https://jsoncanvas.org/spec/1.0/","color":"2"},
+              {"id":"2000000000000004","type":"link","x":440,"y":320,"width":300,"height":160,"url":"https://obsidian.md","color":"#7c3aed"}],
+     "edges":[{"id":"2e00000000000001","fromNode":"2000000000000001","fromSide":"right","toNode":"2000000000000003","toSide":"top","toEnd":"arrow","label":"file to specification"}]}
+    """
 }

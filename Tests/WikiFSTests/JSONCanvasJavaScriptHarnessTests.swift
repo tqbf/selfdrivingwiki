@@ -167,9 +167,41 @@ struct JSONCanvasJavaScriptHarnessTests {
     func rejectsTraversalAndSchemeReferences() throws {
         let runner = try loadRunner()
         // The whole canvas fails closed on an invalid file reference.
-        let result = try runner.call("parseCanvas", arg: JSONCanvasFixtures.invalidFileReferences)
+        let base64 = Data(JSONCanvasFixtures.invalidFileReferences.utf8).base64EncodedString()
+        let result = try runner.call("parseCanvas", arg: base64)
         let value = try decodeObject(result)
         #expect((value["ok"] as? Bool) == false)
+    }
+
+    @Test("file nodes accept subpaths and spaces in names")
+    func acceptsFileSubpathsAndNamedSpaces() throws {
+        let runner = try loadRunner()
+        // The real-world Testbed fixture: a file node with a spaced name AND a
+        // subpath, a file node with a plain spaced name, and link nodes. This
+        // regressed in 1.1.0 because the subpath validator rejected the
+        // leading '#' (the forbidden-class regex matched the '#' itself).
+        let fixture = JSONCanvasFixtures.fileAndLinkNodes
+        // parseCanvas expects a base64 payload (like the wire loop).
+        let base64 = Data(fixture.utf8).base64EncodedString()
+        let result = try runner.call("parseCanvas", arg: base64)
+        let value = try decodeObject(result)
+        #expect((value["ok"] as? Bool) == true)
+        #expect(value["nodes"] as? Int == 4)
+        #expect(value["edges"] as? Int == 1)
+        // The scene bounds span all four nodes (file + link nodes).
+        let scene = try runner.call("scene", arg: fixture)
+        let sceneValue = try decodeObject(scene)
+        let bounds = try #require(sceneValue["bounds"] as? [String: Double])
+        #expect(bounds["right"] == 740)
+        #expect(bounds["bottom"] == 480)
+        // Both file nodes resolve as imageNode asset requests; the spaced
+        // reference includes the subpath-bearing name.
+        let assets = try runner.call("resolveAssets", arg: fixture)
+        let assetsValue = try decodeObject(assets)
+        let requests = try #require(assetsValue["requests"] as? [[String: String]])
+        let references = requests.compactMap { $0["reference"] }
+        #expect(references.contains("JSON Canvas"))
+        #expect(references.contains("SVG"))
     }
 
     // MARK: - JSC harness

@@ -143,7 +143,7 @@
         file = wire.file;
         if (wire.subpath !== undefined) {
           if (typeof wire.subpath !== "string" || wire.subpath.length === 0 || wire.subpath.length > maximumTextLength ||
-              wire.subpath.charAt(0) !== "#" || /[?#%]/.test(wire.subpath) || /[\u0000-\u001f\u007f]/.test(wire.subpath)) throw new Error("invalid internal link");
+              wire.subpath.charAt(0) !== "#" || /[?#%]/.test(wire.subpath.slice(1)) || /[\u0000-\u001f\u007f]/.test(wire.subpath)) throw new Error("invalid internal link");
           subpath = wire.subpath;
         }
         textValue = file;

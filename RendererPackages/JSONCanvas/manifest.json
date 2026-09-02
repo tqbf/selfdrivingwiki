@@ -1,12 +1,12 @@
 {
   "revision": 5,
   "packageID": "org.selfdrivingwiki.json-canvas-readonly",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "descriptors": [
     {
       "reference": {
         "packageID": "org.selfdrivingwiki.json-canvas-readonly",
-        "version": "1.1.0",
+        "version": "1.1.1",
         "registrationID": "json-canvas"
       },
       "displayName": "JSON Canvas",
@@ -57,7 +57,7 @@
       "approvedAssets": [
         {
           "path": "PROVENANCE.md",
-          "digest": "fc6295bcfae2293347288fad94510937b8d438acf8c5a444d91bd32318074b11"
+          "digest": "2a9e3fe30aadf2fbafb6340ca126595a64875006b401706f80c2b866d299f87b"
         },
         {
           "path": "LICENSE.md",
@@ -77,7 +77,7 @@
         },
         {
           "path": "viewer.js",
-          "digest": "500c162c95920b3f809c9fc1d0eeb2b1ceaafdc232ab53045516ff4aeb55bf9e"
+          "digest": "9f2c4c65e04d708980e5ad231cd5f34e663fce068e1c6ecf2c5f31bc2b38e442"
         },
         {
           "path": "viewer.css",
@@ -136,7 +136,7 @@
   "assets": [
     {
       "path": "PROVENANCE.md",
-      "digest": "fc6295bcfae2293347288fad94510937b8d438acf8c5a444d91bd32318074b11"
+      "digest": "2a9e3fe30aadf2fbafb6340ca126595a64875006b401706f80c2b866d299f87b"
     },
     {
       "path": "LICENSE.md",
@@ -156,7 +156,7 @@
     },
     {
       "path": "viewer.js",
-      "digest": "500c162c95920b3f809c9fc1d0eeb2b1ceaafdc232ab53045516ff4aeb55bf9e"
+      "digest": "9f2c4c65e04d708980e5ad231cd5f34e663fce068e1c6ecf2c5f31bc2b38e442"
     },
     {
       "path": "viewer.css",
