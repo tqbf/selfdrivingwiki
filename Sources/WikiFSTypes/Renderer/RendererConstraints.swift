@@ -292,7 +292,7 @@ public enum RendererAssetReadLimits {
 /// True when `value` is a valid JavaScript identifier (the extractor entry
 /// function name and the fence-validation entry function share the same
 /// identifier-safety requirement).
-func rendererJavaScriptIdentifier(_ value: String) -> Bool {
+public func rendererJavaScriptIdentifier(_ value: String) -> Bool {
     guard value.isEmpty == false,
           value.first == "_" || value.first?.isLetter == true,
           value.allSatisfy({ $0 == "_" || $0 == "$" || $0.isLetter || $0.isNumber })

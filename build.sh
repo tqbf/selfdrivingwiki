@@ -142,7 +142,14 @@ CTL_BIN="${BIN_DIR}/${CTL_NAME}"
 DAEMON_BIN="${BIN_DIR}/${DAEMON_NAME}"
 EXTRACTOR_FIXTURE_BIN="${BIN_DIR}/ExtractorProcessFixture"
 PODCAST_HELPER_BIN="${BIN_DIR}/${PODCAST_HELPER_NAME}"
-for b in "${APP_BIN}" "${EXT_BIN}" "${CTL_BIN}" "${DAEMON_BIN}" "${EXTRACTOR_FIXTURE_BIN}"; do
+# The renderer asset-reference-extractor helper (manifest revision 5
+# asset-read authority). Single-invocation, embedded JavaScriptCore. Copied
+# into Contents/Helpers (same as wikictl) so the host can spawn it at a
+# stable bundle-relative path; the resolver also finds the SwiftPM sibling
+# under .build for bare swift build/test.
+RENDERER_ASSET_HELPER_NAME="renderer-asset-reference-extractor-helper"
+RENDERER_ASSET_HELPER_BIN="${BIN_DIR}/RendererAssetReferenceExtractorHelper"
+for b in "${APP_BIN}" "${EXT_BIN}" "${CTL_BIN}" "${DAEMON_BIN}" "${EXTRACTOR_FIXTURE_BIN}" "${RENDERER_ASSET_HELPER_BIN}"; do
   [ -x "$b" ] || { echo "✗ built binary missing: $b" >&2; exit 1; }
 done
 
@@ -155,6 +162,9 @@ mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}" "${APPEX_MACOS}" "${HELPERS_DIR}" "${
 cp "${APP_BIN}" "${MACOS_DIR}/${APP_NAME}"
 cp "${EXT_BIN}" "${APPEX_MACOS}/${EXT_NAME}"
 cp "${CTL_BIN}" "${HELPERS_DIR}/${CTL_NAME}"
+# Renderer asset-reference-extractor helper — same Contents/Helpers staging
+# as wikictl so the host's deterministic resolver finds it in the signed app.
+cp "${RENDERER_ASSET_HELPER_BIN}" "${HELPERS_DIR}/${RENDERER_ASSET_HELPER_NAME}"
 # wikid daemon — bundled as an XPC service (Contents/XPCServices/wikid.xpc).
 # The system manages its lifecycle: auto-launches on first
 # NSXPCConnection(serviceName:), terminates after idle. No LaunchAgent plist,
@@ -668,6 +678,11 @@ PLIST
   echo "→ codesign wikictl helper (${IDENTITY})"
   codesign --force --timestamp=none --sign "${IDENTITY}" \
     "${HELPERS_DIR}/${CTL_NAME}"
+  # Renderer asset-reference-extractor helper — nested Mach-O, same
+  # inside-out signing discipline as wikictl (sealed before the outer app).
+  echo "→ codesign renderer asset-reference-extractor helper (${IDENTITY})"
+  codesign --force --timestamp=none --sign "${IDENTITY}" \
+    "${HELPERS_DIR}/${RENDERER_ASSET_HELPER_NAME}"
   # wikid XPC service — sign the BUNDLE (not the bare Mach-O). With the
   # embedded provisioning profile + entitlements, the daemon can access the
   # App Group container + shared keychain WITHOUT TCC prompts or AMFI kills.
