@@ -221,65 +221,25 @@ public struct RendererAssetReadDeclaration: Codable, Hashable, Sendable {
         extractorAsset: RendererRelativePath,
         extractorEntryFunction: String
     ) throws {
-        guard allowedRoles.isEmpty == false else {
-            throw RendererValidationError.emptyAssetReadDeclaration
-        }
-        guard allowedMIMETypes.isEmpty == false else {
-            throw RendererValidationError.emptyAssetReadDeclaration
-        }
-        let supportedMIMEs: Set<RendererMIMEType> = [
-            try .init(validating: "image/png"),
-            try .init(validating: "image/jpeg"),
-            try .init(validating: "image/gif"),
-            try .init(validating: "image/svg+xml"),
-            try .init(validating: "image/webp"),
-        ]
-        guard allowedMIMETypes.isSubset(of: supportedMIMEs) else {
-            throw RendererValidationError.unsupportedAssetMIMEType
-        }
-        guard maximumExtractedReferenceCount > 0,
-              maximumExtractedReferenceCount <= RendererAssetReadLimits.maximumExtractedReferenceCount else {
-            throw RendererValidationError.invalidAssetReadLimit("maximumExtractedReferenceCount=\(maximumExtractedReferenceCount)")
-        }
-        guard maximumExtractorInputBytes > 0,
-              maximumExtractorInputBytes <= RendererAssetReadLimits.maximumExtractorInputBytes else {
-            throw RendererValidationError.invalidAssetReadLimit("maximumExtractorInputBytes=\(maximumExtractorInputBytes)")
-        }
-        guard maximumExtractorOutputBytes > 0,
-              maximumExtractorOutputBytes <= RendererAssetReadLimits.maximumExtractorOutputBytes else {
-            throw RendererValidationError.invalidAssetReadLimit("maximumExtractorOutputBytes=\(maximumExtractorOutputBytes)")
-        }
-        guard maximumExtractorExecutionSeconds > 0,
-              maximumExtractorExecutionSeconds <= RendererAssetReadLimits.maximumExtractorExecutionSeconds else {
-            throw RendererValidationError.invalidAssetReadLimit("maximumExtractorExecutionSeconds=\(maximumExtractorExecutionSeconds)")
-        }
-        guard maximumBytesPerAsset > 0,
-              maximumBytesPerAsset <= RendererAssetReadLimits.maximumBytesPerAsset else {
-            throw RendererValidationError.invalidAssetReadLimit("maximumBytesPerAsset=\(maximumBytesPerAsset)")
-        }
-        guard maximumAggregateSessionBytes > 0,
-              maximumAggregateSessionBytes <= RendererAssetReadLimits.maximumAggregateSessionBytes else {
-            throw RendererValidationError.invalidAssetReadLimit("maximumAggregateSessionBytes=\(maximumAggregateSessionBytes)")
-        }
-        guard rendererJavaScriptIdentifier(extractorEntryFunction) else {
-            throw RendererValidationError.invalidAssetReadLimit("extractorEntryFunction=\(extractorEntryFunction)")
-        }
-        self.allowedRoles = allowedRoles
-        self.allowedMIMETypes = allowedMIMETypes
-        self.maximumExtractedReferenceCount = maximumExtractedReferenceCount
-        self.maximumExtractorInputBytes = maximumExtractorInputBytes
-        self.maximumExtractorOutputBytes = maximumExtractorOutputBytes
-        self.maximumExtractorExecutionSeconds = maximumExtractorExecutionSeconds
-        self.maximumBytesPerAsset = maximumBytesPerAsset
-        self.maximumAggregateSessionBytes = maximumAggregateSessionBytes
-        self.extractorAsset = extractorAsset
-        self.extractorEntryFunction = extractorEntryFunction
+        guard allowedRoles.isEmpty == false else { throw RendererValidationError.emptyAssetReadDeclaration }
+        guard allowedMIMETypes.isEmpty == false else { throw RendererValidationError.emptyAssetReadDeclaration }
+        let supportedMIMEs: Set<RendererMIMEType> = [try .init(validating: "image/png"), try .init(validating: "image/jpeg"), try .init(validating: "image/gif"), try .init(validating: "image/svg+xml"), try .init(validating: "image/webp")]
+        guard allowedMIMETypes.isSubset(of: supportedMIMEs) else { throw RendererValidationError.unsupportedAssetMIMEType }
+        guard maximumExtractedReferenceCount > 0, maximumExtractedReferenceCount <= RendererAssetReadLimits.maximumExtractedReferenceCount else { throw RendererValidationError.invalidAssetReadLimit("maximumExtractedReferenceCount=\(maximumExtractedReferenceCount)") }
+        guard maximumExtractorInputBytes > 0, maximumExtractorInputBytes <= RendererAssetReadLimits.maximumExtractorInputBytes else { throw RendererValidationError.invalidAssetReadLimit("maximumExtractorInputBytes=\(maximumExtractorInputBytes)") }
+        guard maximumExtractorOutputBytes > 0, maximumExtractorOutputBytes <= RendererAssetReadLimits.maximumExtractorOutputBytes else { throw RendererValidationError.invalidAssetReadLimit("maximumExtractorOutputBytes=\(maximumExtractorOutputBytes)") }
+        guard maximumExtractorExecutionSeconds > 0, maximumExtractorExecutionSeconds <= RendererAssetReadLimits.maximumExtractorExecutionSeconds else { throw RendererValidationError.invalidAssetReadLimit("maximumExtractorExecutionSeconds=\(maximumExtractorExecutionSeconds)") }
+        guard maximumBytesPerAsset > 0, maximumBytesPerAsset <= RendererAssetReadLimits.maximumBytesPerAsset else { throw RendererValidationError.invalidAssetReadLimit("maximumBytesPerAsset=\(maximumBytesPerAsset)") }
+        guard maximumAggregateSessionBytes > 0, maximumAggregateSessionBytes <= RendererAssetReadLimits.maximumAggregateSessionBytes else { throw RendererValidationError.invalidAssetReadLimit("maximumAggregateSessionBytes=\(maximumAggregateSessionBytes)") }
+        guard rendererJavaScriptIdentifier(extractorEntryFunction) else { throw RendererValidationError.invalidAssetReadLimit("extractorEntryFunction=\(extractorEntryFunction)") }
+        self.allowedRoles = allowedRoles; self.allowedMIMETypes = allowedMIMETypes
+        self.maximumExtractedReferenceCount = maximumExtractedReferenceCount; self.maximumExtractorInputBytes = maximumExtractorInputBytes
+        self.maximumExtractorOutputBytes = maximumExtractorOutputBytes; self.maximumExtractorExecutionSeconds = maximumExtractorExecutionSeconds
+        self.maximumBytesPerAsset = maximumBytesPerAsset; self.maximumAggregateSessionBytes = maximumAggregateSessionBytes
+        self.extractorAsset = extractorAsset; self.extractorEntryFunction = extractorEntryFunction
     }
 }
 
-/// The named ceilings for renderer asset-read declarations. These clamp what a
-/// package may request so a hostile or corrupt manifest cannot expand host
-/// budget beyond a bounded, documentable cap.
 public enum RendererAssetReadLimits {
     public static let maximumExtractedReferenceCount = 256
     public static let maximumExtractorInputBytes = 256 * 1_024
@@ -289,22 +249,9 @@ public enum RendererAssetReadLimits {
     public static let maximumAggregateSessionBytes = 64 * 1_024 * 1_024
 }
 
-/// True when `value` is a valid JavaScript identifier (the extractor entry
-/// function name and the fence-validation entry function share the same
-/// identifier-safety requirement).
 public func rendererJavaScriptIdentifier(_ value: String) -> Bool {
-    guard value.isEmpty == false,
-          value.first == "_" || value.first?.isLetter == true,
-          value.allSatisfy({ $0 == "_" || $0 == "$" || $0.isLetter || $0.isNumber })
-    else { return false }
-    // Reject reserved words so a package cannot alias a host intrinsic.
-    let reserved: Set<String> = [
-        "await", "break", "case", "catch", "class", "const", "continue",
-        "debugger", "default", "delete", "do", "else", "enum", "export",
-        "extends", "false", "finally", "for", "function", "if", "import",
-        "in", "instanceof", "let", "new", "null", "return", "static",
-        "super", "switch", "this", "throw", "true", "try", "typeof", "var",
-        "void", "while", "with", "yield", "null", "undefined", "NaN", "Infinity",
-    ]
+    guard value.isEmpty == false, value.first == "_" || value.first?.isLetter == true,
+          value.allSatisfy({ $0 == "_" || $0 == "$" || $0.isLetter || $0.isNumber }) else { return false }
+    let reserved: Set<String> = ["await", "break", "case", "catch", "class", "const", "continue", "debugger", "default", "delete", "do", "else", "enum", "export", "extends", "false", "finally", "for", "function", "if", "import", "in", "instanceof", "let", "new", "null", "return", "static", "super", "switch", "this", "throw", "true", "try", "typeof", "var", "void", "while", "with", "yield", "undefined", "NaN", "Infinity"]
     return reserved.contains(value) == false
 }
