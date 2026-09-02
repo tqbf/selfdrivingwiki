@@ -33,21 +33,22 @@ design: plans/json-canvas-renderer-package.md
 - `swift run RendererPackageTool validate RendererPackages/JSONCanvas` — passes.
 - Focused normal-suite filters passed: manifest revision 4, bridge contracts, parser, neutrality, reviewed package.
 - `WIKIFS_APP_TESTS=1 swift test --filter RendererAttachmentCoordinatorTests` passed: 37 tests.
-- `WIKIFS_APP_TESTS=1 swift test --filter RendererContentWorldBridgeTests` passed: 7 tests.
+- `WIKIFS_APP_TESTS=1 swift test --filter RendererContentWorldBridgeTests` passed: 8 tests.
 - `WIKIFS_APP_TESTS=1 swift test --filter RendererAttachmentSpikeHostedTests` passed: 4 tests.
 - `WIKIFS_APP_TESTS=1 swift test --filter Phase6RendererHostedValidationTests` passed: 2 tests.
 - `WIKIFS_APP_TESTS=1 swift test --filter JSONCanvasRendererPackageTests` passed: 6 tests.
 - `WIKIFS_APP_TESTS=1 swift test --filter JSONCanvasRendererPackageHostedValidationTests` passed: 2 real-WebKit tests.
 - `scripts/test-with-watchdog.sh` passed the full suite with no unfinished tests.
 - Bare `swift build` and `swift test` passed. The test run completed 4,146 tests in 448 suites.
-- `make build` passed. Two `make test` runs each found one unrelated extractor-package concurrency failure. Each failed test then passed three focused reruns, and the watchdog full suite passed.
+- `make build` passed. The final two `make test` runs passed 4,146 tests in 448 suites.
 - Built-app inspection found no bundled JSON Canvas package assets.
 - `scripts/validate-skills` is not present in this checkout, so that planned check could not run.
 - An OpenAI-family review found a lost text-node hit rectangle and missing focusable internal-link semantics. Version 1.0.1 fixes both and adds static plus real-WebKit regression checks.
+- An operator-selected DeepSeek Flash review found a stale hosted fixture and a post-reload navigation request-ID collision. Commits `b94d39b4` and `2139950d` fix both. The focused DeepSeek follow-up found no remaining issue.
 - The host applies `RendererContentSecurityPolicy` headers to package resources. The package does not duplicate this trusted CSP in document markup.
-- Two GLM-family review attempts stalled without reports. A completed non-author-family review remains required before delivery.
+- Two GLM-family review attempts stalled without reports. DeepSeek contributed to implementation, so its review is not a model-family-independent review.
 - Pull request: https://github.com/tqbf/selfdrivingwiki/pull/1195
-- Remaining before delivery: complete or explicitly waive the non-author-family review gate.
+- Remaining before merge: confirm final CI and explicitly accept or waive the independent-family review gate.
 
 ## Notes / honest limits
 
