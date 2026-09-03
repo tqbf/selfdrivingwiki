@@ -743,6 +743,11 @@ final class WikiReaderWebView: WKWebView {
         // for the first page load. The store is injected later by the
         // representable (same as the view's own `store` property).
         config.setURLSchemeHandler(blobHandler, forURLScheme: BlobSchemeHandler.scheme)
+        // Register the reader document scheme so the custom-scheme baseURL is
+        // honored: without a registered handler, WebKit silently falls back to
+        // about:blank for loadHTMLString(baseURL:) (proven in hosted probes).
+        config.setURLSchemeHandler(
+            WikiReaderDocumentSchemeHandler.shared, forURLScheme: WikiReaderDocumentOrigin.scheme)
         // Same for renderer-package assets served to in-page expansion iframes,
         // through the canonical handler wrapping the frame router (CSP, MIME,
         // no-sniff, response ordering, and cancellation stay single-sourced).
@@ -1608,14 +1613,20 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     ReaderTiming.point("webview.main-hop", ms: Self.elapsedMs(since: convertDone))
                     ReaderTiming.point("webview.convert", ms: convertMs)
                     self.htmlLoadStart = DispatchTime.now()
-                    // Load under a real https origin (not about:blank) so embedded
-                    // players that validate the parent origin work — notably the
-                    // YouTube iframe, which 153-errors under an opaque `null` origin
-                    // (issue #206). All in-document links/images use absolute schemes
-                    // (wiki://, wiki-blob://, http[s]://), so base-relative resolution
-                    // is unaffected. Must stay in lock-step with the `?origin=` param
-                    // stamped onto the YouTube embed URL in ExternalEmbed.
-                    webView.loadHTMLString(html, baseURL: WikiReaderOrigin.url)
+                    // Load under the dedicated custom-scheme reader origin so
+                    // the parent document can frame custom-scheme children
+                    // (`renderer-package:` iframes, `wiki-blob:` PDF/HTML
+                    // frames). WebKit's custom-scheme CORS enforcement blocks
+                    // framed custom-scheme loads from an https parent (proven
+                    // in Phase 1 hosted probes), which is why the retired
+                    // synthetic https origin no longer works. All in-document
+                    // links/images use absolute schemes (wiki://,
+                    // wiki-blob://, http[s]://), so base-relative resolution
+                    // is unaffected. Provider-hosted media is never embedded
+                    // inline, so no external player validates this origin
+                    // (operator decision of 2026-09-03; see
+                    // `WikiReaderDocumentOrigin`).
+                    webView.loadHTMLString(html, baseURL: WikiReaderDocumentOrigin.url)
                 }
             }
         }
@@ -2329,19 +2340,21 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     decisionHandler(.cancel)
                     return
                 }
-                // A fragment-only link resolves against the synthetic reader origin.
-                // Allow it so WKWebView scrolls to the target within this document.
-                if WikiReaderOrigin.isSameDocumentFragment(url) {
+                // A fragment-only link resolves against the reader document
+                // origin. Allow it so WKWebView scrolls to the target within
+                // this document.
+                if WikiReaderDocumentOrigin.isSameDocumentFragment(url) {
                     decisionHandler(.allow)
                     return
                 }
                 // Relative links in source markdown (e.g. `[Back to README](../README.md)`)
                 // are not `[[wikilinks]]`, so `RelativeLinkRewriter` leaves them as raw
-                // `<a href>`. WKWebView resolves them against the synthetic reader origin
-                // (`WikiReaderOrigin` → `https://reader.wikifs.invalid`). Try to navigate to
-                // a matching source by filename/display-name; if none found, cancel silently
-                // — never open the bogus `reader.wikifs.invalid` URL in the system browser.
-                if url.host == WikiReaderOrigin.url?.host {
+                // `<a href>`. WKWebView resolves them against the reader document origin
+                // (`WikiReaderDocumentOrigin` → `wiki-reader://reader/document.html`). Try to
+                // navigate to a matching source by filename/display-name; if none found, cancel
+                // silently — never open the bogus reader URL in the system browser.
+                if url.scheme == WikiReaderDocumentOrigin.scheme,
+                   url.host == WikiReaderDocumentOrigin.host {
                     let targetName = url.lastPathComponent
                     let openInNewTab = navigationAction.modifierFlags.contains(.command)
                     if let store,
