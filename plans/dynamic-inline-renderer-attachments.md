@@ -5,16 +5,35 @@ Status: active design record.
 > Updated 2026-08-25: Syntax now owns the embedding role. Markdown images and
 > media-capable wiki source embeds stay inline. Approved rich fences use
 > disclosure rows. See [`typed-markdown-embed-pipeline.md`](typed-markdown-embed-pipeline.md).
+>
+> Updated 2026-09-03: Reader embeds moved into the reader document's DOM.
+> Package renderers, built-in PDF and HTML, and byte-backed media render as
+> iframes and media elements inside the page. The native sibling overlay and
+> its geometry projection are removed. See "DOM embeds" below.
 
 ## Purpose
 
 The Markdown reader has two presentation paths. Approved rich fences use compact renderer rows. Image syntax remains in the reader DOM without disclosure chrome.
 
-The reader owns admission, geometry, focus, resource policy, and teardown for dynamic attachments. Each renderer owns its expanded view.
+The reader owns admission, focus, resource policy, and teardown for dynamic attachments. Each renderer owns its expanded view.
 
 Image syntax does not auto-mount a dynamic attachment. Ordinary images use DOM `<img>` elements. Mermaid and trusted typed projectors can create inert DOM SVG. Other renderer-backed images keep a DOM image fallback and can show an exact-authorized interactive action.
 
 Readable code, summaries, or images remain as fallback content. A failed or unavailable renderer never produces an empty row.
+
+## DOM embeds
+
+The reader document loads under the `wiki-reader:` custom scheme. WebKit blocks framed custom-scheme loads from an https parent, so the reader parent cannot be an https document. `WikiReaderDocumentSchemeHandler` registers the scheme. Without a registered handler, `loadHTMLString(baseURL:)` falls back to `about:blank`.
+
+Each admitted package iframe gets a 128-bit random origin token. The URL shape is `renderer-package://<token>/<package>/<version>/<path>`. WebKit reports the token as the frame's exact `WKSecurityOrigin.host`. Two frames of one package get different origins. One frame cannot read another frame's document.
+
+`ReaderRendererPackageRouter` maps one token to one package reservation and rewrites requests to the canonical `renderer-package://package/...` form. The canonical `RendererPackageSchemeHandler` adds the CSP, MIME, and no-sniff headers. Unknown, replayed, or revoked tokens fail closed.
+
+Built-in content uses exact-version blob URLs. `wiki-blob://source-version/<SourceVersionID>` serves pinned bytes and the stored MIME. A HEAD edit never changes what an admitted embed shows. The compatibility `wiki-blob://source/<SourceID>` route stays for ordinary embeds.
+
+Package frames get a sandbox with only `allow-scripts`. Raw HTML frames omit `allow-scripts`, so scripts, inline handlers, and `javascript:` URLs do not run. Byte-backed audio and video are `<audio>` and `<video>` elements with metadata preload. Provider-hosted media with no bytes renders a readable fallback with an open action. The reader origin is never stamped into an external URL.
+
+The reader admits one frame-scoped bridge session per frame. Each session owns its broker, input reader, expected origin host, webview identity, and generation. A message with a wrong token, origin, webview, generation, or closed state fails closed.
 
 ## Titles and stable identity
 
@@ -46,37 +65,25 @@ An installed renderer receives the exact admitted `RendererBridgeInput` through 
 
 An unsupported disclosure request stays collapsed. It does not open a window. **Open in Window** is a separate direct action that uses the same admitted context.
 
-## Keyed hosts and separate budgets
+## Budgets and lifecycle
 
-Image syntax does not use a keyed host or an inline attachment budget. Its DOM content follows normal document layout and scrolling.
+A reader document can keep four renderer rows expanded. A fifth disclosure request stays collapsed and creates no renderer resources. The refusal is retryable.
 
-`WikiReaderContainerView` stores other native children and visible rectangles by `RendererAttachmentPlaceholderID`. Geometry, focus, failure, DOM removal, and teardown are keyed.
+Inline content uses a separate document budget of six renderers. It does not consume a renderer-row slot. Package frames add a third budget of six concurrent frames, with a 30-second load timeout.
 
-A reader document can keep four native or installed renderer rows expanded. A fifth disclosure request stays collapsed and creates no renderer resources.
+`ReaderDOMRendererLifecycle` is a finite state machine per placeholder: `collapsed`, `loading`, `active`, `retryableResourceRefusal`, `failed`, or `removed`. Legal transitions are an explicit table. A stale callback from an older generation cannot mutate a newer document.
 
-Inline content uses a separate document budget. It does not consume a renderer-row slot. The coordinator checks this budget immediately before resolver, factory, host-child, or session creation.
+Collapse, DOM removal, navigation, reload, reader dismantle, and process termination close only the matching frame session and release its budget.
 
-Each inline placeholder uses one state: `fallback`, `eligible`, `waitingForResources`, `mounted`, `failed`, or `removed`.
-
-An `IntersectionObserver` uses the viewport plus a 600-pixel preload margin. It mounts eligible inline content inside this retained visibility window.
-
-The coordinator releases an inline child after it stays outside the retained window or leaves the DOM. Ordinary geometry and zoom updates keep the existing child.
-
-The process-wide installed-WebKit permit pool is a third resource. Permit pressure keeps fallback content visible and retryable.
-
-Inline Mermaid stays inside the document. It does not consume native or installed renderer budgets. Authored Mermaid fences continue to use disclosure rows.
+Inline Mermaid stays inside the document. It does not consume inline or frame budgets. Authored Mermaid fences continue to use disclosure rows.
 
 ## Geometry, zoom, and focus
 
-The document reports one CSS rectangle, visibility value, revision, and generation for each placeholder. The coordinator accepts only finite, newer geometry for the active generation.
+Embeds are DOM children. Scroll, resize, and reader `pageZoom` move and scale them with the page. There is no geometry report, no viewport projection, and no reprojection pass.
 
-The container updates only the matching child. A geometry report, failure, or removal for one row does not move or close another row.
+`WKWebView.pageZoom` remains the reader zoom source. Package canvas zoom stays renderer-owned. The reader applies no second scale transform.
 
-`WKWebView.pageZoom` remains the reader zoom source. The reader converts each CSS rectangle once with `RendererAttachmentGeometry` and lets the native child fill that scaled frame.
-
-The reader explicitly reprojects all mounted children and requests one geometry report after a zoom change. It does not apply a second whole-view scale transform.
-
-Disclosure activation moves focus into the selected inline renderer. Escape collapses only the focused renderer and restores reader focus.
+Disclosure activation moves focus into the reader document. Escape collapses only the expanded row and restores focus to that row's disclosure button.
 
 ## Mermaid boundary
 
@@ -86,15 +93,15 @@ An authored Mermaid fence uses the shared title and disclosure semantics. Its di
 
 The reader keeps Mermaid source as escaped text. A missing library or parse failure preserves readable raw code.
 
-Inline Mermaid does not use the inline attachment budget unless an approved installed renderer explicitly handles it.
+Inline Mermaid does not use the inline or frame budgets unless an approved installed renderer explicitly handles it.
 
 ## Failure and teardown
 
 A resolver failure affects only its matching placeholder and generation. Other expanded rows keep their state.
 
-A document load, WebKit reload, or reader dismantle removes all children. DOM removal, collapse, and renderer failure remove only the matching child.
+A document load, WebKit reload, or reader dismantle closes all frame sessions. DOM removal, collapse, and renderer failure remove only the matching embed.
 
-Removing an installed child closes its WebKit session and releases its process permit. Resource pressure remains retryable.
+Closing a frame session closes its broker and releases its budget slot. Resource pressure remains retryable.
 
 ## Non-goals
 
@@ -105,11 +112,12 @@ This design does not pass reader zoom to a separate renderer window. Renderer-ow
 ## Required checks
 
 - Test initial collapsed rows, titles, trailing window actions, and ARIA state.
-- Test inline placeholders without disclosure markup.
-- Test separate inline, disclosure-row, and process-wide budgets.
-- Test visibility mount, retained-window release, retry, and DOM removal.
+- Test separate row, inline, and frame budgets.
 - Test exact source and fence admission, forged action rejection, role mismatch, and stale generations.
-- Test keyed geometry, focus, failure, reload, and teardown.
-- Test zoom alignment below and above 100 percent without double scaling.
+- Test frame-scoped bridge provenance: token, origin, webview, generation, closed state, and two-frame isolation.
+- Test scoped collapse, Escape, DOM removal, reload, dismantle, revocation, and process-termination teardown.
+- Test exact-version blob bytes and MIME with HEAD-change non-substitution.
+- Test the inert HTML sandbox and the byteless-media readable fallback.
+- Test DOM scroll and zoom invariance: embed and sentinel rectangles stay aligned without overlay projection.
 - Test inline source Mermaid and authored Mermaid rows.
 - Test readable fallback for unclaimed, unresolved, external, oversized, and failed content.
