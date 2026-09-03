@@ -84,12 +84,18 @@ reload, dismantle, and process termination close only the matching session.
 
 ## Known issues
 
-Two source-contract suites fail on pristine `main` before this branch:
-`SourceDetailRendererArchitectureAuditTests` and
-`BuiltInRendererRegistryTests`. Commit `9c1604ce` renamed the Source Detail
-wiring to `routedInstalledRendererFactoryInputs` and removed a factory entry
-without updating those tests. The failures are pre-existing and unrelated;
-fix them in a separate change.
+Source-contract suites fail on pristine `main` before this branch. Commit
+`9c1604ce` renamed the Source Detail wiring to
+`routedInstalledRendererFactoryInputs`, removed a built-in factory entry, and
+changed the navigation-activation JS, without updating these tests:
+
+- `SourceDetailRendererArchitectureAuditTests.testNoFormatSpecificRendererRouting`
+- `BuiltInRendererRegistryTests.testNoFormatSpecificRendererRouting`
+- `RendererContentWorldBridgeTests.navigationActivationUsesNonceDerivedRequestIdentity`
+- `EnvVarHints` / `SourcesTests` flake in the full run (environment-dependent)
+
+The failures are pre-existing and unrelated to this branch. Fix them in a
+separate change.
 
 ## Follow-ups
 
