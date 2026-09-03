@@ -1205,6 +1205,9 @@ final class WikiReaderWebView: WKWebView {
       // The native side passes only validated values (frame-scoped URL,
       // accessible title, bounded height); no input bytes or capabilities
       // cross this boundary. `sandboxAttrs` is a JSON array of strings.
+      // Load/error observers: the native side polls this map after injection
+      // to confirm the frame actually loaded (embed load diagnostics).
+      window.__sdwRendererEmbedLoads = window.__sdwRendererEmbedLoads || {};
       window.sdwInjectRendererEmbed = function(placeholderID, expansionID, kind, src, title, height, sandboxJSON){
         var card = document.getElementById(placeholderID);
         if(!card){ return 'no-card'; }
@@ -1236,12 +1239,19 @@ final class WikiReaderWebView: WKWebView {
           }
           element.loading = 'lazy';
         }
+        element.addEventListener('load', function(){
+          window.__sdwRendererEmbedLoads[placeholderID] = 'loaded:' + (element.contentWindow && element.contentWindow.location ? element.contentWindow.location.href : 'no-window');
+        });
+        element.addEventListener('error', function(){
+          window.__sdwRendererEmbedLoads[placeholderID] = 'error-event';
+        });
         element.src = src;
         element.title = title;
         element.className = 'sdw-renderer-embed';
         element.id = expansionID + '-embed';
         element.setAttribute('aria-label', title);
         expansion.appendChild(element);
+        window.__sdwRendererEmbedLoads[placeholderID] = 'appended';
         return 'injected';
       };
 
@@ -2361,24 +2371,35 @@ internal struct WikiReaderRep: NSViewRepresentable {
             else {
                 // Readable-fallback plans render status text, not a surface.
                 if case .readableFallback(let fallback) = plan {
+                    DebugLog.reader("embed[\(placeholderID.rawValue)]: readable fallback (\(fallback.explanation))")
                     setRowExpansion(true, for: placeholderID, status: fallback.explanation)
                     return .activate
                 }
+                DebugLog.reader("embed[\(placeholderID.rawValue)]: no injection script for \(plan)")
                 return .rejected
             }
-            webView.evaluateJavaScript(script) { [weak self] _, error in
+            webView.evaluateJavaScript(script) { [weak self] result, error in
                 guard let self else { return }
                 if let error {
-                    DebugLog.reader("renderer embed injection failed for \(placeholderID.rawValue): \(error.localizedDescription)")
+                    DebugLog.reader("embed[\(placeholderID.rawValue)]: injection JS error \(error.localizedDescription)")
                     self.frameBridgeRegistry.close(placeholderID: placeholderID)
                     return
                 }
+                // Any? from the JS bridge is not Sendable; stringify in place.
+                let resultDescription = result.map { "\($0)" } ?? "nil"
+                DebugLog.reader("embed[\(placeholderID.rawValue)]: injection result \(resultDescription)")
                 if case .packageFrame = plan {
                     // The frame's own load completion is not directly
                     // observable; the injection acknowledgement plus the
                     // registry timeout bound a hung frame.
                     if let token = frameToken {
                         self.frameBridgeRegistry.frameDidLoad(token: token)
+                    }
+                    // Poll the document's load-state map once, late enough for
+                    // a local-resource frame to have finished (diagnostics only).
+                    let poll = "String(window.__sdwRendererEmbedLoads && window.__sdwRendererEmbedLoads[\"\(WikiReaderRep.jsString(placeholderID.rawValue))\"] || 'no-entry')"
+                    webView.evaluateJavaScript(poll) { state, _ in
+                        DebugLog.reader("embed[\(placeholderID.rawValue)]: load state \(state ?? "poll-error")")
                     }
                 }
             }

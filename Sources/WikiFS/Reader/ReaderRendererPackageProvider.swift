@@ -192,6 +192,7 @@ final class ReaderRendererPackageRouter: RendererPackageResourceProviding, @unch
         diagnosticStartedRequests.append(url)
         guard let admitted = routes[frameURL.token] else {
             lock.unlock()
+            DebugLog.reader("package-router: unknown frame token \(frameURL.token.rawValue) for \(frameURL.request.packageID.rawValue)/\(frameURL.request.version.rawValue)/\(frameURL.request.path.rawValue)")
             throw RendererPackageResourceError.packageIdentityMismatch
         }
         // One origin host serves exactly one package reservation.
@@ -199,11 +200,13 @@ final class ReaderRendererPackageRouter: RendererPackageResourceProviding, @unch
               admitted.reservation.version == frameURL.request.version
         else {
             lock.unlock()
+            DebugLog.reader("package-router: reservation mismatch for \(frameURL.request.packageID.rawValue)/\(frameURL.request.version.rawValue)")
             throw RendererPackageResourceError.packageIdentityMismatch
         }
         // Validated package file I/O runs outside the critical section.
         let provider = admitted.provider
         lock.unlock()
+        DebugLog.reader("package-router: serving \(frameURL.request.packageID.rawValue)/\(frameURL.request.version.rawValue)/\(frameURL.request.path.rawValue) for frame \(frameURL.token.rawValue)")
         return try provider.resource(for: frameURL.canonicalURL)
     }
 }
