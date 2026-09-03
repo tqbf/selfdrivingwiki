@@ -19,9 +19,20 @@ import WikiFSCore
 /// are served by `BlobSchemeHandler` from the exact-version store.
 @MainActor
 final class WikiReaderDocumentSchemeHandler: NSObject, WKURLSchemeHandler {
-    /// A shared no-op instance: `loadHTMLString` supplies the document body,
-    /// so any task WebKit starts is answered with an empty 200 to satisfy the
-    /// registration probe without duplicating the HTML payload.
+    /// The scheme string this handler serves.
+    static let scheme = "wiki-reader"
+
+    /// The converted reader document body for the next navigation. The
+    /// coordinator sets this right before `load(request:)`; the handler
+    /// consumes it when WebKit starts the navigation task.
+    private static var pendingHTML: String?
+
+    static func setPendingHTML(_ html: String) {
+        pendingHTML = html
+    }
+
+    /// A shared instance: the handler answers the navigation with the
+    /// pending HTML set by the coordinator.
     static let shared = WikiReaderDocumentSchemeHandler()
 
     override private init() {
@@ -29,18 +40,22 @@ final class WikiReaderDocumentSchemeHandler: NSObject, WKURLSchemeHandler {
     }
 
     func webView(_ webView: WKWebView, start urlSchemeTask: any WKURLSchemeTask) {
-        // `loadHTMLString` renders the body; the handler only validates the
-        // scheme's registration. Answer with an empty HTML document for any
-        // direct navigation (never reached in production reader flow).
-        let body = Data("<!doctype html><html><body></body></html>".utf8)
+        let body = Self.consumePendingHTML()
+            ?? Data("<!doctype html><html><body></body></html>".utf8)
         let response = URLResponse(
-            url: urlSchemeTask.request.url ?? WikiReaderDocumentOrigin.url ?? URL(string: "about:blank")!,
+            url: urlSchemeTask.request.url ?? URL(string: "about:blank")!,
             mimeType: "text/html",
             expectedContentLength: body.count,
             textEncodingName: "utf-8")
         urlSchemeTask.didReceive(response)
         urlSchemeTask.didReceive(body)
         urlSchemeTask.didFinish()
+    }
+
+    private static func consumePendingHTML() -> Data? {
+        guard let html = pendingHTML else { return nil }
+        pendingHTML = nil
+        return Data(html.utf8)
     }
 
     func webView(_ webView: WKWebView, stop urlSchemeTask: any WKURLSchemeTask) {}

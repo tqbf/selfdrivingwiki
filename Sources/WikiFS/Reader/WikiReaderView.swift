@@ -1689,20 +1689,25 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     ReaderTiming.point("webview.main-hop", ms: Self.elapsedMs(since: convertDone))
                     ReaderTiming.point("webview.convert", ms: convertMs)
                     self.htmlLoadStart = DispatchTime.now()
-                    // Load under the dedicated custom-scheme reader origin so
-                    // the parent document can frame custom-scheme children
-                    // (`renderer-package:` iframes, `wiki-blob:` PDF/HTML
-                    // frames). WebKit's custom-scheme CORS enforcement blocks
-                    // framed custom-scheme loads from an https parent (proven
-                    // in Phase 1 hosted probes), which is why the retired
-                    // synthetic https origin no longer works. All in-document
-                    // links/images use absolute schemes (wiki://,
+                    // Load through the dedicated custom-scheme handler via a
+                    // real navigation. Hosted probes showed custom-scheme
+                    // SUBRESOURCE loads (renderer-package: iframes, wiki-blob:
+                    // frames) from an HTML-string parent never reach the
+                    // registered scheme handlers, while handler-served
+                    // navigations frame and load subresources normally. The
+                    // handler answers this navigation with the converted body.
+                    // All in-document links/images use absolute schemes (wiki://,
                     // wiki-blob://, http[s]://), so base-relative resolution
                     // is unaffected. Provider-hosted media is never embedded
                     // inline, so no external player validates this origin
                     // (operator decision of 2026-09-03; see
                     // `WikiReaderDocumentOrigin`).
-                    webView.loadHTMLString(html, baseURL: WikiReaderDocumentOrigin.url)
+                    WikiReaderDocumentSchemeHandler.setPendingHTML(html)
+                    guard let documentURL = WikiReaderDocumentOrigin.url else {
+                        DebugLog.reader("reader document origin URL construction failed")
+                        return
+                    }
+                    webView.load(URLRequest(url: documentURL))
                 }
             }
         }

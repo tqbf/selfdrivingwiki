@@ -29,7 +29,10 @@ struct InjectionReproTests {
           <div class="sdw-renderer-card__expansion" id="row-1-expansion"></div>
         </section>
         """
-        webView.loadHTMLString(WikiReaderView.documentHTML(body), baseURL: WikiReaderDocumentOrigin.url)
+        // Load via handler-served navigation — the production reader path.
+        // (HTML-string parents never reach scheme handlers for subframes.)
+        WikiReaderDocumentSchemeHandler.setPendingHTML(WikiReaderView.documentHTML(body))
+        webView.load(URLRequest(url: WikiReaderDocumentOrigin.url!))
         let deadline = ContinuousClock.now + .seconds(10)
         while webView.isLoading, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(20))
