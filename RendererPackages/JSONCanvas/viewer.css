@@ -119,10 +119,13 @@ body {
 }
 
 .edge {
-  stroke: var(--edge-stroke);
   stroke-width: 1.5;
   pointer-events: none;
   fill: none;
+}
+
+.edge-default {
+  stroke: var(--edge-stroke);
 }
 
 /* Default (no-color) edge arrowheads inherit the edge-stroke custom property

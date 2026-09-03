@@ -82,6 +82,21 @@ struct JSONCanvasJavaScriptHarnessTests {
         let vTo = try #require(vValue["to"] as? [String: Double])
         #expect(vFrom["y"] == 50)   // a's bottom (faces b below)
         #expect(vTo["y"] == 150)    // b's top
+
+        // A diagonal edge with a clear vertical gap uses the bottom/top
+        // boundaries, even when the center points are farther apart
+        // horizontally. This is the implicit edge in the Testbed canvas.
+        let diagonalResult = try runner.call(
+            "edge",
+            args: [JSONCanvasFixtures.edgesAndEndpoints,
+                   "4000000000000001", "4000000000000005", nil, nil])
+        let diagonalValue = try decodeObject(diagonalResult)
+        let diagonalFrom = try #require(diagonalValue["from"] as? [String: Double])
+        let diagonalTo = try #require(diagonalValue["to"] as? [String: Double])
+        #expect(diagonalFrom["x"] == 110)
+        #expect(diagonalFrom["y"] == 280) // Left.bottom
+        #expect(diagonalTo["x"] == 460)
+        #expect(diagonalTo["y"] == 360)   // Bottom.top
     }
 
     @Test("JSON Canvas endpoint defaults apply: fromEnd none, toEnd arrow")

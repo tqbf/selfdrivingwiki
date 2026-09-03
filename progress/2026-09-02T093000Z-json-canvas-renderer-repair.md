@@ -37,7 +37,7 @@ Version 1.1.0 of the reviewed JSON Canvas renderer package replaced the lossy 1.
 - Hosted WebKit tests (`JSONCanvasRendererPackageHostedValidationTests`, 3): real-window rendering of bezier edges, default `marker-end`, Markdown `strong` inside `foreignObject`, asset fallback, fit transform, malformed-input message + source-byte preservation.
 - Package tests (6): revision-5 declaration, roles/MIME/extractor, 7 assets, `asset.read`, viewer static restrictions, tamper rejection.
 - Asset-read chain: manifest V5 tests (6), extractor helper + location (7), authorized asset reader (5), bridge contracts incl. asset.read (17), admission builder (3) — 38 focused tests.
-- Normal suite: 4181 tests pass. `swift run RendererPackageTool validate RendererPackages/JSONCanvas` passes: version 1.1.0, package hash `2e17de05a9cb367752aa27021bd15ca4f858828015d307bb0ebb188bda5a3f96`.
+- Normal suite: the prior renderer suite passed. The current package validates as version 1.1.6 with package hash `e60eb3723b4ea78089279735ae2a2eaf8157224a11476bc963ce850def2824fb`.
 ## Supersedes
 
 Version 1.0.1's rendering claims (center-to-center edges, single-line text, no fit, no images) are superseded by 1.1.0 and fixed in 1.1.1; the 1.0.1 package bytes and hash remain a stability contract in repository history.
@@ -74,4 +74,4 @@ Fix:
 
 Regression: `JSONCanvasFixtures.edgesAndEndpoints` (the exact Testbed canvas) + `JSONCanvasJavaScriptHarnessTests.edgesAndArrowheadsCarryColors` assert per-color marker assignment for preset (`1`, `2`, `6`) and hex (`#059669`), no-arrow/none-arrow ends, both-arrow edges, and the default edge's `toEnd=arrow` marker with the "default" sentinel.
 
-Package version `1.1.2` (viewer.js + viewer.css changed). Hash `2e17de05a9cb367752aa27021bd15ca4f858828015d307bb0ebb188bda5a3f96`.
+Package version `1.1.6` (viewer.js + viewer.css changed). Hash `e60eb3723b4ea78089279735ae2a2eaf8157224a11476bc963ce850def2824fb`. A real-window WebKit snapshot test now compares rasterized stem and arrowhead pixels for the exact reported canvas.
