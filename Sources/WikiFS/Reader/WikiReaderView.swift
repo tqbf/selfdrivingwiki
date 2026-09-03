@@ -2428,20 +2428,24 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     inputReader: inputReader,
                     expectedOrigin: expectedOrigin)
                 broker.bind(to: webView)
-                // Expose the authorized input selector inside THIS frame only
-                // (the script exits unless the frame host is the token) and
-                // route its envelope through the frame-scoped bridge. The
-                // script is added before the iframe exists, so it is present
-                // at the frame's document-start. Accumulated scripts are
-                // removed in teardown via removeAllUserScripts-free scoped
-                // cleanup: each frame's script is host-gated and inert for
-                // every other frame, so leaving them is safe and bounded by
-                // the frame budget.
-                webView.configuration.userContentController.addUserScript(
-                    RendererContentWorldBroker.frameInputBootstrapScript(
-                        input: context.input,
-                        expectedOriginHost: framePlan.frameToken.rawValue,
-                        messageHandlerName: WikiReaderWebView.subframeBridgeName))
+                // Expose the authorized input selector inside THIS frame only.
+                // WKUserScripts added after main-frame load do not run in
+                // subframes, so the router serves the entry document with a
+                // frame-scoped bootstrap inlined at document-start (same
+                // origin, host-gated to the token). The reader webview's
+                // subframe bridge handler receives the envelopes.
+                let bootstrap = RendererContentWorldBroker.frameInputBootstrapJS(
+                    input: context.input,
+                    expectedOriginHost: framePlan.frameToken.rawValue,
+                    messageHandlerName: WikiReaderWebView.subframeBridgeName)
+                // The router inlines the bootstrap into the served entry
+                // document (WKUserScripts added post-load don't run in
+                // subframes), so the frame sees rendererInput at start.
+                // The router inlines the bootstrap into the served entry
+                // document (WKUserScripts added post-load don't run in
+                // subframes), so the frame sees rendererInput at start.
+                webView.rendererPackageRouter.setFrameBootstrap(
+                    token: framePlan.frameToken, html: bootstrap)
                 let admitted = frameBridgeRegistry.admit(
                     placeholderID: placeholderID,
                     frameToken: framePlan.frameToken,

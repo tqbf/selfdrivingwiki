@@ -151,11 +151,32 @@ final class ReaderRendererPackageRouter: RendererPackageResourceProviding, @unch
     private let lock = NSLock()
     private var routes: [RendererFrameOriginToken: ReaderFrameRoute] = [:]
 
+    /// Serves the frame-scoped input bootstrap for one token, consumed when
+    /// the entry document is served. Set by the reader at admission.
+    private let bootstrapLookup: @Sendable (RendererFrameOriginToken) -> String?
+
     /// Diagnostic record of every URL handed to `resource(for:)`. Read only
     /// from tests; production code never touches it.
     private(set) var diagnosticStartedRequests: [URL] = []
 
-    init() {}
+    init(bootstrapLookup: @escaping @Sendable (RendererFrameOriginToken) -> String? = { _ in nil }) {
+        self.bootstrapLookup = bootstrapLookup
+    }
+
+    /// Frame-scoped input bootstrap **JS** per admitted token. Served as a
+    /// separate `renderer-input.js` script file (the package CSP blocks
+    /// inline scripts, and WKUserScripts added post-load don't run in
+    /// subframes).
+    private var inputBootstraps: [RendererFrameOriginToken: String] = [:]
+
+    /// Attaches the frame-scoped input bootstrap to one admitted route. The
+    /// router serves it as `renderer-input.js` and inlines a `<script src>`
+    /// reference into the entry document before the package's own scripts.
+    func setFrameBootstrap(token: RendererFrameOriginToken, html: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        inputBootstraps[token] = html
+    }
 
     /// Admits one frame route and returns the frame-scoped entry URL to use
     /// as the iframe's `src`.
@@ -220,7 +241,57 @@ final class ReaderRendererPackageRouter: RendererPackageResourceProviding, @unch
         let provider = admitted.provider
         lock.unlock()
         DebugLog.reader("package-router: serving \(frameURL.request.packageID.rawValue)/\(frameURL.request.version.rawValue)/\(frameURL.request.path.rawValue) for frame \(frameURL.token.rawValue)")
-        return try provider.resource(for: frameURL.canonicalURL)
+
+        // Serve the frame-scoped input bootstrap as its own script file. The
+        // package CSP allows external renderer-package: scripts but blocks
+        // inline ones, and WKUserScripts added post-load don't run in
+        // subframes — so the bootstrap must be a real served file.
+        if frameURL.request.path.rawValue == "renderer-input.js" {
+            lock.lock()
+            let bootstrapJS = inputBootstraps[frameURL.token]
+            lock.unlock()
+            if let bootstrapJS,
+               let mime = RendererMIMEType(rawValue: "text/javascript") {
+                DebugLog.reader("package-router: serving renderer-input.js for frame \(frameURL.token.rawValue)")
+                return RendererPackageResource(
+                    data: Data(bootstrapJS.utf8),
+                    mimeType: mime,
+                    isEntryDocument: false)
+            }
+        }
+
+        let resource = try provider.resource(for: frameURL.canonicalURL)
+
+        // Entry document: inline a <script src="renderer-input.js"> reference
+        // BEFORE the package's own script tags, so the input selector exists
+        // when viewer.js runs. The bootstrap itself is served separately.
+        if resource.isEntryDocument,
+           let html = String(data: resource.data, encoding: .utf8),
+           html.utf8.count <= RendererPackageValidationLimits.maximumCopiedByteCount {
+            lock.lock()
+            let hasBootstrap = inputBootstraps[frameURL.token] != nil
+            lock.unlock()
+            guard hasBootstrap else {
+                DebugLog.reader("package-router: no input bootstrap for frame \(frameURL.token.rawValue)")
+                return resource
+            }
+            let reference = "<script src=\"renderer-input.js\"></script>"
+            var patched = html
+            if let firstScriptRange = patched.lowercased().range(of: "<script") {
+                patched.insert(contentsOf: reference, at: firstScriptRange.lowerBound)
+            } else if let bodyEnd = patched.lowercased().range(of: "</body>") {
+                patched.insert(contentsOf: reference, at: bodyEnd.lowerBound)
+            } else {
+                DebugLog.reader("package-router: entry document has no script or body tag; bootstrap reference not inlined")
+                return resource
+            }
+            DebugLog.reader("package-router: inlined renderer-input.js reference into entry document for frame \(frameURL.token.rawValue)")
+            return RendererPackageResource(
+                data: Data(patched.utf8),
+                mimeType: resource.mimeType,
+                isEntryDocument: resource.isEntryDocument)
+        }
+        return resource
     }
 }
 #endif

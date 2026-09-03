@@ -65,10 +65,13 @@ struct RendererPackageFramePlan: Equatable {
     /// Near-square expansion target for the reader column (720pt against 760).
     var boundedHeight: CGFloat = RendererDOMEmbedMetrics.nearSquareHeight
 
-    /// The minimum sandbox flags the package document needs. Everything not
-    /// listed stays denied (popups, forms, top navigation, downloads, and
-    /// nested frames are never granted).
-    static let packageSandboxFlags = "allow-scripts"
+    /// The minimum sandbox flags the package document needs. `allow-scripts`
+    /// runs package scripts; `allow-same-origin` gives the frame its real
+    /// token origin instead of an opaque one — without it,
+    /// `window.location.host` is the empty string and the host-gated input
+    /// bootstrap never matches. Everything not listed stays denied (popups,
+    /// forms, top navigation, downloads, nested frames).
+    static let packageSandboxFlags = "allow-scripts allow-same-origin"
 }
 
 /// A pinned built-in iframe plan served from the exact-version blob route.

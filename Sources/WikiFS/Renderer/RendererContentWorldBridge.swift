@@ -398,16 +398,18 @@ extension RendererContentWorldBroker {
     /// Exposes only the authorized input selector — bytes stay behind
     /// `input.read`, matching the package contract.
     /// Document-start bootstrap for reader DOM-embed frames. Injected with
-    /// `forMainFrameOnly: false` and content world `.page`; the script itself
-    /// exits unless the frame's origin host equals the admitted frame token,
-    /// so unrelated frames are inert. Exposes only the authorized input
-    /// selector — bytes stay behind `input.read`, matching the package
-    /// contract — and relays envelopes to the reader's subframe handler.
-    static func frameInputBootstrapScript(
+    /// Frame-scoped input bootstrap **JS** for reader DOM-embed frames. The
+    /// reader router serves this as `renderer-input.js` (the package CSP
+    /// allows external renderer-package: scripts but blocks inline ones, and
+    /// WKUserScripts added post-load don't run in subframes). The script
+    /// exits unless the frame host equals the admitted token; exposes only
+    /// the authorized input selector and relays envelopes to the reader's
+    /// subframe bridge handler.
+    static func frameInputBootstrapJS(
         input: RendererBridgeInput,
         expectedOriginHost: String,
         messageHandlerName: String
-    ) -> WKUserScript {
+    ) -> String {
         let encodedInput: Data
         do {
             encodedInput = try JSONEncoder().encode(input)
@@ -415,7 +417,7 @@ extension RendererContentWorldBroker {
             preconditionFailure("RendererBridgeInput must remain encodable: \(error)")
         }
         let inputJSON = String(decoding: encodedInput, as: UTF8.self)
-        let source = """
+        return """
         (function(){
           if (window.location.host !== '\(expectedOriginHost)') { return; }
           document.documentElement.dataset.rendererInput = \(String(reflecting: inputJSON));
@@ -430,11 +432,6 @@ extension RendererContentWorldBroker {
           });
         })();
         """
-        return WKUserScript(
-            source: source,
-            injectionTime: .atDocumentStart,
-            forMainFrameOnly: false,
-            in: .page)
     }
 
     /// Frame-scoped subframe bridge for reader DOM embeds. Registered once on
