@@ -692,6 +692,10 @@ final class WikiReaderWebView: WKWebView {
     /// frame tokens. Both maps share lifecycles (replacement revokes both).
     var rendererPackageFrameEntryPaths: [RendererReference: String] = [:]
 
+    /// Signature of the last installed package snapshot, used to keep
+    /// `installRendererPackages` idempotent across SwiftUI update passes.
+    var installedRendererPackageSignature: String = ""
+
     /// Routes `renderer-package://<frame-token>/…` requests from in-page
     /// expansion iframes to per-frame validated package providers. Admitted
     /// or revoked by `WikiReaderRep` as package snapshots change.
@@ -1533,6 +1537,19 @@ internal struct WikiReaderRep: NSViewRepresentable {
         _ inputs: RendererPackageEmbedInputs?,
         into webView: WikiReaderWebView
     ) {
+        // Idempotent: SwiftUI calls updateNSView on every render. Rebuilding
+        // the routes on unchanged input would revoke the frame origins that
+        // already-loaded iframes are using, orphaning them mid-session.
+        // Rebuild only when the set of (reference, entryPath) actually changed.
+        let newSignature = inputs.map { snapshot in
+            snapshot.entries
+                .map { "\($0.reference.packageID.rawValue)/\($0.reference.version.rawValue)/\($0.reference.registrationID.rawValue):\($0.entryPath)" }
+                .sorted()
+                .joined(separator: "|")
+        } ?? "unavailable"
+        if newSignature == webView.installedRendererPackageSignature { return }
+        webView.installedRendererPackageSignature = newSignature
+
         let router = webView.rendererPackageRouter
         router.revokeAll()
         webView.rendererPackageFrameTokens.removeAll()
