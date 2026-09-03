@@ -200,6 +200,10 @@ struct WikiReaderView: View {
     /// Validated installed descriptor snapshot supplied by the reader host.
     /// It is data-only; constructing renderer sessions remains downstream.
     var inlineRendererDescriptors: [RendererDescriptor] = []
+    /// Per-descriptor validated package resource providers, used to serve
+    /// `renderer-package:` assets to in-page expansion iframes. Hosts owning a
+    /// full renderer pane pass the live snapshot; default is no packages.
+    var rendererPackageInputs: RendererPackageEmbedInputs? = nil
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
     @State private var isLoading = true
 
@@ -227,6 +231,7 @@ struct WikiReaderView: View {
                           onRendererActivation: onRendererActivation,
                           inlineAttachmentResolver: inlineAttachmentResolver,
                           inlineRendererDescriptors: inlineRendererDescriptors,
+                          rendererPackageInputs: rendererPackageInputs,
                           findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
             if isLoading {
                 ProgressView()
@@ -678,6 +683,22 @@ final class WikiReaderWebView: WKWebView {
     /// `store` is set by the representable alongside the view's own `store`.
     let blobHandler = BlobSchemeHandler(store: nil)
 
+    /// Frame-origin tokens for admitted renderer references, set by
+    /// `WikiReaderRep.installRendererPackages`. The Coordinator reads a
+    /// token to build the iframe `src` during activation.
+    var rendererPackageFrameTokens: [RendererReference: RendererFrameOriginToken] = [:]
+
+    /// Routes `renderer-package://<frame-token>/…` requests from in-page
+    /// expansion iframes to per-frame validated package providers. Admitted
+    /// or revoked by `WikiReaderRep` as package snapshots change.
+    let rendererPackageRouter = ReaderRendererPackageRouter()
+
+    /// The canonical package scheme handler wrapping the frame router, so
+    /// CSP, MIME, no-sniff, response ordering, and cancellation stay
+    /// single-sourced. Created in `init` before `super.init` so it can be
+    /// registered on the configuration.
+    private(set) var rendererPackageSchemeHandler: RendererPackageSchemeHandler?
+
     init() {
         let config = WKWebViewConfiguration()
         let cc = WKUserContentController()
@@ -716,7 +737,16 @@ final class WikiReaderWebView: WKWebView {
         // for the first page load. The store is injected later by the
         // representable (same as the view's own `store` property).
         config.setURLSchemeHandler(blobHandler, forURLScheme: BlobSchemeHandler.scheme)
+        // Same for renderer-package assets served to in-page expansion iframes,
+        // through the canonical handler wrapping the frame router (CSP, MIME,
+        // no-sniff, response ordering, and cancellation stay single-sourced).
+        // The handler is created locally because `self` is not available
+        // before `super.init`; it references the same router instance.
+        let packageHandler = RendererPackageSchemeHandler(resourceProvider: rendererPackageRouter)
+        config.setURLSchemeHandler(
+            packageHandler, forURLScheme: RendererPackageScheme.name)
         super.init(frame: .zero, configuration: config)
+        rendererPackageSchemeHandler = packageHandler
         proxy.target = self
         embedProxy.target = self
         attachmentProxy.target = self
@@ -1297,6 +1327,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
     let onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)?
     let inlineAttachmentResolver: RendererInlineAttachmentResolver
     let inlineRendererDescriptors: [RendererDescriptor]
+    let rendererPackageInputs: RendererPackageEmbedInputs?
     let findText: String?
     let findVersion: Int
     let findOccurrence: Int
@@ -1312,8 +1343,10 @@ internal struct WikiReaderRep: NSViewRepresentable {
         webView.addURLHandler = addURLHandler
         webView.addBookmarkHandler = addBookmarkHandler
         webView.onRendererActivation = onRendererActivation
+        Self.installRendererPackages(rendererPackageInputs, into: webView)
         context.coordinator.inlineAttachmentResolver = inlineAttachmentResolver
         context.coordinator.inlineRendererDescriptors = inlineRendererDescriptors
+        context.coordinator.rendererPackageInputs = rendererPackageInputs
         webView.navigationDelegate = context.coordinator
         webView.coordinator = context.coordinator
         context.coordinator.webView = webView
@@ -1337,8 +1370,10 @@ internal struct WikiReaderRep: NSViewRepresentable {
         webView.addURLHandler = addURLHandler
         webView.addBookmarkHandler = addBookmarkHandler
         webView.onRendererActivation = onRendererActivation
+        Self.installRendererPackages(rendererPackageInputs, into: webView)
         context.coordinator.inlineAttachmentResolver = inlineAttachmentResolver
         context.coordinator.inlineRendererDescriptors = inlineRendererDescriptors
+        context.coordinator.rendererPackageInputs = rendererPackageInputs
         context.coordinator.store = store
         context.coordinator.currentSelection = currentSelection
         if context.coordinator.loadedMarkdown != markdown ||
@@ -1364,6 +1399,35 @@ internal struct WikiReaderRep: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
+    /// Replaces the frame router's routes with the host's current validated
+    /// package snapshot. Each admitted renderer reference gets a fresh,
+    /// unguessable frame-origin token; replacing the snapshot revokes every
+    /// prior route (a stale frame's requests then fail closed).
+    @MainActor
+    private static func installRendererPackages(
+        _ inputs: RendererPackageEmbedInputs?,
+        into webView: WikiReaderWebView
+    ) {
+        let router = webView.rendererPackageRouter
+        router.revokeAll()
+        for entry in inputs?.entries ?? [] {
+            // Package assets are hash-pinned and declared in the manifest, so
+            // any declared path may be requested under the frame origin; the
+            // entry document is what the iframe initially loads.
+            guard let entryPath = RendererRelativePath(rawValue: entry.entryPath) else { continue }
+            let token = RendererFrameOriginToken.generate()
+            let reservation = RendererPackageReservation(
+                packageID: entry.reference.packageID,
+                version: entry.reference.version)
+            webView.rendererPackageFrameTokens[entry.reference] = token
+            _ = router.admit(
+                token: token,
+                reservation: reservation,
+                entryPath: entryPath,
+                provider: entry.provider)
+        }
+    }
+
     static func dismantleNSView(_ container: WikiReaderContainerView, coordinator: Coordinator) {
         coordinator.teardown()
         container.teardown()
@@ -1376,6 +1440,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         private var attachmentCoordinator: RendererAttachmentCoordinator?
         var inlineAttachmentResolver: RendererInlineAttachmentResolver = RendererInlineAttachmentResolverFactory.defaultResolver
         var inlineRendererDescriptors: [RendererDescriptor] = []
+        var rendererPackageInputs: RendererPackageEmbedInputs? = nil
         var store: WikiStoreModel?
         var currentSelection: WikiSelection?
         var loadedMarkdown: String?
