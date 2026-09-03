@@ -247,6 +247,13 @@ enum RendererDOMEmbedPlanner {
 /// never concatenated HTML/JavaScript.
 @MainActor
 enum RendererDOMEmbedInjection {
+    /// The acknowledgement string sdwInjectRendererEmbed returns on success.
+    /// Shared between the generated JS (WikiReaderView.embedBootstrapJS
+    /// returns the literal 'injected') and the Swift guard so the two sides
+    /// cannot drift. RendererDocumentationContractTests-style pinning: if the
+    /// JS literal changes, update this constant and the JS together.
+    static let injectionAcknowledgement = "injected"
+
     /// The JavaScript that creates the embed element with DOM APIs. Returns
     /// the acknowledgement string ('injected' / 'no-card' / …).
     static func injectionScript(

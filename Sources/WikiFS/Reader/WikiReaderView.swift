@@ -2413,14 +2413,12 @@ internal struct WikiReaderRep: NSViewRepresentable {
             // Package frames need an admitted bridge session before their
             // document can ask for input. Admit first: a budget rejection
             // below collapses the row without a frame in the DOM.
-            var frameToken: RendererFrameOriginToken?
             var embedEntryURL: URL?
             if case .packageFrame(let framePlan) = plan {
                 // Per-embed token: two embeds of the same package must NOT
                 // share an origin, or one embed's bridge session would
                 // authorize the other embed's input (cross-embed leak).
                 let embedToken = RendererFrameOriginToken.generate()
-                frameToken = embedToken
                 guard let webViewObject = webView as NSView? else { return .rejected }
                 // The exact authorized input reader for this context. Source
                 // identities use the admitted-source initializer so the
@@ -2561,31 +2559,25 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     self.teardownDOMEmbed(placeholderID)
                     return
                 }
-                // Any? from the JS bridge is not Sendable; stringify in place.
-                let resultDescription = result.map { "\($0)" } ?? "nil"
-                DebugLog.reader("embed[\(placeholderID.rawValue)]: injection result \(resultDescription)")
+                // The acknowledgement is a plain String in the completion
+                // result; compare the typed value against the shared constant
+                // (description formatting is not a reliable comparison).
+                let acknowledgement = result as? String
+                DebugLog.reader("embed[\(placeholderID.rawValue)]: injection result \(acknowledgement ?? "nil")")
                 // Only a positive acknowledgement counts as mounted. Failure
-                // strings (no-card, no-expansion, bad-sandbox) mean no surface
-                // was created — roll back the whole unit.
-                guard resultDescription == "Optional(injected)" else {
-                    DebugLog.reader("embed[\(placeholderID.rawValue)]: injection not acknowledged (\(resultDescription)); rolling back")
+                // strings (no-card, no-expansion, bad-sandbox, nil) mean no
+                // surface was created — roll back the whole unit.
+                guard acknowledgement == RendererDOMEmbedInjection.injectionAcknowledgement else {
+                    DebugLog.reader("embed[\(placeholderID.rawValue)]: injection not acknowledged; rolling back")
                     self.teardownDOMEmbed(placeholderID)
                     return
                 }
-                if case .packageFrame = plan {
-                    // The frame's own load completion is not directly
-                    // observable; the injection acknowledgement plus the
-                    // registry timeout bound a hung frame.
-                    if let token = frameToken {
-                        self.frameBridgeRegistry.frameDidLoad(token: token)
-                    }
-                    // Poll the document's load-state map once, late enough for
-                    // a local-resource frame to have finished (diagnostics only).
-                    let poll = "String(window.__sdwRendererEmbedLoads && window.__sdwRendererEmbedLoads[\"\(WikiReaderRep.jsString(placeholderID.rawValue))\"] || 'no-entry')"
-                    webView.evaluateJavaScript(poll) { state, _ in
-                        DebugLog.reader("embed[\(placeholderID.rawValue)]: load state \(state ?? "poll-error")")
-                    }
-                }
+                // The registry load timeout stays armed here: an injection
+                // acknowledgement only proves the element was appended, not
+                // that the frame's document loaded. frameDidLoad is driven by
+                // the real load event (pushed through the subframe bridge), so
+                // a hung frame is released by the timeout instead of leaking
+                // its session and frame slot.
             }
             return .activate
         }
