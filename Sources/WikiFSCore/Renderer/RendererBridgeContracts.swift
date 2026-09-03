@@ -367,7 +367,20 @@ public struct RendererBridgeAuthorizer: Sendable {
         guard request.capability == capability else { throw RendererBridgeAuthorizationError.capabilityMismatch }
         try validate(context: context)
         guard request.method == .inputRead else { throw RendererBridgeAuthorizationError.malformedEnvelope }
-        guard authorizedInput == nil || request.input == authorizedInput else { throw RendererBridgeAuthorizationError.unauthorizedInput }
+        guard authorizedInput == nil || request.input == authorizedInput else {
+            // Mismatch diagnostics: encode both sides for the log. Encoding
+            // cannot fail for these Codable values.
+            func describe(_ value: RendererBridgeInput?) -> String {
+                guard let value else { return "nil" }
+                do {
+                    return String(data: try JSONEncoder().encode(value), encoding: .utf8) ?? "?"
+                } catch {
+                    return "encode-error: \(error)"
+                }
+            }
+            DebugLog.reader("authorizer input mismatch: request[\(describe(request.input).prefix(200))] authorized[\(describe(authorizedInput).prefix(200))]")
+            throw RendererBridgeAuthorizationError.unauthorizedInput
+        }
         try consume(request.id)
         return request
     }
