@@ -1443,16 +1443,27 @@ internal struct WikiReaderRep: NSViewRepresentable {
         if #available(macOS 11.0, *) {
             webView.configuration.userContentController.addScriptMessageHandler(
                 RendererContentWorldBroker.ReaderSubframeBridgeHandler { [weak coordinator = context.coordinator] frameInfo, originHost in
-                    guard let coordinator,
-                          frameInfo.webView.map(ObjectIdentifier.init) == coordinator.webView.map(ObjectIdentifier.init)
-                    else { return nil }
-                    guard let token = RendererFrameOriginToken.tokenIfValid(originHost),
-                          let session = coordinator.frameBridgeRegistry.authorize(
-                            token: token,
-                            originHost: originHost,
-                            originScheme: RendererPackageScheme.name,
-                            webViewID: frameInfo.webView.map(ObjectIdentifier.init))
-                    else { return nil }
+                    guard let coordinator else {
+                        DebugLog.reader("subframe bridge: coordinator deallocated")
+                        return nil
+                    }
+                    guard frameInfo.webView.map(ObjectIdentifier.init) == coordinator.webView.map(ObjectIdentifier.init) else {
+                        DebugLog.reader("subframe bridge: webview mismatch (frameInfo webView \(frameInfo.webView != nil ? "present" : "nil"))")
+                        return nil
+                    }
+                    guard let token = RendererFrameOriginToken.tokenIfValid(originHost) else {
+                        DebugLog.reader("subframe bridge: invalid token alphabet \(originHost)")
+                        return nil
+                    }
+                    guard let session = coordinator.frameBridgeRegistry.authorize(
+                        token: token,
+                        originHost: originHost,
+                        originScheme: RendererPackageScheme.name,
+                        webViewID: frameInfo.webView.map(ObjectIdentifier.init))
+                    else {
+                        DebugLog.reader("subframe bridge: registry rejected token \(originHost)")
+                        return nil
+                    }
                     return session.broker
                 },
                 contentWorld: .page,
