@@ -1556,7 +1556,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
             transclusionGeneration += 1
             let generation = loadGeneration
             attachmentCoordinator?.closeAll()
-            attachmentContainer?.removeAllAttachments()
+            frameBridgeRegistry.closeAll()
             attachmentCoordinator = RendererAttachmentCoordinator(generation: generation)
             loadedMarkdown = markdown
             loadedDocumentIdentity = documentIdentity
@@ -1916,7 +1916,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
             isLoadingBinding = nil
             renderOptions = nil
             attachmentCoordinator?.closeAll()
-            attachmentContainer?.removeAllAttachments()
+            frameBridgeRegistry.closeAll()
             attachmentCoordinator = nil
             attachmentContainer = nil
             webView = nil
@@ -2056,13 +2056,14 @@ internal struct WikiReaderRep: NSViewRepresentable {
         // swiftlint:disable:next implicitly_unwrapped_optional
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
             // WebKit now replaces the DOM for the current load generation.
-            // Invalidate lazy DOM work and release children from the old document.
+            // Invalidate lazy DOM work and release frame sessions from the
+            // old document (the DOM itself is replaced by the navigation).
             transclusionGeneration += 1
             cancelTransclusionTasks()
             cancelInlineRetentionTasks()
+            frameBridgeRegistry.closeAll()
             attachmentCoordinator?.closeAll()
-            attachmentContainer?.removeAllAttachments()
-            attachmentCoordinator = RendererAttachmentCoordinator(generation: loadGeneration)
+            attachmentCoordinator = nil
         }
 
         func handleAttachmentGeometry(_ message: RendererAttachmentGeometryMessage) {
@@ -2098,41 +2099,45 @@ internal struct WikiReaderRep: NSViewRepresentable {
             guard let attachmentCoordinator, attachmentCoordinator.generation == generation else { return }
             inlineRetentionTasks.removeValue(forKey: placeholderID)?.cancel()
             let role = attachmentCoordinator.role(for: placeholderID)
-            let removedMountedChild = attachmentContainer?.ownsMountedAttachment(named: placeholderID) == true
+            // DOM era: remove the embed surface and its bridge session.
+            frameBridgeRegistry.remove(placeholderID: placeholderID)
+            webView?.evaluateJavaScript(RendererDOMEmbedInjection.removalScript(for: placeholderID))
             if role == .inlineContent {
                 attachmentCoordinator.removeInline(placeholderID)
             } else {
                 attachmentCoordinator.close(placeholderID)
             }
-            if removedMountedChild { attachmentContainer?.removeAttachment(named: placeholderID) }
             if role == .disclosureRow { setRowExpansion(false, for: placeholderID) }
-            retryWaitingInlineContent()
         }
 
+        /// DOM era: inline content mounts inside the document (media elements,
+        /// iframes) — there is no native inline child to project.
         private func mountInlineContentIfEligible(_ placeholderID: RendererAttachmentPlaceholderID) {
             guard let attachmentCoordinator,
-                  let attachmentContainer,
                   attachmentCoordinator.role(for: placeholderID) == .inlineContent,
                   attachmentCoordinator.inlineState(for: placeholderID) != .mounted,
                   let context = webView?.rendererActivationAdmission?.attachmentContext(for: placeholderID),
                   context.embeddingRole == .inlineContent else { return }
             guard attachmentCoordinator.admitInline(placeholderID) == .activate else { return }
 
+            // Built-in source embeds mount their typed DOM plan; native
+            // inline renderers have no host child anymore and fail to the
+            // readable fallback.
+            if case .source = context.identity,
+               case .source = context.input,
+               let plan = RendererDOMEmbedPlanner.builtInPlan(context: context) {
+                _ = mountDOMEmbed(plan: plan, named: placeholderID, context: context)
+                return
+            }
             switch inlineAttachmentResolver(
                 context,
                 placeholderID,
                 inlineSessionFailureHandler(for: placeholderID, generation: context.generation)
             ) {
-            case .content(let content):
-                attachmentContainer.activateAttachment(
-                    named: placeholderID,
-                    title: context.displayTitle ?? context.rendererReference.registrationID.rawValue,
-                    content: content,
-                    takesFocus: false,
-                    onExit: nil)
-                if let webView {
-                    updateAttachmentViewport(for: placeholderID, in: webView, container: attachmentContainer)
-                }
+            case .content:
+                // Native inline child mounting was removed with the overlay;
+                // unsupported native inline renderers fail to the fallback.
+                attachmentCoordinator.failInline(placeholderID)
             case .unsupported:
                 attachmentCoordinator.failInline(placeholderID)
             case .failed:
@@ -2157,7 +2162,6 @@ internal struct WikiReaderRep: NSViewRepresentable {
                       attachmentCoordinator.geometry(for: placeholderID)?.visible == false
                 else { return }
                 attachmentCoordinator.releaseInline(placeholderID)
-                self.attachmentContainer?.removeAttachment(named: placeholderID)
                 self.inlineRetentionTasks.removeValue(forKey: placeholderID)
                 self.retryWaitingInlineContent()
             }
@@ -2194,7 +2198,9 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 return .rejected
             }
             if attachmentCoordinator.state(for: placeholderID) == .active {
-                attachmentContainer.focusAttachment(named: placeholderID)
+                // DOM era: the embed is part of the document; focus returns to
+                // the webview (the row's disclosure button is a DOM focus target).
+                webView?.window?.makeFirstResponder(webView)
                 return .activate
             }
             let admission = attachmentCoordinator.activate(placeholderID)
@@ -2271,30 +2277,13 @@ internal struct WikiReaderRep: NSViewRepresentable {
             takesFocus: Bool,
             context: RendererEmbedActivationContext
         ) -> RendererAttachmentActivationResult {
-            guard let attachmentCoordinator else { return .rejected }
-            guard attachmentCoordinator.state(for: placeholderID) == .active else { return .rejected }
-            // The latest geometry still describes the collapsed row. Expand the
-            // DOM region first and keep the native child hidden until WebKit
-            // reports that region's rectangle.
-            attachmentContainer.updateAttachmentViewport(.zero, for: placeholderID)
-            setRowExpansion(true, for: placeholderID)
-            if let webView {
-                let reservedHeight = attachmentCoordinator.reserveHeight(
-                    RendererAttachmentHostPolicy.preferredReservedHeight(
-                        for: context.rendererReference,
-                        role: context.embeddingRole),
-                    for: placeholderID)
-                let identifier = WikiReaderRep.jsString(placeholderID.rawValue)
-                webView.evaluateJavaScript(
-                    "window.__sdwRendererAttachmentReserve && window.__sdwRendererAttachmentReserve(\"\(identifier)\", \(reservedHeight));")
-            }
-            attachmentContainer.activateAttachment(
-                named: placeholderID,
-                title: context.displayTitle ?? context.rendererReference.registrationID.rawValue,
-                content: content,
-                takesFocus: takesFocus,
-                onExit: { [weak self] in self?.collapseAttachment(placeholderID) })
-            return .activate
+            // DOM era: native inline children are removed. The remaining
+            // caller (native inline renderers) fails to the readable fallback.
+            _ = content
+            _ = placeholderID
+            _ = takesFocus
+            _ = context
+            return .rejected
         }
 
         /// Clears a placeholder's status/fallback message after a successful
@@ -2407,7 +2396,11 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 guard state != .closed else { return }
                 DebugLog.reader("inline renderer session failed for \(placeholderID.rawValue): \(failure.kind)")
                 if role == .inlineContent {
-                    self.attachmentContainer?.removeAttachment(named: placeholderID)
+                    // DOM era: the embed surface lives in the document; a
+                    // failed session closes its bridge and the row keeps its
+                    // readable fallback.
+                    self.frameBridgeRegistry.close(placeholderID: placeholderID)
+                    webView?.evaluateJavaScript(RendererDOMEmbedInjection.removalScript(for: placeholderID))
                     if failure.kind == .concurrencyLimitReached {
                         attachmentCoordinator.waitForInlineResources(placeholderID)
                     } else {
@@ -2418,7 +2411,8 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 guard state != .unresolved else { return }
                 if failure.kind == .concurrencyLimitReached {
                     attachmentCoordinator.refuse(placeholderID, reason: .resourcePressure)
-                    self.attachmentContainer?.removeAttachment(named: placeholderID)
+                    self.frameBridgeRegistry.close(placeholderID: placeholderID)
+                    webView?.evaluateJavaScript(RendererDOMEmbedInjection.removalScript(for: placeholderID))
                     self.surfaceRefusal(.resourcePressure, for: placeholderID)
                     return
                 }
@@ -2426,20 +2420,13 @@ internal struct WikiReaderRep: NSViewRepresentable {
             }
         }
 
+        // DOM era: viewport projection was overlay machinery; embedded content
+        // moves and scales with the page because it is part of the page.
         private func updateAttachmentViewport(
             for placeholderID: RendererAttachmentPlaceholderID,
             in webView: WikiReaderWebView,
             container: WikiReaderContainerView
-        ) {
-            guard let geometry = attachmentCoordinator?.geometry(for: placeholderID) else { return }
-            let rect = RendererAttachmentGeometry.overlayRect(
-                cssRect: geometry.cssRect,
-                pageZoom: webView.pageZoom,
-                readerBounds: webView.bounds)
-            container.updateAttachmentViewport(
-                geometry.visible ? rect : .zero,
-                for: placeholderID)
-        }
+        ) {}
 
         func applyReaderZoom(
             _ readerZoom: Double,
@@ -2450,9 +2437,8 @@ internal struct WikiReaderRep: NSViewRepresentable {
             guard appliedReaderZoom != zoom else { return }
             appliedReaderZoom = zoom
             webView.pageZoom = zoom
-            for placeholderID in attachmentCoordinator?.placeholderIDs ?? [] {
-                updateAttachmentViewport(for: placeholderID, in: webView, container: container)
-            }
+            // Reader pageZoom is the single outer zoom; package canvas zoom
+            // stays renderer-owned. Embedded DOM content scales with the page.
             webView.evaluateJavaScript("window.__sdwRendererAttachmentReport && window.__sdwRendererAttachmentReport(\(loadGeneration));")
         }
 
@@ -2486,18 +2472,12 @@ internal struct WikiReaderRep: NSViewRepresentable {
 
         func collapseAttachment(_ placeholderID: RendererAttachmentPlaceholderID) {
             guard let attachmentCoordinator,
-                  attachmentCoordinator.state(for: placeholderID) == .active,
-                  let attachmentContainer,
-                  attachmentContainer.ownsMountedAttachment(named: placeholderID)
-            else {
-                // DOM-era collapse: no native child is mounted; remove the
-                // embed surface and its bridge session, scoped to this row.
-                teardownDOMEmbed(placeholderID)
-                setRowExpansion(false, for: placeholderID)
-                return
-            }
+                  attachmentCoordinator.state(for: placeholderID) == .active
+            else { return }
             attachmentCoordinator.collapse(placeholderID)
-            attachmentContainer.removeAttachment(named: placeholderID)
+            // DOM-era collapse: remove the embed surface and its bridge
+            // session, scoped to this row.
+            teardownDOMEmbed(placeholderID)
             setRowExpansion(false, for: placeholderID)
         }
 
@@ -2513,8 +2493,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         func failAttachment(_ placeholderID: RendererAttachmentPlaceholderID) {
             attachmentCoordinator?.fail(placeholderID)
             setRowExpansion(false, for: placeholderID)
-            guard attachmentContainer?.ownsMountedAttachment(named: placeholderID) == true else { return }
-            attachmentContainer?.removeAttachment(named: placeholderID)
+            teardownDOMEmbed(placeholderID)
         }
 
         func webView(
