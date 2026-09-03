@@ -1,7 +1,15 @@
+---
+timestamp: 2026-09-03T120000Z
+title: Reader DOM renderer embeds
+branch: feature/reader-dom-renderer-embeds
+status: implemented
+---
+
 # Reader DOM renderer embeds
 
-Date: 2026-09-03
-Status: implemented on `feature/reader-dom-renderer-embeds`. Not merged.
+## Progress
+
+Implemented on `feature/reader-dom-renderer-embeds`. Not merged.
 
 ## What changed
 
@@ -58,7 +66,7 @@ finite state machine per placeholder with an explicit legal-transition table.
 Stale-generation callbacks fail closed. Collapse, DOM removal, navigation,
 reload, dismantle, and process termination close only the matching session.
 
-## Evidence
+## Verification
 
 - `RendererHostedSubframeHarnessTests`: subframe origin proof, two-frame
   isolation, https-parent negative control, harness self-tests (AC.11).

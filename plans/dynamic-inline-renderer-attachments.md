@@ -71,7 +71,7 @@ A reader document can keep four renderer rows expanded. A fifth disclosure reque
 
 Inline content uses a separate document budget of six renderers. It does not consume a renderer-row slot. Package frames add a third budget of six concurrent frames, with a 30-second load timeout.
 
-`ReaderDOMRendererLifecycle` is a finite state machine per placeholder: `collapsed`, `loading`, `active`, `retryableResourceRefusal`, `failed`, or `removed`. Legal transitions are an explicit table. A stale callback from an older generation cannot mutate a newer document.
+`ReaderDOMRendererLifecycle` is a six-state lifecycle per placeholder: `collapsed`, `loading`, `active`, `retryableResourceRefusal`, `failed`, or `removed`. Legal transitions are an explicit table. A stale callback from an older generation cannot mutate a newer document.
 
 Collapse, DOM removal, navigation, reload, reader dismantle, and process termination close only the matching frame session and release its budget.
 
