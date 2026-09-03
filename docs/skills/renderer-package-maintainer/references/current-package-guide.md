@@ -48,7 +48,7 @@ The package version is `1.0.5`. Its manifest declares a bounded JSON matcher for
 
 ### Reviewed Mermaid renderer package
 
-The reviewed package root is `RendererPackages/Mermaid` in the repository. SwiftPM does not copy it into the app resource bundle. Users import the folder through Settings → Renderers → Advanced Local Renderer Package Import. The package ID is `org.selfdrivingwiki.mermaid-readonly`. The version is `1.0.0`. The registration ID is `mermaid`.
+The reviewed package root is `RendererPackages/Mermaid` in the repository. SwiftPM does not copy it into the app resource bundle. Users import the folder through Settings → Renderers → Advanced Local Renderer Package Import. The package ID is `org.selfdrivingwiki.mermaid-readonly`. The version is `1.0.1`. The registration ID is `mermaid`.
 
 The package claims the `mermaid` fence alias with the inline MIME type `text/mermaid`, and it matches `text/mermaid` sources plus the `.mmd` extension fallback. It is a read-only Web renderer. It declares `input.read` only, no external links, and 48,000-byte input and decoded-input limits. It has priority 90 and fills both embedding roles.
 
@@ -57,6 +57,36 @@ The package carries one vendored engine asset, `mermaid.min.js`, from the upstre
 The manifest is revision 3. Its claim carries a fence-syntax validation declaration: the engine asset `mermaid.min.js`, the wrapper asset `validate.js`, and the entry function `__sdw_validate_fence`. The wrapper asset installs a minimal DOM and timer environment before the engine loads, because the bundled engine captures DOM state when it loads. The host evaluates the wrapper first, then the engine, then calls the entry function.
 
 A revision 3 claim may declare `validation` with `engineAssetPath`, `wrapperAssetPath`, and `entryFunction`. The two asset paths must be distinct, approved by the declaring descriptor, and declared in the top-level asset list. The entry function must be one JavaScript identifier. A revision 1 or 2 manifest that carries a `validation` object is rejected.
+
+### Reviewed JSON Canvas renderer package
+
+The reviewed package root is `RendererPackages/JSONCanvas` in the repository. SwiftPM does not copy it into the app resource bundle. Users import the folder through Settings → Renderers → Advanced Local Renderer Package Import. The package ID is `org.selfdrivingwiki.json-canvas-readonly`. The version is `1.1.2`. The registration ID is `json-canvas`. The manifest is revision 5.
+
+The package matches `application/json` sources with a bounded JSON matcher requiring root-object `nodes` and `edges` arrays of objects, plus the `.canvas` extension fallback. It claims the `jsoncanvas` fence alias with the inline MIME type `application/json`. It fills both embedding roles, has priority 110, and 48,000-byte input and decoded-input limits.
+
+The package declares `inputRead`, `externalLink`, `hostNavigation`, and `assetRead` capabilities with a `hostNavigation` declaration that allows page, source, and named-content target kinds, and an `assetRead` declaration (roles `imageNode` + `groupBackground`; MIME `image/png`, `image/jpeg`, `image/gif`, `image/webp`; one reviewed `extractor.js` with entry `__sdw_extract_canvas_assets`; bounded extractor and session limits). It uses the user-activated external-link policy and protocol revision 1.
+
+### Manifest revision 5 and asset read
+
+A revision 5 manifest may declare the optional `assetRead` capability plus an `assetRead` object with:
+
+- `allowedRoles`: a nonempty closed set (`imageNode`, `groupBackground`).
+- `allowedMIMETypes`: a nonempty subset of `image/png`, `image/jpeg`, `image/gif`, `image/svg+xml`, `image/webp`. SVG stays excluded from the JSON Canvas declaration until a hostile-SVG image-surface isolation gate passes.
+- `maximumExtractedReferenceCount`, `maximumExtractorInputBytes`, `maximumExtractorOutputBytes`, `maximumExtractorExecutionSeconds`, `maximumBytesPerAsset`, `maximumAggregateSessionBytes`: bounded ceilings.
+- `extractorAsset`: a package-local asset (hash-approved, declared in both the descriptor and top-level assets) that derives `{role, reference}` records from the pinned primary input.
+- `extractorEntryFunction`: an identifier-safe entry name.
+
+The capability requires the declaration, and the declaration requires the capability. Built-in/native declarations are rejected, and the extractor asset must be approved by the declaring descriptor. Revisions 1 to 4 that carry asset-read authority fail closed.
+
+The host runs the reviewed extractor in a single-invocation helper (fresh JavaScriptCore context, bounded framed stdin/stdout, enforced deadline + output caps, process-group terminate/reap) before any WebKit session exists, resolves each record against the exact sibling/File Provider projection, and pins each to `SourceID` + exact `SourceVersionID` + MIME + size + digest. The session asset reader returns only bounded approved bytes through `asset.read`; every miss is a uniform redacted denial. The package cannot enumerate the wiki, request arbitrary SourceIDs, read the primary canvas through `asset.read`, or fetch network/file URLs.
+
+### Manifest revision 4 and host navigation
+
+A revision 4 (or later) manifest may declare the optional `hostNavigation` capability and a `hostNavigation` object with `allowedTargetKinds` (a nonempty set of `page`, `source`, and `namedContent`).
+
+The capability requires the declaration, and the declaration requires the capability. Built-in or native declarations are rejected. Revisions 1 to 3 that carry a navigation capability or declaration fail closed. Older hosts cannot decode the capability and reject the manifest.
+
+Package code may request only the declared, typed target kinds through the isolated bridge. Named-content references are validated relative paths with an optional `#subpath`; the trusted host normalizes basename, extension removal, and anchor before routing. Every internal navigation request requires a fresh host-observed, single-use, purpose-bound user activation, and the bridge returns only a uniform acknowledgement. External HTTP(S) links continue through the separate external-link activation flow.
 
 ### Create and validate a package
 

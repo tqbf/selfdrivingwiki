@@ -240,7 +240,7 @@ struct PackageFenceValidationManifestTests {
         let descriptor = try webDescriptor(claims: [
             RendererFixtures.fenceClaim(alias: "mermaid", mime: "text/mermaid", validation: try declaration()),
         ])
-        let validated = try manifest(revision: RendererManifestRevision.current, descriptor: descriptor)
+        let validated = try manifest(revision: RendererManifestRevision.fenceValidation, descriptor: descriptor)
         let first = try validated.canonicalJSON()
         let second = try validated.canonicalJSON()
         #expect(first == second)

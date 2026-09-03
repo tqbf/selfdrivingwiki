@@ -1,0 +1,166 @@
+{
+  "revision": 5,
+  "packageID": "org.selfdrivingwiki.json-canvas-readonly",
+  "version": "1.1.2",
+  "descriptors": [
+    {
+      "reference": {
+        "packageID": "org.selfdrivingwiki.json-canvas-readonly",
+        "version": "1.1.2",
+        "registrationID": "json-canvas"
+      },
+      "displayName": "JSON Canvas",
+      "implementation": {
+        "webPackage": {
+          "_0": {
+            "path": "index.html"
+          }
+        }
+      },
+      "matchers": [
+        {
+          "normalizedMIME": {
+            "_0": "application/json"
+          }
+        },
+        {
+          "extensionFallback": {
+            "_0": "canvas"
+          }
+        },
+        {
+          "boundedJSON": {
+            "_0": {
+              "root": "object",
+              "properties": {},
+              "arrays": {
+                "nodes": "object",
+                "edges": "object"
+              }
+            }
+          }
+        }
+      ],
+      "presentations": [
+        "web"
+      ],
+      "supportedEmbeddingRoles": [
+        "inlineContent",
+        "disclosureRow"
+      ],
+      "fenceClaims": [
+        {
+          "alias": "jsoncanvas",
+          "inlineMIMEType": "application/json"
+        }
+      ],
+      "approvedAssets": [
+        {
+          "path": "PROVENANCE.md",
+          "digest": "7d1fe54f3d67392ee5b4051581847b522caa51e4727c28472da61ea1fa247e6f"
+        },
+        {
+          "path": "LICENSE.md",
+          "digest": "081e33340d0eb36d193ee4cab8446bb08c0566878b55f72aa3643d65b38d959d"
+        },
+        {
+          "path": "JSONCanvasSpec.md",
+          "digest": "15f0cc8356cd168df2ce211112a7699f0185373320c179e8fc83d1f922cc7e10"
+        },
+        {
+          "path": "extractor.js",
+          "digest": "59ac5ecd690409da74295743f53df3299e7b6092b5982167b40761f33f54f82e"
+        },
+        {
+          "path": "index.html",
+          "digest": "b05ad791c251df13fce6b614f0dd5d8a6232565be472cb2378ef9c8ec3c42975"
+        },
+        {
+          "path": "viewer.js",
+          "digest": "cc249b16a512d42373d295082bdfd3a1541c55cd8c84f9db912817579e50aad1"
+        },
+        {
+          "path": "viewer.css",
+          "digest": "5b4063aa4126b2f508bc1355855874ca2e291180d9230ace6dffa2d78b9d844e"
+        }
+      ],
+      "capabilities": [
+        "inputRead",
+        "externalLink",
+        "hostNavigation",
+        "assetRead"
+      ],
+      "hostNavigation": {
+        "allowedTargetKinds": [
+          "namedContent",
+          "page",
+          "source"
+        ]
+      },
+      "assetRead": {
+        "allowedRoles": [
+          "imageNode",
+          "groupBackground"
+        ],
+        "allowedMIMETypes": [
+          "image/gif",
+          "image/jpeg",
+          "image/png",
+          "image/webp"
+        ],
+        "maximumExtractedReferenceCount": 256,
+        "maximumExtractorInputBytes": 262144,
+        "maximumExtractorOutputBytes": 262144,
+        "maximumExtractorExecutionSeconds": 5,
+        "maximumBytesPerAsset": 8388608,
+        "maximumAggregateSessionBytes": 33554432,
+        "extractorAsset": "extractor.js",
+        "extractorEntryFunction": "__sdw_extract_canvas_assets"
+      },
+      "sizeLimits": {
+        "maximumInputByteCount": 48000,
+        "maximumDecodedByteCount": 48000
+      },
+      "linkPolicy": "userActivatedExternal",
+      "accessibility": {
+        "supportsVoiceOver": true,
+        "supportsKeyboardNavigation": true
+      },
+      "compatibility": {
+        "minimumProtocolRevision": 1,
+        "maximumProtocolRevision": 1
+      },
+      "priority": 110
+    }
+  ],
+  "assets": [
+    {
+      "path": "PROVENANCE.md",
+      "digest": "7d1fe54f3d67392ee5b4051581847b522caa51e4727c28472da61ea1fa247e6f"
+    },
+    {
+      "path": "LICENSE.md",
+      "digest": "081e33340d0eb36d193ee4cab8446bb08c0566878b55f72aa3643d65b38d959d"
+    },
+    {
+      "path": "JSONCanvasSpec.md",
+      "digest": "15f0cc8356cd168df2ce211112a7699f0185373320c179e8fc83d1f922cc7e10"
+    },
+    {
+      "path": "extractor.js",
+      "digest": "59ac5ecd690409da74295743f53df3299e7b6092b5982167b40761f33f54f82e"
+    },
+    {
+      "path": "index.html",
+      "digest": "b05ad791c251df13fce6b614f0dd5d8a6232565be472cb2378ef9c8ec3c42975"
+    },
+    {
+      "path": "viewer.js",
+      "digest": "cc249b16a512d42373d295082bdfd3a1541c55cd8c84f9db912817579e50aad1"
+    },
+    {
+      "path": "viewer.css",
+      "digest": "5b4063aa4126b2f508bc1355855874ca2e291180d9230ace6dffa2d78b9d844e"
+    }
+  ]
+}

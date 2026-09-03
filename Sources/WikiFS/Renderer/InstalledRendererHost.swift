@@ -100,7 +100,9 @@ final class InstalledRendererHost {
                     resourceProvider: provider,
                     failureRecorder: preparation.failureRecorder,
                     inputReader: nil,
-                    externalActivationPolicy: .disabled)
+                    externalActivationPolicy: .disabled,
+                    hostNavigationTargetKinds: [],
+                    hostNavigationRouting: .unavailable)
             })
     }
 

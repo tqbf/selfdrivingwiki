@@ -16,7 +16,7 @@ struct RendererCapabilityBoundaryPolicyTests {
             #expect(!inputs.contains(forbidden), "Shared built-in inputs must not expose \(forbidden)")
         }
         #expect(inputs.contains("mediaTarget: EmbedTarget?"))
-        #expect(inputs.contains("jsonCanvasHostAction:"))
+        #expect(!inputs.contains("jsonCanvasHostAction:"))
     }
 
     @Test("installed package protocol version one remains closed")

@@ -42,6 +42,9 @@ enum RendererFixtures {
         embeddingRoles: Set<RendererEmbeddingRole> = [.disclosureRow],
         explicitEmbeddingRoles: Bool = false,
         fenceClaims: [RendererFenceClaim] = [],
+        capabilities: Set<RendererCapability> = [.inputRead],
+        hostNavigation: RendererHostNavigationDeclaration? = nil,
+        assetRead: RendererAssetReadDeclaration? = nil,
         priority: Int = 0
     ) throws -> RendererDescriptor {
         guard let entry = assets.first else { throw RendererValidationError.invalidPresentation }
@@ -55,7 +58,9 @@ enum RendererFixtures {
             hasExplicitEmbeddingRoles: explicitEmbeddingRoles,
             fenceClaims: fenceClaims,
             approvedAssets: assets,
-            capabilities: [.inputRead],
+            capabilities: capabilities,
+            hostNavigation: hostNavigation,
+            assetRead: assetRead,
             sizeLimits: try .init(maximumInputByteCount: 1_024, maximumDecodedByteCount: 2_048),
             linkPolicy: .none,
             accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),

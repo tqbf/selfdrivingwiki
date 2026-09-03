@@ -368,12 +368,24 @@ struct WikiAppWebViewTests {
             queueEngine: try makePageDetailQueueEngine(),
             extractionProvider: StubExtractionProvider())
         session.store.openTab(.page(page.id))
+        let rendererLayout = try RendererPackageStoreLayout(
+            appGroupContainerRoot: dir.appendingPathComponent("renderer-machine", isDirectory: true))
+        let rendererHandle = try await RendererRuntimeFactory(layout: rendererLayout).assemble()
+        let installedRendererHost = InstalledRendererHost(services: rendererHandle.services)
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let packageDirectory = repositoryRoot
+            .appendingPathComponent("RendererPackages/JSONCanvas", isDirectory: true)
+        let installed = await installedRendererHost.installRendererDirectory(packageDirectory)
+        try #require(installed)
+        session.store.rendererEnabledDescriptors = installedRendererHost.inputs.enabledDescriptors
+
         let registry = WikiRegistryClient(containerDirectory: dir)
         let root = RootView(
             session: session,
             registry: registry,
             fileProvider: FileProviderFacade(),
-            installedRendererHost: InstalledRendererHost(services: UnavailableRendererServices())
+            installedRendererHost: installedRendererHost
         )
         .environment(FindModel())
         .environment(QueueActivityTracker())
@@ -410,6 +422,9 @@ struct WikiAppWebViewTests {
         let attachment = try await waitForNativeRendererAttachment(in: hosting.view, timeout: .seconds(10))
         #expect(attachment.isHidden == false)
         #expect(window.sheets.count == sheetCountBeforePresentation)
+
+        hosting.rootView = AnyView(EmptyView())
+        try await rendererHandle.dispose()
     }
 
     @Test("hosted SwiftUI mount exposes the session WebView and tears it down")

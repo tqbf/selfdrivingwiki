@@ -64,8 +64,7 @@ import WikiFSTypes
             sourceBytes: Data("%PDF".utf8),
             pdfQuote: "a retained quote",
             htmlSource: nil,
-            mediaTarget: nil,
-            jsonCanvasHostAction: { _ in })
+            mediaTarget: nil)
 
         #expect(state.selection == .rendered)
         #expect(state.pinnedRenderer == descriptor.reference)
@@ -184,8 +183,8 @@ import WikiFSTypes
             inputs: try Self.factoryInputs(sourceBytes: nil)) == nil)
     }
 
-    @Test("Planner maps a complete JSON Canvas document to the native built-in")
-    func plannerMatchesJSONCanvas() throws {
+    @Test("Planner maps no native built-in to a JSON Canvas document")
+    func plannerDoesNotMapJSONCanvasToNativeBuiltIn() throws {
         let data = Data("""
         {"nodes":[{"id":"note","type":"text","x":0,"y":0,"width":120,"height":60,"text":"Note"}],"edges":[]}
         """.utf8)
@@ -201,7 +200,10 @@ import WikiFSTypes
             currentMarkdown: nil,
             origin: nil)
 
-        #expect(id == .jsonCanvas)
+        // JSON Canvas is a renderer-package source now: no native built-in
+        // maps it, and the generic installed package lifecycle provides the
+        // renderer pane from the descriptor.
+        #expect(id == nil)
     }
 
     @Test("JSON Canvas sources use the raw source presentation")
@@ -216,7 +218,6 @@ import WikiFSTypes
             updatedAt: .distantPast,
             version: 1)
 
-        #expect(SourceRendererPresentationPlanner.standaloneDiagramSource(source))
         #expect(SourceRendererPresentationPlanner.usesMarkdownSourcePresentation(
             for: source,
             currentMarkdown: "{\"nodes\":[],\"edges\":[]}"))
@@ -231,10 +232,8 @@ import WikiFSTypes
             mimeType: MimeType.json,
             byteSize: content.utf8.count)
 
-        // Excalidraw is a renderer-package source now: no reader-projected
-        // diagram tab, just the readable code-block presentation plus the
-        // package renderer pane from the generic lifecycle.
-        #expect(!SourceRendererPresentationPlanner.standaloneDiagramSource(source))
+        // Excalidraw uses the readable code-block presentation. The generic
+        // installed-package lifecycle provides its renderer pane.
         #expect(SourceRendererPresentationPlanner.usesMarkdownSourcePresentation(
             for: source,
             boundedBytes: Data(content.utf8),
@@ -298,32 +297,15 @@ import WikiFSTypes
         }
     }
 
-    @Test("JSON Canvas factory returns nil for unavailable and malformed input so the host keeps Source")
+    @Test("Factory map has no JSON Canvas native entry so host keeps Source")
     @MainActor
-    func jsonCanvasFactoryFailsClosedToHostFallback() throws {
-        let descriptor = BuiltInRendererDescriptors.descriptor(for: .jsonCanvas)
-        #expect(descriptor.accessibility.supportsVoiceOver)
-        #expect(descriptor.accessibility.supportsKeyboardNavigation)
-        let validData = Data("""
-        {"nodes":[{"id":"note","type":"text","x":0,"y":0,"width":120,"height":60,"text":"Note"}],"edges":[]}
-        """.utf8)
-        let malformedData = Data("{\"nodes\":[]".utf8)
-        let unsafeLinkData = Data("""
-        {"nodes":[{"id":"link","type":"file","x":0,"y":0,"width":120,"height":60,"file":"../secret.md"}],"edges":[]}
-        """.utf8)
-
-        #expect(BuiltInRendererFactoryMap.makeView(
-            for: descriptor,
-            inputs: try Self.factoryInputs(sourceBytes: validData)) != nil)
-        #expect(BuiltInRendererFactoryMap.makeView(
-            for: descriptor,
-            inputs: try Self.factoryInputs(sourceBytes: malformedData)) == nil)
-        #expect(BuiltInRendererFactoryMap.makeView(
-            for: descriptor,
-            inputs: try Self.factoryInputs(sourceBytes: nil)) == nil)
-        #expect(BuiltInRendererFactoryMap.makeView(
-            for: descriptor,
-            inputs: try Self.factoryInputs(sourceBytes: unsafeLinkData)) == nil)
+    func noNativeJSONCanvasFactoryKeepsHostFallback() throws {
+        // JSON Canvas is a renderer-package source: no built-in native factory
+        // can claim a canvas document, so the host always keeps the readable
+        // Source fallback.
+        #expect(BuiltInRendererFactoryMap.factory(for: .pdf) != nil)
+        #expect(BuiltInRendererFactoryMap.factories.keys.contains(.pdf))
+        #expect(BuiltInRendererFactoryMap.factories.keys.count == 4)
     }
 
     @Test("Characterization: NULL-MIME standalone diagram bytes stay readable")
@@ -371,8 +353,7 @@ import WikiFSTypes
             sourceBytes: nil,
             pdfQuote: nil,
             htmlSource: nil,
-            mediaTarget: nil,
-            jsonCanvasHostAction: { _ in })
+            mediaTarget: nil)
         #expect(BuiltInRendererFactoryMap.makeView(for: descriptor, inputs: inputs) == nil)
     }
 
@@ -569,8 +550,7 @@ import WikiFSTypes
             sourceBytes: sourceBytes,
             pdfQuote: nil,
             htmlSource: nil,
-            mediaTarget: nil,
-            jsonCanvasHostAction: { _ in })
+            mediaTarget: nil)
     }
 }
 

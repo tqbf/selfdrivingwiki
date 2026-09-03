@@ -53,6 +53,10 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
     public var hasFenceValidation: Bool { fenceClaims.contains { $0.hasValidation } }
     public let approvedAssets: [RendererAsset]
     public let capabilities: Set<RendererCapability>
+    public let hostNavigation: RendererHostNavigationDeclaration?
+    public var hasHostNavigationDeclaration: Bool { hostNavigation != nil }
+    public let assetRead: RendererAssetReadDeclaration?
+    public var hasAssetReadDeclaration: Bool { assetRead != nil }
     public let sizeLimits: RendererSizeLimits
     public let linkPolicy: RendererLinkPolicy
     public let accessibility: RendererAccessibility
@@ -70,6 +74,8 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
         fenceClaims: [RendererFenceClaim] = [],
         approvedAssets: [RendererAsset],
         capabilities: Set<RendererCapability>,
+        hostNavigation: RendererHostNavigationDeclaration? = nil,
+        assetRead: RendererAssetReadDeclaration? = nil,
         sizeLimits: RendererSizeLimits,
         linkPolicy: RendererLinkPolicy,
         accessibility: RendererAccessibility,
@@ -97,8 +103,20 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
         guard capabilities.contains(.inputRead) else {
             throw RendererValidationError.missingRequiredCapability(.inputRead)
         }
-        for capability in capabilities where capability != .inputRead && capability != .externalLink {
+        for capability in capabilities where capability != .inputRead && capability != .externalLink && capability != .hostNavigation && capability != .assetRead {
             throw RendererValidationError.forbiddenCapability(capability)
+        }
+        if capabilities.contains(.hostNavigation), hostNavigation == nil {
+            throw RendererValidationError.hostNavigationCapabilityRequiresDeclaration
+        }
+        if hostNavigation != nil, capabilities.contains(.hostNavigation) == false {
+            throw RendererValidationError.hostNavigationDeclarationRequiresCapability
+        }
+        if capabilities.contains(.assetRead), assetRead == nil {
+            throw RendererValidationError.assetReadCapabilityRequiresDeclaration
+        }
+        if assetRead != nil, capabilities.contains(.assetRead) == false {
+            throw RendererValidationError.assetReadDeclarationRequiresCapability
         }
         if linkPolicy == .userActivatedExternal && capabilities.contains(.externalLink) == false {
             throw RendererValidationError.missingRequiredCapability(.externalLink)
@@ -127,9 +145,19 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
         switch implementation {
         case .builtIn:
             guard presentations == [.native], assets.isEmpty else { throw RendererValidationError.invalidPresentation }
+            guard hostNavigation == nil else { throw RendererValidationError.hostNavigationRequiresWebPackage }
+            guard assetRead == nil else { throw RendererValidationError.assetReadRequiresWebPackage }
         case let .webPackage(entryPoint):
             guard presentations == [.web], assets.contains(where: { $0.path == entryPoint.path }) else {
                 throw RendererValidationError.invalidPresentation
+            }
+            // The reference-extractor asset is a renderer input byte read by
+            // the host helper; it must be approved by this descriptor and
+            // covered by package digests, exactly like fence-validation
+            // engine/wrapper assets.
+            if let declaration = assetRead,
+               assets.contains(where: { $0.path == declaration.extractorAsset }) == false {
+                throw RendererValidationError.extractorAssetNotApproved(declaration.extractorAsset)
             }
         }
         self.reference = reference
@@ -142,6 +170,8 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
         self.fenceClaims = claims
         self.approvedAssets = assets
         self.capabilities = capabilities
+        self.hostNavigation = hostNavigation
+        self.assetRead = assetRead
         self.sizeLimits = sizeLimits
         self.linkPolicy = linkPolicy
         self.accessibility = accessibility
@@ -159,6 +189,8 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
         case fenceClaims
         case approvedAssets
         case capabilities
+        case hostNavigation
+        case assetRead
         case sizeLimits
         case linkPolicy
         case accessibility
@@ -183,6 +215,12 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
         }
         try container.encode(approvedAssets, forKey: .approvedAssets)
         try container.encode(capabilities, forKey: .capabilities)
+        if let hostNavigation {
+            try container.encode(hostNavigation, forKey: .hostNavigation)
+        }
+        if let assetRead {
+            try container.encode(assetRead, forKey: .assetRead)
+        }
         try container.encode(sizeLimits, forKey: .sizeLimits)
         try container.encode(linkPolicy, forKey: .linkPolicy)
         try container.encode(accessibility, forKey: .accessibility)
@@ -206,6 +244,8 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
             fenceClaims: try container.decodeIfPresent([RendererFenceClaim].self, forKey: .fenceClaims) ?? [],
             approvedAssets: container.decode([RendererAsset].self, forKey: .approvedAssets),
             capabilities: container.decode(Set<RendererCapability>.self, forKey: .capabilities),
+            hostNavigation: try container.decodeIfPresent(RendererHostNavigationDeclaration.self, forKey: .hostNavigation),
+            assetRead: try container.decodeIfPresent(RendererAssetReadDeclaration.self, forKey: .assetRead),
             sizeLimits: container.decode(RendererSizeLimits.self, forKey: .sizeLimits),
             linkPolicy: container.decode(RendererLinkPolicy.self, forKey: .linkPolicy),
             accessibility: container.decode(RendererAccessibility.self, forKey: .accessibility),

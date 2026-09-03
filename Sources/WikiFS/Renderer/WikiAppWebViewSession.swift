@@ -152,6 +152,7 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
     private var permit: RendererWebViewSessionPermit?
     private var bridge: RendererContentWorldBroker?
     private var scriptMessageHandler: RendererScriptMessageHandler?
+    private var navigationActivationHandler: RendererNavigationActivationScriptMessageHandler?
     private var trustedActivationHandler: RendererTrustedActivationScriptMessageHandler?
     private var externalLinkHandler: RendererExternalLinkScriptMessageHandler?
     private let externalLinkRedemptionGate: RendererExternalLinkRedemptionGate
@@ -241,8 +242,24 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
                 configuration.userContentController.addUserScript(
                     RendererContentWorldBroker.pageRelayScript(contentWorld: configuration.contentWorld)
                 )
+                let navigationActivationHandler = RendererNavigationActivationScriptMessageHandler(
+                    broker: bridge,
+                    expectedContentWorld: configuration.contentWorld
+                ) { [weak self] webView, securityOrigin, isMainFrame in
+                    self?.isTrustedPackageMessage(
+                        webView: webView,
+                        securityOrigin: securityOrigin,
+                        isMainFrame: isMainFrame) ?? false
+                }
+                configuration.userContentController.addScriptMessageHandler(
+                    navigationActivationHandler,
+                    contentWorld: configuration.contentWorld,
+                    name: WikiAppWebViewPolicy.hostNavigationActivationHandlerName)
+                configuration.userContentController.addUserScript(
+                    RendererContentWorldBroker.navigationActivationScript(contentWorld: configuration.contentWorld))
                 self.bridge = bridge
                 scriptMessageHandler = handler
+                self.navigationActivationHandler = navigationActivationHandler
             } catch {
                 DebugLog.reader("Renderer bridge bootstrap failed.")
                 failLoading(.bridgeBootstrapFailed)
@@ -298,12 +315,17 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
         bridge?.close()
         bridge = nil
         scriptMessageHandler = nil
+        navigationActivationHandler = nil
         trustedActivationHandler = nil
         externalLinkHandler = nil
         configuration?.schemeHandler.close()
         if let configuration {
             configuration.userContentController.removeScriptMessageHandler(
                 forName: WikiAppWebViewPolicy.isolatedMessageHandlerName,
+                contentWorld: configuration.contentWorld
+            )
+            configuration.userContentController.removeScriptMessageHandler(
+                forName: WikiAppWebViewPolicy.hostNavigationActivationHandlerName,
                 contentWorld: configuration.contentWorld
             )
             configuration.userContentController.removeScriptMessageHandler(
@@ -436,6 +458,13 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
     private func invalidateForNavigation() {
         navigationID &+= 1
         externalLinkRedemptionGate.invalidateAll(reason: .navigationInvalidated)
+        bridge?.invalidateNavigationActivations()
+    }
+
+    private func isTrustedPackageMessage(
+        webView: WKWebView?, securityOrigin: WKSecurityOrigin?, isMainFrame: Bool
+    ) -> Bool {
+        self.webView === webView && isReadyForBridge && hasExpectedPackageOrigin(securityOrigin) && isMainFrame
     }
 
     private func recordTrustedActivation(

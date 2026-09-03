@@ -12,41 +12,6 @@ import WikiFSCore
 @Suite("Phase 6 hosted renderer validation", .serialized, .timeLimit(.minutes(2)))
 @MainActor
 struct Phase6RendererHostedValidationTests {
-    @Test("JSON Canvas mounts in an AppKit window with its deterministic outline")
-    func jsonCanvasMountsWithDeterministicOutline() async throws {
-        let lease = await HostedAppKitTestGate.shared.acquire()
-        defer { lease.release() }
-        Self.prepareApplication()
-
-        let document = try JSONCanvasDocument.decode(Self.jsonCanvasInput)
-        let host = NSHostingController(rootView: AnyView(JSONCanvasRendererView(document: document)))
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 720, height: 480),
-            styleMask: [.titled, .closable],
-            backing: .buffered,
-            defer: false)
-        window.contentViewController = host
-        window.setContentSize(NSSize(width: 720, height: 480))
-        window.orderFront(nil)
-        defer {
-            window.orderOut(nil)
-            window.contentView = nil
-        }
-
-        host.view.frame = NSRect(x: 0, y: 0, width: 720, height: 480)
-        host.view.layoutSubtreeIfNeeded()
-        let content = try #require(window.contentView)
-        let bitmap = try #require(content.bitmapImageRepForCachingDisplay(in: content.bounds))
-        content.cacheDisplay(in: content.bounds, to: bitmap)
-        let png = try #require(bitmap.representation(using: .png, properties: [:]))
-
-        #expect(document.outline.map(\.label) == ["First note", "Second note"])
-        #expect(host.view.window === window)
-        #expect(host.view.frame.width == 720)
-        #expect(host.view.frame.height == 480)
-        #expect(png.count > 1_024)
-    }
-
     @Test("Excalidraw loads through the restrictive package session and renders authorized input")
     func excalidrawLoadsAuthorizedInputThroughHostedSession() async throws {
         let lease = await HostedAppKitTestGate.shared.acquire()
@@ -332,16 +297,6 @@ struct Phase6RendererHostedValidationTests {
         }
         throw HostedRendererValidationError.timeout(description: description)
     }
-
-    private static let jsonCanvasInput = Data("""
-    {
-      "nodes": [
-        {"id":"second","type":"text","x":240,"y":100,"width":180,"height":80,"text":"Second note"},
-        {"id":"first","type":"text","x":20,"y":10,"width":180,"height":80,"text":"First note"}
-      ],
-      "edges": [{"id":"edge-1","fromNode":"first","toNode":"second"}]
-    }
-    """.utf8)
 
     private static let excalidrawInput = Data("""
     {

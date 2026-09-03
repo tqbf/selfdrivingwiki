@@ -583,8 +583,7 @@ struct RendererActivationView: View {
             sourceBytes: payload?.bytes,
             pdfQuote: nil,
             htmlSource: nil,
-            mediaTarget: nil,
-            jsonCanvasHostAction: JSONCanvasHostActionRouter.handler(for: store))
+            mediaTarget: nil)
     }
 
     private func authorizedPayload() -> RendererBridgeInputPayload? {
@@ -614,7 +613,7 @@ struct RendererActivationView: View {
             authorizedInput: request.input)
         return installedRendererHost.factory.makeView(
             for: descriptor,
-            inputs: installedRendererHost.inputs,
+            inputs: installedRendererHost.inputs.withHostNavigationRouting(.store(store)),
             inputReader: inputReader,
             onFailure: { failure in
                 DebugLog.reader("Installed renderer presentation failed: \(failure.kind)")

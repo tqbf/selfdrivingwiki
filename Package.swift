@@ -138,6 +138,25 @@ let package = Package(
             path: "Tests/RendererPackageToolTests",
             swiftSettings: strictSwiftSettings
         ),
+        // Single-invocation reference-extractor helper for the renderer
+        // asset-read authority (manifest revision 5). The host runs this
+        // SwiftPM executable (embedded JavaScriptCore) to derive a bounded
+        // `{role, reference}` allowlist from the pinned primary input before a
+        // WebKit asset-read session exists. It is built by `swift build` /
+        // `make build` and copied into `Contents/Helpers` by `build.sh`; the
+        // test target locates the sibling binary under `.build`.
+        .executableTarget(
+            name: "RendererAssetReferenceExtractorHelper",
+            dependencies: ["WikiFSTypes"],
+            path: "Sources/RendererAssetReferenceExtractorHelper",
+            swiftSettings: strictSwiftSettings
+        ),
+        .testTarget(
+            name: "RendererAssetReferenceExtractorHelperTests",
+            dependencies: ["RendererAssetReferenceExtractorHelper", "WikiFSCore", "WikiFSTypes"],
+            path: "Tests/RendererAssetReferenceExtractorHelperTests",
+            swiftSettings: strictSwiftSettings
+        ),
         // Development-only validator and protocol fixture checker for local
         // extractor package authoring. The tool never executes package code.
         .target(

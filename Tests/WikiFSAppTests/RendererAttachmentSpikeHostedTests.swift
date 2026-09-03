@@ -1043,10 +1043,42 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
         return "\"" + escaped + "\""
     }
 
+    /// Installed JSON Canvas renderer package descriptor (reviewed). JSON Canvas
+    /// is a Web package only; exported fence spike tests use its package claim.
+    private static func jsonCanvasInstalledDescriptor() throws -> RendererDescriptor {
+        let entry = try RendererRelativePath(validating: "index.html")
+        return try RendererDescriptor(
+            reference: .init(
+                packageID: try RendererPackageID(validating: "org.selfdrivingwiki.json-canvas-readonly"),
+                version: try RendererPackageVersion(validating: "1.0.1"),
+                registrationID: try RendererRegistrationID(validating: "json-canvas")),
+            displayName: "JSON Canvas",
+            implementation: .webPackage(.init(path: entry)),
+            matchers: [
+                .normalizedMIME(try .init(validating: "application/json")),
+                .extensionFallback(try .init(validating: "canvas")),
+            ],
+            presentations: [.web],
+            supportedEmbeddingRoles: [.inlineContent, .disclosureRow],
+            hasExplicitEmbeddingRoles: true,
+            fenceClaims: [.init(
+                alias: try RendererFenceAlias(validating: "jsoncanvas"),
+                inlineMIMEType: try RendererMIMEType(validating: "application/json"))],
+            approvedAssets: [RendererAsset(path: entry, digest: try .init(hex: "aa0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0a"))],
+            capabilities: [.inputRead, .externalLink, .hostNavigation],
+            hostNavigation: try .init(allowedTargetKinds: [.page, .source, .namedContent]),
+            sizeLimits: .init(maximumInputByteCount: 48_000, maximumDecodedByteCount: 48_000),
+            linkPolicy: .userActivatedExternal,
+            accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
+            compatibility: .init(minimumProtocolRevision: 1, maximumProtocolRevision: 1),
+            priority: 110)
+    }
+
     private static func html(for markdown: String, documentIdentity: MarkdownDocumentIdentity) -> String {
+        let descriptor = try! jsonCanvasInstalledDescriptor()
         let projection = RendererEmbedProjection(
             sourceEmbeds: [:],
-            richFenceClaims: RendererFenceClaimResolver.resolve(builtInDescriptors: [BuiltInRendererDescriptors.descriptor(for: .jsonCanvas)]))
+            richFenceClaims: RendererFenceClaimResolver.resolve(builtInDescriptors: [], enabledInstalledDescriptors: [descriptor]))
         let options = MarkdownRenderOptions(
             codeHighlighting: .disabled,
             rendererEmbedProjection: projection,

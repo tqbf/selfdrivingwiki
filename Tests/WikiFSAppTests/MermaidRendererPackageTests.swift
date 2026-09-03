@@ -18,7 +18,7 @@ struct MermaidRendererPackageTests {
         let package = try fixture.validator.validate(directory: fixture.packageDirectory)
         let descriptor = try #require(package.manifest.descriptors.only)
 
-        #expect(package.manifest.revision == RendererManifestRevision.current)
+        #expect(package.manifest.revision == RendererManifestRevision.fenceValidation)
         #expect(package.packageHash.hex.isEmpty == false)
 
         let claim = try #require(descriptor.fenceClaims.only)

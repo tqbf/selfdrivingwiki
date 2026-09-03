@@ -6,6 +6,37 @@ import WikiFSTypes
 
 // pattern: Imperative Shell
 
+@MainActor
+struct RendererHostNavigationRouting {
+    private let routeTarget: @MainActor (RendererNavigationTarget) -> Void
+
+    init(route: @escaping @MainActor (RendererNavigationTarget) -> Void) {
+        routeTarget = route
+    }
+
+    static let unavailable = Self(route: { _ in })
+
+    static func store(_ store: WikiStoreModel) -> Self {
+        Self { target in
+            switch target {
+            case let .page(pageID):
+                _ = store.selectPage(byID: pageID)
+            case let .source(sourceID):
+                _ = store.selectSource(byID: sourceID)
+            case let .namedContent(reference):
+                let filename = reference.path.split(separator: "/").last.map(String.init) ?? reference.path
+                let title = (filename as NSString).deletingPathExtension
+                let anchor = reference.subpath.map { String($0.dropFirst()) }
+                if store.selectPage(byTitle: title, anchor: anchor) == false {
+                    _ = store.selectSource(byDisplayName: title, anchor: anchor)
+                }
+            }
+        }
+    }
+
+    func route(_ target: RendererNavigationTarget) { routeTarget(target) }
+}
+
 /// Version-pinned inputs needed to mount one validated installed renderer.
 /// The package resource provider exposes bytes only, never its local file URL.
 @MainActor
@@ -15,7 +46,32 @@ struct InstalledRendererSessionConfiguration {
     let resourceProvider: any RendererPackageResourceProviding
     let failureRecorder: RendererSessionFailureRecording?
     let inputReader: RendererAuthorizedInputReader?
+    let assetReader: RendererAuthorizedAssetReader?
     let externalActivationPolicy: RendererExternalActivationPolicy
+    let hostNavigationTargetKinds: Set<RendererHostNavigationTargetKind>
+    let hostNavigationRouting: RendererHostNavigationRouting
+
+    init(
+        identity: InstalledRendererWebViewIdentity,
+        reservation: RendererPackageReservation,
+        resourceProvider: any RendererPackageResourceProviding,
+        failureRecorder: RendererSessionFailureRecording?,
+        inputReader: RendererAuthorizedInputReader?,
+        assetReader: RendererAuthorizedAssetReader? = nil,
+        externalActivationPolicy: RendererExternalActivationPolicy,
+        hostNavigationTargetKinds: Set<RendererHostNavigationTargetKind> = [],
+        hostNavigationRouting: RendererHostNavigationRouting = .unavailable
+    ) {
+        self.identity = identity
+        self.reservation = reservation
+        self.resourceProvider = resourceProvider
+        self.failureRecorder = failureRecorder
+        self.inputReader = inputReader
+        self.assetReader = assetReader
+        self.externalActivationPolicy = externalActivationPolicy
+        self.hostNavigationTargetKinds = hostNavigationTargetKinds
+        self.hostNavigationRouting = hostNavigationRouting
+    }
 }
 
 /// The app-side seam for package-backed renderers. This is intentionally a peer
@@ -44,6 +100,7 @@ struct InstalledRendererFactory {
         for descriptor: RendererDescriptor,
         inputs: Inputs,
         inputReader: RendererAuthorizedInputReader?,
+        assetReader: RendererAuthorizedAssetReader? = nil,
         onFailure: @escaping @MainActor (RendererSessionFailure) -> Void
     ) -> AnyView? {
         guard case let .webPackage(entryPoint) = descriptor.implementation,
@@ -76,7 +133,10 @@ struct InstalledRendererFactory {
             resourceProvider: configuration.resourceProvider,
             failureRecorder: configuration.failureRecorder,
             inputReader: inputReader,
-            externalActivationPolicy: descriptor.linkPolicy == .userActivatedExternal ? .enabled : .disabled)
+            assetReader: assetReader,
+            externalActivationPolicy: descriptor.linkPolicy == .userActivatedExternal ? .enabled : .disabled,
+            hostNavigationTargetKinds: descriptor.hostNavigation?.allowedTargetKinds ?? [],
+            hostNavigationRouting: inputs.hostNavigationRouting)
 
         return AnyView(WikiAppWebView(
             identity: configuration.identity,
@@ -103,6 +163,9 @@ struct InstalledRendererFactory {
                         sessionID: sessionID,
                         capability: .init(rawValue: UUID().uuidString),
                         inputReader: inputReader,
+                        assetReader: configuration.assetReader,
+                        allowedNavigationTargetKinds: configuration.hostNavigationTargetKinds,
+                        routeNavigation: configuration.hostNavigationRouting.route,
                         expectedOrigin: identity.entryURL)
                 }
             },
@@ -131,17 +194,27 @@ struct InstalledRendererFactory {
     @MainActor
     struct Inputs {
         let enabledDescriptors: [RendererDescriptor]
+        let hostNavigationRouting: RendererHostNavigationRouting
         private let resolveConfiguration: ConfigurationResolver
 
         init(
             enabledDescriptors: [RendererDescriptor] = [],
+            hostNavigationRouting: RendererHostNavigationRouting = .unavailable,
             resolveConfiguration: @escaping ConfigurationResolver
         ) {
             self.enabledDescriptors = enabledDescriptors
+            self.hostNavigationRouting = hostNavigationRouting
             self.resolveConfiguration = resolveConfiguration
         }
 
         static let unavailable = Self(resolveConfiguration: { _, _ in nil })
+
+        func withHostNavigationRouting(_ routing: RendererHostNavigationRouting) -> Self {
+            Self(
+                enabledDescriptors: enabledDescriptors,
+                hostNavigationRouting: routing,
+                resolveConfiguration: resolveConfiguration)
+        }
 
         func configuration(
             for descriptor: RendererDescriptor,

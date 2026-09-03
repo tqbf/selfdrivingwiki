@@ -1,0 +1,163 @@
+:root {
+  color-scheme: light dark;
+  --canvas-background: light-dark(#f5f4f2, #1e1e1e);
+  --canvas-text: light-dark(#1a1a1a, #e8e8e8);
+  --node-stroke: light-dark(#3a3a3a, #b0b0b0);
+  --edge-stroke: light-dark(#888888, #6a6a6a);
+  --focus-ring: light-dark(#0a84ff, #0a84ff);
+  --node-fill: light-dark(rgba(255, 255, 255, 0.6), rgba(40, 40, 40, 0.6));
+  --edge-label-bg: light-dark(rgba(245, 244, 242, 0.9), rgba(30, 30, 30, 0.9));
+}
+
+html, body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+  background: var(--canvas-background);
+  color: var(--canvas-text);
+}
+
+#viewer {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  outline: none;
+  position: relative;
+}
+
+#viewer:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.scene {
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+  cursor: grab;
+}
+
+.scene:active {
+  cursor: grabbing;
+}
+
+.node {
+  stroke-width: 1.5;
+  fill: var(--node-fill);
+}
+
+.node:focus,
+.node-anchor:focus {
+  stroke-width: 3;
+  stroke: var(--focus-ring);
+  outline: none;
+}
+
+.node-anchor:hover,
+.node-anchor:focus-visible {
+  stroke: var(--focus-ring);
+}
+
+/* Text nodes: semantic HTML inside a node-bounded foreignObject. */
+.node-text-fo {
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.node-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.3;
+  color: var(--canvas-text);
+  overflow: hidden;
+}
+
+.node-text p {
+  margin: 0 0 2px;
+  overflow-wrap: break-word;
+}
+
+.node-text code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.92em;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  border-radius: 3px;
+  padding: 0 3px;
+}
+
+.node-text .markdown-link {
+  color: var(--focus-ring);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.node-text .overflow-cue {
+  font-size: 11px;
+  color: var(--edge-stroke);
+  margin: 0;
+}
+
+.node-label {
+  fill: var(--canvas-text);
+  font-size: 12px;
+  pointer-events: none;
+  user-select: none;
+}
+
+.node-file-image {
+  pointer-events: none;
+  border-radius: 4px;
+}
+
+.node-group-bg {
+  border-radius: 4px;
+}
+
+.edge {
+  stroke: var(--edge-stroke);
+  stroke-width: 1.5;
+  pointer-events: none;
+  fill: none;
+}
+
+/* Default (no-color) edge arrowheads inherit the edge-stroke custom property
+   so they match the uncolored edge line. Colored edges get a per-color marker
+   with an explicit `color` attribute (see makeEdgeMarkers). */
+marker.edge-arrow-default {
+  color: var(--edge-stroke);
+}
+
+.edge-label-bg {
+  fill: var(--edge-label-bg);
+  stroke: none;
+}
+
+.edge-label {
+  fill: var(--canvas-text);
+  font-size: 11px;
+  pointer-events: none;
+  user-select: none;
+  text-anchor: middle;
+}
+
+.message {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 1rem;
+  text-align: center;
+  color: var(--canvas-text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scene {
+    transition: none;
+  }
+}

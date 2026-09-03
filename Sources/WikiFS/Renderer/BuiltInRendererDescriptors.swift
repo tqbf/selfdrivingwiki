@@ -55,24 +55,6 @@ enum BuiltInRendererDescriptors {
                 matchers: BuiltInRendererMIME.mediaMIMEs.map { .normalizedMIME(mime($0)) },
                 maximumInputByteCount: BuiltInRendererLimits.bytelessMaximumInputByteCount,
                 priority: BuiltInRendererPriority.media)
-        case .jsonCanvas:
-            return make(
-                id: .jsonCanvas,
-                displayName: "JSON Canvas",
-                matchers: [
-                    .normalizedMIME(mime(BuiltInRendererMIME.json)),
-                    .extensionFallback(fileExtension("canvas")),
-                    jsonConstraints(
-                        properties: [:],
-                        arrays: ["nodes": .object, "edges": .object]),
-                ],
-                maximumInputByteCount: JSONCanvasLimits.maximumInputByteCount,
-                embeddingRoles: [.inlineContent, .disclosureRow],
-                fenceClaims: [
-                    RendererFenceClaim(alias: fenceAlias("jsoncanvas"), inlineMIMEType: mime(BuiltInRendererMIME.json)),
-                ],
-                accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
-                priority: BuiltInRendererPriority.jsonCanvas)
         }
     }
 
@@ -141,7 +123,8 @@ enum BuiltInRendererDescriptors {
     /// Aliases the trusted built-in table claims for Markdown rich fences. This
     /// is the single definition of built-in fence authority: the runtime wiring
     /// injects it into package validation and activation, and host components
-    /// (e.g. the JSON Canvas attachment factory) derive their checks from it.
+    /// derive their checks from it. The reviewed JSON Canvas package claims
+    /// `jsoncanvas` at install time; it is not a built-in alias.
     /// Syntax-reserved ordinary-language labels are folded in so a package
     /// cannot claim a programming-language label either.
     static var reservedFenceAliases: Set<RendererFenceAlias> {
@@ -191,7 +174,6 @@ enum BuiltInRendererReference {
 }
 
 enum BuiltInRendererPriority {
-    static let jsonCanvas = 110
     static let bytefulDocument = 100
     static let media = 80
 }

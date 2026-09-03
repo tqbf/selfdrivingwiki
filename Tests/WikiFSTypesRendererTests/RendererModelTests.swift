@@ -551,3 +551,337 @@ struct RendererStableOrderingTests {
         #expect(RendererMatchTier.extensionFallback < .strong)
     }
 }
+
+struct RendererHostNavigationManifestTests {
+    private func declaration(
+        _ kinds: Set<RendererHostNavigationTargetKind> = [.page, .source, .namedContent]
+    ) throws -> RendererHostNavigationDeclaration {
+        try .init(allowedTargetKinds: kinds)
+    }
+
+    private func descriptor(
+        capabilities: Set<RendererCapability> = [.inputRead, .hostNavigation],
+        hostNavigation: RendererHostNavigationDeclaration? = nil
+    ) throws -> RendererDescriptor {
+        try RendererFixtures.webDescriptor(
+            explicitEmbeddingRoles: true,
+            capabilities: capabilities,
+            hostNavigation: hostNavigation ?? declaration())
+    }
+
+    private func manifest(revision: Int, descriptor: RendererDescriptor) throws -> RendererManifest {
+        try RendererManifest(
+            revision: revision,
+            packageID: descriptor.reference.packageID,
+            version: descriptor.reference.version,
+            descriptors: [descriptor],
+            assets: descriptor.approvedAssets)
+    }
+
+    @Test func revision4CanonicalizesDeclaredTargetKindsDeterministically() throws {
+        let descriptor = try descriptor(hostNavigation: declaration([.source, .namedContent, .page]))
+        let value = try manifest(revision: RendererManifestRevision.hostNavigation, descriptor: descriptor)
+        let canonical = try value.canonicalJSON()
+        let text = String(decoding: canonical, as: UTF8.self)
+
+        #expect(value.revision == 4)
+        #expect(descriptor.capabilities.contains(.hostNavigation))
+        #expect(descriptor.hostNavigation?.allowedTargetKinds == [.page, .source, .namedContent])
+        #expect(text.contains(#""allowedTargetKinds":["namedContent","page","source"]"#))
+        #expect(try value.canonicalJSON() == canonical)
+        #expect(try value.packageHash() == value.packageHash())
+    }
+
+    @Test func preRevision4NavigationFailsClosed() throws {
+        let descriptor = try descriptor()
+        for revision in RendererManifestRevision.legacy ... RendererManifestRevision.fenceValidation {
+            #expect(throws: RendererValidationError.hostNavigationRequiresRevision4) {
+                try manifest(revision: revision, descriptor: descriptor)
+            }
+        }
+    }
+
+    @Test func capabilityAndDeclarationMustBePaired() throws {
+        #expect(throws: RendererValidationError.hostNavigationCapabilityRequiresDeclaration) {
+            let asset = RendererFixtures.webAsset()
+            _ = try RendererDescriptor(
+                reference: .init(
+                    packageID: RendererFixtures.packageID,
+                    version: RendererFixtures.version,
+                    registrationID: RendererFixtures.registrationID),
+                displayName: "Web",
+                implementation: .webPackage(.init(path: asset.path)),
+                matchers: [.artifactKind(.source)],
+                presentations: [.web],
+                supportedEmbeddingRoles: [.disclosureRow],
+                hasExplicitEmbeddingRoles: true,
+                approvedAssets: [asset],
+                capabilities: [.inputRead, .hostNavigation],
+                sizeLimits: try .init(maximumInputByteCount: 1_024, maximumDecodedByteCount: 1_024),
+                linkPolicy: .none,
+                accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
+                compatibility: try .init(minimumProtocolRevision: 1, maximumProtocolRevision: 1),
+                priority: 0)
+        }
+        #expect(throws: RendererValidationError.hostNavigationDeclarationRequiresCapability) {
+            _ = try RendererFixtures.webDescriptor(
+                explicitEmbeddingRoles: true,
+                capabilities: [.inputRead],
+                hostNavigation: try declaration())
+        }
+        #expect(throws: RendererValidationError.emptyHostNavigationDeclaration) {
+            _ = try declaration([])
+        }
+    }
+
+    @Test func builtInNavigationDeclarationIsRejected() throws {
+        #expect(throws: RendererValidationError.hostNavigationRequiresWebPackage) {
+            _ = try RendererDescriptor(
+                reference: .init(
+                    packageID: RendererFixtures.packageID,
+                    version: RendererFixtures.version,
+                    registrationID: RendererFixtures.registrationID),
+                displayName: "Native",
+                implementation: .builtIn(.pdf),
+                matchers: [.normalizedMIME(try .init(validating: "application/pdf"))],
+                presentations: [.native],
+                approvedAssets: [],
+                capabilities: [.inputRead, .hostNavigation],
+                hostNavigation: declaration([.page]),
+                sizeLimits: try .init(maximumInputByteCount: 1_024, maximumDecodedByteCount: 1_024),
+                linkPolicy: .none,
+                accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
+                compatibility: try .init(minimumProtocolRevision: 1, maximumProtocolRevision: 1),
+                priority: 0)
+        }
+    }
+
+    @Test func unknownCapabilityAndTargetKindFailDecode() {
+        let capability = Data(#"\"arbitraryNavigation\""#.utf8)
+        let target = Data(#"\"filesystemPath\""#.utf8)
+        #expect(throws: DecodingError.self) {
+            _ = try JSONDecoder().decode(RendererCapability.self, from: capability)
+        }
+        #expect(throws: DecodingError.self) {
+            _ = try JSONDecoder().decode(RendererHostNavigationTargetKind.self, from: target)
+        }
+    }
+
+    @Test func descriptorEncodingOmitsAbsentNavigationDeclaration() throws {
+        let descriptor = try RendererFixtures.webDescriptor(explicitEmbeddingRoles: true)
+        let text = String(decoding: try JSONEncoder().encode(descriptor), as: UTF8.self)
+        #expect(text.contains("hostNavigation") == false)
+    }
+}
+
+struct RendererAssetReadManifestTests {
+    private func declaration(
+        extractorAsset: RendererRelativePath? = nil,
+        entryFunction: String = "__sdw_extract_canvas_assets",
+        roles: Set<RendererAssetRole> = [.imageNode, .groupBackground],
+        mimes: Set<RendererMIMEType>? = nil,
+        count: Int = 64,
+        input: Int = 128 * 1_024,
+        output: Int = 128 * 1_024,
+        seconds: Int = 5,
+        perAsset: Int = 8 * 1_024 * 1_024,
+        aggregate: Int = 32 * 1_024 * 1_024
+    ) throws -> RendererAssetReadDeclaration {
+        let resolvedExtractor: RendererRelativePath
+        if let extractorAsset {
+            resolvedExtractor = extractorAsset
+        } else {
+            resolvedExtractor = try RendererRelativePath(validating: "extractor.js")
+        }
+        return try RendererAssetReadDeclaration(
+            allowedRoles: roles,
+            allowedMIMETypes: mimes ?? [try .init(validating: "image/png"), try .init(validating: "image/jpeg")],
+            maximumExtractedReferenceCount: count,
+            maximumExtractorInputBytes: input,
+            maximumExtractorOutputBytes: output,
+            maximumExtractorExecutionSeconds: seconds,
+            maximumBytesPerAsset: perAsset,
+            maximumAggregateSessionBytes: aggregate,
+            extractorAsset: resolvedExtractor,
+            extractorEntryFunction: entryFunction)
+    }
+
+    private func descriptor(
+        capabilities: Set<RendererCapability> = [.inputRead, .assetRead],
+        assetRead: RendererAssetReadDeclaration? = nil,
+        assets: [RendererAsset] = [RendererFixtures.webAsset(), RendererFixtures.webAsset(path: "extractor.js")]
+    ) throws -> RendererDescriptor {
+        try RendererFixtures.webDescriptor(
+            assets: assets,
+            explicitEmbeddingRoles: true,
+            capabilities: capabilities,
+            assetRead: assetRead ?? declaration())
+    }
+
+    private func manifest(revision: Int, descriptor: RendererDescriptor) throws -> RendererManifest {
+        try RendererManifest(
+            revision: revision,
+            packageID: descriptor.reference.packageID,
+            version: descriptor.reference.version,
+            descriptors: [descriptor],
+            assets: descriptor.approvedAssets)
+    }
+
+    @Test func revision5CanonicalizesAssetReadDeclarationDeterministically() throws {
+        let declaration = try declaration(
+            roles: [.groupBackground, .imageNode],
+            mimes: [try .init(validating: "image/jpeg"), try .init(validating: "image/png")])
+        let descriptor = try descriptor(assetRead: declaration)
+        let value = try manifest(revision: RendererManifestRevision.assetRead, descriptor: descriptor)
+        let canonical = try value.canonicalJSON()
+        let text = String(decoding: canonical, as: UTF8.self)
+
+        #expect(value.revision == 5)
+        #expect(descriptor.capabilities.contains(RendererCapability.assetRead))
+        let allowedRoles = try #require(descriptor.assetRead?.allowedRoles)
+        #expect(allowedRoles == [.imageNode, .groupBackground])
+        #expect(text.contains(#""allowedRoles":["groupBackground","imageNode"]"#))
+        #expect(text.contains(#""allowedMIMETypes":["image/jpeg","image/png"]"#))
+        #expect(text.contains(#""extractorEntryFunction":"__sdw_extract_canvas_assets""#))
+        #expect(try value.canonicalJSON() == canonical)
+    }
+
+    @Test func preRevision5AssetReadFailsClosed() throws {
+        let descriptor = try descriptor()
+        for revision in RendererManifestRevision.legacy ... RendererManifestRevision.hostNavigation {
+            #expect(throws: RendererValidationError.assetReadRequiresRevision5) {
+                try manifest(revision: revision, descriptor: descriptor)
+            }
+        }
+    }
+
+    @Test func assetReadRequiresCapabilityAndDeclarationPairing() throws {
+        #expect(throws: RendererValidationError.assetReadCapabilityRequiresDeclaration) {
+            _ = try RendererFixtures.webDescriptor(
+                explicitEmbeddingRoles: true,
+                capabilities: [.inputRead, .assetRead])
+        }
+        #expect(throws: RendererValidationError.assetReadDeclarationRequiresCapability) {
+            _ = try RendererFixtures.webDescriptor(
+                explicitEmbeddingRoles: true,
+                capabilities: [.inputRead],
+                assetRead: try declaration())
+        }
+    }
+
+    @Test func assetReadIsWebPackageOnly() throws {
+        #expect(throws: RendererValidationError.assetReadRequiresWebPackage) {
+            _ = try RendererDescriptor(
+                reference: .init(
+                    packageID: RendererFixtures.packageID,
+                    version: RendererFixtures.version,
+                    registrationID: RendererFixtures.registrationID),
+                displayName: "Native",
+                implementation: .builtIn(.pdf),
+                matchers: [.normalizedMIME(try .init(validating: "application/pdf"))],
+                presentations: [.native],
+                approvedAssets: [],
+                capabilities: [.inputRead, .assetRead],
+                assetRead: try declaration(),
+                sizeLimits: try .init(maximumInputByteCount: 1_024, maximumDecodedByteCount: 1_024),
+                linkPolicy: .none,
+                accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
+                compatibility: try .init(minimumProtocolRevision: 1, maximumProtocolRevision: 1),
+                priority: 0)
+        }
+    }
+
+    @Test func extractorAssetMustBeApprovedByDescriptor() throws {
+        // The extractor asset is NOT in the descriptor's approved set.
+        let entry = RendererFixtures.webAsset()
+        let declaration = try declaration(extractorAsset: try .init(validating: "missing.js"))
+        let missing = try RendererRelativePath(validating: "missing.js")
+        #expect(throws: RendererValidationError.extractorAssetNotApproved(missing)) {
+            _ = try RendererFixtures.webDescriptor(
+                assets: [entry],
+                explicitEmbeddingRoles: true,
+                capabilities: [.inputRead, .assetRead],
+                assetRead: declaration)
+        }
+    }
+
+    @Test func rejectsEmptyInvalidAndOversizedDeclarations() throws {
+        // Empty role set fails closed.
+        #expect(throws: RendererValidationError.emptyAssetReadDeclaration) {
+            _ = try declaration(roles: [])
+        }
+        // Empty MIME set fails closed.
+        #expect(throws: RendererValidationError.emptyAssetReadDeclaration) {
+            _ = try declaration(mimes: [])
+        }
+        // Unknown MIME type fails closed.
+        #expect(throws: RendererValidationError.unsupportedAssetMIMEType) {
+            _ = try declaration(mimes: [try .init(validating: "application/pdf")])
+        }
+        // Zero entry-function fails closed (not an identifier).
+        #expect(throws: Error.self) {
+            _ = try declaration(entryFunction: "")
+        }
+        // Reserved word entry function fails closed.
+        #expect(throws: Error.self) {
+            _ = try declaration(entryFunction: "null")
+        }
+        // Ceiling overshoot fails closed.
+        #expect(throws: Error.self) {
+            _ = try declaration(count: RendererAssetReadLimits.maximumExtractedReferenceCount + 1)
+        }
+        #expect(throws: Error.self) {
+            _ = try declaration(input: RendererAssetReadLimits.maximumExtractorInputBytes + 1)
+        }
+        #expect(throws: Error.self) {
+            _ = try declaration(perAsset: RendererAssetReadLimits.maximumBytesPerAsset + 1)
+        }
+        #expect(throws: Error.self) {
+            _ = try declaration(aggregate: RendererAssetReadLimits.maximumAggregateSessionBytes + 1)
+        }
+    }
+}
+
+struct RendererModelTests {
+    @Test func reviewedRevision2And3PackageHashesRemainStable() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let fixtures: [(path: String, revision: Int, hash: String)] = [
+            ("RendererPackages/Excalidraw/manifest.json", RendererManifestRevision.fenceClaims,
+             "7580e5195a43ee677a795c2a4591c3dcebf528d3dbfadba7001f659e9c328999"),
+            ("RendererPackages/Mermaid/manifest.json", RendererManifestRevision.fenceValidation,
+             "714bb2a23a33bbe45ab9507137c2784d844fee32220ae6248ea78a60e2acda6f"),
+        ]
+        for fixture in fixtures {
+            let data = try Data(contentsOf: root.appendingPathComponent(fixture.path))
+            let manifest = try JSONDecoder().decode(RendererManifest.self, from: data)
+            #expect(manifest.revision == fixture.revision)
+            #expect(try manifest.packageHash().hex == fixture.hash)
+            #expect(manifest.descriptors.allSatisfy {
+                $0.compatibility.supports(hostProtocolRevision: RendererRegistrySnapshotDefaults.hostProtocolRevision)
+            })
+        }
+    }
+
+    @Test func reviewedRevision4PackageHashRemainsStable() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        // The on-disk package is 1.1.1 (revision 5, subpath fix). Its package
+        // hash is a stability contract: adding a manifest revision or changing
+        // assets must produce a NEW immutable version and never mutate an
+        // existing reviewed package hash. The prior 1.0.1 (revision 4) and
+        // 1.1.0 package hashes are preserved in repository history, not on
+        // disk.
+        let data = try Data(contentsOf: root.appendingPathComponent("RendererPackages/JSONCanvas/manifest.json"))
+        let manifest = try JSONDecoder().decode(RendererManifest.self, from: data)
+        #expect(manifest.revision == RendererManifestRevision.current)
+        #expect(try manifest.packageHash().hex == "2e17de05a9cb367752aa27021bd15ca4f858828015d307bb0ebb188bda5a3f96")
+        #expect(manifest.descriptors.allSatisfy {
+            $0.compatibility.supports(hostProtocolRevision: RendererRegistrySnapshotDefaults.hostProtocolRevision)
+        })
+    }
+}

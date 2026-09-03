@@ -233,18 +233,17 @@ Issue #593 owns Excalidraw-specific behavior and bundle selection.
 
 ### 9.2 JSON Canvas
 
-JSON Canvas proves a built-in native renderer registration:
+This section described the former built-in native renderer. JSON Canvas is now
+a reviewed, machine-scoped Web renderer package. It matches `.canvas` JSON with
+bounded evidence, renders read-only content, routes typed links through the
+generic host-navigation bridge, and falls back to readable source JSON.
 
-- match `.canvas` JSON with bounded sniffing.
-- decode nodes and edges into typed values.
-- support pan, zoom, selection, and outline navigation.
-- resolve file and wiki links through the host.
-- fall back to raw source JSON.
+See [`json-canvas-renderer-package.md`](json-canvas-renderer-package.md) for the
+current design. Issue #594 and the former native test inventory remain
+historical implementation evidence.
 
-Issue #594 owns JSON Canvas parsing and native presentation details.
-
-Together these cases prove that one registry can select both implementation
-kinds without putting format branches in `SourceDetailView`.
+Together, Excalidraw and JSON Canvas prove that the registry can select
+reviewed packages without format branches in `SourceDetailView`.
 
 ## 10. Persistence
 
