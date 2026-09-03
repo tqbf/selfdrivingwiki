@@ -97,12 +97,10 @@ struct WikiFSApp: App {
     /// Owns the open-windows list for the standard Window menu (issue #567).
     @State private var windowTracker: WindowListTracker
 
-    /// App-wide chat daemon coordinator (Phase C4). Owns the per-chat
-    /// `RemoteChatSession` registry + wraps the 6 chat XPC commands. `nil`
-    /// when the daemon is unavailable — chat surfaces then render an
-    /// reconnecting state while transport starts or recovers. Chat has no local
-    /// fallback because the daemon owns chat.
-    @State private var chatDaemonCoordinator: ChatDaemonCoordinator?
+    /// App-wide chat daemon coordinator (Phase C4). The holder has stable
+    /// reference identity so the transport callback can update the mounted
+    /// scene even though `WikiFSApp` itself is a transient value.
+    @State private var chatDaemonHolder: ChatDaemonCoordinatorHolder
 
     /// Presentation-only adapter for typed daemon transport events.
     @State private var healthMonitor: DaemonHealthMonitor
@@ -233,11 +231,15 @@ struct WikiFSApp: App {
 
         let transportMonitor = DaemonHealthMonitor(services: transportOwner.services)
         _healthMonitor = State(initialValue: transportMonitor)
+        let chatDaemonHolder = ChatDaemonCoordinatorHolder()
+        _chatDaemonHolder = State(initialValue: chatDaemonHolder)
         daemonTransportCoordinator = DaemonTransportAppCoordinator(
             services: transportOwner.services,
             bridge: transportBridge,
             queueController: runtimeController,
-            replaceChatCoordinator: { _ in },
+            replaceChatCoordinator: { [chatDaemonHolder] coordinator in
+                chatDaemonHolder.replace(with: coordinator)
+            },
             observeEvent: { [weak transportMonitor] event in
                 transportMonitor?.consume(event)
             })
@@ -356,6 +358,7 @@ struct WikiFSApp: App {
         // so the `.task` copies that remain are harmless redundant fallbacks,
         // not the primary path. Add new one-time launch work HERE, not to an
         // individual window's `.task`.
+        appDelegate.chatDaemonHolder = chatDaemonHolder
         appDelegate.bootstrap = { [self] in
             startStatusItem()
             applyAppKitAppearance()
@@ -497,7 +500,7 @@ struct WikiFSApp: App {
             }
             // Phase C4: chat runs on the daemon — check the coordinator's
             // aggregate rather than a per-wiki chat launcher.
-            if chatDaemonCoordinator?.anyChatGenerating == true {
+            if chatDaemonHolder.coordinator?.anyChatGenerating == true {
                 return "A chat session"
             }
             return nil
@@ -565,18 +568,8 @@ struct WikiFSApp: App {
 
     @MainActor
     private func connectToDaemon() {
-        daemonTransportCoordinator.installChatReplacement { coordinator in
-            replaceChatDaemonCoordinator(coordinator)
-        }
         healthMonitor.start()
         daemonTransportCoordinator.startIfNeeded()
-    }
-
-    @MainActor
-    private func replaceChatDaemonCoordinator(_ coordinator: ChatDaemonCoordinator?) {
-        chatDaemonCoordinator?.stop()
-        chatDaemonCoordinator = coordinator
-        appDelegate.chatDaemonCoordinator = coordinator
     }
 
     var body: some Scene {
@@ -600,7 +593,7 @@ struct WikiFSApp: App {
             .appEnvironment(
                 tracker: activityTracker,
                 openActivityWindow: { [weak openWindowBridge] queue in openWindowBridge?.openActivityWindow?(queue) },
-                chatDaemon: chatDaemonCoordinator,
+                chatDaemon: chatDaemonHolder.coordinator,
                 healthMonitor: healthMonitor)
             .preferredColorScheme(appearanceColorScheme)
             .sheet(isPresented: $showingOptionalRuntimeSetup) {
@@ -696,7 +689,7 @@ struct WikiFSApp: App {
             .appEnvironment(
                 tracker: activityTracker,
                 openActivityWindow: { [weak openWindowBridge] queue in openWindowBridge?.openActivityWindow?(queue) },
-                chatDaemon: chatDaemonCoordinator,
+                chatDaemon: chatDaemonHolder.coordinator,
                 healthMonitor: healthMonitor)
             .preferredColorScheme(appearanceColorScheme)
             .onAppear {
@@ -1015,7 +1008,7 @@ struct WikiFSApp: App {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor weak var sessionManager: SessionManager?
-    @MainActor weak var chatDaemonCoordinator: ChatDaemonCoordinator?
+    @MainActor weak var chatDaemonHolder: ChatDaemonCoordinatorHolder?
     /// STRONG on purpose: this is the only long-lived owner of the status-item
     /// controller. A weak reference here deallocates the controller the moment
     /// `startStatusItem()` returns, which removes the NSStatusItem from the
@@ -1148,7 +1141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidBecomeActive(_ notification: Notification) {
         MainActor.assumeIsolated {
-            chatDaemonCoordinator?.applicationDidBecomeActive()
+            chatDaemonHolder?.coordinator?.applicationDidBecomeActive()
         }
     }
 

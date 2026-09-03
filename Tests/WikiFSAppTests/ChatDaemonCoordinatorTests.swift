@@ -461,6 +461,26 @@ struct ChatDaemonCoordinatorTests {
         #expect(session.selectedModelId(forProvider: ProviderID(rawValue: "claude-acp")) == ModelID(rawValue: "activation-model"))
     }
 
+    @Test func stableHolderPublishesTransportReplacement() {
+        let holder = ChatDaemonCoordinatorHolder()
+        let coordinator = makeCoordinator()
+        let observation = ObservationCounter()
+
+        withObservationTracking {
+            _ = holder.coordinator
+        } onChange: {
+            observation.increment()
+        }
+
+        #expect(holder.coordinator == nil)
+        holder.replace(with: coordinator)
+        #expect(observation.count == 1)
+        #expect(holder.coordinator === coordinator)
+
+        holder.replace(with: nil)
+        #expect(holder.coordinator == nil)
+    }
+
     private func providerConfigDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("provider-reload-\(UUID().uuidString)", isDirectory: true)
@@ -560,6 +580,19 @@ struct ChatDaemonCoordinatorTests {
             await Task.yield()
         }
         Issue.record("Condition was not met before timeout.")
+    }
+}
+
+private final class ObservationCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    var count: Int {
+        lock.withLock { value }
+    }
+
+    func increment() {
+        lock.withLock { value += 1 }
     }
 }
 
