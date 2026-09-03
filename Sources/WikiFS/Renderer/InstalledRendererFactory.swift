@@ -229,11 +229,11 @@ struct InstalledRendererFactory {
         /// no web-package entry point or the package snapshot is unavailable.
         func resourceProvider(
             for descriptor: RendererDescriptor
-        ) -> (entryPath: String, provider: any RendererPackageResourceProviding)? {
+        ) -> (entryPath: String, provider: any RendererPackageResourceProviding, assetReader: RendererAuthorizedAssetReader?)? {
             guard case let .webPackage(entryPoint) = descriptor.implementation,
                   let configuration = resolveConfiguration(descriptor, entryPoint)
             else { return nil }
-            return (entryPoint.path.rawValue, configuration.resourceProvider)
+            return (entryPoint.path.rawValue, configuration.resourceProvider, configuration.assetReader)
         }
     }
 }

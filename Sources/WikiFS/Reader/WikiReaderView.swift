@@ -2429,6 +2429,10 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     DebugLog.reader("embed[\(placeholderID.rawValue)]: input admission failed \(error)")
                     return .rejected
                 }
+                // Admitted asset reader for this descriptor, if the package
+                // declares assets (e.g., JSON Canvas image references).
+                let assetReader = rendererPackageInputs?.entries.first(
+                    where: { $0.reference == context.rendererReference })?.assetReader
                 var originComponents = URLComponents()
                 originComponents.scheme = RendererPackageScheme.name
                 originComponents.host = framePlan.frameToken.rawValue
@@ -2442,6 +2446,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     sessionID: .init(rawValue: UUID()),
                     capability: context.capability,
                     inputReader: inputReader,
+                    assetReader: assetReader,
                     expectedOrigin: expectedOrigin)
                 broker.bind(to: webView)
                 // Expose the authorized input selector inside THIS frame only.

@@ -34,6 +34,9 @@ struct RendererPackageEmbedInputs {
         /// The package entry document's path within the package manifest.
         let entryPath: String
         let provider: any RendererPackageResourceProviding
+        /// Admitted asset reader for the package session (nil when the
+        /// descriptor declares no assets).
+        let assetReader: RendererAuthorizedAssetReader?
     }
 
     let entries: [Entry]
@@ -47,7 +50,8 @@ struct RendererPackageEmbedInputs {
             return Entry(
                 reference: descriptor.reference,
                 entryPath: resolved.entryPath,
-                provider: resolved.provider)
+                provider: resolved.provider,
+                assetReader: resolved.assetReader)
         })
     }
 }
