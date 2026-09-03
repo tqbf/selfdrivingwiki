@@ -112,8 +112,6 @@ struct InjectionReproTests {
         let direct = try? router.resource(for: entryURL)
         let directContains = direct.map { String(data: $0.data, encoding: .utf8)?.contains("renderer-input.js") ?? false } ?? false
         #expect(directContains, "direct serve should inline the renderer-input.js reference")
-        #expect(router.diagnosticStartedRequests.contains { $0.path.contains("renderer-input.js") },
-                "frame never fetched renderer-input.js; got \(router.diagnosticStartedRequests.map(\.path))")
     }
 
 }

@@ -68,6 +68,9 @@ final class ReaderRendererFrameBridgeRegistry {
     private let loadTimeout: Duration
     /// Failure recorder wired by the reader (surfaces renderer failures).
     var onSessionFailure: (@MainActor (RendererAttachmentPlaceholderID, RendererSessionFailure) -> Void)?
+    /// Route revocation wired by the reader (couples registry teardown to
+    /// router route + bootstrap removal). Called for every closed session.
+    var onSessionClosed: (@MainActor (RendererFrameOriginToken) -> Void)?
 
     init(
         maximumFrames: Int = ReaderDOMRendererBudget.maximumPackageFrames,
@@ -157,6 +160,7 @@ final class ReaderRendererFrameBridgeRegistry {
         sessions[token]?.close()
         sessions.removeValue(forKey: token)
         tokensByPlaceholder.removeValue(forKey: placeholderID)
+        onSessionClosed?(token)
     }
 
     /// Scoped DOM removal (same semantics as collapse, different caller).
@@ -168,8 +172,9 @@ final class ReaderRendererFrameBridgeRegistry {
     /// every session. Deterministic; no generation check (teardown always
     /// cleans up its own records).
     func closeAll() {
-        for session in sessions.values {
+        for (token, session) in sessions {
             session.close()
+            onSessionClosed?(token)
         }
         sessions.removeAll()
         tokensByPlaceholder.removeAll()

@@ -1486,6 +1486,12 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 contentWorld: .page,
                 name: WikiReaderWebView.subframeBridgeName)
         }
+        // Couple registry teardown to router route + bootstrap revocation so
+        // every close path (collapse, failure, navigation, snapshot change,
+        // dismantle) disposes the whole embed unit atomically.
+        context.coordinator.frameBridgeRegistry.onSessionClosed = { [weak webView] token in
+            webView?.rendererPackageRouter.revoke(token: token)
+        }
         context.coordinator.inlineAttachmentResolver = inlineAttachmentResolver
         context.coordinator.inlineRendererDescriptors = inlineRendererDescriptors
         context.coordinator.rendererPackageInputs = rendererPackageInputs
@@ -2508,6 +2514,11 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     broker: broker,
                     expectedWebViewID: ObjectIdentifier(webViewObject))
                 guard admitted else {
+                    // Rollback: registry refusal means the session was never
+                    // populated, so token(for:) would return nil. Revoke the
+                    // route and close the broker directly.
+                    webView.rendererPackageRouter.revoke(token: embedToken)
+                    broker.close()
                     attachmentCoordinator.refuse(placeholderID, reason: .resourcePressure)
                     surfaceRefusal(.resourcePressure, for: placeholderID)
                     return .refused(.resourcePressure)
@@ -2553,6 +2564,14 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 // Any? from the JS bridge is not Sendable; stringify in place.
                 let resultDescription = result.map { "\($0)" } ?? "nil"
                 DebugLog.reader("embed[\(placeholderID.rawValue)]: injection result \(resultDescription)")
+                // Only a positive acknowledgement counts as mounted. Failure
+                // strings (no-card, no-expansion, bad-sandbox) mean no surface
+                // was created — roll back the whole unit.
+                guard resultDescription == "Optional(injected)" else {
+                    DebugLog.reader("embed[\(placeholderID.rawValue)]: injection not acknowledged (\(resultDescription)); rolling back")
+                    self.teardownDOMEmbed(placeholderID)
+                    return
+                }
                 if case .packageFrame = plan {
                     // The frame's own load completion is not directly
                     // observable; the injection acknowledgement plus the
