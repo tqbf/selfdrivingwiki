@@ -1266,7 +1266,7 @@ final class WikiReaderWebView: WKWebView {
           element.loading = 'lazy';
         }
         element.addEventListener('load', function(){
-          window.__sdwRendererEmbedLoads[placeholderID] = 'loaded:' + (element.contentWindow && element.contentWindow.location ? element.contentWindow.location.href : 'no-window');
+          window.__sdwRendererEmbedLoads[placeholderID] = 'loaded';
         });
         element.addEventListener('error', function(){
           window.__sdwRendererEmbedLoads[placeholderID] = 'error-event';
