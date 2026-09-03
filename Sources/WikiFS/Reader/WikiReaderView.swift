@@ -777,7 +777,16 @@ final class WikiReaderWebView: WKWebView {
         // validate frame origins against the frame registry.
         config.setURLSchemeHandler(
             packageHandler, forURLScheme: RendererPackageScheme.name)
+        // Allow Safari's Web Inspector to attach to this webview (Develop
+        // menu → simulator/device). Required to see frame console messages,
+        // the bridge postMessage traffic, and package frame DOM state.
+        if ProcessInfo.processInfo.environment["WIKIFS_WEBINSPECTOR"] == "1" {
+            config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        }
         super.init(frame: .zero, configuration: config)
+        if ProcessInfo.processInfo.environment["WIKIFS_WEBINSPECTOR"] == "1" {
+            isInspectable = true
+        }
         rendererPackageSchemeHandler = packageHandler
         proxy.target = self
         embedProxy.target = self
@@ -1465,7 +1474,11 @@ internal struct WikiReaderRep: NSViewRepresentable {
                         originScheme: RendererPackageScheme.name,
                         webViewID: frameInfo.webView.map(ObjectIdentifier.init))
                     else {
-                        DebugLog.reader("subframe bridge: registry rejected token \(originHost)")
+                        let admitted = coordinator.frameBridgeRegistry.session(for: token)
+                        let admittedDescription = admitted.map { session in
+                            "yes(webview match: \(session.expectedWebViewID == frameInfo.webView.map(ObjectIdentifier.init)))"
+                        } ?? "no-route"
+                        DebugLog.reader("subframe bridge: registry rejected token \(originHost) — admitted=\(admittedDescription)")
                         return nil
                     }
                     return session.broker
