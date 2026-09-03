@@ -340,16 +340,16 @@ import WikiFSTypes
     @Test("Lifecycle: a renderer that returns after a transient refresh restores the persisted presentation")
     func lifecycleRecoversRendererAfterTransientUnavailableRefresh() {
         let source = lifecycleSource(
-            filename: "architecture.svg",
-            ext: "svg",
-            mimeType: "image/svg+xml",
+            filename: "architecture.pdf",
+            ext: "pdf",
+            mimeType: MimeType.pdf,
             byteSize: 848)
-        let svg = BuiltInRendererReference.reference(for: .svg)
+        let pdf = BuiltInRendererReference.reference(for: .pdf)
         var lifecycle = RendererPresentationLifecycle(sourceID: source.id)
         lifecycle.resolveLoadedSource(
             source: source,
-            matchingRenderer: svg,
-            boundedBytes: Data("<svg></svg>".utf8),
+            matchingRenderer: pdf,
+            boundedBytes: Data("%PDF".utf8),
             currentMarkdown: nil,
             persistedSelection: .rendered)
 
@@ -357,7 +357,7 @@ import WikiFSTypes
             source: source,
             availableRenderers: [],
             matchingRenderer: nil,
-            boundedBytes: Data("<svg></svg>".utf8),
+            boundedBytes: Data("%PDF".utf8),
             currentMarkdown: nil,
             persistedSelection: .rendered)
         #expect(lifecycle.state.selection == .source)
@@ -365,14 +365,14 @@ import WikiFSTypes
 
         lifecycle.refreshLoadedSource(
             source: source,
-            availableRenderers: [svg],
-            matchingRenderer: svg,
-            boundedBytes: Data("<svg></svg>".utf8),
+            availableRenderers: [pdf],
+            matchingRenderer: pdf,
+            boundedBytes: Data("%PDF".utf8),
             currentMarkdown: nil,
             persistedSelection: .rendered)
 
         #expect(lifecycle.state.selection == .rendered)
-        #expect(lifecycle.state.pinnedRenderer == svg)
+        #expect(lifecycle.state.pinnedRenderer == pdf)
         #expect(lifecycle.state.fallbackReason == nil)
     }
 
@@ -407,17 +407,17 @@ import WikiFSTypes
     @Test("Lifecycle: transient omission restores a legacy Split preference as Rendered only with the same exact renderer")
     func lifecycleLegacySplitRecoveryRejectsRendererSubstitution() {
         let source = lifecycleSource(
-            filename: "architecture.svg",
-            ext: "svg",
-            mimeType: "image/svg+xml",
+            filename: "architecture.pdf",
+            ext: "pdf",
+            mimeType: MimeType.pdf,
             byteSize: 848)
-        let svg = BuiltInRendererReference.reference(for: .svg)
+        let pdf = BuiltInRendererReference.reference(for: .pdf)
         let html = BuiltInRendererReference.reference(for: .html)
-        let bytes = Data("<svg></svg>".utf8)
+        let bytes = Data("%PDF".utf8)
         var lifecycle = RendererPresentationLifecycle(sourceID: source.id)
         lifecycle.resolveLoadedSource(
             source: source,
-            matchingRenderer: svg,
+            matchingRenderer: pdf,
             boundedBytes: bytes,
             currentMarkdown: nil,
             persistedSelection: .split)
@@ -442,13 +442,13 @@ import WikiFSTypes
 
         lifecycle.refreshLoadedSource(
             source: source,
-            availableRenderers: [svg],
-            matchingRenderer: svg,
+            availableRenderers: [pdf],
+            matchingRenderer: pdf,
             boundedBytes: bytes,
             currentMarkdown: nil,
             persistedSelection: .split)
         #expect(lifecycle.state.selection == .rendered)
-        #expect(lifecycle.state.pinnedRenderer == svg)
+        #expect(lifecycle.state.pinnedRenderer == pdf)
         #expect(lifecycle.state.fallbackReason == nil)
     }
 

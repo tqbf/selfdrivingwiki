@@ -9,7 +9,9 @@ import Foundation
 /// WebAssembly modules without enabling JavaScript `eval`. `connect-src`
 /// admits the package scheme so a package may fetch its own declared,
 /// hash-pinned assets through the scheme handler; every network origin stays
-/// blocked. Workers and frames remain forbidden.
+/// blocked. Workers and frames remain forbidden. `img-src` admits `data:` so
+/// a package may mount inert image bytes (SVG image mode never runs script
+/// or loads references); the surface is read-only regardless of payload.
 public enum RendererContentSecurityPolicy {
     public static let headerName = "Content-Security-Policy"
     public static let packageSource = "\(RendererPackageScheme.name):"
@@ -19,7 +21,7 @@ public enum RendererContentSecurityPolicy {
         "script-src \(packageSource) \(wasmSource)",
         "style-src \(packageSource)",
         "connect-src \(packageSource)",
-        "img-src \(packageSource)",
+        "img-src \(packageSource) data:",
         "media-src \(packageSource)",
         "font-src \(packageSource)",
         "frame-src 'none'",

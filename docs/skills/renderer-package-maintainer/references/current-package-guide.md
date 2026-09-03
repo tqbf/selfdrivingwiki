@@ -1,6 +1,11 @@
 ## Renderer packages
 
-The repository includes a reviewed read-only Excalidraw renderer package. The app does not bundle or install this package automatically. Import `RendererPackages/Excalidraw` through Settings → Renderers → Advanced Local Renderer Package Import. The package ID is `org.selfdrivingwiki.excalidraw-readonly`. The version is `1.0.5`. The registration ID is `excalidraw`.
+The repository includes reviewed read-only Excalidraw, Mermaid, JSON Canvas, and SVG renderer packages. The app does not bundle or install these packages automatically. Import each package folder through Settings → Renderers → Advanced Local Renderer Package Import. Package identities:
+
+- Excalidraw: `org.selfdrivingwiki.excalidraw-readonly`, version `1.0.5`, registration `excalidraw`.
+- Mermaid: `org.selfdrivingwiki.mermaid-readonly`, version `1.0.1`, registration `mermaid`.
+- JSON Canvas: `org.selfdrivingwiki.json-canvas-readonly`, version `1.1.6`, registration `json-canvas`.
+- SVG: `org.selfdrivingwiki.svg-readonly`, version `1.0.0`, registration `svg`.
 
 ### Scope and availability
 
@@ -45,6 +50,14 @@ An external link requires a declared link policy and a host-observed user gestur
 The reviewed package root is `RendererPackages/Excalidraw` in the repository. SwiftPM does not copy it into the app resource bundle. Users import the folder through Settings → Renderers → Advanced Local Renderer Package Import.
 
 The package version is `1.0.5`. Its manifest declares a bounded JSON matcher for complete objects with `type` equal to `excalidraw`, `version` equal to `2`, and an `elements` array of objects. It is a read-only Web renderer. It declares `input.read` and user-activated external links. It has 48,000-byte input and decoded-input limits. The viewer supports VoiceOver and keyboard navigation.
+
+### Reviewed SVG renderer package
+
+The reviewed package root is `RendererPackages/SVG` in the repository. SwiftPM does not copy it into the app resource bundle. Users import the folder through Settings → Renderers → Advanced Local Renderer Package Import. The package ID is `org.selfdrivingwiki.svg-readonly`. The version is `1.0.0`. The registration ID is `svg`.
+
+The package matches `image/svg+xml` sources plus the `.svg` extension fallback. It is a read-only Web renderer. It declares `input.read` only, no external links, and 16,000,000-byte input and decoded-input limits (the retired built-in renderer's ceiling). It has priority 100 — the retired built-in's tier — and fills both embedding roles. It claims no fence alias.
+
+The viewer mounts the exact authorized bytes as a base64 `data:` image. WebKit's restricted SVG image mode is the security boundary: script never runs, event handlers never bind, and external references never load. The generic package CSP admits `data:` in `img-src` only; `RendererCapabilityBoundaryPolicyTests` pins that `data:` never appears in any other directive. `PROVENANCE.md` records that the package carries no vendored third-party bytes.
 
 ### Reviewed Mermaid renderer package
 

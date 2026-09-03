@@ -113,8 +113,8 @@ import WikiFSTypes
         #expect(SourceRendererPresentationPlanner.htmlSourceString(for: source, bytes: nil) == nil)
     }
 
-    @Test("Planner maps SVG MIME and bytes to the SVG built-in")
-    func plannerMatchesSVG() throws {
+    @Test("SVG sources use source text presentation without a built-in renderer")
+    func svgUsesSourceTextPresentationWithoutBuiltIn() throws {
         let bytes = Data("""
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">
           <circle cx="5" cy="5" r="4"/>
@@ -126,13 +126,14 @@ import WikiFSTypes
             mimeType: "image/svg+xml",
             byteSize: bytes.count)
 
+        // SVG rendering moved to the reviewed renderer package: no built-in
+        // renderer claims it, so the planner falls back to source text.
         let id = try SourceRendererPresentationPlanner.plannedBuiltInRenderer(
             for: source,
             boundedBytes: bytes,
             currentMarkdown: nil,
             origin: nil)
-
-        #expect(id == .svg)
+        #expect(id == nil)
         #expect(SourceRendererPresentationPlanner.usesMarkdownSourcePresentation(
             for: source,
             boundedBytes: bytes,
@@ -169,18 +170,6 @@ import WikiFSTypes
                 currentMarkdown: nil,
                 origin: nil) == nil)
         }
-    }
-
-    @Test("SVG factory requires source bytes")
-    @MainActor
-    func svgFactoryRequiresSourceBytes() throws {
-        let descriptor = BuiltInRendererDescriptors.descriptor(for: .svg)
-        #expect(BuiltInRendererFactoryMap.makeView(
-            for: descriptor,
-            inputs: try Self.factoryInputs(sourceBytes: Data("<svg/>".utf8))) != nil)
-        #expect(BuiltInRendererFactoryMap.makeView(
-            for: descriptor,
-            inputs: try Self.factoryInputs(sourceBytes: nil)) == nil)
     }
 
     @Test("Planner maps no native built-in to a JSON Canvas document")

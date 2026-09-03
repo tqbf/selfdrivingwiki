@@ -1,0 +1,86 @@
+{
+  "revision": 1,
+  "packageID": "org.selfdrivingwiki.svg-readonly",
+  "version": "1.0.0",
+  "descriptors": [
+    {
+      "reference": {
+        "packageID": "org.selfdrivingwiki.svg-readonly",
+        "version": "1.0.0",
+        "registrationID": "svg"
+      },
+      "displayName": "SVG",
+      "implementation": {
+        "webPackage": {
+          "_0": {
+            "path": "index.html"
+          }
+        }
+      },
+      "matchers": [
+        {
+          "normalizedMIME": {
+            "_0": "image/svg+xml"
+          }
+        },
+        {
+          "extensionFallback": {
+            "_0": "svg"
+          }
+        }
+      ],
+      "presentations": [
+        "web"
+      ],
+      "supportedEmbeddingRoles": [
+        "inlineContent",
+        "disclosureRow"
+      ],
+      "approvedAssets": [
+        {
+          "path": "PROVENANCE.md",
+          "digest": "b15ed427fea7ea775de5ceb9c027a4d9e68d20594a9ef46a2aeb1045b73fb7ac"
+        },
+        {
+          "path": "index.html",
+          "digest": "44aeea2b38a0887cac9a6cdaac8f1f010bc9570c18d147037b7d2af0047eea0a"
+        },
+        {
+          "path": "viewer.js",
+          "digest": "4827baab2a3b0bcf95b9e42a354e00455cab3f923e9c82967ee66327bffd5291"
+        }
+      ],
+      "capabilities": [
+        "inputRead"
+      ],
+      "sizeLimits": {
+        "maximumInputByteCount": 16000000,
+        "maximumDecodedByteCount": 16000000
+      },
+      "linkPolicy": "none",
+      "accessibility": {
+        "supportsVoiceOver": true,
+        "supportsKeyboardNavigation": true
+      },
+      "compatibility": {
+        "minimumProtocolRevision": 1,
+        "maximumProtocolRevision": 1
+      },
+      "priority": 100
+    }
+  ],
+  "assets": [
+    {
+      "path": "PROVENANCE.md",
+      "digest": "b15ed427fea7ea775de5ceb9c027a4d9e68d20594a9ef46a2aeb1045b73fb7ac"
+    },
+    {
+      "path": "index.html",
+      "digest": "44aeea2b38a0887cac9a6cdaac8f1f010bc9570c18d147037b7d2af0047eea0a"
+    },
+    {
+      "path": "viewer.js",
+      "digest": "4827baab2a3b0bcf95b9e42a354e00455cab3f923e9c82967ee66327bffd5291"
+    }
+  ]
+}
