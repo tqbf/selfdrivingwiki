@@ -116,4 +116,129 @@ enum RendererDOMEmbedMetrics {
     /// 760pt readable width). Replaces the overlay reservation policy.
     static let nearSquareHeight: CGFloat = 720.0
 }
+
+/// Builds a DOM embed plan from an authorized activation context. The exact
+/// authorization boundary stays upstream (`RendererEmbedActivationContext` /
+/// `RendererEmbedActivationAdmission`); this builder only chooses the
+/// presentation kind from typed facts the admission already validated.
+@MainActor
+enum RendererDOMEmbedPlanner {
+    /// Builds the package-iframe plan for an admitted installed renderer, or
+    /// nil when the reader webview has no admitted frame token for the
+    /// reference (the row then keeps its fallback / Open in Window action).
+    static func packagePlan(
+        context: RendererEmbedActivationContext,
+        frameToken: RendererFrameOriginToken?,
+        entryPath: String?
+    ) -> RendererDOMEmbedPlan? {
+        guard let frameToken,
+              let entryPath,
+              let entry = RendererRelativePath(rawValue: entryPath)
+        else { return nil }
+        let entryURL = RendererFramePackageURL.frameURL(
+            token: frameToken,
+            packageID: context.rendererReference.packageID,
+            version: context.rendererReference.version,
+            path: entry)
+        return .packageFrame(RendererPackageFramePlan(
+            rendererReference: context.rendererReference,
+            frameToken: frameToken,
+            entryURL: entryURL,
+            accessibleTitle: context.displayTitle
+                ?? "\(context.rendererReference.registrationID.rawValue) renderer"))
+    }
+}
+
+/// Evaluates the reader's named DOM-injection function for a plan, following
+/// the `sdwInjectEmbed` parameter-passing discipline: values as parameters,
+/// never concatenated HTML/JavaScript.
+@MainActor
+enum RendererDOMEmbedInjection {
+    /// The JavaScript that creates the embed element with DOM APIs. Returns
+    /// the acknowledgement string ('injected' / 'no-card' / …).
+    static func injectionScript(
+        plan: RendererDOMEmbedPlan,
+        placeholderID: RendererAttachmentPlaceholderID,
+        expansionID: String
+    ) -> String? {
+        let id = WikiReaderRep.jsString(placeholderID.rawValue)
+        let expansion = WikiReaderRep.jsString(expansionID)
+        switch plan {
+        case .packageFrame(let framePlan):
+            return inject(
+                id: id, expansion: expansion, kind: "iframe",
+                src: framePlan.entryURL.absoluteString,
+                title: framePlan.accessibleTitle,
+                height: Int(framePlan.boundedHeight),
+                sandbox: framePlan.sandboxJSON)
+        case .pdfFrame(let framePlan):
+            return inject(
+                id: id, expansion: expansion, kind: "iframe",
+                src: framePlan.blobURL.absoluteString,
+                title: framePlan.accessibleTitle,
+                height: Int(framePlan.boundedHeight),
+                sandbox: nil)
+        case .inertHTMLFrame(let framePlan):
+            return inject(
+                id: id, expansion: expansion, kind: "iframe",
+                src: framePlan.blobURL.absoluteString,
+                title: framePlan.accessibleTitle,
+                height: Int(framePlan.boundedHeight),
+                sandbox: Self.sandboxJSONString(flags: ["allow-same-origin"]))
+        case .audioElement(let mediaPlan):
+            return inject(
+                id: id, expansion: expansion, kind: "audio",
+                src: mediaPlan.blobURL.absoluteString,
+                title: mediaPlan.accessibleTitle,
+                height: 0, sandbox: nil)
+        case .videoElement(let mediaPlan):
+            return inject(
+                id: id, expansion: expansion, kind: "video",
+                src: mediaPlan.blobURL.absoluteString,
+                title: mediaPlan.accessibleTitle,
+                height: 0, sandbox: nil)
+        case .readableFallback:
+            // Fallback plans render status text, not an embed surface.
+            return nil
+        }
+    }
+
+    static func removalScript(for placeholderID: RendererAttachmentPlaceholderID) -> String {
+        "window.sdwRemoveRendererEmbed && window.sdwRemoveRendererEmbed(\"\(WikiReaderRep.jsString(placeholderID.rawValue))\");"
+    }
+
+    private static func inject(
+        id: String, expansion: String, kind: String, src: String,
+        title: String, height: Int, sandbox: String?
+    ) -> String {
+        let titleLiteral = WikiReaderRep.jsString(title)
+        let sandboxLiteral = sandbox.map { "\"\($0)\"" } ?? "null"
+        return """
+        window.sdwInjectRendererEmbed && window.sdwInjectRendererEmbed(
+            "\(id)", "\(expansion)", "\(kind)",
+            "\(WikiReaderRep.jsString(src))", "\(titleLiteral)",
+            \(height), \(sandboxLiteral));
+        """
+    }
+
+    /// Sandbox attribute JSON for inert frames. Raw HTML omits
+    /// `allow-scripts` (the HTMLSourceWebView guarantee) and everything not
+    /// listed stays denied (popups, forms, top navigation, downloads).
+    static func sandboxJSONString(flags: [String]) -> String {
+        let escaped = flags.map { flag in
+            "\"\(flag.replacingOccurrences(of: "\"", with: "\\\""))\""
+        }
+        return "[\(escaped.joined(separator: ","))]"
+    }
+}
+
+extension RendererPackageFramePlan {
+    /// The plan's sandbox flags as a JSON array literal for the injection
+    /// function. Package documents get exactly `allow-scripts` — minimum
+    /// permission to run their declared scripts; popups, forms, top
+    /// navigation, downloads, and nested frames stay denied.
+    var sandboxJSON: String? {
+        RendererDOMEmbedInjection.sandboxJSONString(flags: Self.packageSandboxFlags.split(separator: " ").map(String.init))
+    }
+}
 #endif

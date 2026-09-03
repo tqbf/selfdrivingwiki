@@ -1196,6 +1196,62 @@ final class WikiReaderWebView: WKWebView {
           nested[i].setAttribute('\(WikiLinkMarkdown.TransclusionAttr.path)', childPath);
         }
       };
+      // DOM-embed injection for renderer frames/media (DOM era): builds the
+      // element with DOM APIs from parameters, never from concatenated HTML.
+      // The native side passes only validated values (frame-scoped URL,
+      // accessible title, bounded height); no input bytes or capabilities
+      // cross this boundary. `sandboxAttrs` is a JSON array of strings.
+      window.sdwInjectRendererEmbed = function(placeholderID, expansionID, kind, src, title, height, sandboxJSON){
+        var card = document.getElementById(placeholderID);
+        if(!card){ return 'no-card'; }
+        var expansion = card.querySelector('.sdw-renderer-card__expansion');
+        if(!expansion){ return 'no-expansion'; }
+        // Remove only this placeholder's prior surface (scoped collapse).
+        var prior = expansion.querySelector('.sdw-renderer-embed');
+        if(prior){ prior.remove(); }
+        var element;
+        if(kind === 'audio'){
+          element = document.createElement('audio');
+          element.controls = true;
+          element.preload = 'metadata';
+        } else if(kind === 'video'){
+          element = document.createElement('video');
+          element.controls = true;
+          element.preload = 'metadata';
+        } else {
+          element = document.createElement('iframe');
+          if(sandboxJSON){
+            try {
+              var flags = JSON.parse(sandboxJSON);
+              if(flags.length > 0){ element.setAttribute('sandbox', flags.join(' ')); }
+            } catch (_) { return 'bad-sandbox'; }
+          }
+          if(height > 0){
+            element.style.height = height + 'px';
+            element.style.width = '100%';
+          }
+          element.loading = 'lazy';
+        }
+        element.src = src;
+        element.title = title;
+        element.className = 'sdw-renderer-embed';
+        element.id = expansionID + '-embed';
+        element.setAttribute('aria-label', title);
+        expansion.appendChild(element);
+        return 'injected';
+      };
+
+      // Scoped removal: only this placeholder's embed surface.
+      window.sdwRemoveRendererEmbed = function(placeholderID){
+        var card = document.getElementById(placeholderID);
+        if(!card){ return 'no-card'; }
+        var expansion = card.querySelector('.sdw-renderer-card__expansion');
+        if(!expansion){ return 'no-expansion'; }
+        var prior = expansion.querySelector('.sdw-renderer-embed');
+        if(prior){ prior.remove(); return 'removed'; }
+        return 'none';
+      };
+
       function postEmbed(details){
         var nodeId = details.getAttribute('\(WikiLinkMarkdown.TransclusionAttr.node)') || '';
         var state  = details.getAttribute('\(WikiLinkMarkdown.TransclusionAttr.state)') || '';
