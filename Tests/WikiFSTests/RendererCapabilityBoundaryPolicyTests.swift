@@ -43,7 +43,7 @@ struct RendererCapabilityBoundaryPolicyTests {
                 + "script-src renderer-package: 'wasm-unsafe-eval'; "
                 + "style-src renderer-package:; "
                 + "connect-src renderer-package:; "
-                + "img-src renderer-package:; "
+                + "img-src renderer-package: data:; "
                 + "media-src renderer-package:; "
                 + "font-src renderer-package:; "
                 + "frame-src 'none'; "
@@ -57,9 +57,19 @@ struct RendererCapabilityBoundaryPolicyTests {
         #expect(csp.contains("'wasm-unsafe-eval'"))
         // Workers stay forbidden.
         #expect(csp.contains("worker-src 'none'"))
-        // No network or opaque origin may appear as a source in any directive.
-        for forbiddenOrigin in ["http:", "https:", "data:", "blob:"] {
+        // No network origin may appear as a source in any directive.
+        for forbiddenOrigin in ["http:", "https:", "blob:"] {
             #expect(!csp.contains(forbiddenOrigin), "CSP must not contain \(forbiddenOrigin)")
+        }
+        // The inert image surface is the one admitted opaque scheme: `data:`
+        // may appear only in `img-src` (SVG image mode never runs script or
+        // loads external references), and never in script/style/connect.
+        let headerValue = RendererContentSecurityPolicy.headerValue
+        let imgDirective = try #require(
+            headerValue.split(separator: "; ").first { $0.hasPrefix("img-src ") })
+        #expect(imgDirective.contains("data:"))
+        for directive in headerValue.split(separator: "; ") where !directive.hasPrefix("img-src ") {
+            #expect(!directive.contains("data:"), "data: must stay out of \(directive)")
         }
     }
 

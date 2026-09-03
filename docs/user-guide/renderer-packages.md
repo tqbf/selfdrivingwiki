@@ -79,6 +79,12 @@ Image file nodes and group background images read only from exact host-pinned wi
 
 JSON Canvas links are typed. Canonical `[[page:<ULID>]]` and `[[source:<ULID>]]` nodes navigate to the matching page or source after a real user activation. A relative file node (with an optional `#subpath`) resolves to the matching page or source by name — never to an arbitrary filesystem path. HTTP(S) link nodes open in your browser through the same trusted external-link flow as other packages.
 
+## SVG
+
+SVG is a renderer package, not a built-in renderer. It displays `.svg` documents as a read-only image. Before you import `RendererPackages/SVG`, a `.svg` source stays readable source text. After you import the folder through **Settings → Renderers → Advanced Local Renderer Package Import**, matching sources render through the generic renderer surface. Removed or suppressed packages restore the readable fallback.
+
+The package loads your SVG bytes as an image, never as a document: scripts inside the SVG never run, click handlers never bind, and references to external files never load. Documents up to 16,000,000 bytes render; larger documents keep the readable source fallback. The display follows light and dark appearance, and host zoom shortcuts scale the drawing.
+
 ## Preferences and fallback
 
 A source can use a logical renderer preference or an exact package version. A preference does not install a package or change another source.
