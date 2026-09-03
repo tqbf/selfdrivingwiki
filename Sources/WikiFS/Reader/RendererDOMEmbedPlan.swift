@@ -147,6 +147,85 @@ enum RendererDOMEmbedPlanner {
             accessibleTitle: context.displayTitle
                 ?? "\(context.rendererReference.registrationID.rawValue) renderer"))
     }
+
+    /// Builds the built-in DOM plan for a source-backed embed from the typed
+    /// source facts the admission already validated. The MIME decides the
+    /// presentation:
+    /// - `application/pdf` → pinned PDF iframe (exact-version blob URL).
+    /// - `text/html` → inert pinned HTML iframe (sandbox omits `allow-scripts`).
+    /// - `audio/*` / `video/*` with bytes → DOM media elements.
+    /// - byteless provider-hosted media (no bytes) → readable fallback with an
+    ///   explicit open action (operator decision of 2026-09-03: no inline
+    ///   external iframe in the reader).
+    ///
+    /// Returns nil when the input has no blob route (a markdown-version pin)
+    /// or the MIME has no built-in presentation; the caller keeps its
+    /// fallback / Open in Window behavior.
+    static func builtInPlan(
+        context: RendererEmbedActivationContext
+    ) -> RendererDOMEmbedPlan? {
+        // Only source identities carry built-in presentation facts.
+        guard case .source(let source) = context.identity else { return nil }
+        let title = context.displayTitle ?? source.sourceID.rawValue
+        let mime = source.mimeType.rawValue
+
+        // Byteless source: no bytes to authorize. Render the readable fallback.
+        if source.bytes.isEmpty {
+            return .readableFallback(RendererReadableFallbackPlan(
+                accessibleTitle: title,
+                explanation: "This media is hosted by its provider and is not embedded in the reader.",
+                openActionLabel: "Open \(title) in Source Detail"))
+        }
+
+        // A source-content version is the only blob-routable pin; a
+        // markdown-version input has no blob route.
+        guard let blobURL = exactVersionBlobURL(source: source) else { return nil }
+        let versionID = source.sourceVersionID?.rawValue ?? ""
+
+        if mime == "application/pdf" {
+            return .pdfFrame(RendererBlobFramePlan(
+                sourceVersionID: versionID,
+                blobURL: blobURL,
+                accessibleTitle: title))
+        }
+        if mime == "text/html" {
+            var plan = RendererBlobFramePlan(
+                sourceVersionID: versionID,
+                blobURL: blobURL,
+                accessibleTitle: title)
+            // Inert: scripts, inline handlers, and javascript: URLs cannot
+            // run (the HTMLSourceWebView guarantee). allow-same-origin keeps
+            // the frame's blob resources resolvable; allow-scripts is
+            // deliberately absent.
+            plan.sandboxFlags = "allow-same-origin"
+            return .inertHTMLFrame(plan)
+        }
+        if mime.hasPrefix("audio/") {
+            return .audioElement(RendererMediaElementPlan(
+                kind: .audio,
+                blobURL: blobURL,
+                accessibleTitle: title))
+        }
+        if mime.hasPrefix("video/") {
+            return .videoElement(RendererMediaElementPlan(
+                kind: .video,
+                blobURL: blobURL,
+                accessibleTitle: title))
+        }
+        return nil
+    }
+
+    /// The exact-version blob URL for an admitted source. Only a
+    /// source-content version is a valid pin; a markdown-version input has no
+    /// blob route and yields no plan (the caller falls back).
+    static func exactVersionBlobURL(source: RendererEmbeddedContent.Source) -> URL? {
+        guard let versionID = source.sourceVersionID else { return nil }
+        var components = URLComponents()
+        components.scheme = "wiki-blob"
+        components.host = BlobSchemeHandler.sourceVersionHost
+        components.path = "/\(versionID.rawValue)"
+        return components.url
+    }
 }
 
 /// Evaluates the reader's named DOM-injection function for a plan, following

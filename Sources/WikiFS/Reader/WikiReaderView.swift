@@ -2203,19 +2203,28 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 return admission
             }
             // DOM era: an admitted package renderer with a frame route mounts
-            // its iframe in the document flow. Open in Window remains a
-            // separate explicit action and is never implied by expansion.
-            if case .disclosureRow = context.embeddingRole,
-               let webView,
-               let frameToken = webView.rendererPackageFrameTokens[context.rendererReference],
-               let entry = webView.rendererPackageFrameEntryPaths[context.rendererReference],
-               let plan = RendererDOMEmbedPlanner.packagePlan(
-                   context: context,
-                   frameToken: frameToken,
-                   entryPath: entry) {
-                webView.evaluateJavaScript(
-                    "window.__sdwRendererAttachmentState && window.__sdwRendererAttachmentState(\"\(WikiReaderRep.jsString(placeholderID.rawValue))\", true, \"\");")
-                return mountDOMEmbed(plan: plan, named: placeholderID, context: context)
+            // its iframe in the document flow. Built-in source embeds (PDF,
+            // inert HTML, byte-backed media, byteless fallback) mount their
+            // typed DOM plan. Open in Window remains a separate explicit
+            // action and is never implied by expansion.
+            if case .disclosureRow = context.embeddingRole, let webView {
+                if let frameToken = webView.rendererPackageFrameTokens[context.rendererReference],
+                   let entry = webView.rendererPackageFrameEntryPaths[context.rendererReference],
+                   let plan = RendererDOMEmbedPlanner.packagePlan(
+                       context: context,
+                       frameToken: frameToken,
+                       entryPath: entry) {
+                    clearRowStatus(placeholderID)
+                    return mountDOMEmbed(plan: plan, named: placeholderID, context: context)
+                }
+                // Built-in presentations for source-backed embeds (no
+                // installed package reference).
+                if case .source = context.identity,
+                   case .source = context.input,
+                   let plan = RendererDOMEmbedPlanner.builtInPlan(context: context) {
+                    clearRowStatus(placeholderID)
+                    return mountDOMEmbed(plan: plan, named: placeholderID, context: context)
+                }
             }
             switch inlineAttachmentResolver(
                 context,
@@ -2286,6 +2295,14 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 takesFocus: takesFocus,
                 onExit: { [weak self] in self?.collapseAttachment(placeholderID) })
             return .activate
+        }
+
+        /// Clears a placeholder's status/fallback message after a successful
+        /// activation (the row was previously refused or failed).
+        func clearRowStatus(_ placeholderID: RendererAttachmentPlaceholderID) {
+            guard let webView else { return }
+            webView.evaluateJavaScript(
+                "window.__sdwRendererAttachmentState && window.__sdwRendererAttachmentState(\"\(WikiReaderRep.jsString(placeholderID.rawValue))\", true, \"\");")
         }
 
         /// DOM-era mounting: injects the embed surface (package iframe, pinned
