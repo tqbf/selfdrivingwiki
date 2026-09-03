@@ -107,7 +107,10 @@ struct RendererFramePackageURL: Hashable, Equatable, Sendable {
     }
 
     private static func isTokenScalarLegal(_ scalar: Unicode.Scalar) -> Bool {
-        ("0" ... "9").contains(Character(scalar)) || scalar == "-"
+        // generate() emits lowercase hex; accept the full alphabet it can
+        // produce so real tokens parse.
+        ("0" ... "9").contains(Character(scalar))
+            || ("a" ... "f").contains(Character(scalar))
     }
 }
 

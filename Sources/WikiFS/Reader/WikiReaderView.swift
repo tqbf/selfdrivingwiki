@@ -757,6 +757,14 @@ final class WikiReaderWebView: WKWebView {
         // The handler is created locally because `self` is not available
         // before `super.init`; it references the same router instance.
         let packageHandler = RendererPackageSchemeHandler(resourceProvider: rendererPackageRouter)
+        // Every task WebKit starts is visible here, including requests the
+        // router later rejects on parse or identity (the router's own
+        // diagnostic only records parseable URLs).
+        packageHandler.onTaskRegistered = { task in
+            if let url = task.requestURL {
+                DebugLog.reader("package-scheme: task registered \(url.absoluteString)")
+            }
+        }
         config.setURLSchemeHandler(
             packageHandler, forURLScheme: RendererPackageScheme.name)
         super.init(frame: .zero, configuration: config)
