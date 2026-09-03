@@ -453,7 +453,10 @@ extension RendererContentWorldBroker {
         ) async -> (Any?, String?) {
             guard let text = message.body as? String,
                   text.utf8.count <= WikiAppWebViewPolicy.maximumBridgeMessageByteCount
-            else { return (nil, "request denied") }
+            else {
+                DebugLog.reader("subframe bridge: oversized or non-string body")
+                return (nil, "request denied")
+            }
             let originHost = message.frameInfo.securityOrigin.host
             guard let broker = validate(message.frameInfo, originHost) else {
                 DebugLog.reader("subframe bridge: rejected origin \(originHost)")
@@ -467,7 +470,7 @@ extension RendererContentWorldBroker {
                 }
                 return (responseText, nil)
             } catch {
-                DebugLog.reader("subframe bridge: denied (\(String(describing: error)))")
+                DebugLog.reader("subframe bridge: denied (\(String(describing: error))) envelope[\(text.prefix(200))]")
                 return (nil, "request denied")
             }
         }
