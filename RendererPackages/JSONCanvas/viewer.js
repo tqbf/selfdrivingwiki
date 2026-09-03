@@ -250,20 +250,37 @@
     return { doc: doc, nodeById: nodeById, bounds: bounds };
   }
 
+  // Choose the nearest pair of facing rectangle boundaries for an omitted
+  // side. Comparing gaps avoids treating a diagonal edge as horizontal just
+  // because the node centers are farther apart on the x axis.
+  function automaticSide(node, other) {
+    if (!other) return null;
+    var cx = node.x + node.width / 2;
+    var cy = node.y + node.height / 2;
+    var ox = other.x + other.width / 2;
+    var oy = other.y + other.height / 2;
+    var dx = ox - cx;
+    var dy = oy - cy;
+    var horizontalGap = Math.max(0, Math.max(node.x - (other.x + other.width), other.x - (node.x + node.width)));
+    var verticalGap = Math.max(0, Math.max(node.y - (other.y + other.height), other.y - (node.y + node.height)));
+    if (verticalGap === 0 && horizontalGap > 0) {
+      return dx >= 0 ? "right" : "left";
+    }
+    if (horizontalGap === 0 && verticalGap > 0) {
+      return dy >= 0 ? "bottom" : "top";
+    }
+    if (horizontalGap < verticalGap || (horizontalGap === verticalGap && Math.abs(dx) >= Math.abs(dy))) {
+      return dx >= 0 ? "right" : "left";
+    }
+    return dy >= 0 ? "bottom" : "top";
+  }
+
   // Rectangle-boundary anchor for an explicit side (or a deterministic
-  // automatic side when absent: pick the side facing the other node center,
-  // clamping to the nearest rectangle side).
+  // automatic side when absent).
   function sideAnchor(node, side, other) {
     var cx = node.x + node.width / 2;
     var cy = node.y + node.height / 2;
-    var resolved = side;
-    if (!resolved && other) {
-      var ox = other.x + other.width / 2;
-      var oy = other.y + other.height / 2;
-      var dx = ox - cx, dy = oy - cy;
-      if (Math.abs(dx) >= Math.abs(dy)) resolved = dx >= 0 ? "right" : "left";
-      else resolved = dy >= 0 ? "bottom" : "top";
-    }
+    var resolved = side || automaticSide(node, other);
     switch (resolved) {
       case "top": return { x: cx, y: node.y };
       case "bottom": return { x: cx, y: node.y + node.height };
@@ -303,14 +320,7 @@
   }
 
   function sideDirection(node, side, other) {
-    var cx = node.x + node.width / 2, cy = node.y + node.height / 2;
-    var ox = other.x + other.width / 2, oy = other.y + other.height / 2;
-    var resolved = side;
-    if (!resolved) {
-      var dx = ox - cx, dy = oy - cy;
-      if (Math.abs(dx) >= Math.abs(dy)) resolved = dx >= 0 ? "right" : "left";
-      else resolved = dy >= 0 ? "bottom" : "top";
-    }
+    var resolved = side || automaticSide(node, other);
     switch (resolved) {
       case "top": return { x: 0, y: -1 };
       case "bottom": return { x: 0, y: 1 };
@@ -498,10 +508,11 @@
     var defs = makeSVG("defs");
     Object.keys(assignment.markers).forEach(function (id) {
       var color = assignment.markers[id];
-      var marker = makeSVG("marker", { id: id, markerWidth: "8", markerHeight: "8", refX: "6", refY: "3", orient: "auto", markerUnits: "strokeWidth" });
-      if (color !== "default") marker.setAttribute("color", edgeColor(color));
+      var marker = makeSVG("marker", { id: id, markerWidth: "8", markerHeight: "8", refX: "6", refY: "3", orient: "auto-start-reverse", markerUnits: "strokeWidth" });
+      var arrowColor = color === "default" ? "currentColor" : edgeColor(color);
+      if (color !== "default") marker.setAttribute("color", arrowColor);
       else marker.setAttribute("class", "edge-arrow-default");
-      var arrow = makeSVG("path", { d: "M0,0 L6,3 L0,6 z", class: "edge-arrow", fill: "currentColor" });
+      var arrow = makeSVG("path", { d: "M0,0 L6,3 L0,6 z", class: "edge-arrow", fill: arrowColor });
       marker.append(arrow);
       defs.append(marker);
     });
@@ -529,14 +540,14 @@
       if (!from || !to) return;
       var geometry = computeEdgeGeometry(from, to, edge.fromSide, edge.toSide);
       var path = makeSVG("path", {
-        class: "edge", d: geometry.path,
+        class: edge.color ? "edge" : "edge edge-default", d: geometry.path,
         stroke: edge.color ? edgeColor(edge.color) : "currentColor",
         fill: "none"
       });
-      // CSS `.edge { stroke: var(--edge-stroke) }` would override the stroke
-      // presentation attribute, so colored edges get an inline style (which
-      // beats the class rule). Default edges keep the CSS gray line.
-      if (edge.color) path.setAttribute("style", "stroke: " + edgeColor(edge.color));
+      // Keep colored strokes as literal SVG presentation attributes. WebKit
+      // can report an inline CSS stroke from getComputedStyle() while still
+      // painting the competing class stroke. Only uncolored edges receive the
+      // CSS class that supplies the theme-aware default gray.
       if (edge.toEnd === "arrow" && edge.__markerTo) path.setAttribute("marker-end", "url(#" + edge.__markerTo + ")");
       if (edge.fromEnd === "arrow" && edge.__markerFrom) path.setAttribute("marker-start", "url(#" + edge.__markerFrom + ")");
       sceneG.append(path);
@@ -545,7 +556,6 @@
         var labelG = makeSVG("g", { class: "edge-label-wrap", transform: "translate(" + mid.x + " " + mid.y + ")" });
         var bg = makeSVG("rect", { class: "edge-label-bg", x: -30, y: -10, width: 60, height: 20, rx: 4 });
         var labelNode = makeSVG("text", { class: "edge-label", x: 0, y: 3, "text-anchor": "middle" });
-        if (edge.color) labelNode.setAttribute("style", "fill: " + edgeColor(edge.color));
         labelNode.textContent = edge.label;
         labelG.append(bg, labelNode);
         sceneG.append(labelG);

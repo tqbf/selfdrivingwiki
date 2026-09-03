@@ -870,7 +870,7 @@ struct RendererModelTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-        // The on-disk package is 1.1.1 (revision 5, subpath fix). Its package
+        // The on-disk package is 1.1.6 (revision 5, explicit colored edge strokes). Its package
         // hash is a stability contract: adding a manifest revision or changing
         // assets must produce a NEW immutable version and never mutate an
         // existing reviewed package hash. The prior 1.0.1 (revision 4) and
@@ -879,7 +879,7 @@ struct RendererModelTests {
         let data = try Data(contentsOf: root.appendingPathComponent("RendererPackages/JSONCanvas/manifest.json"))
         let manifest = try JSONDecoder().decode(RendererManifest.self, from: data)
         #expect(manifest.revision == RendererManifestRevision.current)
-        #expect(try manifest.packageHash().hex == "2e17de05a9cb367752aa27021bd15ca4f858828015d307bb0ebb188bda5a3f96")
+        #expect(try manifest.packageHash().hex == "e60eb3723b4ea78089279735ae2a2eaf8157224a11476bc963ce850def2824fb")
         #expect(manifest.descriptors.allSatisfy {
             $0.compatibility.supports(hostProtocolRevision: RendererRegistrySnapshotDefaults.hostProtocolRevision)
         })

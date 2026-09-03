@@ -331,6 +331,13 @@ private struct CanonicalHostNavigation: Encodable {
 }
 
 private struct CanonicalRendererDescriptorV4: Encodable {
+    private struct CanonicalHostNavigation: Encodable {
+        let allowedTargetKinds: [RendererHostNavigationTargetKind]
+
+        init(_ declaration: RendererHostNavigationDeclaration) {
+            allowedTargetKinds = declaration.allowedTargetKinds.sorted { $0.rawValue < $1.rawValue }
+        }
+    }
     let reference: RendererReference
     let displayName: String
     let implementation: RendererImplementation

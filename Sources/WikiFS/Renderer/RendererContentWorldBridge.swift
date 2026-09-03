@@ -313,6 +313,7 @@ extension RendererContentWorldBroker {
     static func navigationActivationScript(contentWorld: WKContentWorld) -> WKUserScript {
         let source = """
         (function() {
+          var requestSequence = 0;
           function targetElement(event) {
             var path = event.composedPath ? event.composedPath() : [];
             for (var i = 0; i < path.length; i += 1) {
@@ -335,7 +336,7 @@ extension RendererContentWorldBroker {
               var request = {
                 navigation: {
                   _0: {
-                    id: {rawValue: 'navigation-' + nonce},
+                    id: {rawValue: 'navigation-' + String(++requestSequence)},
                     method: 'host.navigate',
                     target: target,
                     activationNonce: {rawValue: nonce}

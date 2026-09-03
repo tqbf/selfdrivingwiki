@@ -1,7 +1,7 @@
 # Provenance — JSON Canvas Renderer Package
 
 - **Package ID:** `org.selfdrivingwiki.json-canvas-readonly`
-- **Version:** `1.1.2`
+- **Version:** `1.1.6`
 - **Registration ID:** `json-canvas`
 - **Manifest revision:** 5
 - **Entry point:** `index.html`
