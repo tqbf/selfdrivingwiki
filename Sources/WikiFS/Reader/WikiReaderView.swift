@@ -708,7 +708,6 @@ final class WikiReaderWebView: WKWebView {
     var diagnosticStartedPackageRequests: [URL] {
         rendererPackageRouter.diagnosticStartedRequests
     }
-
     init() {
         let config = WKWebViewConfiguration()
         let cc = WKUserContentController()

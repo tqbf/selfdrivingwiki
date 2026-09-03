@@ -291,7 +291,10 @@ enum RendererDOMEmbedInjection {
         title: String, height: Int, sandbox: String?
     ) -> String {
         let titleLiteral = WikiReaderRep.jsString(title)
-        let sandboxLiteral = sandbox.map { "\"\($0)\"" } ?? "null"
+        // The sandbox parameter is a JSON *string* the function JSON.parses.
+        // jsString escapes it into a valid double-quoted JS literal; null
+        // means no sandbox attribute.
+        let sandboxLiteral = sandbox.map { "\"\(WikiReaderRep.jsString($0))\"" } ?? "null"
         return """
         window.sdwInjectRendererEmbed && window.sdwInjectRendererEmbed(
             "\(id)", "\(expansion)", "\(kind)",
