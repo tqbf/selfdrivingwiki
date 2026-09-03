@@ -39,13 +39,6 @@ final class DaemonTransportAppCoordinator {
         self.observeEvent = observeEvent
     }
 
-    func installChatReplacement(
-        _ replacement: @escaping @MainActor (ChatDaemonCoordinator?) -> Void
-    ) {
-        guard lifecycle == .idle else { return }
-        replaceChatCoordinator = replacement
-    }
-
     func startIfNeeded() {
         guard lifecycle == .idle else { return }
         lifecycle = .started
