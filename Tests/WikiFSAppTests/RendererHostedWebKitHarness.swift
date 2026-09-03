@@ -43,6 +43,55 @@ final class RendererHostedWebKitHarness {
         navigationRecorder.diagnostics
     }
 
+    /// Subframe observations recorded by `SubframeProvenanceRecorder`: every
+    /// script message that arrived from a non-main frame, with its frame info
+    /// and security origin, plus reply-handler outcomes.
+    struct SubframeObservation: Equatable {
+        let frameIsMainFrame: Bool
+        let originProtocol: String
+        let originHost: String
+        let messageBody: String
+    }
+
+    private(set) var subframeObservations: [SubframeObservation] = []
+    private(set) var subframeReplyResults: [String] = []
+
+    /// Injects a subframe-provenance recorder into the webview's user content
+    /// controller. Call after harness creation, before loading documents with
+    /// subframes; the recorder captures each message's `WKFrameInfo` and
+    /// `WKSecurityOrigin` for origin-provenance assertions.
+    func recordSubframeMessages(
+        in controller: WKUserContentController,
+        contentWorld: WKContentWorld,
+        name: String
+    ) {
+        let recorder = SubframeProvenanceRecorder { [weak self] observation in
+            self?.subframeObservations.append(observation)
+        } onReply: { [weak self] result in
+            self?.subframeReplyResults.append(result)
+        }
+        subframeRecorder = recorder
+        controller.addScriptMessageHandler(
+            recorder,
+            contentWorld: contentWorld,
+            name: name)
+    }
+
+    /// Records the web content process termination callback so tests can
+    /// deterministically invoke the same registry invalidation a production
+    /// delegate would (`webViewWebContentProcessDidTerminate`).
+    func simulateWebContentProcessTermination() {
+        navigationRecorder.recordProcessTermination()
+        onProcessTermination?()
+    }
+
+    /// Injectable lifecycle callback invoked by
+    /// `simulateWebContentProcessTermination()`; production readers install
+    /// their registry invalidation here in tests.
+    var onProcessTermination: (() -> Void)?
+
+    private var subframeRecorder: SubframeProvenanceRecorder?
+
     private let window: NSWindow
     private let navigationRecorder = NavigationRecorder()
     private var lease: HostedAppKitTestGate.Lease?
@@ -69,6 +118,16 @@ final class RendererHostedWebKitHarness {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .default()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
+        return RendererHostedWebKitHarness(lease: lease, configuration: configuration)
+    }
+
+    /// Creates a harness from a caller-built configuration, so hosted tests
+    /// can exercise production-like setups (custom scheme handlers, content
+    /// worlds, subframe script message handlers) before the webview exists.
+    /// The harness installs its own navigation recorder but keeps every
+    /// delegate/handler the configuration already carries.
+    static func custom(configuration: WKWebViewConfiguration) async throws -> RendererHostedWebKitHarness {
+        let lease = await HostedAppKitTestGate.shared.acquire()
         return RendererHostedWebKitHarness(lease: lease, configuration: configuration)
     }
 
@@ -139,6 +198,42 @@ final class RendererHostedWebKitHarness {
 
     /// Explicit, idempotent test teardown. It releases both WebKit and the
     /// shared AppKit host gate after removing the delegate and stopping loads.
+    /// Waits until the JavaScript expression returns `"true"`, polling with a
+    /// bounded deadline. Used for DOM/event/focus assertions whose timing
+    /// WebKit schedules asynchronously (iframe load, focus change).
+    func waitForJavaScriptTrue(
+        _ javaScript: String,
+        description: String,
+        timeout: Duration = Metrics.titleTimeout
+    ) async throws {
+        _ = try await waitForJavaScriptString(
+            javaScript,
+            expectedValue: "true",
+            description: description,
+            timeout: timeout)
+    }
+
+    /// Sends an Escape key event and reports whether the document observed it.
+    /// CGEvent HID posting requires an accessible input tap and often does not
+    /// reach a test window's web content; callers must treat non-delivery as
+    /// an environment limitation, not a product failure. Bounded by `timeout`.
+    func pressEscape(observedFlagJS: String, timeout: Duration = .seconds(5)) async throws -> Bool {
+        let source = CGEventSource(stateID: .hidSystemState)
+        if let down = CGEvent(keyboardEventSource: source, virtualKey: 0x35, keyDown: true),
+           let up = CGEvent(keyboardEventSource: source, virtualKey: 0x35, keyDown: false) {
+            down.post(tap: .cghidEventTap)
+            up.post(tap: .cghidEventTap)
+        }
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            let value = await readJavaScriptString(observedFlagJS) ?? "false"
+            if value == "true" { return true }
+            try Task.checkCancellation()
+            try await Task.sleep(for: Metrics.waitPollInterval)
+        }
+        return false
+    }
+
     func close() {
         guard !isClosed else { return }
         isClosed = true
@@ -165,11 +260,41 @@ final class RendererHostedWebKitHarness {
         throw HarnessError.timeout(description: "hosted WebKit navigation")
     }
 
+    private final class SubframeProvenanceRecorder: NSObject, WKScriptMessageHandlerWithReply {
+        private let onObservation: @MainActor (SubframeObservation) -> Void
+        private let onReply: @MainActor (String) -> Void
+
+        init(
+            onObservation: @escaping @MainActor (SubframeObservation) -> Void,
+            onReply: @escaping @MainActor (String) -> Void
+        ) {
+            self.onObservation = onObservation
+            self.onReply = onReply
+        }
+
+        func userContentController(
+            _ userContentController: WKUserContentController,
+            didReceive message: WKScriptMessage
+        ) async -> (Any?, String?) {
+            let body = message.body as? String ?? String(describing: message.body)
+            onObservation(SubframeObservation(
+                frameIsMainFrame: message.frameInfo.isMainFrame,
+                originProtocol: message.frameInfo.securityOrigin.protocol,
+                originHost: message.frameInfo.securityOrigin.host,
+                messageBody: body))
+            onReply("ack")
+            return ("ack", nil)
+        }
+    }
+
     private final class NavigationRecorder: NSObject, WKNavigationDelegate {
         var didFinish = false
         var failureDescription: String?
         private(set) var serverTrustChallengeCount = 0
         private(set) var lastServerTrustChallenge = "none"
+        private(set) var processTerminationCount = 0
+
+        func recordProcessTermination() { processTerminationCount += 1 }
 
         var diagnostics: String {
             "navigationFinished=\(didFinish), navigationFailure=\(failureDescription ?? "none"), "

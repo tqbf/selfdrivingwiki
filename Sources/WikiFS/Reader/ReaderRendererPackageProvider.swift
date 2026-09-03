@@ -14,7 +14,9 @@ struct RendererFrameOriginToken: Hashable, Equatable, Sendable {
 
     private static let byteCount = 16
 
-    /// 128 bits of randomness from the system CSPRNG, base64url-encoded.
+    /// 128 bits of randomness from the system CSPRNG, lowercase hex. Lowercase
+    /// because WebKit normalizes URL hosts to lowercase; a mixed-case token
+    /// would not compare equal to the reported `WKSecurityOrigin.host`.
     static func generate() -> Self {
         var bytes = [UInt8](repeating: 0, count: byteCount)
         let status = SecRandomCopyBytes(kSecRandomDefault, byteCount, &bytes)
@@ -23,12 +25,8 @@ struct RendererFrameOriginToken: Hashable, Equatable, Sendable {
             // fail closed rather than minting a guessable origin.
             preconditionFailure("SecRandomCopyBytes failed: \(status)")
         }
-        var base64 = Data(bytes).base64EncodedString()
-        base64 = base64
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
-        return Self(rawValue: base64)
+        let hex = bytes.map { String(format: "%02x", $0) }.joined()
+        return Self(rawValue: hex)
     }
 }
 
@@ -109,11 +107,7 @@ struct RendererFramePackageURL: Hashable, Equatable, Sendable {
     }
 
     private static func isTokenScalarLegal(_ scalar: Unicode.Scalar) -> Bool {
-        ("A" ... "Z").contains(Character(scalar))
-            || ("a" ... "z").contains(Character(scalar))
-            || ("0" ... "9").contains(Character(scalar))
-            || scalar == "-"
-            || scalar == "_"
+        ("0" ... "9").contains(Character(scalar)) || scalar == "-"
     }
 }
 
@@ -143,6 +137,10 @@ private struct ReaderFrameRoute: Sendable {
 final class ReaderRendererPackageRouter: RendererPackageResourceProviding, @unchecked Sendable {
     private let lock = NSLock()
     private var routes: [RendererFrameOriginToken: ReaderFrameRoute] = [:]
+
+    /// Diagnostic record of every URL handed to `resource(for:)`. Read only
+    /// from tests; production code never touches it.
+    private(set) var diagnosticStartedRequests: [URL] = []
 
     init() {}
 
@@ -190,19 +188,23 @@ final class ReaderRendererPackageRouter: RendererPackageResourceProviding, @unch
     /// to the validated provider with the canonical URL.
     func resource(for url: URL) throws -> RendererPackageResource {
         let frameURL = try RendererFramePackageURL.parse(url)
-        let route: ReaderFrameRoute
         lock.lock()
-        defer { lock.unlock() }
+        diagnosticStartedRequests.append(url)
         guard let admitted = routes[frameURL.token] else {
+            lock.unlock()
             throw RendererPackageResourceError.packageIdentityMismatch
         }
-        route = admitted
         // One origin host serves exactly one package reservation.
-        guard route.reservation.packageID == frameURL.request.packageID,
-              route.reservation.version == frameURL.request.version
-        else { throw RendererPackageResourceError.packageIdentityMismatch }
-        // Release the lock before validated package file I/O.
-        return try route.provider.resource(for: frameURL.canonicalURL)
+        guard admitted.reservation.packageID == frameURL.request.packageID,
+              admitted.reservation.version == frameURL.request.version
+        else {
+            lock.unlock()
+            throw RendererPackageResourceError.packageIdentityMismatch
+        }
+        // Validated package file I/O runs outside the critical section.
+        let provider = admitted.provider
+        lock.unlock()
+        return try provider.resource(for: frameURL.canonicalURL)
     }
 }
 #endif

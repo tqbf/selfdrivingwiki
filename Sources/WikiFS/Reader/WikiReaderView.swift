@@ -699,6 +699,12 @@ final class WikiReaderWebView: WKWebView {
     /// registered on the configuration.
     private(set) var rendererPackageSchemeHandler: RendererPackageSchemeHandler?
 
+    /// Test/diagnostic observation: every URL the package scheme handler was
+    /// asked to start. Empty in production use; only tests read it.
+    var diagnosticStartedPackageRequests: [URL] {
+        rendererPackageRouter.diagnosticStartedRequests
+    }
+
     init() {
         let config = WKWebViewConfiguration()
         let cc = WKUserContentController()
