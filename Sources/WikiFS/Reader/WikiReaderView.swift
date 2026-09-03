@@ -1563,6 +1563,11 @@ internal struct WikiReaderRep: NSViewRepresentable {
         if newSignature == webView.installedRendererPackageSignature { return }
         webView.installedRendererPackageSignature = newSignature
 
+        // Snapshot replacement is revocation: tear down all active package
+        // embeds (registry sessions, brokers, routes) before installing the
+        // new snapshot, per fail-closed semantics. The old iframes' requests
+        // then fail closed rather than being served by a stale route.
+        webView.coordinator?.frameBridgeRegistry.closeAll()
         let router = webView.rendererPackageRouter
         router.revokeAll()
         webView.rendererPackageFrameTokens.removeAll()
@@ -2403,8 +2408,13 @@ internal struct WikiReaderRep: NSViewRepresentable {
             // document can ask for input. Admit first: a budget rejection
             // below collapses the row without a frame in the DOM.
             var frameToken: RendererFrameOriginToken?
+            var embedEntryURL: URL?
             if case .packageFrame(let framePlan) = plan {
-                frameToken = framePlan.frameToken
+                // Per-embed token: two embeds of the same package must NOT
+                // share an origin, or one embed's bridge session would
+                // authorize the other embed's input (cross-embed leak).
+                let embedToken = RendererFrameOriginToken.generate()
+                frameToken = embedToken
                 guard let webViewObject = webView as NSView? else { return .rejected }
                 // The exact authorized input reader for this context. Source
                 // identities use the admitted-source initializer so the
@@ -2435,7 +2445,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     where: { $0.reference == context.rendererReference })?.assetReader
                 var originComponents = URLComponents()
                 originComponents.scheme = RendererPackageScheme.name
-                originComponents.host = framePlan.frameToken.rawValue
+                originComponents.host = embedToken.rawValue
                 guard let expectedOrigin = originComponents.url else {
                     // A scheme+host component pair always yields a URL; a nil
                     // here would mean an invalid token slipped through.
@@ -2457,19 +2467,42 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 // subframe bridge handler receives the envelopes.
                 let bootstrap = RendererContentWorldBroker.frameInputBootstrapJS(
                     input: context.input,
-                    expectedOriginHost: framePlan.frameToken.rawValue,
+                    expectedOriginHost: embedToken.rawValue,
                     messageHandlerName: WikiReaderWebView.subframeBridgeName)
-                // The router inlines the bootstrap into the served entry
-                // document (WKUserScripts added post-load don't run in
-                // subframes), so the frame sees rendererInput at start.
-                // The router inlines the bootstrap into the served entry
-                // document (WKUserScripts added post-load don't run in
-                // subframes), so the frame sees rendererInput at start.
-                webView.rendererPackageRouter.setFrameBootstrap(
-                    token: framePlan.frameToken, html: bootstrap)
+                // Admit a fresh route for THIS embed under its own token, so
+                // the frame's asset and entry requests resolve through the
+                // router, and inline the bootstrap into its entry document.
+                // The per-embed route serves the entry document and the
+                // bootstrap; the provider is the reference's validated one
+                // from install time (fail-closed if it was revoked).
+                guard let referenceProvider = webView.rendererPackageRouter.provider(
+                    for: framePlan.rendererReference) else {
+                    DebugLog.reader("embed[\(placeholderID.rawValue)]: package provider revoked before expansion")
+                    return .rejected
+                }
+                // The entry path comes from the plan's frame-scoped URL,
+                // parsed with the token-host parser (the canonical parser
+                // rejects token hosts). A parse failure means the plan was
+                // built from a malformed URL; reject rather than guess.
+                // swiftlint:disable:next silent_try_optional
+                guard let frameEntry = try? RendererFramePackageURL.parse(framePlan.entryURL) else {
+                    DebugLog.reader("embed[\(placeholderID.rawValue)]: entry URL parse failed for \(framePlan.entryURL)")
+                    return .rejected
+                }
+                // Admit the per-embed route and use the URL it returns as the
+                // iframe src — the plan's URL carries the stale pre-installed
+                // token, not this embed's fresh one.
+                embedEntryURL = webView.rendererPackageRouter.admit(
+                    token: embedToken,
+                    reservation: RendererPackageReservation(
+                        packageID: framePlan.rendererReference.packageID,
+                        version: framePlan.rendererReference.version),
+                    entryPath: frameEntry.request.path,
+                    provider: referenceProvider,
+                    inputBootstrapHTML: bootstrap)
                 let admitted = frameBridgeRegistry.admit(
                     placeholderID: placeholderID,
-                    frameToken: framePlan.frameToken,
+                    frameToken: embedToken,
                     rendererReference: context.rendererReference,
                     generation: context.generation,
                     broker: broker,
@@ -2482,11 +2515,24 @@ internal struct WikiReaderRep: NSViewRepresentable {
             }
 
             let expansionID = "\(placeholderID.rawValue)-expansion"
+            // For package frames, the iframe src must be THIS embed's
+            // per-embed URL (the plan's URL carries the stale pre-installed
+            // token from install time).
+            let effectivePlan: RendererDOMEmbedPlan
+            if case .packageFrame(var framePlan) = plan {
+                framePlan.entryURL = embedEntryURL ?? framePlan.entryURL
+                effectivePlan = .packageFrame(framePlan)
+            } else {
+                effectivePlan = plan
+            }
             guard let script = RendererDOMEmbedInjection.injectionScript(
-                plan: plan,
+                plan: effectivePlan,
                 placeholderID: placeholderID,
                 expansionID: expansionID)
             else {
+                // Rollback: no surface will be created, so dispose the whole
+                // unit (broker, registry session, router route + bootstrap).
+                teardownDOMEmbed(placeholderID)
                 // Readable-fallback plans render status text, not a surface.
                 if case .readableFallback(let fallback) = plan {
                     DebugLog.reader("embed[\(placeholderID.rawValue)]: readable fallback (\(fallback.explanation))")
@@ -2500,7 +2546,8 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 guard let self else { return }
                 if let error {
                     DebugLog.reader("embed[\(placeholderID.rawValue)]: injection JS error \(error.localizedDescription)")
-                    self.frameBridgeRegistry.close(placeholderID: placeholderID)
+                    // Rollback: dispose the whole unit on injection failure.
+                    self.teardownDOMEmbed(placeholderID)
                     return
                 }
                 // Any? from the JS bridge is not Sendable; stringify in place.
@@ -2624,12 +2671,19 @@ internal struct WikiReaderRep: NSViewRepresentable {
         }
 
         /// Scoped DOM-embed teardown: removes the embed surface from this
-        /// placeholder's expansion region and closes its bridge session. Other
-        /// rows are untouched.
+        /// placeholder's expansion region, closes its bridge session, and
+        /// revokes its router route + bootstrap. Other rows are untouched.
         func teardownDOMEmbed(_ placeholderID: RendererAttachmentPlaceholderID) {
+            // Capture the token before the registry drops it.
+            let token = frameBridgeRegistry.token(for: placeholderID)
             frameBridgeRegistry.close(placeholderID: placeholderID)
             guard let webView else { return }
             webView.evaluateJavaScript(RendererDOMEmbedInjection.removalScript(for: placeholderID))
+            // Revoke the per-embed route + bootstrap so closed embeds lose
+            // both halves of their capability (advisor finding 2/3).
+            if let token {
+                webView.rendererPackageRouter.revoke(token: token)
+            }
         }
 
         func failAttachment(_ placeholderID: RendererAttachmentPlaceholderID) {

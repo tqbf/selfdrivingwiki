@@ -71,12 +71,8 @@ struct InjectionReproTests {
                 packageID: RendererPackageID(rawValue: "org.selfdrivingwiki.json-canvas-readonly")!,
                 version: RendererPackageVersion(rawValue: "1.1.6")!),
             entryPath: entryPath,
-            provider: CanvasStubProvider(html: entryHTML))
-        // The bootstrap is inlined into the served entry document (WKUser
-        // Scripts added post-load don't run in subframes).
-        router.setFrameBootstrap(
-            token: frameToken,
-            html: RendererContentWorldBroker.frameInputBootstrapJS(
+            provider: CanvasStubProvider(html: entryHTML),
+            inputBootstrapHTML: RendererContentWorldBroker.frameInputBootstrapJS(
                 input: .source(versionID: SourceVersionID(rawValue: "01HTESTVERSION0000000000001")),
                 expectedOriginHost: frameToken.rawValue,
                 messageHandlerName: "subframeRendererBridge"))

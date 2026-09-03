@@ -60,7 +60,9 @@ enum RendererDOMEmbedPlan: Equatable {
 struct RendererPackageFramePlan: Equatable {
     let rendererReference: RendererReference
     let frameToken: RendererFrameOriginToken
-    let entryURL: URL
+    /// The frame-scoped entry URL. Re-based onto a fresh per-embed token at
+    /// expansion time (per-embed origin isolation).
+    var entryURL: URL
     let accessibleTitle: String
     /// Near-square expansion target for the reader column (720pt against 760).
     var boundedHeight: CGFloat = RendererDOMEmbedMetrics.nearSquareHeight
@@ -118,6 +120,15 @@ enum RendererDOMEmbedMetrics {
     /// Near-square expansion target for the reader column (720pt against the
     /// 760pt readable width). Replaces the overlay reservation policy.
     static let nearSquareHeight: CGFloat = 720.0
+}
+
+/// Serves nothing — a fail-closed stand-in for the rare case where an embed's
+/// per-embed route admission cannot find its reference's validated provider
+/// (e.g., the package was revoked between install and expansion).
+struct WebViewBootstrapShim: RendererPackageResourceProviding {
+    func resource(for url: URL) throws -> RendererPackageResource {
+        throw RendererPackageResourceError.packageIdentityMismatch
+    }
 }
 
 /// Builds a DOM embed plan from an authorized activation context. The exact

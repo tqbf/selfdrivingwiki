@@ -178,29 +178,46 @@ final class ReaderRendererPackageRouter: RendererPackageResourceProviding, @unch
         inputBootstraps[token] = html
     }
 
+    /// Returns the validated provider for a reference — the admitted route
+    /// matching the reference's exact package, version, and registration.
+    func provider(for reference: RendererReference) -> (any RendererPackageResourceProviding)? {
+        lock.lock()
+        defer { lock.unlock() }
+        return routes.values.first {
+            $0.reservation.packageID == reference.packageID
+                && $0.reservation.version == reference.version
+        }?.provider
+    }
+
+    /// Revokes one frame's route and its bootstrap. Later requests for that
+    /// origin fail closed.
+    func revoke(token: RendererFrameOriginToken) {
+        lock.lock()
+        defer { lock.unlock() }
+        routes.removeValue(forKey: token)
+        inputBootstraps.removeValue(forKey: token)
+    }
+
     /// Admits one frame route and returns the frame-scoped entry URL to use
     /// as the iframe's `src`.
     func admit(
         token: RendererFrameOriginToken,
         reservation: RendererPackageReservation,
         entryPath: RendererRelativePath,
-        provider: any RendererPackageResourceProviding
+        provider: any RendererPackageResourceProviding,
+        inputBootstrapHTML: String? = nil
     ) -> URL {
         lock.lock()
         defer { lock.unlock() }
         routes[token] = ReaderFrameRoute(reservation: reservation, provider: provider)
+        if let inputBootstrapHTML {
+            inputBootstraps[token] = inputBootstrapHTML
+        }
         return RendererFramePackageURL.frameURL(
             token: token,
             packageID: reservation.packageID,
             version: reservation.version,
             path: entryPath)
-    }
-
-    /// Revokes one frame's route. Later requests for that origin fail closed.
-    func revoke(token: RendererFrameOriginToken) {
-        lock.lock()
-        defer { lock.unlock() }
-        routes.removeValue(forKey: token)
     }
 
     /// Revokes every route (document replacement, snapshot replacement,
@@ -209,6 +226,7 @@ final class ReaderRendererPackageRouter: RendererPackageResourceProviding, @unch
         lock.lock()
         defer { lock.unlock() }
         routes.removeAll()
+        inputBootstraps.removeAll()
     }
 
     var activeRouteCount: Int {
