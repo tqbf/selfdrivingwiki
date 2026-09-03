@@ -20,12 +20,14 @@ struct RendererAttachmentCoordinatorTests {
         coordinator.webView = webView
         coordinator.attachmentContainer = container
         Self.startLifecycleLoad(coordinator, webView: webView)
+        let generation = try #require(coordinator.attachmentGeneration)
         let placeholder = try RendererAttachmentPlaceholderID(validating: "navigation-row")
 
         coordinator.webView(webView, didStartProvisionalNavigation: nil)
-        // DOM era: the navigation replaces the whole document, so all
-        // attachment state and frame sessions are torn down.
-        #expect(coordinator.attachmentGeneration == nil)
+        // DOM era: the navigation replaces the whole document. Frame sessions
+        // close, and the coordinator recreates for the new generation so
+        // stale geometry and activations from the old document fail closed.
+        #expect(coordinator.attachmentGeneration == generation)
         #expect(coordinator.attachmentState(for: placeholder) == .unresolved)
     }
 

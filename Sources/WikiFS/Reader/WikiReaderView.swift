@@ -2058,12 +2058,15 @@ internal struct WikiReaderRep: NSViewRepresentable {
             // WebKit now replaces the DOM for the current load generation.
             // Invalidate lazy DOM work and release frame sessions from the
             // old document (the DOM itself is replaced by the navigation).
+            // The coordinator is recreated for the new generation so stale
+            // geometry and activation callbacks from the old document fail
+            // closed; the fresh document's geometry then re-registers rows.
             transclusionGeneration += 1
             cancelTransclusionTasks()
             cancelInlineRetentionTasks()
             frameBridgeRegistry.closeAll()
             attachmentCoordinator?.closeAll()
-            attachmentCoordinator = nil
+            attachmentCoordinator = RendererAttachmentCoordinator(generation: loadGeneration)
         }
 
         func handleAttachmentGeometry(_ message: RendererAttachmentGeometryMessage) {
