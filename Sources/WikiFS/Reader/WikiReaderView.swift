@@ -2406,13 +2406,29 @@ internal struct WikiReaderRep: NSViewRepresentable {
             if case .packageFrame(let framePlan) = plan {
                 frameToken = framePlan.frameToken
                 guard let webViewObject = webView as NSView? else { return .rejected }
-                // The exact authorized input reader for this context. No
+                // The exact authorized input reader for this context. Source
+                // identities use the admitted-source initializer so the
+                // digest/MIME match against the admission-time snapshot is
+                // enforced (matching the inline resolver's behavior). No
                 // registered store (preview readers) means no bridge: the
                 // row collapses to a readable fallback instead.
                 guard let store else { return .rejected }
-                let inputReader = RendererAuthorizedInputReader(
-                    store: store.internalStore,
-                    authorizedInput: context.input)
+                let inputReader: RendererAuthorizedInputReader
+                do {
+                    if case .source(let admittedSource) = context.identity {
+                        inputReader = try RendererAuthorizedInputReader(
+                            store: store.internalStore,
+                            authorizedInput: context.input,
+                            admittedSource: admittedSource)
+                    } else {
+                        inputReader = RendererAuthorizedInputReader(
+                            store: store.internalStore,
+                            authorizedInput: context.input)
+                    }
+                } catch {
+                    DebugLog.reader("embed[\(placeholderID.rawValue)]: input admission failed \(error)")
+                    return .rejected
+                }
                 var originComponents = URLComponents()
                 originComponents.scheme = RendererPackageScheme.name
                 originComponents.host = framePlan.frameToken.rawValue
