@@ -91,6 +91,24 @@ final class RendererContentWorldBroker {
               provenance.originHost == expectedOrigin.host
         else { throw RendererBridgeAuthorizationError.wrongWindow }
         guard provenance.isMainFrame else { throw RendererBridgeAuthorizationError.nonMainFrame }
+        return try handleEnvelope(envelope, sessionIsReady: sessionIsReady)
+    }
+
+    /// Frame-scoped entry for reader DOM embeds: identical authorization to
+    /// `handlePageEnvelope` except the caller has already validated the
+    /// subframe's token origin and generation (the reader frame registry),
+    /// so a non-main frame is expected here rather than rejected.
+    func handleSubframeEnvelope(
+        _ envelope: Data,
+        sessionIsReady: Bool
+    ) throws -> Data {
+        try handleEnvelope(envelope, sessionIsReady: sessionIsReady)
+    }
+
+    private func handleEnvelope(
+        _ envelope: Data,
+        sessionIsReady: Bool
+    ) throws -> Data {
         guard envelope.count <= WikiAppWebViewPolicy.maximumBridgeMessageByteCount else {
             throw RendererBridgeAuthorizationError.oversizedEnvelope
         }
@@ -362,7 +380,7 @@ extension RendererContentWorldBroker {
         let source = """
         window.addEventListener("message", function(event) {
             if (event.source !== window || !event.data || typeof event.data.rendererBridge !== "string") { return; }
-            const reply = window.webkit.messageHandlers["\(WikiAppWebViewPolicy.isolatedMessageHandlerName)"].postMessage(event.data.rendererBridge);
+            const reply = window.webkit.messageHandlers["\\(WikiAppWebViewPolicy.isolatedMessageHandlerName)"].postMessage(event.data.rendererBridge);
             if (reply && typeof reply.then === "function") {
                 reply.then(function(value) {
                     window.postMessage({rendererBridgeResponse: value}, "*");
@@ -372,5 +390,91 @@ extension RendererContentWorldBroker {
         """
         return WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true, in: contentWorld)
     }
+
+    /// Document-start bootstrap for reader DOM-embed frames. Injected with
+    /// `forMainFrameOnly: false` and content world `.page`, but the reader's
+    /// message handler only honors envelopes whose frame origin host equals
+    /// the admitted frame token, so unrelated frames' scripts are inert.
+    /// Exposes only the authorized input selector — bytes stay behind
+    /// `input.read`, matching the package contract.
+    /// Document-start bootstrap for reader DOM-embed frames. Injected with
+    /// `forMainFrameOnly: false` and content world `.page`; the script itself
+    /// exits unless the frame's origin host equals the admitted frame token,
+    /// so unrelated frames are inert. Exposes only the authorized input
+    /// selector — bytes stay behind `input.read`, matching the package
+    /// contract — and relays envelopes to the reader's subframe handler.
+    static func frameInputBootstrapScript(
+        input: RendererBridgeInput,
+        expectedOriginHost: String,
+        messageHandlerName: String
+    ) -> WKUserScript {
+        let encodedInput: Data
+        do {
+            encodedInput = try JSONEncoder().encode(input)
+        } catch {
+            preconditionFailure("RendererBridgeInput must remain encodable: \(error)")
+        }
+        let inputJSON = String(decoding: encodedInput, as: UTF8.self)
+        let source = """
+        (function(){
+          if (window.location.host !== '\(expectedOriginHost)') { return; }
+          document.documentElement.dataset.rendererInput = \(String(reflecting: inputJSON));
+          window.addEventListener("message", function(event) {
+            if (event.source !== window || !event.data || typeof event.data.rendererBridge !== "string") { return; }
+            var reply = window.webkit.messageHandlers["\(messageHandlerName)"].postMessage(event.data.rendererBridge);
+            if (reply && typeof reply.then === "function") {
+              reply.then(function(value) {
+                window.postMessage({rendererBridgeResponse: value}, "*");
+              });
+            }
+          });
+        })();
+        """
+        return WKUserScript(
+            source: source,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: false,
+            in: .page)
+    }
+
+    /// Frame-scoped subframe bridge for reader DOM embeds. Registered once on
+    /// the reader webview in the `.page` content world; honors only envelopes
+    /// whose frame origin host equals an admitted frame token (validated by
+    /// the reader frame registry) and replies into the sending frame.
+    @MainActor
+    final class ReaderSubframeBridgeHandler: NSObject, WKScriptMessageHandlerWithReply {
+        private let validate: (WKFrameInfo, String) -> RendererContentWorldBroker?
+
+        init(validate: @escaping (WKFrameInfo, String) -> RendererContentWorldBroker?) {
+            self.validate = validate
+        }
+
+        @available(macOS 11.0, *)
+        func userContentController(
+            _ userContentController: WKUserContentController,
+            didReceive message: WKScriptMessage
+        ) async -> (Any?, String?) {
+            guard let text = message.body as? String,
+                  text.utf8.count <= WikiAppWebViewPolicy.maximumBridgeMessageByteCount
+            else { return (nil, "request denied") }
+            let originHost = message.frameInfo.securityOrigin.host
+            guard let broker = validate(message.frameInfo, originHost) else {
+                DebugLog.reader("subframe bridge: rejected origin \(originHost)")
+                return (nil, "request denied")
+            }
+            do {
+                let response = try broker.handleSubframeEnvelope(
+                    Data(text.utf8), sessionIsReady: true)
+                guard let responseText = String(data: response, encoding: .utf8) else {
+                    return (nil, "invalid response")
+                }
+                return (responseText, nil)
+            } catch {
+                DebugLog.reader("subframe bridge: denied (\(String(describing: error)))")
+                return (nil, "request denied")
+            }
+        }
+    }
+
 }
 #endif

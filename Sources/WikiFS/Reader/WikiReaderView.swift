@@ -708,6 +708,9 @@ final class WikiReaderWebView: WKWebView {
     var diagnosticStartedPackageRequests: [URL] {
         rendererPackageRouter.diagnosticStartedRequests
     }
+    /// Message handler name for the frame-scoped subframe bridge.
+    nonisolated static let subframeBridgeName = "subframeRendererBridge"
+
     init() {
         let config = WKWebViewConfiguration()
         let cc = WKUserContentController()
@@ -765,6 +768,9 @@ final class WikiReaderWebView: WKWebView {
                 DebugLog.reader("package-scheme: task registered \(url.absoluteString)")
             }
         }
+        // The frame-scoped subframe bridge handler is registered in
+        // `makeNSView` (WikiReaderRep), where the coordinator exists to
+        // validate frame origins against the frame registry.
         config.setURLSchemeHandler(
             packageHandler, forURLScheme: RendererPackageScheme.name)
         super.init(frame: .zero, configuration: config)
@@ -1432,6 +1438,26 @@ internal struct WikiReaderRep: NSViewRepresentable {
         webView.addBookmarkHandler = addBookmarkHandler
         webView.onRendererActivation = onRendererActivation
         Self.installRendererPackages(rendererPackageInputs, into: webView)
+        // Frame-scoped subframe bridge: honors only envelopes from admitted
+        // frame token origins, validated through the coordinator's registry.
+        if #available(macOS 11.0, *) {
+            webView.configuration.userContentController.addScriptMessageHandler(
+                RendererContentWorldBroker.ReaderSubframeBridgeHandler { [weak coordinator = context.coordinator] frameInfo, originHost in
+                    guard let coordinator,
+                          frameInfo.webView.map(ObjectIdentifier.init) == coordinator.webView.map(ObjectIdentifier.init)
+                    else { return nil }
+                    guard let token = RendererFrameOriginToken.tokenIfValid(originHost),
+                          let session = coordinator.frameBridgeRegistry.authorize(
+                            token: token,
+                            originHost: originHost,
+                            originScheme: RendererPackageScheme.name,
+                            webViewID: frameInfo.webView.map(ObjectIdentifier.init))
+                    else { return nil }
+                    return session.broker
+                },
+                contentWorld: .page,
+                name: WikiReaderWebView.subframeBridgeName)
+        }
         context.coordinator.inlineAttachmentResolver = inlineAttachmentResolver
         context.coordinator.inlineRendererDescriptors = inlineRendererDescriptors
         context.coordinator.rendererPackageInputs = rendererPackageInputs
@@ -2361,6 +2387,20 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     inputReader: inputReader,
                     expectedOrigin: expectedOrigin)
                 broker.bind(to: webView)
+                // Expose the authorized input selector inside THIS frame only
+                // (the script exits unless the frame host is the token) and
+                // route its envelope through the frame-scoped bridge. The
+                // script is added before the iframe exists, so it is present
+                // at the frame's document-start. Accumulated scripts are
+                // removed in teardown via removeAllUserScripts-free scoped
+                // cleanup: each frame's script is host-gated and inert for
+                // every other frame, so leaving them is safe and bounded by
+                // the frame budget.
+                webView.configuration.userContentController.addUserScript(
+                    RendererContentWorldBroker.frameInputBootstrapScript(
+                        input: context.input,
+                        expectedOriginHost: framePlan.frameToken.rawValue,
+                        messageHandlerName: WikiReaderWebView.subframeBridgeName))
                 let admitted = frameBridgeRegistry.admit(
                     placeholderID: placeholderID,
                     frameToken: framePlan.frameToken,

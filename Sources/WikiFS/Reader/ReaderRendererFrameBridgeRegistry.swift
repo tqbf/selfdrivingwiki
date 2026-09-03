@@ -125,22 +125,21 @@ final class ReaderRendererFrameBridgeRegistry {
     }
 
     /// Validates provenance and returns the session for one incoming message.
-    /// Rejects unknown tokens, wrong origins, wrong webviews, stale
-    /// generations, and closed frames — the frame-scoped equivalent of the
-    /// full-window session's provenance checks.
+    /// Rejects unknown tokens, wrong origins, wrong webviews, and closed
+    /// frames — the frame-scoped equivalent of the full-window session's
+    /// provenance checks. The session's own admission generation is the
+    /// authority; callers do not pass a generation.
     func authorize(
         token: RendererFrameOriginToken,
         originHost: String,
         originScheme: String,
-        webViewID: ObjectIdentifier?,
-        generation: Int
+        webViewID: ObjectIdentifier?
     ) -> ReaderRendererFrameSession? {
         guard let session = sessions[token],
               session.isClosed == false,
               session.expectedOriginHost == originHost,
               originScheme == RendererPackageScheme.name,
-              session.expectedWebViewID == webViewID,
-              session.generation == generation
+              session.expectedWebViewID == webViewID
         else { return nil }
         return session
     }

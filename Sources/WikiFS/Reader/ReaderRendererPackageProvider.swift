@@ -14,6 +14,16 @@ struct RendererFrameOriginToken: Hashable, Equatable, Sendable {
 
     private static let byteCount = 16
 
+    /// Returns the token only if the raw value matches the generate() alphabet
+    /// (lowercase hex). Prevents arbitrary host strings from becoming tokens.
+    static func tokenIfValid(_ rawValue: String) -> RendererFrameOriginToken? {
+        let isHexScalar = { (scalar: Unicode.Scalar) -> Bool in
+            ("0" ... "9").contains(Character(scalar))
+                || ("a" ... "f").contains(Character(scalar))
+        }
+        return rawValue.unicodeScalars.allSatisfy(isHexScalar) ? Self(rawValue: rawValue) : nil
+    }
+
     /// 128 bits of randomness from the system CSPRNG, lowercase hex. Lowercase
     /// because WebKit normalizes URL hosts to lowercase; a mixed-case token
     /// would not compare equal to the reported `WKSecurityOrigin.host`.

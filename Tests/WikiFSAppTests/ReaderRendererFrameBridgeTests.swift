@@ -51,7 +51,7 @@ struct ReaderRendererFrameBridgeTests {
             originHost: token.rawValue,
             originScheme: RendererPackageScheme.name,
             webViewID: ObjectIdentifier(webview),
-            generation: 5) != nil)
+            ) != nil)
     }
 
     @Test("wrong token, origin, webview, generation, or closed state fails closed")
@@ -74,43 +74,37 @@ struct ReaderRendererFrameBridgeTests {
             originHost: token.rawValue,
             originScheme: RendererPackageScheme.name,
             webViewID: ObjectIdentifier(webview),
-            generation: 5) == nil)
+            ) == nil)
         // Wrong origin host (cross-frame replay).
         #expect(registry.authorize(
             token: token,
             originHost: "other-frame-host",
             originScheme: RendererPackageScheme.name,
             webViewID: ObjectIdentifier(webview),
-            generation: 5) == nil)
+            ) == nil)
         // Wrong origin scheme.
         #expect(registry.authorize(
             token: token,
             originHost: token.rawValue,
             originScheme: "https",
             webViewID: ObjectIdentifier(webview),
-            generation: 5) == nil)
+            ) == nil)
         // Wrong webview (frame hopping).
         #expect(registry.authorize(
             token: token,
             originHost: token.rawValue,
             originScheme: RendererPackageScheme.name,
             webViewID: ObjectIdentifier(NSObject()),
-            generation: 5) == nil)
-        // Stale generation.
-        #expect(registry.authorize(
-            token: token,
-            originHost: token.rawValue,
-            originScheme: RendererPackageScheme.name,
-            webViewID: ObjectIdentifier(webview),
-            generation: 4) == nil)
-        // Closed frame.
+            ) == nil)
+        // Closed frame (a stale-generation session is closed by the registry
+        // when the coordinator recreates; closed sessions fail identically).
         registry.close(placeholderID: p)
         #expect(registry.authorize(
             token: token,
             originHost: token.rawValue,
             originScheme: RendererPackageScheme.name,
             webViewID: ObjectIdentifier(webview),
-            generation: 5) == nil)
+            ) == nil)
     }
 
     @Test("frame budget bounds concurrent admitted sessions")
@@ -163,7 +157,7 @@ struct ReaderRendererFrameBridgeTests {
             originHost: tokenB.rawValue,
             originScheme: RendererPackageScheme.name,
             webViewID: ObjectIdentifier(webview),
-            generation: 1) != nil)
+            ) != nil)
     }
 
     @Test("two same-package frames hold distinct tokens and cannot read each other")
@@ -196,13 +190,13 @@ struct ReaderRendererFrameBridgeTests {
             originHost: tokenB.rawValue, // A's token, B's origin: replay
             originScheme: RendererPackageScheme.name,
             webViewID: ObjectIdentifier(webview),
-            generation: 1) == nil)
+            ) == nil)
         #expect(registry.authorize(
             token: tokenB,
             originHost: tokenA.rawValue, // B's token, A's origin: replay
             originScheme: RendererPackageScheme.name,
             webViewID: ObjectIdentifier(webview),
-            generation: 1) == nil)
+            ) == nil)
     }
 
     @Test("closeAll releases every session deterministically")

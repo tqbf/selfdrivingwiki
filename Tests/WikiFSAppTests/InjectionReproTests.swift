@@ -108,23 +108,19 @@ struct InjectionReproTests {
                 "String(document.getElementById('row-1-expansion-embed')?.src || 'no-frame')"
             ) { result, _ in cont.resume(returning: result as? String ?? "nil") }
         }
-        Issue.record("frame src attribute: \(srcAttribute)")
+        #expect(srcAttribute.hasPrefix("renderer-package://\(plan.frameTokenHost)/"))
 
-        // The load-state map records appended → loaded:<href> for the frame.
-        let stateDeadline = ContinuousClock.now + .seconds(5)
-        var loadState = "appended"
-        while !loadState.hasPrefix("loaded:"), ContinuousClock.now < stateDeadline {
-            loadState = await withCheckedContinuation { (cont: CheckedContinuation<String, Never>) in
-                webView.evaluateJavaScript(
-                    "String(window.__sdwRendererEmbedLoads && window.__sdwRendererEmbedLoads['row-1'] || 'no-entry')"
-                ) { result, _ in
-                    cont.resume(returning: result as? String ?? "nil")
-                }
-            }
-            if loadState.hasPrefix("loaded:") { break }
-            try await Task.sleep(for: .milliseconds(100))
+        // The parent must NOT be able to read the frame's document — the
+        // frame is cross-origin isolated under its token origin (a core
+        // security property). Content verification happens through the
+        // router ground-truth assertion above.
+        let contentProbe = await withCheckedContinuation { (cont: CheckedContinuation<String, Never>) in
+            webView.evaluateJavaScript(
+                "(function(){try{return 'parent-read:'+document.getElementById('row-1-expansion-embed').contentDocument.body.textContent;}catch(e){return 'cross-origin-isolated';}})()"
+            ) { result, _ in cont.resume(returning: result as? String ?? "nil") }
         }
-        #expect(loadState.hasPrefix("loaded:renderer-package://\(plan.frameTokenHost)"))
+        #expect(contentProbe == "cross-origin-isolated",
+                "frame access state: \(contentProbe)")
     }
 
 }
