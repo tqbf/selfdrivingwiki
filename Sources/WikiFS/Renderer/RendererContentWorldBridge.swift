@@ -468,6 +468,7 @@ extension RendererContentWorldBroker {
                 guard let responseText = String(data: response, encoding: .utf8) else {
                     return (nil, "invalid response")
                 }
+                DebugLog.reader("subframe bridge: ok (\(responseText.count) bytes) for frame \(originHost)")
                 return (responseText, nil)
             } catch {
                 DebugLog.reader("subframe bridge: denied (\(String(describing: error))) envelope[\(text.prefix(200))]")
