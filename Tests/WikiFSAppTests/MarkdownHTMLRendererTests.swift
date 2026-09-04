@@ -697,7 +697,7 @@ struct MarkdownHTMLRendererTests {
     func rendererActionURLStaysStaticWithoutAdmission() throws {
         let projection = RendererEmbedProjection(
             sourceEmbeds: [:],
-            richFenceClaims: RendererFenceClaimResolver.resolve(builtInDescriptors: [], enabledInstalledDescriptors: [try Self.jsonCanvasInstalledDescriptor()]))
+            richFenceClaims: RendererFenceClaimResolver.resolve(builtInDescriptors: [], availableInstalledDescriptors: [try Self.jsonCanvasInstalledDescriptor()]))
         let document = MarkdownDocumentIdentity(
             pageID: PageID(rawValue: "01HTESTPAGE000000000000001"),
             pageVersionID: PageVersionID(rawValue: "01HTESTPV00000000000000001"))
@@ -728,7 +728,7 @@ struct MarkdownHTMLRendererTests {
     func longRendererTitlesRetainAccessibleValueWhileVisuallyEllipsizing() {
         let projection = RendererEmbedProjection(
             sourceEmbeds: [:],
-            richFenceClaims: RendererFenceClaimResolver.resolve(builtInDescriptors: [], enabledInstalledDescriptors: [try! Self.jsonCanvasInstalledDescriptor()]))
+            richFenceClaims: RendererFenceClaimResolver.resolve(builtInDescriptors: [], availableInstalledDescriptors: [try! Self.jsonCanvasInstalledDescriptor()]))
         let document = MarkdownDocumentIdentity(
             pageID: PageID(rawValue: "01HTESTPAGE000000000000001"),
             pageVersionID: PageVersionID(rawValue: "01HTESTPV00000000000000001"))
@@ -966,7 +966,7 @@ private extension MarkdownHTMLRendererTests {
         let imageTargets = try MarkdownImageTargetProjection.build(
             siblingSources: ["image.png": source],
             siblingSourceIDs: ["image.png": sourceID],
-            registry: try RendererRegistrySnapshot(builtInDescriptors: [], enabledInstalledDescriptors: [descriptor]),
+            registry: try RendererRegistrySnapshot(builtInDescriptors: [], availableInstalledDescriptors: [descriptor]),
             inlineCapableReferences: [reference])
         let admission = RendererEmbedActivationAdmission(
             pageID: pageID,

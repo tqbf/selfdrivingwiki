@@ -130,8 +130,8 @@ struct ContentView: View {
         // transcript, and activity window — resolves fence claims from data.
         // Built-ins land in init; the enabled descriptors follow the host
         // snapshot, and a change invalidates the memoized context.
-        .onChange(of: installedRendererHost.inputs.enabledDescriptors, initial: true) { _, descriptors in
-            store.rendererEnabledDescriptors = descriptors
+        .onChange(of: installedRendererHost.inputs.availableDescriptors, initial: true) { _, descriptors in
+            store.rendererAvailableDescriptors = descriptors
         }
         // "Show In List" reveal (issue #183): a detail-view button requested the
         // sidebar reveal a page/source. Un-collapse the sidebar so the target list
@@ -469,15 +469,24 @@ struct ContentView: View {
 /// them, so the same drawing embedded on two pages deliberately shares one
 /// window: the windows would be identical.
 struct RendererActivationPresentation: Identifiable, Codable, Hashable {
+    struct SourceContext: Codable, Hashable, Sendable {
+        let source: RendererEmbeddedContent.Source
+        let siblingSources: [String: SourceID]
+        let sourceExtensions: [SourceID: String]
+    }
+
     let reference: RendererReference
     let input: RendererBridgeInput
     let wikiID: WikiID
+    let sourceContext: SourceContext?
     let id: String
 
-    init(reference: RendererReference, input: RendererBridgeInput, wikiID: WikiID) {
+    init(reference: RendererReference, input: RendererBridgeInput, wikiID: WikiID,
+         sourceContext: SourceContext? = nil) {
         self.reference = reference
         self.input = input
         self.wikiID = wikiID
+        self.sourceContext = sourceContext
         let encodedInput: String
         switch input {
         case .inlineArtifact(let artifact):
@@ -543,12 +552,15 @@ struct RendererActivationView: View {
     @Bindable var store: WikiStoreModel
     let installedRendererHost: InstalledRendererHost
     let request: RendererActivationPresentation
+    @State private var rendererSessionPreparation = RendererSessionPreparationOwner()
 
     var body: some View {
         rendererContent
             .frame(minWidth: 520, minHeight: 420)
             .navigationTitle(title)
             .onExitCommand { dismiss() }
+            .task(id: request.id) { preparePackageSession() }
+            .onDisappear { rendererSessionPreparation.cancel() }
     }
 
     @ViewBuilder
@@ -574,7 +586,7 @@ struct RendererActivationView: View {
 
     private var rendererDescriptor: RendererDescriptor? {
         BuiltInRendererDescriptors.all.first(where: { $0.reference == request.reference })
-        ?? installedRendererHost.inputs.enabledDescriptors.first(where: { $0.reference == request.reference })
+        ?? installedRendererHost.inputs.availableDescriptors.first(where: { $0.reference == request.reference })
     }
 
     private var builtInInputs: BuiltInRendererFactoryInputs {
@@ -607,17 +619,25 @@ struct RendererActivationView: View {
         return try reader.read(input)
     }
 
+    private func preparePackageSession() {
+        guard let descriptor = rendererDescriptor,
+              case .webPackage = descriptor.implementation,
+              let configuration = installedRendererHost.inputs.configuration(for: descriptor)
+        else { rendererSessionPreparation.cancel(); return }
+        rendererSessionPreparation.prepare(.init(
+            descriptor: descriptor, configuration: configuration, input: request.input,
+            admittedSource: request.sourceContext?.source, store: store.internalStore,
+            siblingSources: request.sourceContext?.siblingSources ?? [:],
+            sourceExtensions: request.sourceContext?.sourceExtensions ?? [:],
+            hostNavigationRouting: .store(store)))
+    }
+
     private func packageRendererView(for descriptor: RendererDescriptor) -> AnyView? {
-        let inputReader = RendererAuthorizedInputReader(
-            store: store.internalStore,
-            authorizedInput: request.input)
-        return installedRendererHost.factory.makeView(
-            for: descriptor,
-            inputs: installedRendererHost.inputs.withHostNavigationRouting(.store(store)),
-            inputReader: inputReader,
-            onFailure: { failure in
-                DebugLog.reader("Installed renderer presentation failed: \(failure.kind)")
-            })
+        guard let authority = rendererSessionPreparation.prepared,
+              authority.descriptor.reference == descriptor.reference else { return nil }
+        return installedRendererHost.factory.makeView(authority: authority) { failure in
+            DebugLog.reader("Installed renderer presentation failed: \(failure.kind)")
+        }
     }
 
     @ViewBuilder

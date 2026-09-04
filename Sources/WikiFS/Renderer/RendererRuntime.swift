@@ -244,7 +244,7 @@ actor RendererRuntime: RendererServices {
         }
         return RendererPreparation(
             machineIndex: index,
-            enabledDescriptors: descriptors,
+            availableDescriptors: descriptors,
             providers: providers,
             failureRecorder: machineStore.sessionFailureRecorder())
     }

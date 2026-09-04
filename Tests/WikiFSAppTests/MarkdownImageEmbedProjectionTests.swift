@@ -42,7 +42,7 @@ struct MarkdownImageTargetProjectionTests {
         let targets = try MarkdownImageTargetProjection.build(
             siblingSources: ["images/board.canvas": source],
             siblingSourceIDs: ["images/board.canvas": source.sourceID],
-            registry: try RendererRegistrySnapshot(builtInDescriptors: [], enabledInstalledDescriptors: [descriptor]),
+            registry: try RendererRegistrySnapshot(builtInDescriptors: [], availableInstalledDescriptors: [descriptor]),
             inlineCapableReferences: [descriptor.reference])
 
         guard case let .renderer(reference, pinnedSource) = targets["images/board.canvas"] else {
@@ -64,7 +64,7 @@ struct MarkdownImageTargetProjectionTests {
         let targets = try MarkdownImageTargetProjection.build(
             siblingSources: ["images/board.canvas": source],
             siblingSourceIDs: ["images/board.canvas": source.sourceID],
-            registry: try RendererRegistrySnapshot(builtInDescriptors: [], enabledInstalledDescriptors: [descriptor]),
+            registry: try RendererRegistrySnapshot(builtInDescriptors: [], availableInstalledDescriptors: [descriptor]),
             inlineCapableReferences: [descriptor.reference])
 
         for target in [
@@ -81,7 +81,7 @@ struct MarkdownImageTargetProjectionTests {
     @Test("descriptor capability MIME and size failures stay ordinary")
     func failedEligibilityFactsStayOrdinary() throws {
         let descriptor = try Self.jsonCanvasInstalledDescriptor()
-        let registry = try RendererRegistrySnapshot(builtInDescriptors: [], enabledInstalledDescriptors: [descriptor])
+        let registry = try RendererRegistrySnapshot(builtInDescriptors: [], availableInstalledDescriptors: [descriptor])
         let validSource = try imageSource(bytes: Self.jsonCanvasBytes)
         let siblingIDs = ["images/board.canvas": validSource.sourceID]
         let unclaimed = try MarkdownImageTargetProjection.build(
@@ -124,7 +124,7 @@ struct MarkdownImageTargetProjectionTests {
         let targets = try MarkdownImageTargetProjection.build(
             siblingSources: ["images/board.canvas": source],
             siblingSourceIDs: ["images/board.canvas": source.sourceID],
-            registry: try RendererRegistrySnapshot(builtInDescriptors: [], enabledInstalledDescriptors: [descriptor]),
+            registry: try RendererRegistrySnapshot(builtInDescriptors: [], availableInstalledDescriptors: [descriptor]),
             inlineCapableReferences: [descriptor.reference])
         let prepared = ReaderMarkdown.preparedDocument("![System <&>](images/board.canvas)")
         let projection = ResolvedDocumentProjection(markdownImages: targets)
@@ -153,7 +153,7 @@ struct MarkdownImageTargetProjectionTests {
             displayNames: [source.sourceID: "Excalidraw Architecture"],
             registry: try RendererRegistrySnapshot(
                 builtInDescriptors: [],
-                enabledInstalledDescriptors: [descriptor]),
+                availableInstalledDescriptors: [descriptor]),
             inlineCapableReferences: [descriptor.reference])
 
         let plan = try #require(plans[source.sourceID])
@@ -176,21 +176,21 @@ struct MarkdownImageTargetProjectionTests {
             displayNames: [:],
             registry: try RendererRegistrySnapshot(
                 builtInDescriptors: [],
-                enabledInstalledDescriptors: [rowOnly]),
+                availableInstalledDescriptors: [rowOnly]),
             inlineCapableReferences: [rowOnly.reference])
         let factoryDenied = try DocumentSourceRendererProjection.build(
             sources: [source.sourceID: source],
             displayNames: [:],
             registry: try RendererRegistrySnapshot(
                 builtInDescriptors: [],
-                enabledInstalledDescriptors: [inline]),
+                availableInstalledDescriptors: [inline]),
             inlineCapableReferences: [])
         let artifactDenied = try DocumentSourceRendererProjection.build(
             sources: [malformed.sourceID: malformed],
             displayNames: [:],
             registry: try RendererRegistrySnapshot(
                 builtInDescriptors: [],
-                enabledInstalledDescriptors: [inline]),
+                availableInstalledDescriptors: [inline]),
             inlineCapableReferences: [inline.reference])
 
         #expect(rowDenied.isEmpty)
@@ -212,35 +212,35 @@ struct MarkdownImageTargetProjectionTests {
             fileExtension: nil,
             registry: try RendererRegistrySnapshot(
                 builtInDescriptors: [],
-                enabledInstalledDescriptors: [inline]),
+                availableInstalledDescriptors: [inline]),
             inlineCapableReferences: [inline.reference]))
         #expect(!DocumentSourceRendererProjection.hasEligibleRenderer(
             mimeType: jsonMIME,
             fileExtension: nil,
             registry: try RendererRegistrySnapshot(
                 builtInDescriptors: [],
-                enabledInstalledDescriptors: [rowOnly]),
+                availableInstalledDescriptors: [rowOnly]),
             inlineCapableReferences: [rowOnly.reference]))
         #expect(!DocumentSourceRendererProjection.hasEligibleRenderer(
             mimeType: jsonMIME,
             fileExtension: nil,
             registry: try RendererRegistrySnapshot(
                 builtInDescriptors: [],
-                enabledInstalledDescriptors: [inline]),
+                availableInstalledDescriptors: [inline]),
             inlineCapableReferences: []))
         #expect(!DocumentSourceRendererProjection.hasEligibleRenderer(
             mimeType: "image/png",
             fileExtension: nil,
             registry: try RendererRegistrySnapshot(
                 builtInDescriptors: [],
-                enabledInstalledDescriptors: [inline]),
+                availableInstalledDescriptors: [inline]),
             inlineCapableReferences: [inline.reference]))
         #expect(!DocumentSourceRendererProjection.hasEligibleRenderer(
             mimeType: jsonMIME,
             fileExtension: nil,
             registry: try RendererRegistrySnapshot(
                 builtInDescriptors: [],
-                enabledInstalledDescriptors: [incompatible]),
+                availableInstalledDescriptors: [incompatible]),
             inlineCapableReferences: [incompatible.reference]))
         // The extension fallback tier: a NULL-MIME row matches an
         // extension-fallback claim, and nothing matches when both are absent.
@@ -252,21 +252,21 @@ struct MarkdownImageTargetProjectionTests {
             fileExtension: "mmd",
             registry: try RendererRegistrySnapshot(
                 builtInDescriptors: [],
-                enabledInstalledDescriptors: [extensionBacked]),
+                availableInstalledDescriptors: [extensionBacked]),
             inlineCapableReferences: [extensionBacked.reference]))
         #expect(!DocumentSourceRendererProjection.hasEligibleRenderer(
             mimeType: nil,
             fileExtension: nil,
             registry: try RendererRegistrySnapshot(
                 builtInDescriptors: [],
-                enabledInstalledDescriptors: [extensionBacked]),
+                availableInstalledDescriptors: [extensionBacked]),
             inlineCapableReferences: [extensionBacked.reference]))
         #expect(!DocumentSourceRendererProjection.hasEligibleRenderer(
             mimeType: nil,
             fileExtension: "txt",
             registry: try RendererRegistrySnapshot(
                 builtInDescriptors: [],
-                enabledInstalledDescriptors: [extensionBacked]),
+                availableInstalledDescriptors: [extensionBacked]),
             inlineCapableReferences: [extensionBacked.reference]))
     }
 
@@ -422,7 +422,7 @@ struct MarkdownImageTargetProjectionTests {
         let descriptor = try excalidrawDescriptor(embeddingRoles: [.inlineContent])
         let registry = try RendererRegistrySnapshot(
             builtInDescriptors: [],
-            enabledInstalledDescriptors: [descriptor])
+            availableInstalledDescriptors: [descriptor])
         let context = WikiRenderContext(
             pageTitles: ["collision"],
             pageIDToName: [:],

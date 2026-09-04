@@ -135,7 +135,20 @@ struct AppendDerivedMarkdownHooks: Sendable {
 ///   `WikiStoreError.unexpected("TODO: …")` (or return empty for the
 ///   non-throwing embed-work methods). The build compiles; methods are
 ///   implemented incrementally.
-public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
+/// Internal compatibility surface for historical per-wiki renderer enablement.
+/// Current renderer discovery and availability must not depend on this protocol.
+protocol LegacyRendererWikiEnablementCompatibility: AnyObject {
+    func listRendererWikiEnablement() throws -> [RendererWikiEnablement]
+    func rendererWikiEnablement(packageID: RendererPackageID) throws -> RendererWikiEnablement?
+    func setRendererWikiEnablement(packageID: RendererPackageID, isEnabled: Bool) throws
+}
+
+/// GRDB store. `@unchecked Sendable` is safe because every public entry point
+/// is method-atomic: `dbWriter` holds GRDB's own serialization and each
+/// mutator routes through the recursive-lock + savepoint discipline (see
+/// `plans/graph-model-and-versioning.md` §8 and the SQLite concurrency skill).
+// swiftlint:disable:next unchecked_sendable
+public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompatibility, @unchecked Sendable {
 
     // MARK: - Stored properties
 
@@ -3590,8 +3603,10 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
-    // MARK: - Renderer settings (dynamic renderers Phase 3)
+    // MARK: - Renderer settings compatibility
 
+    /// Reads the retired per-wiki enablement data so historical databases remain
+    /// inspectable. Current renderer availability does not consult these rows.
     public func listRendererWikiEnablement() throws -> [RendererWikiEnablement] {
         try dbWriter.read { db in
             try Row.fetchAll(db, sql: """
@@ -3612,6 +3627,8 @@ public final class GRDBWikiStore: WikiStore, @unchecked Sendable {
         }
     }
 
+    /// Persists the historical row and journal event for compatibility only.
+    /// Current renderer availability does not consult this value.
     public func setRendererWikiEnablement(packageID: RendererPackageID, isEnabled: Bool) throws {
         let event = RendererSettingsChangeEvent.wikiEnablementSet(packageID: packageID, isEnabled: isEnabled)
         try mutateRendererSettings(event: event) { db, committedAt in

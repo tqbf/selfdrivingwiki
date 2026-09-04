@@ -35,7 +35,7 @@ struct SVGRendererPackageTests {
         let descriptor = try #require(package.manifest.descriptors.only)
         let snapshot = try RendererRegistrySnapshot(
             builtInDescriptors: [],
-            enabledInstalledDescriptors: [descriptor])
+            availableInstalledDescriptors: [descriptor])
         let mimeInput = try RendererMatchInput(
             mimeType: try .init(validating: "image/svg+xml"),
             fileExtension: try .init(validating: "svg"),

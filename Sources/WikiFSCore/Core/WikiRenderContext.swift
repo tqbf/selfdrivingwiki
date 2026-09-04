@@ -219,7 +219,7 @@ public struct WikiRenderContext: Sendable {
         // windows — sees the same claim map with no per-view wiring.
         let rendererFenceClaims = RendererFenceClaimResolver.resolve(
             builtInDescriptors: store.rendererBuiltInDescriptors,
-            enabledInstalledDescriptors: store.rendererEnabledDescriptors)
+            availableInstalledDescriptors: store.rendererAvailableDescriptors)
         // Remember every alias this store has seen claimed. A later registry
         // refresh that drops a claimant (removal or safe-mode suppression)
         // then explains its fences' fallback instead of rendering silently.

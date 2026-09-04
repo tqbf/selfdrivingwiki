@@ -670,7 +670,8 @@ private struct FixedRendererEventClock: RendererEventClock {
     }
 
     @Test func settingsRoundTripPersistsJournalRecordsInOrder() throws {
-        let store = try store()
+        let url = try tempDatabaseURL()
+        let store = try store(url: url)
         let packageID = try RendererPackageID(validating: "org.example.viewer")
         let source = try store.addSource(filename: "diagram.canvas", data: Data("{}".utf8))
         let preference = RendererPreferenceReference.logical(
@@ -687,6 +688,11 @@ private struct FixedRendererEventClock: RendererEventClock {
         let records = try store.rendererSettingsJournalRecords()
         #expect(records.map(\.sequence) == [1, 2, 3])
         #expect(records.allSatisfy { $0.committedAt.rawValue.hasSuffix("+00:00") })
+
+        store.close()
+        let reopened = try self.store(url: url)
+        #expect(try reopened.rendererWikiEnablement(packageID: packageID)?.isEnabled == true)
+        #expect(try reopened.rendererSettingsJournalRecords().map(\.sequence) == [1, 2, 3])
     }
 
     @Test func sourcePresentationRoundTripsAndDeletesIndependentlyOfRendererPreference() throws {

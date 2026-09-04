@@ -30,13 +30,13 @@ typealias RendererInlineAttachmentResolver = @MainActor (
 @MainActor
 struct RendererPackageEmbedInputs {
     struct Entry {
-        let reference: RendererReference
+        let descriptor: RendererDescriptor
+        var reference: RendererReference { descriptor.reference }
         /// The package entry document's path within the package manifest.
         let entryPath: String
-        let provider: any RendererPackageResourceProviding
-        /// Admitted asset reader for the package session (nil when the
-        /// descriptor declares no assets).
-        let assetReader: RendererAuthorizedAssetReader?
+        let configuration: InstalledRendererSessionConfiguration
+        let hostNavigationRouting: RendererHostNavigationRouting
+        var provider: any RendererPackageResourceProviding { configuration.resourceProvider }
     }
 
     let entries: [Entry]
@@ -45,13 +45,14 @@ struct RendererPackageEmbedInputs {
 
     /// Flattens the factory inputs' per-descriptor provider lookup.
     static func make(from inputs: InstalledRendererFactory.Inputs) -> Self {
-        Self(entries: inputs.enabledDescriptors.compactMap { descriptor in
-            guard let resolved = inputs.resourceProvider(for: descriptor) else { return nil }
+        Self(entries: inputs.availableDescriptors.compactMap { descriptor in
+            guard case let .webPackage(entryPoint) = descriptor.implementation,
+                  let configuration = inputs.configuration(for: descriptor) else { return nil }
             return Entry(
-                reference: descriptor.reference,
-                entryPath: resolved.entryPath,
-                provider: resolved.provider,
-                assetReader: resolved.assetReader)
+                descriptor: descriptor,
+                entryPath: entryPoint.path.rawValue,
+                configuration: configuration,
+                hostNavigationRouting: inputs.hostNavigationRouting)
         })
     }
 }
@@ -95,39 +96,21 @@ enum RendererInlineAttachmentResolverFactory {
         installedRendererFactory: InstalledRendererFactory,
         installedRendererFactoryInputs: InstalledRendererFactory.Inputs
     ) -> RendererInlineAttachmentResolution {
-        guard let descriptor = installedRendererFactoryInputs.enabledDescriptors.first(where: {
+        guard let descriptor = installedRendererFactoryInputs.availableDescriptors.first(where: {
             $0.reference == context.rendererReference
         }), descriptor.supportedEmbeddingRoles.contains(context.embeddingRole) else {
             DebugLog.reader("inline installed renderer role mismatch for \(placeholderID.rawValue)")
             return .unsupported
         }
 
-        let inputReader: RendererAuthorizedInputReader
-        do {
-            if case .source(let source) = context.identity {
-                inputReader = try RendererAuthorizedInputReader(
-                    store: store,
-                    authorizedInput: context.input,
-                    admittedSource: source)
-            } else {
-                inputReader = RendererAuthorizedInputReader(
-                    store: store,
-                    authorizedInput: context.input)
-            }
-        } catch {
-            DebugLog.reader("inline installed renderer input admission failed for \(placeholderID.rawValue)")
-            return .failed
-        }
-        guard let view = installedRendererFactory.makeView(
-            for: descriptor,
-            inputs: installedRendererFactoryInputs,
-            inputReader: inputReader,
-            onFailure: onSessionFailure)
-        else {
-            DebugLog.reader("inline installed renderer could not be created for \(placeholderID.rawValue)")
-            return .failed
-        }
-        return .content(view)
+        // Package-backed inline rendering is mounted as a DOM frame by the
+        // reader. It requires asynchronous session preparation and must never
+        // create a parallel full-window session from this legacy resolver.
+        _ = context
+        _ = store
+        _ = installedRendererFactory
+        _ = onSessionFailure
+        return .unsupported
     }
 }
 #endif

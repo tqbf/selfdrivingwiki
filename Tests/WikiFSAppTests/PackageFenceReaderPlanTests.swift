@@ -52,7 +52,7 @@ struct PackageFenceReaderPlanTests {
     func d2FenceRendersFromClaimData() throws {
         let claims = RendererFenceClaimResolver.resolve(
             builtInDescriptors: BuiltInRendererDescriptors.all,
-            enabledInstalledDescriptors: [try Self.d2Descriptor()])
+            availableInstalledDescriptors: [try Self.d2Descriptor()])
         let html = MarkdownHTMLRenderer.render(
             "```d2\nx -> y\n```",
             options: Self.options(claims: claims))
@@ -112,7 +112,7 @@ struct PackageFenceReaderPlanTests {
         let store = try GRDBWikiStore()
         let model = WikiStoreModel(store: store)
         model.rendererBuiltInDescriptors = BuiltInRendererDescriptors.all
-        model.rendererEnabledDescriptors = [PackageFenceTestSupport.d2Descriptor()]
+        model.rendererAvailableDescriptors = [PackageFenceTestSupport.d2Descriptor()]
         let d2 = try #require(RendererFenceAlias(rawValue: "d2"))
 
         let whileInstalled = model.renderContext()
@@ -120,13 +120,13 @@ struct PackageFenceReaderPlanTests {
         #expect(whileInstalled.rendererEmbedProjection.unavailableFenceAliases.isEmpty)
 
         // Registry refresh drops the claimant; the next context flags it.
-        model.rendererEnabledDescriptors = []
+        model.rendererAvailableDescriptors = []
         let afterRemoval = model.renderContext()
         #expect(afterRemoval.rendererEmbedProjection.fenceClaim(for: d2) == nil)
         #expect(afterRemoval.rendererEmbedProjection.unavailableFenceAliases.contains(d2))
 
         // Reinstall restores rendering from the same session state.
-        model.rendererEnabledDescriptors = [PackageFenceTestSupport.d2Descriptor()]
+        model.rendererAvailableDescriptors = [PackageFenceTestSupport.d2Descriptor()]
         let reinstalled = model.renderContext()
         #expect(reinstalled.rendererEmbedProjection.fenceClaim(for: d2) != nil)
         #expect(!reinstalled.rendererEmbedProjection.unavailableFenceAliases.contains(d2))
@@ -154,7 +154,7 @@ struct PackageFenceReaderPlanTests {
         // descriptor data.
         let claims = RendererFenceClaimResolver.resolve(
             builtInDescriptors: BuiltInRendererDescriptors.all,
-            enabledInstalledDescriptors: [PackageFenceTestSupport.installedMermaidDescriptor()])
+            availableInstalledDescriptors: [PackageFenceTestSupport.installedMermaidDescriptor()])
         let html = MarkdownHTMLRenderer.render(
             "```mermaid\ngraph TD\nA-->B\n```",
             options: Self.options(claims: claims))
@@ -206,7 +206,7 @@ struct PackageFenceReaderPlanTests {
     func excalidrawGolden() throws {
         let claims = RendererFenceClaimResolver.resolve(
             builtInDescriptors: BuiltInRendererDescriptors.all,
-            enabledInstalledDescriptors: [try Self.installedExcalidrawDescriptor()])
+            availableInstalledDescriptors: [try Self.installedExcalidrawDescriptor()])
         let html = MarkdownHTMLRenderer.render(
             "```excalidraw\n{\"type\":\"excalidraw\",\"version\":2,\"elements\":[]}\n```",
             options: Self.options(claims: claims))

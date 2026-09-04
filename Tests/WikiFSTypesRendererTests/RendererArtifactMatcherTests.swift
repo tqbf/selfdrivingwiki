@@ -109,10 +109,10 @@ struct RendererArtifactRegistryTests {
             constraints: try Phase6RendererArtifactFixtures.jsonCanvasConstraints())
         let forward = try RendererRegistrySnapshot(
             builtInDescriptors: [],
-            enabledInstalledDescriptors: [excalidraw, canvas])
+            availableInstalledDescriptors: [excalidraw, canvas])
         let reverse = try RendererRegistrySnapshot(
             builtInDescriptors: [],
-            enabledInstalledDescriptors: [canvas, excalidraw])
+            availableInstalledDescriptors: [canvas, excalidraw])
 
         let excalidrawInput = try Phase6RendererArtifactFixtures.input(
             bytes: Phase6RendererArtifactFixtures.excalidraw,
@@ -140,7 +140,7 @@ struct RendererArtifactRegistryTests {
             constraints: try Phase6RendererArtifactFixtures.jsonCanvasConstraints())
         let snapshot = try RendererRegistrySnapshot(
             builtInDescriptors: [],
-            enabledInstalledDescriptors: [excalidraw, canvas])
+            availableInstalledDescriptors: [excalidraw, canvas])
         let malformedExcalidraw = try Phase6RendererArtifactFixtures.input(
             bytes: Phase6RendererArtifactFixtures.malformedExcalidraw,
             fileExtension: "excalidraw")

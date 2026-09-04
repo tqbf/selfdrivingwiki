@@ -43,7 +43,7 @@ struct MermaidRendererPackageTests {
         let descriptor = try #require(package.manifest.descriptors.only)
         let snapshot = try RendererRegistrySnapshot(
             builtInDescriptors: [],
-            enabledInstalledDescriptors: [descriptor])
+            availableInstalledDescriptors: [descriptor])
         let mimeInput = try RendererMatchInput(
             mimeType: try .init(validating: "text/mermaid"),
             fileExtension: try .init(validating: "mmd"),

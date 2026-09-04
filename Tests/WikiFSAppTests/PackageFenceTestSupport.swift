@@ -69,7 +69,7 @@ enum PackageFenceTestSupport {
     static var builtInAndInstalledClaims: [RendererFenceAlias: RendererFenceClaimAssignment] {
         RendererFenceClaimResolver.resolve(
             builtInDescriptors: BuiltInRendererDescriptors.all,
-            enabledInstalledDescriptors: [
+            availableInstalledDescriptors: [
                 installedExcalidrawDescriptor(),
                 installedMermaidDescriptor(),
                 installedJSONCanvasDescriptor(),

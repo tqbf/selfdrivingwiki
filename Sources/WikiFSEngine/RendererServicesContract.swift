@@ -7,19 +7,19 @@ import WikiFSTypes
 /// Installed package paths remain private to provider implementations.
 public struct RendererPreparation: Sendable {
     public let machineIndex: RendererMachineIndex
-    public let enabledDescriptors: [RendererDescriptor]
+    public let availableDescriptors: [RendererDescriptor]
     public let failureRecorder: RendererSessionFailureRecording
 
     private let providers: [RendererPackageReservation: any RendererPackageResourceProviding]
 
     public init(
         machineIndex: RendererMachineIndex,
-        enabledDescriptors: [RendererDescriptor],
+        availableDescriptors: [RendererDescriptor],
         providers: [RendererPackageReservation: any RendererPackageResourceProviding],
         failureRecorder: @escaping RendererSessionFailureRecording
     ) {
         self.machineIndex = machineIndex
-        self.enabledDescriptors = enabledDescriptors
+        self.availableDescriptors = availableDescriptors
         self.providers = providers
         self.failureRecorder = failureRecorder
     }

@@ -75,7 +75,7 @@ struct MermaidRendererPackageMatchingTests {
         // With no real extension and no matching MIME, nothing resolves.
         let snapshot = try RendererRegistrySnapshot(
             builtInDescriptors: [],
-            enabledInstalledDescriptors: [descriptor])
+            availableInstalledDescriptors: [descriptor])
         let input = try RendererMatchInput(
             mimeType: try RendererMIMEType(validating: "text/plain"),
             fileExtension: source.fileExtension.flatMap { try RendererFileExtension(validating: $0) },
@@ -136,7 +136,7 @@ struct MermaidRendererPackageMatchingTests {
         // extension through the same snapshot the planner builds.
         let snapshot = try RendererRegistrySnapshot(
             builtInDescriptors: [],
-            enabledInstalledDescriptors: [descriptor])
+            availableInstalledDescriptors: [descriptor])
         let input = try self.input(mimeType: nil, fileExtension: "mmd")
         let matches = snapshot.matching(input)
         #expect(matches.map(\.reference) == [descriptor.reference])
@@ -149,7 +149,7 @@ struct MermaidRendererPackageMatchingTests {
         // match is exactly one descriptor.
         let snapshot = try RendererRegistrySnapshot(
             builtInDescriptors: [],
-            enabledInstalledDescriptors: [descriptor])
+            availableInstalledDescriptors: [descriptor])
         let mimeInput = try self.input(mimeType: "text/mermaid", fileExtension: "mmd")
         let extensionInput = try self.input(mimeType: nil, fileExtension: "mmd")
         #expect(snapshot.matching(mimeInput).map(\.reference) == [descriptor.reference])

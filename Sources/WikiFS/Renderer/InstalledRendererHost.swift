@@ -82,7 +82,7 @@ final class InstalledRendererHost {
         machineIndex = preparation.machineIndex
         factory = InstalledRendererFactory()
         inputs = InstalledRendererFactory.Inputs(
-            enabledDescriptors: preparation.enabledDescriptors,
+            availableDescriptors: preparation.availableDescriptors,
             resolveConfiguration: { descriptor, entryPoint in
                 let reservation = RendererPackageReservation(
                     packageID: descriptor.reference.packageID,
@@ -98,11 +98,7 @@ final class InstalledRendererHost {
                         entryURL: entryURL),
                     reservation: reservation,
                     resourceProvider: provider,
-                    failureRecorder: preparation.failureRecorder,
-                    inputReader: nil,
-                    externalActivationPolicy: .disabled,
-                    hostNavigationTargetKinds: [],
-                    hostNavigationRouting: .unavailable)
+                    failureRecorder: preparation.failureRecorder)
             })
     }
 

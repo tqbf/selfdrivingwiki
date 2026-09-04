@@ -346,7 +346,7 @@ struct D2RendererHostedValidationTests {
             pageVersionID: PageVersionID(rawValue: "01HTESTPV00000000000000001"))
         let claims = RendererFenceClaimResolver.resolve(
             builtInDescriptors: BuiltInRendererDescriptors.all,
-            enabledInstalledDescriptors: [descriptor])
+            availableInstalledDescriptors: [descriptor])
         let admission = RendererEmbedActivationAdmission(
             pageID: document.pageID,
             pageVersionID: document.pageVersionID,

@@ -75,7 +75,7 @@ struct TypedMarkdownHTMLRendererTests {
                     sourceEmbeds: [:],
                     richFenceClaims: RendererFenceClaimResolver.resolve(
                         builtInDescriptors: [],
-                        enabledInstalledDescriptors: [PackageFenceTestSupport.installedMermaidDescriptor()])),
+                        availableInstalledDescriptors: [PackageFenceTestSupport.installedMermaidDescriptor()])),
                 documentIdentity: identity,
                 rendererActivationAdmission: nil))
 

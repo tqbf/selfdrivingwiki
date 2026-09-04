@@ -15,7 +15,7 @@ struct ExcalidrawRendererPackageTests {
         let descriptor = try #require(validated.manifest.descriptors.only)
         let snapshot = try RendererRegistrySnapshot(
             builtInDescriptors: [],
-            enabledInstalledDescriptors: [descriptor])
+            availableInstalledDescriptors: [descriptor])
         let validInput = try RendererMatchInput(
             mimeType: try .init(validating: "application/json"),
             fileExtension: try .init(validating: "excalidraw"),

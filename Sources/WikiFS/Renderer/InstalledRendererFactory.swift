@@ -1,5 +1,6 @@
 #if os(macOS)
 import Foundation
+import Observation
 import SwiftUI
 import WikiFSCore
 import WikiFSTypes
@@ -37,41 +38,209 @@ struct RendererHostNavigationRouting {
     func route(_ target: RendererNavigationTarget) { routeTarget(target) }
 }
 
-/// Version-pinned inputs needed to mount one validated installed renderer.
-/// The package resource provider exposes bytes only, never its local file URL.
+/// Machine-scoped, validated package facts. It deliberately contains no
+/// presentation reader: every renderer session receives fresh authority.
 @MainActor
 struct InstalledRendererSessionConfiguration {
     let identity: InstalledRendererWebViewIdentity
     let reservation: RendererPackageReservation
     let resourceProvider: any RendererPackageResourceProviding
     let failureRecorder: RendererSessionFailureRecording?
-    let inputReader: RendererAuthorizedInputReader?
-    let assetReader: RendererAuthorizedAssetReader?
-    let externalActivationPolicy: RendererExternalActivationPolicy
-    let hostNavigationTargetKinds: Set<RendererHostNavigationTargetKind>
+}
+
+/// Typed identity for one exact renderer preparation request.
+struct RendererSessionPreparationIdentity: Equatable, Sendable {
+    let reference: RendererReference
+    let input: RendererBridgeInput
+}
+
+/// All host facts used to prepare one renderer session. Sibling authority is
+/// the exact projection for the rendered source, never an all-source lookup.
+@MainActor
+struct RendererSessionPreparationRequest {
+    let descriptor: RendererDescriptor
+    let configuration: InstalledRendererSessionConfiguration
+    let input: RendererBridgeInput
+    let admittedSource: RendererEmbeddedContent.Source?
+    let store: any WikiStore
+    let siblingSources: [String: SourceID]
+    let sourceExtensions: [SourceID: String]
     let hostNavigationRouting: RendererHostNavigationRouting
 
-    init(
-        identity: InstalledRendererWebViewIdentity,
-        reservation: RendererPackageReservation,
-        resourceProvider: any RendererPackageResourceProviding,
-        failureRecorder: RendererSessionFailureRecording?,
-        inputReader: RendererAuthorizedInputReader?,
-        assetReader: RendererAuthorizedAssetReader? = nil,
-        externalActivationPolicy: RendererExternalActivationPolicy,
-        hostNavigationTargetKinds: Set<RendererHostNavigationTargetKind> = [],
-        hostNavigationRouting: RendererHostNavigationRouting = .unavailable
-    ) {
-        self.identity = identity
-        self.reservation = reservation
-        self.resourceProvider = resourceProvider
-        self.failureRecorder = failureRecorder
+    var identity: RendererSessionPreparationIdentity {
+        .init(reference: descriptor.reference, input: input)
+    }
+}
+
+/// The complete, session-private authority consumed by every package host.
+/// Closing is idempotent and revokes both byte-reading capabilities together.
+@MainActor
+final class RendererPreparedSessionAuthority {
+    let descriptor: RendererDescriptor
+    let configuration: InstalledRendererSessionConfiguration
+    let inputReader: RendererAuthorizedInputReader
+    let assetReader: RendererAuthorizedAssetReader?
+    let allowedNavigationTargetKinds: Set<RendererHostNavigationTargetKind>
+    let hostNavigationRouting: RendererHostNavigationRouting
+    let externalActivationPolicy: RendererExternalActivationPolicy
+    private(set) var isClosed = false
+
+    init(request: RendererSessionPreparationRequest, inputReader: RendererAuthorizedInputReader,
+         assetReader: RendererAuthorizedAssetReader?) {
+        descriptor = request.descriptor
+        configuration = request.configuration
         self.inputReader = inputReader
         self.assetReader = assetReader
-        self.externalActivationPolicy = externalActivationPolicy
-        self.hostNavigationTargetKinds = hostNavigationTargetKinds
-        self.hostNavigationRouting = hostNavigationRouting
+        allowedNavigationTargetKinds = request.descriptor.hostNavigation?.allowedTargetKinds ?? []
+        hostNavigationRouting = request.hostNavigationRouting
+        externalActivationPolicy = request.descriptor.linkPolicy == .userActivatedExternal ? .enabled : .disabled
     }
+
+    func close() {
+        guard isClosed == false else { return }
+        isClosed = true
+        inputReader.close()
+        assetReader?.close()
+    }
+}
+
+/// Host resource limits which are intentionally not package-controlled.
+enum RendererSessionHostPolicy {
+    static let maximumReadsPerAssetReference = 4
+    static let extractorStandardOutputLimit = 256 * 1_024
+    static let extractorStandardErrorLimit = 64 * 1_024
+}
+
+@MainActor
+enum RendererSessionPreparer {
+    static func prepare(
+        _ request: RendererSessionPreparationRequest,
+        executeHelper: @escaping RendererAssetSessionPreparer.HelperExecutor = RendererAssetSessionPreparer.executeHelper
+    ) async throws -> RendererPreparedSessionAuthority {
+        try Task.checkCancellation()
+        let inputReader: RendererAuthorizedInputReader
+        if let admittedSource = request.admittedSource {
+            inputReader = try RendererAuthorizedInputReader(
+                store: request.store, authorizedInput: request.input, admittedSource: admittedSource)
+        } else {
+            inputReader = RendererAuthorizedInputReader(store: request.store, authorizedInput: request.input)
+        }
+        let inputLimit = min(request.descriptor.sizeLimits.maximumInputByteCount,
+                             WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount)
+        let decodedLimit = min(request.descriptor.sizeLimits.maximumDecodedByteCount,
+                               WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount)
+        try inputReader.validateInput(maximumInputByteCount: inputLimit, maximumDecodedByteCount: decodedLimit)
+
+        var assetReader: RendererAuthorizedAssetReader?
+        if let declaration = request.descriptor.assetRead {
+            do {
+                let extractorURL = RendererPackageScheme.url(
+                    packageID: request.configuration.reservation.packageID,
+                    version: request.configuration.reservation.version,
+                    path: declaration.extractorAsset)
+                let extractor = try request.configuration.resourceProvider.resource(for: extractorURL).data
+                let primary = try exactPrimaryPayload(for: request)
+                let helperResult = try await executeHelper(.init(
+                    helperURL: RendererAssetExtractorHelperLocation.locate(),
+                    extractorBytes: extractor,
+                    entryFunction: declaration.extractorEntryFunction,
+                    primaryInput: primary.bytes,
+                    maximumExtractorInputBytes: declaration.maximumExtractorInputBytes,
+                    maximumExtractorOutputBytes: declaration.maximumExtractorOutputBytes,
+                    maximumExtractorExecutionSeconds: declaration.maximumExtractorExecutionSeconds,
+                    maximumReferenceCount: declaration.maximumExtractedReferenceCount,
+                    stdoutLimit: RendererSessionHostPolicy.extractorStandardOutputLimit,
+                    stderrLimit: RendererSessionHostPolicy.extractorStandardErrorLimit))
+                try Task.checkCancellation()
+                assetReader = RendererAssetSessionPreparer.makeAssetReader(
+                    from: helperResult,
+                    siblingSources: request.siblingSources,
+                    store: request.store,
+                    sourceExtensions: request.sourceExtensions,
+                    allowedRoles: declaration.allowedRoles,
+                    maximumBytesPerAsset: declaration.maximumBytesPerAsset,
+                    maximumAggregateSessionBytes: declaration.maximumAggregateSessionBytes,
+                    maximumPerRequestReadCount: RendererSessionHostPolicy.maximumReadsPerAssetReference)
+            } catch is CancellationError {
+                inputReader.close()
+                throw CancellationError()
+            } catch {
+                DebugLog.reader("Renderer asset extraction was unavailable; continuing without asset authority.")
+                assetReader = nil
+            }
+        }
+        try Task.checkCancellation()
+        return RendererPreparedSessionAuthority(request: request, inputReader: inputReader, assetReader: assetReader)
+    }
+
+    private static func exactPrimaryPayload(
+        for request: RendererSessionPreparationRequest
+    ) throws -> RendererBridgeInputPayload {
+        if let source = request.admittedSource {
+            return .init(mimeType: source.mimeType.rawValue, bytes: source.bytes)
+        }
+        switch request.input {
+        case .inlineArtifact(let artifact):
+            return .init(mimeType: artifact.mimeType.rawValue, bytes: artifact.bytes)
+        case .source(let versionID):
+            let bytes = try request.store.sourceContent(versionID: versionID)
+            return .init(mimeType: "application/octet-stream", bytes: bytes)
+        case .markdown:
+            let reader = RendererAuthorizedInputReader(store: request.store, authorizedInput: request.input)
+            defer { reader.close() }
+            return try reader.read(request.input)
+        }
+    }
+}
+
+/// One-task, generation-checked preparation owner for SwiftUI presentation.
+@MainActor
+@Observable
+final class RendererSessionPreparationOwner {
+    typealias Preparation = @MainActor (RendererSessionPreparationRequest) async throws -> RendererPreparedSessionAuthority
+
+    private(set) var prepared: RendererPreparedSessionAuthority?
+    private(set) var identity: RendererSessionPreparationIdentity?
+    private let preparation: Preparation
+    private var generation: UInt64 = 0
+    private var task: Task<Void, Never>?
+
+    init(preparation: @escaping Preparation = { request in
+        try await RendererSessionPreparer.prepare(request)
+    }) {
+        self.preparation = preparation
+    }
+
+    func prepare(_ request: RendererSessionPreparationRequest) {
+        generation &+= 1
+        let requestedGeneration = generation
+        let requestedIdentity = request.identity
+        task?.cancel()
+        prepared?.close()
+        prepared = nil
+        identity = requestedIdentity
+        task = Task {
+            do {
+                let result = try await preparation(request)
+                guard Task.isCancelled == false, generation == requestedGeneration,
+                      identity == requestedIdentity else { result.close(); return }
+                prepared = result
+            } catch {
+                guard generation == requestedGeneration, identity == requestedIdentity else { return }
+                DebugLog.reader("Renderer session preparation failed; using Source fallback: \(error)")
+            }
+        }
+    }
+
+    func cancel() {
+        generation &+= 1
+        task?.cancel()
+        task = nil
+        prepared?.close()
+        prepared = nil
+        identity = nil
+    }
+
 }
 
 /// The app-side seam for package-backed renderers. This is intentionally a peer
@@ -81,7 +250,7 @@ struct InstalledRendererFactory {
     typealias SessionFactory = @MainActor (
         InstalledRendererWebViewIdentity,
         @escaping @MainActor (RendererSessionFailure) -> Void,
-        InstalledRendererSessionConfiguration
+        RendererPreparedSessionAuthority
     ) -> any WikiAppWebViewSessionControlling
     typealias ConfigurationResolver = @MainActor (
         RendererDescriptor,
@@ -97,51 +266,23 @@ struct InstalledRendererFactory {
     static let unavailable = Self()
 
     func makeView(
-        for descriptor: RendererDescriptor,
-        inputs: Inputs,
-        inputReader: RendererAuthorizedInputReader?,
-        assetReader: RendererAuthorizedAssetReader? = nil,
+        authority: RendererPreparedSessionAuthority,
         onFailure: @escaping @MainActor (RendererSessionFailure) -> Void
     ) -> AnyView? {
+        let descriptor = authority.descriptor
+        let configuration = authority.configuration
         guard case let .webPackage(entryPoint) = descriptor.implementation,
-              let inputReader,
-              let configuration = inputs.configuration(for: descriptor, entryPoint: entryPoint),
               configuration.identity.rendererReference == descriptor.reference,
               configuration.reservation.packageID == descriptor.reference.packageID,
               configuration.reservation.version == descriptor.reference.version,
-              entryURLMatches(entryPoint: entryPoint, identity: configuration.identity)
+              entryURLMatches(entryPoint: entryPoint, identity: configuration.identity),
+              authority.isClosed == false
         else { return nil }
-
-        let admissionMaximumInputByteCount = min(
-            descriptor.sizeLimits.maximumInputByteCount,
-            WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount)
-        let admissionMaximumDecodedByteCount = min(
-            descriptor.sizeLimits.maximumDecodedByteCount,
-            WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount)
-        do {
-            try inputReader.validateInput(
-                maximumInputByteCount: admissionMaximumInputByteCount,
-                maximumDecodedByteCount: admissionMaximumDecodedByteCount)
-        } catch {
-            DebugLog.reader("Installed renderer input was unavailable or exceeded its declared bound; using Source fallback.")
-            return nil
-        }
-
-        let sessionConfiguration = InstalledRendererSessionConfiguration(
-            identity: configuration.identity,
-            reservation: configuration.reservation,
-            resourceProvider: configuration.resourceProvider,
-            failureRecorder: configuration.failureRecorder,
-            inputReader: inputReader,
-            assetReader: assetReader,
-            externalActivationPolicy: descriptor.linkPolicy == .userActivatedExternal ? .enabled : .disabled,
-            hostNavigationTargetKinds: descriptor.hostNavigation?.allowedTargetKinds ?? [],
-            hostNavigationRouting: inputs.hostNavigationRouting)
 
         return AnyView(WikiAppWebView(
             identity: configuration.identity,
             makeSession: { identity, reportFailure in
-                makeSession(identity, reportFailure, sessionConfiguration)
+                makeSession(identity, reportFailure, authority)
             },
             onFailure: onFailure))
     }
@@ -149,27 +290,25 @@ struct InstalledRendererFactory {
     private static func makeLiveSession(
         identity: InstalledRendererWebViewIdentity,
         reportFailure: @escaping @MainActor (RendererSessionFailure) -> Void,
-        configuration: InstalledRendererSessionConfiguration
+        authority: RendererPreparedSessionAuthority
     ) -> any WikiAppWebViewSessionControlling {
         WikiAppWebViewSession(
             entryURL: identity.entryURL,
-            resourceProvider: configuration.resourceProvider,
-            installedPackage: configuration.reservation,
-            failureRecorder: configuration.failureRecorder,
+            resourceProvider: authority.configuration.resourceProvider,
+            installedPackage: authority.configuration.reservation,
+            failureRecorder: authority.configuration.failureRecorder,
             lifecycleFailureHandler: reportFailure,
-            bridgeFactory: configuration.inputReader.map { inputReader in
-                { sessionID in
-                    RendererContentWorldBroker(
-                        sessionID: sessionID,
-                        capability: .init(rawValue: UUID().uuidString),
-                        inputReader: inputReader,
-                        assetReader: configuration.assetReader,
-                        allowedNavigationTargetKinds: configuration.hostNavigationTargetKinds,
-                        routeNavigation: configuration.hostNavigationRouting.route,
-                        expectedOrigin: identity.entryURL)
-                }
+            bridgeFactory: { sessionID in
+                RendererContentWorldBroker(
+                    sessionID: sessionID,
+                    capability: .init(rawValue: UUID().uuidString),
+                    inputReader: authority.inputReader,
+                    assetReader: authority.assetReader,
+                    allowedNavigationTargetKinds: authority.allowedNavigationTargetKinds,
+                    routeNavigation: authority.hostNavigationRouting.route,
+                    expectedOrigin: identity.entryURL)
             },
-            externalActivationPolicy: configuration.externalActivationPolicy)
+            externalActivationPolicy: authority.externalActivationPolicy)
     }
 
     private func entryURLMatches(
@@ -193,16 +332,16 @@ struct InstalledRendererFactory {
     /// host-owned Source fallback without opening an unvalidated renderer.
     @MainActor
     struct Inputs {
-        let enabledDescriptors: [RendererDescriptor]
+        let availableDescriptors: [RendererDescriptor]
         let hostNavigationRouting: RendererHostNavigationRouting
         private let resolveConfiguration: ConfigurationResolver
 
         init(
-            enabledDescriptors: [RendererDescriptor] = [],
+            availableDescriptors: [RendererDescriptor] = [],
             hostNavigationRouting: RendererHostNavigationRouting = .unavailable,
             resolveConfiguration: @escaping ConfigurationResolver
         ) {
-            self.enabledDescriptors = enabledDescriptors
+            self.availableDescriptors = availableDescriptors
             self.hostNavigationRouting = hostNavigationRouting
             self.resolveConfiguration = resolveConfiguration
         }
@@ -211,7 +350,7 @@ struct InstalledRendererFactory {
 
         func withHostNavigationRouting(_ routing: RendererHostNavigationRouting) -> Self {
             Self(
-                enabledDescriptors: enabledDescriptors,
+                availableDescriptors: availableDescriptors,
                 hostNavigationRouting: routing,
                 resolveConfiguration: resolveConfiguration)
         }
@@ -227,13 +366,18 @@ struct InstalledRendererFactory {
         /// serve `renderer-package:` assets to an in-page iframe on the reader
         /// webview (no separate WKWebView session). Nil when the descriptor has
         /// no web-package entry point or the package snapshot is unavailable.
+        func configuration(for descriptor: RendererDescriptor) -> InstalledRendererSessionConfiguration? {
+            guard case let .webPackage(entryPoint) = descriptor.implementation else { return nil }
+            return resolveConfiguration(descriptor, entryPoint)
+        }
+
         func resourceProvider(
             for descriptor: RendererDescriptor
-        ) -> (entryPath: String, provider: any RendererPackageResourceProviding, assetReader: RendererAuthorizedAssetReader?)? {
+        ) -> (entryPath: String, provider: any RendererPackageResourceProviding)? {
             guard case let .webPackage(entryPoint) = descriptor.implementation,
                   let configuration = resolveConfiguration(descriptor, entryPoint)
             else { return nil }
-            return (entryPoint.path.rawValue, configuration.resourceProvider, configuration.assetReader)
+            return (entryPoint.path.rawValue, configuration.resourceProvider)
         }
     }
 }

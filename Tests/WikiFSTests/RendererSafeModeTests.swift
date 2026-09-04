@@ -70,11 +70,11 @@ struct RendererSafeModeTests {
         }
 
         let builtIn = try fixture.builtInDescriptor()
-        let suppressed = try RendererRegistrySnapshot(builtInDescriptors: [builtIn], enabledInstalledDescriptors: index.availableDescriptorProjection)
+        let suppressed = try RendererRegistrySnapshot(builtInDescriptors: [builtIn], availableInstalledDescriptors: index.availableDescriptorProjection)
         #expect(suppressed.descriptors == [builtIn, fixture.secondInstalledDescriptor])
 
         let reset = try await store.resetInstalledRendererSafeMode(expectedGeneration: index.generation)
-        let restored = try RendererRegistrySnapshot(builtInDescriptors: [builtIn], enabledInstalledDescriptors: reset.availableDescriptorProjection)
+        let restored = try RendererRegistrySnapshot(builtInDescriptors: [builtIn], availableInstalledDescriptors: reset.availableDescriptorProjection)
         #expect(reset.safeModeIsEnabled == false)
         #expect(restored.descriptors.contains(fixture.installedDescriptor))
         let resetClock = RendererMachineStoreFailureFixture.Clock(timestamp: try RendererMachineStoreFailureFixture.timestamp(minutes: 1))
