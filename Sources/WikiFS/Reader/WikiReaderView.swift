@@ -780,13 +780,11 @@ final class WikiReaderWebView: WKWebView {
         // Allow Safari's Web Inspector to attach to this webview (Develop
         // menu → simulator/device). Required to see frame console messages,
         // the bridge postMessage traffic, and package frame DOM state.
-        if ProcessInfo.processInfo.environment["WIKIFS_WEBINSPECTOR"] == "1" {
-            config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+        if DebugInspector.isEnabled {
+            DebugInspector.apply(to: config)
         }
         super.init(frame: .zero, configuration: config)
-        if ProcessInfo.processInfo.environment["WIKIFS_WEBINSPECTOR"] == "1" {
-            isInspectable = true
-        }
+        DebugInspector.apply(to: self)
         rendererPackageSchemeHandler = packageHandler
         proxy.target = self
         embedProxy.target = self
