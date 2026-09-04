@@ -164,6 +164,12 @@ public final class RendererPackageValidator {
             }
         }
         let declared = Dictionary(uniqueKeysWithValues: manifest.assets.map { ($0.path, $0) })
+        // The host-reserved frame namespace is never package-servable: a
+        // manifest that declares an asset under the reserved prefix is
+        // rejected so a package cannot shadow host-composed frame resources.
+        for path in declared.keys where RendererFrameHostNamespace.isReserved(path) {
+            throw RendererPackageValidationError.invalidPath(path.rawValue)
+        }
         // Every file in the tree must be a declared asset and match its digest
         // by construction. Fence-validation engine/wrapper assets are members
         // of approvedAssets (enforced in RendererDescriptor.init) and of the

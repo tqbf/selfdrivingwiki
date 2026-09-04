@@ -135,6 +135,53 @@ private struct ReaderFrameRoute: Sendable {
     let provider: any RendererPackageResourceProviding
 }
 
+/// A host-composed frame resource: trusted host overlay bytes served under a
+/// frame's origin. These bytes are never package assets — they carry no
+/// manifest digest — and the reserved `__host__/` namespace guarantees a
+/// package cannot shadow or collide with them.
+struct RendererFrameResource: Sendable {
+    enum Source: Sendable, Equatable {
+        /// Host-composed overlay bytes (e.g. the input bootstrap script).
+        case trustedHostOverlay
+    }
+
+    let data: Data
+    let mimeType: RendererMIMEType
+    let source: Source
+}
+
+/// The host-side composition layer for frame resources. It serves only typed
+/// `RendererFrameResource` overlays under the reserved `__host__/` namespace;
+/// every other request falls through to the validated package provider.
+@MainActor
+final class ReaderFrameResourceComposer {
+    private var overlays: [RendererFrameOriginToken: [String: RendererFrameResource]] = [:]
+
+    /// Attaches the frame-scoped input bootstrap overlay for one token.
+    func setInputBootstrap(token: RendererFrameOriginToken, javaScript: String) {
+        guard let mime = RendererMIMEType(rawValue: "text/javascript") else { return }
+        overlays[token, default: [:]][RendererFrameHostNamespace.inputBootstrapPath] =
+            RendererFrameResource(
+                data: Data(javaScript.utf8),
+                mimeType: mime,
+                source: .trustedHostOverlay)
+    }
+
+    /// Drops every overlay for one token (scoped close).
+    func revoke(token: RendererFrameOriginToken) {
+        overlays.removeValue(forKey: token)
+    }
+
+    /// Drops every overlay (document replacement, dismantle).
+    func revokeAll() {
+        overlays.removeAll()
+    }
+
+    func overlay(token: RendererFrameOriginToken, path: String) -> RendererFrameResource? {
+        overlays[token]?[path]
+    }
+}
+
 /// The reader's package routing provider, consumed by the canonical
 /// `RendererPackageSchemeHandler` registered on `WikiReaderWebView`. It maps
 /// one frame-origin token to one admitted package reservation and rewrites
@@ -155,9 +202,55 @@ final class ReaderRendererPackageRouter: RendererPackageResourceProviding, @unch
     private let lock = NSLock()
     private var routes: [RendererFrameOriginToken: ReaderFrameRoute] = [:]
 
+    /// The host-composed frame resource layer. Frame overlays (input
+    /// bootstrap) live here, never in the route table; the overlay map is
+    /// guarded by the router's own lock, which the composer borrows through
+    /// the router's synchronized accessors.
+    // swiftlint:disable:next unchecked_sendable
+    private final class Composer: @unchecked Sendable {
+        private let lock: NSLock
+        private var overlays: [RendererFrameOriginToken: [String: RendererFrameResource]] = [:]
+
+        init(lock: NSLock) {
+            self.lock = lock
+        }
+
+        func setInputBootstrap(token: RendererFrameOriginToken, javaScript: String) {
+            guard let mime = RendererMIMEType(rawValue: "text/javascript") else { return }
+            lock.lock()
+            defer { lock.unlock() }
+            overlays[token, default: [:]][RendererFrameHostNamespace.inputBootstrapPath] =
+                RendererFrameResource(
+                    data: Data(javaScript.utf8),
+                    mimeType: mime,
+                    source: .trustedHostOverlay)
+        }
+
+        func revoke(token: RendererFrameOriginToken) {
+            lock.lock()
+            defer { lock.unlock() }
+            overlays.removeValue(forKey: token)
+        }
+
+        func revokeAll() {
+            lock.lock()
+            defer { lock.unlock() }
+            overlays.removeAll()
+        }
+
+        func overlay(token: RendererFrameOriginToken, path: String) -> RendererFrameResource? {
+            lock.lock()
+            defer { lock.unlock() }
+            return overlays[token]?[path]
+        }
+    }
+
     /// Serves the frame-scoped input bootstrap for one token, consumed when
     /// the entry document is served. Set by the reader at admission.
     private let bootstrapLookup: @Sendable (RendererFrameOriginToken) -> String?
+
+    /// The host-composed frame resource layer, sharing the route table lock.
+    private let composer: Composer
 
     /// Diagnostic record of every URL handed to `resource(for:)`. Read only
     /// from tests; production code never touches it.
@@ -165,45 +258,38 @@ final class ReaderRendererPackageRouter: RendererPackageResourceProviding, @unch
 
     init(bootstrapLookup: @escaping @Sendable (RendererFrameOriginToken) -> String? = { _ in nil }) {
         self.bootstrapLookup = bootstrapLookup
+        self.composer = Composer(lock: lock)
     }
 
-    /// Frame-scoped input bootstrap **JS** per admitted token. Served as a
-    /// separate `renderer-input.js` script file (the package CSP blocks
+    /// Frame-scoped input bootstrap **JS** per admitted token, stored in the
+    /// host frame-resource layer (not the route table). Served from the
+    /// reserved `__host__/renderer-input.js` path: the package CSP blocks
     /// inline scripts, and WKUserScripts added post-load don't run in
-    /// subframes).
-    private var inputBootstraps: [RendererFrameOriginToken: String] = [:]
+    /// subframes.
+    private func setInputBootstrap(token: RendererFrameOriginToken, javaScript: String) {
+        composer.setInputBootstrap(token: token, javaScript: javaScript)
+    }
 
     /// Attaches the frame-scoped input bootstrap to one admitted route. The
-    /// router serves it as `renderer-input.js` and inlines a `<script src>`
-    /// reference into the entry document before the package's own scripts.
+    /// host composer serves it as `__host__/renderer-input.js` and the entry
+    /// document inlines a `<script src>` reference to that reserved path
+    /// before the package's own scripts.
     func setFrameBootstrap(token: RendererFrameOriginToken, html: String) {
-        lock.lock()
-        defer { lock.unlock() }
-        inputBootstraps[token] = html
+        setInputBootstrap(token: token, javaScript: html)
     }
 
-    /// Returns the validated provider for a reference — the admitted route
-    /// matching the reference's exact package, version, and registration.
-    func provider(for reference: RendererReference) -> (any RendererPackageResourceProviding)? {
-        lock.lock()
-        defer { lock.unlock() }
-        return routes.values.first {
-            $0.reservation.packageID == reference.packageID
-                && $0.reservation.version == reference.version
-        }?.provider
-    }
-
-    /// Revokes one frame's route and its bootstrap. Later requests for that
-    /// origin fail closed.
+    /// Revokes one frame's route and its host overlays. Later requests for
+    /// that origin fail closed.
     func revoke(token: RendererFrameOriginToken) {
         lock.lock()
         defer { lock.unlock() }
         routes.removeValue(forKey: token)
-        inputBootstraps.removeValue(forKey: token)
+        composer.revoke(token: token)
     }
 
     /// Admits one frame route and returns the frame-scoped entry URL to use
-    /// as the iframe's `src`.
+    /// as the iframe's `src`. The provider must be the validated package
+    /// provider for the route's exact reservation.
     func admit(
         token: RendererFrameOriginToken,
         reservation: RendererPackageReservation,
@@ -215,7 +301,7 @@ final class ReaderRendererPackageRouter: RendererPackageResourceProviding, @unch
         defer { lock.unlock() }
         routes[token] = ReaderFrameRoute(reservation: reservation, provider: provider)
         if let inputBootstrapHTML {
-            inputBootstraps[token] = inputBootstrapHTML
+            composer.setInputBootstrap(token: token, javaScript: inputBootstrapHTML)
         }
         return RendererFramePackageURL.frameURL(
             token: token,
@@ -224,13 +310,13 @@ final class ReaderRendererPackageRouter: RendererPackageResourceProviding, @unch
             path: entryPath)
     }
 
-    /// Revokes every route (document replacement, snapshot replacement,
-    /// reader dismantle). Active frames' requests then fail closed.
+    /// Revokes every route and host overlay (document replacement, snapshot
+    /// replacement, reader dismantle). Active frames' requests fail closed.
     func revokeAll() {
         lock.lock()
         defer { lock.unlock() }
         routes.removeAll()
-        inputBootstraps.removeAll()
+        composer.revokeAll()
     }
 
     var activeRouteCount: Int {
@@ -239,11 +325,28 @@ final class ReaderRendererPackageRouter: RendererPackageResourceProviding, @unch
         return routes.count
     }
 
-    /// The canonical provider lookup. Copies the route under lock, releases,
-    /// verifies the request matches the admitted reservation, then delegates
-    /// to the validated provider with the canonical URL.
+    /// The canonical provider lookup. Reserved host-namespace paths are
+    /// served from the frame-resource composer (typed host overlays); every
+    /// other request is delegated unchanged to the validated package
+    /// provider — package bytes are never synthesized or rewritten here.
     func resource(for url: URL) throws -> RendererPackageResource {
         let frameURL = try RendererFramePackageURL.parse(url)
+        // Reserved host namespace: composed frame resources only. These
+        // bytes are trusted host overlays, not package assets.
+        if RendererFrameHostNamespace.isReserved(frameURL.request.path) {
+            guard let overlay = composer.overlay(
+                token: frameURL.token,
+                path: frameURL.request.path.rawValue)
+            else {
+                DebugLog.reader("package-router: no host overlay for \(frameURL.request.path.rawValue) frame \(frameURL.token.rawValue)")
+                throw RendererPackageResourceError.undeclaredAsset
+            }
+            return RendererPackageResource(
+                data: overlay.data,
+                mimeType: overlay.mimeType,
+                isEntryDocument: false)
+        }
+
         lock.lock()
         diagnosticStartedRequests.append(url)
         guard let admitted = routes[frameURL.token] else {
@@ -259,61 +362,38 @@ final class ReaderRendererPackageRouter: RendererPackageResourceProviding, @unch
             DebugLog.reader("package-router: reservation mismatch for \(frameURL.request.packageID.rawValue)/\(frameURL.request.version.rawValue)")
             throw RendererPackageResourceError.packageIdentityMismatch
         }
-        // Validated package file I/O runs outside the critical section.
+        // Validated package file I/O runs outside the critical section. The
+        // provider re-verifies the manifest declaration and digest per read.
         let provider = admitted.provider
         lock.unlock()
-        DebugLog.reader("package-router: serving \(frameURL.request.packageID.rawValue)/\(frameURL.request.version.rawValue)/\(frameURL.request.path.rawValue) for frame \(frameURL.token.rawValue)")
-
-        // Serve the frame-scoped input bootstrap as its own script file. The
-        // package CSP allows external renderer-package: scripts but blocks
-        // inline ones, and WKUserScripts added post-load don't run in
-        // subframes — so the bootstrap must be a real served file.
-        if frameURL.request.path.rawValue == "renderer-input.js" {
-            lock.lock()
-            let bootstrapJS = inputBootstraps[frameURL.token]
-            lock.unlock()
-            if let bootstrapJS,
-               let mime = RendererMIMEType(rawValue: "text/javascript") {
-                DebugLog.reader("package-router: serving renderer-input.js for frame \(frameURL.token.rawValue)")
-                return RendererPackageResource(
-                    data: Data(bootstrapJS.utf8),
-                    mimeType: mime,
-                    isEntryDocument: false)
-            }
-        }
-
         let resource = try provider.resource(for: frameURL.canonicalURL)
 
-        // Entry document: inline a <script src="renderer-input.js"> reference
-        // BEFORE the package's own script tags, so the input selector exists
-        // when viewer.js runs. The bootstrap itself is served separately.
-        if resource.isEntryDocument,
-           let html = String(data: resource.data, encoding: .utf8),
-           html.utf8.count <= RendererPackageValidationLimits.maximumCopiedByteCount {
-            lock.lock()
-            let hasBootstrap = inputBootstraps[frameURL.token] != nil
-            lock.unlock()
-            guard hasBootstrap else {
-                DebugLog.reader("package-router: no input bootstrap for frame \(frameURL.token.rawValue)")
-                return resource
-            }
-            let reference = "<script src=\"renderer-input.js\"></script>"
-            var patched = html
-            if let firstScriptRange = patched.lowercased().range(of: "<script") {
-                patched.insert(contentsOf: reference, at: firstScriptRange.lowerBound)
-            } else if let bodyEnd = patched.lowercased().range(of: "</body>") {
-                patched.insert(contentsOf: reference, at: bodyEnd.lowerBound)
-            } else {
-                DebugLog.reader("package-router: entry document has no script or body tag; bootstrap reference not inlined")
-                return resource
-            }
-            DebugLog.reader("package-router: inlined renderer-input.js reference into entry document for frame \(frameURL.token.rawValue)")
-            return RendererPackageResource(
-                data: Data(patched.utf8),
-                mimeType: resource.mimeType,
-                isEntryDocument: resource.isEntryDocument)
+        // Frame-resource composition: the entry document gains a reference to
+        // the host input bootstrap under the reserved __host__/ namespace, so
+        // the input selector exists before package scripts run. Composition
+        // preserves package asset immutability — the validated provider's
+        // bytes are never mutated, and the composed response is host overlay
+        // plus package bytes; it does not match any package digest.
+        guard resource.isEntryDocument,
+              composer.overlay(token: frameURL.token, path: RendererFrameHostNamespace.inputBootstrapPath) != nil,
+              let html = String(data: resource.data, encoding: .utf8),
+              html.utf8.count <= RendererPackageValidationLimits.maximumCopiedByteCount
+        else { return resource }
+
+        let reference = "<script src=\"\(RendererFrameHostNamespace.inputBootstrapPath)\"></script>"
+        var composed = html
+        if let firstScriptRange = composed.lowercased().range(of: "<script") {
+            composed.insert(contentsOf: reference, at: firstScriptRange.lowerBound)
+        } else if let bodyEnd = composed.lowercased().range(of: "</body>") {
+            composed.insert(contentsOf: reference, at: bodyEnd.lowerBound)
+        } else {
+            DebugLog.reader("package-router: entry document has no script or body tag; bootstrap reference not composed")
+            return resource
         }
-        return resource
+        return RendererPackageResource(
+            data: Data(composed.utf8),
+            mimeType: resource.mimeType,
+            isEntryDocument: resource.isEntryDocument)
     }
 }
 #endif

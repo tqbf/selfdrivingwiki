@@ -2400,13 +2400,13 @@ internal struct WikiReaderRep: NSViewRepresentable {
             // publishes, so a budget or preparation failure leaves no
             // session resources behind.
             if case .packageFrame = plan {
-                // No registered store (preview readers) means no bridge: the
-                // row collapses to a readable fallback instead. The exact
-                // input reader and session-private asset reader are built by
-                // the per-session preparer, generation-checked before mount.
-                guard let store else { return .rejected }
-                guard let packageEntry = rendererPackageInputs?.entries.first(
-                    where: { $0.reference == context.rendererReference }) else { return .rejected }
+            // No registered store (preview readers) means no bridge: the
+            // row collapses to a readable fallback instead. The exact
+            // input reader and session-private asset reader are built by
+            // the per-session preparer, generation-checked before mount.
+            guard let store else { return .rejected }
+            guard let packageEntry = rendererPackageInputs?.entries.first(
+                where: { $0.reference == context.rendererReference }) else { return .rejected }
                 let authorityRequest = RendererSessionPreparationRequest(
                     descriptor: packageEntry.descriptor,
                     configuration: packageEntry.configuration,
