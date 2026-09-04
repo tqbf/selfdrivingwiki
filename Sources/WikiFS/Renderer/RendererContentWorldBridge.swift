@@ -380,7 +380,7 @@ extension RendererContentWorldBroker {
         let source = """
         window.addEventListener("message", function(event) {
             if (event.source !== window || !event.data || typeof event.data.rendererBridge !== "string") { return; }
-            const reply = window.webkit.messageHandlers["\\(WikiAppWebViewPolicy.isolatedMessageHandlerName)"].postMessage(event.data.rendererBridge);
+            const reply = window.webkit.messageHandlers["\(WikiAppWebViewPolicy.isolatedMessageHandlerName)"].postMessage(event.data.rendererBridge);
             if (reply && typeof reply.then === "function") {
                 reply.then(function(value) {
                     window.postMessage({rendererBridgeResponse: value}, "*");
