@@ -587,7 +587,7 @@ struct WikiReaderView: View {
           audio.wiki-embed { width: 100%; }
           .sdw-inline-renderer { display: block; position: relative; width: 100%; }
           .sdw-inline-renderer[data-renderer-admitted="true"] {
-            min-height: \(Int(RendererAttachmentHostPolicy.dynamicInlineRendererReservedHeight))px;
+            min-height: 480px;
             margin: 0 0 1em; overflow: hidden; border-radius: 8px;
           }
           .sdw-inline-renderer__action { display: inline-block; margin-top: 0.45em; font-size: 0.9em; }
@@ -732,8 +732,8 @@ final class WikiReaderWebView: WKWebView {
         // references this view, same pattern as the hover handler.
         let embedProxy = EmbedFetchMessageHandler(target: nil)
         cc.add(embedProxy, name: Self.embedFetchName)
-        let attachmentProxy = RendererAttachmentGeometryMessageHandler(target: nil)
-        cc.add(attachmentProxy, name: "rendererAttachmentGeometry")
+        let attachmentProxy = RendererAttachmentLifecycleMessageHandler(target: nil)
+        cc.add(attachmentProxy, name: "rendererAttachmentLifecycle")
         let attachmentActionProxy = RendererAttachmentActionMessageHandler(target: nil)
         cc.add(attachmentActionProxy, name: "rendererAttachmentAction")
         cc.addUserScript(WKUserScript(
@@ -745,7 +745,7 @@ final class WikiReaderWebView: WKWebView {
             injectionTime: .atDocumentEnd,
             forMainFrameOnly: true))
         cc.addUserScript(WKUserScript(
-            source: Self.rendererAttachmentGeometryJS,
+            source: Self.rendererAttachmentLifecycleJS,
             injectionTime: .atDocumentEnd,
             forMainFrameOnly: true))
         config.userContentController = cc
@@ -792,21 +792,20 @@ final class WikiReaderWebView: WKWebView {
         attachmentActionProxy.target = self
     }
 
-    nonisolated static let rendererAttachmentGeometryJS = """
+    nonisolated static let rendererAttachmentLifecycleJS = """
     (function(){
       var known={};var visible={};var margin=600;
-      var observer=new IntersectionObserver(function(entries){entries.forEach(function(entry){visible[entry.target.id]=entry.isIntersecting;});window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();},{root:null,rootMargin:margin+'px 0px '+margin+'px 0px',threshold:0});
+      var observer=new IntersectionObserver(function(entries){entries.forEach(function(entry){visible[entry.target.id]=entry.isIntersecting;});report();},{root:null,rootMargin:margin+'px 0px '+margin+'px 0px',threshold:0});
       function role(e){return e.classList.contains('sdw-inline-renderer')?'inlineContent':'disclosureRow';}
       function nodes(){return document.querySelectorAll('.sdw-renderer-card[id],.sdw-inline-renderer[id][data-renderer-admitted="true"]');}
       function report(){var g=window.__sdwRendererAttachmentGeneration;if(typeof g!=='number')return;var current={};
-        nodes().forEach(function(e){current[e.id]=true;if(!known[e.id])observer.observe(e);var expansion=e.querySelector('.sdw-renderer-card__expansion');var target=role(e)==='disclosureRow'&&e.dataset.rendererExpanded==='true'&&expansion?expansion:e;var r=target.getBoundingClientRect();var retained=visible[e.id]===true;
-          window.webkit.messageHandlers.rendererAttachmentGeometry.postMessage({generation:g,placeholderID:e.id,embeddingRole:role(e),x:r.x,y:r.y,width:r.width,height:r.height,visible:retained,revision:(window.__sdwRendererAttachmentRevision||0)});});
-        Object.keys(known).forEach(function(id){if(!current[id]){observer.unobserve(known[id]);delete visible[id];window.webkit.messageHandlers.rendererAttachmentGeometry.postMessage({kind:'removed',generation:g,placeholderID:id});}});known={};nodes().forEach(function(e){known[e.id]=e;});}
-      window.__sdwRendererAttachmentReport=function(g){window.__sdwRendererAttachmentGeneration=g;window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();};
-      window.__sdwRendererAttachmentReserve=function(id,height){var card=document.getElementById(id);if(!card||!Number.isFinite(height))return;var target=card.classList.contains('sdw-inline-renderer')?card:card.querySelector('.sdw-renderer-card__expansion');if(!target)return;target.style.minHeight=height+'px';window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();};
-      window.__sdwRendererAttachmentState=function(id,expanded,status){var card=document.getElementById(id);if(!card)return;card.dataset.rendererExpanded=expanded?'true':'false';var disclosure=card.querySelector('.sdw-renderer-card__disclosure');if(disclosure)disclosure.setAttribute('aria-expanded',expanded?'true':'false');var expansion=card.querySelector('.sdw-renderer-card__expansion');if(expansion){expansion.hidden=!expanded;expansion.setAttribute('aria-hidden',expanded?'false':'true');}var prior=card.querySelector('.sdw-renderer-card__status');if(prior)prior.remove();if(status&&expansion){var node=document.createElement('p');node.className='sdw-renderer-card__status';node.setAttribute('role','status');node.textContent=status;expansion.appendChild(node);}window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();};
+        nodes().forEach(function(e){current[e.id]=true;if(!known[e.id])observer.observe(e);var retained=visible[e.id]===true;
+          window.webkit.messageHandlers.rendererAttachmentLifecycle.postMessage({generation:g,placeholderID:e.id,embeddingRole:role(e),visible:retained});});
+        Object.keys(known).forEach(function(id){if(!current[id]){observer.unobserve(known[id]);delete visible[id];window.webkit.messageHandlers.rendererAttachmentLifecycle.postMessage({removed:true,generation:g,placeholderID:id});}});known={};nodes().forEach(function(e){known[e.id]=e;});}
+      window.__sdwRendererAttachmentReport=function(g){window.__sdwRendererAttachmentGeneration=g;report();};
+      window.__sdwRendererAttachmentState=function(id,expanded,status){var card=document.getElementById(id);if(!card)return;card.dataset.rendererExpanded=expanded?'true':'false';var disclosure=card.querySelector('.sdw-renderer-card__disclosure');if(disclosure)disclosure.setAttribute('aria-expanded',expanded?'true':'false');var expansion=card.querySelector('.sdw-renderer-card__expansion');if(expansion){expansion.hidden=!expanded;expansion.setAttribute('aria-hidden',expanded?'false':'true');}var prior=card.querySelector('.sdw-renderer-card__status');if(prior)prior.remove();if(status&&expansion){var node=document.createElement('p');node.className='sdw-renderer-card__status';node.setAttribute('role','status');node.textContent=status;expansion.appendChild(node);}report();};
       document.addEventListener('click',function(event){if(event.target.closest('[data-renderer-action="open-window"]'))return;var rowHeader=event.target.closest('.sdw-renderer-card__row');if(!rowHeader)return;var card=rowHeader.closest('.sdw-renderer-card[id]');if(!card)return;event.preventDefault();window.webkit.messageHandlers.rendererAttachmentAction.postMessage({action:card.dataset.rendererExpanded==='true'?'collapse':'activate',placeholderID:card.id});});
-      addEventListener('scroll',report,{passive:true});addEventListener('resize',report);new MutationObserver(function(){window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();}).observe(document.documentElement,{childList:true,subtree:true,attributes:true});
+      addEventListener('scroll',report,{passive:true});addEventListener('resize',report);new MutationObserver(function(){report();}).observe(document.documentElement,{childList:true,subtree:true,attributes:true});
     })();
     """
 
@@ -1382,19 +1381,19 @@ internal final class EmbedFetchMessageHandler: NSObject, WKScriptMessageHandler 
 }
 
 @MainActor
-private final class RendererAttachmentGeometryMessageHandler: NSObject, WKScriptMessageHandler {
+private final class RendererAttachmentLifecycleMessageHandler: NSObject, WKScriptMessageHandler {
     weak var target: WikiReaderWebView?
     init(target: WikiReaderWebView?) { self.target = target }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.name == "rendererAttachmentGeometry", let body = message.body as? [String: Any] else { return }
-        if body["kind"] as? String == "removed", let generation = body["generation"] as? Int,
+        guard message.name == "rendererAttachmentLifecycle", let body = message.body as? [String: Any] else { return }
+        if body["removed"] as? Bool == true, let generation = body["generation"] as? Int,
            let rawID = body["placeholderID"] as? String,
            let id = RendererAttachmentPlaceholderID.validatedOrNil(rawID) {
             target?.coordinator?.handleAttachmentRemoval(id, generation: generation); return
         }
-        guard let geometry = RendererAttachmentGeometryMessage(body: body) else { return }
-        target?.coordinator?.handleAttachmentGeometry(geometry)
+        guard let event = RendererAttachmentLifecycleMessage(body: body) else { return }
+        target?.coordinator?.handleAttachmentLifecycle(event)
     }
 }
 
@@ -1466,29 +1465,26 @@ internal struct WikiReaderRep: NSViewRepresentable {
                         DebugLog.reader("subframe bridge: invalid token alphabet \(originHost)")
                         return nil
                     }
-                    guard let session = coordinator.frameBridgeRegistry.authorize(
-                        token: token,
-                        originHost: originHost,
-                        originScheme: RendererPackageScheme.name,
-                        webViewID: frameInfo.webView.map(ObjectIdentifier.init))
+                    guard let unit = coordinator.domLifecycle.authorize(token: token)
                     else {
-                        let admitted = coordinator.frameBridgeRegistry.session(for: token)
-                        let admittedDescription = admitted.map { session in
-                            "yes(webview match: \(session.expectedWebViewID == frameInfo.webView.map(ObjectIdentifier.init)))"
-                        } ?? "no-route"
+                        let admitted = coordinator.domLifecycle.unit(for: token)
+                        let admittedDescription = admitted == nil ? "no-route" : "yes"
                         DebugLog.reader("subframe bridge: registry rejected token \(originHost) — admitted=\(admittedDescription)")
                         return nil
                     }
-                    return session.broker
+                    guard let broker = unit.broker else { return nil }
+                    return broker
                 },
                 contentWorld: .page,
                 name: WikiReaderWebView.subframeBridgeName)
         }
-        // Couple registry teardown to router route + bootstrap revocation so
+        // Couple embed-unit teardown to router route + bootstrap revocation so
         // every close path (collapse, failure, navigation, snapshot change,
         // dismantle) disposes the whole embed unit atomically.
-        context.coordinator.frameBridgeRegistry.onSessionClosed = { [weak webView] token in
-            webView?.rendererPackageRouter.revoke(token: token)
+        context.coordinator.domLifecycle.onUnitClosed = { [weak webView] unit in
+            if let token = unit.frameToken {
+                webView?.rendererPackageRouter.revoke(token: token)
+            }
         }
         context.coordinator.inlineAttachmentResolver = inlineAttachmentResolver
         context.coordinator.inlineRendererDescriptors = inlineRendererDescriptors
@@ -1571,7 +1567,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
         // embeds (registry sessions, brokers, routes) before installing the
         // new snapshot, per fail-closed semantics. The old iframes' requests
         // then fail closed rather than being served by a stale route.
-        webView.coordinator?.frameBridgeRegistry.closeAll()
+        webView.coordinator?.domRendererCoordinator?.removeAll()
         let router = webView.rendererPackageRouter
         router.revokeAll()
         webView.rendererPackageFrameTokens.removeAll()
@@ -1604,11 +1600,9 @@ internal struct WikiReaderRep: NSViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate {
         weak var webView: WikiReaderWebView?
         weak var attachmentContainer: WikiReaderContainerView?
-        private var attachmentCoordinator: RendererAttachmentCoordinator?
-        /// Frame-scoped bridge registry for admitted package iframes (DOM era).
-        /// Admitted on expansion; closed on collapse, removal, reload, and
-        /// dismantle.
-        var frameBridgeRegistry: ReaderRendererFrameBridgeRegistry = ReaderRendererFrameBridgeRegistry()
+        /// The one DOM embed lifecycle owner: units, budgets, and frame
+        /// authorization keyed by typed placeholder identity.
+        var domRendererCoordinator: ReaderDOMRendererCoordinator?
         var inlineAttachmentResolver: RendererInlineAttachmentResolver = RendererInlineAttachmentResolverFactory.defaultResolver
         var inlineRendererDescriptors: [RendererDescriptor] = []
         var rendererPackageInputs: RendererPackageEmbedInputs? = nil
@@ -1640,6 +1634,15 @@ internal struct WikiReaderRep: NSViewRepresentable {
         private var isLoadingBinding: Binding<Bool>?
         private var renderOptions: MarkdownRenderOptions?
 
+        /// The generation-scoped DOM lifecycle owner. Created lazily so a
+        /// teardown-only coordinator never mints state.
+        var domLifecycle: ReaderDOMRendererCoordinator {
+            if let domRendererCoordinator { return domRendererCoordinator }
+            let fresh = ReaderDOMRendererCoordinator(generation: loadGeneration)
+            domRendererCoordinator = fresh
+            return fresh
+        }
+
         func startLoad(
             markdown: String,
             documentIdentity: MarkdownDocumentIdentity?,
@@ -1652,9 +1655,8 @@ internal struct WikiReaderRep: NSViewRepresentable {
             loadGeneration += 1
             transclusionGeneration += 1
             let generation = loadGeneration
-            attachmentCoordinator?.closeAll()
-            frameBridgeRegistry.closeAll()
-            attachmentCoordinator = RendererAttachmentCoordinator(generation: generation)
+            domRendererCoordinator?.removeAll()
+            domRendererCoordinator = ReaderDOMRendererCoordinator(generation: generation)
             loadedMarkdown = markdown
             loadedDocumentIdentity = documentIdentity
             pageLoaded = false
@@ -2006,9 +2008,8 @@ internal struct WikiReaderRep: NSViewRepresentable {
             isDismantled = true
             loadGeneration += 1
             transclusionGeneration += 1
-            // DOM-era teardown: close every frame bridge session before the
-            // webview goes away.
-            frameBridgeRegistry.closeAll()
+            // DOM-era teardown: dispose every embed unit before the webview
+            // goes away.
             convertTask?.cancel()
             convertTask = nil
             cancelTransclusionTasks()
@@ -2019,9 +2020,8 @@ internal struct WikiReaderRep: NSViewRepresentable {
             webView?.rendererActivationAdmission = nil
             isLoadingBinding = nil
             renderOptions = nil
-            attachmentCoordinator?.closeAll()
-            frameBridgeRegistry.closeAll()
-            attachmentCoordinator = nil
+            domRendererCoordinator?.removeAll()
+            domRendererCoordinator = nil
             attachmentContainer = nil
             webView = nil
             store = nil
@@ -2163,69 +2163,54 @@ internal struct WikiReaderRep: NSViewRepresentable {
             // Invalidate lazy DOM work and release frame sessions from the
             // old document (the DOM itself is replaced by the navigation).
             // The coordinator is recreated for the new generation so stale
-            // geometry and activation callbacks from the old document fail
-            // closed; the fresh document's geometry then re-registers rows.
+            // lifecycle and activation callbacks from the old document fail
+            // closed; the fresh document's events then re-register rows.
             transclusionGeneration += 1
             cancelTransclusionTasks()
             cancelInlineRetentionTasks()
-            frameBridgeRegistry.closeAll()
-            attachmentCoordinator?.closeAll()
-            attachmentCoordinator = RendererAttachmentCoordinator(generation: loadGeneration)
+            domRendererCoordinator?.removeAll()
+            domRendererCoordinator = ReaderDOMRendererCoordinator(generation: loadGeneration)
         }
 
-        func handleAttachmentGeometry(_ message: RendererAttachmentGeometryMessage) {
-            guard let attachmentCoordinator else { return }
-            let isFirstGeometry = attachmentCoordinator.state(for: message.placeholderID) == .unresolved
-            let isFirstRowGeometry = message.embeddingRole == .disclosureRow && isFirstGeometry
-            let isFirstInlineGeometry = message.embeddingRole == .inlineContent && isFirstGeometry
-            guard attachmentCoordinator.ingest(message),
-                  let webView, let attachmentContainer else { return }
-            if isFirstRowGeometry || isFirstInlineGeometry {
-                let renderer = webView.rendererActivationAdmission?
-                    .attachmentContext(for: message.placeholderID)?
-                    .rendererReference
-                let reservedHeight = attachmentCoordinator.reserveHeight(
-                    RendererAttachmentHostPolicy.preferredReservedHeight(
-                        for: renderer,
-                        role: message.embeddingRole),
-                    for: message.placeholderID)
-                let identifier = WikiReaderRep.jsString(message.placeholderID.rawValue)
-                webView.evaluateJavaScript("window.__sdwRendererAttachmentReserve && window.__sdwRendererAttachmentReserve(\"\(identifier)\", \(reservedHeight));")
-            }
-            updateAttachmentViewport(for: message.placeholderID, in: webView, container: attachmentContainer)
-            guard message.embeddingRole == .inlineContent else { return }
-            if message.visible {
-                inlineRetentionTasks.removeValue(forKey: message.placeholderID)?.cancel()
-                mountInlineContentIfEligible(message.placeholderID)
-            } else if attachmentCoordinator.inlineState(for: message.placeholderID) == .mounted {
-                scheduleInlineRetentionRelease(message.placeholderID, generation: message.generation)
+        /// DOM lifecycle event handling: registration (placeholder discovery),
+        /// retained-visibility updates for inline auto-start/retention, and
+        /// removal. No geometry: the document owns embed size and layout.
+        func handleAttachmentLifecycle(_ event: RendererAttachmentLifecycleMessage) {
+            let lifecycle = domLifecycle
+            guard lifecycle.registerPlaceholder(event) != nil else { return }
+            let placeholderID = event.placeholderID
+            if event.embeddingRole == .inlineContent {
+                if event.visible {
+                    inlineRetentionTasks.removeValue(forKey: placeholderID)?.cancel()
+                    mountInlineContentIfEligible(placeholderID)
+                } else if lifecycle.lifecycle(for: placeholderID).isActive {
+                    scheduleInlineRetentionRelease(placeholderID, generation: event.generation)
+                }
             }
         }
 
         func handleAttachmentRemoval(_ placeholderID: RendererAttachmentPlaceholderID, generation: Int) {
-            guard let attachmentCoordinator, attachmentCoordinator.generation == generation else { return }
+            guard let lifecycle = domRendererCoordinator,
+                  lifecycle.generation == generation else { return }
             inlineRetentionTasks.removeValue(forKey: placeholderID)?.cancel()
-            let role = attachmentCoordinator.role(for: placeholderID)
-            // DOM era: remove the embed surface and its bridge session.
-            frameBridgeRegistry.remove(placeholderID: placeholderID)
+            rendererPreparationTasks.removeValue(forKey: placeholderID)?.cancel()
+            let role = lifecycle.role(for: placeholderID)
+            // DOM era: remove the embed surface and its bridge session as one
+            // owned unit; other embeds are untouched.
+            lifecycle.remove(placeholderID)
             webView?.evaluateJavaScript(RendererDOMEmbedInjection.removalScript(for: placeholderID))
-            if role == .inlineContent {
-                attachmentCoordinator.removeInline(placeholderID)
-            } else {
-                attachmentCoordinator.close(placeholderID)
-            }
             if role == .disclosureRow { setRowExpansion(false, for: placeholderID) }
         }
 
         /// DOM era: inline content mounts inside the document (media elements,
         /// iframes) — there is no native inline child to project.
         private func mountInlineContentIfEligible(_ placeholderID: RendererAttachmentPlaceholderID) {
-            guard let attachmentCoordinator,
-                  attachmentCoordinator.role(for: placeholderID) == .inlineContent,
-                  attachmentCoordinator.inlineState(for: placeholderID) != .mounted,
+            guard let lifecycle = domRendererCoordinator,
+                  lifecycle.role(for: placeholderID) == .inlineContent,
+                  lifecycle.lifecycle(for: placeholderID) != .active,
                   let context = webView?.rendererActivationAdmission?.attachmentContext(for: placeholderID),
                   context.embeddingRole == .inlineContent else { return }
-            guard attachmentCoordinator.admitInline(placeholderID) == .activate else { return }
+            guard lifecycle.beginLoading(placeholderID, role: .inlineContent) == nil else { return }
 
             // Built-in source embeds mount their typed DOM plan. Package
             // inline renderers mount their package iframe (per-embed token),
@@ -2247,19 +2232,15 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 _ = mountDOMEmbed(plan: plan, named: placeholderID, context: context)
                 return
             }
+            // Native inline child mounting was removed with the overlay;
+            // unsupported native inline renderers fail to the fallback.
             switch inlineAttachmentResolver(
                 context,
                 placeholderID,
                 inlineSessionFailureHandler(for: placeholderID, generation: context.generation)
             ) {
-            case .content:
-                // Native inline child mounting was removed with the overlay;
-                // unsupported native inline renderers fail to the fallback.
-                attachmentCoordinator.failInline(placeholderID)
-            case .unsupported:
-                attachmentCoordinator.failInline(placeholderID)
-            case .failed:
-                attachmentCoordinator.failInline(placeholderID)
+            case .content, .unsupported, .failed:
+                failAttachment(placeholderID)
             }
         }
 
@@ -2275,21 +2256,22 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     return
                 }
                 guard let self,
-                      let attachmentCoordinator = self.attachmentCoordinator,
-                      attachmentCoordinator.generation == generation,
-                      attachmentCoordinator.geometry(for: placeholderID)?.visible == false
+                      let lifecycle = self.domRendererCoordinator,
+                      lifecycle.generation == generation,
+                      lifecycle.state(for: placeholderID)?.visible == false
                 else { return }
-                attachmentCoordinator.releaseInline(placeholderID)
+                lifecycle.collapse(placeholderID)
+                self.teardownDOMEmbed(placeholderID)
                 self.inlineRetentionTasks.removeValue(forKey: placeholderID)
                 self.retryWaitingInlineContent()
             }
         }
 
         private func retryWaitingInlineContent() {
-            guard let attachmentCoordinator else { return }
-            for placeholderID in attachmentCoordinator.placeholderIDs
-            where attachmentCoordinator.inlineState(for: placeholderID) == .waitingForResources
-                && attachmentCoordinator.geometry(for: placeholderID)?.visible == true {
+            guard let lifecycle = domRendererCoordinator else { return }
+            for placeholderID in lifecycle.placeholderIDs
+            where lifecycle.state(for: placeholderID)?.visible == true
+                && lifecycle.lifecycle(for: placeholderID) != .active {
                 mountInlineContentIfEligible(placeholderID)
             }
         }
@@ -2315,23 +2297,23 @@ internal struct WikiReaderRep: NSViewRepresentable {
         /// renderer-specific inline view; unsupported renderers retain the full
         /// renderer route.
         func activateAttachment(_ placeholderID: RendererAttachmentPlaceholderID) -> RendererAttachmentActivationResult {
-            guard let attachmentCoordinator, let attachmentContainer else { return .rejected }
             // No registered context means there is nothing authorized to show —
             // neither natively nor in the full renderer.
             guard let context = webView?.rendererActivationAdmission?.attachmentContext(for: placeholderID) else {
                 failAttachment(placeholderID)
                 return .rejected
             }
-            if attachmentCoordinator.state(for: placeholderID) == .active {
+            if domLifecycle.lifecycle(for: placeholderID).isActive {
                 // DOM era: the embed is part of the document; focus returns to
                 // the webview (the row's disclosure button is a DOM focus target).
                 webView?.window?.makeFirstResponder(webView)
                 return .activate
             }
-            let admission = attachmentCoordinator.activate(placeholderID)
-            guard admission == .activate else {
-                if case let .refused(reason) = admission { surfaceRefusal(reason, for: placeholderID) }
-                return admission
+            // Reserve the row budget before mounting; a refusal stays
+            // retryable and allocates no session resources.
+            if let reason = domLifecycle.beginLoading(placeholderID, role: context.embeddingRole) {
+                surfaceRefusal(reason == .rowBudget ? .rowBudget : .resourcePressure, for: placeholderID)
+                return .refused(.rowBudget)
             }
             // DOM era: an admitted package renderer with a frame route mounts
             // its iframe in the document flow. Built-in source embeds (PDF,
@@ -2363,26 +2345,23 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 inlineSessionFailureHandler(for: placeholderID, generation: context.generation)
             ) {
             case .failed:
-                attachmentCoordinator.collapse(placeholderID)
+                domLifecycle.collapse(placeholderID)
                 failAttachment(placeholderID)
                 return .rejected
             case .unsupported:
                 // Expansion and Open in Window are separate user actions. Keep
                 // this row collapsed when no inline factory accepts its input.
-                attachmentCoordinator.collapse(placeholderID)
+                domLifecycle.collapse(placeholderID)
                 setRowExpansion(
                     false,
                     for: placeholderID,
                     status: "This renderer is not available inline. Use Open in Window.")
                 return .rejected
-            case .content(let content):
-                let result = mountInlineAttachment(
-                    content,
-                    named: placeholderID,
-                    in: attachmentContainer,
-                    takesFocus: true,
-                    context: context)
-                return result
+            case .content:
+                // DOM era: native inline children are removed. The remaining
+                // caller (native inline renderers) fails to the readable fallback.
+                failAttachment(placeholderID)
+                return .rejected
             }
         }
 
@@ -2393,22 +2372,6 @@ internal struct WikiReaderRep: NSViewRepresentable {
             guard let present = webView?.onRendererActivation else { return .rejected }
             present(context.rendererReference, context.input)
             return .showInFullRenderer
-        }
-
-        private func mountInlineAttachment(
-            _ content: AnyView,
-            named placeholderID: RendererAttachmentPlaceholderID,
-            in attachmentContainer: WikiReaderContainerView,
-            takesFocus: Bool,
-            context: RendererEmbedActivationContext
-        ) -> RendererAttachmentActivationResult {
-            // DOM era: native inline children are removed. The remaining
-            // caller (native inline renderers) fails to the readable fallback.
-            _ = content
-            _ = placeholderID
-            _ = takesFocus
-            _ = context
-            return .rejected
         }
 
         /// Clears a placeholder's status/fallback message after a successful
@@ -2429,8 +2392,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
             named placeholderID: RendererAttachmentPlaceholderID,
             context: RendererEmbedActivationContext
         ) -> RendererAttachmentActivationResult {
-            guard let webView, let attachmentCoordinator else { return .rejected }
-            guard attachmentCoordinator.state(for: placeholderID) == .active else { return .rejected }
+            guard let webView else { return .rejected }
 
             // Package frames need an admitted bridge session before their
             // document can ask for input. Session preparation runs first;
@@ -2470,7 +2432,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                         let authority = try await RendererSessionPreparer.prepare(authorityRequest)
                         guard Task.isCancelled == false,
                               self.loadGeneration == context.generation,
-                              self.attachmentCoordinator?.state(for: placeholderID) == .active
+                              self.domRendererCoordinator?.lifecycle(for: placeholderID).isActive == true
                         else {
                             authority.close()
                             return
@@ -2550,12 +2512,12 @@ internal struct WikiReaderRep: NSViewRepresentable {
             placeholderID: RendererAttachmentPlaceholderID,
             context: RendererEmbedActivationContext
         ) {
-            guard let webView, let attachmentCoordinator else {
+            guard let webView, let lifecycle = domRendererCoordinator else {
                 authority.close()
                 return
             }
             guard case .packageFrame(let framePlan) = plan,
-                  attachmentCoordinator.state(for: placeholderID) == .active
+                  lifecycle.lifecycle(for: placeholderID).isActive
             else {
                 authority.close()
                 return
@@ -2564,10 +2526,6 @@ internal struct WikiReaderRep: NSViewRepresentable {
             // an origin, or one embed's bridge session would authorize the
             // other embed's input (cross-embed leak).
             let embedToken = RendererFrameOriginToken.generate()
-            guard let webViewObject = webView as NSView? else {
-                authority.close()
-                return
-            }
             var originComponents = URLComponents()
             originComponents.scheme = RendererPackageScheme.name
             originComponents.host = embedToken.rawValue
@@ -2618,20 +2576,16 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 entryPath: frameEntry.request.path,
                 provider: authority.configuration.resourceProvider,
                 inputBootstrapHTML: bootstrap)
-            let admitted = frameBridgeRegistry.admit(
-                placeholderID: placeholderID,
-                frameToken: embedToken,
-                rendererReference: context.rendererReference,
-                generation: context.generation,
+            guard lifecycle.attachSession(
+                placeholderID,
                 broker: broker,
-                expectedWebViewID: ObjectIdentifier(webViewObject))
-            guard admitted else {
-                // Rollback: registry refusal means the session was never
-                // populated, so token(for:) would return nil. Revoke the
-                // route and close the broker directly.
+                frameToken: embedToken)
+            else {
+                // Rollback: attach refusal means no session state was stored.
+                // Revoke the route and dispose the broker directly.
                 webView.rendererPackageRouter.revoke(token: embedToken)
                 authority.close()
-                attachmentCoordinator.refuse(placeholderID, reason: .resourcePressure)
+                lifecycle.refuse(placeholderID, reason: .resourcePressure)
                 surfaceRefusal(.resourcePressure, for: placeholderID)
                 return
             }
@@ -2676,45 +2630,27 @@ internal struct WikiReaderRep: NSViewRepresentable {
         ) -> @MainActor (RendererSessionFailure) -> Void {
             { [weak self] failure in
                 guard let self,
-                      let attachmentCoordinator = self.attachmentCoordinator,
-                      attachmentCoordinator.generation == generation
+                      let lifecycle = self.domRendererCoordinator,
+                      lifecycle.generation == generation
                 else { return }
-                let role = attachmentCoordinator.role(for: placeholderID)
-                let state = attachmentCoordinator.state(for: placeholderID)
-                guard state != .closed else { return }
+                let state = lifecycle.lifecycle(for: placeholderID)
+                guard state != .removed else { return }
                 DebugLog.reader("inline renderer session failed for \(placeholderID.rawValue): \(failure.kind)")
-                if role == .inlineContent {
-                    // DOM era: the embed surface lives in the document; a
-                    // failed session closes its bridge and the row keeps its
-                    // readable fallback.
-                    self.frameBridgeRegistry.close(placeholderID: placeholderID)
-                    webView?.evaluateJavaScript(RendererDOMEmbedInjection.removalScript(for: placeholderID))
-                    if failure.kind == .concurrencyLimitReached {
-                        attachmentCoordinator.waitForInlineResources(placeholderID)
-                    } else {
-                        attachmentCoordinator.failInline(placeholderID)
-                    }
-                    return
-                }
-                guard state != .unresolved else { return }
+                // DOM era: the embed surface lives in the document; a failed
+                // session closes exactly its own embed unit and the row keeps
+                // its readable fallback.
+                self.teardownDOMEmbed(placeholderID)
                 if failure.kind == .concurrencyLimitReached {
-                    attachmentCoordinator.refuse(placeholderID, reason: .resourcePressure)
-                    self.frameBridgeRegistry.close(placeholderID: placeholderID)
-                    webView?.evaluateJavaScript(RendererDOMEmbedInjection.removalScript(for: placeholderID))
+                    // Retryable resource pressure: the row stays collapsed
+                    // with a refusal status and can retry after release.
+                    lifecycle.refuse(placeholderID, reason: .resourcePressure)
                     self.surfaceRefusal(.resourcePressure, for: placeholderID)
                     return
                 }
-                self.failAttachment(placeholderID)
+                lifecycle.fail(placeholderID)
+                self.setRowExpansion(false, for: placeholderID)
             }
         }
-
-        // DOM era: viewport projection was overlay machinery; embedded content
-        // moves and scales with the page because it is part of the page.
-        private func updateAttachmentViewport(
-            for placeholderID: RendererAttachmentPlaceholderID,
-            in webView: WikiReaderWebView,
-            container: WikiReaderContainerView
-        ) {}
 
         func applyReaderZoom(
             _ readerZoom: Double,
@@ -2745,48 +2681,36 @@ internal struct WikiReaderRep: NSViewRepresentable {
             setRowExpansion(false, for: placeholderID, status: message)
         }
 
-        func attachmentState(for placeholderID: RendererAttachmentPlaceholderID) -> RendererAttachmentState {
-            attachmentCoordinator?.state(for: placeholderID) ?? .unresolved
+        func attachmentState(for placeholderID: RendererAttachmentPlaceholderID) -> ReaderDOMRendererState? {
+            domRendererCoordinator?.state(for: placeholderID)
         }
 
-        func inlineAttachmentState(
-            for placeholderID: RendererAttachmentPlaceholderID
-        ) -> InlineRendererAttachmentState {
-            attachmentCoordinator?.inlineState(for: placeholderID) ?? .fallback
-        }
-
-        var attachmentGeneration: Int? { attachmentCoordinator?.generation }
+        var attachmentGeneration: Int? { domRendererCoordinator?.generation }
         var currentTransclusionGeneration: Int { transclusionGeneration }
 
         func collapseAttachment(_ placeholderID: RendererAttachmentPlaceholderID) {
-            guard let attachmentCoordinator,
-                  attachmentCoordinator.state(for: placeholderID) == .active
+            guard let lifecycle = domRendererCoordinator,
+                  lifecycle.lifecycle(for: placeholderID).isActive
             else { return }
-            attachmentCoordinator.collapse(placeholderID)
-            // DOM-era collapse: remove the embed surface and its bridge
-            // session, scoped to this row.
+            // DOM-era collapse: dispose the exact embed unit (surface, bridge
+            // session, route), scoped to this row.
             teardownDOMEmbed(placeholderID)
+            lifecycle.collapse(placeholderID)
             setRowExpansion(false, for: placeholderID)
         }
 
         /// Scoped DOM-embed teardown: removes the embed surface from this
-        /// placeholder's expansion region, closes its bridge session, and
-        /// revokes its router route + bootstrap. Other rows are untouched.
+        /// placeholder's expansion region and disposes its embed unit (bridge
+        /// session + router route + bootstrap via the unit's close hook).
+        /// Other rows are untouched.
         func teardownDOMEmbed(_ placeholderID: RendererAttachmentPlaceholderID) {
-            // Capture the token before the registry drops it.
-            let token = frameBridgeRegistry.token(for: placeholderID)
-            frameBridgeRegistry.close(placeholderID: placeholderID)
+            domRendererCoordinator?.remove(placeholderID)
             guard let webView else { return }
             webView.evaluateJavaScript(RendererDOMEmbedInjection.removalScript(for: placeholderID))
-            // Revoke the per-embed route + bootstrap so closed embeds lose
-            // both halves of their capability (advisor finding 2/3).
-            if let token {
-                webView.rendererPackageRouter.revoke(token: token)
-            }
         }
 
         func failAttachment(_ placeholderID: RendererAttachmentPlaceholderID) {
-            attachmentCoordinator?.fail(placeholderID)
+            domRendererCoordinator?.fail(placeholderID)
             setRowExpansion(false, for: placeholderID)
             teardownDOMEmbed(placeholderID)
         }

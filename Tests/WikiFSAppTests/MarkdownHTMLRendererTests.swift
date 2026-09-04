@@ -472,8 +472,8 @@ struct MarkdownHTMLRendererTests {
         // The generic disclosure posts an expand action that the attachment
         // coordinator answers by mounting the package session.
         #expect(mermaid.contains("data-renderer-action=\"expand\""))
-        #expect(WikiReaderWebView.rendererAttachmentGeometryJS.contains("data-mermaid-disclosure") == false)
-        #expect(WikiReaderWebView.rendererAttachmentGeometryJS.contains("__sdwRenderMermaidRow") == false)
+        #expect(WikiReaderWebView.rendererAttachmentLifecycleJS.contains("data-mermaid-disclosure") == false)
+        #expect(WikiReaderWebView.rendererAttachmentLifecycleJS.contains("__sdwRenderMermaidRow") == false)
     }
 
     @Test("an Excalidraw card delegates drawing to the dynamic renderer")
@@ -778,17 +778,18 @@ struct MarkdownHTMLRendererTests {
         #expect(html.contains("min-height: 480px"))
     }
 
-    @Test("native renderer reservation and geometry use the expansion region below the row")
+    @Test("lifecycle bootstrap carries discovery, visibility, and removal without geometry")
     func nativeRendererLayoutTargetsExpansionRegion() {
-        let script = WikiReaderWebView.rendererAttachmentGeometryJS
+        let script = WikiReaderWebView.rendererAttachmentLifecycleJS
 
         #expect(script.contains(".sdw-inline-renderer[id][data-renderer-admitted=\"true\"]"))
-        #expect(script.contains("card.classList.contains('sdw-inline-renderer')?card:card.querySelector('.sdw-renderer-card__expansion')"))
-        #expect(script.contains("target.style.minHeight=height+'px'"))
-        #expect(script.contains("expansion.style.minHeight=height+'px'") == false)
-        #expect(script.contains("e.dataset.rendererExpanded==='true'&&expansion?expansion:e"))
-        #expect(script.contains("var r=e.getBoundingClientRect()") == false)
-        #expect(script.contains("window.__sdwRendererAttachmentRevision=(window.__sdwRendererAttachmentRevision||0)+1;report();"))
+        // Geometry fields and native height reservation are gone: the
+        // document owns embed size and layout.
+        #expect(script.contains("getBoundingClientRect") == false)
+        #expect(script.contains("style.minHeight") == false)
+        #expect(script.contains("rendererAttachmentLifecycle.postMessage"))
+        #expect(script.contains("visible:retained"))
+        #expect(script.contains("removed:true"))
         #expect(script.contains("event.target.closest('.sdw-renderer-card__row')"))
         #expect(script.contains("event.target.closest('[data-renderer-action=\"open-window\"]')"))
         #expect(script.contains("action:card.dataset.rendererExpanded==='true'?'collapse':'activate'"))

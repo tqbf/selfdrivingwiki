@@ -13,15 +13,25 @@ struct RendererFrameOriginToken: Hashable, Equatable, Sendable {
     let rawValue: String
 
     private static let byteCount = 16
+    /// A token is exactly 128 bits of randomness rendered as lowercase hex.
+    private static let characterCount = 32
 
-    /// Returns the token only if the raw value matches the generate() alphabet
-    /// (lowercase hex). Prevents arbitrary host strings from becoming tokens.
+    /// The exact token shape `generate()` emits: 32 lowercase hex characters.
+    /// Sharing this parser with `RendererFramePackageURL.parse` keeps the
+    /// token invariant in one implementation.
+    private static func isValidShape(_ rawValue: String) -> Bool {
+        rawValue.count == characterCount &&
+            rawValue.unicodeScalars.allSatisfy { scalar in
+                ("0" ... "9").contains(Character(scalar))
+                    || ("a" ... "f").contains(Character(scalar))
+            }
+    }
+
+    /// Returns the token only if the raw value matches the generate() shape
+    /// (exactly 32 lowercase hex characters). Prevents arbitrary host strings
+    /// from becoming tokens.
     static func tokenIfValid(_ rawValue: String) -> RendererFrameOriginToken? {
-        let isHexScalar = { (scalar: Unicode.Scalar) -> Bool in
-            ("0" ... "9").contains(Character(scalar))
-                || ("a" ... "f").contains(Character(scalar))
-        }
-        return rawValue.unicodeScalars.allSatisfy(isHexScalar) ? Self(rawValue: rawValue) : nil
+        isValidShape(rawValue) ? Self(rawValue: rawValue) : nil
     }
 
     /// 128 bits of randomness from the system CSPRNG, lowercase hex. Lowercase
@@ -63,11 +73,12 @@ struct RendererFramePackageURL: Hashable, Equatable, Sendable {
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
             throw RendererPackageResourceError.invalidRequest
         }
-        // The token is the host; base64url alphabet only.
+        // The token is the host; it must match the exact generate() shape
+        // (one shared invariant implementation with tokenIfValid).
         let rawToken = components.host ?? ""
-        guard !rawToken.isEmpty,
-              rawToken.unicodeScalars.allSatisfy(Self.isTokenScalarLegal)
-        else { throw RendererPackageResourceError.invalidRequest }
+        guard let token = RendererFrameOriginToken.tokenIfValid(rawToken) else {
+            throw RendererPackageResourceError.invalidRequest
+        }
         let pathComponents = components.path.split(separator: "/", omittingEmptySubsequences: true)
         guard pathComponents.count >= 3,
               let packageID = RendererPackageID(rawValue: String(pathComponents[0])),
@@ -85,7 +96,7 @@ struct RendererFramePackageURL: Hashable, Equatable, Sendable {
             version: version,
             path: path)
         return Self(
-            token: RendererFrameOriginToken(rawValue: rawToken),
+            token: token,
             request: try RendererPackageScheme.request(from: canonical))
     }
 
@@ -114,13 +125,6 @@ struct RendererFramePackageURL: Hashable, Equatable, Sendable {
             packageID: request.packageID,
             version: request.version,
             path: request.path)
-    }
-
-    private static func isTokenScalarLegal(_ scalar: Unicode.Scalar) -> Bool {
-        // generate() emits lowercase hex; accept the full alphabet it can
-        // produce so real tokens parse.
-        ("0" ... "9").contains(Character(scalar))
-            || ("a" ... "f").contains(Character(scalar))
     }
 }
 

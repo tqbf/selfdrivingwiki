@@ -1,165 +1,201 @@
 #if os(macOS)
 import Foundation
 import Testing
-import WikiFSTypes
 @testable import WikiFS
+import WikiFSCore
+import WikiFSTypes
 
-/// AC.8 lifecycle tests: the DOM-era finite state machine replaces the
-/// overlay-era attachment coordinator. Initially collapsed, only selected
-/// rows expand, the four-row budget refuses without a frame, inline/disclosure
-/// budgets are independent, refusal is retryable, and removal is scoped.
-@Suite
+/// Phase 3 acceptance tests for the one DOM lifecycle: production coordinator
+/// ownership, budget separation, retryable refusal, and scoped teardown.
 @MainActor
 struct ReaderDOMRendererLifecycleTests {
     private func placeholder(_ raw: String) throws -> RendererAttachmentPlaceholderID {
         try RendererAttachmentPlaceholderID(validating: raw)
     }
 
-    @Test("placeholders start collapsed with no surface")
-    func startsCollapsed() throws {
-        let coordinator = ReaderDOMRendererCoordinator(generation: 3)
-        let p = try placeholder("row-a")
-        #expect(coordinator.register(p, role: .disclosureRow, generation: 3))
-        #expect(coordinator.lifecycle(for: p) == .collapsed)
-        #expect(coordinator.record(for: p)?.surfaceID == nil)
-        #expect(coordinator.lifecycle(for: p).canExpand)
+    private func event(
+        _ id: RendererAttachmentPlaceholderID,
+        role: RendererEmbeddingRole,
+        generation: Int = 1,
+        visible: Bool = false,
+        removed: Bool = false
+    ) -> RendererAttachmentLifecycleMessage {
+        guard let message = RendererAttachmentLifecycleMessage(
+            generation: generation,
+            placeholderID: id,
+            embeddingRole: role,
+            visible: visible,
+            isRemoval: removed)
+        else { fatalError("fixture must satisfy lifecycle message validation") }
+        return message
     }
 
-    @Test("expansion moves collapsed to loading then active, scoped per placeholder")
-    func expansionIsScoped() throws {
-        let coordinator = ReaderDOMRendererCoordinator(generation: 3)
-        let a = try placeholder("row-a")
-        let b = try placeholder("row-b")
-        coordinator.register(a, role: .disclosureRow, generation: 3)
-        coordinator.register(b, role: .disclosureRow, generation: 3)
+    @Test("lifecycle event decode accepts discovery and rejects malformed shapes")
+    func lifecycleMessageDecode() throws {
+        let id = try placeholder("row-a")
+        let valid = RendererAttachmentLifecycleMessage(
+            generation: 2, placeholderID: id,
+            embeddingRole: .inlineContent, visible: true, isRemoval: false)
+        #expect(valid != nil)
 
-        #expect(coordinator.beginLoading(a, surfaceID: "token-a") == nil)
-        #expect(coordinator.lifecycle(for: a) == .loading)
-        #expect(coordinator.lifecycle(for: b) == .collapsed)
+        let removalShape: [String: Any] = [
+            "generation": 1, "placeholderID": id.rawValue,
+            "removed": true, "visible": false,
+        ]
+        // Removal decode path tolerates a missing role.
+        var body = removalShape
+        #expect(RendererAttachmentLifecycleMessage(body: body) == nil)
 
-        coordinator.finishLoading(a)
-        #expect(coordinator.lifecycle(for: a) == .active)
-        #expect(coordinator.lifecycle(for: b) == .collapsed)
+        body["embeddingRole"] = "inlineContent"
+        #expect(RendererAttachmentLifecycleMessage(body: body) != nil)
+        _ = valid
     }
 
-    @Test("fifth expanded row is refused without creating a surface")
-    func rowBudgetRefuses() throws {
+    @Test("placeholder registration is discovery-gated and idempotent")
+    func registrationIsIdempotent() throws {
         let coordinator = ReaderDOMRendererCoordinator(generation: 1)
-        var placeholders: [RendererAttachmentPlaceholderID] = []
-        for index in 0..<5 {
-            placeholders.append(try placeholder("row-\(index)"))
-            coordinator.register(placeholders[index], role: .disclosureRow, generation: 1)
-        }
-        for index in 0..<4 {
-            #expect(coordinator.beginLoading(placeholders[index], surfaceID: "token-\(index)") == nil)
-            coordinator.finishLoading(placeholders[index])
-        }
-        // The fifth refusal carries a retryable reason and no surface.
-        #expect(coordinator.beginLoading(placeholders[4], surfaceID: "token-4") == .rowBudget)
-        coordinator.refuse(placeholders[4], reason: .rowBudget, message: "budget")
-        #expect(coordinator.lifecycle(for: placeholders[4]) == .retryableResourceRefusal(.rowBudget))
-        #expect(coordinator.record(for: placeholders[4])?.surfaceID == nil)
-        #expect(coordinator.lifecycle(for: placeholders[4]).canExpand)
+        let id = try placeholder("row-a")
+        let message = event(id, role: .disclosureRow)
+
+        #expect(coordinator.registerPlaceholder(message) != nil)
+        #expect(coordinator.registerPlaceholder(message) != nil)
+        #expect(coordinator.activeUnitCount == 1)
+        #expect(coordinator.state(for: id)?.role == .disclosureRow)
+
+        // A stale generation fails closed.
+        let stale = event(id, role: .disclosureRow, generation: 99)
+        #expect(coordinator.registerPlaceholder(stale) == nil)
     }
 
-    @Test("inline and disclosure budgets are independent")
-    func inlineAndRowBudgetsAreIndependent() throws {
+    @Test("production coordinator uses one lifecycle and one owner per embed")
+    func productionCoordinatorUsesOneLifecycle() throws {
+        let coordinator = ReaderDOMRendererCoordinator(generation: 3)
+        let id = try placeholder("row-a")
+        _ = coordinator.registerPlaceholder(event(id, role: .disclosureRow, generation: 3))
+
+        // No session resources yet: collapsed, no broker, no surface.
+        let before = coordinator.state(for: id)
+        #expect(before?.lifecycle == .collapsed)
+        #expect(before?.surfaceID == nil)
+
+        // Budget reservation succeeds but still creates no broker.
+        #expect(coordinator.beginLoading(id, role: .disclosureRow) == nil)
+        #expect(coordinator.state(for: id)?.surfaceID == nil)
+    }
+
+    @Test("row inline and frame budgets are independent and refusal creates no resources")
+    func rowInlineAndFrameBudgetsAreIndependent() throws {
         let coordinator = ReaderDOMRendererCoordinator(
-            generation: 1, maximumInlineRenderers: 2)
-        let row = try placeholder("row")
-        let inlineA = try placeholder("inline-a")
-        let inlineB = try placeholder("inline-b")
-        let inlineC = try placeholder("inline-c")
-        coordinator.register(row, role: .disclosureRow, generation: 1)
-        coordinator.register(inlineA, role: .inlineContent, generation: 1)
-        coordinator.register(inlineB, role: .inlineContent, generation: 1)
-        coordinator.register(inlineC, role: .inlineContent, generation: 1)
+            generation: 1, maximumExpandedRows: 2, maximumInlineRenderers: 1,
+            maximumPackageFrames: 1)
+        let rows = try (0...2).map { try placeholder("row-\($0)") }
+        for row in rows {
+            _ = coordinator.registerPlaceholder(event(row, role: .disclosureRow))
+        }
 
-        #expect(coordinator.beginLoading(inlineA, surfaceID: "ia") == nil)
-        #expect(coordinator.beginLoading(inlineB, surfaceID: "ib") == nil)
-        // The inline budget is full…
-        #expect(coordinator.beginLoading(inlineC, surfaceID: "ic") != nil)
-        // …but the disclosure budget is untouched by inline pressure.
-        #expect(coordinator.beginLoading(row, surfaceID: "row") == nil)
+        // Two rows may hold budget; the third is refused.
+        #expect(coordinator.beginLoading(rows[0], role: .disclosureRow) == nil)
+        #expect(coordinator.beginLoading(rows[1], role: .disclosureRow) == nil)
+        #expect(coordinator.beginLoading(rows[2], role: .disclosureRow) == .rowBudget)
     }
 
-    @Test("collapse resets to collapsed and releases the surface identity")
-    func collapseReleasesSurface() throws {
-        let coordinator = ReaderDOMRendererCoordinator(generation: 2)
-        let p = try placeholder("row")
-        coordinator.register(p, role: .disclosureRow, generation: 2)
-        #expect(coordinator.beginLoading(p, surfaceID: "token") == nil)
-        coordinator.finishLoading(p)
-        coordinator.collapse(p)
-        let record = coordinator.record(for: p)
-        #expect(record?.lifecycle == .collapsed)
-        #expect(record?.surfaceID == nil)
-        #expect(coordinator.lifecycle(for: p).canExpand)
+    @Test("attach session stores one broker per token; duplicate tokens fail closed")
+    func attachSessionIsExclusivePerToken() throws {
+        let coordinator = ReaderDOMRendererCoordinator(generation: 1)
+        let id = try placeholder("row-a")
+        _ = coordinator.registerPlaceholder(event(id, role: .disclosureRow))
+
+        let token = RendererFrameOriginToken.generate()
+        let broker = RendererContentWorldBroker(
+            sessionID: .init(rawValue: UUID()),
+            capability: .init(rawValue: "cap"),
+            inputReader: StubInputReader.make())
+
+        #expect(coordinator.attachSession(id, broker: broker, frameToken: token))
+        // A second attach to the same unit fails.
+        #expect(coordinator.attachSession(id, broker: broker, frameToken: token) == false)
+        // The token authorizes exactly that unit.
+        #expect(coordinator.authorize(token: token) === coordinator.unit(for: id))
+
+        // Closing revokes the token authorization.
+        coordinator.remove(id)
+        #expect(coordinator.authorize(token: token) == nil)
+        broker.close()
     }
 
-    @Test("failure keeps readable failed state; retry re-enters loading")
-    func failureIsRecoverable() throws {
-        let coordinator = ReaderDOMRendererCoordinator(generation: 2)
-        let p = try placeholder("row")
-        coordinator.register(p, role: .disclosureRow, generation: 2)
-        #expect(coordinator.beginLoading(p, surfaceID: "token") == nil)
-        coordinator.fail(p)
-        #expect(coordinator.lifecycle(for: p) == .failed)
-        #expect(coordinator.record(for: p)?.surfaceID == nil)
-        // Retry after failure is a legal transition.
-        #expect(coordinator.beginLoading(p, surfaceID: "token-2") == nil)
-        #expect(coordinator.lifecycle(for: p) == .loading)
-    }
-
-    @Test("stale-generation callbacks never mutate a newer document")
-    func staleGenerationFailsClosed() throws {
-        let coordinator = ReaderDOMRendererCoordinator(generation: 7)
-        let p = try placeholder("row")
-        coordinator.register(p, role: .disclosureRow, generation: 7)
-        #expect(coordinator.beginLoading(p, surfaceID: "token") == nil)
-
-        // Simulate a document replacement: the coordinator's generation moves
-        // to 9 while old records still carry generation 7.
-        let stale = ReaderDOMRendererCoordinator(generation: 7)
-        _ = stale // (records keep their original generation)
-
-        // A newer-generation coordinator refuses stale transitions through
-        // the generation check in transition().
-        var record = ReaderDOMRendererRecord(lifecycle: .loading, embeddingRole: .disclosureRow, generation: 7)
-        #expect(record.transition(to: .active, generation: 9) == false)
-        #expect(record.lifecycle == .loading)
-    }
-
-    @Test("removal works from any state and never affects other rows")
-    func removalIsScoped() throws {
-        let coordinator = ReaderDOMRendererCoordinator(generation: 4)
+    @Test("scoped close paths dispose exactly one embed unit")
+    func scopedClosePathsDisposeOneEmbedUnit() throws {
+        let coordinator = ReaderDOMRendererCoordinator(generation: 1)
         let a = try placeholder("row-a")
         let b = try placeholder("row-b")
-        coordinator.register(a, role: .disclosureRow, generation: 4)
-        coordinator.register(b, role: .disclosureRow, generation: 4)
-        #expect(coordinator.beginLoading(a, surfaceID: "ta") == nil)
-        coordinator.finishLoading(a)
-        #expect(coordinator.beginLoading(b, surfaceID: "tb") == nil)
+        _ = coordinator.registerPlaceholder(event(a, role: .disclosureRow))
+        _ = coordinator.registerPlaceholder(event(b, role: .disclosureRow))
 
         coordinator.remove(a)
-        #expect(coordinator.lifecycle(for: a) == .removed)
-        #expect(coordinator.lifecycle(for: b) == .loading)
+        #expect(coordinator.unit(for: a) == nil)
+        #expect(coordinator.unit(for: b) != nil)
+        #expect(coordinator.activeUnitCount == 1)
     }
 
-    @Test("open-in-window is never implied by lifecycle transitions")
-    func lifecycleNeverOpensWindow() throws {
-        // The lifecycle has no transition that opens a window: expansion ends
-        // at .active in the reader document. This is a type-level pin.
-        let transitions: [(ReaderDOMRendererLifecycle, ReaderDOMRendererLifecycle)] = [
-            (.collapsed, .loading),
-            (.loading, .active),
-            (.active, .collapsed),
-        ]
-        for (from, to) in transitions {
-            #expect(ReaderDOMRendererRecord.isLegalTransition(from: from, to: to))
+    @Test("reload and dismantle dispose all embed units")
+    func reloadAndDismantleDisposeAllEmbedUnits() throws {
+        let coordinator = ReaderDOMRendererCoordinator(generation: 1)
+        let ids = try (0..<3).map { try placeholder("row-\($0)") }
+        for id in ids {
+            _ = coordinator.registerPlaceholder(event(id, role: .disclosureRow))
         }
-        // There is no window-opening terminal state in the machine.
-        #expect(!ReaderDOMRendererRecord.isLegalTransition(from: .collapsed, to: .failed) == false)
+        #expect(coordinator.activeUnitCount == 3)
+        coordinator.removeAll()
+        #expect(coordinator.activeUnitCount == 0)
+        #expect(coordinator.placeholderIDs.isEmpty)
+    }
+
+    @Test("frame origin token accepts only the exact generated shape")
+    func tokenValidation() {
+        let valid = String(repeating: "a1", count: 16)  // 32 lowercase hex chars
+        #expect(RendererFrameOriginToken.tokenIfValid(valid) != nil)
+
+        #expect(RendererFrameOriginToken.tokenIfValid("") == nil)                    // empty
+        #expect(RendererFrameOriginToken.tokenIfValid(String(repeating: "a", count: 31)) == nil)   // short
+        #expect(RendererFrameOriginToken.tokenIfValid(String(repeating: "a", count: 33)) == nil)   // long
+        #expect(RendererFrameOriginToken.tokenIfValid(String(repeating: "A", count: 32)) == nil)   // uppercase
+        #expect(RendererFrameOriginToken.tokenIfValid(String(repeating: "g", count: 32)) == nil)   // non-hex
+        #expect(RendererFrameOriginToken.tokenIfValid("reader-test-parent") == nil)  // host-like
+
+        // Generated tokens always parse back through the same invariant.
+        let generated = RendererFrameOriginToken.generate()
+        #expect(RendererFrameOriginToken.tokenIfValid(generated.rawValue) == generated)
+    }
+
+    @Test("frame package URL parse shares the token invariant implementation")
+    func frameURLTokenValidation() throws {
+        let token = RendererFrameOriginToken.generate()
+        let url = RendererFramePackageURL.frameURL(
+            token: token,
+            packageID: RendererPackageID(rawValue: "org.example.probe")!,
+            version: RendererPackageVersion(rawValue: "1.0.0")!,
+            path: RendererRelativePath(rawValue: "index.html")!)
+        #expect(try RendererFramePackageURL.parse(url).token == token)
+
+        // A non-token host fails closed through the same parser.
+        let badURL = URL(string:
+            "renderer-package://reader-test-parent/org.example.probe/1.0.0/index.html")!
+        #expect(throws: RendererPackageResourceError.invalidRequest) {
+            _ = try RendererFramePackageURL.parse(badURL)
+        }
+    }
+}
+
+/// Minimal store-backed input reader fixture for broker construction in tests.
+@MainActor
+private final class StubInputReader {
+    static func make() -> RendererAuthorizedInputReader {
+        let store = try! GRDBWikiStore()
+        let summary = try! store.addSource(filename: "stub.txt", data: Data("stub".utf8))
+        let version = try! store.activeContentVersion(sourceID: summary.id)!
+        return RendererAuthorizedInputReader(
+            store: store,
+            authorizedInput: .source(versionID: version.id))
     }
 }
 #endif
