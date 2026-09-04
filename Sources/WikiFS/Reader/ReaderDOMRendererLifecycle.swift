@@ -189,6 +189,11 @@ final class ReaderDOMEmbedUnit {
     private(set) var loadTimeoutTask: Task<Void, Never>?
     private(set) var visible = false
     private(set) var isClosed = false
+    /// The explicit lifecycle state. It is set through the transition methods
+    /// below; deriving it from implementation details (broker presence) is
+    /// wrong because the mount sequence checks the state before the broker
+    /// attaches.
+    private(set) var lifecycle: ReaderDOMRendererLifecycle = .collapsed
     /// True from `beginLoading` until close: the unit holds a row, inline, or
     /// frame budget slot even before its broker attaches.
     fileprivate(set) var holdsBudget = false
@@ -233,12 +238,24 @@ final class ReaderDOMEmbedUnit {
     func close() {
         guard isClosed == false else { return }
         isClosed = true
+        lifecycle = .removed
         loadTimeoutTask?.cancel()
         loadTimeoutTask = nil
         Self.coordinatorOnClosed?(self)
         broker?.close()
         broker = nil
         frameToken = nil
+    }
+
+    /// Transitions the lifecycle state when the transition is legal for the
+    /// unit's own generation. Returns false for refused transitions.
+    func transition(to next: ReaderDOMRendererLifecycle, documentGeneration: Int) -> Bool {
+        guard isClosed == false,
+              generation == documentGeneration,
+              ReaderDOMRendererCoordinator.isLegalTransition(from: lifecycle, to: next)
+        else { return false }
+        lifecycle = next
+        return true
     }
 }
 
@@ -300,9 +317,7 @@ final class ReaderDOMRendererCoordinator {
     var activeUnitCount: Int { units.count }
 
     private static func lifecycleState(of unit: ReaderDOMEmbedUnit) -> ReaderDOMRendererLifecycle {
-        if unit.isClosed { return .removed }
-        if unit.broker != nil { return .active }
-        return .collapsed
+        unit.lifecycle
     }
 
     private static func state(of unit: ReaderDOMEmbedUnit) -> ReaderDOMRendererState {
@@ -399,6 +414,7 @@ final class ReaderDOMRendererCoordinator {
             if mountedInline >= maximumInlineRenderers { return .resourcePressure }
         }
         unit.holdsBudget = true
+        _ = unit.transition(to: .loading, documentGeneration: generation)
         return nil
     }
 
@@ -420,6 +436,14 @@ final class ReaderDOMRendererCoordinator {
         unit.attachBroker(broker, frameToken: frameToken)
         unitsByToken[frameToken] = unit
         return true
+    }
+
+    /// The frame or DOM element reported a real load completion. Moves the
+    /// unit from `loading` to `active`.
+    func finishLoading(_ placeholderID: RendererAttachmentPlaceholderID) {
+        guard let unit = units[placeholderID],
+              unit.isClosed == false else { return }
+        _ = unit.transition(to: .active, documentGeneration: generation)
     }
 
     /// The frame finished loading; cancels its timeout.

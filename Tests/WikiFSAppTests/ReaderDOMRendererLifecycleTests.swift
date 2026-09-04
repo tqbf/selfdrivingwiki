@@ -78,9 +78,24 @@ struct ReaderDOMRendererLifecycleTests {
         #expect(before?.lifecycle == .collapsed)
         #expect(before?.surfaceID == nil)
 
-        // Budget reservation succeeds but still creates no broker.
+        // Budget reservation moves the unit to loading with no broker.
         #expect(coordinator.beginLoading(id, role: .disclosureRow) == nil)
+        #expect(coordinator.lifecycle(for: id) == .loading)
         #expect(coordinator.state(for: id)?.surfaceID == nil)
+
+        // Attaching the session makes the embed active.
+        let broker = RendererContentWorldBroker(
+            sessionID: .init(rawValue: UUID()),
+            capability: .init(rawValue: "cap"),
+            inputReader: StubInputReader.make())
+        let token = RendererFrameOriginToken.generate()
+        #expect(coordinator.attachSession(id, broker: broker, frameToken: token))
+        #expect(coordinator.lifecycle(for: id) == .loading)
+
+        // Only a real load completion activates the unit.
+        coordinator.finishLoading(id)
+        #expect(coordinator.lifecycle(for: id) == .active)
+        broker.close()
     }
 
     @Test("row inline and frame budgets are independent and refusal creates no resources")
@@ -120,6 +135,7 @@ struct ReaderDOMRendererLifecycleTests {
         // Closing revokes the token authorization.
         coordinator.remove(id)
         #expect(coordinator.authorize(token: token) == nil)
+        #expect(coordinator.lifecycle(for: id) == .collapsed)  // unit gone
         broker.close()
     }
 

@@ -2432,7 +2432,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                         let authority = try await RendererSessionPreparer.prepare(authorityRequest)
                         guard Task.isCancelled == false,
                               self.loadGeneration == context.generation,
-                              self.domRendererCoordinator?.lifecycle(for: placeholderID).isActive == true
+                              self.domRendererCoordinator?.lifecycle(for: placeholderID).canExpand == true
                         else {
                             authority.close()
                             return
@@ -2492,6 +2492,9 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     self.teardownDOMEmbed(placeholderID)
                     return
                 }
+                // A direct-injected (built-in) embed has no frame session, so
+                // its lifecycle becomes active here.
+                self.domRendererCoordinator?.finishLoading(placeholderID)
                 // The registry load timeout stays armed here: an injection
                 // acknowledgement only proves the element was appended, not
                 // that the frame's document loaded. frameDidLoad is driven by
@@ -2517,7 +2520,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 return
             }
             guard case .packageFrame(let framePlan) = plan,
-                  lifecycle.lifecycle(for: placeholderID).isActive
+                  lifecycle.lifecycle(for: placeholderID).canExpand
             else {
                 authority.close()
                 return
@@ -2589,6 +2592,9 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 surfaceRefusal(.resourcePressure, for: placeholderID)
                 return
             }
+            // The unit now owns its session resources; the embed surface
+            // mounts below and the frame's load event releases the timeout.
+            lifecycle.finishLoading(placeholderID)
             let effectivePlan: RendererDOMEmbedPlan
             if case .packageFrame(var framePlan) = plan {
                 framePlan.entryURL = embedEntryURL
