@@ -2453,7 +2453,8 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     return .rejected
                 }
                 // Admitted asset reader for this descriptor, if the package
-                // declares assets (e.g., JSON Canvas image references).
+                // declares assets (e.g., image references resolved through
+                // asset.read).
                 let assetReader = rendererPackageInputs?.entries.first(
                     where: { $0.reference == context.rendererReference })?.assetReader
                 var originComponents = URLComponents()
