@@ -200,6 +200,10 @@ struct WikiReaderView: View {
     /// Validated installed descriptor snapshot supplied by the reader host.
     /// It is data-only; constructing renderer sessions remains downstream.
     var inlineRendererDescriptors: [RendererDescriptor] = []
+    /// Per-descriptor validated package resource providers, used to serve
+    /// `renderer-package:` assets to in-page expansion iframes. Hosts owning a
+    /// full renderer pane pass the live snapshot; default is no packages.
+    var rendererPackageInputs: RendererPackageEmbedInputs? = nil
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
     @State private var isLoading = true
 
@@ -227,6 +231,7 @@ struct WikiReaderView: View {
                           onRendererActivation: onRendererActivation,
                           inlineAttachmentResolver: inlineAttachmentResolver,
                           inlineRendererDescriptors: inlineRendererDescriptors,
+                          rendererPackageInputs: rendererPackageInputs,
                           findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
             if isLoading {
                 ProgressView()
@@ -678,6 +683,38 @@ final class WikiReaderWebView: WKWebView {
     /// `store` is set by the representable alongside the view's own `store`.
     let blobHandler = BlobSchemeHandler(store: nil)
 
+    /// Frame-origin tokens for admitted renderer references, set by
+    /// `WikiReaderRep.installRendererPackages`. The Coordinator reads a
+    /// token to build the iframe `src` during activation.
+    var rendererPackageFrameTokens: [RendererReference: RendererFrameOriginToken] = [:]
+
+    /// Entry paths for admitted renderer references, set alongside the
+    /// frame tokens. Both maps share lifecycles (replacement revokes both).
+    var rendererPackageFrameEntryPaths: [RendererReference: String] = [:]
+
+    /// Signature of the last installed package snapshot, used to keep
+    /// `installRendererPackages` idempotent across SwiftUI update passes.
+    var installedRendererPackageSignature: String = ""
+
+    /// Routes `renderer-package://<frame-token>/…` requests from in-page
+    /// expansion iframes to per-frame validated package providers. Admitted
+    /// or revoked by `WikiReaderRep` as package snapshots change.
+    let rendererPackageRouter = ReaderRendererPackageRouter()
+
+    /// The canonical package scheme handler wrapping the frame router, so
+    /// CSP, MIME, no-sniff, response ordering, and cancellation stay
+    /// single-sourced. Created in `init` before `super.init` so it can be
+    /// registered on the configuration.
+    private(set) var rendererPackageSchemeHandler: RendererPackageSchemeHandler?
+
+    /// Test/diagnostic observation: every URL the package scheme handler was
+    /// asked to start. Empty in production use; only tests read it.
+    var diagnosticStartedPackageRequests: [URL] {
+        rendererPackageRouter.diagnosticStartedRequests
+    }
+    /// Message handler name for the frame-scoped subframe bridge.
+    nonisolated static let subframeBridgeName = "subframeRendererBridge"
+
     init() {
         let config = WKWebViewConfiguration()
         let cc = WKUserContentController()
@@ -716,7 +753,39 @@ final class WikiReaderWebView: WKWebView {
         // for the first page load. The store is injected later by the
         // representable (same as the view's own `store` property).
         config.setURLSchemeHandler(blobHandler, forURLScheme: BlobSchemeHandler.scheme)
+        // Register the reader document scheme so the custom-scheme baseURL is
+        // honored: without a registered handler, WebKit silently falls back to
+        // about:blank for loadHTMLString(baseURL:) (proven in hosted probes).
+        config.setURLSchemeHandler(
+            WikiReaderDocumentSchemeHandler.shared, forURLScheme: WikiReaderDocumentOrigin.scheme)
+        // Same for renderer-package assets served to in-page expansion iframes,
+        // through the canonical handler wrapping the frame router (CSP, MIME,
+        // no-sniff, response ordering, and cancellation stay single-sourced).
+        // The handler is created locally because `self` is not available
+        // before `super.init`; it references the same router instance.
+        let packageHandler = RendererPackageSchemeHandler(resourceProvider: rendererPackageRouter)
+        // Every task WebKit starts is visible here, including requests the
+        // router later rejects on parse or identity (the router's own
+        // diagnostic only records parseable URLs).
+        packageHandler.onTaskRegistered = { task in
+            if let url = task.requestURL {
+                DebugLog.reader("package-scheme: task registered \(url.absoluteString)")
+            }
+        }
+        // The frame-scoped subframe bridge handler is registered in
+        // `makeNSView` (WikiReaderRep), where the coordinator exists to
+        // validate frame origins against the frame registry.
+        config.setURLSchemeHandler(
+            packageHandler, forURLScheme: RendererPackageScheme.name)
+        // Allow Safari's Web Inspector to attach to this webview (Develop
+        // menu → simulator/device). Required to see frame console messages,
+        // the bridge postMessage traffic, and package frame DOM state.
+        if DebugInspector.isEnabled {
+            DebugInspector.apply(to: config)
+        }
         super.init(frame: .zero, configuration: config)
+        DebugInspector.apply(to: self)
+        rendererPackageSchemeHandler = packageHandler
         proxy.target = self
         embedProxy.target = self
         attachmentProxy.target = self
@@ -1155,6 +1224,72 @@ final class WikiReaderWebView: WKWebView {
           nested[i].setAttribute('\(WikiLinkMarkdown.TransclusionAttr.path)', childPath);
         }
       };
+      // DOM-embed injection for renderer frames/media (DOM era): builds the
+      // element with DOM APIs from parameters, never from concatenated HTML.
+      // The native side passes only validated values (frame-scoped URL,
+      // accessible title, bounded height); no input bytes or capabilities
+      // cross this boundary. `sandboxAttrs` is a JSON array of strings.
+      // Load/error observers: the native side polls this map after injection
+      // to confirm the frame actually loaded (embed load diagnostics).
+      window.__sdwRendererEmbedLoads = window.__sdwRendererEmbedLoads || {};
+      window.sdwInjectRendererEmbed = function(placeholderID, expansionID, kind, src, title, height, sandboxJSON){
+        var card = document.getElementById(placeholderID);
+        if(!card){ return 'no-card'; }
+        var expansion = card.querySelector('.sdw-renderer-card__expansion');
+        if(!expansion){ return 'no-expansion'; }
+        // Remove only this placeholder's prior surface (scoped collapse).
+        var prior = expansion.querySelector('.sdw-renderer-embed');
+        if(prior){ prior.remove(); }
+        var element;
+        if(kind === 'audio'){
+          element = document.createElement('audio');
+          element.controls = true;
+          element.preload = 'metadata';
+        } else if(kind === 'video'){
+          element = document.createElement('video');
+          element.controls = true;
+          element.preload = 'metadata';
+        } else {
+          element = document.createElement('iframe');
+          if(sandboxJSON){
+            try {
+              var flags = JSON.parse(sandboxJSON);
+              if(flags.length > 0){ element.setAttribute('sandbox', flags.join(' ')); }
+            } catch (_) { return 'bad-sandbox'; }
+          }
+          if(height > 0){
+            element.style.height = height + 'px';
+            element.style.width = '100%';
+          }
+          element.loading = 'lazy';
+        }
+        element.addEventListener('load', function(){
+          window.__sdwRendererEmbedLoads[placeholderID] = 'loaded';
+        });
+        element.addEventListener('error', function(){
+          window.__sdwRendererEmbedLoads[placeholderID] = 'error-event';
+        });
+        element.src = src;
+        element.title = title;
+        element.className = 'sdw-renderer-embed';
+        element.id = expansionID + '-embed';
+        element.setAttribute('aria-label', title);
+        expansion.appendChild(element);
+        window.__sdwRendererEmbedLoads[placeholderID] = 'appended';
+        return 'injected';
+      };
+
+      // Scoped removal: only this placeholder's embed surface.
+      window.sdwRemoveRendererEmbed = function(placeholderID){
+        var card = document.getElementById(placeholderID);
+        if(!card){ return 'no-card'; }
+        var expansion = card.querySelector('.sdw-renderer-card__expansion');
+        if(!expansion){ return 'no-expansion'; }
+        var prior = expansion.querySelector('.sdw-renderer-embed');
+        if(prior){ prior.remove(); return 'removed'; }
+        return 'none';
+      };
+
       function postEmbed(details){
         var nodeId = details.getAttribute('\(WikiLinkMarkdown.TransclusionAttr.node)') || '';
         var state  = details.getAttribute('\(WikiLinkMarkdown.TransclusionAttr.state)') || '';
@@ -1297,6 +1432,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
     let onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)?
     let inlineAttachmentResolver: RendererInlineAttachmentResolver
     let inlineRendererDescriptors: [RendererDescriptor]
+    let rendererPackageInputs: RendererPackageEmbedInputs?
     let findText: String?
     let findVersion: Int
     let findOccurrence: Int
@@ -1312,8 +1448,51 @@ internal struct WikiReaderRep: NSViewRepresentable {
         webView.addURLHandler = addURLHandler
         webView.addBookmarkHandler = addBookmarkHandler
         webView.onRendererActivation = onRendererActivation
+        Self.installRendererPackages(rendererPackageInputs, into: webView)
+        // Frame-scoped subframe bridge: honors only envelopes from admitted
+        // frame token origins, validated through the coordinator's registry.
+        if #available(macOS 11.0, *) {
+            webView.configuration.userContentController.addScriptMessageHandler(
+                RendererContentWorldBroker.ReaderSubframeBridgeHandler { [weak coordinator = context.coordinator] frameInfo, originHost in
+                    guard let coordinator else {
+                        DebugLog.reader("subframe bridge: coordinator deallocated")
+                        return nil
+                    }
+                    guard frameInfo.webView.map(ObjectIdentifier.init) == coordinator.webView.map(ObjectIdentifier.init) else {
+                        DebugLog.reader("subframe bridge: webview mismatch (frameInfo webView \(frameInfo.webView != nil ? "present" : "nil"))")
+                        return nil
+                    }
+                    guard let token = RendererFrameOriginToken.tokenIfValid(originHost) else {
+                        DebugLog.reader("subframe bridge: invalid token alphabet \(originHost)")
+                        return nil
+                    }
+                    guard let session = coordinator.frameBridgeRegistry.authorize(
+                        token: token,
+                        originHost: originHost,
+                        originScheme: RendererPackageScheme.name,
+                        webViewID: frameInfo.webView.map(ObjectIdentifier.init))
+                    else {
+                        let admitted = coordinator.frameBridgeRegistry.session(for: token)
+                        let admittedDescription = admitted.map { session in
+                            "yes(webview match: \(session.expectedWebViewID == frameInfo.webView.map(ObjectIdentifier.init)))"
+                        } ?? "no-route"
+                        DebugLog.reader("subframe bridge: registry rejected token \(originHost) — admitted=\(admittedDescription)")
+                        return nil
+                    }
+                    return session.broker
+                },
+                contentWorld: .page,
+                name: WikiReaderWebView.subframeBridgeName)
+        }
+        // Couple registry teardown to router route + bootstrap revocation so
+        // every close path (collapse, failure, navigation, snapshot change,
+        // dismantle) disposes the whole embed unit atomically.
+        context.coordinator.frameBridgeRegistry.onSessionClosed = { [weak webView] token in
+            webView?.rendererPackageRouter.revoke(token: token)
+        }
         context.coordinator.inlineAttachmentResolver = inlineAttachmentResolver
         context.coordinator.inlineRendererDescriptors = inlineRendererDescriptors
+        context.coordinator.rendererPackageInputs = rendererPackageInputs
         webView.navigationDelegate = context.coordinator
         webView.coordinator = context.coordinator
         context.coordinator.webView = webView
@@ -1337,8 +1516,10 @@ internal struct WikiReaderRep: NSViewRepresentable {
         webView.addURLHandler = addURLHandler
         webView.addBookmarkHandler = addBookmarkHandler
         webView.onRendererActivation = onRendererActivation
+        Self.installRendererPackages(rendererPackageInputs, into: webView)
         context.coordinator.inlineAttachmentResolver = inlineAttachmentResolver
         context.coordinator.inlineRendererDescriptors = inlineRendererDescriptors
+        context.coordinator.rendererPackageInputs = rendererPackageInputs
         context.coordinator.store = store
         context.coordinator.currentSelection = currentSelection
         if context.coordinator.loadedMarkdown != markdown ||
@@ -1364,6 +1545,56 @@ internal struct WikiReaderRep: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
+    /// Replaces the frame router's routes with the host's current validated
+    /// package snapshot. Each admitted renderer reference gets a fresh,
+    /// unguessable frame-origin token; replacing the snapshot revokes every
+    /// prior route (a stale frame's requests then fail closed).
+    @MainActor
+    private static func installRendererPackages(
+        _ inputs: RendererPackageEmbedInputs?,
+        into webView: WikiReaderWebView
+    ) {
+        // Idempotent: SwiftUI calls updateNSView on every render. Rebuilding
+        // the routes on unchanged input would revoke the frame origins that
+        // already-loaded iframes are using, orphaning them mid-session.
+        // Rebuild only when the set of (reference, entryPath) actually changed.
+        let newSignature = inputs.map { snapshot in
+            snapshot.entries
+                .map { "\($0.reference.packageID.rawValue)/\($0.reference.version.rawValue)/\($0.reference.registrationID.rawValue):\($0.entryPath)" }
+                .sorted()
+                .joined(separator: "|")
+        } ?? "unavailable"
+        if newSignature == webView.installedRendererPackageSignature { return }
+        webView.installedRendererPackageSignature = newSignature
+
+        // Snapshot replacement is revocation: tear down all active package
+        // embeds (registry sessions, brokers, routes) before installing the
+        // new snapshot, per fail-closed semantics. The old iframes' requests
+        // then fail closed rather than being served by a stale route.
+        webView.coordinator?.frameBridgeRegistry.closeAll()
+        let router = webView.rendererPackageRouter
+        router.revokeAll()
+        webView.rendererPackageFrameTokens.removeAll()
+        webView.rendererPackageFrameEntryPaths.removeAll()
+        for entry in inputs?.entries ?? [] {
+            // Package assets are hash-pinned and declared in the manifest, so
+            // any declared path may be requested under the frame origin; the
+            // entry document is what the iframe initially loads.
+            guard let entryPath = RendererRelativePath(rawValue: entry.entryPath) else { continue }
+            let token = RendererFrameOriginToken.generate()
+            let reservation = RendererPackageReservation(
+                packageID: entry.reference.packageID,
+                version: entry.reference.version)
+            webView.rendererPackageFrameTokens[entry.reference] = token
+            webView.rendererPackageFrameEntryPaths[entry.reference] = entry.entryPath
+            _ = router.admit(
+                token: token,
+                reservation: reservation,
+                entryPath: entryPath,
+                provider: entry.provider)
+        }
+    }
+
     static func dismantleNSView(_ container: WikiReaderContainerView, coordinator: Coordinator) {
         coordinator.teardown()
         container.teardown()
@@ -1374,8 +1605,13 @@ internal struct WikiReaderRep: NSViewRepresentable {
         weak var webView: WikiReaderWebView?
         weak var attachmentContainer: WikiReaderContainerView?
         private var attachmentCoordinator: RendererAttachmentCoordinator?
+        /// Frame-scoped bridge registry for admitted package iframes (DOM era).
+        /// Admitted on expansion; closed on collapse, removal, reload, and
+        /// dismantle.
+        var frameBridgeRegistry: ReaderRendererFrameBridgeRegistry = ReaderRendererFrameBridgeRegistry()
         var inlineAttachmentResolver: RendererInlineAttachmentResolver = RendererInlineAttachmentResolverFactory.defaultResolver
         var inlineRendererDescriptors: [RendererDescriptor] = []
+        var rendererPackageInputs: RendererPackageEmbedInputs? = nil
         var store: WikiStoreModel?
         var currentSelection: WikiSelection?
         var loadedMarkdown: String?
@@ -1413,7 +1649,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
             transclusionGeneration += 1
             let generation = loadGeneration
             attachmentCoordinator?.closeAll()
-            attachmentContainer?.removeAllAttachments()
+            frameBridgeRegistry.closeAll()
             attachmentCoordinator = RendererAttachmentCoordinator(generation: generation)
             loadedMarkdown = markdown
             loadedDocumentIdentity = documentIdentity
@@ -1537,14 +1773,25 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     ReaderTiming.point("webview.main-hop", ms: Self.elapsedMs(since: convertDone))
                     ReaderTiming.point("webview.convert", ms: convertMs)
                     self.htmlLoadStart = DispatchTime.now()
-                    // Load under a real https origin (not about:blank) so embedded
-                    // players that validate the parent origin work — notably the
-                    // YouTube iframe, which 153-errors under an opaque `null` origin
-                    // (issue #206). All in-document links/images use absolute schemes
-                    // (wiki://, wiki-blob://, http[s]://), so base-relative resolution
-                    // is unaffected. Must stay in lock-step with the `?origin=` param
-                    // stamped onto the YouTube embed URL in ExternalEmbed.
-                    webView.loadHTMLString(html, baseURL: WikiReaderOrigin.url)
+                    // Load through the dedicated custom-scheme handler via a
+                    // real navigation. Hosted probes showed custom-scheme
+                    // SUBRESOURCE loads (renderer-package: iframes, wiki-blob:
+                    // frames) from an HTML-string parent never reach the
+                    // registered scheme handlers, while handler-served
+                    // navigations frame and load subresources normally. The
+                    // handler answers this navigation with the converted body.
+                    // All in-document links/images use absolute schemes (wiki://,
+                    // wiki-blob://, http[s]://), so base-relative resolution
+                    // is unaffected. Provider-hosted media is never embedded
+                    // inline, so no external player validates this origin
+                    // (operator decision of 2026-09-03; see
+                    // `WikiReaderDocumentOrigin`).
+                    WikiReaderDocumentSchemeHandler.setPendingHTML(html)
+                    guard let documentURL = WikiReaderDocumentOrigin.url else {
+                        DebugLog.reader("reader document origin URL construction failed")
+                        return
+                    }
+                    webView.load(URLRequest(url: documentURL))
                 }
             }
         }
@@ -1753,6 +2000,9 @@ internal struct WikiReaderRep: NSViewRepresentable {
             isDismantled = true
             loadGeneration += 1
             transclusionGeneration += 1
+            // DOM-era teardown: close every frame bridge session before the
+            // webview goes away.
+            frameBridgeRegistry.closeAll()
             convertTask?.cancel()
             convertTask = nil
             cancelTransclusionTasks()
@@ -1764,7 +2014,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
             isLoadingBinding = nil
             renderOptions = nil
             attachmentCoordinator?.closeAll()
-            attachmentContainer?.removeAllAttachments()
+            frameBridgeRegistry.closeAll()
             attachmentCoordinator = nil
             attachmentContainer = nil
             webView = nil
@@ -1904,12 +2154,16 @@ internal struct WikiReaderRep: NSViewRepresentable {
         // swiftlint:disable:next implicitly_unwrapped_optional
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
             // WebKit now replaces the DOM for the current load generation.
-            // Invalidate lazy DOM work and release children from the old document.
+            // Invalidate lazy DOM work and release frame sessions from the
+            // old document (the DOM itself is replaced by the navigation).
+            // The coordinator is recreated for the new generation so stale
+            // geometry and activation callbacks from the old document fail
+            // closed; the fresh document's geometry then re-registers rows.
             transclusionGeneration += 1
             cancelTransclusionTasks()
             cancelInlineRetentionTasks()
+            frameBridgeRegistry.closeAll()
             attachmentCoordinator?.closeAll()
-            attachmentContainer?.removeAllAttachments()
             attachmentCoordinator = RendererAttachmentCoordinator(generation: loadGeneration)
         }
 
@@ -1946,41 +2200,56 @@ internal struct WikiReaderRep: NSViewRepresentable {
             guard let attachmentCoordinator, attachmentCoordinator.generation == generation else { return }
             inlineRetentionTasks.removeValue(forKey: placeholderID)?.cancel()
             let role = attachmentCoordinator.role(for: placeholderID)
-            let removedMountedChild = attachmentContainer?.ownsMountedAttachment(named: placeholderID) == true
+            // DOM era: remove the embed surface and its bridge session.
+            frameBridgeRegistry.remove(placeholderID: placeholderID)
+            webView?.evaluateJavaScript(RendererDOMEmbedInjection.removalScript(for: placeholderID))
             if role == .inlineContent {
                 attachmentCoordinator.removeInline(placeholderID)
             } else {
                 attachmentCoordinator.close(placeholderID)
             }
-            if removedMountedChild { attachmentContainer?.removeAttachment(named: placeholderID) }
             if role == .disclosureRow { setRowExpansion(false, for: placeholderID) }
-            retryWaitingInlineContent()
         }
 
+        /// DOM era: inline content mounts inside the document (media elements,
+        /// iframes) — there is no native inline child to project.
         private func mountInlineContentIfEligible(_ placeholderID: RendererAttachmentPlaceholderID) {
             guard let attachmentCoordinator,
-                  let attachmentContainer,
                   attachmentCoordinator.role(for: placeholderID) == .inlineContent,
                   attachmentCoordinator.inlineState(for: placeholderID) != .mounted,
                   let context = webView?.rendererActivationAdmission?.attachmentContext(for: placeholderID),
                   context.embeddingRole == .inlineContent else { return }
             guard attachmentCoordinator.admitInline(placeholderID) == .activate else { return }
 
+            // Built-in source embeds mount their typed DOM plan. Package
+            // inline renderers mount their package iframe (per-embed token),
+            // same as disclosure rows. Native inline renderers have no host
+            // child anymore and fail to the readable fallback.
+            if let webView,
+               let frameToken = webView.rendererPackageFrameTokens[context.rendererReference],
+               let entry = webView.rendererPackageFrameEntryPaths[context.rendererReference],
+               let plan = RendererDOMEmbedPlanner.packagePlan(
+                   context: context,
+                   frameToken: frameToken,
+                   entryPath: entry) {
+                _ = mountDOMEmbed(plan: plan, named: placeholderID, context: context)
+                return
+            }
+            if case .source = context.identity,
+               case .source = context.input,
+               let plan = RendererDOMEmbedPlanner.builtInPlan(context: context) {
+                _ = mountDOMEmbed(plan: plan, named: placeholderID, context: context)
+                return
+            }
             switch inlineAttachmentResolver(
                 context,
                 placeholderID,
                 inlineSessionFailureHandler(for: placeholderID, generation: context.generation)
             ) {
-            case .content(let content):
-                attachmentContainer.activateAttachment(
-                    named: placeholderID,
-                    title: context.displayTitle ?? context.rendererReference.registrationID.rawValue,
-                    content: content,
-                    takesFocus: false,
-                    onExit: nil)
-                if let webView {
-                    updateAttachmentViewport(for: placeholderID, in: webView, container: attachmentContainer)
-                }
+            case .content:
+                // Native inline child mounting was removed with the overlay;
+                // unsupported native inline renderers fail to the fallback.
+                attachmentCoordinator.failInline(placeholderID)
             case .unsupported:
                 attachmentCoordinator.failInline(placeholderID)
             case .failed:
@@ -2005,7 +2274,6 @@ internal struct WikiReaderRep: NSViewRepresentable {
                       attachmentCoordinator.geometry(for: placeholderID)?.visible == false
                 else { return }
                 attachmentCoordinator.releaseInline(placeholderID)
-                self.attachmentContainer?.removeAttachment(named: placeholderID)
                 self.inlineRetentionTasks.removeValue(forKey: placeholderID)
                 self.retryWaitingInlineContent()
             }
@@ -2042,13 +2310,39 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 return .rejected
             }
             if attachmentCoordinator.state(for: placeholderID) == .active {
-                attachmentContainer.focusAttachment(named: placeholderID)
+                // DOM era: the embed is part of the document; focus returns to
+                // the webview (the row's disclosure button is a DOM focus target).
+                webView?.window?.makeFirstResponder(webView)
                 return .activate
             }
             let admission = attachmentCoordinator.activate(placeholderID)
             guard admission == .activate else {
                 if case let .refused(reason) = admission { surfaceRefusal(reason, for: placeholderID) }
                 return admission
+            }
+            // DOM era: an admitted package renderer with a frame route mounts
+            // its iframe in the document flow. Built-in source embeds (PDF,
+            // inert HTML, byte-backed media, byteless fallback) mount their
+            // typed DOM plan. Open in Window remains a separate explicit
+            // action and is never implied by expansion.
+            if case .disclosureRow = context.embeddingRole, let webView {
+                if let frameToken = webView.rendererPackageFrameTokens[context.rendererReference],
+                   let entry = webView.rendererPackageFrameEntryPaths[context.rendererReference],
+                   let plan = RendererDOMEmbedPlanner.packagePlan(
+                       context: context,
+                       frameToken: frameToken,
+                       entryPath: entry) {
+                    clearRowStatus(placeholderID)
+                    return mountDOMEmbed(plan: plan, named: placeholderID, context: context)
+                }
+                // Built-in presentations for source-backed embeds (no
+                // installed package reference).
+                if case .source = context.identity,
+                   case .source = context.input,
+                   let plan = RendererDOMEmbedPlanner.builtInPlan(context: context) {
+                    clearRowStatus(placeholderID)
+                    return mountDOMEmbed(plan: plan, named: placeholderID, context: context)
+                }
             }
             switch inlineAttachmentResolver(
                 context,
@@ -2095,29 +2389,206 @@ internal struct WikiReaderRep: NSViewRepresentable {
             takesFocus: Bool,
             context: RendererEmbedActivationContext
         ) -> RendererAttachmentActivationResult {
-            guard let attachmentCoordinator else { return .rejected }
+            // DOM era: native inline children are removed. The remaining
+            // caller (native inline renderers) fails to the readable fallback.
+            _ = content
+            _ = placeholderID
+            _ = takesFocus
+            _ = context
+            return .rejected
+        }
+
+        /// Clears a placeholder's status/fallback message after a successful
+        /// activation (the row was previously refused or failed).
+        func clearRowStatus(_ placeholderID: RendererAttachmentPlaceholderID) {
+            guard let webView else { return }
+            webView.evaluateJavaScript(
+                "window.__sdwRendererAttachmentState && window.__sdwRendererAttachmentState(\"\(WikiReaderRep.jsString(placeholderID.rawValue))\", true, \"\");")
+        }
+
+        /// DOM-era mounting: injects the embed surface (package iframe, pinned
+        /// blob frame, or media element) into the placeholder's expansion region
+        /// through the named JS function, and admits its frame-scoped bridge
+        /// session. Returns `.activate` on success; the caller collapses on
+        /// any failure so the row keeps a readable fallback.
+        private func mountDOMEmbed(
+            plan: RendererDOMEmbedPlan,
+            named placeholderID: RendererAttachmentPlaceholderID,
+            context: RendererEmbedActivationContext
+        ) -> RendererAttachmentActivationResult {
+            guard let webView, let attachmentCoordinator else { return .rejected }
             guard attachmentCoordinator.state(for: placeholderID) == .active else { return .rejected }
-            // The latest geometry still describes the collapsed row. Expand the
-            // DOM region first and keep the native child hidden until WebKit
-            // reports that region's rectangle.
-            attachmentContainer.updateAttachmentViewport(.zero, for: placeholderID)
-            setRowExpansion(true, for: placeholderID)
-            if let webView {
-                let reservedHeight = attachmentCoordinator.reserveHeight(
-                    RendererAttachmentHostPolicy.preferredReservedHeight(
-                        for: context.rendererReference,
-                        role: context.embeddingRole),
-                    for: placeholderID)
-                let identifier = WikiReaderRep.jsString(placeholderID.rawValue)
-                webView.evaluateJavaScript(
-                    "window.__sdwRendererAttachmentReserve && window.__sdwRendererAttachmentReserve(\"\(identifier)\", \(reservedHeight));")
+
+            // Package frames need an admitted bridge session before their
+            // document can ask for input. Admit first: a budget rejection
+            // below collapses the row without a frame in the DOM.
+            var embedEntryURL: URL?
+            if case .packageFrame(let framePlan) = plan {
+                // Per-embed token: two embeds of the same package must NOT
+                // share an origin, or one embed's bridge session would
+                // authorize the other embed's input (cross-embed leak).
+                let embedToken = RendererFrameOriginToken.generate()
+                guard let webViewObject = webView as NSView? else { return .rejected }
+                // The exact authorized input reader for this context. Source
+                // identities use the admitted-source initializer so the
+                // digest/MIME match against the admission-time snapshot is
+                // enforced (matching the inline resolver's behavior). No
+                // registered store (preview readers) means no bridge: the
+                // row collapses to a readable fallback instead.
+                guard let store else { return .rejected }
+                let inputReader: RendererAuthorizedInputReader
+                do {
+                    if case .source(let admittedSource) = context.identity {
+                        inputReader = try RendererAuthorizedInputReader(
+                            store: store.internalStore,
+                            authorizedInput: context.input,
+                            admittedSource: admittedSource)
+                    } else {
+                        inputReader = RendererAuthorizedInputReader(
+                            store: store.internalStore,
+                            authorizedInput: context.input)
+                    }
+                } catch {
+                    DebugLog.reader("embed[\(placeholderID.rawValue)]: input admission failed \(error)")
+                    return .rejected
+                }
+                // Admitted asset reader for this descriptor, if the package
+                // declares assets (e.g., image references resolved through
+                // asset.read).
+                let assetReader = rendererPackageInputs?.entries.first(
+                    where: { $0.reference == context.rendererReference })?.assetReader
+                var originComponents = URLComponents()
+                originComponents.scheme = RendererPackageScheme.name
+                originComponents.host = embedToken.rawValue
+                guard let expectedOrigin = originComponents.url else {
+                    // A scheme+host component pair always yields a URL; a nil
+                    // here would mean an invalid token slipped through.
+                    DebugLog.reader("frame origin URL construction failed for \(placeholderID.rawValue)")
+                    return .rejected
+                }
+                let broker = RendererContentWorldBroker(
+                    sessionID: .init(rawValue: UUID()),
+                    capability: context.capability,
+                    inputReader: inputReader,
+                    assetReader: assetReader,
+                    expectedOrigin: expectedOrigin)
+                broker.bind(to: webView)
+                // Expose the authorized input selector inside THIS frame only.
+                // WKUserScripts added after main-frame load do not run in
+                // subframes, so the router serves the entry document with a
+                // frame-scoped bootstrap inlined at document-start (same
+                // origin, host-gated to the token). The reader webview's
+                // subframe bridge handler receives the envelopes.
+                let bootstrap = RendererContentWorldBroker.frameInputBootstrapJS(
+                    input: context.input,
+                    expectedOriginHost: embedToken.rawValue,
+                    messageHandlerName: WikiReaderWebView.subframeBridgeName)
+                // Admit a fresh route for THIS embed under its own token, so
+                // the frame's asset and entry requests resolve through the
+                // router, and inline the bootstrap into its entry document.
+                // The per-embed route serves the entry document and the
+                // bootstrap; the provider is the reference's validated one
+                // from install time (fail-closed if it was revoked).
+                guard let referenceProvider = webView.rendererPackageRouter.provider(
+                    for: framePlan.rendererReference) else {
+                    DebugLog.reader("embed[\(placeholderID.rawValue)]: package provider revoked before expansion")
+                    return .rejected
+                }
+                // The entry path comes from the plan's frame-scoped URL,
+                // parsed with the token-host parser (the canonical parser
+                // rejects token hosts). A parse failure means the plan was
+                // built from a malformed URL; reject rather than guess.
+                // swiftlint:disable:next silent_try_optional
+                guard let frameEntry = try? RendererFramePackageURL.parse(framePlan.entryURL) else {
+                    DebugLog.reader("embed[\(placeholderID.rawValue)]: entry URL parse failed for \(framePlan.entryURL)")
+                    return .rejected
+                }
+                // Admit the per-embed route and use the URL it returns as the
+                // iframe src — the plan's URL carries the stale pre-installed
+                // token, not this embed's fresh one.
+                embedEntryURL = webView.rendererPackageRouter.admit(
+                    token: embedToken,
+                    reservation: RendererPackageReservation(
+                        packageID: framePlan.rendererReference.packageID,
+                        version: framePlan.rendererReference.version),
+                    entryPath: frameEntry.request.path,
+                    provider: referenceProvider,
+                    inputBootstrapHTML: bootstrap)
+                let admitted = frameBridgeRegistry.admit(
+                    placeholderID: placeholderID,
+                    frameToken: embedToken,
+                    rendererReference: context.rendererReference,
+                    generation: context.generation,
+                    broker: broker,
+                    expectedWebViewID: ObjectIdentifier(webViewObject))
+                guard admitted else {
+                    // Rollback: registry refusal means the session was never
+                    // populated, so token(for:) would return nil. Revoke the
+                    // route and close the broker directly.
+                    webView.rendererPackageRouter.revoke(token: embedToken)
+                    broker.close()
+                    attachmentCoordinator.refuse(placeholderID, reason: .resourcePressure)
+                    surfaceRefusal(.resourcePressure, for: placeholderID)
+                    return .refused(.resourcePressure)
+                }
             }
-            attachmentContainer.activateAttachment(
-                named: placeholderID,
-                title: context.displayTitle ?? context.rendererReference.registrationID.rawValue,
-                content: content,
-                takesFocus: takesFocus,
-                onExit: { [weak self] in self?.collapseAttachment(placeholderID) })
+
+            let expansionID = "\(placeholderID.rawValue)-expansion"
+            // For package frames, the iframe src must be THIS embed's
+            // per-embed URL (the plan's URL carries the stale pre-installed
+            // token from install time).
+            let effectivePlan: RendererDOMEmbedPlan
+            if case .packageFrame(var framePlan) = plan {
+                framePlan.entryURL = embedEntryURL ?? framePlan.entryURL
+                effectivePlan = .packageFrame(framePlan)
+            } else {
+                effectivePlan = plan
+            }
+            guard let script = RendererDOMEmbedInjection.injectionScript(
+                plan: effectivePlan,
+                placeholderID: placeholderID,
+                expansionID: expansionID)
+            else {
+                // Rollback: no surface will be created, so dispose the whole
+                // unit (broker, registry session, router route + bootstrap).
+                teardownDOMEmbed(placeholderID)
+                // Readable-fallback plans render status text, not a surface.
+                if case .readableFallback(let fallback) = plan {
+                    DebugLog.reader("embed[\(placeholderID.rawValue)]: readable fallback (\(fallback.explanation))")
+                    setRowExpansion(true, for: placeholderID, status: fallback.explanation)
+                    return .activate
+                }
+                DebugLog.reader("embed[\(placeholderID.rawValue)]: no injection script for \(plan)")
+                return .rejected
+            }
+            webView.evaluateJavaScript(script) { [weak self] result, error in
+                guard let self else { return }
+                if let error {
+                    DebugLog.reader("embed[\(placeholderID.rawValue)]: injection JS error \(error.localizedDescription)")
+                    // Rollback: dispose the whole unit on injection failure.
+                    self.teardownDOMEmbed(placeholderID)
+                    return
+                }
+                // The acknowledgement is a plain String in the completion
+                // result; compare the typed value against the shared constant
+                // (description formatting is not a reliable comparison).
+                let acknowledgement = result as? String
+                DebugLog.reader("embed[\(placeholderID.rawValue)]: injection result \(acknowledgement ?? "nil")")
+                // Only a positive acknowledgement counts as mounted. Failure
+                // strings (no-card, no-expansion, bad-sandbox, nil) mean no
+                // surface was created — roll back the whole unit.
+                guard acknowledgement == RendererDOMEmbedInjection.injectionAcknowledgement else {
+                    DebugLog.reader("embed[\(placeholderID.rawValue)]: injection not acknowledged; rolling back")
+                    self.teardownDOMEmbed(placeholderID)
+                    return
+                }
+                // The registry load timeout stays armed here: an injection
+                // acknowledgement only proves the element was appended, not
+                // that the frame's document loaded. frameDidLoad is driven by
+                // the real load event (pushed through the subframe bridge), so
+                // a hung frame is released by the timeout instead of leaking
+                // its session and frame slot.
+            }
             return .activate
         }
 
@@ -2135,7 +2606,11 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 guard state != .closed else { return }
                 DebugLog.reader("inline renderer session failed for \(placeholderID.rawValue): \(failure.kind)")
                 if role == .inlineContent {
-                    self.attachmentContainer?.removeAttachment(named: placeholderID)
+                    // DOM era: the embed surface lives in the document; a
+                    // failed session closes its bridge and the row keeps its
+                    // readable fallback.
+                    self.frameBridgeRegistry.close(placeholderID: placeholderID)
+                    webView?.evaluateJavaScript(RendererDOMEmbedInjection.removalScript(for: placeholderID))
                     if failure.kind == .concurrencyLimitReached {
                         attachmentCoordinator.waitForInlineResources(placeholderID)
                     } else {
@@ -2146,7 +2621,8 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 guard state != .unresolved else { return }
                 if failure.kind == .concurrencyLimitReached {
                     attachmentCoordinator.refuse(placeholderID, reason: .resourcePressure)
-                    self.attachmentContainer?.removeAttachment(named: placeholderID)
+                    self.frameBridgeRegistry.close(placeholderID: placeholderID)
+                    webView?.evaluateJavaScript(RendererDOMEmbedInjection.removalScript(for: placeholderID))
                     self.surfaceRefusal(.resourcePressure, for: placeholderID)
                     return
                 }
@@ -2154,20 +2630,13 @@ internal struct WikiReaderRep: NSViewRepresentable {
             }
         }
 
+        // DOM era: viewport projection was overlay machinery; embedded content
+        // moves and scales with the page because it is part of the page.
         private func updateAttachmentViewport(
             for placeholderID: RendererAttachmentPlaceholderID,
             in webView: WikiReaderWebView,
             container: WikiReaderContainerView
-        ) {
-            guard let geometry = attachmentCoordinator?.geometry(for: placeholderID) else { return }
-            let rect = RendererAttachmentGeometry.overlayRect(
-                cssRect: geometry.cssRect,
-                pageZoom: webView.pageZoom,
-                readerBounds: webView.bounds)
-            container.updateAttachmentViewport(
-                geometry.visible ? rect : .zero,
-                for: placeholderID)
-        }
+        ) {}
 
         func applyReaderZoom(
             _ readerZoom: Double,
@@ -2178,9 +2647,8 @@ internal struct WikiReaderRep: NSViewRepresentable {
             guard appliedReaderZoom != zoom else { return }
             appliedReaderZoom = zoom
             webView.pageZoom = zoom
-            for placeholderID in attachmentCoordinator?.placeholderIDs ?? [] {
-                updateAttachmentViewport(for: placeholderID, in: webView, container: container)
-            }
+            // Reader pageZoom is the single outer zoom; package canvas zoom
+            // stays renderer-owned. Embedded DOM content scales with the page.
             webView.evaluateJavaScript("window.__sdwRendererAttachmentReport && window.__sdwRendererAttachmentReport(\(loadGeneration));")
         }
 
@@ -2214,20 +2682,35 @@ internal struct WikiReaderRep: NSViewRepresentable {
 
         func collapseAttachment(_ placeholderID: RendererAttachmentPlaceholderID) {
             guard let attachmentCoordinator,
-                  attachmentCoordinator.state(for: placeholderID) == .active,
-                  let attachmentContainer,
-                  attachmentContainer.ownsMountedAttachment(named: placeholderID)
+                  attachmentCoordinator.state(for: placeholderID) == .active
             else { return }
             attachmentCoordinator.collapse(placeholderID)
-            attachmentContainer.removeAttachment(named: placeholderID)
+            // DOM-era collapse: remove the embed surface and its bridge
+            // session, scoped to this row.
+            teardownDOMEmbed(placeholderID)
             setRowExpansion(false, for: placeholderID)
+        }
+
+        /// Scoped DOM-embed teardown: removes the embed surface from this
+        /// placeholder's expansion region, closes its bridge session, and
+        /// revokes its router route + bootstrap. Other rows are untouched.
+        func teardownDOMEmbed(_ placeholderID: RendererAttachmentPlaceholderID) {
+            // Capture the token before the registry drops it.
+            let token = frameBridgeRegistry.token(for: placeholderID)
+            frameBridgeRegistry.close(placeholderID: placeholderID)
+            guard let webView else { return }
+            webView.evaluateJavaScript(RendererDOMEmbedInjection.removalScript(for: placeholderID))
+            // Revoke the per-embed route + bootstrap so closed embeds lose
+            // both halves of their capability (advisor finding 2/3).
+            if let token {
+                webView.rendererPackageRouter.revoke(token: token)
+            }
         }
 
         func failAttachment(_ placeholderID: RendererAttachmentPlaceholderID) {
             attachmentCoordinator?.fail(placeholderID)
             setRowExpansion(false, for: placeholderID)
-            guard attachmentContainer?.ownsMountedAttachment(named: placeholderID) == true else { return }
-            attachmentContainer?.removeAttachment(named: placeholderID)
+            teardownDOMEmbed(placeholderID)
         }
 
         func webView(
@@ -2258,19 +2741,21 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     decisionHandler(.cancel)
                     return
                 }
-                // A fragment-only link resolves against the synthetic reader origin.
-                // Allow it so WKWebView scrolls to the target within this document.
-                if WikiReaderOrigin.isSameDocumentFragment(url) {
+                // A fragment-only link resolves against the reader document
+                // origin. Allow it so WKWebView scrolls to the target within
+                // this document.
+                if WikiReaderDocumentOrigin.isSameDocumentFragment(url) {
                     decisionHandler(.allow)
                     return
                 }
                 // Relative links in source markdown (e.g. `[Back to README](../README.md)`)
                 // are not `[[wikilinks]]`, so `RelativeLinkRewriter` leaves them as raw
-                // `<a href>`. WKWebView resolves them against the synthetic reader origin
-                // (`WikiReaderOrigin` → `https://reader.wikifs.invalid`). Try to navigate to
-                // a matching source by filename/display-name; if none found, cancel silently
-                // — never open the bogus `reader.wikifs.invalid` URL in the system browser.
-                if url.host == WikiReaderOrigin.url?.host {
+                // `<a href>`. WKWebView resolves them against the reader document origin
+                // (`WikiReaderDocumentOrigin` → `wiki-reader://reader/document.html`). Try to
+                // navigate to a matching source by filename/display-name; if none found, cancel
+                // silently — never open the bogus reader URL in the system browser.
+                if url.scheme == WikiReaderDocumentOrigin.scheme,
+                   url.host == WikiReaderDocumentOrigin.host {
                     let targetName = url.lastPathComponent
                     let openInNewTab = navigationAction.modifierFlags.contains(.command)
                     if let store,

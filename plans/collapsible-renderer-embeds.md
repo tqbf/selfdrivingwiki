@@ -4,6 +4,14 @@
 > content to disclosure rows. Syntax owns the embedding role. Approved rich
 > fences use rows. Images and media stay inline. See
 > [`typed-markdown-embed-pipeline.md`](typed-markdown-embed-pipeline.md).
+>
+> **Superseded 2026-09-03:** reader embeds now live inside the reader
+> document's DOM. The keyed native children, sibling overlay, geometry
+> messages, viewport projection, and zoom reprojection described in this
+> document are removed. See
+> [`dynamic-inline-renderer-attachments.md`](dynamic-inline-renderer-attachments.md)
+> §"DOM embeds" for the active design. This document remains as historical
+> context for the disclosure-row UX and its budgets.
 
 Change interactive Markdown embeds into compact disclosure rows. Each row shows a title, places **Open in Window** at the trailing edge, expands an interactive renderer inline, and scales with reader page zoom.
 

@@ -23,6 +23,39 @@ typealias RendererInlineAttachmentResolver = @MainActor (
     @escaping @MainActor (RendererSessionFailure) -> Void
 ) -> RendererInlineAttachmentResolution
 
+/// Per-descriptor validated package resources for in-page expansion iframes.
+/// The reader host builds this from `InstalledRendererFactory.Inputs`; the
+/// reader webview's frame router routes only these package identities, each
+/// under its own unguessable frame origin.
+@MainActor
+struct RendererPackageEmbedInputs {
+    struct Entry {
+        let reference: RendererReference
+        /// The package entry document's path within the package manifest.
+        let entryPath: String
+        let provider: any RendererPackageResourceProviding
+        /// Admitted asset reader for the package session (nil when the
+        /// descriptor declares no assets).
+        let assetReader: RendererAuthorizedAssetReader?
+    }
+
+    let entries: [Entry]
+
+    static let unavailable = Self(entries: [])
+
+    /// Flattens the factory inputs' per-descriptor provider lookup.
+    static func make(from inputs: InstalledRendererFactory.Inputs) -> Self {
+        Self(entries: inputs.enabledDescriptors.compactMap { descriptor in
+            guard let resolved = inputs.resourceProvider(for: descriptor) else { return nil }
+            return Entry(
+                reference: descriptor.reference,
+                entryPath: resolved.entryPath,
+                provider: resolved.provider,
+                assetReader: resolved.assetReader)
+        })
+    }
+}
+
 /// The default reader composition. It is intentionally outside
 /// `WikiReaderRep.Coordinator`: adding a renderer never requires a format
 /// switch in reader lifecycle code.

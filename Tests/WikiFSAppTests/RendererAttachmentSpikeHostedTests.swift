@@ -624,7 +624,7 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
         currentSnapshot = nil
         currentRevision = 0
         webView.pageZoom = Double(ZoomScale.defaultScale)
-        webView.loadHTMLString(Self.html(for: markdown, documentIdentity: documentIdentity), baseURL: WikiReaderOrigin.url)
+        webView.loadHTMLString(Self.html(for: markdown, documentIdentity: documentIdentity), baseURL: WikiReaderDocumentOrigin.url)
         try await Self.waitFor(description: "reader web view load") { [weak self] in
             self?.didFinishLoad == true
         }
@@ -637,7 +637,7 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
         currentGeometry = nil
         currentSnapshot = nil
         currentRevision = 0
-        webView.loadHTMLString(Self.html(for: markdown, documentIdentity: documentIdentity), baseURL: WikiReaderOrigin.url)
+        webView.loadHTMLString(Self.html(for: markdown, documentIdentity: documentIdentity), baseURL: WikiReaderDocumentOrigin.url)
         try await Self.waitFor(description: "reader web view reload") { [weak self] in
             self?.didFinishLoad == true
         }

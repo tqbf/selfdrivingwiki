@@ -71,6 +71,17 @@ public final class RendererAuthorizedInputReader {
     public func read(_ requestedInput: RendererBridgeInput) throws -> RendererBridgeInputPayload {
         try validateOpen()
         guard requestedInput == authorizedInput else {
+            // Encoding for the mismatch log cannot fail for these Codable
+            // values; a failure would indicate a contract bug worth surfacing
+            // via the mismatch message itself.
+            func encodeForLog(_ value: RendererBridgeInput) -> String {
+                do {
+                    return String(data: try JSONEncoder().encode(value), encoding: .utf8) ?? "?"
+                } catch {
+                    return "encode-error: \(error)"
+                }
+            }
+            DebugLog.reader("reader input mismatch: requested[\(encodeForLog(requestedInput).prefix(160))] authorized[\(encodeForLog(authorizedInput).prefix(160))]")
             throw ReaderError.unauthorizedInput
         }
         try validateInput(

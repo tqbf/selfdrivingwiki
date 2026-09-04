@@ -116,8 +116,9 @@ struct WikiAppWebViewConfigurationFactory {
         let contentWorld = WKContentWorld.world(
             name: "\(WikiAppWebViewPolicy.isolatedContentWorldNamePrefix).\(sessionID.rawValue.uuidString)"
         )
-        let schemeHandler = RendererPackageSchemeHandler(resourceProvider: resourceProvider)
         let configuration = WKWebViewConfiguration()
+        DebugInspector.apply(to: configuration)
+        let schemeHandler = RendererPackageSchemeHandler(resourceProvider: resourceProvider)
         configuration.websiteDataStore = dataStore
         configuration.userContentController = userContentController
         configuration.setURLSchemeHandler(schemeHandler, forURLScheme: RendererPackageScheme.name)
@@ -289,6 +290,7 @@ final class WikiAppWebViewSession: NSObject, WKNavigationDelegate, WKUIDelegate 
             self.externalLinkHandler = externalLinkHandler
         }
         let webView = WKWebView(frame: .zero, configuration: configuration.webViewConfiguration)
+        DebugInspector.apply(to: webView)
         webView.navigationDelegate = self
         webView.uiDelegate = self
         bridge?.bind(to: webView)

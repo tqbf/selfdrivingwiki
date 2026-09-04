@@ -1408,6 +1408,7 @@ struct SourceDetailView: View {
                                 installedRendererFactory: installedRendererFactory,
                                 installedRendererFactoryInputs: routedInstalledRendererFactoryInputs),
                             inlineRendererDescriptors: installedRendererFactoryInputs.enabledDescriptors,
+                            rendererPackageInputs: RendererPackageEmbedInputs.make(from: installedRendererFactoryInputs),
                             findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
                 .zoomShortcuts($readerZoom)
                 .zoomScroll($readerZoom)
@@ -1426,6 +1427,7 @@ struct SourceDetailView: View {
                                 installedRendererFactory: installedRendererFactory,
                                 installedRendererFactoryInputs: routedInstalledRendererFactoryInputs),
                             inlineRendererDescriptors: installedRendererFactoryInputs.enabledDescriptors,
+                            rendererPackageInputs: RendererPackageEmbedInputs.make(from: installedRendererFactoryInputs),
                             findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
                 .zoomShortcuts($readerZoom)
                 .zoomScroll($readerZoom)

@@ -107,5 +107,69 @@ struct BlobSchemeHandlerTests {
         let http = task.receivedResponse as? HTTPURLResponse
         #expect(http?.statusCode == 404)
     }
+
+    // MARK: - Exact-version route (renderer admission, AC.6)
+
+    @Test func exactVersionRouteServesPinnedBytesAndMIME() throws {
+        let store = try tempStore()
+        let original = Data("version-one-bytes".utf8)
+        let source = try store.addSource(filename: "doc.txt", data: original, mimeType: "text/plain")
+        let model = WikiStoreModel(store: store)
+
+        let v1 = try #require(try store.activeContentVersion(sourceID: source.id))
+        let handler = BlobSchemeHandler(store: model)
+        let url = URL(string: "wiki-blob://source-version/\(v1.id.rawValue)")!
+        let task = MockSchemeTask(url: url)
+        handler.serve(task)
+
+        let http = task.receivedResponse as? HTTPURLResponse
+        #expect(task.didFinishCalled)
+        #expect(http?.statusCode == 200)
+        #expect(http?.value(forHTTPHeaderField: "Content-Type") == "text/plain")
+        #expect(task.receivedData == original)
+    }
+
+    @Test func exactVersionRouteNeverSubstitutesHEAD() throws {
+        let store = try tempStore()
+        let original = Data("version-one-bytes".utf8)
+        let source = try store.addSource(filename: "doc.txt", data: original, mimeType: "text/plain")
+        let model = WikiStoreModel(store: store)
+
+        let v1 = try #require(try store.activeContentVersion(sourceID: source.id))
+
+        // HEAD moves forward: a new content version becomes active.
+        let replacement = Data("version-two-bytes".utf8)
+        _ = try store.appendContentVersion(sourceID: source.id, data: replacement, mimeType: "text/plain")
+        let v2 = try #require(try store.activeContentVersion(sourceID: source.id))
+        #expect(v1.id != v2.id)
+
+        // The compatibility HEAD route serves the new bytes…
+        let headTask = MockSchemeTask(url: URL(string: "wiki-blob://source/\(source.id.rawValue)")!)
+        BlobSchemeHandler(store: model).serve(headTask)
+        #expect(headTask.receivedData == replacement)
+
+        // …but the exact-version route still serves v1's pinned bytes and MIME.
+        let pinnedTask = MockSchemeTask(url: URL(string: "wiki-blob://source-version/\(v1.id.rawValue)")!)
+        BlobSchemeHandler(store: model).serve(pinnedTask)
+        let pinnedHTTP = pinnedTask.receivedResponse as? HTTPURLResponse
+        #expect(pinnedTask.didFinishCalled)
+        #expect(pinnedHTTP?.statusCode == 200)
+        #expect(pinnedTask.receivedData == original)
+        #expect(pinnedHTTP?.value(forHTTPHeaderField: "Content-Type") == "text/plain")
+    }
+
+    @Test func exactVersionRouteReturns404ForUnknownVersion() throws {
+        let store = try tempStore()
+        let model = WikiStoreModel(store: store)
+        let handler = BlobSchemeHandler(store: model)
+        let task = MockSchemeTask(url: URL(string: "wiki-blob://source-version/01HNOSUCHVERSION000000")!)
+
+        handler.serve(task)
+
+        let http = task.receivedResponse as? HTTPURLResponse
+        #expect(task.didFinishCalled)
+        #expect(http?.statusCode == 404)
+        #expect(task.receivedData.isEmpty)
+    }
 }
 #endif

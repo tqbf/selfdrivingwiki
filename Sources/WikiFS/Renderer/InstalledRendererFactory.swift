@@ -222,6 +222,19 @@ struct InstalledRendererFactory {
         ) -> InstalledRendererSessionConfiguration? {
             resolveConfiguration(descriptor, entryPoint)
         }
+
+        /// The validated package resource provider for one descriptor, used to
+        /// serve `renderer-package:` assets to an in-page iframe on the reader
+        /// webview (no separate WKWebView session). Nil when the descriptor has
+        /// no web-package entry point or the package snapshot is unavailable.
+        func resourceProvider(
+            for descriptor: RendererDescriptor
+        ) -> (entryPath: String, provider: any RendererPackageResourceProviding, assetReader: RendererAuthorizedAssetReader?)? {
+            guard case let .webPackage(entryPoint) = descriptor.implementation,
+                  let configuration = resolveConfiguration(descriptor, entryPoint)
+            else { return nil }
+            return (entryPoint.path.rawValue, configuration.resourceProvider, configuration.assetReader)
+        }
     }
 }
 #endif
