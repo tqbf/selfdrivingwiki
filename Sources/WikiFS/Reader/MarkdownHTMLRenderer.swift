@@ -760,7 +760,6 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
         let titleText = escape(title)
         let titleAttribute = escapeAttribute(title)
         let accessibilityLabelAttribute = escapeAttribute(accessibilityLabel)
-        let summary = escape(plan.semanticContent)
         let fallbackNoticeHTML: String = {
             guard let reason = plan.fallbackReason else { return "" }
             return #"<p class="sdw-renderer-card__fallback">\#(escape(Self.fallbackNotice(for: reason)))</p>"#
@@ -833,7 +832,6 @@ struct MarkdownHTMLRenderer: MarkupVisitor {
             \(actionHTML)
           </div>
           <div class="sdw-renderer-card__expansion" id="\(expansionID)" role="region" aria-label="\(accessibilityLabelAttribute) details"\(expansionVisibilityAttributes)>
-            <p class="sdw-renderer-card__summary">\(summary)</p>
             \(fallbackNoticeHTML)
             \(readableFallbackHTML ?? "")
           </div>
