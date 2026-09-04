@@ -2223,9 +2223,20 @@ internal struct WikiReaderRep: NSViewRepresentable {
                   context.embeddingRole == .inlineContent else { return }
             guard attachmentCoordinator.admitInline(placeholderID) == .activate else { return }
 
-            // Built-in source embeds mount their typed DOM plan; native
-            // inline renderers have no host child anymore and fail to the
-            // readable fallback.
+            // Built-in source embeds mount their typed DOM plan. Package
+            // inline renderers mount their package iframe (per-embed token),
+            // same as disclosure rows. Native inline renderers have no host
+            // child anymore and fail to the readable fallback.
+            if let webView,
+               let frameToken = webView.rendererPackageFrameTokens[context.rendererReference],
+               let entry = webView.rendererPackageFrameEntryPaths[context.rendererReference],
+               let plan = RendererDOMEmbedPlanner.packagePlan(
+                   context: context,
+                   frameToken: frameToken,
+                   entryPath: entry) {
+                _ = mountDOMEmbed(plan: plan, named: placeholderID, context: context)
+                return
+            }
             if case .source = context.identity,
                case .source = context.input,
                let plan = RendererDOMEmbedPlanner.builtInPlan(context: context) {
