@@ -36,12 +36,14 @@ final class WindowListTracker {
         guard !didStart else { return }
         didStart = true
         let center = NotificationCenter.default
-        // Recompute whenever a window appears, focuses, hides, or closes —
-        // the open-windows list must stay in sync without a manual refresh.
+        // Recompute when a window appears, focuses, or closes. Do not observe
+        // occlusion changes here: AppKit can emit those while the menu bar is
+        // tracking (for example when the pointer enters View), and publishing
+        // an @Observable change then makes SwiftUI rebuild the command tree
+        // under the pointer, dismissing the menu (#1201).
         let names: [Notification.Name] = [
             NSWindow.didBecomeKeyNotification,
             NSWindow.didBecomeMainNotification,
-            NSWindow.didChangeOcclusionStateNotification,
             NSWindow.willCloseNotification,
             NSApplication.didBecomeActiveNotification
         ]
