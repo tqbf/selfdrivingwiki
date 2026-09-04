@@ -97,7 +97,7 @@ struct RendererFrameResourceProvenanceTests {
             packageID: RendererPackageID(rawValue: "org.example.probe")!,
             version: RendererPackageVersion(rawValue: "1.0.0")!,
             path: RendererRelativePath(rawValue: RendererFrameHostNamespace.inputBootstrapPath)!)
-        #expect(throws: RendererPackageResourceError.packageIdentityMismatch) {
+        #expect(throws: RendererPackageResourceError.undeclaredAsset) {
             _ = try router2.resource(for: strangerURL)
         }
     }

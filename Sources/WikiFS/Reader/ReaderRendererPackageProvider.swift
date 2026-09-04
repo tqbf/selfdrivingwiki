@@ -203,17 +203,14 @@ final class ReaderRendererPackageRouter: RendererPackageResourceProviding, @unch
     private var routes: [RendererFrameOriginToken: ReaderFrameRoute] = [:]
 
     /// The host-composed frame resource layer. Frame overlays (input
-    /// bootstrap) live here, never in the route table; the overlay map is
-    /// guarded by the router's own lock, which the composer borrows through
-    /// the router's synchronized accessors.
+    /// bootstrap) live here, never in the route table. The composer keeps
+    /// its own private lock: the router's accessors hold the route-table
+    /// lock when they delegate to the composer, and NSLock is not
+    /// recursive, so sharing one lock across the two maps would deadlock.
     // swiftlint:disable:next unchecked_sendable
     private final class Composer: @unchecked Sendable {
-        private let lock: NSLock
+        private let lock = NSLock()
         private var overlays: [RendererFrameOriginToken: [String: RendererFrameResource]] = [:]
-
-        init(lock: NSLock) {
-            self.lock = lock
-        }
 
         func setInputBootstrap(token: RendererFrameOriginToken, javaScript: String) {
             guard let mime = RendererMIMEType(rawValue: "text/javascript") else { return }
@@ -249,8 +246,8 @@ final class ReaderRendererPackageRouter: RendererPackageResourceProviding, @unch
     /// the entry document is served. Set by the reader at admission.
     private let bootstrapLookup: @Sendable (RendererFrameOriginToken) -> String?
 
-    /// The host-composed frame resource layer, sharing the route table lock.
-    private let composer: Composer
+    /// The host-composed frame resource layer, with its own private lock.
+    private let composer = Composer()
 
     /// Diagnostic record of every URL handed to `resource(for:)`. Read only
     /// from tests; production code never touches it.
@@ -258,7 +255,6 @@ final class ReaderRendererPackageRouter: RendererPackageResourceProviding, @unch
 
     init(bootstrapLookup: @escaping @Sendable (RendererFrameOriginToken) -> String? = { _ in nil }) {
         self.bootstrapLookup = bootstrapLookup
-        self.composer = Composer(lock: lock)
     }
 
     /// Frame-scoped input bootstrap **JS** per admitted token, stored in the
