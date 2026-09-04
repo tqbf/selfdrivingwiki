@@ -2404,9 +2404,15 @@ internal struct WikiReaderRep: NSViewRepresentable {
             // row collapses to a readable fallback instead. The exact
             // input reader and session-private asset reader are built by
             // the per-session preparer, generation-checked before mount.
-            guard let store else { return .rejected }
+            guard let store else {
+                domRendererCoordinator?.remove(placeholderID)
+                return .rejected
+            }
             guard let packageEntry = rendererPackageInputs?.entries.first(
-                where: { $0.reference == context.rendererReference }) else { return .rejected }
+                where: { $0.reference == context.rendererReference }) else {
+                domRendererCoordinator?.remove(placeholderID)
+                return .rejected
+            }
                 let authorityRequest = RendererSessionPreparationRequest(
                     descriptor: packageEntry.descriptor,
                     configuration: packageEntry.configuration,
@@ -2430,9 +2436,12 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     guard let self else { return }
                     do {
                         let authority = try await RendererSessionPreparer.prepare(authorityRequest)
+                        // beginLoading moved this unit to .loading; require
+                        // that state so a collapsed/removed placeholder never
+                        // mounts a late session.
                         guard Task.isCancelled == false,
                               self.loadGeneration == context.generation,
-                              self.domRendererCoordinator?.lifecycle(for: placeholderID).canExpand == true
+                              self.domRendererCoordinator?.lifecycle(for: placeholderID) == .loading
                         else {
                             authority.close()
                             return
@@ -2444,6 +2453,9 @@ internal struct WikiReaderRep: NSViewRepresentable {
                             context: context)
                     } catch {
                         DebugLog.reader("embed[\(placeholderID.rawValue)]: session preparation failed \(error)")
+                        // Preparation failed: release the loading unit so the
+                        // row returns to Source fallback and can retry.
+                        self.failAttachment(placeholderID)
                     }
                 }
                 // The caller keeps the row loading; the preparation completion
@@ -2520,7 +2532,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 return
             }
             guard case .packageFrame(let framePlan) = plan,
-                  lifecycle.lifecycle(for: placeholderID).canExpand
+                  lifecycle.lifecycle(for: placeholderID) == .loading
             else {
                 authority.close()
                 return
@@ -2588,7 +2600,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 // Revoke the route and dispose the broker directly.
                 webView.rendererPackageRouter.revoke(token: embedToken)
                 authority.close()
-                lifecycle.refuse(placeholderID, reason: .resourcePressure)
+                failAttachment(placeholderID)
                 surfaceRefusal(.resourcePressure, for: placeholderID)
                 return
             }
