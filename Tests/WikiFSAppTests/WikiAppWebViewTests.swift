@@ -419,8 +419,11 @@ struct WikiAppWebViewTests {
             timeout: .seconds(5)
         )
 
-        let attachment = try await waitForNativeRendererAttachment(in: hosting.view, timeout: .seconds(10))
-        #expect(attachment.isHidden == false)
+        let expandedSurface = try await waitForPositiveJavaScriptString(
+            "document.querySelector('.sdw-renderer-card__expansion iframe.sdw-renderer-embed') ? 'expanded' : ''",
+            in: webView,
+            timeout: .seconds(10))
+        #expect(expandedSurface == "expanded")
         #expect(window.sheets.count == sheetCountBeforePresentation)
 
         hosting.rootView = AnyView(EmptyView())
@@ -550,24 +553,6 @@ private func waitForPositiveJavaScriptString(
         try await Task.sleep(for: .milliseconds(25))
     }
     throw WikiDetailHostedRouteError.timeout("wiki detail JavaScript value")
-}
-
-@MainActor
-private func waitForNativeRendererAttachment(
-    in view: NSView,
-    timeout: Duration = .seconds(15)
-) async throws -> NSView {
-    let deadline = ContinuousClock.now + timeout
-    while ContinuousClock.now < deadline {
-        if let attachment = findView(in: view, where: {
-            $0.accessibilityIdentifier().hasPrefix("renderer-attachment-")
-        }) {
-            return attachment
-        }
-        try Task.checkCancellation()
-        try await Task.sleep(for: .milliseconds(25))
-    }
-    throw WikiDetailHostedRouteError.timeout("native renderer attachment")
 }
 
 @MainActor
