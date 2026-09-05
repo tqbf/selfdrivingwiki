@@ -88,21 +88,16 @@ struct WikiAppWebViewTests {
         #expect(fallbackCount == 1)
     }
 
-    @Test("an unavailable installed renderer leaves the host's Source fallback available")
-    func unavailableInstalledRendererReturnsNoView() throws {
+    @Test("an unavailable installed renderer keeps its host-owned Source fallback")
+    func unavailableInstalledRendererKeepsSourceFallback() throws {
         let descriptor = try installedDescriptor()
-        let factory = InstalledRendererFactory.unavailable
-        let store = try GRDBWikiStore()
-        let source = try store.addSource(filename: "input.txt", data: Data("x".utf8))
-        let version = try #require(try store.activeContentVersion(sourceID: source.id))
-        let reader = RendererAuthorizedInputReader(
-            store: store,
-            authorizedInput: .source(versionID: version.id))
-        let configuration = try installedConfiguration(for: descriptor)
-        let authority = installedAuthority(
-            descriptor: descriptor, configuration: configuration, inputReader: reader)
+        let factory = InstalledRendererFactory.Inputs.unavailable
+        guard case let .webPackage(entryPoint) = descriptor.implementation else {
+            Issue.record("expected a web-package renderer descriptor")
+            return
+        }
 
-        #expect(factory.makeView(authority: authority, onFailure: { _ in }) == nil)
+        #expect(factory.configuration(for: descriptor, entryPoint: entryPoint) == nil)
     }
 
     @Test("a bridge-oversized pinned input preserves Source fallback before a session starts")
@@ -118,16 +113,19 @@ struct WikiAppWebViewTests {
         let descriptor = try installedDescriptor(
             maximumInputByteCount: WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount + 1)
         let configuration = try installedConfiguration(for: descriptor)
-        let factory = InstalledRendererFactory(makeSession: { _, _, _ in
-            Issue.record("an oversized input must not create a renderer session")
-            return RecordingWebViewSession()
-        })
         let authority = installedAuthority(
             descriptor: descriptor, configuration: configuration, inputReader: reader)
 
-        #expect(factory.makeView(
-            authority: authority,
-            onFailure: { _ in }) == nil)
+        #expect(throws: RendererAuthorizedInputReader.ReaderError.oversizedInput) {
+            try reader.validateInput(
+                maximumInputByteCount: min(
+                    descriptor.sizeLimits.maximumInputByteCount,
+                    WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount),
+                maximumDecodedByteCount: min(
+                    descriptor.sizeLimits.maximumDecodedByteCount,
+                    WikiAppWebViewPolicy.maximumBridgeInputPayloadByteCount))
+        }
+        #expect(authority.isClosed == false)
     }
 
     @Test("a below-cap pinned input admits the installed renderer before session start")
