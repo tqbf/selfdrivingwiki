@@ -5,7 +5,7 @@ The repository includes reviewed read-only Excalidraw, Mermaid, JSON Canvas, and
 - Excalidraw: `org.selfdrivingwiki.excalidraw-readonly`, version `1.0.5`, registration `excalidraw`.
 - Mermaid: `org.selfdrivingwiki.mermaid-readonly`, version `1.0.1`, registration `mermaid`.
 - JSON Canvas: `org.selfdrivingwiki.json-canvas-readonly`, version `1.1.6`, registration `json-canvas`.
-- SVG: `org.selfdrivingwiki.svg-readonly`, version `1.0.0`, registration `svg`.
+- SVG: `org.selfdrivingwiki.svg-readonly`, version `1.0.1`, registration `svg`.
 
 ### Scope and availability
 
@@ -53,9 +53,9 @@ The package version is `1.0.5`. Its manifest declares a bounded JSON matcher for
 
 ### Reviewed SVG renderer package
 
-The reviewed package root is `RendererPackages/SVG` in the repository. SwiftPM does not copy it into the app resource bundle. Users import the folder through Settings → Renderers → Advanced Local Renderer Package Import. The package ID is `org.selfdrivingwiki.svg-readonly`. The version is `1.0.0`. The registration ID is `svg`.
+The reviewed package root is `RendererPackages/SVG` in the repository. SwiftPM does not copy it into the app resource bundle. Users import the folder through Settings → Renderers → Advanced Local Renderer Package Import. The package ID is `org.selfdrivingwiki.svg-readonly`. The version is `1.0.1`. The registration ID is `svg`.
 
-The package matches `image/svg+xml` sources plus the `.svg` extension fallback. It is a read-only Web renderer. It declares `input.read` only, no external links, and 16,000,000-byte input and decoded-input limits (the retired built-in renderer's ceiling). It has priority 100 — the retired built-in's tier — and fills both embedding roles. It claims no fence alias.
+The package matches `image/svg+xml` sources plus the `.svg` extension fallback. Its revision 2 manifest claims one rich fence alias, `svg`, with the inline MIME type `image/svg+xml`. It is a read-only Web renderer. It declares `input.read` only, no external links, and 16,000,000-byte input and decoded-input limits (the retired built-in renderer's ceiling). It has priority 100 — the retired built-in's tier — and fills both embedding roles.
 
 The viewer mounts the exact authorized bytes as a base64 `data:` image. WebKit's restricted SVG image mode is the security boundary: script never runs, event handlers never bind, and external references never load. The generic package CSP admits `data:` in `img-src` only; `RendererCapabilityBoundaryPolicyTests` pins that `data:` never appears in any other directive. `PROVENANCE.md` records that the package carries no vendored third-party bytes.
 

@@ -1,12 +1,12 @@
 {
-  "revision": 1,
+  "revision": 2,
   "packageID": "org.selfdrivingwiki.svg-readonly",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "descriptors": [
     {
       "reference": {
         "packageID": "org.selfdrivingwiki.svg-readonly",
-        "version": "1.0.0",
+        "version": "1.0.1",
         "registrationID": "svg"
       },
       "displayName": "SVG",
@@ -35,6 +35,12 @@
       "supportedEmbeddingRoles": [
         "inlineContent",
         "disclosureRow"
+      ],
+      "fenceClaims": [
+        {
+          "alias": "svg",
+          "inlineMIMEType": "image/svg+xml"
+        }
       ],
       "approvedAssets": [
         {

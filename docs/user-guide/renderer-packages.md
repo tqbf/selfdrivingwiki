@@ -32,7 +32,7 @@ Import accepts one local folder. It does not accept ZIP files, other archives, r
 
 Markdown syntax selects the renderer role. A package can fill a compatible role, but it cannot change the role.
 
-A rich fence is named by the first word of its info string. That name is live registry data. An optional JSON Canvas renderer package claims `jsoncanvas` when you install it. The optional Mermaid and Excalidraw renderer packages claim `mermaid` and `excalidraw` when you install them. An installed package can claim its own names through its manifest's `fenceClaims`. A fence uses the available renderer that claims its name. Installing or removing a package changes that result on the next render without a restart.
+A rich fence is named by the first word of its info string. That name is live registry data. An optional JSON Canvas renderer package claims `jsoncanvas` when you install it. The optional Mermaid and Excalidraw renderer packages claim `mermaid` and `excalidraw` when you install them. The optional SVG renderer package claims `svg` when you install it. An installed package can claim its own names through its manifest's `fenceClaims`. A fence uses the available renderer that claims its name. Installing or removing a package changes that result on the next render without a restart.
 
 Approved rich fences use a disclosure row. The row starts collapsed and shows **Open in Window** at the trailing edge. When a renderer that has been drawing a fence becomes unavailable (its package was removed or suppressed), the fence falls back to typed raw code with a notice that the renderer is not available here; a fence nobody ever claimed stays plain code.
 
@@ -81,9 +81,19 @@ JSON Canvas links are typed. Canonical `[[page:<ULID>]]` and `[[source:<ULID>]]`
 
 ## SVG
 
-SVG is a renderer package, not a built-in renderer. It displays `.svg` documents as a read-only image. Before you import `RendererPackages/SVG`, a `.svg` source stays readable source text. After you import the folder through **Settings → Renderers → Advanced Local Renderer Package Import**, matching sources render through the generic renderer surface. Removed or suppressed packages restore the readable fallback.
+SVG is a renderer package, not a built-in renderer. It displays `.svg` documents as a read-only image. Before you import `RendererPackages/SVG`, a `.svg` source stays readable source text. To import version `1.0.1`, open **Settings → Renderers → Advanced Local Renderer Package Import** and select the `RendererPackages/SVG` folder. The app does not update local packages automatically. After import, matching sources render through the generic renderer surface. Removed or suppressed packages restore the readable fallback.
 
-The package loads your SVG bytes as an image, never as a document: scripts inside the SVG never run, click handlers never bind, and references to external files never load. Documents up to 16,000,000 bytes render; larger documents keep the readable source fallback. The display follows light and dark appearance, and host zoom shortcuts scale the drawing.
+The package also claims one rich fence alias, `svg`, with the inline MIME type `image/svg+xml`. The row starts collapsed and shows **Open in Window** at the trailing edge. You can add an optional quoted title after the fence name. An SVG fence at or below 48,384 bytes renders; a larger fence stays readable code.
+
+````markdown
+```svg "A blue square"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="A blue square">
+  <rect width="32" height="32" fill="#2563eb" />
+</svg>
+```
+````
+
+The package loads your SVG bytes as an image, never as a document: scripts inside the SVG never run, click handlers never bind, and references to external files never load. Documents up to 16,000,000 bytes render; larger documents keep the readable source fallback. The display follows light and dark appearance, and host zoom shortcuts scale the drawing. A data image stays an inert inline image and does not become an SVG fence or disclosure row.
 
 ## Preferences and fallback
 

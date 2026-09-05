@@ -128,6 +128,46 @@ struct RendererPackageDocumentationTests {
         #expect(plan.contains("Images and media stay inline"))
     }
 
+    @Test("SVG fence documentation matches the reviewed manifest")
+    func svgFenceDocumentationMatchesManifest() throws {
+        let root = repositoryRoot()
+        let guide = try String(contentsOf: root.appending(path: "docs/user-guide/renderer-packages.md"), encoding: .utf8)
+        let maintainerGuide = try String(contentsOf: root.appending(path: "docs/skills/renderer-package-maintainer/references/current-package-guide.md"), encoding: .utf8)
+        let manifestData = try Data(contentsOf: root.appending(path: "RendererPackages/SVG/manifest.json"))
+        let manifest = try #require(JSONSerialization.jsonObject(with: manifestData) as? [String: Any])
+        let descriptors = try #require(manifest["descriptors"] as? [[String: Any]])
+        let descriptor = try #require(descriptors.first)
+        let reference = try #require(descriptor["reference"] as? [String: Any])
+        let claims = try #require(descriptor["fenceClaims"] as? [[String: Any]])
+        let claim = try #require(claims.first)
+
+        // Every documented fact derives from the parsed manifest, so a
+        // version or claim edit cannot pass while either guide lags behind.
+        let packageID = try #require(manifest["packageID"] as? String)
+        let version = try #require(manifest["version"] as? String)
+        let registrationID = try #require(reference["registrationID"] as? String)
+        let alias = try #require(claim["alias"] as? String)
+        let mime = try #require(claim["inlineMIMEType"] as? String)
+
+        #expect(manifest["revision"] as? Int == 2)
+        #expect(reference["packageID"] as? String == packageID)
+        #expect(reference["version"] as? String == version)
+        #expect(claims.count == 1)
+
+        #expect(guide.contains("To import version `\(version)`"))
+        #expect(guide.contains("The optional SVG renderer package claims `\(alias)` when you install it."))
+        #expect(guide.contains("claims one rich fence alias, `\(alias)`, with the inline MIME type `\(mime)`"))
+        #expect(guide.contains("Settings → Renderers → Advanced Local Renderer Package Import"))
+        #expect(guide.contains("```svg \"A blue square\""))
+        #expect(guide.contains("A data image stays an inert inline image"))
+        #expect(maintainerGuide.contains(
+            "- SVG: `\(packageID)`, version `\(version)`, registration `\(registrationID)`."))
+        #expect(maintainerGuide.contains(
+            "The package ID is `\(packageID)`. The version is `\(version)`. The registration ID is `\(registrationID)`."))
+        #expect(maintainerGuide.contains(
+            "claims one rich fence alias, `\(alias)`, with the inline MIME type `\(mime)`"))
+    }
+
     private func minimalTemplateRoot() -> URL {
         repositoryRoot().appending(
             path: "docs/skills/renderer-package-maintainer/assets/minimal-renderer-package")
