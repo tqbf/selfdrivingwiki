@@ -28,7 +28,7 @@ struct RendererRuntimeFactoryTests {
         let preparation = try await handle.services.prepareCurrentRegistry()
 
         #expect(preparation.machineIndex.records.isEmpty)
-        #expect(preparation.enabledDescriptors.isEmpty)
+        #expect(preparation.availableDescriptors.isEmpty)
         try await handle.dispose()
     }
 
@@ -39,8 +39,8 @@ struct RendererRuntimeFactoryTests {
         let handle = try await fixture.assembly.assemble()
         let preparation = try await handle.services.prepareCurrentRegistry()
 
-        #expect(preparation.machineIndex.availableDescriptorProjection == preparation.enabledDescriptors)
-        for descriptor in preparation.enabledDescriptors {
+        #expect(preparation.machineIndex.availableDescriptorProjection == preparation.availableDescriptors)
+        for descriptor in preparation.availableDescriptors {
             let reservation = RendererPackageReservation(
                 packageID: descriptor.reference.packageID,
                 version: descriptor.reference.version)
@@ -49,16 +49,17 @@ struct RendererRuntimeFactoryTests {
         try await handle.dispose()
     }
 
-    @Test("provider existential crosses an actor boundary with its fixture bytes")
+    @Test("machine-valid descriptors are available without wiki enablement")
     @MainActor
-    func existentialCrossesActorBoundary() async throws {
+    func machineValidDescriptorsAreAvailableWithoutWikiEnablement() async throws {
         let fixture = try Fixture(name: "sendable")
         defer { fixture.cleanup() }
         let handle = try await fixture.assembly.assemble()
         let preparation = try await handle.services.installLocalDirectory(
             PackageFenceTestSupport.packageDirectory)
         let returned = await PreparationRelay().relay(preparation)
-        let descriptor = try #require(returned.enabledDescriptors.first)
+        #expect(returned.machineIndex.availableDescriptorProjection == returned.availableDescriptors)
+        let descriptor = try #require(returned.availableDescriptors.first)
         let reservation = RendererPackageReservation(
             packageID: descriptor.reference.packageID,
             version: descriptor.reference.version)
@@ -113,7 +114,7 @@ struct RendererRuntimeFactoryTests {
 
         #expect(publication.publish(to: host) == false)
         #expect(host.machineIndex == nil)
-        #expect(host.inputs.enabledDescriptors.isEmpty)
+        #expect(host.inputs.availableDescriptors.isEmpty)
     }
 
     @Test("owner shutdown is idempotent and rejects new work")

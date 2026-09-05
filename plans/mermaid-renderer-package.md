@@ -12,7 +12,7 @@ Mermaid JavaScript bytes. `MermaidSourceNeutralityTests` enforces this.
 The package follows the Excalidraw model. It is committed in the repository,
 SwiftPM does not copy it into the app, and a user imports the folder once per
 Mac through Settings → Renderers → Advanced Local Renderer Package Import.
-The package ID is `org.selfdrivingwiki.mermaid-readonly`, version `1.0.0`, and
+The package ID is `org.selfdrivingwiki.mermaid-readonly`, version `1.0.1`, and
 the registration ID is `mermaid`.
 
 Before import, a ` ```mermaid ` fence falls back to typed raw code with the
@@ -21,9 +21,10 @@ Removal restores the fallback and preserves Source data.
 
 ## Manifest revision 3: the fenceValidation contract
 
-`RendererManifestRevision.current` is 3. A claim may declare a
-`validation` object with an engine asset path, a wrapper asset path, and an
-entry function name:
+A revision-3 claim may declare a `validation` object with an engine asset
+path, a wrapper asset path, and an entry function name. Revision 3 introduced
+this validation contract; revision 5 (`assetRead`) is current, and revision 3
+claims stay valid in later revisions.
 
 - `RendererFenceValidationDeclaration` validates that the two paths are
   distinct package-relative asset paths and that the entry function is one

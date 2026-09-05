@@ -82,58 +82,6 @@ struct SourceTextPresentationTests {
                 == "````\n{\"type\":\"excalidraw\",\"version\":2}\n````")
     }
 
-    // MARK: - Reader-projected diagram tabs (characterization)
-
-    @Test func mmdSourceGainsNoReaderProjectedTab() {
-        // The old built-in's `[.reader, .rendered]` projection is gone: a
-        // `.mmd` source presents like any other renderer-package text source.
-        let source = fixtureSource(filename: "diagram.mmd", ext: "mmd", mimeType: nil)
-        let bytes = Data("flowchart TD\n    A --> B".utf8)
-        let result = SourceDetailPresentationCharacterization.characterize(
-            source: source,
-            boundedBytes: bytes,
-            currentMarkdown: nil,
-            hasProcessedMarkdown: false,
-            origin: nil)
-        #expect(result.tabs == [])
-    }
-
-    @Test func markdownDocumentWithAFencedDiagramKeepsItsReaderTab() {
-        // A markdown document with an embedded fence is a normal native
-        // Markdown source: the markdown content area renders it (fences
-        // become claimed disclosure rows there). The redundant
-        // reader-projected "Rendered" tab is gone — the accepted
-        // simplification; the Reader already renders the same document.
-        let source = fixtureSource(filename: "arch.md", ext: "md", mimeType: MimeType.markdown)
-        let bytes = Data("# Architecture\n\n```mermaid\nflowchart TD\n  A --> B\n```\n".utf8)
-        let result = SourceDetailPresentationCharacterization.characterize(
-            source: source,
-            boundedBytes: bytes,
-            currentMarkdown: "# Architecture",
-            hasProcessedMarkdown: true,
-            origin: nil)
-        #expect(result.contentArea == .markdown)
-        #expect(result.tabs == [])
-        #expect(!result.tabs.contains(.rendered))
-        // The document itself stays a rendered Markdown document.
-        #expect(SourceRendererPresentationPlanner.sourceMarkdown(
-            for: source, content: String(decoding: bytes, as: UTF8.self)).hasPrefix("# Architecture"))
-    }
-
-    @Test func canvasSourceKeepsItsReaderProjectedPresentation() {
-        // JSON Canvas is still a native built-in renderer: it keeps the
-        // reader-projected tab.
-        let source = fixtureSource(filename: "board.canvas", ext: "canvas", mimeType: "application/json")
-        let bytes = Data("{\"nodes\":[],\"edges\":[]}".utf8)
-        let result = SourceDetailPresentationCharacterization.characterize(
-            source: source,
-            boundedBytes: bytes,
-            currentMarkdown: nil,
-            hasProcessedMarkdown: false,
-            origin: nil)
-        #expect(result.tabs == [.reader, .rendered])
-    }
-
     // MARK: - The outline derivation (no host format branch)
 
     @Test func outlineAppliesOnlyToRenderedMarkdownDocuments() {

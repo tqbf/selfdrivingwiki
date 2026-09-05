@@ -34,9 +34,9 @@ public struct RendererFenceClaimAssignment: Hashable, Sendable {
 public enum RendererFenceClaimResolver {
     public static func resolve(
         builtInDescriptors: [RendererDescriptor],
-        enabledInstalledDescriptors: [RendererDescriptor] = []
+        availableInstalledDescriptors: [RendererDescriptor] = []
     ) -> [RendererFenceAlias: RendererFenceClaimAssignment] {
-        let ordered = (builtInDescriptors + enabledInstalledDescriptors)
+        let ordered = (builtInDescriptors + availableInstalledDescriptors)
             .sorted { $0.stableTieBreakKey < $1.stableTieBreakKey }
         var claims: [RendererFenceAlias: RendererFenceClaimAssignment] = [:]
         for descriptor in ordered {
@@ -68,7 +68,7 @@ public struct RendererRegistrySnapshot: Hashable, Sendable {
 
     public init(
         builtInDescriptors: [RendererDescriptor],
-        enabledInstalledDescriptors: [RendererDescriptor] = [],
+        availableInstalledDescriptors: [RendererDescriptor] = [],
         hostProtocolRevision: Int = RendererRegistrySnapshotDefaults.hostProtocolRevision
     ) throws {
         guard hostProtocolRevision > 0 else {
@@ -76,14 +76,14 @@ public struct RendererRegistrySnapshot: Hashable, Sendable {
         }
         try Self.validateChannelInvariants(
             builtInDescriptors: builtInDescriptors,
-            enabledInstalledDescriptors: enabledInstalledDescriptors)
-        let combined = builtInDescriptors + enabledInstalledDescriptors
+            availableInstalledDescriptors: availableInstalledDescriptors)
+        let combined = builtInDescriptors + availableInstalledDescriptors
         try Self.validateUniqueReferences(combined)
         self.hostProtocolRevision = hostProtocolRevision
         self.descriptors = combined.sorted { $0.stableTieBreakKey < $1.stableTieBreakKey }
         self.fenceClaims = RendererFenceClaimResolver.resolve(
             builtInDescriptors: builtInDescriptors,
-            enabledInstalledDescriptors: enabledInstalledDescriptors)
+            availableInstalledDescriptors: availableInstalledDescriptors)
     }
 
     /// The claim answering one rich-fence alias, if any descriptor in this
@@ -135,14 +135,14 @@ public struct RendererRegistrySnapshot: Hashable, Sendable {
 
     private static func validateChannelInvariants(
         builtInDescriptors: [RendererDescriptor],
-        enabledInstalledDescriptors: [RendererDescriptor]
+        availableInstalledDescriptors: [RendererDescriptor]
     ) throws {
         for descriptor in builtInDescriptors {
             guard case .builtIn = descriptor.implementation else {
                 throw RendererValidationError.builtInRegistryContainsInstalled(descriptor.reference.registrationID)
             }
         }
-        for descriptor in enabledInstalledDescriptors {
+        for descriptor in availableInstalledDescriptors {
             guard case .webPackage = descriptor.implementation else {
                 throw RendererValidationError.installedRegistryContainsBuiltIn(descriptor.reference.registrationID)
             }

@@ -344,13 +344,9 @@ public protocol WikiStore: AnyObject, Sendable {
 
     // MARK: - Renderer settings (dynamic renderers Phase 3)
 
-    func listRendererWikiEnablement() throws -> [RendererWikiEnablement]
-    func rendererWikiEnablement(packageID: RendererPackageID) throws -> RendererWikiEnablement?
-    func setRendererWikiEnablement(packageID: RendererPackageID, isEnabled: Bool) throws
     func listRendererSourcePreferences() throws -> [RendererSourcePreference]
     func rendererSourcePreference(sourceID: SourceID) throws -> RendererSourcePreference?
     func setRendererSourcePreference(sourceID: SourceID, preference: RendererPreferenceReference) throws
-    func removeRendererSourcePreference(sourceID: SourceID) throws
     func rendererSourcePresentation(sourceID: SourceID) throws -> RendererSourcePresentation?
     func setRendererSourcePresentation(sourceID: SourceID, presentation: RendererSourcePresentationMode) throws
     func removeRendererSourcePresentation(sourceID: SourceID) throws

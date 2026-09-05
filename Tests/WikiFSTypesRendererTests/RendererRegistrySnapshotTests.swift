@@ -16,10 +16,10 @@ struct RendererRegistrySnapshotTests {
 
         let forward = try RendererRegistrySnapshot(
             builtInDescriptors: [builtIn],
-            enabledInstalledDescriptors: [installedA, installedB])
+            availableInstalledDescriptors: [installedA, installedB])
         let reverse = try RendererRegistrySnapshot(
             builtInDescriptors: [builtIn],
-            enabledInstalledDescriptors: [installedB, installedA])
+            availableInstalledDescriptors: [installedB, installedA])
 
         #expect(forward.descriptors.map(\.reference) == reverse.descriptors.map(\.reference))
         #expect(forward.descriptors.map(\.reference) == [installedA.reference, installedB.reference, builtIn.reference])
@@ -31,7 +31,7 @@ struct RendererRegistrySnapshotTests {
         #expect(throws: RendererValidationError.duplicateRegistration(builtIn.reference.registrationID)) {
             _ = try RendererRegistrySnapshot(
                 builtInDescriptors: [builtIn],
-                enabledInstalledDescriptors: [installed])
+                availableInstalledDescriptors: [installed])
         }
     }
 
@@ -47,7 +47,7 @@ struct RendererRegistrySnapshotTests {
         #expect(throws: RendererValidationError.installedRegistryContainsBuiltIn(builtIn.reference.registrationID)) {
             _ = try RendererRegistrySnapshot(
                 builtInDescriptors: [],
-                enabledInstalledDescriptors: [builtIn])
+                availableInstalledDescriptors: [builtIn])
         }
     }
 

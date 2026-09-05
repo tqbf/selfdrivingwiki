@@ -25,7 +25,7 @@ struct PackageFenceClaimRegistryTests {
         let descriptor = try claimingDescriptor(registrationID: "viewer")
         let snapshot = try RendererRegistrySnapshot(
             builtInDescriptors: [],
-            enabledInstalledDescriptors: [descriptor])
+            availableInstalledDescriptors: [descriptor])
         let alias = try #require(RendererFenceAlias(rawValue: "d2"))
         let claim = try #require(snapshot.fenceClaim(for: alias))
         #expect(claim.reference == descriptor.reference)
@@ -49,10 +49,10 @@ struct PackageFenceClaimRegistryTests {
         // Order of construction inputs must not matter.
         let forward = try RendererRegistrySnapshot(
             builtInDescriptors: [],
-            enabledInstalledDescriptors: [lowPriority, highPriority])
+            availableInstalledDescriptors: [lowPriority, highPriority])
         let reverse = try RendererRegistrySnapshot(
             builtInDescriptors: [],
-            enabledInstalledDescriptors: [highPriority, lowPriority])
+            availableInstalledDescriptors: [highPriority, lowPriority])
         #expect(forward.fenceClaim(for: alias)?.reference == highPriority.reference)
         #expect(reverse.fenceClaim(for: alias)?.reference == highPriority.reference)
 
@@ -61,7 +61,7 @@ struct PackageFenceClaimRegistryTests {
         let second = try claimingDescriptor(packageID: "org.example.b", registrationID: "viewer")
         let equalPriority = try RendererRegistrySnapshot(
             builtInDescriptors: [],
-            enabledInstalledDescriptors: [second, first])
+            availableInstalledDescriptors: [second, first])
         #expect(equalPriority.fenceClaim(for: alias)?.reference == first.reference)
     }
 
@@ -73,10 +73,10 @@ struct PackageFenceClaimRegistryTests {
             alias: "graph")
         let snapshot = try RendererRegistrySnapshot(
             builtInDescriptors: [],
-            enabledInstalledDescriptors: [builtIn, installed])
+            availableInstalledDescriptors: [builtIn, installed])
         #expect(snapshot.fenceClaims == RendererFenceClaimResolver.resolve(
             builtInDescriptors: [],
-            enabledInstalledDescriptors: [builtIn, installed]))
+            availableInstalledDescriptors: [builtIn, installed]))
     }
 
     @Test func removedOrSuppressedClaimantsDropTheirClaims() throws {
@@ -89,12 +89,12 @@ struct PackageFenceClaimRegistryTests {
 
         let present = try RendererRegistrySnapshot(
             builtInDescriptors: [],
-            enabledInstalledDescriptors: [claimant])
+            availableInstalledDescriptors: [claimant])
         #expect(present.fenceClaim(for: alias) != nil)
 
         let suppressed = try RendererRegistrySnapshot(
             builtInDescriptors: [],
-            enabledInstalledDescriptors: [])
+            availableInstalledDescriptors: [])
         #expect(suppressed.fenceClaim(for: alias) == nil)
     }
 }

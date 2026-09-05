@@ -2,36 +2,60 @@ import Foundation
 import WikiFSCore
 import WikiFSTypes
 
-// pattern: Imperative Shell — prepares the per-session asset admission.
+// pattern: Imperative Shell — explicit helper and store actor boundaries.
 
-/// Prepares the session asset reader for an installed renderer that declares
-/// revision-5 `assetRead` authority.
-///
-/// Flow:
-/// 1. Run the hash-approved reference-extractor helper against the pinned
-///    primary input bytes, bounded by the descriptor's declared limits
-///    (deadline, stdout/stderr caps, reference count).
-/// 2. Resolve the extracted records against the EXACT sibling/File Provider
-///    projection supplied by the caller (never broadened to all sources),
-///    pinning each to SourceID + SourceVersionID + MIME + size + digest.
-/// 3. Build the immutable `RendererAuthorizedAssetReader` for the session.
-///
-/// Any failure — missing helper, timeout, malformed output, undeclared role,
-/// unresolved/ambiguous reference, budget — fails closed to `nil` (zero
-/// admitted assets) while preserving normal non-image rendering and
-/// source/raw fallback.
-public enum RendererAssetSessionPreparer {
-    public static func makeAssetReader(
-        helperURL: URL?,
-        extractorBytes: Data,
-        entryFunction: String,
-        primaryInput: Data,
-        maxExtractorInputBytes: Int,
-        maxExtractorOutputBytes: Int,
-        maxExtractorExecutionSeconds: Int,
-        maxReferenceCount: Int,
-        stdoutLimit: Int,
-        stderrLimit: Int,
+/// Immutable, Sendable helper-execution input. It contains no store handle.
+struct RendererAssetHelperExecutionRequest: Sendable {
+    let helperURL: URL?
+    let extractorBytes: Data
+    let entryFunction: String
+    let primaryInput: Data
+    let maximumExtractorInputBytes: Int
+    let maximumExtractorOutputBytes: Int
+    let maximumExtractorExecutionSeconds: Int
+    let maximumReferenceCount: Int
+    let stdoutLimit: Int
+    let stderrLimit: Int
+}
+
+/// Immutable helper output crossing back to the main actor. It contains no
+/// store-backed objects or readers.
+struct RendererAssetHelperExecutionResult: Sendable, Equatable {
+    let records: [RendererAssetReferenceExtractorClient.ExtractedRecord]
+}
+
+enum RendererAssetSessionPreparer {
+    typealias HelperExecutor = @Sendable (RendererAssetHelperExecutionRequest) async throws -> RendererAssetHelperExecutionResult
+
+    static func executeHelper(
+        _ request: RendererAssetHelperExecutionRequest
+    ) async throws -> RendererAssetHelperExecutionResult {
+        try Task.checkCancellation()
+        guard let helperURL = request.helperURL,
+              RendererAssetExtractorHelperLocation.isExecutableFile(helperURL) else {
+            return .init(records: [])
+        }
+        let outcome = try await RendererAssetReferenceExtractorClient.run(.init(
+            helperURL: helperURL,
+            extractorBytes: request.extractorBytes,
+            entryFunction: request.entryFunction,
+            primaryInput: request.primaryInput,
+            maxExtractorInputBytes: request.maximumExtractorInputBytes,
+            maxExtractorOutputBytes: request.maximumExtractorOutputBytes,
+            maxReferenceCount: request.maximumReferenceCount,
+            maxExecutionSeconds: request.maximumExtractorExecutionSeconds,
+            stdoutLimit: request.stdoutLimit,
+            stderrLimit: request.stderrLimit))
+        try Task.checkCancellation()
+        guard outcome.failureReason == nil else { return .init(records: []) }
+        return .init(records: outcome.records)
+    }
+
+    /// Store-backed admission and session-reader construction. This operation
+    /// is deliberately isolated from helper execution.
+    @MainActor
+    static func makeAssetReader(
+        from result: RendererAssetHelperExecutionResult,
         siblingSources: [String: SourceID],
         store: any WikiStore,
         sourceExtensions: [SourceID: String],
@@ -39,48 +63,17 @@ public enum RendererAssetSessionPreparer {
         maximumBytesPerAsset: Int,
         maximumAggregateSessionBytes: Int,
         maximumPerRequestReadCount: Int
-    ) async -> RendererAuthorizedAssetReader? {
-        guard let helperURL, RendererAssetExtractorHelperLocation.isExecutableFile(helperURL) else {
-            DebugLog.reader("Renderer asset session skipped: no reference-extractor helper.")
-            return nil
-        }
-        let request = RendererAssetReferenceExtractorClient.Request(
-            helperURL: helperURL,
-            extractorBytes: extractorBytes,
-            entryFunction: entryFunction,
-            primaryInput: primaryInput,
-            maxExtractorInputBytes: maxExtractorInputBytes,
-            maxExtractorOutputBytes: maxExtractorOutputBytes,
-            maxReferenceCount: maxReferenceCount,
-            maxExecutionSeconds: maxExtractorExecutionSeconds,
-            stdoutLimit: stdoutLimit,
-            stderrLimit: stderrLimit)
-        let outcome: RendererAssetReferenceExtractorClient.Outcome
+    ) -> RendererAuthorizedAssetReader? {
+        guard result.records.isEmpty == false else { return nil }
         do {
-            outcome = try await RendererAssetReferenceExtractorClient.run(request)
-        } catch {
-            DebugLog.reader("Renderer asset session failed closed: extractor helper error.")
-            return nil
-        }
-        guard outcome.failureReason == nil else {
-            DebugLog.reader("Renderer asset session failed closed: \(outcome.failureReason ?? "extraction failed")")
-            return nil
-        }
-        let admissions: [RendererAuthorizedAssetReader.Admission]
-        do {
-            admissions = try RendererAssetAdmissionProjection.buildAdmissions(
-                records: outcome.records,
+            let admissions = try RendererAssetAdmissionProjection.buildAdmissions(
+                records: result.records,
                 siblingSourceMap: siblingSources,
                 store: store,
                 sourceExtensions: sourceExtensions,
                 allowedRoles: allowedRoles,
                 maximumBytesPerAsset: maximumBytesPerAsset)
-        } catch {
-            DebugLog.reader("Renderer asset session failed closed: admission resolution failed.")
-            return nil
-        }
-        guard admissions.isEmpty == false else { return nil }
-        do {
+            guard admissions.isEmpty == false else { return nil }
             return try RendererAuthorizedAssetReader(
                 admissions: admissions,
                 maximumBytesPerAsset: maximumBytesPerAsset,
@@ -88,7 +81,7 @@ public enum RendererAssetSessionPreparer {
                 maximumPerRequestReadCount: maximumPerRequestReadCount,
                 store: store)
         } catch {
-            DebugLog.reader("Renderer asset session failed closed: reader construction failed.")
+            DebugLog.reader("Renderer asset admission failed closed; continuing without asset authority.")
             return nil
         }
     }

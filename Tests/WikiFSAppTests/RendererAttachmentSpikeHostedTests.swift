@@ -1078,7 +1078,7 @@ private final class RendererAttachmentSpikeHarness: NSObject, WKNavigationDelega
         let descriptor = try! jsonCanvasInstalledDescriptor()
         let projection = RendererEmbedProjection(
             sourceEmbeds: [:],
-            richFenceClaims: RendererFenceClaimResolver.resolve(builtInDescriptors: [], enabledInstalledDescriptors: [descriptor]))
+            richFenceClaims: RendererFenceClaimResolver.resolve(builtInDescriptors: [], availableInstalledDescriptors: [descriptor]))
         let options = MarkdownRenderOptions(
             codeHighlighting: .disabled,
             rendererEmbedProjection: projection,

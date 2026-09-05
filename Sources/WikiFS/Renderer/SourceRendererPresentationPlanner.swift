@@ -18,7 +18,7 @@ struct SourceRendererPresentationPlanner: Sendable {
     init(installedDescriptors: [RendererDescriptor] = []) throws {
         registry = try RendererRegistrySnapshot(
             builtInDescriptors: BuiltInRendererDescriptors.all,
-            enabledInstalledDescriptors: installedDescriptors)
+            availableInstalledDescriptors: installedDescriptors)
     }
 
     init(registry: RendererRegistrySnapshot) {
@@ -279,94 +279,6 @@ struct SourceRendererPresentationPlanner: Sendable {
         case .localFile?, .website?, .zotero?, .markdownFolder?, .podcast?, .legacyImport?, .none:
             nil
         }
-    }
-}
-
-/// Testable golden model for the legacy SourceDetailView presentation branches.
-/// PR 2 uses it to characterize behavior before PR 4 replaces routing.
-enum SourceDetailPresentationCharacterization {
-    enum Presentation: String, Sendable, Equatable {
-        case reader = "Reader"
-        case pdf = "PDF"
-        case html = "HTML"
-        case rendered = "Rendered"
-        case media = "Media"
-    }
-
-    struct Result: Sendable, Equatable {
-        let contentArea: ContentArea
-        let tabs: [Presentation]
-    }
-
-    enum ContentArea: Sendable, Equatable {
-        case tabbed
-        case pdfOnly
-        case markdown
-        case binaryFallback
-    }
-
-    nonisolated static func characterize(
-        source: SourceSummary,
-        boundedBytes: Data?,
-        currentMarkdown: String?,
-        hasProcessedMarkdown: Bool,
-        origin: SourceOrigin?
-    ) -> Result {
-        let isPDF = MimeType.isPDF(source.mimeType)
-        let isHTMLSource = htmlSource(source)
-        let htmlString = htmlSourceString(isHTMLSource: isHTMLSource, boundedBytes: boundedBytes)
-        let hasMediaPlayer = mediaPlayerAvailable(source: source, origin: origin)
-
-        let tabs: [Presentation]
-        if hasMediaPlayer {
-            tabs = [.reader, .media]
-        } else if isPDF && hasProcessedMarkdown {
-            tabs = [.reader, .pdf]
-        } else if isHTMLSource && (hasProcessedMarkdown || htmlString != nil) {
-            tabs = hasProcessedMarkdown ? [.reader, .html] : [.html]
-        } else {
-            tabs = []
-        }
-
-        let contentArea: ContentArea
-        if !tabs.isEmpty || hasMediaPlayer {
-            contentArea = .tabbed
-        } else if isPDF {
-            contentArea = .pdfOnly
-        } else if MimeType.isSourceTextPresentable(source.mimeType) {
-            contentArea = .markdown
-        } else {
-            contentArea = .binaryFallback
-        }
-        return Result(contentArea: contentArea, tabs: tabs)
-    }
-
-    private static func htmlSource(_ source: SourceSummary) -> Bool {
-        if let mime = source.mimeType {
-            return mime == MimeType.html || mime == MimeType.xhtml
-        }
-        let ext = source.ext.lowercased()
-        return ext == "html" || ext == "htm" || ext == "xhtml"
-    }
-
-    private static func htmlSourceString(isHTMLSource: Bool, boundedBytes: Data?) -> String? {
-        guard isHTMLSource, let boundedBytes else { return nil }
-        return String(data: boundedBytes, encoding: .utf8) ?? String(decoding: boundedBytes, as: UTF8.self)
-    }
-
-    private static func mediaPlayerAvailable(source: SourceSummary, origin: SourceOrigin?) -> Bool {
-        guard let descriptor = embedDescriptor(source: source, origin: origin) else { return false }
-        return ExternalEmbed.target(for: descriptor) != nil
-    }
-
-    private static func embedDescriptor(source: SourceSummary, origin: SourceOrigin?) -> SourceEmbedDescriptor? {
-        guard let mime = source.mimeType, let origin else { return nil }
-        return SourceEmbedDescriptor(
-            id: source.id,
-            mimeType: mime,
-            externalIdentity: origin.externalIdentity,
-            agentName: origin.agentName,
-            planURL: origin.plan)
     }
 }
 #endif

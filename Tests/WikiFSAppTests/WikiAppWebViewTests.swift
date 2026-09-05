@@ -92,8 +92,17 @@ struct WikiAppWebViewTests {
     func unavailableInstalledRendererReturnsNoView() throws {
         let descriptor = try installedDescriptor()
         let factory = InstalledRendererFactory.unavailable
+        let store = try GRDBWikiStore()
+        let source = try store.addSource(filename: "input.txt", data: Data("x".utf8))
+        let version = try #require(try store.activeContentVersion(sourceID: source.id))
+        let reader = RendererAuthorizedInputReader(
+            store: store,
+            authorizedInput: .source(versionID: version.id))
+        let configuration = try installedConfiguration(for: descriptor)
+        let authority = installedAuthority(
+            descriptor: descriptor, configuration: configuration, inputReader: reader)
 
-        #expect(factory.makeView(for: descriptor, inputs: .unavailable, inputReader: nil, onFailure: { _ in }) == nil)
+        #expect(factory.makeView(authority: authority, onFailure: { _ in }) == nil)
     }
 
     @Test("a bridge-oversized pinned input preserves Source fallback before a session starts")
@@ -113,14 +122,11 @@ struct WikiAppWebViewTests {
             Issue.record("an oversized input must not create a renderer session")
             return RecordingWebViewSession()
         })
-        let inputs = InstalledRendererFactory.Inputs(
-            enabledDescriptors: [descriptor],
-            resolveConfiguration: { _, _ in configuration })
+        let authority = installedAuthority(
+            descriptor: descriptor, configuration: configuration, inputReader: reader)
 
         #expect(factory.makeView(
-            for: descriptor,
-            inputs: inputs,
-            inputReader: reader,
+            authority: authority,
             onFailure: { _ in }) == nil)
     }
 
@@ -152,14 +158,11 @@ struct WikiAppWebViewTests {
             makeSessionCount += 1
             return session
         })
-        let inputs = InstalledRendererFactory.Inputs(
-            enabledDescriptors: [descriptor],
-            resolveConfiguration: { _, _ in configuration })
+        let authority = installedAuthority(
+            descriptor: descriptor, configuration: configuration, inputReader: reader)
 
         guard let view = factory.makeView(
-            for: descriptor,
-            inputs: inputs,
-            inputReader: reader,
+            authority: authority,
             onFailure: { _ in }) else {
             Issue.record("a below-cap input should admit the installed renderer and construct one hosted session")
             return
@@ -211,20 +214,17 @@ struct WikiAppWebViewTests {
         let configuration = try installedConfiguration(
             for: descriptor,
             failureRecorder: failureRecorder)
-        var capturedConfiguration: InstalledRendererSessionConfiguration?
+        var capturedAuthority: RendererPreparedSessionAuthority?
         let session = RecordingWebViewSession()
-        let factory = InstalledRendererFactory(makeSession: { _, reportFailure, configuration in
-            capturedConfiguration = configuration
+        let factory = InstalledRendererFactory(makeSession: { _, reportFailure, authority in
+            capturedAuthority = authority
             session.failure = reportFailure
             return session
         })
-        let inputs = InstalledRendererFactory.Inputs(
-            enabledDescriptors: [descriptor],
-            resolveConfiguration: { _, _ in configuration })
+        let prepared = installedAuthority(
+            descriptor: descriptor, configuration: configuration, inputReader: reader)
         guard let view = factory.makeView(
-            for: descriptor,
-            inputs: inputs,
-            inputReader: reader,
+            authority: prepared,
             onFailure: { _ in }) else {
             Issue.record("a valid pinned input should create an installed renderer view")
             return
@@ -234,13 +234,13 @@ struct WikiAppWebViewTests {
         window.orderFront(nil)
         defer { window.orderOut(nil) }
 
-        for _ in 0 ..< 20 where capturedConfiguration == nil {
+        for _ in 0 ..< 20 where capturedAuthority == nil {
             await Task.yield()
         }
-        let captured = try #require(capturedConfiguration)
-        #expect(captured.inputReader?.authorizedInput == reader.authorizedInput)
+        let captured = try #require(capturedAuthority)
+        #expect(captured.inputReader.authorizedInput == reader.authorizedInput)
         #expect(captured.externalActivationPolicy == .enabled)
-        #expect(captured.failureRecorder != nil)
+        #expect(captured.configuration.failureRecorder != nil)
         for _ in 0 ..< 20 where session.events.isEmpty {
             await Task.yield()
         }
@@ -378,7 +378,7 @@ struct WikiAppWebViewTests {
             .appendingPathComponent("RendererPackages/JSONCanvas", isDirectory: true)
         let installed = await installedRendererHost.installRendererDirectory(packageDirectory)
         try #require(installed)
-        session.store.rendererEnabledDescriptors = installedRendererHost.inputs.enabledDescriptors
+        session.store.rendererAvailableDescriptors = installedRendererHost.inputs.availableDescriptors
 
         let registry = WikiRegistryClient(containerDirectory: dir)
         let root = RootView(
@@ -694,9 +694,30 @@ private func installedConfiguration(
                 path: entryPoint.path)),
         reservation: reservation,
         resourceProvider: resourceProvider,
-        failureRecorder: failureRecorder,
-        inputReader: nil,
-        externalActivationPolicy: .disabled)
+        failureRecorder: failureRecorder)
+}
+
+/// Builds prepared session authority directly, mirroring what the per-session
+/// preparer publishes for a validated configuration and exact input reader.
+@MainActor
+private func installedAuthority(
+    descriptor: RendererDescriptor,
+    configuration: InstalledRendererSessionConfiguration,
+    inputReader: RendererAuthorizedInputReader
+) -> RendererPreparedSessionAuthority {
+    let input = inputReader.authorizedInput
+    return RendererPreparedSessionAuthority(
+        request: RendererSessionPreparationRequest(
+            descriptor: descriptor,
+            configuration: configuration,
+            input: input,
+            admittedSource: nil,
+            store: try! GRDBWikiStore(),
+            siblingSources: [:],
+            sourceExtensions: [:],
+            hostNavigationRouting: .unavailable),
+        inputReader: inputReader,
+        assetReader: nil)
 }
 
 private struct UnavailableRendererPackageResourceProvider: RendererPackageResourceProviding {

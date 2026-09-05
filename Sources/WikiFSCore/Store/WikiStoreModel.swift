@@ -144,14 +144,14 @@ public final class WikiStoreModel {
         }
     }
 
-    /// Enabled installed renderer descriptors from the app-scoped
+    /// Available installed renderer descriptors from the app-scoped
     /// ``InstalledRendererHost`` snapshot, threaded in by the app wiring.
     /// Superseded and safe-mode-suppressed packages drop out here, so their
     /// fence claims drop out of every render context. A change bumps the
     /// renderer availability revision and invalidates the memoized context.
-    @ObservationIgnored public var rendererEnabledDescriptors: [RendererDescriptor] = [] {
+    @ObservationIgnored public var rendererAvailableDescriptors: [RendererDescriptor] = [] {
         didSet {
-            guard rendererEnabledDescriptors != oldValue else { return }
+            guard rendererAvailableDescriptors != oldValue else { return }
             rendererMachineAvailabilityRevision &+= 1
         }
     }
@@ -3129,14 +3129,6 @@ public final class WikiStoreModel {
         }
     }
 
-    public func removeRendererSourcePreference(sourceID: SourceID) {
-        do {
-            try store.removeRendererSourcePreference(sourceID: sourceID)
-        } catch {
-            DebugLog.store("WikiStoreModel.removeRendererSourcePreference failed: \(error)")
-        }
-    }
-
     public func rendererSourcePreference(for sourceID: SourceID) -> RendererPreferenceReference? {
         DebugLog.trying("rendererSourcePreference", operation: {
             try store.rendererSourcePreference(sourceID: sourceID)?.preference
@@ -3163,25 +3155,6 @@ public final class WikiStoreModel {
         DebugLog.trying("rendererSourcePresentation", operation: {
             try store.rendererSourcePresentation(sourceID: sourceID)?.presentation
         })
-    }
-
-    /// Returns the current-wiki enablement for one machine-installed package.
-    /// A missing row deliberately means disabled; removal never deletes this
-    /// row, so reinstalling the same package restores the logical preference.
-    public func rendererWikiEnablement(for packageID: RendererPackageID) -> Bool {
-        DebugLog.trying("rendererWikiEnablement", operation: {
-            try store.rendererWikiEnablement(packageID: packageID)?.isEnabled ?? false
-        }) ?? false
-    }
-
-    /// Persists current-wiki enablement through the store's renderer-settings
-    /// mutation seam. Machine installation and wiki preference remain separate.
-    public func setRendererWikiEnablement(packageID: RendererPackageID, isEnabled: Bool) {
-        do {
-            try store.setRendererWikiEnablement(packageID: packageID, isEnabled: isEnabled)
-        } catch {
-            DebugLog.store("WikiStoreModel.setRendererWikiEnablement failed: \(error)")
-        }
     }
 
     public func isSourceIngested(_ file: SourceSummary) -> Bool {

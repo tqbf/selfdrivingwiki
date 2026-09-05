@@ -109,6 +109,7 @@ struct SourceDetailView: View {
     /// An installed renderer's terminal session failure is transient. The host
     /// falls back to Source without changing the persisted renderer preference.
     @State private var failedInstalledRendererReference: RendererReference?
+    @State private var rendererSessionPreparation = RendererSessionPreparationOwner()
     /// Cached once per source lifecycle so body evaluation and editor changes do
     /// not repeatedly synchronously fetch the complete SQLite blob.
     @State private var sourceBytesSnapshot: Data?
@@ -509,6 +510,7 @@ struct SourceDetailView: View {
             shouldRestoreEditing = false
         }
         .task(id: file.id) {
+            rendererSessionPreparation.cancel()
             refreshSourceBytesSnapshot()
             headVersion = store.processedMarkdownHead(for: file)
             origin = store.sourceOrigin(for: file.id)
@@ -1198,6 +1200,9 @@ struct SourceDetailView: View {
             onRendererSelected: persistRendererPreference,
             onPresentationSelected: persistRendererPresentationSelection,
             onFallback: handleRendererFallback)
+        .task(id: rendererPreparationKey) {
+            prepareSelectedRendererSession()
+        }
     }
 
     @ViewBuilder
@@ -1224,22 +1229,54 @@ struct SourceDetailView: View {
         }
     }
 
+    private var rendererPreparationKey: String {
+        let reference = rendererPresentationLifecycle.state.pinnedRenderer
+        let version = rendererAuthorizedInputResolver.rendererAuthorizedInputReader(for: file.id)?.authorizedInput
+        let versionKey = version.map { String(describing: $0) } ?? "unavailable"
+        return "\(file.id.rawValue)|\(reference?.packageID.rawValue ?? "source")|\(reference?.version.rawValue ?? "none")|\(reference?.registrationID.rawValue ?? "none")|\(versionKey)"
+    }
+
+    private func prepareSelectedRendererSession() {
+        guard rendererPresentationLifecycle.state.selection == .rendered,
+              let reference = rendererPresentationLifecycle.state.pinnedRenderer,
+              let descriptor = rendererDescriptors.first(where: { $0.reference == reference }),
+              case .webPackage = descriptor.implementation,
+              let configuration = routedInstalledRendererFactoryInputs.configuration(for: descriptor),
+              let currentReader = rendererAuthorizedInputResolver.rendererAuthorizedInputReader(for: file.id),
+              case .source(let versionID) = currentReader.authorizedInput
+        else { rendererSessionPreparation.cancel(); return }
+        let input = currentReader.authorizedInput
+        let admittedSource: RendererEmbeddedContent.Source?
+        if let bytes = sourceBytesSnapshot, let mime = file.mimeType {
+            // An invalid MIME on a stale snapshot simply leaves the admitted
+            // source unset: preparation then builds the reader from the exact
+            // pinned version without digest pre-validation.
+            // swiftlint:disable:next silent_try_optional
+            admittedSource = try? RendererEmbeddedContent.Source(
+                sourceID: file.id, sourceVersionID: versionID,
+                mimeType: .init(validating: mime), fileExtension: file.ext, bytes: bytes)
+        } else { admittedSource = nil }
+        let extensions = Dictionary(uniqueKeysWithValues: store.sources.map { ($0.id, $0.ext.lowercased()) })
+        rendererSessionPreparation.prepare(.init(
+            descriptor: descriptor, configuration: configuration, input: input,
+            admittedSource: admittedSource, store: store.internalStore,
+            siblingSources: store.siblingImageResolvers()[file.id] ?? [:],
+            sourceExtensions: extensions, hostNavigationRouting: .store(store)))
+    }
+
     private func renderedContent(for descriptor: RendererDescriptor) -> AnyView? {
         if let builtIn = BuiltInRendererFactoryMap.makeView(for: descriptor, inputs: rendererFactoryInputs) {
             return builtIn
         }
-        guard failedInstalledRendererReference != descriptor.reference else { return nil }
-        return installedRendererFactory.makeView(
-            for: descriptor,
-            inputs: routedInstalledRendererFactoryInputs,
-            inputReader: rendererAuthorizedInputResolver.rendererAuthorizedInputReader(for: file.id)) { _ in
-                // The representable already deferred this callback out of its
-                // AppKit/WebKit stack. Keep the detail-state mutation deferred
-                // as well because the rendered closure can run in an update pass.
-                Task { @MainActor in
-                    failedInstalledRendererReference = descriptor.reference
-                }
+        guard failedInstalledRendererReference != descriptor.reference,
+              let authority = rendererSessionPreparation.prepared,
+              authority.descriptor.reference == descriptor.reference else { return nil }
+        return installedRendererFactory.makeView(authority: authority) { _ in
+            Task { @MainActor in
+                rendererSessionPreparation.cancel()
+                failedInstalledRendererReference = descriptor.reference
             }
+        }
     }
 
     private func persistRendererPreference(_ reference: RendererReference) {
@@ -1266,7 +1303,7 @@ struct SourceDetailView: View {
 
     private func rendererPlanner() throws -> SourceRendererPresentationPlanner {
         try SourceRendererPresentationPlanner(
-            installedDescriptors: installedRendererFactoryInputs.enabledDescriptors)
+            installedDescriptors: installedRendererFactoryInputs.availableDescriptors)
     }
 
     private func persistRendererPresentationSelection(_ selection: RendererPresentationState.Selection) {
@@ -1407,7 +1444,7 @@ struct SourceDetailView: View {
                                 store: store.internalStore,
                                 installedRendererFactory: installedRendererFactory,
                                 installedRendererFactoryInputs: routedInstalledRendererFactoryInputs),
-                            inlineRendererDescriptors: installedRendererFactoryInputs.enabledDescriptors,
+                            inlineRendererDescriptors: installedRendererFactoryInputs.availableDescriptors,
                             rendererPackageInputs: RendererPackageEmbedInputs.make(from: installedRendererFactoryInputs),
                             findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
                 .zoomShortcuts($readerZoom)
@@ -1426,7 +1463,7 @@ struct SourceDetailView: View {
                                 store: store.internalStore,
                                 installedRendererFactory: installedRendererFactory,
                                 installedRendererFactoryInputs: routedInstalledRendererFactoryInputs),
-                            inlineRendererDescriptors: installedRendererFactoryInputs.enabledDescriptors,
+                            inlineRendererDescriptors: installedRendererFactoryInputs.availableDescriptors,
                             rendererPackageInputs: RendererPackageEmbedInputs.make(from: installedRendererFactoryInputs),
                             findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
                 .zoomShortcuts($readerZoom)

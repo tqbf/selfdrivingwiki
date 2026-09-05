@@ -528,7 +528,7 @@ struct PageDetailView: View {
                             store: store.internalStore,
                             installedRendererFactory: installedRendererFactory,
                             installedRendererFactoryInputs: routedInstalledRendererFactoryInputs),
-                        inlineRendererDescriptors: installedRendererFactoryInputs.enabledDescriptors,
+                        inlineRendererDescriptors: installedRendererFactoryInputs.availableDescriptors,
                         rendererPackageInputs: RendererPackageEmbedInputs.make(from: installedRendererFactoryInputs),
                         findText: findText, findVersion: findVersion,
                         findOccurrence: findOccurrence)

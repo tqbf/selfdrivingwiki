@@ -9,7 +9,11 @@ status: implemented
 
 ## Progress
 
-Implemented on `feature/reader-dom-renderer-embeds`. Not merged.
+Implemented on `feature/reader-dom-renderer-embeds`. Merged through PR #1199.
+The conceptual-integrity repair (2026-09-04) replaced the remaining overlay-era
+coordinator with the production `ReaderDOMRendererCoordinator`; see
+`progress/2026-09-04T000000Z-renderer-conceptual-integrity.md` for the current
+lifecycle and session-authority flow.
 
 ## What changed
 
@@ -50,8 +54,8 @@ that. The `wiki-reader:` origin is never stamped into an external URL.
   replayed, revoked, cross-package, and cross-generation tokens fail closed.
 - The canonical `RendererPackageSchemeHandler` stays the single source of CSP,
   MIME, no-sniff, response ordering, and cancellation.
-- `ReaderRendererFrameBridgeRegistry` scopes one bridge session per frame:
-  broker, input reader, expected origin host, webview identity, generation.
+- `ReaderDOMRendererCoordinator` scopes one embed unit per placeholder:
+  broker, input reader, frame token, load timeout, and an idempotent close.
   Wrong token, origin, webview, generation, or closed state rejects the
   message. Two same-package frames cannot read each other's inputs.
 - Raw HTML frames omit `allow-scripts`. Package frames get exactly

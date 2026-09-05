@@ -22,7 +22,7 @@ struct InstalledRendererHostTests {
         let after = try await store.read()
 
         #expect(after == before)
-        #expect(host.inputs.enabledDescriptors.isEmpty)
+        #expect(host.inputs.availableDescriptors.isEmpty)
         try await handle.dispose()
     }
 
@@ -104,7 +104,7 @@ struct InstalledRendererHostTests {
 
         let handle = try await makeRuntime(layout: layout)
         let preparation = try await handle.services.prepareCurrentRegistry()
-        let prepared = try #require(preparation.enabledDescriptors.count == 1 ? preparation.enabledDescriptors.first : nil)
+        let prepared = try #require(preparation.availableDescriptors.count == 1 ? preparation.availableDescriptors.first : nil)
         guard case let .webPackage(entryPoint) = prepared.implementation else {
             Issue.record("Expected the legacy package descriptor to remain a web package.")
             return
@@ -133,7 +133,7 @@ struct InstalledRendererHostTests {
         await host.refresh()
 
         #expect(host.machineIndex == nil)
-        #expect(host.inputs.enabledDescriptors.isEmpty)
+        #expect(host.inputs.availableDescriptors.isEmpty)
         let resetSucceeded = await host.resetInstalledRendererSafeMode(
             packageID: packageID,
             version: version)
@@ -184,7 +184,7 @@ struct InstalledRendererHostTests {
         let host = InstalledRendererHost(services: UnavailableRendererServices())
         host.apply(RendererPreparation(
             machineIndex: indexA,
-            enabledDescriptors: [descriptor],
+            availableDescriptors: [descriptor],
             providers: [reservation: providerA],
             failureRecorder: { _, _ in }))
         let configurationA = try #require(host.inputs.configuration(
@@ -193,7 +193,7 @@ struct InstalledRendererHostTests {
 
         host.apply(RendererPreparation(
             machineIndex: try RendererMachineIndex(generation: 2),
-            enabledDescriptors: [],
+            availableDescriptors: [],
             providers: [:],
             failureRecorder: { _, _ in }))
 
@@ -236,7 +236,7 @@ struct InstalledRendererHostTests {
 
         let index = try await store.read()
         #expect(index.records == [conflicting])
-        #expect(host.inputs.enabledDescriptors.isEmpty)
+        #expect(host.inputs.availableDescriptors.isEmpty)
         try await handle.dispose()
     }
 

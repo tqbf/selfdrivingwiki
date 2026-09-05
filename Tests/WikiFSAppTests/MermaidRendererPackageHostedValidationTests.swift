@@ -174,7 +174,7 @@ struct MermaidRendererPackageHostedValidationTests {
             pageVersionID: PageVersionID(rawValue: "01HTESTPV00000000000000001"))
         let claims = RendererFenceClaimResolver.resolve(
             builtInDescriptors: BuiltInRendererDescriptors.all,
-            enabledInstalledDescriptors: [descriptor])
+            availableInstalledDescriptors: [descriptor])
         let admission = RendererEmbedActivationAdmission(
             pageID: document.pageID,
             pageVersionID: document.pageVersionID,
@@ -319,15 +319,11 @@ struct MermaidRendererPackageHostedValidationTests {
             for: summary, content: content)
         #expect(sourceMarkdown == "````\ngraph TD\n A-->B\n````")
 
-        // The characterization carries no reader-projected diagram tab.
-        let result = SourceDetailPresentationCharacterization.characterize(
-            source: summary,
-            boundedBytes: bytes,
-            currentMarkdown: nil,
-            hasProcessedMarkdown: false,
-            origin: nil)
-        #expect(result.tabs.isEmpty)
-        #expect(result.contentArea == .markdown)
+        #expect(SourceRendererPresentationPlanner.usesMarkdownSourcePresentation(
+            for: summary, boundedBytes: bytes, currentMarkdown: nil))
+        let planner = try SourceRendererPresentationPlanner(installedDescriptors: [])
+        #expect(try planner.matchingDescriptors(
+            for: summary, boundedBytes: bytes, currentMarkdown: nil, origin: nil).isEmpty)
 
         // AC.3's bundle leg: the app process carries no vendored engine
         // resource. The reviewed package is the only copy.
