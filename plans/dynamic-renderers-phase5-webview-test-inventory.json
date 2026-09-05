@@ -223,7 +223,7 @@
     {
       "path": "Sources/WikiFS/Renderer/InstalledRendererFactory.swift",
       "symbols": ["InstalledRendererSessionConfiguration", "InstalledRendererFactory.makeView", "InstalledRendererFactory.makeLiveSession"],
-      "tests": ["WikiAppWebViewTests.unavailableInstalledRendererReturnsNoView", "WikiAppWebViewTests.oversizedPinnedInputReturnsNoView", "WikiAppWebViewTests.factoryWiresPinnedInputAndLifecycleContracts"]
+      "tests": ["WikiAppWebViewTests.unavailableInstalledRendererKeepsSourceFallback", "WikiAppWebViewTests.oversizedPinnedInputReturnsNoView", "WikiAppWebViewTests.factoryWiresPinnedInputAndLifecycleContracts"]
     },
     {
       "path": "Sources/WikiFS/Renderer/InstalledRendererHost.swift",
@@ -346,7 +346,7 @@
       "WikiAppWebViewTests.identityReplacementClosesBeforeStartingReplacement",
       "WikiAppWebViewTests.dismantleClosesSession",
       "WikiAppWebViewTests.sessionFailureDefersStateMutation",
-      "WikiAppWebViewTests.unavailableInstalledRendererReturnsNoView",
+      "WikiAppWebViewTests.unavailableInstalledRendererKeepsSourceFallback",
       "WikiAppWebViewTests.sourceDetailKeepsInstalledFactoryOutsideBuiltInMap",
       "InstalledRendererHostTests.unavailableMachineStorePreservesSourceFallback",
       "InstalledRendererHostTests.recoveryUsesTypedReference"

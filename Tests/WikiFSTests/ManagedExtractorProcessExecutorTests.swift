@@ -9,7 +9,7 @@ import Darwin
 @Suite("Managed extractor process executor", .serialized, .timeLimit(.minutes(2)))
 struct ManagedExtractorProcessExecutorTests {
     @Test func directExecutionStreamsProgressAndReturnsTerminalResult() async throws {
-        let fixture = try Fixture(mode: "success")
+        let fixture = try Fixture(mode: "success", maximumDurationMilliseconds: 60_000)
         defer { fixture.cleanup() }
         let frames = FrameCollector()
 

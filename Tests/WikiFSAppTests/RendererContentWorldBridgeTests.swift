@@ -19,14 +19,15 @@ struct RendererContentWorldBridgeTests {
         #expect(source.contains("capability") == false)
     }
 
-    @Test("navigation activation derives request identity from the fresh nonce")
-    func navigationActivationUsesNonceDerivedRequestIdentity() {
+    @Test("navigation activation uses a fresh request identity for each event")
+    func navigationActivationUsesFreshRequestIdentity() {
         let source = RendererContentWorldBroker
             .navigationActivationScript(contentWorld: .page)
             .source
 
-        #expect(source.contains("id: {rawValue: 'navigation-' + nonce}"))
-        #expect(source.contains("requestSequence") == false)
+        #expect(source.contains("var requestSequence = 0;"))
+        #expect(source.contains("id: {rawValue: 'navigation-' + String(++requestSequence)}"))
+        #expect(source.contains("activationNonce: {rawValue: nonce}"))
     }
 
     @Test("isolated-world bridge replies only to bound main-frame package messages")
