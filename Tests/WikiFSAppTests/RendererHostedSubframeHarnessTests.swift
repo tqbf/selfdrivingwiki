@@ -360,6 +360,48 @@ struct RendererHostedSubframeHarnessTests {
             timeout: .seconds(2))
     }
 
+    @Test("inline renderer host accepts and removes a DOM package embed")
+    func inlineRendererHostAcceptsAndRemovesDOMPackageEmbed() async throws {
+        let harness = try await RendererHostedWebKitHarness.permissive()
+        defer { harness.close() }
+        try await harness.loadHTML("""
+        <!doctype html><html><body>
+        <span class="sdw-inline-renderer" id="source-include" data-renderer-admitted="true">
+          <span class="sdw-inline-renderer__fallback">source fallback</span>
+        </span>
+        <script>\(WikiReaderWebView.embedBootstrapJS)</script>
+        </body></html>
+        """)
+
+        try await harness.executeJavaScript(
+            "window.sdwInjectRendererEmbed('source-include', 'source-include-expansion', 'iframe', 'about:blank', 'Excalidraw', 480, '[\"allow-scripts\"]')",
+            expectedValue: RendererDOMEmbedInjection.injectionAcknowledgement,
+            description: "inline renderer package-frame injection")
+        try await harness.waitForJavaScriptTrue(
+            "String(document.querySelector('#source-include > iframe.sdw-renderer-embed') !== null)",
+            description: "package frame mounted inside inline renderer host")
+        try await harness.waitForJavaScriptTrue(
+            "String(document.querySelector('#source-include > .sdw-inline-renderer__fallback').hidden === true)",
+            description: "source include fallback hidden after package-frame injection")
+        try await harness.executeJavaScript(
+            "window.sdwInjectRendererEmbed('source-include', 'replacement', 'iframe', 'about:blank', 'Excalidraw', 480, 'malformed')",
+            expectedValue: "bad-sandbox",
+            description: "malformed inline renderer reinjection")
+        try await harness.waitForJavaScriptTrue(
+            "String(document.querySelector('#source-include-expansion-embed') !== null && document.querySelector('#source-include > .sdw-inline-renderer__fallback').hidden === true)",
+            description: "failed reinjection preserves the working frame and fallback state")
+        try await harness.executeJavaScript(
+            "window.sdwRemoveRendererEmbed('source-include')",
+            expectedValue: "removed",
+            description: "inline renderer package-frame removal")
+        try await harness.waitForJavaScriptTrue(
+            "String(document.querySelector('#source-include > iframe.sdw-renderer-embed') === null)",
+            description: "package frame removed from inline renderer host")
+        try await harness.waitForJavaScriptTrue(
+            "String(document.querySelector('#source-include > .sdw-inline-renderer__fallback').hidden === false)",
+            description: "source include fallback restored after package-frame removal")
+    }
+
     @Test("lifecycle adapter invokes scoped invalidation")
     func lifecycleAdapterInvokesScopedInvalidation() async throws {
         let harness = try await RendererHostedWebKitHarness.permissive()
