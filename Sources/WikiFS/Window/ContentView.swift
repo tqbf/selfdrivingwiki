@@ -572,6 +572,10 @@ struct RendererActivationView: View {
                 builtInView
             } else if let packageView = packageRendererView(for: descriptor) {
                 packageView
+            } else if rendererSessionPreparation.isPending {
+                // Hold the window while the session prepares; "could not be
+                // presented" would be a false error during the in-flight window.
+                RendererPreparingPane(rendererName: descriptor.displayName)
             } else {
                 unavailableView(reason: "The renderer could not be presented.")
             }

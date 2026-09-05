@@ -1238,13 +1238,24 @@ struct SourceDetailView: View {
 
     private func prepareSelectedRendererSession() {
         guard rendererPresentationLifecycle.state.selection == .rendered,
-              let reference = rendererPresentationLifecycle.state.pinnedRenderer,
-              let descriptor = rendererDescriptors.first(where: { $0.reference == reference }),
+              let reference = rendererPresentationLifecycle.state.pinnedRenderer else {
+            // No rendered pane is selected, so there is no session to prepare.
+            rendererSessionPreparation.cancel()
+            return
+        }
+        guard let descriptor = rendererDescriptors.first(where: { $0.reference == reference }),
               case .webPackage = descriptor.implementation,
               let configuration = routedInstalledRendererFactoryInputs.configuration(for: descriptor),
               let currentReader = rendererAuthorizedInputResolver.rendererAuthorizedInputReader(for: file.id),
               case .source(let versionID) = currentReader.authorizedInput
-        else { rendererSessionPreparation.cancel(); return }
+        else {
+            // The renderer tab is selected but its session can never be
+            // prepared (no package configuration, no authorized input). Mark
+            // the definitive failure so the host falls back to Source instead
+            // of holding the pane forever.
+            rendererSessionPreparation.markUnavailable()
+            return
+        }
         let input = currentReader.authorizedInput
         let admittedSource: RendererEmbeddedContent.Source?
         if let bytes = sourceBytesSnapshot, let mime = file.mimeType {
@@ -1268,14 +1279,26 @@ struct SourceDetailView: View {
         if let builtIn = BuiltInRendererFactoryMap.makeView(for: descriptor, inputs: rendererFactoryInputs) {
             return builtIn
         }
-        guard failedInstalledRendererReference != descriptor.reference,
-              let authority = rendererSessionPreparation.prepared,
-              authority.descriptor.reference == descriptor.reference else { return nil }
-        return installedRendererFactory.makeView(authority: authority) { _ in
-            Task { @MainActor in
-                rendererSessionPreparation.cancel()
-                failedInstalledRendererReference = descriptor.reference
+        guard failedInstalledRendererReference != descriptor.reference else { return nil }
+        switch rendererSessionPreparation.phase {
+        case .prepared:
+            guard let authority = rendererSessionPreparation.prepared,
+                  authority.descriptor.reference == descriptor.reference else { return nil }
+            return installedRendererFactory.makeView(authority: authority) { _ in
+                Task { @MainActor in
+                    rendererSessionPreparation.cancel()
+                    failedInstalledRendererReference = descriptor.reference
+                }
             }
+        case .failed:
+            return nil
+        case .idle, .preparing:
+            // Hold the pane while the session prepares. Falling back now
+            // would revert the selection to Source — and that revert cancels
+            // the in-flight preparation, which made the renderer tab
+            // unreachable for installed packages no matter how often the
+            // user retried.
+            return AnyView(RendererPreparingPane(rendererName: descriptor.displayName))
         }
     }
 

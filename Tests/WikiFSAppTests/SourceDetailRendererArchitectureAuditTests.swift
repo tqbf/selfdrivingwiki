@@ -50,7 +50,10 @@ import Testing
         // inline attachments do not silently fall back to the host-only
         // default resolver.
         #expect(source.components(separatedBy: "RendererInlineAttachmentResolverFactory.make").count - 1 == 2)
-        #expect(source.components(separatedBy: "installedRendererFactoryInputs: installedRendererFactoryInputs").count - 1 == 2)
+        // The two markdown paths route the store-navigation-wrapped inputs so
+        // inline attachments do not silently fall back to the host-only
+        // default resolver.
+        #expect(source.components(separatedBy: "installedRendererFactoryInputs: routedInstalledRendererFactoryInputs").count - 1 == 2)
 
         let sourceRefreshStart = try #require(source.range(of: ".onChange(of: store.sources)"))
         let sourceRefreshEnd = try #require(source[sourceRefreshStart.lowerBound...].range(of: ".background"))
@@ -95,6 +98,29 @@ import Testing
 
         #expect(host.contains("let failedSourceID = state.sourceID"))
         #expect(host.contains("shouldApplyDeferredFallback(failedSourceID: failedSourceID, currentState: state)"))
+    }
+
+    @Test func rendererPaneHoldsWhileSessionPreparationIsPending() throws {
+        // The pane-holding contract for installed web-package renderers:
+        // `renderedContent` must return a preparing pane while the owner is
+        // idle/preparing and return nil only on a definitive failure. An
+        // early fallback reverts the selection to Source, the revert re-keys
+        // the preparation task and cancels it, and the renderer tab becomes
+        // unreachable no matter how often the user retries.
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let detail = try String(contentsOf: root.appendingPathComponent("Sources/WikiFS/Sources/SourceDetailView.swift"), encoding: .utf8)
+        let factory = try String(contentsOf: root.appendingPathComponent("Sources/WikiFS/Renderer/InstalledRendererFactory.swift"), encoding: .utf8)
+
+        #expect(detail.contains("switch rendererSessionPreparation.phase {"))
+        #expect(detail.contains("case .idle, .preparing:"))
+        #expect(detail.contains("RendererPreparingPane(rendererName: descriptor.displayName)"))
+        // A definitive request-assembly failure marks the pane failed instead
+        // of silently cancelling, so the host can fall back truthfully.
+        #expect(detail.contains("rendererSessionPreparation.markUnavailable()"))
+        #expect(factory.contains("enum Phase"))
+        #expect(factory.contains("func markUnavailable()"))
+        #expect(factory.contains("var isPending: Bool"))
     }
 
     @Test func rendererHostUsesOneTabPerAvailableRenderingAndNoSplitControl() throws {

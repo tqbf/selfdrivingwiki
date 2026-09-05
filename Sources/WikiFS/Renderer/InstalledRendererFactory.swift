@@ -199,8 +199,25 @@ enum RendererSessionPreparer {
 final class RendererSessionPreparationOwner {
     typealias Preparation = @MainActor (RendererSessionPreparationRequest) async throws -> RendererPreparedSessionAuthority
 
+    /// Observable lifecycle of the latest preparation request. `preparing`
+    /// lets a host hold its pane while the session builds; `failed` means the
+    /// pane definitively cannot be served (the preparation threw, or the host
+    /// could not assemble a request at all), so the host may fall back.
+    /// `idle` covers both "nothing requested" and "cancelled" — neither is a
+    /// failure. Falling back during `idle`/`preparing` is the bug this phase
+    /// exists to prevent: the fallback reverts the pane's selection, the
+    /// revert cancels the in-flight preparation, and the renderer becomes
+    /// unreachable no matter how often the user retries.
+    enum Phase: Equatable, Sendable {
+        case idle
+        case preparing
+        case prepared
+        case failed
+    }
+
     private(set) var prepared: RendererPreparedSessionAuthority?
     private(set) var identity: RendererSessionPreparationIdentity?
+    private(set) var phase: Phase = .idle
     private let preparation: Preparation
     private var generation: UInt64 = 0
     private var task: Task<Void, Never>?
@@ -211,6 +228,11 @@ final class RendererSessionPreparationOwner {
         self.preparation = preparation
     }
 
+    /// Whether the latest request is still unresolved — nothing requested
+    /// (`idle`) or in flight (`preparing`). Hosts should hold a preparing
+    /// pane while this is true and only treat `failed` as a load failure.
+    var isPending: Bool { phase == .idle || phase == .preparing }
+
     func prepare(_ request: RendererSessionPreparationRequest) {
         generation &+= 1
         let requestedGeneration = generation
@@ -219,15 +241,18 @@ final class RendererSessionPreparationOwner {
         prepared?.close()
         prepared = nil
         identity = requestedIdentity
+        phase = .preparing
         task = Task {
             do {
                 let result = try await preparation(request)
                 guard Task.isCancelled == false, generation == requestedGeneration,
                       identity == requestedIdentity else { result.close(); return }
                 prepared = result
+                phase = .prepared
             } catch {
                 guard generation == requestedGeneration, identity == requestedIdentity else { return }
                 DebugLog.reader("Renderer session preparation failed; using Source fallback: \(error)")
+                phase = .failed
             }
         }
     }
@@ -239,6 +264,20 @@ final class RendererSessionPreparationOwner {
         prepared?.close()
         prepared = nil
         identity = nil
+        phase = .idle
+    }
+
+    /// The host cannot assemble a preparation request for the selected pane
+    /// at all (missing configuration or authorized input). Unlike `cancel()`,
+    /// this is definitive: it tells the host to fall back instead of waiting.
+    func markUnavailable() {
+        generation &+= 1
+        task?.cancel()
+        task = nil
+        prepared?.close()
+        prepared = nil
+        identity = nil
+        phase = .failed
     }
 
 }
