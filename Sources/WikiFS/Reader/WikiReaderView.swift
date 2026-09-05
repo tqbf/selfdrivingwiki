@@ -1234,10 +1234,11 @@ final class WikiReaderWebView: WKWebView {
       window.sdwInjectRendererEmbed = function(placeholderID, expansionID, kind, src, title, height, sandboxJSON){
         var card = document.getElementById(placeholderID);
         if(!card){ return 'no-card'; }
-        var expansion = card.querySelector('.sdw-renderer-card__expansion');
-        if(!expansion){ return 'no-expansion'; }
+        var embedHost = card.querySelector('.sdw-renderer-card__expansion');
+        if(!embedHost && card.classList.contains('sdw-inline-renderer')){ embedHost = card; }
+        if(!embedHost){ return 'no-embed-host'; }
         // Remove only this placeholder's prior surface (scoped collapse).
-        var prior = expansion.querySelector('.sdw-renderer-embed');
+        var prior = embedHost.querySelector('.sdw-renderer-embed');
         if(prior){ prior.remove(); }
         var element;
         if(kind === 'audio'){
@@ -1273,7 +1274,7 @@ final class WikiReaderWebView: WKWebView {
         element.className = 'sdw-renderer-embed';
         element.id = expansionID + '-embed';
         element.setAttribute('aria-label', title);
-        expansion.appendChild(element);
+        embedHost.appendChild(element);
         window.__sdwRendererEmbedLoads[placeholderID] = 'appended';
         return 'injected';
       };
@@ -1282,9 +1283,10 @@ final class WikiReaderWebView: WKWebView {
       window.sdwRemoveRendererEmbed = function(placeholderID){
         var card = document.getElementById(placeholderID);
         if(!card){ return 'no-card'; }
-        var expansion = card.querySelector('.sdw-renderer-card__expansion');
-        if(!expansion){ return 'no-expansion'; }
-        var prior = expansion.querySelector('.sdw-renderer-embed');
+        var embedHost = card.querySelector('.sdw-renderer-card__expansion');
+        if(!embedHost && card.classList.contains('sdw-inline-renderer')){ embedHost = card; }
+        if(!embedHost){ return 'no-embed-host'; }
+        var prior = embedHost.querySelector('.sdw-renderer-embed');
         if(prior){ prior.remove(); return 'removed'; }
         return 'none';
       };

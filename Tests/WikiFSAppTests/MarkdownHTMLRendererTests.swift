@@ -793,6 +793,8 @@ struct MarkdownHTMLRendererTests {
         #expect(script.contains("event.target.closest('.sdw-renderer-card__row')"))
         #expect(script.contains("event.target.closest('[data-renderer-action=\"open-window\"]')"))
         #expect(script.contains("action:card.dataset.rendererExpanded==='true'?'collapse':'activate'"))
+        #expect(WikiReaderWebView.embedBootstrapJS.contains("card.classList.contains('sdw-inline-renderer')"))
+        #expect(WikiReaderWebView.embedBootstrapJS.contains("embedHost.appendChild(element)"))
         #expect(script.contains("sdw-renderer-card__collapse") == false)
         #expect(script.contains("__sdwRendererAttachmentPresentCollapse") == false)
     }
