@@ -795,6 +795,8 @@ struct MarkdownHTMLRendererTests {
         #expect(script.contains("action:card.dataset.rendererExpanded==='true'?'collapse':'activate'"))
         #expect(WikiReaderWebView.embedBootstrapJS.contains("card.classList.contains('sdw-inline-renderer')"))
         #expect(WikiReaderWebView.embedBootstrapJS.contains("embedHost.appendChild(element)"))
+        #expect(WikiReaderWebView.embedBootstrapJS.contains("inlineFallback.hidden = true"))
+        #expect(WikiReaderWebView.embedBootstrapJS.contains("inlineFallback.hidden = false"))
         #expect(script.contains("sdw-renderer-card__collapse") == false)
         #expect(script.contains("__sdwRendererAttachmentPresentCollapse") == false)
     }

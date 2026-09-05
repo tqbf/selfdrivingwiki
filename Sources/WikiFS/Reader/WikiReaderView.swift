@@ -1237,9 +1237,6 @@ final class WikiReaderWebView: WKWebView {
         var embedHost = card.querySelector('.sdw-renderer-card__expansion');
         if(!embedHost && card.classList.contains('sdw-inline-renderer')){ embedHost = card; }
         if(!embedHost){ return 'no-embed-host'; }
-        // Remove only this placeholder's prior surface (scoped collapse).
-        var prior = embedHost.querySelector('.sdw-renderer-embed');
-        if(prior){ prior.remove(); }
         var element;
         if(kind === 'audio'){
           element = document.createElement('audio');
@@ -1274,6 +1271,12 @@ final class WikiReaderWebView: WKWebView {
         element.className = 'sdw-renderer-embed';
         element.id = expansionID + '-embed';
         element.setAttribute('aria-label', title);
+        // Replace only after the new surface is fully validated. A malformed
+        // reinjection must keep the working surface and its fallback state.
+        var prior = embedHost.querySelector('.sdw-renderer-embed');
+        if(prior){ prior.remove(); }
+        var inlineFallback = card.querySelector('.sdw-inline-renderer__fallback');
+        if(inlineFallback){ inlineFallback.hidden = true; inlineFallback.setAttribute('aria-hidden', 'true'); }
         embedHost.appendChild(element);
         window.__sdwRendererEmbedLoads[placeholderID] = 'appended';
         return 'injected';
@@ -1287,7 +1290,12 @@ final class WikiReaderWebView: WKWebView {
         if(!embedHost && card.classList.contains('sdw-inline-renderer')){ embedHost = card; }
         if(!embedHost){ return 'no-embed-host'; }
         var prior = embedHost.querySelector('.sdw-renderer-embed');
-        if(prior){ prior.remove(); return 'removed'; }
+        if(prior){
+          prior.remove();
+          var inlineFallback = card.querySelector('.sdw-inline-renderer__fallback');
+          if(inlineFallback){ inlineFallback.hidden = false; inlineFallback.setAttribute('aria-hidden', 'false'); }
+          return 'removed';
+        }
         return 'none';
       };
 
