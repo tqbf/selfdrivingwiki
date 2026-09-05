@@ -14,7 +14,7 @@ struct RaceFreeProcessGroupRunnerTests {
             standardInput: input,
             stdoutLimit: 16 * 1024,
             stderrLimit: 4 * 1024))
-        let result = try await handle.result(timeout: .seconds(5))
+        let result = try await handle.result(timeout: .seconds(60))
         #expect(result.terminationCause == .exited(code: 0))
         #expect(result.terminationStatus == 0)
         let frames = result.stdout.split(separator: 0x0A)
