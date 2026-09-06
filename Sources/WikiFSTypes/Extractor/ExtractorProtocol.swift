@@ -551,15 +551,31 @@ public struct ExtractorReportedMetadata: Codable, Hashable, Sendable {
         validatedToolName: nil,
         toolVersion: nil,
         modelName: nil,
-        modelVersion: nil)
+        modelVersion: nil,
+        language: nil,
+        transcriptGenerated: nil)
 
     public let toolName: String?
     public let toolVersion: String?
     public let modelName: String?
     public let modelVersion: String?
+    /// The caption language a transcript package selected, when it can
+    /// report one. Optional and additive: packages and hosts that never
+    /// write it keep decoding byte-for-byte.
+    public let language: String?
+    /// Whether the selected captions were auto-generated, when the package
+    /// can report it. Optional and additive like `language`.
+    public let transcriptGenerated: Bool?
 
-    public init(toolName: String? = nil, toolVersion: String? = nil, modelName: String? = nil, modelVersion: String? = nil) throws {
-        for value in [toolName, toolVersion, modelName, modelVersion].compactMap({ $0 }) {
+    public init(
+        toolName: String? = nil,
+        toolVersion: String? = nil,
+        modelName: String? = nil,
+        modelVersion: String? = nil,
+        language: String? = nil,
+        transcriptGenerated: Bool? = nil
+    ) throws {
+        for value in [toolName, toolVersion, modelName, modelVersion, language].compactMap({ $0 }) {
             guard value.isEmpty == false, value.utf8.count <= 256, value.contains("\0") == false else {
                 throw ExtractorValidationError.invalidManifest("reported metadata")
             }
@@ -568,13 +584,24 @@ public struct ExtractorReportedMetadata: Codable, Hashable, Sendable {
         self.toolVersion = toolVersion
         self.modelName = modelName
         self.modelVersion = modelVersion
+        self.language = language
+        self.transcriptGenerated = transcriptGenerated
     }
 
-    private init(validatedToolName: String?, toolVersion: String?, modelName: String?, modelVersion: String?) {
+    private init(
+        validatedToolName: String?,
+        toolVersion: String?,
+        modelName: String?,
+        modelVersion: String?,
+        language: String?,
+        transcriptGenerated: Bool?
+    ) {
         self.toolName = validatedToolName
         self.toolVersion = toolVersion
         self.modelName = modelName
         self.modelVersion = modelVersion
+        self.language = language
+        self.transcriptGenerated = transcriptGenerated
     }
 
     public init(from decoder: any Decoder) throws {
@@ -583,7 +610,9 @@ public struct ExtractorReportedMetadata: Codable, Hashable, Sendable {
             toolName: container.decodeIfPresent(String.self, forKey: .toolName),
             toolVersion: container.decodeIfPresent(String.self, forKey: .toolVersion),
             modelName: container.decodeIfPresent(String.self, forKey: .modelName),
-            modelVersion: container.decodeIfPresent(String.self, forKey: .modelVersion))
+            modelVersion: container.decodeIfPresent(String.self, forKey: .modelVersion),
+            language: container.decodeIfPresent(String.self, forKey: .language),
+            transcriptGenerated: container.decodeIfPresent(Bool.self, forKey: .transcriptGenerated))
     }
 }
 

@@ -51,6 +51,19 @@
           "registrationID": "apple-episode"
         }
       }
+    },
+    {
+      "route": {
+        "kind": "youtube-transcript",
+        "mimeType": "video/youtube"
+      },
+      "extractor": {
+        "kind": "installed",
+        "installed": {
+          "packageID": "org.selfdrivingwiki.youtube-transcript",
+          "registrationID": "captions"
+        }
+      }
     }
   ]
 }

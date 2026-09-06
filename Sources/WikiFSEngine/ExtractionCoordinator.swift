@@ -68,6 +68,9 @@ public protocol ExtractionServices: Sendable {
     /// The Apple Podcasts transcript route: same package-only shape as the
     /// RSS sibling, over the `apple-podcast-transcript` kind.
     func prepareApplePodcastTranscript() async throws -> ProcessPackageApplePodcastTranscript
+    /// The YouTube transcript route: same package-only shape as the podcast
+    /// siblings, over the `youtube-transcript` kind.
+    func prepareYouTubeTranscript() async throws -> ProcessPackageYouTubeTranscript
     /// Active package registration claims used for import recognition.
     func registeredExtractionInputs() async -> RegisteredExtractionInputs
 }
@@ -102,6 +105,13 @@ public extension ExtractionServices {
     /// coordinator). The process facade overrides it with real package
     /// resolution.
     func prepareApplePodcastTranscript() async throws -> ProcessPackageApplePodcastTranscript {
+        throw ExtractionServicesError.unavailable
+    }
+
+    /// Default for seams that never run packages (test runtimes, the legacy
+    /// coordinator). The process facade overrides it with real package
+    /// resolution.
+    func prepareYouTubeTranscript() async throws -> ProcessPackageYouTubeTranscript {
         throw ExtractionServicesError.unavailable
     }
 

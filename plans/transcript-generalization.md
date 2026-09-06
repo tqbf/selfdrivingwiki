@@ -1,5 +1,17 @@
 # Transcript Pipeline Generalization Plan
 
+> **Historical design record.** This document describes the PR5 (#808)
+> direct-fetch design, in which `WikiStoreModel.transcribe` fetched YouTube
+> captions through an in-process fetcher. That path is gone: podcast and
+> YouTube transcripts now run through reviewed extractor packages in the
+> extraction queue, with installed-package provenance. The unified
+> provider-dispatch *shape* survived — `transcribe(sourceID:)` is pure
+> dispatch and throws `.transcriptQueueRequired` for every transcript
+> provider — but the per-provider fetch protocols and direct writes it
+> designed are superseded. See
+> [`plans/youtube-transcript-extractor-package.md`](youtube-transcript-extractor-package.md)
+> for the current YouTube contract.
+
 > **Investigation output (read-only).** Maps the current podcast + YouTube
 > transcript paths and designs a unified byteless-transcript pipeline that
 > dispatches by provider. Scope: podcast (done, PR #807) + YouTube (broken,

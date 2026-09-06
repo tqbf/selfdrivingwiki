@@ -8,7 +8,7 @@ import Testing
 /// TTML packaging). Both podcast transcribe paths now enqueue through the
 /// extraction queue — the reviewed apple-podcast-transcript and
 /// podcast-transcript package routes — so the model-level `transcribe`
-/// throws `.podcastQueueRequired` for podcast sources and writes nothing.
+/// throws `.transcriptQueueRequired` for podcast sources and writes nothing.
 ///
 /// Uses an exploding HTML fetcher so we can assert which path ran — no
 /// network, no private frameworks.
@@ -90,7 +90,7 @@ struct PodcastIngestRoutingTests {
 
     /// The Apple TTML packaging: the model has no direct podcast fetch path.
     /// `transcribe(sourceID:)` on an Apple episode source throws
-    /// `.podcastQueueRequired` — callers enqueue the durable job, which the
+    /// `.transcriptQueueRequired` — callers enqueue the durable job, which the
     /// queue resolves through the reviewed apple-podcast-transcript package
     /// (installed-package provenance; RSS fallback when no helper is staged,
     /// proven by the queue/provider tests).
@@ -106,13 +106,13 @@ struct PodcastIngestRoutingTests {
         // write nothing itself.
         let sources = try store.listSources()
         let stored = try #require(sources.first { $0.filename == outcome.filename })
-        await #expect(throws: SourceRefreshService.RefreshError.podcastQueueRequired) {
+        await #expect(throws: SourceRefreshService.RefreshError.transcriptQueueRequired) {
             _ = try await model.transcribe(sourceID: stored.id)
         }
         #expect(try store.processedMarkdownHead(sourceID: stored.id) == nil)
     }
 
-    /// The generic RSS podcast arm behaves identically: `.podcastQueueRequired`,
+    /// The generic RSS podcast arm behaves identically: `.transcriptQueueRequired`,
     /// nothing written. (Preserved from the RSS packaging; now pinned beside
     /// the Apple arm so both podcast source classes keep the same shape.)
     @Test func rssPodcastTranscribeRequiresQueueEnqueue() async throws {
@@ -129,7 +129,7 @@ struct PodcastIngestRoutingTests {
                 externalIdentity: nil),
             role: .primary)
 
-        await #expect(throws: SourceRefreshService.RefreshError.podcastQueueRequired) {
+        await #expect(throws: SourceRefreshService.RefreshError.transcriptQueueRequired) {
             _ = try await model.transcribe(sourceID: summary.id)
         }
         #expect(try store.processedMarkdownHead(sourceID: summary.id) == nil)

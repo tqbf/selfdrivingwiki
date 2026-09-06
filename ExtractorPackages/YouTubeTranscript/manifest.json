@@ -1,0 +1,51 @@
+{
+  "capabilities": [
+    "network"
+  ],
+  "displayName": "YouTube Transcript",
+  "entryPoint": "bin/youtube-transcript-extractor",
+  "files": [
+    {
+      "digest": "368c3505d9fa1b819f961105f46af7170f875397e81bb35e04eba509122f8e95",
+      "path": "PROVENANCE.md"
+    },
+    {
+      "digest": "d35ba748f41f1d480644d852fc00fb5e0a1f4f6aa554f8cf47c37782f601393f",
+      "path": "bin/youtube-transcript"
+    },
+    {
+      "digest": "24be677e49012450321cf7785cf019b4a7bdea9f94392e19fd89d8f07b365026",
+      "path": "bin/youtube-transcript-extractor"
+    }
+  ],
+  "launch": {
+    "arguments": [
+      "run",
+      "--script"
+    ],
+    "command": "uv",
+    "mode": "runtime"
+  },
+  "limits": {
+    "maximumDurationMilliseconds": 300000,
+    "maximumInputByteCount": 1048576,
+    "maximumMarkdownOutputByteCount": 33554432,
+    "maximumProgressEventCount": 64
+  },
+  "manifestRevision": 1,
+  "packageID": "org.selfdrivingwiki.youtube-transcript",
+  "protocolRevision": 3,
+  "registrations": [
+    {
+      "displayName": "YouTube Transcript",
+      "id": "captions",
+      "kinds": [
+        "youtube-transcript"
+      ],
+      "mimeTypes": [
+        "video/youtube"
+      ]
+    }
+  ],
+  "version": "1.0.0"
+}

@@ -9,7 +9,7 @@ import Foundation
 /// parse without touching the ingest plumbing in `WikiStoreModel.addURL`.
 ///
 /// Issue #564 (Phase 4 follow-up): implement once the Vimeo API token is wired
-/// through Keychain. The HTTP flow will mirror `YouTubeTranscriptService`:
+/// through Keychain. The HTTP flow will mirror the extractor-package
 ///   1. Resolve the Vimeo token from Keychain (`KeychainCredentialStore`).
 ///   2. `GET /videos/{id}/transcripts` with `Authorization: Bearer <token>`.
 ///   3. Download the transcript resource (URN → a VTT/SRT URL).

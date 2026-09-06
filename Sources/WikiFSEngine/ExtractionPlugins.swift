@@ -152,18 +152,13 @@ public enum DefuddleExtractionPlugin {
     }
 }
 
-public enum YouTubeTranscriptPlugin {
-    public static let id = PluginID("wiki.extraction.youtube-transcript")
-    public static let key = ExtractionBackendKey(kind: .youtubeTranscript, backendID: "youtube")
-
-    public static func definition(
-        makeFetcher: @escaping @Sendable () async -> any YouTubeTranscriptFetching
-    ) -> PluginDefinition {
-        adapterDefinition(id: id, label: "YouTube transcripts", key: key) {
-            .youtubeTranscript(await makeFetcher())
-        }
-    }
-}
+// `YouTubeTranscriptPlugin` was REMOVED with the YouTube caption packaging:
+// YouTube transcripts run through the reviewed youtube-transcript package,
+// whose prepared `.youtubeTranscript` adapter carries exact package
+// provenance. The former built-in fetcher registration could not carry
+// provenance and had no production composition site. The direct
+// `YouTubeTranscriptService` + `TranscriptSubprocess` path was deleted with
+// it.
 
 // `RSSPodcastTranscriptPlugin` was REMOVED: RSS podcast transcripts run
 // through the reviewed podcast-transcript package, whose prepared

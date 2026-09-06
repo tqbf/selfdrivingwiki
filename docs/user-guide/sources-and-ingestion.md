@@ -50,6 +50,14 @@ the provider and the video/episode id. These sources are first-class (visible,
 searchable, and citable), and you embed them as inline players with
 `![[source:Name]]`. See [Embeds](pages-and-links.md#embedding-a-youtube-video-or-other-web-media).
 
+**Transcripts are on demand.** Apple Podcasts, RSS podcast feeds, and
+YouTube sources show a **Transcribe** action; the extraction queue fetches
+the transcript through a reviewed extractor package and appends it to the
+source with full provenance. YouTube transcription fetches only the captions
+YouTube exposes — videos without captions, with captions disabled, or with
+blocked requests fail with a short cause, and no media is ever downloaded.
+See [Extractor packages](extractor-packages.md).
+
 ### From Zotero
 
 If you use [Zotero](https://www.zotero.org/) for reference management:

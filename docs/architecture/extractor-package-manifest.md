@@ -69,8 +69,8 @@ enforces the boundary.
 | --- | --- | --- |
 | `id` | string | 1 to 64 characters, lowercase ASCII letters, digits, hyphens. |
 | `displayName` | string | 1 to 128 bytes. |
-| `kinds` | array | Nonempty subset of `pdf`, `html`, `docx`, `podcast-transcript`, and `apple-podcast-transcript`. |
-| `mimeTypes` | array | Nonempty set of normalized lowercase MIME types. A `podcast-transcript` registration must declare its route MIME, typically the synthetic `audio/podcast` source MIME. An `apple-podcast-transcript` registration declares the synthetic `audio/apple-podcast` source MIME. |
+| `kinds` | array | Nonempty subset of `pdf`, `html`, `docx`, `podcast-transcript`, `apple-podcast-transcript`, and `youtube-transcript`. |
+| `mimeTypes` | array | Nonempty set of normalized lowercase MIME types. A `podcast-transcript` registration must declare its route MIME, typically the synthetic `audio/podcast` source MIME. An `apple-podcast-transcript` registration declares the synthetic `audio/apple-podcast` source MIME. A `youtube-transcript` registration declares the synthetic `video/youtube` source MIME. |
 | `filenameExtensions` | array, optional | Lowercase ASCII letters and digits, no leading dot, at most 32 characters. |
 
 Duplicate values inside one registration are rejected. Duplicate registration IDs in one manifest are rejected.
@@ -180,6 +180,7 @@ The reviewed packages in `ExtractorPackages/` are complete reviewed packages:
 - `DoclingServe/manifest.json` — PDF conversion through a self-hosted Docling Serve, `direct` launch, manifest revision 2 with an optional `api-token` credential requirement, `network` capability.
 - `PodcastTranscript/manifest.json` — RSS podcast transcript conversion, `uv run --script` launch, manifest revision 1 with protocol revision 3 (the `remote-url` transport and the `podcast-transcript` kind are registration data, not manifest fields), `network` capability only.
 - `ApplePodcastTranscript/manifest.json` — Apple Podcasts episode TTML transcript conversion, same launch and manifest shapes, registering only `apple-podcast-transcript` for `audio/apple-podcast`, `network` capability only. The signed `podcast-token-helper` is deliberately NOT a package file: code signing rewrites Mach-O bytes, which would break the digest contract. The host stages the helper into the private operation root for this exact revision; the request's operation configuration carries only the staged helper's relative path.
+- `YouTubeTranscript/manifest.json` — YouTube caption conversion, `uv run --script` launch, manifest revision 1 with protocol revision 3, registering only `youtube-transcript` for `video/youtube`, `network` capability only. The package fetches only the captions YouTube exposes through `youtube-transcript-api` (an unofficial interface that can change or be blocked); it never downloads media and never runs speech-to-text.
 
 ### Protocol revisions across manifest revisions
 

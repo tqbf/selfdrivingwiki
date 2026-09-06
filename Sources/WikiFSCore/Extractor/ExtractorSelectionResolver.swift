@@ -71,6 +71,9 @@ public enum ExtractorSelectionResolver {
         if route == .canonicalApplePodcastTranscript {
             return resolveApplePodcastTranscript(configuration: configuration, activeRegistrations: activeRegistrations)
         }
+        if route == .canonicalYouTubeTranscript {
+            return resolveYouTubeTranscript(configuration: configuration, activeRegistrations: activeRegistrations)
+        }
         return nil
     }
 
@@ -122,6 +125,18 @@ public enum ExtractorSelectionResolver {
         activeRegistrations: [ActiveExtractorRegistration]
     ) -> ExtractionSelectionDecision {
         resolve(.canonicalApplePodcastTranscript, kind: .applePodcastTranscript, configuration: configuration, activeRegistrations: activeRegistrations)
+    }
+
+    /// YouTube transcript resolution: the same generic precedence over the
+    /// YouTube route and the `youtube-transcript` kind. The bundled default
+    /// record supplies the reviewed YouTube lineage when the user has never
+    /// configured the route; an explicit `.none` disables; an unresolvable
+    /// saved reference fails closed. No YouTube-specific policy lives here.
+    public static func resolveYouTubeTranscript(
+        configuration: ExtractionConfig,
+        activeRegistrations: [ActiveExtractorRegistration]
+    ) -> ExtractionSelectionDecision {
+        resolve(.canonicalYouTubeTranscript, kind: .youtubeTranscript, configuration: configuration, activeRegistrations: activeRegistrations)
     }
 
     /// The single generic precedence: the stored route record first, then the

@@ -44,7 +44,7 @@ The host encodes one `ExtractorProtocolRequest` as JSON, appends a newline, writ
 | --- | --- | --- |
 | `requestID` | UUID string | Identifies the operation. Every frame must repeat it. |
 | `protocolRevision` | integer | `1`, `2`, or `3`. Must equal the manifest `protocolRevision`. |
-| `kind` | string | `pdf`, `html`, `docx`, `podcast-transcript`, or `apple-podcast-transcript`. |
+| `kind` | string | `pdf`, `html`, `docx`, `podcast-transcript`, `apple-podcast-transcript`, or `youtube-transcript`. |
 | `mimeType` | string | Normalized lowercase MIME type. |
 | `originalFilename` | string | 1 to 1,024 bytes, no NUL. |
 | `inputTransport` | string | `operation-file` (all revisions) or `remote-url` (revision 3). |
@@ -139,7 +139,7 @@ Every package frame uses one envelope:
 | `invalid-request` | The request is malformed for the package. | Package |
 | `missing-runtime` | A runtime command is absent. | Host |
 | `setup` | Dependency or model setup failed. | Package |
-| `timeout` | The operation passed its deadline or duration limit. | Host |
+| `timeout` | The operation passed its deadline or duration limit. | Host, or the package when it detects the request deadline has passed |
 | `cancellation` | The user or the host canceled the operation. | Host |
 | `process-termination` | The process exited nonzero or died from a signal. | Host |
 | `output-limit` | Output exceeded a host limit. | Host |
@@ -180,6 +180,8 @@ The current working directory is the operation root.
 
 The host owns time. The effective timeout is the smaller of the manifest duration limit and the remaining time to the request deadline. When the timeout passes or the host cancels the task, the host sends `SIGTERM` to the verified process group, waits a one-second grace period, and then sends `SIGKILL` to the same group. The host rechecks the executable identity immediately before spawn and refuses to launch changed bytes.
 
+A package that receives a deadline may check it at its own processing seams and report `timeout` itself, before the host terminates the process. That self-report does not weaken host ownership: the host still enforces the deadline and still terminates the process group when the effective timeout passes.
+
 ## Host rejections
 
 The host fails the operation, and the package loses the selection, when any of these happen:
@@ -198,7 +200,7 @@ Revisions 1, 2, and 3 are supported. The manifest declares the revision the pack
 
 - Revision 1: operation-file requests only. No credential or operation-configuration paths.
 - Revision 2: adds the optional credential input file and operation-configuration file paths. The wire shape of the other fields is unchanged from revision 1.
-- Revision 3: adds the `remote-url` input transport and the `podcast-transcript` kind. Revision 3 packages can use either input transport. Revisions 1 and 2 reject the `remoteURL` key and the `remote-url` transport; no revision accepts a mixed shape (both `inputPath` and `remoteURL`).
+- Revision 3: adds the `remote-url` input transport and the `podcast-transcript`, `apple-podcast-transcript`, and `youtube-transcript` kinds. Revision 3 packages can use either input transport. Revisions 1 and 2 reject the `remoteURL` key and the `remote-url` transport; no revision accepts a mixed shape (both `inputPath` and `remoteURL`).
 
 A remote-url package is a registration and transport change, not a manifest-format change: the reviewed podcast transcript package keeps manifest revision 1 with protocol revision 3. An older host fails closed — it rejects the unknown kind at validation. Future revisions must keep this document updated with a migration note in `docs/architecture/extractor-package-manifest.md`.
 

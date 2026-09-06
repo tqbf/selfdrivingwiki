@@ -314,7 +314,8 @@ public extension ContentKind {
         case .pdf:   return .pdf
         case .html:  return .html
         case .docx:  return .docx
-        case .podcastTranscript, .applePodcastTranscript: return .unknown
+        case .podcastTranscript, .applePodcastTranscript, .youtubeTranscript:
+            return .unknown
         }
     }
 }

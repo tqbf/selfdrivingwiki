@@ -760,4 +760,54 @@ struct ExtractionConfigTests {
         #expect(ExtractorSelectionResolver.resolve(
             .canonicalPodcastTranscript, configuration: empty, activeRegistrations: []) != nil)
     }
+
+    /// The YouTube route resolves through the same generic precedence: the
+    /// bundled default reviewed lineage with no record, an exact installed
+    /// reference when active, fail-closed retention when it is not, and an
+    /// explicit `.none` staying disabled (no reviewed-default revival).
+    @Test func youtubeRouteSelectionUsesTheGenericPrecedence() throws {
+        let reviewed = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.selfdrivingwiki.youtube-transcript"),
+            registrationID: try ExtractorRegistrationID(validating: "captions"))
+
+        // No record → the bundled default reviewed lineage; with no active
+        // registration it fails closed with the redacted diagnostic.
+        let empty = ExtractionConfig()
+        let defaulted = ExtractorSelectionResolver.resolveYouTubeTranscript(
+            configuration: empty, activeRegistrations: [])
+        #expect(defaulted.selection
+            == .unavailableInstalled(kind: .youtubeTranscript, reference: reviewed))
+        #expect(defaulted.diagnostic == .unavailableInstalled(reviewed))
+
+        // Saved installed reference + active revision-3 registration → the
+        // exact reference.
+        let logical = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.example.youtube"),
+            registrationID: try ExtractorRegistrationID(validating: "captions"))
+        let active = try activeRegistration(
+            logical: logical, version: "1.0.0", digestByte: 6, kinds: [.youtubeTranscript],
+            protocolRevision: .v3)
+        var config = ExtractionConfig()
+        config.setExtractorSelection(.installed(logical), for: .canonicalYouTubeTranscript)
+        let decision = ExtractorSelectionResolver.resolveYouTubeTranscript(
+            configuration: config, activeRegistrations: [active])
+        #expect(decision.selection == .installed(kind: .youtubeTranscript, reference: active.reference))
+        #expect(decision.diagnostic == nil)
+
+        // Inactive → fail closed, identity retained.
+        let unavailable = ExtractorSelectionResolver.resolveYouTubeTranscript(
+            configuration: config, activeRegistrations: [])
+        #expect(unavailable.selection == .unavailableInstalled(kind: .youtubeTranscript, reference: logical))
+        #expect(unavailable.diagnostic == .unavailableInstalled(logical))
+
+        // Explicit `.none` disables the route (no reviewed-default revival).
+        var disabled = ExtractionConfig()
+        disabled.setExtractorSelection(ExtractionBackendReference.none, for: .canonicalYouTubeTranscript)
+        #expect(ExtractorSelectionResolver.resolveYouTubeTranscript(
+            configuration: disabled, activeRegistrations: [active]).selection == .noSelection)
+
+        // The route-aware entry dispatches the canonical YouTube route.
+        #expect(ExtractorSelectionResolver.resolve(
+            .canonicalYouTubeTranscript, configuration: empty, activeRegistrations: []) != nil)
+    }
 }

@@ -151,19 +151,16 @@ public enum SourceProvider: String, CaseIterable, Equatable, Hashable, Sendable 
     /// byteless-embed providers whose only path to a transcript markdown is the
     /// on-demand Transcribe button (`SourceDetailView.runTranscription`):
     /// - `applePodcast` — signed bearer → AMP metadata → TTML download → parse
-    ///   (PR4). Runtime guard layered on top at the model: the bundled
-    ///   signing helper must be present (`ApplePodcastTranscriptService.bundled()`
-    ///   != nil) AND this build must compile podcast support
-    ///   (`#if PODCAST_TRANSCRIPTS`).
+    ///   (PR4). The reviewed apple-podcast-transcript package route runs the
+    ///   job through the extraction queue.
     /// - `podcast` (generic RSS) — runs through the app's extraction queue:
     ///   the reviewed podcast-transcript package fetches the feed and parses
     ///   `<podcast:transcript>` tags with exact package provenance. No
     ///   signing helper needed; available on every build (App Store included).
-    ///   `WikiStoreModel.transcribe` throws `.podcastQueueRequired` — callers
-    ///   enqueue the durable extraction job instead.
-    /// - `youtube` — pure-Swift watch-page → caption track scrape (PR5). No
-    ///   signing helper needed; always available when the source has a valid
-    ///   11-char video ID in `origin.externalIdentity`.
+    /// - `youtube` — the reviewed youtube-transcript package fetches the
+    ///   captions YouTube exposes (PR5, now through the extraction queue).
+    ///   `WikiStoreModel.transcribe` throws `.transcriptQueueRequired` for all
+    ///   three — callers enqueue the durable extraction job instead.
     ///
     /// Every other provider (local-file / Zotero / folder / website / Vimeo /
     /// Spotify / SoundCloud / remote-media / legacy-import / unknown) has no

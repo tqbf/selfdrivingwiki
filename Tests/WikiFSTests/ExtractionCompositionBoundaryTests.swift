@@ -64,6 +64,46 @@ struct ExtractionCompositionBoundaryTests {
         }
     }
 
+    /// YouTube identity after the caption packaging: production constructs
+    /// NO `YouTubeTranscriptService`, launches no raw youtube-transcript
+    /// script outside the package runner, and records no NEW
+    /// `.builtInTool(.youtubeCaptions)` queue results. Historical
+    /// `.youtubeCaptions` rows stay readable through the provenance codecs,
+    /// which this scan does not touch.
+    @Test("no production YouTube direct-fetch path remains")
+    func noProductionYouTubeDirectFetchPath() throws {
+        let root = repositoryRoot()
+        let productionRoot = root.appendingPathComponent("Sources", isDirectory: true)
+        var files: [URL] = []
+        if let enumerator = FileManager.default.enumerator(
+            at: productionRoot,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]) {
+            while let candidate = enumerator.nextObject() as? URL {
+                if candidate.pathExtension == "swift" { files.append(candidate) }
+            }
+        }
+        #expect(files.isEmpty == false, "no production sources found to scan")
+
+        let forbidden = [
+            "YouTubeTranscriptService(",
+            "YouTubeTranscriptFetching",
+            ".builtInTool(.youtubeCaptions)",
+            "TranscriptSubprocess",
+        ]
+        for file in files {
+            var contents = try String(contentsOf: file, encoding: .utf8)
+            // Strip comments so prose cannot trip the scan.
+            contents = contents.replacingOccurrences(
+                of: #"//.*"#, with: "", options: .regularExpression)
+            for needle in forbidden {
+                #expect(
+                    !contents.contains(needle),
+                    "\(file.lastPathComponent) references \(needle); YouTube transcripts run through the reviewed youtube-transcript package route only")
+            }
+        }
+    }
+
     /// Apple identity is confined to the reviewed registration and identity
     /// seams, the route presentation table (display data), the process service
     /// lineage constants, and the engine's exact-revision support grant. No

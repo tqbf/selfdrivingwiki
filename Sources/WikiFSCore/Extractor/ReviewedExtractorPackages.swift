@@ -66,9 +66,15 @@ public enum ReviewedExtractorPackages {
         version: "1.0.0",
         digest: "7d02732f4d7b91368b73c08fe7c7cd8b7c2761b341c49e92a00d03318369d3a8")
 
+    public static let youtubeTranscript = make(
+        directoryName: "YouTubeTranscript",
+        packageID: "org.selfdrivingwiki.youtube-transcript",
+        version: "1.0.0",
+        digest: "daf2ab7e61164aeb82246e03747df459fdf116c5235c9bf0faee11f57ac7cd54")
+
     public static let all: [ReviewedExtractorPackage] = [
         defuddle, pdf2md, doclingServe, docx2md, podcastTranscript,
-        applePodcastTranscript,
+        applePodcastTranscript, youtubeTranscript,
     ]
 
     /// Locates the reviewed payload. `Bundle.main` resolves in both hosts:

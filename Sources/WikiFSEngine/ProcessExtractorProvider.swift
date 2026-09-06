@@ -237,6 +237,20 @@ public struct ProcessExtractorProvider: Sendable {
         return ProcessPackageApplePodcastTranscript(operation: operation)
     }
 
+    /// Prepares the process-backed YouTube transcript adapter for one exact
+    /// package revision. Same `remote-url` revision-3 operation shape as the
+    /// podcast siblings; the package fetches only the captions YouTube
+    /// exposes — media download and speech-to-text stay outside the
+    /// registration.
+    public func prepareYouTubeTranscript(
+        revision: ExtractorPackageRevisionID,
+        manifest: ExtractorManifest
+    ) async throws -> ProcessPackageYouTubeTranscript {
+        let operation = try await prepareOperation(
+            kind: .youtubeTranscript, revision: revision, manifest: manifest)
+        return ProcessPackageYouTubeTranscript(operation: operation)
+    }
+
     public static func packageProvenance(
         revision: ExtractorPackageRevisionID,
         manifest: ExtractorManifest,
@@ -775,6 +789,7 @@ public final class PreparedProcessOperation: Sendable {
             case .docx: MimeType.docx
             case .podcastTranscript: MimeType.audioPodcast
             case .applePodcastTranscript: MimeType.audioApplePodcast
+            case .youtubeTranscript: MimeType.videoYouTube
             }
             let mimeType = try ExtractorMIMEType(
                 validating: self.mimeType(defaulting: fallbackMIMEType))
@@ -1309,6 +1324,72 @@ public struct ProcessPackageApplePodcastTranscript: Sendable, ProcessPackageProv
                 remoteURL: ExtractorRemoteSourceURL(
                     validating: sourceURL.absoluteString),
                 filename: "episode",
+                onProgress: onProgress)
+            return Outcome(
+                markdown: outcome.markdown,
+                reportedMetadata: outcome.reportedMetadata)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch ManagedExtractorProcessError.cancellation {
+            throw CancellationError()
+        } catch {
+            throw ProcessPackageError(
+                message: ProcessPackageFailureMapper.message(error))
+        }
+    }
+}
+
+/// The process-backed YouTube transcript adapter for one exact package
+/// revision. Accepts a validated video URL and executes one prepared
+/// revision-3 `remote-url` operation against the pinned snapshot. The
+/// package fetches only the captions YouTube exposes; media download and
+/// speech-to-text are outside the registration.
+public struct ProcessPackageYouTubeTranscript: Sendable, ProcessPackageProvenanceProviding {
+    public var displayName: String { operation.manifest.displayName }
+    public var packageProvenance: ExtractorPackageExecutionProvenance {
+        ExtractorPackageExecutionProvenance(
+            revision: operation.revision,
+            registrationID: operation.registrationID,
+            protocolRevision: operation.protocolRevision)
+    }
+
+    let operation: PreparedProcessOperation
+
+    init(operation: PreparedProcessOperation) {
+        self.operation = operation
+    }
+
+    /// The shared operation-level readiness answer (runtime resolution,
+    /// entry-point presence). The YouTube package is `runtime`-launched
+    /// through `uv`, so a missing runtime surfaces here as setup guidance.
+    public func readiness() async -> ExtractionReadiness {
+        operation.readiness()
+    }
+
+    /// One outcome of one transcript fetch: the Markdown product plus the
+    /// package-reported metadata for provenance.
+    public struct Outcome: Sendable {
+        public let markdown: String
+        public let reportedMetadata: ExtractorReportedMetadata
+
+        public init(markdown: String, reportedMetadata: ExtractorReportedMetadata) {
+            self.markdown = markdown
+            self.reportedMetadata = reportedMetadata
+        }
+    }
+
+    /// Fetches and converts the captions at `sourceURL`. Progress lines
+    /// are package-controlled text already redacted by the operation.
+    public func transcript(
+        for sourceURL: URL,
+        onProgress: (@Sendable (String) -> Void)? = nil
+    ) async throws -> Outcome {
+        do {
+            let outcome = try await operation.execute(
+                kind: .youtubeTranscript,
+                remoteURL: ExtractorRemoteSourceURL(
+                    validating: sourceURL.absoluteString),
+                filename: "video",
                 onProgress: onProgress)
             return Outcome(
                 markdown: outcome.markdown,

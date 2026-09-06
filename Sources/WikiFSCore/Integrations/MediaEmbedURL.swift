@@ -84,7 +84,7 @@ public enum MediaEmbedURL {
         }
 
         // Validate the 11-char id shape ([A-Za-z0-9_-]).
-        guard isValidYouTubeID(id) else { return nil }
+        guard isValidVideoID(id) else { return nil }
         let absolute = url.absoluteString
         return MediaEmbedMatch(
             agentName: SourceProvider.youtube.rawValue,
@@ -208,9 +208,13 @@ public enum MediaEmbedURL {
 
     // MARK: - Helpers
 
-    /// YouTube ids are exactly 11 characters from `[A-Za-z0-9_-]`.
-    private static func isValidYouTubeID(_ id: String) -> Bool {
-        id.count == 11 && id.allSatisfy { $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }
+    /// YouTube ids are exactly 11 ASCII bytes from `[A-Za-z0-9_-]`.
+    /// The check is deliberately ASCII-strict: the ID is interpolated into
+    /// the canonical watch URL and re-validated by the package, whose own
+    /// pattern accepts ASCII only. (`Character.isLetter`/`.isNumber` would
+    /// admit non-ASCII letters and digits that the package must reject.)
+    public static func isValidVideoID(_ id: String) -> Bool {
+        id.utf8.count == 11 && id.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-") }
     }
 
     /// The non-empty path segments (URL-decoded), or nil when there are none.
@@ -224,5 +228,31 @@ public enum MediaEmbedURL {
     /// The last non-empty path segment, URL-decoded.
     private static func lastPath(_ url: URL) -> String {
         pathSegments(url)?.last ?? ""
+    }
+}
+
+/// Resolves the typed remote-URL operation input for a YouTube source row
+/// (the extraction-queue transcription contract). The stored plan URL wins
+/// when it validates as a YouTube video URL, so watch, `youtu.be`, Shorts,
+/// and embed source contracts stay intact. Legacy rows with a valid
+/// 11-character `externalIdentity` but no usable plan URL resolve to the
+/// canonical watch URL reconstructed here — at the external-format boundary,
+/// from an ID whose shape is already validated. Every other shape returns
+/// nil: invalid or missing data never launches a package.
+public enum YouTubeSourceURL {
+    public static func resolveOperationURL(
+        plan: String?,
+        externalIdentity: String?
+    ) -> URL? {
+        if let plan,
+           let validated = ExtractorRemoteSourceURL(rawValue: plan),
+           MediaEmbedURL.youtube(validated.rawValue) != nil {
+            return validated.url
+        }
+        guard let identity = externalIdentity,
+              MediaEmbedURL.isValidVideoID(identity) else {
+            return nil
+        }
+        return URL(string: "https://www.youtube.com/watch?v=\(identity)")
     }
 }

@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 from conftest import (
+    MockFetchedTranscript,
     MockTranscript,
     NoTranscriptFound,
     TranscriptsDisabled,
@@ -124,14 +125,27 @@ class TestLanguagePreference:
         mock_yta.YouTubeTranscriptApi.return_value.fetch.side_effect = NoTranscriptFound("test")
 
         fallback_segments = [{"text": "Bonjour tout le monde", "start": 0.0, "duration": 2.0}]
-        fallback_transcript = MockTranscript("fr", fallback_segments)
+        fallback_transcript = MockTranscript("fr", fallback_segments, is_generated=True)
         mock_yta.YouTubeTranscriptApi.return_value.list.return_value = [fallback_transcript]
 
-        segments, language = _yt._fetch_transcript("dQw4w9WgXcQ", "en")
+        fetched = _yt._fetch_transcript("dQw4w9WgXcQ", "en")
 
-        assert language == "fr"
-        assert segments == fallback_segments
+        assert fetched.language == "fr"
+        assert fetched.segments == fallback_segments
+        assert fetched.is_generated is True
         mock_yta.YouTubeTranscriptApi.return_value.list.assert_called_once_with("dQw4w9WgXcQ")
+
+    def test_fetch_reports_generated_status(self, mocker, mock_yta):
+        """A primary fetch propagates the library's is_generated status."""
+        mocker.patch.object(_yt, "_import_api", return_value=mock_yta)
+        mock_yta.YouTubeTranscriptApi.return_value.fetch.return_value = MockFetchedTranscript(
+            "en", is_generated=True
+        )
+
+        fetched = _yt._fetch_transcript("dQw4w9WgXcQ", "en")
+
+        assert fetched.is_generated is True
+        assert fetched.language == "en"
 
 
 # ── Output formatting ──────────────────────────────────────────────────
@@ -359,7 +373,9 @@ class TestExitCodes:
 
     def test_exit_unknown_error(self, mocker, mock_yta, capsys):
         mocker.patch.object(_yt, "_import_api", return_value=mock_yta)
-        mock_yta.YouTubeTranscriptApi.return_value.fetch.side_effect = RuntimeError("network failure")
+        mock_yta.YouTubeTranscriptApi.return_value.fetch.side_effect = RuntimeError(
+            "network failure"
+        )
 
         with pytest.raises(SystemExit) as exc:
             _yt.main(argv=["dQw4w9WgXcQ"])

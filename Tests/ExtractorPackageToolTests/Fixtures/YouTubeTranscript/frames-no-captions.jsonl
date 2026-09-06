@@ -1,0 +1,2 @@
+{"kind":"progress","payload":{"requestID":"6f1e2b3c-0000-4000-8000-000000000001","completedUnitCount":0,"totalUnitCount":4,"message":"fetching captions"}}
+{"kind":"failure","payload":{"requestID":"6f1e2b3c-0000-4000-8000-000000000001","cause":"unsupported-input","message":"no caption track is available for this video"}}

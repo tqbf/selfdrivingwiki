@@ -67,20 +67,24 @@ struct ExtractorRouteTableBuilderTests {
                     mimeTypes: ["text/html"]),
             ])
         let rows = ExtractorRouteTableBuilder.build(input)
-        // Host PDF + HTML + DOCX + both podcast transcript routes, plus the
+        // Host PDF + HTML + DOCX + all three transcript routes, plus the
         // saved future route. The HTML registration covers the canonical HTML
-        // route and adds no new row. The Apple route row comes from the
-        // bundled default-route record (the reviewed apple-podcast-transcript
-        // lineage), saved as unavailable when no registration is active.
-        #expect(rows.count == 6)
+        // route and adds no new row. The Apple and YouTube route rows come
+        // from the bundled default-route records (the reviewed
+        // apple-podcast-transcript and youtube-transcript lineages), saved as
+        // unavailable when no registration is active.
+        #expect(rows.count == 7)
         #expect(rows.map(\.route) == [
             .canonicalPDF, .canonicalHTML, .canonicalDOCX, .canonicalPodcastTranscript,
-            .canonicalApplePodcastTranscript,
+            .canonicalApplePodcastTranscript, .canonicalYouTubeTranscript,
             futureRoute,
         ])
         let appleRow = try #require(
             rows.first { $0.route == .canonicalApplePodcastTranscript })
         #expect(appleRow.savedSelection == nil)
+        let youtubeRow = try #require(
+            rows.first { $0.route == .canonicalYouTubeTranscript })
+        #expect(youtubeRow.savedSelection == nil)
         let futureRow = try #require(rows.first { $0.route == futureRoute })
         // The saved future route keeps its host (ACP) selection identity.
         #expect(futureRow.savedSelection == ExtractorRouteHostCatalog.acpReference)
@@ -108,9 +112,12 @@ struct ExtractorRouteTableBuilderTests {
         // typed route order; identical inputs produce identical rows.
         #expect(first.map(\.route) == second.map(\.route))
         #expect(first == second)
-        #expect(first.map(\.route).prefix(4)
-            == [.canonicalPDF, .canonicalHTML, .canonicalDOCX, .canonicalPodcastTranscript])
-        #expect(first.dropFirst(4).map(\.route) == first.dropFirst(4).map(\.route).sorted())
+        #expect(first.map(\.route).prefix(6)
+            == [
+                .canonicalPDF, .canonicalHTML, .canonicalDOCX, .canonicalPodcastTranscript,
+                .canonicalApplePodcastTranscript, .canonicalYouTubeTranscript,
+            ])
+        #expect(first.dropFirst(6).map(\.route) == first.dropFirst(6).map(\.route).sorted())
     }
 
     @Test func unknownMIMEUsesStableGenericLabel() throws {

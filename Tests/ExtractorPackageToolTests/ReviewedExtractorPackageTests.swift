@@ -208,8 +208,108 @@ struct ReviewedExtractorPackageTests {
         }
     }
 
+    /// The reviewed YouTube transcript package: manifest revision 1 with
+    /// protocol revision 3, one `youtube-transcript` registration over the
+    /// synthetic `video/youtube` MIME, and the `network` capability only.
+    /// Media download and speech-to-text are not registered.
+    @Test func youtubeTranscriptRevisionMatchesGolden() throws {
+        let output = try validate("YouTubeTranscript")
+
+        #expect(output.packageID == "org.selfdrivingwiki.youtube-transcript")
+        #expect(output.protocolRevision == 3)
+        #expect(output.registrationIDs == ["captions"])
+
+        let manifest = try manifest("YouTubeTranscript")
+        #expect(manifest.manifestRevision == .v1)
+        let registration = try #require(manifest.registrations.first)
+        #expect(registration.kinds == [.youtubeTranscript])
+        #expect(registration.mimeTypes == [try ExtractorMIMEType(validating: "video/youtube")])
+        #expect(registration.credentialRequirements.isEmpty)
+        #expect(manifest.capabilities == [.network])
+        guard case .runtime(let command, let arguments) = manifest.launch else {
+            Issue.record("youtube-transcript must launch through a runtime")
+            return
+        }
+        #expect(command.rawValue == "uv")
+        #expect(arguments == ["run", "--script"])
+
+        // The exact reviewed identity is pinned byte-for-byte; a regenerated
+        // package whose digest changed fails this gate with the new value.
+        #expect(output.packageDigest
+            == "daf2ab7e61164aeb82246e03747df459fdf116c5235c9bf0faee11f57ac7cd54")
+    }
+
+    /// The reviewed YouTube package never claims model or shared-cache
+    /// capabilities: it fetches captions YouTube exposes and does nothing else.
+    @Test func youtubeTranscriptDeclaresNoModelOrSharedCacheCapabilities() throws {
+        let manifest = try manifest("YouTubeTranscript")
+        #expect(manifest.capabilities.contains(.modelDownload) == false)
+        #expect(manifest.capabilities.contains(.sharedRuntimeCache) == false)
+    }
+
+    /// Recorded success, no-caption, and blocked-request frame sequences from
+    /// the committed bundle replay through `protocol-smoke`. The tool never
+    /// launches the process — it validates the directory and replays the
+    /// recorded frames against the manifest's limits.
+    @Test func youtubeTranscriptRecordedProtocolFramesReplayThroughProtocolSmoke() throws {
+        let fixtures = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/YouTubeTranscript", isDirectory: true)
+        let request = fixtures.appendingPathComponent("request.json").path
+
+        let success = try ExtractorPackageToolExecutor().execute(arguments: [
+            "protocol-smoke",
+            Self.packageURL("YouTubeTranscript").path,
+            request,
+            fixtures.appendingPathComponent("frames.jsonl").path,
+        ])
+        #expect(success.packageID == "org.selfdrivingwiki.youtube-transcript")
+        #expect(success.terminalKind == "result")
+        #expect(success.progressEventCount == 4)
+
+        let noCaptions = try ExtractorPackageToolExecutor().execute(arguments: [
+            "protocol-smoke",
+            Self.packageURL("YouTubeTranscript").path,
+            request,
+            fixtures.appendingPathComponent("frames-no-captions.jsonl").path,
+        ])
+        #expect(noCaptions.terminalKind == "failure")
+
+        let blocked = try ExtractorPackageToolExecutor().execute(arguments: [
+            "protocol-smoke",
+            Self.packageURL("YouTubeTranscript").path,
+            request,
+            fixtures.appendingPathComponent("frames-blocked.jsonl").path,
+        ])
+        #expect(blocked.terminalKind == "failure")
+    }
+
+    /// A malformed frame document (two terminal frames) must fail the
+    /// protocol-smoke replay: exactly one terminal frame is the contract.
+    @Test func youtubeTranscriptRejectsFrameRuleViolations() throws {
+        let fixtures = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/YouTubeTranscript", isDirectory: true)
+        let request = fixtures.appendingPathComponent("request.json").path
+        let malformed = fixtures.appendingPathComponent("frames-malformed.jsonl")
+        let frame = """
+        {"kind":"failure","payload":{"requestID":"6f1e2b3c-0000-4000-8000-000000000001","cause":"extraction-failure","message":"caption retrieval failed"}}
+        """
+        try Data((frame + "\n" + frame).utf8).write(to: malformed)
+        defer { try? FileManager.default.removeItem(at: malformed) }
+
+        #expect(throws: (any Error).self) {
+            _ = try ExtractorPackageToolExecutor().execute(arguments: [
+                "protocol-smoke",
+                Self.packageURL("YouTubeTranscript").path,
+                request,
+                malformed.path,
+            ])
+        }
+    }
+
     @Test func reviewedDigestsAreStableAcrossRepeatedValidation() throws {
-        for name in ["Defuddle", "Pdf2md", "DoclingServe", "Docx2md", "PodcastTranscript"] {
+        for name in ["Defuddle", "Pdf2md", "DoclingServe", "Docx2md", "PodcastTranscript", "ApplePodcastTranscript", "YouTubeTranscript"] {
             let first = try validate(name)
             let second = try validate(name)
             #expect(first.packageDigest == second.packageDigest)
@@ -233,11 +333,15 @@ struct ReviewedExtractorPackageTests {
         let pdf2md = try manifest("Pdf2md")
         let docx2md = try manifest("Docx2md")
         let podcast = try manifest("PodcastTranscript")
+        let applePodcast = try manifest("ApplePodcastTranscript")
+        let youtube = try manifest("YouTubeTranscript")
 
         #expect(defuddle.registrations.allSatisfy { $0.kinds == [.html] })
         #expect(pdf2md.registrations.allSatisfy { $0.kinds == [.pdf] })
         #expect(docx2md.registrations.allSatisfy { $0.kinds == [.docx] })
         #expect(podcast.registrations.allSatisfy { $0.kinds == [.podcastTranscript] })
+        #expect(applePodcast.registrations.allSatisfy { $0.kinds == [.applePodcastTranscript] })
+        #expect(youtube.registrations.allSatisfy { $0.kinds == [.youtubeTranscript] })
     }
 
     /// AC.4: a frames.jsonl + request.json pair recorded from a real run of

@@ -16,6 +16,12 @@ public enum ExtractorKind: String, Codable, CaseIterable, Hashable, Sendable {
     /// host support, or fall back to the RSS transcript algorithm
     /// (`apple-podcast-transcript` on the wire).
     case applePodcastTranscript = "apple-podcast-transcript"
+    /// URL-backed YouTube caption conversion. Same `remote-url` request
+    /// shape as the podcast transcript kinds, a separate operation family:
+    /// the package fetches only the captions YouTube exposes for the video
+    /// and never downloads media or runs speech-to-text
+    /// (`youtube-transcript` on the wire).
+    case youtubeTranscript = "youtube-transcript"
 }
 
 public enum ExtractorLaunchMode: String, Codable, CaseIterable, Hashable, Sendable {

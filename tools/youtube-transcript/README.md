@@ -1,13 +1,15 @@
 # youtube-transcript
 
-Standalone `uv` script (PEP 723 inline metadata) that fetches YouTube video
-transcripts and outputs markdown to stdout. Mirrors the `tools/pdf2md/pdf2md`
-pattern.
+Standalone `uv` script (PEP 723 inline metadata) that fetches the captions
+YouTube exposes for one video and outputs Markdown. The script has two
+surfaces:
 
-The Swift `YouTubeTranscriptService` spawns it as a subprocess, replacing the
-fragile `ytInitialPlayerResponse` watch-page scrape (#584).
+1. A CLI for interactive use.
+2. A protocol revision 3 extractor entry point loaded by the reviewed
+   `ExtractorPackages/YouTubeTranscript` package. This is the only path the
+   app and the daemon use.
 
-## Usage
+## CLI usage
 
 ```bash
 uv run --script youtube-transcript <video-id-or-url> [--lang en] [--json] [--output file.md] [--timestamps]
@@ -41,10 +43,9 @@ uv run --script youtube-transcript dQw4w9WgXcQ --lang es
 
 ## Installation
 
-Requires [uv](https://docs.astral.sh/uv/). Install it if you want to use this optional integration.
-
-The `youtube-transcript-api` dependency is declared in the PEP 723 inline
-metadata block — `uv` resolves it automatically on first run.
+Requires [uv](https://docs.astral.sh/uv/). The `youtube-transcript-api`
+dependency is declared in the PEP 723 inline metadata block — `uv` resolves
+it automatically on first run.
 
 ## Output formats
 
@@ -54,16 +55,6 @@ metadata block — `uv` resolves it automatically on first run.
 # YouTube Transcript: dQw4w9WgXcQ
 
 Hello everyone welcome to the video. Today we are going to talk about how to build great software.
-```
-
-With `--timestamps`:
-
-```markdown
-# YouTube Transcript: dQw4w9WgXcQ
-
-[00:00] Hello everyone welcome to the video.
-[00:03] Today we are going to talk about
-[00:05] how to build great software.
 ```
 
 ### JSON (`--json`)
@@ -85,11 +76,12 @@ With `--timestamps`:
 The script tries, in order:
 
 1. Requested language (default `en`)
-2. English manual captions (`en`, `en-GB`)
-3. English ASR (`en-US` generated)
-4. First available track of any language (via `list_transcripts`)
+2. English variants (`en`, `en-US`, `en-GB`)
+3. First available track of any language (via the track list)
 
-## Exit codes
+The library prefers manually created captions over auto-generated ones.
+
+## Exit codes (CLI)
 
 | Code | Meaning                                      |
 |------|----------------------------------------------|
@@ -99,63 +91,48 @@ The script tries, in order:
 | 3    | Transcripts disabled for this video          |
 | 4    | Video unavailable (deleted, private, etc.)  |
 
+## Extractor package protocol (revision 3)
+
+The reviewed `ExtractorPackages/YouTubeTranscript` package serves ONE
+request: a revision-3 `ExtractorProtocolRequest` JSON object on stdin and
+JSON Lines frames on stdout, through the generated
+`bin/youtube-transcript-extractor` entry point. The request carries one
+validated HTTP(S) video URL (`remote-url` transport) and no input bytes.
+
+Package-owned behavior:
+
+- Strict URL normalization (watch, `youtu.be`, Shorts, embed, mobile) to a
+  typed 11-character video ID. Non-YouTube hosts and invalid IDs are typed
+  failures; the URL is never echoed.
+- Named bounds that equal or tighten the manifest limits (request 1 MiB,
+  output 32 MiB, 64 progress frames), incremental UTF-8 byte accounting per
+  caption segment, and deadline checks before network access and at every
+  processing seam.
+- Atomic publication: the Markdown is written to a partial file and renamed
+  into place; a failure leaves no partial output.
+- Exactly one terminal frame. Failure messages are fixed strings that never
+  contain the URL, video ID, upstream error text, or paths.
+- Reported metadata: stable tool name, selected language, and the
+  generated/manual status when the library exposes it.
+
+The package never downloads media and never runs speech-to-text. A video
+with no available captions is a typed failure. `youtube-transcript-api`
+uses an undocumented YouTube interface that can change without notice, and
+YouTube can block requests; both surface as bounded extraction failures.
+
+See `docs/architecture/extractor-script-protocol.md` and
+`plans/youtube-transcript-extractor-package.md`.
+
 ## Testing
 
 ```bash
-uv run pytest tests/ -v          # all tests (mocked — no YouTube calls)
-uv run ruff check youtube-transcript tests/
-uv run pyright youtube-transcript tests/
+cd tools/youtube-transcript
+mise exec -- uv run pytest tests/ -v        # all tests (mocked — no YouTube calls)
+mise exec -- uv run ruff format --check .
+mise exec -- uv run ruff check .
+mise exec -- uv run pyright
 ```
 
-## Swift integration
-
-After this tool lands, `YouTubeTranscriptService` spawns the script as a
-subprocess instead of scraping the watch page. The generalization PR (#809)
-already routes YouTube through `transcribe(sourceID:)` — this tool just swaps
-the fetch backend. See plans/youtube-transcript-tool.md for details.
-
-## Plan
-
-### Summary
-
-Create `tools/youtube-transcript/youtube-transcript` — a standalone uv script
-(PEP 723 inline metadata) that fetches YouTube video transcripts and outputs
-markdown to stdout. Mirrors the `tools/pdf2md/pdf2md` pattern exactly.
-
-The Swift `YouTubeTranscriptService` will spawn it as a subprocess, replacing
-the fragile `ytInitialPlayerResponse` watch-page scrape (#584).
-
-### Reference code
-
-- **pdf2md pattern** (`tools/pdf2md/pdf2md`): `#!/usr/bin/env -S uv run --script`
-  with `# /// script` inline metadata block. Takes file input, outputs markdown
-  to stdout, exit codes for error types.
-- **groundedllm** (`hayhooks/components/youtube_transcript.py`): video ID
-  extraction, `youtube_transcript_api` usage, language preference logic, error
-  handling for `NoTranscriptFound` / `TranscriptsDisabled` / `VideoUnavailable`.
-- **groundedllm** (`hayhooks/components/content_extraction.py`): URL routing
-  patterns, content fetching, resolver patterns.
-
-### Deliverables
-
-1. **The script:** `tools/youtube-transcript/youtube-transcript` — PEP 723
-   inline metadata, `youtube-transcript-api>=1.0` dependency.
-2. **Tests:** `tools/youtube-transcript/tests/` — unit tests with mocked
-   `YouTubeTranscriptApi` (no real YouTube calls in CI).
-3. **Project config:** `tools/youtube-transcript/pyproject.toml` — dev
-   dependencies only (runtime deps in PEP 723 inline block).
-4. **Docs:** `tools/youtube-transcript/README.md`.
-5. **Gitignore:** `tools/youtube-transcript/.gitignore`.
-
-### Acceptance criteria
-
-- **AC.1**: `uv run --script youtube-transcript dQw4w9WgXcQ` outputs markdown to
-  stdout with exit 0 (tested with mock, not real network).
-- **AC.2**: URL inputs are parsed to video IDs (watch, shorts, youtu.be, embed).
-- **AC.3**: Language preference tries manual -> ASR -> first available.
-- **AC.4**: `--json` outputs structured JSON with segments.
-- **AC.5**: Exit codes: 0 success, 1 unknown, 2 no transcript, 3 disabled,
-  4 unavailable.
-- **AC.6**: `uv run pytest tests/` passes with mocked YouTube API.
-- **AC.7**: `uv run ruff check youtube-transcript tests/` clean.
-- **AC.8**: `uv run pyright youtube-transcript tests/` clean.
+The package under `ExtractorPackages/YouTubeTranscript/` is generated by
+`scripts/sync-extractor-packages.sh` from this script — never edit the
+generated bytes by hand.

@@ -30,7 +30,6 @@ struct ExtractionPluginBootTests {
                     "baseURL": .string("https://example.invalid/gemini"),
                 ]),
             Entry(id: EntryID("defuddle"), plugin: DefuddleExtractionPlugin.id),
-            Entry(id: EntryID("youtube"), plugin: YouTubeTranscriptPlugin.id),
         ]
         let booted = try await CordisBoot.boot(CordisBoot.Options(
             catalog: try PluginCatalog([
@@ -41,7 +40,6 @@ struct ExtractionPluginBootTests {
                 AnthropicExtractionPlugin.definition(readCredential: { _ in nil }, fetcher: http),
                 GeminiExtractionPlugin.definition(readCredential: { _ in nil }, fetcher: http),
                 DefuddleExtractionPlugin.definition { FixtureHTMLExtractor() },
-                YouTubeTranscriptPlugin.definition { FixtureYouTubeFetcher() },
             ]),
             layers: [PatchFile(entries: entries)]))
 
@@ -51,7 +49,6 @@ struct ExtractionPluginBootTests {
             AnthropicExtractionPlugin.key,
             DefuddleExtractionPlugin.key,
             GeminiExtractionPlugin.key,
-            YouTubeTranscriptPlugin.key,
         ].sorted { $0.description < $1.description })
 
         try await booted.tree.update(to: entries.filter { $0.id != EntryID("gemini") })
@@ -75,12 +72,6 @@ private struct FixturePDFExtractor: MarkdownExtractor {
 private struct FixtureHTMLExtractor: HtmlMarkdownExtractor {
     func extract(html: String) async -> HtmlExtractionResult? {
         HtmlExtractionResult(markdown: "fixture")
-    }
-}
-
-private struct FixtureYouTubeFetcher: YouTubeTranscriptFetching {
-    func transcript(forVideoID videoID: String) async throws -> YouTubeTranscript {
-        YouTubeTranscript(videoID: videoID, title: "fixture", markdown: "fixture", filename: "fixture.md")
     }
 }
 #endif
