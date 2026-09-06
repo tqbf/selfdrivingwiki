@@ -860,7 +860,17 @@ struct ExtractionSettingsView: View {
             if choice.reference == .installed(ProcessExtractionServices.reviewedDOCXLogical) {
                 return .reviewedDocx2md
             }
-            return .reviewedDefuddle
+            if choice.reference == .installed(ProcessExtractionServices.reviewedHTMLLogical) {
+                return .reviewedDefuddle
+            }
+            // Transcript and future reviewed lineages: tag the generic
+            // installed lineage, which the generic write path persists. The
+            // former fallback tagged every other reviewed lineage as the
+            // Defuddle case, so a transcript reviewed pick wrote nothing.
+            if case .installed(let logical) = choice.reference {
+                return .installed(logical)
+            }
+            return .prompt
         case .installedPackage:
             if case .installed(let logical) = choice.reference { return .installed(logical) }
             return .prompt
@@ -2133,12 +2143,27 @@ enum ExtractorRouteSettingsMapping {
                 return .prompt
             }
         }
-        // Future registration-derived routes carry package choices only.
+        // Transcript and future registration-derived routes: display the
+        // route's effective default. With no record, the bundled default
+        // policy supplies the reviewed lineage — show it instead of a
+        // misleading "no default" (the explicit disable choice stays in the
+        // picker for opting out).
         switch saved {
         case .installed(let logical):
             return installedSelection(logical, row: row)
-        default:
+        case .some(.host):
+            // No built-in transcript host adapter exists; a host reference on
+            // these routes is a dead selection. Display no-selection.
             return .prompt
+        case .some(ExtractionBackendReference.none):
+            return .prompt
+        case nil:
+            guard case .installed(let logical)? = config.selectionOrDefault(for: route),
+                  row.choices.contains(where: { $0.reference == .installed(logical) })
+            else {
+                return .prompt
+            }
+            return .installed(logical)
         }
     }
 

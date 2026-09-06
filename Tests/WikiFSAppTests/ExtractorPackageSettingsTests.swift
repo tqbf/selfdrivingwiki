@@ -187,6 +187,72 @@ struct ExtractorPackageSettingsTests {
         #expect(config.extractorSelection(for: .canonicalDOCX) == .installed(ProcessExtractionServices.reviewedDOCXLogical))
     }
 
+    /// The transcript routes display their bundled reviewed default on a
+    /// fresh config (the generic "no default" display was misleading —
+    /// execution resolves the reviewed package through the bundled
+    /// default-route policy), and a reviewed transcript pick persists its
+    /// lineage instead of collapsing into a legacy display tag that the
+    /// generic write path dropped.
+    @Test("transcript routes display the reviewed default and persist reviewed picks")
+    func transcriptRoutesDisplayAndPersistReviewedLineages() throws {
+        let lineages: [(route: ExtractorRouteID, logical: LogicalExtractorReference, name: String)] = [
+            (.canonicalPodcastTranscript, ProcessExtractionServices.reviewedPodcastTranscriptLogical, "Podcast Transcript"),
+            (.canonicalApplePodcastTranscript, ProcessExtractionServices.reviewedApplePodcastTranscriptLogical, "Apple Podcast Transcript"),
+            (.canonicalYouTubeTranscript, ProcessExtractionServices.reviewedYouTubeTranscriptLogical, "YouTube Transcript"),
+        ]
+
+        for lineage in lineages {
+            let descriptor = try #require(
+                ExtractorRouteHostCatalog.descriptors.first { $0.route == lineage.route })
+            let row = ExtractorRouteSettingsRow(
+                descriptor: descriptor,
+                savedSelection: nil,
+                resolvedSelection: nil,
+                choices: [
+                    ExtractorRouteChoice(
+                        route: lineage.route,
+                        reference: .none,
+                        displayName: "No default (disable)",
+                        category: .prompt),
+                    ExtractorRouteChoice(
+                        route: lineage.route,
+                        reference: .installed(lineage.logical),
+                        displayName: lineage.name,
+                        category: .installedPackage,
+                        exactSummary: "1.0.0 · abcdef123456"),
+                ],
+                status: .ready)
+
+            // Fresh config: the bundled default displays as the reviewed
+            // package, not as "no default".
+            #expect(
+                ExtractorRouteSettingsMapping.selection(
+                    route: lineage.route, config: ExtractionConfig(), row: row)
+                == .installed(lineage.logical))
+
+            // The picker tag for the reviewed choice carries the generic
+            // installed lineage (never a legacy display case), and the pick
+            // persists and reads back.
+            let tag = ExtractionSettingsView.selection(for: row.choices[1])
+            #expect(tag == .installed(lineage.logical))
+
+            var config = ExtractionConfig()
+            ExtractorRouteSettingsMapping.write(tag, route: lineage.route, into: &config)
+            #expect(config.extractorSelection(for: lineage.route) == .installed(lineage.logical))
+            #expect(
+                ExtractorRouteSettingsMapping.selection(
+                    route: lineage.route, config: config, row: row)
+                == .installed(lineage.logical))
+        }
+
+        // The explicit disable choice still maps to the prompt record.
+        #expect(ExtractionSettingsView.selection(for: ExtractorRouteChoice(
+            route: .canonicalYouTubeTranscript,
+            reference: .none,
+            displayName: "No default (disable)",
+            category: .prompt)) == .prompt)
+    }
+
     @Test("DOCX prompt writes the explicit reviewed-package default record")
     func docxPromptClearsSelection() {
         var config = ExtractionConfig()
