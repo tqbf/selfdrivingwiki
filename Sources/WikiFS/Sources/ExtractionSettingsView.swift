@@ -1420,12 +1420,24 @@ struct ExtractionSettingsView: View {
             }
 
             if packageModel.canRemove {
+                // Reviewed packages are bundled with the app: the reviewed
+                // overlay re-admits them on every launch, so Remove would be
+                // a silent no-op. They stay disabled with the route-disable
+                // alternative named instead.
+                let selectionIsReviewed = selectedPackageRow?.installedRow
+                    .map(ExtractorPackageSettingsModel.isReviewed) ?? false
                 Button("Remove Package…", systemImage: "minus", role: .destructive) {
                     removalCandidate = selectedPackageRow?.installedRow
                 }
-                .disabled(packageModel.isBusy || selectedPackageRow?.installedRow == nil)
+                .disabled(packageModel.isBusy || selectedPackageRow?.installedRow == nil
+                          || selectionIsReviewed)
                 .accessibilityIdentifier(PackageAccessibility.removeButton)
-                .accessibilityLabel("Remove the selected extractor package")
+                .accessibilityLabel(selectionIsReviewed
+                    ? "Reviewed packages ship with the app and cannot be removed"
+                    : "Remove the selected extractor package")
+                .help(selectionIsReviewed
+                    ? "Reviewed packages are bundled with the app and cannot be removed. To turn one off, set its route to no default under Default Extractors."
+                    : "Remove the selected extractor package")
             }
 
             Spacer()
@@ -2782,6 +2794,18 @@ final class ExtractorPackageSettingsModel {
     var canImport: Bool { importAction != nil }
     var canRemove: Bool { removeAction != nil }
 
+    /// Reviewed packages are build inputs bundled with the app (see
+    /// `ReviewedExtractorPackages`): the reviewed overlay re-admits them on
+    /// every launch, so removing them from the machine catalog — they were
+    /// never there — is a silent no-op. The UI treats those rows as
+    /// non-removable and points at the route's disable choice instead.
+    /// Exact-revision identity against the compiled reviewed table is the
+    /// same reviewed-identity seam the route presentation uses; no package
+    /// ID literal appears here.
+    static func isReviewed(_ row: ExtractorPackageSettingsRow) -> Bool {
+        ReviewedExtractorPackages.all.contains { $0.revision == row.revision }
+    }
+
     func refresh() async {
         guard let loadSnapshot, !isBusy else { return }
         isBusy = true
@@ -2813,6 +2837,10 @@ final class ExtractorPackageSettingsModel {
     }
 
     func remove(_ row: ExtractorPackageSettingsRow) async {
+        // Defensive backstop for the disabled button: a reviewed package has
+        // no machine-catalog record, so running the removal would silently
+        // do nothing. Refuse instead.
+        guard Self.isReviewed(row) == false else { return }
         guard let removeAction, !isBusy else { return }
         isBusy = true
         busyMessage = Self.removingMessage

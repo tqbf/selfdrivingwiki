@@ -946,7 +946,13 @@ public final class PreparedProcessOperation: Sendable {
             toolName: reported.toolName.map(redactor.redact),
             toolVersion: reported.toolVersion.map(redactor.redact),
             modelName: reported.modelName.map(redactor.redact),
-            modelVersion: reported.modelVersion.map(redactor.redact))
+            modelVersion: reported.modelVersion.map(redactor.redact),
+            // Caption-selection facts (protocol revision 3): the language is
+            // package-controlled text and goes through the same bounded
+            // redactor; the generated/manual flag is a boolean with no path
+            // or content surface.
+            language: reported.language.map(redactor.redact),
+            transcriptGenerated: reported.transcriptGenerated)
         return try ExtractorResultFrame(
             requestID: frame.requestID,
             outputPath: frame.outputPath,

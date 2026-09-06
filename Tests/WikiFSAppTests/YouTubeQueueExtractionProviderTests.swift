@@ -184,10 +184,11 @@ struct YouTubeQueueExtractionProviderTests {
     private func seedYouTubeSource(
         _ store: GRDBWikiStore,
         plan: String? = Self.watchURL,
-        externalIdentity: String? = Self.videoID
+        externalIdentity: String? = Self.videoID,
+        filenameSuffix: String = ""
     ) throws -> SourceID {
         let summary = try store.addBytelessSource(
-            filename: "youtube-\(externalIdentity ?? "row")",
+            filename: "youtube-\(externalIdentity ?? "row")\(filenameSuffix.isEmpty ? "" : "-\(filenameSuffix)")",
             mimeType: MimeType.videoYouTube,
             provenance: SourceProvenance(
                 agentName: SourceProvider.youtube.rawValue,
@@ -340,13 +341,15 @@ struct YouTubeQueueExtractionProviderTests {
     /// never invoked — invalid legacy data never launches a package.
     @Test func invalidLegacyDataNeverInvokesTheExecutor() async throws {
         let store = try makeStore()
-        for (plan, identity) in [
-            (nil, nil),
-            (nil, "bad id"),
-            ("not a url", "bad id"),
-            ("https://example.com/watch?v=dQw4w9WgXcQ", nil),
-        ] {
-            let sourceID = try seedYouTubeSource(store, plan: plan, externalIdentity: identity)
+        for (index, shape) in [
+            (String?.none, String?.none),
+            (String?.none, "bad-id-2"),
+            ("not a url", "bad-id-3"),
+            ("https://example.com/watch?v=dQw4w9WgXcQ", String?.none),
+        ].enumerated() {
+            let sourceID = try seedYouTubeSource(
+                store, plan: shape.0, externalIdentity: shape.1,
+                filenameSuffix: "invalid-\(index)")
             let executor = FakeYouTubeExecutor()
 
             let box = SessionLookupBox()
@@ -357,7 +360,7 @@ struct YouTubeQueueExtractionProviderTests {
 
             let resolution = try await provider.resolveExtraction(
                 wikiID: WikiID(rawValue: "w"), sourceID: sourceID, backendOverride: nil)
-            #expect(resolution == nil, "plan=\(plan ?? "nil") identity=\(identity ?? "nil")")
+            #expect(resolution == nil, "plan=\(shape.0 ?? "nil") identity=\(shape.1 ?? "nil")")
             #expect(executor.lastRequest == nil)
         }
     }

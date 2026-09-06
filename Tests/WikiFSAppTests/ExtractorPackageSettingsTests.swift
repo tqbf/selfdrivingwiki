@@ -1,5 +1,6 @@
 #if os(macOS)
 import Foundation
+import Synchronization
 import Testing
 import WikiFSCore
 import WikiFSEngine
@@ -715,6 +716,42 @@ struct ExtractorPackageSettingsTests {
         let remaining = try #require(model.tableRows.first)
         #expect(model.notice(for: remaining)?.severity == .failure)
         #expect(model.paneNotice == nil)
+    }
+
+    /// Reviewed packages are bundled with the app; the reviewed overlay
+    /// re-admits them on every launch, so removal would be a silent no-op
+    /// against the machine catalog. The model refuses the mutation, and the
+    /// UI gates the destructive button on the same answer.
+    @Test("a reviewed package is recognized and its removal is refused")
+    func reviewedPackageRemovalIsRefused() async throws {
+        let reviewed = ReviewedExtractorPackages.youtubeTranscript
+        let reviewedRow = ExtractorPackageSettingsRow(
+            kind: .youtubeTranscript,
+            packageID: reviewed.packageID.rawValue,
+            version: reviewed.version.rawValue,
+            digestPrefix: String(reviewed.revision.digest.hex.prefix(12)),
+            registrationID: "captions",
+            revision: reviewed.revision)
+        #expect(ExtractorPackageSettingsModel.isReviewed(reviewedRow))
+
+        let importedRow = try settingsRow()
+        #expect(ExtractorPackageSettingsModel.isReviewed(importedRow) == false)
+
+        let removeCalls = Mutex<Int>(0)
+        let model = ExtractorPackageSettingsModel(
+            loadSnapshot: { ExtractorPackageSettingsSnapshot(rows: [reviewedRow, importedRow]) },
+            removePackage: { _ in
+                removeCalls.withLock { $0 += 1 }
+                return .succeeded(nil)
+            })
+
+        await model.refresh()
+        await model.remove(reviewedRow)
+        #expect(removeCalls.withLock { $0 } == 0)
+        #expect(model.tableRows.contains { $0.installedRow == reviewedRow })
+
+        await model.remove(importedRow)
+        #expect(removeCalls.withLock { $0 } == 1)
     }
 
     @Test("one notice at a time: a later outcome replaces the one before it")
