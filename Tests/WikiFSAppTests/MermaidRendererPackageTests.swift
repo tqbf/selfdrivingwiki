@@ -147,6 +147,7 @@ struct MermaidRendererPackageTests {
         #expect(entrySource.contains("__sdw_validate_fence"))
         #expect(documentSource.contains("mermaid.min.js"))
         #expect(documentSource.contains("viewer.js"))
+        #expect(documentSource.contains("<h1") == false)
 
         for prohibitedPattern in [
             "window.open", "fetch(", "XMLHttpRequest", "WebSocket", "Worker(",

@@ -94,7 +94,7 @@
         },
         {
           "path": "index.html",
-          "digest": "779f4d56ba0fe22006ddb47dfe9cd469538bb0608857cb286c08847f0e39619f"
+          "digest": "8a719b3bb8127bffbb6dbb8816df42060ba74bf00277fd472b95e67e73c4e70f"
         },
         {
           "path": "mermaid.min.js",
@@ -143,7 +143,7 @@
     },
     {
       "path": "index.html",
-      "digest": "779f4d56ba0fe22006ddb47dfe9cd469538bb0608857cb286c08847f0e39619f"
+      "digest": "8a719b3bb8127bffbb6dbb8816df42060ba74bf00277fd472b95e67e73c4e70f"
     },
     {
       "path": "mermaid.min.js",

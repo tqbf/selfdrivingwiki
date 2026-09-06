@@ -56,7 +56,7 @@
         },
         {
           "path": "index.html",
-          "digest": "44aeea2b38a0887cac9a6cdaac8f1f010bc9570c18d147037b7d2af0047eea0a"
+          "digest": "d87baa11ea379e14e569fe4c204401d2aa9591e50ac08f801fdc9b782705586c"
         },
         {
           "path": "viewer.js",
@@ -89,7 +89,7 @@
     },
     {
       "path": "index.html",
-      "digest": "44aeea2b38a0887cac9a6cdaac8f1f010bc9570c18d147037b7d2af0047eea0a"
+      "digest": "d87baa11ea379e14e569fe4c204401d2aa9591e50ac08f801fdc9b782705586c"
     },
     {
       "path": "viewer.js",

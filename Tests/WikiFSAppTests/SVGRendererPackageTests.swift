@@ -243,6 +243,7 @@ struct SVGRendererPackageTests {
         // never decoded into markup, and the load is budget-bounded.
         #expect(viewerSource.contains("Promise.race"))
         #expect(documentSource.contains("viewer.js"))
+        #expect(documentSource.contains("<h1") == false)
 
         for prohibitedPattern in [
             "window.open", "fetch(", "XMLHttpRequest", "WebSocket", "Worker(",
