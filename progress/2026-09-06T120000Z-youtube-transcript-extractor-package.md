@@ -126,6 +126,19 @@ the digest regeneration they caused).
   user-guide, README, and this record as rendered Markdown. Prose accuracy
   has no automated harness; this manual read is the recorded limitation.
 
+## Pull request evidence (AC.12)
+
+- PR: https://github.com/tqbf/selfdrivingwiki/pull/1213
+- `gh pr view 1213 --json headRefName,baseRefName,state,isDraft,url,autoMergeRequest`:
+  head `feature/youtube-transcript-extractor-package`, base
+  `feature/apple-ttml-extractor-package`, state `OPEN`, `isDraft: false`,
+  `autoMergeRequest: null` (no auto-merge).
+- GraphQL `isInMergeQueue: false` — no merge-queue entry for the exact PR
+  head. (`mergeStateStatus: UNSTABLE` reflects CI checks pending at open
+  time, not an enqueue.)
+- `gh pr checks 1213`: lint / python / skills / swift all recorded as
+  pending at PR creation; the merge decision stays with the operator.
+
 ## Known limits
 
 - `youtube-transcript-api` uses an undocumented YouTube interface; YouTube
