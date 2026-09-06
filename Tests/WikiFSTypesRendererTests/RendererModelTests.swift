@@ -843,25 +843,28 @@ struct RendererAssetReadManifestTests {
 }
 
 struct RendererModelTests {
-    @Test func reviewedRevision2And3PackageHashesRemainStable() throws {
+    @Test func reviewedLegacyRevisionPackageHashesRemainStable() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-        // The revision-6 refresh bumped every reviewed package identity, so
-        // these fixtures moved to repository history. They remain stability
-        // contracts: re-emitting those revisions must reproduce these bytes.
+        // The revision-6 refresh bumped every reviewed package identity. These
+        // historical manifests are checked in verbatim from before that bump
+        // so the pre-v6 canonical hashes stay pinned: re-emitting those
+        // revisions must reproduce these bytes.
         let fixtures: [(path: String, revision: Int, hash: String)] = [
-            ("RendererPackages/Excalidraw/manifest.json", RendererManifestRevision.fenceClaims,
+            ("Tests/WikiFSTypesRendererTests/Fixtures/legacy/Excalidraw-rev2-manifest.json",
+             RendererManifestRevision.fenceClaims,
              "7580e5195a43ee677a795c2a4591c3dcebf528d3dbfadba7001f659e9c328999"),
-            ("RendererPackages/Mermaid/manifest.json", RendererManifestRevision.fenceValidation,
+            ("Tests/WikiFSTypesRendererTests/Fixtures/legacy/Mermaid-rev3-manifest.json",
+             RendererManifestRevision.fenceValidation,
              "714bb2a23a33bbe45ab9507137c2784d844fee32220ae6248ea78a60e2acda6f"),
         ]
         for fixture in fixtures {
             let data = try Data(contentsOf: root.appendingPathComponent(fixture.path))
             let manifest = try JSONDecoder().decode(RendererManifest.self, from: data)
-            #expect(manifest.revision == RendererManifestRevision.sourceTypes)
-            #expect(try manifest.packageHash().hex != fixture.hash)
+            #expect(manifest.revision == fixture.revision)
+            #expect(try manifest.packageHash().hex == fixture.hash)
             #expect(manifest.descriptors.allSatisfy {
                 $0.compatibility.supports(hostProtocolRevision: RendererRegistrySnapshotDefaults.hostProtocolRevision)
             })

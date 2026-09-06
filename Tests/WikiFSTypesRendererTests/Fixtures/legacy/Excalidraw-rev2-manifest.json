@@ -1,0 +1,127 @@
+{
+  "revision": 2,
+  "packageID": "org.selfdrivingwiki.excalidraw-readonly",
+  "version": "1.0.5",
+  "descriptors": [
+    {
+      "reference": {
+        "packageID": "org.selfdrivingwiki.excalidraw-readonly",
+        "version": "1.0.5",
+        "registrationID": "excalidraw"
+      },
+      "displayName": "Excalidraw",
+      "implementation": {
+        "webPackage": {
+          "_0": {
+            "path": "index.html"
+          }
+        }
+      },
+      "matchers": [
+        {
+          "normalizedMIME": {
+            "_0": "application/json"
+          }
+        },
+        {
+          "extensionFallback": {
+            "_0": "excalidraw"
+          }
+        },
+        {
+          "boundedJSON": {
+            "_0": {
+              "root": "object",
+              "properties": {
+                "type": {
+                  "stringEquals": "excalidraw"
+                },
+                "version": {
+                  "integerEquals": 2
+                }
+              },
+              "arrays": {
+                "elements": "object"
+              }
+            }
+          }
+        }
+      ],
+      "presentations": [
+        "web"
+      ],
+      "supportedEmbeddingRoles": [
+        "inlineContent",
+        "disclosureRow"
+      ],
+      "fenceClaims": [
+        {
+          "alias": "excalidraw",
+          "inlineMIMEType": "application/json"
+        }
+      ],
+      "approvedAssets": [
+        {
+          "path": "LICENSE.md",
+          "digest": "d868f632abe40c63a0b0ea0caa29c8a0a1f2f59b7f3e26eb0bfd02f899edf5f8"
+        },
+        {
+          "path": "PROVENANCE.md",
+          "digest": "cdaca4e4e27b5742beeca4e3eff9a691afad532bb5d6eacd4432d84e3487d633"
+        },
+        {
+          "path": "index.html",
+          "digest": "b302ef48aeded4452cdd653dc984c05d31d3c9f442d22771489497a84a0a4f80"
+        },
+        {
+          "path": "viewer.css",
+          "digest": "b040e1aa87402726be2284db15404b2693536263b45e79d509314ce7d8177a4f"
+        },
+        {
+          "path": "viewer.js",
+          "digest": "72acedbc270e52ea2e92d8a621cb2fa54b1246b0fe031b1ebbb7d2faaa8680bc"
+        }
+      ],
+      "capabilities": [
+        "inputRead",
+        "externalLink"
+      ],
+      "sizeLimits": {
+        "maximumInputByteCount": 48000,
+        "maximumDecodedByteCount": 48000
+      },
+      "linkPolicy": "userActivatedExternal",
+      "accessibility": {
+        "supportsVoiceOver": true,
+        "supportsKeyboardNavigation": true
+      },
+      "compatibility": {
+        "minimumProtocolRevision": 1,
+        "maximumProtocolRevision": 1
+      },
+      "priority": 110
+    }
+  ],
+  "assets": [
+    {
+      "path": "LICENSE.md",
+      "digest": "d868f632abe40c63a0b0ea0caa29c8a0a1f2f59b7f3e26eb0bfd02f899edf5f8"
+    },
+    {
+      "path": "PROVENANCE.md",
+      "digest": "cdaca4e4e27b5742beeca4e3eff9a691afad532bb5d6eacd4432d84e3487d633"
+    },
+    {
+      "path": "index.html",
+      "digest": "b302ef48aeded4452cdd653dc984c05d31d3c9f442d22771489497a84a0a4f80"
+    },
+    {
+      "path": "viewer.css",
+      "digest": "b040e1aa87402726be2284db15404b2693536263b45e79d509314ce7d8177a4f"
+    },
+    {
+      "path": "viewer.js",
+      "digest": "72acedbc270e52ea2e92d8a621cb2fa54b1246b0fe031b1ebbb7d2faaa8680bc"
+    }
+  ]
+}
