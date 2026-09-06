@@ -17,7 +17,8 @@ version (extracted from PDFs, fetched from web pages, etc.).
 | **PDF** | Research papers, reports, ebooks | After extraction (yes) |
 | **Web page** | Blog posts, documentation, articles | Yes (fetched and converted) |
 | **Markdown** | Notes, Obsidian exports, LogSeq | Yes (the file itself) |
-| **Podcast** | Apple Podcasts episodes | If a transcript is available |
+| **Podcast (RSS feed)** | Any podcast feed URL | After transcription — through the reviewed podcast-transcript package |
+| **Podcast (Apple)** | Apple Podcasts episodes | After transcription — through the Apple TTML backend |
 | **Image** | PNG, JPEG, screenshots | No (binary embed only) |
 | **Other** | CSVs, JSON, code files | No (agent reads raw bytes) |
 
