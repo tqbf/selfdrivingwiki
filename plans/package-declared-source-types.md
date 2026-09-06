@@ -64,9 +64,12 @@ One bounded read feeds both channels. Policy:
 
 Renderer packages are optional. Install, removal, safe-mode
 suppression, and reset change the catalog only. They never write wiki
-databases. Without a claim, a karaoke-mapped `.mmd` source stays
-generic text: readable, safe, and free of hidden policy. The
-renderer's ordinary matchers still offer its pane when installed.
+databases. Without a claim, a `.mmd` file with no stored MIME ingests
+as generic text. An explicit MIME is authoritative: a source whose
+mirrors carry the karaoke value keeps it until ingest with an active
+claim or an explicit repair run. A generic-text source stays readable,
+and the renderer's ordinary matchers still offer its pane when
+installed.
 
 ## Ingest and presentation
 

@@ -123,8 +123,10 @@ still pass.
 
 Renderer packages now declare their source formats. A `text/mermaid`
 row classifies as generic `text` without a package claim. With an
-active claim, ingest stores the package canonical MIME and the row
-classifies as markdown-class native text. See
+active claim, ingest stores the package canonical MIME
+(`text/vnd.mermaid`); `ContentKind` still classifies that value as
+generic `text`. Catalog-aware presentation, transclusion, and
+provenance labels treat the row as readable package-owned text. See
 [`plans/package-declared-source-types.md`](package-declared-source-types.md).
 
 ### 5.1 `BackgroundIngestCoordinator.scanWiki` — THE BUG FIX (site #2)

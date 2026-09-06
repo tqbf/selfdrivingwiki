@@ -29,9 +29,11 @@ immutable versions:
 - Excalidraw `1.1.0` — hash `713d4d9e…62b91d6`
 - JSON Canvas `1.2.0` — hash `8bad1662…b4daae0`
 
-The prior revision hashes stay pinned in repository history; a test
-reproduces the old revision-5 JSONCanvas hash through the validator to
-prove canonical bytes never moved.
+The pre-v6 reviewed identities stay pinned. Checked-in historical
+manifests (Excalidraw 1.0.5 at revision 2, Mermaid 1.0.0 at revision
+3) re-verify their canonical hashes in
+`reviewedLegacyRevisionPackageHashesRemainStable`. The revision-5
+JSON Canvas hash lives only in repository history and has no test.
 
 Design and wiring:
 
@@ -76,7 +78,7 @@ New and updated suites, all green:
   signature channel staying off the artifact channel.
 - `RendererSourceTypeIngestTests` (7) — ingest-level alias, extension,
   conflict, signature, ambiguity, and artifact-bound coverage.
-- `MIMERepairTests` (14) — the original seven plus dry-run, apply,
+- `MIMERepairTests` (16) — the original seven plus dry-run, apply,
   idempotence, ambiguity, package absence, and both artifact-boundary
   repair cases against the real Mermaid claim.
 - `RendererSourceTypeNeutralityContractTests` — scans production
@@ -100,7 +102,7 @@ New and updated suites, all green:
   `RendererArtifactMatcherTests`,
   `PackageFenceValidationManifestTests` — 171 tests green.
 
-Full gates `make build` and `make test` pass (4221 tests, 462 suites).
+Full gates `make build` and `make test` pass (4225 tests, 462 suites).
 The plan's `scripts/validate-skills` entry has no matching script in the
 repository; the skill contract is pinned by
 `RendererPackageDocumentationTests` instead, which passes.
@@ -157,12 +159,26 @@ byte-aware and metadata-only resolution; the fixture helper now
 propagates `displayName`, which also restored the intended
 different-label ambiguity case.
 
+A conceptual drift audit (Codex review; the operator waived review
+model diversity and the implementation family is unrecorded) found the
+H1 fix had left two resolution paths in `MIMERepairDecision`. The
+repair deleted the superseded path and unified on presentation
+identity. A canonical no-op now requires both mirrors to equal the
+canonical value, so a canonical/NULL pair normalizes instead of
+stranding the NULL sibling. Alias acceptance reads the resolved
+presentation group's declared MIME set, so equivalent claims accept
+each other's aliases. Non-NULL candidate rows report the new
+`.neither` null state. Regression tests:
+`canonicalMirrorWithNullSiblingStillNormalizes`,
+`equivalentPresentationClaimsAcceptEachOthersAliases`.
+
 ## Notes
 
 - The old `.mmd` → `text/mermaid` ingest fallback is intentionally
-  gone. Without the package, `.mmd` stores the generic text MIME and
-  stays readable; with it, imports store `text/vnd.mermaid` and
-  repair normalizes history.
+  gone. Without the package, an undeclared `.mmd` stores the generic
+  text MIME, and a karaoke declaration keeps its value; with the
+  package, imports store `text/vnd.mermaid` and repair normalizes
+  history.
 - `SourceDetailView.isMarkdownNative` and provenance labels consult
   the catalog through the same validated inputs the renderer panes
   use, so no new host state was added.
