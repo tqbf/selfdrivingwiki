@@ -400,14 +400,14 @@ struct ExtractionRouteTableHostedTests {
         #expect(source.contains("MIME type: \\(routeRow.route.mimeType.rawValue)"))
         #expect(source.contains("Text(\"\\(routeRow.route.mimeType.rawValue)\")") == false)
 
-        // The podcast transcript default is a standard route row of the same
+        // The podcast transcript defaults are standard route rows of the same
         // table (registration-driven, resolved through the reviewed
-        // podcast-transcript package). The separate Apple TTML backend
-        // control remains its own row until the Apple follow-up.
-        #expect(source.contains("podcastBackendBinding"))
-        #expect(source.contains("Picker(\"Apple Transcript\", selection: podcastBackendBinding)"))
-        #expect(source.contains("case podcastTranscript(PodcastTranscriptionBackend?)"))
-        #expect(source.contains("extraction.routes.picker.podcast"))
+        // podcast-transcript and apple-podcast-transcript packages). The
+        // bespoke Apple TTML backend row is GONE with the packaging.
+        #expect(source.contains("podcastBackendBinding") == false)
+        #expect(source.contains("Picker(\"Apple Transcript\"") == false)
+        #expect(source.contains("case podcastTranscript(PodcastTranscriptionBackend?)") == false)
+        #expect(source.contains("extraction.routes.picker.podcast") == false)
         #expect(source.contains("Podcast feed transcripts run through the reviewed podcast-transcript package."))
         #expect(source.contains("not package-backed") == false)
         #expect(!source.contains("Text(\"Transcripts\")"))
@@ -432,7 +432,7 @@ struct ExtractionRouteTableHostedTests {
         #expect(source.contains(".sheet(item: $serviceConfigurationDialog) { dialog in\n            serviceConfigurationSheet(dialog)"))
     }
 
-    @Test("the transcript row keeps its own id space and tracks its selection")
+    @Test("every table row is a route row with one id space")
     func transcriptRowIsItsOwnIdentity() throws {
         let routeRow = ExtractorRouteSettingsRow(
             descriptor: ExtractorRouteDescriptor(
@@ -445,15 +445,10 @@ struct ExtractionRouteTableHostedTests {
             status: .ready)
 
         let route = ExtractionDefaultsTableRow.route(routeRow)
-        let prompt = ExtractionDefaultsTableRow.podcastTranscript(nil)
-        let chosen = ExtractionDefaultsTableRow.podcastTranscript(.appleTranscript)
 
-        // A transcript is not a route, so it cannot collide with one.
-        #expect(route.id != prompt.id)
-        // The transcript row is one row whichever backend it names, so the
-        // table updates it in place instead of replacing it.
-        #expect(prompt.id == chosen.id)
-        #expect(prompt != chosen)
+        // The former bespoke transcript row case is gone; every row is a
+        // route row, so ids are route-scoped by construction.
+        #expect(route.id == "route/\(routeRow.id)")
     }
 
     @Test("picker options show only extractor names")

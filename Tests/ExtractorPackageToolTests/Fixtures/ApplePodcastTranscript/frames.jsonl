@@ -1,0 +1,4 @@
+{"kind":"progress","payload":{"requestID":"9f25e76a-be09-467f-b71e-68c02da4d16c","completedUnitCount":0,"totalUnitCount":4,"message":"resolving source"}}
+{"kind":"progress","payload":{"requestID":"9f25e76a-be09-467f-b71e-68c02da4d16c","completedUnitCount":3,"totalUnitCount":4,"message":"writing markdown"}}
+{"kind":"progress","payload":{"requestID":"9f25e76a-be09-467f-b71e-68c02da4d16c","completedUnitCount":4,"totalUnitCount":4,"message":"done"}}
+{"kind":"result","payload":{"requestID":"9f25e76a-be09-467f-b71e-68c02da4d16c","outputPath":"output/result.md","markdownByteCount":293,"metadata":{"toolName":"apple-podcast-transcript"}}}

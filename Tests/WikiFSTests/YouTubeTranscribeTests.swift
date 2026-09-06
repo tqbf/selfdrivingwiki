@@ -65,7 +65,6 @@ struct YouTubeTranscribeTests {
         let outcome = try await model.addURL(
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
             fetcher: BytelessEmbedIntegrationTests.YouTubeFixtureFetcher(),
-            podcastFetcher: nil,
             youtubeFetcher: nil)  // intentionally nil: fetcher is unused at ingest
         #expect(outcome.kind == .videoEmbed)
         let sources = try store.listSources()
@@ -119,7 +118,6 @@ struct YouTubeTranscribeTests {
         _ = try await model.addURL(
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
             fetcher: BytelessEmbedIntegrationTests.YouTubeFixtureFetcher(),
-            podcastFetcher: nil,
             youtubeFetcher: nil)
         let sources = try store.listSources()
         let stored = try #require(sources.first)
@@ -226,7 +224,6 @@ struct YouTubeTranscribeTests {
         _ = try await model.addURL(
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
             fetcher: BytelessEmbedIntegrationTests.YouTubeFixtureFetcher(),
-            podcastFetcher: nil,
             youtubeFetcher: nil)
         let source = try #require(try store.listSources().first)
 

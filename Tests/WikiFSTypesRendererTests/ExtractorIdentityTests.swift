@@ -44,7 +44,7 @@ struct ExtractorIdentityTests {
         #expect(ExtractorProtocolRevision(rawValue: 2) != nil)
         #expect(ExtractorProtocolRevision(rawValue: 3) != nil)
         #expect(ExtractorProtocolRevision(rawValue: 4) == nil)
-        #expect(ExtractorKind.allCases == [.pdf, .html, .docx, .podcastTranscript])
+        #expect(ExtractorKind.allCases == [.pdf, .html, .docx, .podcastTranscript, .applePodcastTranscript])
         #expect(ExtractorFailureCause.allCases.count == 10)
     }
 

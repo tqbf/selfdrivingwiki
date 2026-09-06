@@ -264,7 +264,11 @@ struct ProcessExtractorCredentialTests {
         }
         let valid = try? ExtractorOperationConfiguration(
             endpoint: "http://127.0.0.1:8000", timeoutMilliseconds: 600_000)
-        #expect(valid?.timeoutMilliseconds == 600_000)
+        guard case .doclingServe(_, .some(let timeout)) = valid else {
+            Issue.record("expected a docling configuration")
+            return
+        }
+        #expect(timeout == 600_000)
     }
 
     // MARK: Redaction

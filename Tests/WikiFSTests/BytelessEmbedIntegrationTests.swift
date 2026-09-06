@@ -135,7 +135,6 @@ struct BytelessEmbedIntegrationTests {
         let outcome = try await model.addURL(
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
             fetcher: ExplodingFetcher(),
-            podcastFetcher: nil,
             youtubeFetcher: nil)
         #else
         let outcome = try await model.addURL(
@@ -351,7 +350,6 @@ struct BytelessEmbedIntegrationTests {
         let outcome = try await model.addURL(
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
             fetcher: YouTubeFixtureFetcher(),
-            podcastFetcher: nil,
             youtubeFetcher: nil)  // unused at ingest (PR5: byteless-only)
         #else
         let outcome = try await model.addURL(
@@ -411,7 +409,6 @@ struct BytelessEmbedIntegrationTests {
         let outcome = try await model.addURL(
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
             fetcher: emptyFetcher,
-            podcastFetcher: nil,
             youtubeFetcher: nil)  // unused at ingest (PR5: byteless-only)
         #else
         let outcome = try await model.addURL(
