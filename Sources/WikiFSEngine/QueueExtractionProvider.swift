@@ -59,9 +59,6 @@ public struct TranscriptExtractionResolution: Sendable {
     public let filename: String
     /// The typed persistence mode for the produced alternative.
     public let resultMode: TranscriptResultMode
-    /// Package transcripts link the result to the source's immutable
-    /// initial version; built-in tools do not (see `TranscriptResultMode`).
-    public let requiresInitialSourceVersion: Bool
     /// Non-PDF capacity bucket for the queue engine's concurrency config.
     public let capacityID: String
 
@@ -71,13 +68,11 @@ public struct TranscriptExtractionResolution: Sendable {
         fetch: @escaping @Sendable (_ onProgress: @escaping @Sendable (String) -> Void) async throws -> TranscriptFetchOutcome,
         filename: String,
         resultMode: TranscriptResultMode,
-        requiresInitialSourceVersion: Bool = false,
         capacityID: String = TranscriptExtractionResolution.defaultCapacityID
     ) {
         self.fetch = fetch
         self.filename = filename
         self.resultMode = resultMode
-        self.requiresInitialSourceVersion = requiresInitialSourceVersion
         self.capacityID = capacityID
     }
 }
@@ -153,8 +148,7 @@ public protocol QueueExtractionProvider: Sendable {
 
     /// Persist a transcript result with its typed mode: a built-in tool row
     /// for `.builtInTool`, or a `.transcript`-origin package row with exact
-    /// provenance and the required initial source-version link for
-    /// `.installedPackage`.
+    /// provenance and the initial source-version link for `.installedPackage`.
     func persistTranscriptExtraction(
         wikiID: WikiID,
         sourceID: SourceID,

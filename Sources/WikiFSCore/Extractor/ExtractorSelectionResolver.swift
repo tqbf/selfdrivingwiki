@@ -147,12 +147,7 @@ public enum ExtractorSelectionResolver {
     ) -> ExtractorReference? {
         activeRegistrations
             .filter {
-                // #1159: protocol revision 2 registrations are selectable
-                // alongside revision 1. Protocol revision 3 (remote-url
-                // input) registrations are selectable too — the transport is
-                // invisible to selection.
-                ($0.protocolRevision == .v1 || $0.protocolRevision == .v2 || $0.protocolRevision == .v3)
-                    && $0.kinds.contains(kind)
+                $0.kinds.contains(kind)
                     && $0.reference.revision.packageID == logicalReference.packageID
                     && $0.reference.registrationID == logicalReference.registrationID
             }

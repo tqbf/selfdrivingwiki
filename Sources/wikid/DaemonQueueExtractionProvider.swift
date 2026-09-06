@@ -74,8 +74,7 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
                             reportedMetadata: outcome.reportedMetadata)
                     },
                     filename: "transcript",
-                    resultMode: .installedPackage(producer),
-                    requiresInitialSourceVersion: true))
+                    resultMode: .installedPackage(producer)))
 
             case .applePodcast:
                 #if PODCAST_TRANSCRIPTS
