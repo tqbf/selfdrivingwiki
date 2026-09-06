@@ -77,11 +77,21 @@ public extension ExtractorRouteID {
         kind: .docx,
         mimeTypeString: "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
+    /// The RSS podcast transcript route. The synthetic `audio/podcast`
+    /// source MIME is the route dimension for byteless `.podcast` sources;
+    /// the input itself is the source URL (protocol revision 3).
+    static let canonicalPodcastTranscript = ExtractorRouteID.validatedCanonical(
+        kind: .podcastTranscript,
+        mimeTypeString: "audio/podcast")
+
     /// True for the routes host execution supports today. Future package
     /// registrations may declare other MIME types; displaying and resolving them
     /// is the route table's job, while execution adapters for new kinds remain
     /// separate work.
-    var isCanonical: Bool { self == .canonicalPDF || self == .canonicalHTML || self == .canonicalDOCX }
+    var isCanonical: Bool {
+        self == .canonicalPDF || self == .canonicalHTML || self == .canonicalDOCX
+            || self == .canonicalPodcastTranscript
+    }
 
     private static func validatedCanonical(kind: ExtractorKind, mimeTypeString: String) -> ExtractorRouteID {
         guard let route = ExtractorRouteID(normalizing: kind, mimeTypeString: mimeTypeString) else {
