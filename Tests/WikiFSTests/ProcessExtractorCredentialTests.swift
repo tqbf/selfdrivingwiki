@@ -413,6 +413,54 @@ struct ProcessExtractorCredentialTests {
         #expect(resolver.callCount == 0)
     }
 
+    /// A credential-free revision-3 package (the podcast transcript shape)
+    /// still runs the final launch-seam admission/catalog gate: revocation
+    /// between preparation and spawn must refuse the launch even though the
+    /// registration declares no credential requirements.
+    @Test func credentialFreeRevisionThreeRemoteURLOperationRunsTheLaunchGate() async throws {
+        let manifest = try v2Manifest(requirements: [], protocolRevision: .v3)
+        let executor = StubCredentialExecutor()
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("op-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let revision = try revision(for: manifest)
+
+        let gate = LaunchGateBox()
+        let operation = PreparedProcessOperation(
+            directoryRoot: root,
+            packageRoot: root.appendingPathComponent("package"),
+            homeRoot: root.appendingPathComponent("home"),
+            temporaryRoot: root.appendingPathComponent("tmp"),
+            cacheRoot: root.appendingPathComponent("cache"),
+            sharedRuntimeCacheRoot: nil,
+            sharedModelCacheRoot: nil,
+            revision: revision,
+            manifest: manifest,
+            registration: manifest.registrations[0],
+            registrationID: manifest.registrations[0].id,
+            protocolRevision: manifest.protocolRevision,
+            mimeTypes: ["audio/podcast"],
+            executor: executor,
+            launchGate: { try gate.refuse() },
+            operationCredentials: nil,
+            operationConfiguration: nil,
+            runtimeResolution: nil)
+
+        // The package was revoked after preparation: the launch gate throws
+        // (mapped through the redactor like every launch failure) and the
+        // executor is never invoked.
+        await #expect(throws: ProcessPackageError.self) {
+            _ = try await operation.execute(
+                kind: .podcastTranscript,
+                remoteURL: ExtractorRemoteSourceURL(
+                    validating: "https://example.com/feed.rss"),
+                filename: "feed",
+                onProgress: nil)
+        }
+        #expect(gate.callCount == 1)
+        #expect(executor.capturedRequests.isEmpty)
+    }
+
     @Test func ownerReadOnlyFileVerificationRejectsWrongMode() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("mode-\(UUID().uuidString)", isDirectory: true)
@@ -428,6 +476,22 @@ struct ProcessExtractorCredentialTests {
         #expect(throws: ExtractorDirectoryAdmissionError.self) {
             _ = try PreparedProcessOperation.verifyOwnerReadOnlyFile(fd: fd, at: url)
         }
+    }
+}
+
+/// Thread-safe launch-gate stub: counts invocations and always refuses, so a
+/// test can prove the executor never spawns after revocation.
+final class LaunchGateBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var callCount: Int {
+        lock.withLock { count }
+    }
+
+    func refuse() throws {
+        lock.withLock { count += 1 }
+        throw ExtractorOperationCredentialError.packageNotAdmitted
     }
 }
 

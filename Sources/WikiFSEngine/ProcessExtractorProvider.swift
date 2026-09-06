@@ -752,8 +752,12 @@ public final class PreparedProcessOperation: Sendable {
             // Final launch-seam gate: the LAST thing before spawn, after the
             // request snapshot is fully constructed (PR 3 review HIGH-1).
             // Revision-1 prepared operations never re-consult admission
-            // (their pinned-snapshot semantics are preserved).
-            if declaresRequirements, let launchGate = self.launchGate {
+            // (their pinned-snapshot semantics are preserved). Every
+            // revision-2+ operation rechecks for EVERY launch — the gate
+            // protects admission and catalog membership, not just
+            // credentials, so a credential-free revision-3 package (the
+            // podcast transcript package) is rechecked too.
+            if manifest.protocolRevision >= .v2, let launchGate = self.launchGate {
                 try await launchGate()
             }
             let outcome = try await self.executor.execute(managedRequest) { [redactor] (frame: ExtractorProtocolFrame) in
