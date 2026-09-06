@@ -2339,59 +2339,18 @@ public final class WikiStoreModel {
     /// "Ingest into wiki" phase is a separate, later step. Issue #178.
     ///
     /// Issue #799 PR5: the `youtubeFetcher` parameter is a back-compat no-op at
-    /// ingest — kept for source compatibility with callers that inject a fetcher
-    /// (mirrors the podcast PR4 contract). YouTube ingestion now creates a
-    /// byteless embed source + synthetic metadata page with NO transcript at
-    /// ingest; the user clicks Transcribe in `SourceDetailView` to trigger the
-    /// caption fetch explicitly via `transcribe(sourceID:youtubeFetcher:)`.
+    /// ingest — kept for source compatibility with callers that inject a fetcher.
+    /// YouTube ingestion now creates a byteless embed source + synthetic metadata
+    /// page with NO transcript at ingest; the user clicks Transcribe in
+    /// `SourceDetailView` to trigger the caption fetch explicitly via
+    /// `transcribe(sourceID:youtubeFetcher:)`. The same holds for Apple Podcasts
+    /// episodes: ingest creates the byteless source only; transcripts enqueue
+    /// through the reviewed apple-podcast-transcript package route.
     @discardableResult
     public func addURL(
         _ rawInput: String,
         fetcher: any URLFetchService.URLResourceFetcher = URLSessionFetcher(),
         youtubeFetcher: (any YouTubeTranscriptFetching)?? = nil,
-        allowDuplicateURL: Bool = false
-    ) async throws -> URLFetchService.FetchOutcome {
-        try rejectExistingURL(rawInput, allowDuplicateURL: allowDuplicateURL)
-        #if PODCAST_TRANSCRIPTS
-        // Delegate to the podcast-aware overload so routing is in one place.
-        return try await addURL(
-            rawInput, fetcher: fetcher,
-            podcastFetcher: ApplePodcastTranscriptService.bundled(),
-            youtubeFetcher: youtubeFetcher ?? YouTubeTranscriptService(),
-            allowDuplicateURL: true)
-        #else
-        // Phase 5b: byteless external-embed media (YouTube/Vimeo/Spotify/
-        // SoundCloud/remote-media) routes uniformly through `bytelessMediaOutcome`,
-        // which creates the byteless embed source + synthetic metadata page (NO
-        // transcript at ingest — mirrors the podcast PR4 contract). The Transcribe
-        // button (PR5) is the sole affordance to surface a transcript for YouTube.
-        // The `youtubeFetcher` parameter is intentionally NOT consulted at ingest;
-        // it lives on as a back-compat no-op (its seam is `transcribe`).
-        if let outcome = try await bytelessMediaOutcome(rawInput, urlFetcher: fetcher) {
-            return outcome
-        }
-        return try await addURLViaWebsite(rawInput, fetcher: fetcher)
-        #endif
-    }
-
-    #if PODCAST_TRANSCRIPTS
-    /// The podcast-aware `addURL`: recognizes an Apple Podcasts episode link and
-    /// routes to the byteless-embed pipeline instead of the HTML fetcher. The
-    /// `podcastFetcher` seam lets CI inject a fake `PodcastTranscriptFetching`
-    /// for the **transcribe** step (the bundled service returns nil without the
-    /// signing helper). It is intentionally NOT consulted at ingest time in PR4
-    /// — per #799, no auto-transcription at ingest; the user clicks Transcribe
-    /// in `SourceDetailView` to trigger the network fetch explicitly. The
-    /// parameter stays on the signature for back-compat with the existing tests
-    /// that assert the routing contract, and so the same call site can opt a
-    /// fake fetcher back in for the (now-separate) `transcribePodcast(sourceID:)`
-    /// step.
-    @discardableResult
-    public func addURL(
-        _ rawInput: String,
-        fetcher: any URLFetchService.URLResourceFetcher,
-        podcastFetcher: (any PodcastTranscriptFetching)?,
-        youtubeFetcher: (any YouTubeTranscriptFetching)? = nil,
         allowDuplicateURL: Bool = false
     ) async throws -> URLFetchService.FetchOutcome {
         try rejectExistingURL(rawInput, allowDuplicateURL: allowDuplicateURL)
@@ -2402,15 +2361,15 @@ public final class WikiStoreModel {
         // `podcasts.apple.com` URL the user pasted (the episode ID alone
         // isn't a clickable link).
         if let episode = PodcastEpisodeURL.parse(rawInput) {
-            // Issue #799 PR4: stop auto-transcribing at ingest. The episode
+            // Issue #799 PR4: no auto-transcription at ingest. The episode
             // URL creates a byteless embed source (like YouTube/Vimeo/Spotify/
             // SoundCloud/remote-media) with NO transcript. The user clicks
-            // "Transcribe" in `SourceDetailView` to trigger the network fetch
-            // (signed bearer → AMP → TTML → parse → markdown) explicitly via
-            // `transcribePodcast(sourceID:)`. Same provenance shape as before
-            // (agentName = apple-podcast, plan/externalRef = pasted page URL,
-            // externalIdentity = the numeric episode ID) so ExternalEmbed
-            // continues to host-swap planURL → embed.podcasts.apple.com.
+            // "Transcribe" in `SourceDetailView` to enqueue the fetch through
+            // the reviewed apple-podcast-transcript package route. Same
+            // provenance shape as before (agentName = apple-podcast,
+            // plan/externalRef = pasted page URL, externalIdentity = the
+            // numeric episode ID) so ExternalEmbed continues to host-swap
+            // planURL → embed.podcasts.apple.com.
             let pageURL = URLFetchService.normalizeURL(rawInput)
                 ?? URL(string: "https://podcasts.apple.com")!
             let summary = try store.addBytelessSource(
@@ -2441,13 +2400,12 @@ public final class WikiStoreModel {
             }
             // No transcript markdown is written — the source's
             // `source_markdown_versions` stays empty until the user transcribes.
-            // Mirrors the post-PR3 HTML invariant and the YouTube-without-
-            // captions path BEFORE the #646 synthetic-page work. The reader
-            // shows the embed player (the source has an `embedTarget`); the
-            // Transcribe button is the sole affordance to surface a transcript.
-            // No manual reload — the bus fires reloadFromStore() async after
-            // the store writes. The tab title is passed explicitly so tabTitle
-            // (which reads `sources`) needs no synchronous freshness.
+            // The reader shows the embed player (the source has an
+            // `embedTarget`); the Transcribe button is the sole affordance to
+            // surface a transcript. No manual reload — the bus fires
+            // reloadFromStore() async after the store writes. The tab title is
+            // passed explicitly so tabTitle (which reads `sources`) needs no
+            // synchronous freshness.
             openTab(.source(summary.id), title: resolvedTitle ?? summary.effectiveName)
             return URLFetchService.FetchOutcome(
                 filename: summary.filename,
@@ -2455,19 +2413,18 @@ public final class WikiStoreModel {
                 kind: .audioEmbed)
         }
         // Phase 5b: byteless external-embed media (provider iframes + direct-
-        // remote). YouTube now routes uniformly through `bytelessMediaOutcome`
+        // remote). YouTube routes uniformly through `bytelessMediaOutcome`
         // (creates the byteless embed source + synthetic metadata page, NO
-        // transcript at ingest — mirrors the podcast PR4 contract above). The
-        // user clicks Transcribe in `SourceDetailView` to trigger the network
-        // fetch explicitly via `transcribe(sourceID:)`. The `youtubeFetcher`
-        // parameter stays for back-compat (mirrors `podcastFetcher`); it is
-        // intentionally NOT consulted at ingest.
+        // transcript at ingest). The user clicks Transcribe in
+        // `SourceDetailView` to enqueue the fetch explicitly via the queue.
+        // The `youtubeFetcher` parameter is intentionally NOT consulted at
+        // ingest; it lives on as a back-compat no-op (its seam is
+        // `transcribe`).
         if let outcome = try await bytelessMediaOutcome(rawInput, urlFetcher: fetcher) {
             return outcome
         }
         return try await addURLViaWebsite(rawInput, fetcher: fetcher)
     }
-    #endif
 
     /// Guard URL intake before any provider routing or network work. Invalid
     /// input remains the fetch service's responsibility so callers retain its
@@ -2789,18 +2746,6 @@ public final class WikiStoreModel {
     /// actor, exactly like `addURL`.
     ///
     /// Returns a human-readable description for UI surfacing.
-    #if PODCAST_TRANSCRIPTS
-    @discardableResult
-    public func refreshSource(
-        _ id: SourceID,
-        fetcher: any URLFetchService.URLResourceFetcher = URLSessionFetcher(),
-        podcastFetcher: (any PodcastTranscriptFetching)? = ApplePodcastTranscriptService.bundled()
-    ) async throws -> String {
-        let service = SourceRefreshService(
-            fetcher: fetcher, podcastFetcher: podcastFetcher)
-        return try await performRefresh(id: id, service: service)
-    }
-    #else
     @discardableResult
     public func refreshSource(
         _ id: SourceID,
@@ -2809,7 +2754,6 @@ public final class WikiStoreModel {
         let service = SourceRefreshService(fetcher: fetcher)
         return try await performRefresh(id: id, service: service)
     }
-    #endif
 
     /// Shared refresh body: materialize off-main, append the version on-main,
     /// reload. Split out so the `#if PODCAST_TRANSCRIPTS` gated inits don't
@@ -3259,11 +3203,12 @@ public final class WikiStoreModel {
         case .website:
             return !(DebugLog.trying("hasImageSiblings", operation: { try store.hasImageSiblings(sourceID: id) }) ?? false)
         case .applePodcast:
-            #if PODCAST_TRANSCRIPTS
-            return ApplePodcastTranscriptService.bundled() != nil
-            #else
-            return false
-            #endif
+            // Apple Podcasts transcripts run through the reviewed extractor
+            // package route (Apple TTML workflow, or the package's RSS
+            // fallback when no helper is staged). Refresh availability comes
+            // from the route, not from helper presence — the enqueue path
+            // reports a typed failure when the route is disabled.
+            return true
         case .podcast:
             // Generic RSS-feed podcast: always refreshable on every build —
             // the `podcast-transcript` script needs only `uv` (no signing
@@ -3782,27 +3727,18 @@ public final class WikiStoreModel {
     /// lifecycle in PR2.
     ///
     /// - Parameters:
-    ///   - sourceID: the byteless embed source to transcribe (Apple Podcasts or
-    ///     YouTube).
-    ///   - podcastFetcher: the `PodcastTranscriptFetching` to use for the
-    ///     podcast arm; defaults to `ApplePodcastTranscriptService.bundled()`
-    ///     (the bundled signing helper). Tests inject a fake. `nil` on a build
-    ///     without the helper → throws `.signatureUnavailable`. NOT consulted
-    ///     for the YouTube arm. On a build without `PODCAST_TRANSCRIPTS` the
-    ///     parameter is a back-compat `Any? = nil` placeholder (the podcast arm
-    ///     throws `.notRefreshable` regardless).
+    ///   - sourceID: the byteless embed source to transcribe (YouTube; the
+    ///     podcast arms enqueue through the extraction queue).
     ///   - youtubeFetcher: the `YouTubeTranscriptFetching` to use for the
     ///     YouTube arm; defaults to `YouTubeTranscriptService(fetcher:
-    ///     URLSessionFetcher())` (pure-Swift scrape). Tests inject a fake. NOT
-    ///     consulted for the podcast arm. Always compiled (no signing helper).
+    ///     URLSessionFetcher())` (pure-Swift scrape). Tests inject a fake.
+    ///     Always compiled (no signing helper).
     /// - Returns: the new `SourceMarkdownVersion`, or nil on a store write
     ///   failure (the `appendDerivedMarkdown` throw is logged via `DebugLog`,
     ///   mirroring `extractHtml`'s discipline).
-    #if PODCAST_TRANSCRIPTS
     @discardableResult
     public func transcribe(
         sourceID: SourceID,
-        podcastFetcher: (any PodcastTranscriptFetching)? = ApplePodcastTranscriptService.bundled(),
         youtubeFetcher: (any YouTubeTranscriptFetching)? = YouTubeTranscriptService()
     ) async throws -> SourceMarkdownVersion? {
         guard let origin = sourceOrigin(for: sourceID),
@@ -3810,13 +3746,12 @@ public final class WikiStoreModel {
             throw SourceRefreshService.RefreshError.notRefreshable("unknown")
         }
         switch provider {
-        case .applePodcast:
-            return try await transcribePodcast(
-                sourceID: sourceID, origin: origin, fetcher: podcastFetcher)
-        case .podcast:
-            // RSS podcast transcripts run through the app's extraction queue
-            // (the extractor-package route) — the model has no direct fetch
-            // path and `WikiFSCore` cannot reach the queue engine.
+        case .applePodcast, .podcast:
+            // Both podcast arms run through the app's extraction queue (the
+            // extractor-package routes) — the model has no direct fetch path
+            // and `WikiFSCore` cannot reach the queue engine. The queue's
+            // package adapters carry exact provenance for both source
+            // classes.
             throw SourceRefreshService.RefreshError.podcastQueueRequired
         case .youtube:
             return try await transcribeYouTube(
@@ -3826,120 +3761,6 @@ public final class WikiStoreModel {
             throw SourceRefreshService.RefreshError.notRefreshable(origin.agentName)
         }
     }
-    #else
-    @discardableResult
-    public func transcribe(
-        sourceID: SourceID,
-        podcastFetcher: Any? = nil,
-        youtubeFetcher: (any YouTubeTranscriptFetching)? = YouTubeTranscriptService()
-    ) async throws -> SourceMarkdownVersion? {
-        guard let origin = sourceOrigin(for: sourceID),
-              let provider = origin.provider else {
-            throw SourceRefreshService.RefreshError.notRefreshable("unknown")
-        }
-        switch provider {
-        case .applePodcast:
-            // Phase-out build: podcast support isn't compiled (WIKIFS_APP_STORE=1).
-            // The View-level `isTranscribable` predicate returns `false` for
-            // `.applePodcast` outside this flag, so the Transcribe button doesn't
-            // render and this path is unreachable in production; the throw keeps
-            // the model honest for callers that bypass the predicate (headless
-            // API, tests). The shape matches the private
-            // `transcribePodcast(sourceID:origin:fetcher:)` phase-out arm below.
-            _ = podcastFetcher  // unused on the phase-out build
-            throw SourceRefreshService.RefreshError.notRefreshable(origin.agentName)
-        case .podcast:
-            // RSS podcast transcripts run through the app's extraction queue
-            // (the extractor-package route) on every build.
-            throw SourceRefreshService.RefreshError.podcastQueueRequired
-        case .youtube:
-            return try await transcribeYouTube(
-                sourceID: sourceID, origin: origin, fetcher: youtubeFetcher)
-        case .vimeo, .spotify, .soundcloud, .remoteMedia,
-             .localFile, .website, .zotero, .markdownFolder, .legacyImport:
-            throw SourceRefreshService.RefreshError.notRefreshable(origin.agentName)
-        }
-    }
-    #endif
-
-    // MARK: - Per-provider transcription helpers
-
-    /// Podcast arm of the unified dispatch (PR4 logic, moved from the public
-    /// entry point to a private helper in PR5). Reconstructs the episode URL
-    /// from `origin.plan` (the page URL recorded at ingest —
-    /// `PodcastEpisodeURL.parse(_:)` recovers the numeric episode ID + the
-    /// slug), re-injects the fetcher (passed through from the dispatch entry
-    /// point — mirrors `refreshSource`'s injection point), calls
-    /// `ApplePodcastMaterializer.materialize()` (which runs the full token →
-    /// AMP → TTML → parse → markdown pipeline off-main in a detached `Task`),
-    /// and writes the transcript markdown via `appendDerivedMarkdown` with
-    /// the `.appleTTML` tool.
-    ///
-    /// Throws `PodcastTranscriptError.signatureUnavailable` when the helper
-    /// binary isn't present (mirroring the same throw at ingest pre-PR4 and
-    /// `SourceRefreshService.materializePodcast`'s shape), and
-    /// `SourceRefreshService.RefreshError.missingPlan` when the origin has no
-    /// `plan` URL (data-integrity edge case — podcast ingests always record the
-    /// page URL at ingest). The `origin.provider == .applePodcast` guard lives
-    /// at the dispatch entry point (the `switch`), so this helper trusts the
-    /// caller has already verified the provider.
-    #if PODCAST_TRANSCRIPTS
-    private func transcribePodcast(
-        sourceID: SourceID, origin: SourceOrigin,
-        fetcher: (any PodcastTranscriptFetching)?
-    ) async throws -> SourceMarkdownVersion? {
-        guard let planURLString = origin.plan,
-              let pageURL = URL(string: planURLString),
-              let episode = PodcastEpisodeURL.parse(planURLString) else {
-            throw SourceRefreshService.RefreshError.missingPlan
-        }
-        // Prefer the injected fetcher (FairPlay path when the signing helper is
-        // available). Fall back to the RSS subprocess service — it needs only
-        // `uv` (no macOS signing helper), so podcast transcripts work even in
-        // builds where `podcast-token-helper` is absent. Issue #812.
-        let svc = fetcher ?? RSSPodcastTranscriptService(sourceURL: pageURL)
-        // The materializer runs the transcript fetch (helper subprocess + two
-        // HTTP round-trips + TTML parse) off-main in a detached Task; the
-        // model never touches the store inside this `await`.
-        let provider = ApplePodcastMaterializer(
-            episode: episode, pageURL: pageURL, fetcher: svc)
-        let transcript = try await provider.materialize()
-        let markdown = String(data: transcript.data, encoding: .utf8) ?? ""
-        do {
-            // #251: link the extraction to the immutable v1 created at ingest,
-            // regardless of which content version is currently active.
-            guard let sourceVersionID = try store.initialContentVersion(sourceID: sourceID)?.id else {
-                throw WikiStoreError.unexpected(
-                    "apple podcast source has no initial content version: \(sourceID.rawValue)")
-            }
-            return try store.appendDerivedMarkdown(
-                sourceID: sourceID, content: markdown, origin: .transcript,
-                producer: .tool(.appleTTML), providerID: nil, modelID: nil, toolVersion: nil,
-                sourceVersionID: sourceVersionID, note: nil)
-        } catch {
-            // #475/#492: never silently swallow — a transcription failure
-            // (after network round-trips) must leave a Console.app trace.
-            DebugLog.store("WikiStoreModel.transcribe (applePodcast) appendDerivedMarkdown failed (source=\(sourceID.rawValue)): \(error)")
-            return nil
-        }
-    }
-    #else
-    private func transcribePodcast(
-        sourceID: SourceID, origin: SourceOrigin,
-        fetcher: Any?
-    ) async throws -> SourceMarkdownVersion? {
-        // Phase-out build: podcast support isn't compiled (WIKIFS_APP_STORE=1).
-        // The View-level `isTranscribable` predicate returns `false` for
-        // `.applePodcast` outside this flag, so the Transcribe button doesn't
-        // render and this path is unreachable in production; the throw keeps
-        // the model honest for callers that bypass the predicate (headless
-        // API, tests). The shape matches `SourceRefreshService.materializePodcast`'s
-        // phase-out arm, which also throws `.notRefreshable` here.
-        _ = fetcher  // unused on the phase-out build
-        _ = sourceID
-        throw SourceRefreshService.RefreshError.notRefreshable(origin.agentName)
-    }
-    #endif
 
     /// YouTube arm of the unified dispatch (PR5, NEW). Reads
     /// `origin.externalIdentity` (the 11-char video ID — `MediaEmbedURL.youtube`

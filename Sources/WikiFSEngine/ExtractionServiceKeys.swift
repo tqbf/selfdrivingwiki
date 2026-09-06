@@ -36,7 +36,11 @@ public enum ExtractionBackendAdapter: Sendable {
     /// prepared package operation, so results keep exact package provenance
     /// — the former built-in fetcher case could not, and was removed.
     case podcastTranscript(ProcessPackagePodcastTranscript)
-    case applePodcastTranscript(any PodcastTranscriptFetching)
+    /// The process-backed Apple Podcasts transcript adapter. Same prepared
+    /// operation shape as the RSS sibling; the built-in fetcher case was
+    /// removed with the Apple TTML packaging (the former built-in adapter
+    /// could not carry package provenance).
+    case applePodcastTranscript(ProcessPackageApplePodcastTranscript)
 }
 
 public struct RegisteredExtractionBackend: Sendable {

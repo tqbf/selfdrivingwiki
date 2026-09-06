@@ -433,61 +433,13 @@ public struct WebsiteSnapshot: Sendable {
     }
 }
 
-// MARK: - ApplePodcastMaterializer
-
-#if PODCAST_TRANSCRIPTS
-/// Materializes an Apple Podcasts episode transcript: the fetch (token signing →
-/// AMP metadata → TTML download → parse → markdown) runs off-main, producing a
-/// `MaterializedSource` with `agentName = "apple-podcast"`, `activityKind = "fetch"`,
-/// `plan`/`externalRef` = the episode's `podcasts.apple.com` URL, and
-/// `externalIdentity` = the numeric episode ID (`i=` value). This is the first real
-/// consumer of the `SourceMaterializer` protocol; `addURL` routes recognized episode
-/// URLs here instead of `WebsiteMaterializer`.
-///
-/// Holds the page URL separately from `EpisodeRef` so the provenance records the
-/// canonical `podcasts.apple.com` link (not the episode ID alone) — the ID is what
-/// the AMP endpoint wants, but the URL is what the user pasted and what the Origin
-/// row should surface.
-public struct ApplePodcastMaterializer: SourceMaterializer {
-    public let agentName = SourceProvider.applePodcast.rawValue
-    public let episode: PodcastEpisodeURL.EpisodeRef
-    public let pageURL: URL
-    public let fetcher: any PodcastTranscriptFetching
-
-    public init(
-        episode: PodcastEpisodeURL.EpisodeRef,
-        pageURL: URL,
-        fetcher: any PodcastTranscriptFetching
-    ) {
-        self.episode = episode
-        self.pageURL = pageURL
-        self.fetcher = fetcher
-    }
-
-    public func materialize() async throws -> MaterializedSource {
-        let episode = self.episode
-        let fetcher = self.fetcher
-        // The transcript fetch (helper subprocess + two HTTP round-trips) is
-        // off-main; the materializer never touches the store.
-        let transcript = try await Task.detached(priority: .userInitiated) {
-            try await fetcher.transcript(for: episode)
-        }.value
-        let urlString = pageURL.absoluteString
-        return MaterializedSource(
-            filename: transcript.filename,
-            data: Data(transcript.markdown.utf8),
-            mimeType: MimeType.markdown,
-            provenance: SourceProvenance(
-                agentName: agentName,
-                activityKind: "fetch",
-                plan: urlString,
-                externalRef: urlString,
-                externalIdentity: episode.id
-            )
-        )
-    }
-}
-#endif
+// MARK: - Apple Podcasts ingest
+//
+// The `ApplePodcastMaterializer` was REMOVED with the Apple TTML packaging:
+// Apple Podcasts transcripts run through the reviewed apple-podcast-transcript
+// package via the extraction queue, whose prepared adapter carries exact
+// installed-package provenance. The former built-in materializer could not
+// carry provenance and had no remaining production caller.
 
 // MARK: - ZoteroMaterializer
 

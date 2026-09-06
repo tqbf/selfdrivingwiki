@@ -473,10 +473,6 @@ struct ExtractionSettingsView: View {
     @State private var doclingTokenText = ""
     @State private var doclingTokenConfigured = false
     @State private var doclingTest = TestPhase.idle
-    // Issue #799 PR1: Podcast backend draft (optional — nil = no default yet,
-    // user is prompted to pick on first transcription). Seeded from
-    // `ExtractionConfig` in `init`, written back in `writeConfig`.
-    @State private var draftPodcastBackend: PodcastTranscriptionBackend?
     // Installed-package lifecycle (dynamic-extractor-packages Phase 7).
     @State private var packageModel: ExtractorPackageSettingsModel
     @State private var showingImportPicker = false
@@ -555,7 +551,6 @@ struct ExtractionSettingsView: View {
         _acpProviderSelection = State(initialValue: ExtractorSettingsSelectionMapping.acpProviderSelection(from: config))
         _doclingEndpointText = State(initialValue: config.doclingServeEndpoint ?? "")
         _doclingTimeoutText = State(initialValue: config.doclingServeTimeoutMilliseconds.map { String($0 / 1_000) } ?? "")
-        _draftPodcastBackend = State(initialValue: config.podcastBackend)
         _packageModel = State(initialValue: ExtractorPackageSettingsModel(
             loadSnapshot: packageSnapshot,
             importPackage: importPackage,
@@ -732,35 +727,24 @@ struct ExtractionSettingsView: View {
     private var extractorRouteTable: some View {
         Table(defaultsRows) {
             TableColumn("Format") { (row: ExtractionDefaultsTableRow) in
-                switch row {
-                case .route(let routeRow):
+                if case .route(let routeRow) = row {
                     Label(routeRow.descriptor.displayName, systemImage: routeRow.descriptor.systemImage ?? "doc")
                         // Technical MIME identity lives in help text, not a column.
                         .help("MIME type: \(routeRow.route.mimeType.rawValue)")
-                case .podcastTranscript:
-                    Label(Self.podcastTranscriptRowTitle, systemImage: "apple.logo")
-                        .help(Self.podcastTranscriptHelp)
                 }
             }
             // Wide enough for the longest format name in the table, which is
             // the transcript row rather than one of the three-letter routes.
             .width(min: 110, ideal: 160)
             TableColumn("Default extractor") { (row: ExtractionDefaultsTableRow) in
-                switch row {
-                case .route(let routeRow): routePicker(routeRow)
-                case .podcastTranscript: podcastTranscriptPicker
+                if case .route(let routeRow) = row {
+                    routePicker(routeRow)
                 }
             }
             .width(min: 220, ideal: 280)
             TableColumn("Status") { (row: ExtractionDefaultsTableRow) in
-                switch row {
-                case .route(let routeRow):
+                if case .route(let routeRow) = row {
                     statusLabel(routeRow)
-                case .podcastTranscript:
-                    // A host adapter has no package to install, activate, or
-                    // authorize, so the table builder's non-package answer
-                    // (ready) is the honest one here too.
-                    podcastTranscriptStatusBadge
                 }
             }
             // Status is a semantic-colored icon + short label — compact by
@@ -825,47 +809,12 @@ struct ExtractionSettingsView: View {
         }
     }
 
-    static let podcastTranscriptRowTitle = "Apple transcript"
-    static let podcastTranscriptHelp = "Apple Podcasts transcripts use the separate Apple TTML backend. RSS podcast feed transcripts are a standard route above, resolved through the reviewed podcast-transcript package."
-
     /// Every default the table shows: the registration-driven extraction
-    /// routes, then the podcast transcript default.
+    /// routes. The Apple Podcasts transcript route is a standard package
+    /// route row (resolved through the reviewed apple-podcast-transcript
+    /// package); the former bespoke Apple TTML backend row is gone.
     private var defaultsRows: [ExtractionDefaultsTableRow] {
         routeRows.map(ExtractionDefaultsTableRow.route)
-            + [.podcastTranscript(draftPodcastBackend)]
-    }
-
-    /// The Apple transcript row's pop-up. It writes a
-    /// `PodcastTranscriptionBackend`, not an `ExtractorRouteSettingsSelection`,
-    /// which is why the row is its own case rather than a synthesized route.
-    /// The RSS podcast transcript route itself is a standard row now; this
-    /// control stays until the Apple TTML packaging follow-up.
-    private var podcastTranscriptPicker: some View {
-        Picker("Apple Transcript", selection: podcastBackendBinding) {
-            Text("Prompt me when transcribing").tag(nil as PodcastTranscriptionBackend?)
-            ForEach(PodcastTranscriptionBackend.allCases, id: \.self) { backend in
-                Text(backend.displayName).tag(backend as PodcastTranscriptionBackend?)
-            }
-        }
-        .labelsHidden()
-        .frame(maxWidth: 260)
-        .onChange(of: draftPodcastBackend) { persistAll() }
-        .accessibilityIdentifier(RouteAccessibility.podcastPicker)
-        .accessibilityLabel("Default Apple podcast transcript backend")
-        .accessibilityValue(draftPodcastBackend?.displayName ?? "Prompt me when transcribing")
-    }
-
-    private var podcastTranscriptStatusBadge: some View {
-        HStack(spacing: 5) {
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(.green)
-            Text("Ready")
-        }
-        .fixedSize(horizontal: false, vertical: true)
-        .lineLimit(1)
-        .help(Self.podcastTranscriptHelp)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Podcast transcript, ready")
     }
 
     /// One row's pop-up. Tags are the typed `ExtractorRouteSettingsSelection`
@@ -1099,9 +1048,6 @@ struct ExtractionSettingsView: View {
         static let table = "extraction.routes.table"
         static let pickerPrefix = "extraction.routes.picker"
         static let statusPrefix = "extraction.routes.status"
-        /// The transcript row is not route-scoped, so its picker takes a fixed
-        /// identifier rather than a route-derived one.
-        static let podcastPicker = "extraction.routes.picker.podcast"
     }
 
     // MARK: - Extractor status recovery
@@ -1965,12 +1911,6 @@ struct ExtractionSettingsView: View {
         if case .failed(let m) = doclingTest { return m }; return nil
     }
 
-    private var podcastBackendBinding: Binding<PodcastTranscriptionBackend?> {
-        Binding(
-            get: { draftPodcastBackend },
-            set: { draftPodcastBackend = $0 })
-    }
-
     // MARK: - Auto-save
 
     /// Persist every non-secret draft into `ExtractionConfig`. Called from
@@ -2026,7 +1966,6 @@ struct ExtractionSettingsView: View {
         } else {
             config.doclingServeTimeoutMilliseconds = nil
         }
-        config.podcastBackend = draftPodcastBackend
     }
 
     // MARK: - Test Connection
@@ -2390,13 +2329,10 @@ enum ExtractionSettingsPane: String, CaseIterable, Identifiable, Hashable, Senda
 /// table show both without either pretending to be the other.
 enum ExtractionDefaultsTableRow: Identifiable, Hashable, Sendable {
     case route(ExtractorRouteSettingsRow)
-    /// Carries the current choice so the table diffs when the user changes it.
-    case podcastTranscript(PodcastTranscriptionBackend?)
 
     var id: String {
         switch self {
         case .route(let row): "route/\(row.id)"
-        case .podcastTranscript: "transcript/podcast"
         }
     }
 }

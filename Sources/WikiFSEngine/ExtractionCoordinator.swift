@@ -65,6 +65,9 @@ public protocol ExtractionServices: Sendable {
     /// or an unavailable selection. The prepared adapter runs validated
     /// `remote-url` operations with exact package provenance.
     func preparePodcastTranscript() async throws -> ProcessPackagePodcastTranscript
+    /// The Apple Podcasts transcript route: same package-only shape as the
+    /// RSS sibling, over the `apple-podcast-transcript` kind.
+    func prepareApplePodcastTranscript() async throws -> ProcessPackageApplePodcastTranscript
     /// Active package registration claims used for import recognition.
     func registeredExtractionInputs() async -> RegisteredExtractionInputs
 }
@@ -92,6 +95,13 @@ public extension ExtractionServices {
     /// coordinator). The process facade overrides it with real package
     /// resolution.
     func preparePodcastTranscript() async throws -> ProcessPackagePodcastTranscript {
+        throw ExtractionServicesError.unavailable
+    }
+
+    /// Default for seams that never run packages (test runtimes, the legacy
+    /// coordinator). The process facade overrides it with real package
+    /// resolution.
+    func prepareApplePodcastTranscript() async throws -> ProcessPackageApplePodcastTranscript {
         throw ExtractionServicesError.unavailable
     }
 
@@ -166,6 +176,10 @@ public actor MutableExtractionServices: ExtractionServices {
 
     public func preparePodcastTranscript() async throws -> ProcessPackagePodcastTranscript {
         try await installed.preparePodcastTranscript()
+    }
+
+    public func prepareApplePodcastTranscript() async throws -> ProcessPackageApplePodcastTranscript {
+        try await installed.prepareApplePodcastTranscript()
     }
 
     public func registeredExtractionInputs() async -> RegisteredExtractionInputs {

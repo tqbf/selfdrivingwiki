@@ -169,23 +169,13 @@ public enum YouTubeTranscriptPlugin {
 // through the reviewed podcast-transcript package, whose prepared
 // `.podcastTranscript` adapter carries exact package provenance. The former
 // built-in fetcher registration could not carry provenance and was never
-// part of a production composition. The Apple built-in plugin below stays
-// until the Apple-native TTML packaging follow-up.
-
-public enum ApplePodcastTranscriptPlugin {
-    public static let id = PluginID("wiki.extraction.apple-podcast-transcript")
-    public static let key = ExtractionBackendKey(
-        kind: .applePodcastTranscript,
-        backendID: PodcastTranscriptionBackend.appleTranscript.rawValue)
-
-    public static func definition(
-        makeFetcher: @escaping @Sendable () async -> any PodcastTranscriptFetching
-    ) -> PluginDefinition {
-        adapterDefinition(id: id, label: "Apple Podcasts transcripts", key: key) {
-            .applePodcastTranscript(await makeFetcher())
-        }
-    }
-}
+// part of a production composition.
+//
+// `ApplePodcastTranscriptPlugin` was REMOVED with the Apple TTML packaging:
+// Apple Podcasts transcripts run through the reviewed
+// apple-podcast-transcript package, whose prepared
+// `.applePodcastTranscript` adapter carries exact package provenance. The
+// former built-in registration had no production composition site.
 
 private func adapterDefinition(
     id: PluginID,

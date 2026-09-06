@@ -57,6 +57,11 @@ public enum MimeType {
     /// podcast-transcript extractor registration has a stable route MIME.
     public static let audioPodcast = "audio/podcast"
 
+    /// `audio/apple-podcast` — the synthetic source MIME for byteless Apple
+    /// Podcasts episode sources. Route MIME for the `apple-podcast-transcript`
+    /// extractor registration; the input itself is the episode page URL.
+    public static let audioApplePodcast = "audio/apple-podcast"
+
     /// `application/xml`.
     public static let xml = "application/xml"
 

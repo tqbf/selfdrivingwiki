@@ -238,22 +238,20 @@ struct SourceDetailView: View {
     /// PR4 AC.16, generalized to YouTube in PR5). The registry half of the
     /// gate (PR2 §5.4) consults `contentKind.capabilities.hasTranscriptBackend`
     /// (true only for `.podcastTranscript` / `.youtubeTranscript`), then
-    /// runtime guards layer on top: the podcast runtime guard (bundled
-    /// signing helper present AND this build compiles podcast support via
-    /// `#if PODCAST_TRANSCRIPTS`) delegates to
-    /// `store.isSourceRefreshable(for:)` so the predicate is identical to
-    /// the Refresh button's guard for podcasts. YouTube and generic RSS need
-    /// no signing helper, so they're always "available" once the provider
-    /// matches (the model throws `.missingPlan` when the ID is missing,
-    /// surfaced by `runTranscription`).
+    /// route availability layers on top: the Apple Podcasts arm delegates to
+    /// `store.isSourceRefreshable(for:)`, which derives availability from the
+    /// reviewed package route (not from signing-helper presence — a missing
+    /// helper keeps the route usable through the package's RSS fallback).
+    /// YouTube and generic RSS need no runtime guard, so they're always
+    /// "available" once the provider matches (the model throws
+    /// `.missingPlan` when the ID is missing, surfaced by `runTranscription`).
     private var isTranscribable: Bool {
         guard contentKind.capabilities.hasTranscriptBackend else { return false }
         switch origin?.provider {
         case .applePodcast:
-            // Mirror the Refresh button's runtime guard (helper present +
-            // build compiles podcast support). The predicate returns `false`
-            // for `.applePodcast` outside `#if PODCAST_TRANSCRIPTS` or when
-            // `ApplePodcastTranscriptService.bundled()` is nil.
+            // The reviewed package route decides: route disabled in
+            // settings → not transcribable; a missing signing helper does
+            // NOT disable the route (the package falls back to RSS).
             return store.isSourceRefreshable(for: file.id)
         case .podcast:
             // Generic RSS-feed podcast: always transcribable on every build —

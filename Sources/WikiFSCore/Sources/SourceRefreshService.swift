@@ -72,23 +72,10 @@ public struct SourceRefreshService: Sendable {
     }
 
     public let fetcher: any URLFetchService.URLResourceFetcher
-    #if PODCAST_TRANSCRIPTS
-    public let podcastFetcher: (any PodcastTranscriptFetching)?
-    #endif
 
-    #if PODCAST_TRANSCRIPTS
-    public init(
-        fetcher: any URLFetchService.URLResourceFetcher,
-        podcastFetcher: (any PodcastTranscriptFetching)? = nil
-    ) {
-        self.fetcher = fetcher
-        self.podcastFetcher = podcastFetcher
-    }
-    #else
     public init(fetcher: any URLFetchService.URLResourceFetcher) {
         self.fetcher = fetcher
     }
-    #endif
 
     /// Read the origin → reconstruct the provider → materialize OFF-main.
     /// Returns the material the caller should append. Throws `.notRefreshable`
@@ -103,13 +90,10 @@ public struct SourceRefreshService: Sendable {
         switch origin.provider {
         case .website:
             return try await materializeWebsite(origin: origin)
-        case .applePodcast:
-            return try await materializePodcast(origin: origin)
-        case .podcast:
-            // RSS podcast transcripts run through the app's extraction queue
-            // (the extractor-package route). The app's refresh action for a
-            // `.podcast` source enqueues that job instead of calling this
-            // materializer.
+        case .applePodcast, .podcast:
+            // Both podcast arms run through the app's extraction queue (the
+            // extractor-package routes). The app's Transcribe and refresh
+            // actions enqueue that job instead of calling a materializer.
             throw RefreshError.podcastQueueRequired
         case .localFile, .zotero, .markdownFolder, .youtube, .vimeo, .spotify,
              .soundcloud, .remoteMedia, .legacyImport, nil:
@@ -135,35 +119,4 @@ public struct SourceRefreshService: Sendable {
             detectionHints: source.detectionHints,
             provenance: prov)
     }
-
-    // MARK: - Apple Podcast
-
-    #if PODCAST_TRANSCRIPTS
-    private func materializePodcast(origin: SourceOrigin) async throws -> RefreshMaterial {
-        guard let urlString = origin.plan else {
-            throw RefreshError.missingPlan
-        }
-        guard let episode = PodcastEpisodeURL.parse(urlString) else {
-            throw RefreshError.missingPlan
-        }
-        guard let svc = podcastFetcher else {
-            throw PodcastTranscriptError.signatureUnavailable(
-                "Apple Podcasts transcripts need the signing helper, which isn't available in this build.")
-        }
-        guard let pageURL = URL(string: urlString) else {
-            throw RefreshError.missingPlan
-        }
-        // The provider's materialize() runs the transcript fetch off-main
-        // (Task.detached inside). Byteless source → only the derived markdown
-        // (transcript) changes on refresh; the content version never does.
-        let provider = ApplePodcastMaterializer(episode: episode, pageURL: pageURL, fetcher: svc)
-        let transcript = try await provider.materialize()
-        let markdown = String(data: transcript.data, encoding: .utf8) ?? ""
-        return .derivedMarkdown(content: markdown)
-    }
-    #else
-    private func materializePodcast(origin: SourceOrigin) async throws -> RefreshMaterial {
-        throw RefreshError.notRefreshable(origin.agentName)
-    }
-    #endif
 }

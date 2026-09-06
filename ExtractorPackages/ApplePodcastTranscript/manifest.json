@@ -1,0 +1,51 @@
+{
+  "capabilities": [
+    "network"
+  ],
+  "displayName": "Apple Podcast Transcript",
+  "entryPoint": "bin/apple-podcast-transcript-extractor",
+  "files": [
+    {
+      "digest": "975781f908fb924e744d769dc4de8353c15417f0b779d45a4b1fb21595ef721d",
+      "path": "PROVENANCE.md"
+    },
+    {
+      "digest": "c9c4905a421e133406703cc355c199be717c3b572077a2daa54c47bef00534b4",
+      "path": "bin/apple-podcast-transcript"
+    },
+    {
+      "digest": "9367474ea8ee88a52eed54de16bf58eb729d6d3f20e008727abf29393b8cdac6",
+      "path": "bin/apple-podcast-transcript-extractor"
+    }
+  ],
+  "launch": {
+    "arguments": [
+      "run",
+      "--script"
+    ],
+    "command": "uv",
+    "mode": "runtime"
+  },
+  "limits": {
+    "maximumDurationMilliseconds": 300000,
+    "maximumInputByteCount": 1048576,
+    "maximumMarkdownOutputByteCount": 33554432,
+    "maximumProgressEventCount": 64
+  },
+  "manifestRevision": 1,
+  "packageID": "org.selfdrivingwiki.apple-podcast-transcript",
+  "protocolRevision": 3,
+  "registrations": [
+    {
+      "displayName": "Apple Podcasts Transcript",
+      "id": "apple-episode",
+      "kinds": [
+        "apple-podcast-transcript"
+      ],
+      "mimeTypes": [
+        "audio/apple-podcast"
+      ]
+    }
+  ],
+  "version": "1.0.0"
+}

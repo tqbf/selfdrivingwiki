@@ -10,6 +10,12 @@ public enum ExtractorKind: String, Codable, CaseIterable, Hashable, Sendable {
     /// normalized HTTP or HTTPS URL carried by the request, never staged
     /// bytes (`podcast-transcript` on the wire).
     case podcastTranscript = "podcast-transcript"
+    /// Apple Podcasts episode TTML transcript conversion. Same `remote-url`
+    /// request shape as `podcastTranscript`, a separate operation family:
+    /// the package may run the Apple AMP + TTML workflow through staged
+    /// host support, or fall back to the RSS transcript algorithm
+    /// (`apple-podcast-transcript` on the wire).
+    case applePodcastTranscript = "apple-podcast-transcript"
 }
 
 public enum ExtractorLaunchMode: String, Codable, CaseIterable, Hashable, Sendable {

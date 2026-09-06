@@ -77,33 +77,29 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
                     resultMode: .installedPackage(producer)))
 
             case .applePodcast:
-                #if PODCAST_TRANSCRIPTS
-                // Apple TTML keeps its built-in materializer and its current
-                // RSS fallback (issue #812 no-signing-helper rationale). The
-                // fallback sites below are allow-listed for
-                // ExtractionCompositionBoundaryTests and removed by the Apple
-                // TTML packaging follow-up.
+                // Apple transcripts run through the reviewed/selected
+                // extractor package — the same route shape as the RSS
+                // sibling. The package picks its Apple TTML workflow or its
+                // RSS fallback from the host-staged operation support, so a
+                // missing helper keeps the route usable. The source URL
+                // becomes the typed operation input only after host URL
+                // validation.
                 guard let planURLString = origin.plan,
-                      let pageURL = URL(string: planURLString),
-                      let episode = PodcastEpisodeURL.parse(planURLString) else {
+                      let validatedURL = ExtractorRemoteSourceURL(rawValue: planURLString) else {
                     return nil
                 }
-                let fetcher: any PodcastTranscriptFetching =
-                    ApplePodcastTranscriptService.bundled()
-                    ?? RSSPodcastTranscriptService(sourceURL: pageURL)
-                let materializer = ApplePodcastMaterializer(
-                    episode: episode, pageURL: pageURL, fetcher: fetcher)
+                let adapter = try await extractionServices.prepareApplePodcastTranscript()
+                let producer = adapter.packageProvenance
                 return .transcript(TranscriptExtractionResolution(
-                    fetch: { _ in
-                        let result = try await materializer.materialize()
+                    fetch: { onProgress in
+                        let outcome = try await adapter.transcript(
+                            for: validatedURL.url, onProgress: onProgress)
                         return TranscriptFetchOutcome(
-                            markdown: String(data: result.data, encoding: .utf8) ?? "")
+                            markdown: outcome.markdown,
+                            reportedMetadata: outcome.reportedMetadata)
                     },
                     filename: "transcript",
-                    resultMode: .builtInTool(.appleTTML)))
-                #else
-                return nil
-                #endif
+                    resultMode: .installedPackage(producer)))
 
             default:
                 break

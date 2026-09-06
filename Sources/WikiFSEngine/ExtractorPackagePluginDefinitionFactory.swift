@@ -121,6 +121,72 @@ public enum ExtractorPackagePluginDefinitionFactory {
             declaredWorkCount: 1)
     }
 
+    // MARK: - Provider wiring
+
+    /// Builds the process provider for one revision, attaching the
+    /// reviewed-only host services:
+    ///
+    /// - Docling Serve lineage: the public endpoint + timeout operation
+    ///   configuration (#1159).
+    /// - The EXACT reviewed Apple Podcasts revision: the staged
+    ///   token-helper grant and the durable revision-scoped token cache.
+    ///   Admission matches the complete revision identity — package ID,
+    ///   version, AND digest — never a kind, MIME type, capability, or any
+    ///   package-controlled string.
+    static func makeProvider(
+        revision: ExtractorPackageRevisionID,
+        layout: ExtractorPackageStoreLayout,
+        catalogReader: any ExtractorPackageCatalogReading,
+        executor: any ManagedProcessExecuting,
+        admissionChecker: any ProcessPackageAdmissionChecking,
+        sourceLocator: any ExtractorPackageSourceLocating,
+        operationCredentialResolver: (any ExtractorOperationCredentialResolving)?
+    ) -> ProcessExtractorProvider {
+        // Public, non-secret operation configuration (#1159): the
+        // reviewed Docling Serve package reads its endpoint + timeout
+        // from typed host settings through the configuration envelope.
+        let isDoclingServe = revision.packageID == ReviewedExtractorPackages.doclingServe.packageID
+        let doclingConfigurationProvider = isDoclingServe
+            ? Self.doclingOperationConfigurationProvider(
+                appGroupRoot: layout.appGroupContainerRoot)
+            : nil
+        let isReviewedApple =
+            revision == ReviewedExtractorPackages.applePodcastTranscript.revision
+        let appleSupportProvider = isReviewedApple
+            ? ReviewedApplePodcastSupportProvider(revision: revision)
+            : nil
+        let appleTokenCacheRoot: (@Sendable (ExtractorPackageRevisionID) -> URL?)? =
+            isReviewedApple ? Self.appleTokenCacheRootProvider(layoutRoot: layout.root) : nil
+        return ProcessExtractorProvider(
+            layout: layout,
+            catalogReader: catalogReader,
+            executor: executor,
+            admission: admissionChecker,
+            sourceLocator: sourceLocator,
+            sharedRuntimeCacheRoot: layout.root.appendingPathComponent("runtime-cache", isDirectory: true),
+            sharedModelCacheRoot: layout.root.appendingPathComponent("model-cache", isDirectory: true),
+            operationCredentials: operationCredentialResolver,
+            operationConfiguration: doclingConfigurationProvider,
+            operationSupport: appleSupportProvider,
+            durableTokenCacheRoot: appleTokenCacheRoot)
+    }
+
+    /// The revision-scoped durable token-cache closure for the reviewed
+    /// Apple package. The closure re-checks the exact revision on every
+    /// call, so a stale prepared operation of a superseded revision never
+    /// touches the live revision's cache.
+    static func appleTokenCacheRootProvider(
+        layoutRoot: URL
+    ) -> @Sendable (ExtractorPackageRevisionID) -> URL? {
+        let reviewedRevision = ReviewedExtractorPackages.applePodcastTranscript.revision
+        return { revision in
+            ReviewedApplePodcastTokenCache.root(
+                for: revision,
+                reviewedRevision: reviewedRevision,
+                layoutRoot: layoutRoot)
+        }
+    }
+
     // MARK: - Component body
 
     static func makeComponentDefinition(
@@ -158,24 +224,14 @@ public enum ExtractorPackagePluginDefinitionFactory {
                 ExtractionServiceKeys.packageSourceLocator)
             let operationCredentialResolver = try await activation.require(
                 ExtractionServiceKeys.operationCredentialResolver)
-            // Public, non-secret operation configuration (#1159): the
-            // reviewed Docling Serve package reads its endpoint + timeout
-            // from typed host settings through the configuration envelope.
-            let isDoclingServe = revision.packageID == ReviewedExtractorPackages.doclingServe.packageID
-            let doclingConfigurationProvider = isDoclingServe
-                ? Self.doclingOperationConfigurationProvider(
-                    appGroupRoot: layout.appGroupContainerRoot)
-                : nil
-            let provider = ProcessExtractorProvider(
+            let provider = Self.makeProvider(
+                revision: revision,
                 layout: layout,
                 catalogReader: catalogReader,
                 executor: executor,
-                admission: admissionChecker,
+                admissionChecker: admissionChecker,
                 sourceLocator: sourceLocator,
-                sharedRuntimeCacheRoot: layout.root.appendingPathComponent("runtime-cache", isDirectory: true),
-                sharedModelCacheRoot: layout.root.appendingPathComponent("model-cache", isDirectory: true),
-                operationCredentials: operationCredentialResolver,
-                operationConfiguration: doclingConfigurationProvider)
+                operationCredentialResolver: operationCredentialResolver)
 
             // Build every registration factory before mutating the registry.
             var entries: [ExtractionBatchEntry] = []
@@ -241,6 +297,16 @@ public enum ExtractorPackagePluginDefinitionFactory {
                                 return ExtractionBackendAdapter.podcastTranscript(adapter)
                             },
                             presentation: presentation))
+                    case .applePodcastTranscript:
+                        entries.append(ExtractionBatchEntry(
+                            key: .installed(kind: backendKind, reference: reference),
+                            backend: RegisteredExtractionBackend(key: legacyPlaceholderKey) {
+                                let adapter = try await provider.prepareApplePodcastTranscript(
+                                    revision: revision,
+                                    manifest: manifest)
+                                return ExtractionBackendAdapter.applePodcastTranscript(adapter)
+                            },
+                            presentation: presentation))
                     }
                 }
             }
@@ -260,6 +326,7 @@ public enum ExtractorPackagePluginDefinitionFactory {
         case .html: return .html
         case .docx: return .docx
         case .podcastTranscript: return .rssPodcastTranscript
+        case .applePodcastTranscript: return .applePodcastTranscript
         }
     }
 
@@ -274,9 +341,13 @@ public enum ExtractorPackagePluginDefinitionFactory {
             throw FactoryError.unsupportedProtocol(manifest.protocolRevision)
         }
         for registration in manifest.registrations {
-            guard registration.kinds.isSubset(of: [.pdf, .html, .docx, .podcastTranscript]) else {
+            guard registration.kinds.isSubset(of: [
+                .pdf, .html, .docx, .podcastTranscript, .applePodcastTranscript,
+            ]) else {
                 let offending = registration.kinds
-                    .subtracting([.pdf, .html, .docx, .podcastTranscript])
+                    .subtracting([
+                        .pdf, .html, .docx, .podcastTranscript, .applePodcastTranscript,
+                    ])
                     .first.map(\.rawValue) ?? "?"
                 throw FactoryError.unsupportedRegistrationKind(offending)
             }
