@@ -23,14 +23,10 @@ struct ExtractionCompositionBoundaryTests {
         #expect(!source.contains("extractionCoordinator.fetcher"))
     }
 
-    /// AC.15: RSS podcast transcription is queue-only. No production Swift
-    /// source may construct or directly invoke `RSSPodcastTranscriptService`
-    /// except the three allow-listed `.applePodcast` fallback sites — the
-    /// `.applePodcast` arms of the app and daemon queue providers (issue #812
-    /// no-signing-helper rationale) and the `fetcher ??` fallback inside
-    /// `WikiStoreModel.transcribePodcast`. All three are removed by the
-    /// Apple TTML packaging follow-up; a new site or a moved construction
-    /// fails this test.
+    /// Temporary architecture guard for the Apple TTML follow-up. Production
+    /// code must not construct `RSSPodcastTranscriptService` outside the three
+    /// known `.applePodcast` fallback sites. Public behavior tests cover RSS
+    /// queue routing. This source scan only prevents a new legacy-service site.
     @Test("no production RSS podcast subprocess path outside the Apple fallback sites")
     func noProductionRSSPodcastSubprocessPath() throws {
         let root = repositoryRoot()
@@ -106,36 +102,6 @@ struct ExtractionCompositionBoundaryTests {
                 }
             }
         }
-    }
-
-    /// The queue is the only `.podcast` production path: the model's
-    /// `transcribe` dispatch and the refresh materializer must both throw
-    /// the typed queue-required error rather than fetch a feed themselves.
-    @Test("model transcribe and refresh reject the .podcast arm in favor of the queue")
-    func podcastArmsThrowQueueRequired() throws {
-        let root = repositoryRoot()
-        let modelSource = try String(
-            contentsOf: root.appendingPathComponent("Sources/WikiFSCore/Store/WikiStoreModel.swift"),
-            encoding: .utf8)
-        let refreshSource = try String(
-            contentsOf: root.appendingPathComponent("Sources/WikiFSCore/Sources/SourceRefreshService.swift"),
-            encoding: .utf8)
-
-        // No direct RSS fetch in either file, and the typed error is thrown.
-        #expect(!modelSource.contains("transcribeRSSPodcast"))
-        #expect(modelSource.contains("RefreshError.podcastQueueRequired"))
-        #expect(!refreshSource.contains("materializePodcastFeed"))
-        #expect(refreshSource.contains("RefreshError.podcastQueueRequired"))
-
-        // wikictl's refresh flows through the same materializer, so a
-        // `.podcast` source surfaces the typed queue-required error (whose
-        // message names the app's extraction queue) instead of a wrong
-        // "no URL to re-fetch" claim. The CLI file constructs no RSS service.
-        let cliSource = try String(
-            contentsOf: root.appendingPathComponent("Sources/WikiCtlCore/SourceCommand.swift"),
-            encoding: .utf8)
-        #expect(!cliSource.contains("RSSPodcastTranscriptService("))
-        #expect(cliSource.contains("service.materialize(origin: origin)"))
     }
 }
 
