@@ -126,8 +126,9 @@ public enum SourceProvider: String, CaseIterable, Equatable, Hashable, Sendable 
     /// - `applePodcast`: `false` when this build doesn't compile podcast
     ///   support OR the `podcast-token-helper` binary isn't present at runtime.
     /// - `podcast` (generic RSS): always refreshable on every build — the
-    ///   re-transcribe fetches a fresh `<podcast:transcript>` via the
-    ///   `podcast-transcript` `uv` script (no signing helper).
+    ///   app's refresh action enqueues the durable extraction job, and RSS
+    ///   podcast transcripts run through the extractor-package route in the
+    ///   app's extraction queue (no direct re-fetch here).
     ///
     /// Every other provider (local-file / Zotero / folder / YouTube / Vimeo /
     /// Spotify / SoundCloud / remote-media / legacy-import / unknown) is
@@ -154,10 +155,12 @@ public enum SourceProvider: String, CaseIterable, Equatable, Hashable, Sendable 
     ///   signing helper must be present (`ApplePodcastTranscriptService.bundled()`
     ///   != nil) AND this build must compile podcast support
     ///   (`#if PODCAST_TRANSCRIPTS`).
-    /// - `podcast` (generic RSS) — the `podcast-transcript` `uv` script fetches
-    ///   the feed and parses `<podcast:transcript>` tags. No signing helper
-    ///   needed; always available on every build (App Store included). The
-    ///   `transcribeRSSPodcast` helper lives outside `#if PODCAST_TRANSCRIPTS`.
+    /// - `podcast` (generic RSS) — runs through the app's extraction queue:
+    ///   the reviewed podcast-transcript package fetches the feed and parses
+    ///   `<podcast:transcript>` tags with exact package provenance. No
+    ///   signing helper needed; available on every build (App Store included).
+    ///   `WikiStoreModel.transcribe` throws `.podcastQueueRequired` — callers
+    ///   enqueue the durable extraction job instead.
     /// - `youtube` — pure-Swift watch-page → caption track scrape (PR5). No
     ///   signing helper needed; always available when the source has a valid
     ///   11-char video ID in `origin.externalIdentity`.

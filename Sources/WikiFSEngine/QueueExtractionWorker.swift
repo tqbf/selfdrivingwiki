@@ -43,8 +43,8 @@ public struct QueueExtractionWorkerFactory: QueueWorkerFactory {
             ExtractionBackend(rawValue: $0)
         }
 
-        // Ask the provider to resolve — if it returns nil (no PDF bytes,
-        // unconfigured backend), the item stays queued and is never dispatched.
+        // Ask the provider to resolve — if it returns nil (no bytes, no
+        // route), the item stays queued and is never dispatched.
         let resolved: ExtractionResolution?
         do {
             resolved = try await provider.resolveExtraction(
@@ -65,17 +65,20 @@ public struct QueueExtractionWorkerFactory: QueueWorkerFactory {
         }
         guard let resolved else { return nil }
 
-        // Transcript sources get their own capacity bucket.
-        if resolved.transcriptFetch != nil { return ProviderID(rawValue: "transcript") }
-
-        // Map the backend to a provider ID that the engine's capacity config
-        // can route: local → "local-pdf2md", remote → backend-specific.
-        switch resolved.backend {
-        case .localPdf2md: return ProviderID(rawValue: "local-pdf2md")
-        case .acp: return ProviderID(rawValue: "remote-acp")
-        case .anthropic: return ProviderID(rawValue: "remote-anthropic")
-        case .gemini: return ProviderID(rawValue: "remote-gemini")
-        case .doclingServe: return ProviderID(rawValue: "remote-docling")
+        switch resolved {
+        case .transcript(let transcript):
+            // Transcript sources get their own (non-PDF) capacity bucket.
+            return ProviderID(rawValue: transcript.capacityID)
+        case .bytes(let bytes):
+            // Map the backend to a provider ID that the engine's capacity
+            // config can route: local → "local-pdf2md", remote → backend-specific.
+            switch bytes.backend {
+            case .localPdf2md: return ProviderID(rawValue: "local-pdf2md")
+            case .acp: return ProviderID(rawValue: "remote-acp")
+            case .anthropic: return ProviderID(rawValue: "remote-anthropic")
+            case .gemini: return ProviderID(rawValue: "remote-gemini")
+            case .doclingServe: return ProviderID(rawValue: "remote-docling")
+            }
         }
     }
 
@@ -122,33 +125,24 @@ struct QueueExtractionWorker: QueueWorker {
             ExtractionBackend(rawValue: $0)
         }
 
-        // Resolve the extractor + PDF bytes, OR a transcript fetch closure
-        // (main-actor hop in the app impl).
+        // Resolve the extraction (main-actor hop in the app impl).
         guard let resolved = try await provider.resolveExtraction(
             wikiID: item.wikiID,
             sourceID: sourceID,
             backendOverride: backendOverride
         ) else {
-            // No PDF bytes and not a transcript source — skip extraction
-            // (the worker returns normally → item .completed).
+            // No bytes and no transcript route — skip extraction (the worker
+            // returns normally → item .completed).
             return
         }
 
-        let markdown: String
-
-        if let fetch = resolved.transcriptFetch {
-            // Transcript extraction: network/subprocess fetch (no local bytes).
-            emitProgress(item.id, "Fetching transcript…")
-            markdown = try await fetch()
-        } else {
-            // Bytes-based extraction: readiness check + convert.
-            guard let extractor = resolved.extractor,
-                  let pdfData = resolved.pdfData else {
-                throw QueueExtractionError.missingSourceID
-            }
-
+        // Exhaustive over the tagged execution model: a bytes conversion and
+        // a transcript fetch cannot be confused, and every resolution carries
+        // exactly its own persistence payload.
+        switch resolved {
+        case .bytes(let bytes):
             // Readiness check — preserve graceful fallback.
-            let readiness = await extractor.readiness()
+            let readiness = await bytes.extractor.readiness()
             guard readiness.isReady else {
                 let message: String
                 switch readiness {
@@ -160,33 +154,30 @@ struct QueueExtractionWorker: QueueWorker {
             }
 
             // Convert (off-main — MarkdownExtractor is Sendable).
-            markdown = try await extractor.convert(
-                pdfData: pdfData,
-                filename: resolved.filename
+            let markdown = try await bytes.extractor.convert(
+                pdfData: bytes.sourceBytes,
+                filename: bytes.filename
             ) { [itemID = item.id] line in
                 emitProgress(itemID, line)
             }
-        }
 
-        // Persist (main-actor hop in the app impl). Legacy providers retain
-        // their original contract. Package-aware providers use the typed seam.
-        if let packageProvider = provider as? any InstalledPackageExtractionPersisting,
-           resolved.packageProvenance != nil {
-            try await packageProvider.persistInstalledPackageExtraction(
+            try await provider.persistBytesExtraction(
                 wikiID: item.wikiID,
                 sourceID: sourceID,
-                markdown: markdown,
-                backend: resolved.backend,
-                modelVersion: resolved.modelVersion,
-                packageProvenance: resolved.packageProvenance)
-        } else {
-            try await provider.persistExtraction(
+                resolution: bytes,
+                markdown: markdown)
+
+        case .transcript(let transcript):
+            emitProgress(item.id, "Fetching transcript…")
+            let outcome = try await transcript.fetch { [itemID = item.id] line in
+                emitProgress(itemID, line)
+            }
+
+            try await provider.persistTranscriptExtraction(
                 wikiID: item.wikiID,
                 sourceID: sourceID,
-                markdown: markdown,
-                backend: resolved.backend,
-                modelVersion: resolved.modelVersion,
-                technique: resolved.technique)
+                resolution: transcript,
+                outcome: outcome)
         }
     }
 }

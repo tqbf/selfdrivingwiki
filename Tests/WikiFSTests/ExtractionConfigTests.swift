@@ -720,7 +720,8 @@ struct ExtractionConfigTests {
         logical: LogicalExtractorReference,
         version: String,
         digestByte: UInt8,
-        kinds: Set<ExtractorKind>
+        kinds: Set<ExtractorKind>,
+        protocolRevision: ExtractorProtocolRevision = .v1
     ) throws -> ActiveExtractorRegistration {
         let revision = ExtractorPackageRevisionID(
             packageID: logical.packageID,
@@ -729,6 +730,56 @@ struct ExtractionConfigTests {
         return ActiveExtractorRegistration(
             reference: ExtractorReference(revision: revision, registrationID: logical.registrationID),
             kinds: kinds,
-            protocolRevision: .v1)
+            protocolRevision: protocolRevision)
+    }
+
+    /// The podcast transcript route resolves through the same generic
+    /// precedence, and protocol revision 3 registrations are selectable: a
+    /// saved installed reference whose only active registration is v3
+    /// resolves to it (a v2-only gate would permanently resolve
+    /// `.unavailableInstalled` while the rest of the suite looks green).
+    @Test func podcastRouteSelectionResolvesRevision3Registration() throws {
+        let reviewed = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.selfdrivingwiki.podcast-transcript"),
+            registrationID: try ExtractorRegistrationID(validating: "feed"))
+
+        // No record → the bundled default reviewed lineage; with no active
+        // registration it fails closed with the redacted diagnostic.
+        let empty = ExtractionConfig()
+        let defaulted = ExtractorSelectionResolver.resolvePodcastTranscript(
+            configuration: empty, activeRegistrations: [])
+        #expect(defaulted.selection
+            == .unavailableInstalled(kind: .podcastTranscript, reference: reviewed))
+
+        // Saved installed reference + active revision-3 registration → the
+        // exact reference.
+        let logical = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.example.podcast"),
+            registrationID: try ExtractorRegistrationID(validating: "feed"))
+        let active = try activeRegistration(
+            logical: logical, version: "1.0.0", digestByte: 5, kinds: [.podcastTranscript],
+            protocolRevision: .v3)
+        var config = ExtractionConfig()
+        config.setExtractorSelection(.installed(logical), for: .canonicalPodcastTranscript)
+        let decision = ExtractorSelectionResolver.resolvePodcastTranscript(
+            configuration: config, activeRegistrations: [active])
+        #expect(decision.selection == .installed(kind: .podcastTranscript, reference: active.reference))
+        #expect(decision.diagnostic == nil)
+
+        // Inactive → fail closed, identity retained.
+        let unavailable = ExtractorSelectionResolver.resolvePodcastTranscript(
+            configuration: config, activeRegistrations: [])
+        #expect(unavailable.selection == .unavailableInstalled(kind: .podcastTranscript, reference: logical))
+        #expect(unavailable.diagnostic == .unavailableInstalled(logical))
+
+        // Explicit `.none` disables the route (no reviewed-default revival).
+        var disabled = ExtractionConfig()
+        disabled.setExtractorSelection(ExtractionBackendReference.none, for: .canonicalPodcastTranscript)
+        #expect(ExtractorSelectionResolver.resolvePodcastTranscript(
+            configuration: disabled, activeRegistrations: [active]).selection == .noSelection)
+
+        // The route-aware entry dispatches the canonical podcast route.
+        #expect(ExtractorSelectionResolver.resolve(
+            .canonicalPodcastTranscript, configuration: empty, activeRegistrations: []) != nil)
     }
 }

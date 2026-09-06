@@ -15,7 +15,7 @@ import WikiFSEngine
 /// `@unchecked Sendable` (all stored properties are immutable `let`s of
 /// `Sendable` types). It hops to the main actor only when reading
 /// `ExtractionCoordinator` state.
-final class DaemonQueueExtractionProvider: InstalledPackageExtractionPersisting {
+final class DaemonQueueExtractionProvider: QueueExtractionProvider {
     private let extractionServices: any ExtractionServices
     private let storeResolver: @Sendable (WikiID) -> GRDBWikiStore?
 
@@ -47,28 +47,43 @@ final class DaemonQueueExtractionProvider: InstalledPackageExtractionPersisting 
                     ?? MediaEmbedURL.youtube(origin.plan ?? "")?.externalIdentity
                 guard let videoID else { return nil }
                 let svc = YouTubeTranscriptService()
-                return ExtractionResolution(
-                    transcriptFetch: { @Sendable in
-                        try await svc.transcript(forVideoID: videoID).markdown
+                return .transcript(TranscriptExtractionResolution(
+                    fetch: { _ in
+                        TranscriptFetchOutcome(
+                            markdown: try await svc.transcript(forVideoID: videoID).markdown)
                     },
-                    technique: "youtube-captions",
-                    filename: "transcript")
+                    filename: "transcript",
+                    resultMode: .builtInTool(.youtubeCaptions)))
 
             case .podcast:
+                // RSS podcast transcripts run through the reviewed/selected
+                // extractor package. The source URL becomes the typed
+                // operation input only after host URL validation.
                 guard let planURLString = origin.plan,
-                      let sourceURL = URL(string: planURLString) else {
+                      let validatedURL = ExtractorRemoteSourceURL(rawValue: planURLString) else {
                     return nil
                 }
-                let svc = RSSPodcastTranscriptService()
-                return ExtractionResolution(
-                    transcriptFetch: { @Sendable in
-                        try await svc.transcript(forFeedURL: sourceURL).markdown
+                let adapter = try await extractionServices.preparePodcastTranscript()
+                let producer = adapter.packageProvenance
+                return .transcript(TranscriptExtractionResolution(
+                    fetch: { onProgress in
+                        let outcome = try await adapter.transcript(
+                            for: validatedURL.url, onProgress: onProgress)
+                        return TranscriptFetchOutcome(
+                            markdown: outcome.markdown,
+                            reportedMetadata: outcome.reportedMetadata)
                     },
-                    technique: "rss-podcast-transcript",
-                    filename: "transcript")
+                    filename: "transcript",
+                    resultMode: .installedPackage(producer),
+                    requiresInitialSourceVersion: true))
 
             case .applePodcast:
                 #if PODCAST_TRANSCRIPTS
+                // Apple TTML keeps its built-in materializer and its current
+                // RSS fallback (issue #812 no-signing-helper rationale). The
+                // fallback sites below are allow-listed for
+                // ExtractionCompositionBoundaryTests and removed by the Apple
+                // TTML packaging follow-up.
                 guard let planURLString = origin.plan,
                       let pageURL = URL(string: planURLString),
                       let episode = PodcastEpisodeURL.parse(planURLString) else {
@@ -79,13 +94,14 @@ final class DaemonQueueExtractionProvider: InstalledPackageExtractionPersisting 
                     ?? RSSPodcastTranscriptService(sourceURL: pageURL)
                 let materializer = ApplePodcastMaterializer(
                     episode: episode, pageURL: pageURL, fetcher: fetcher)
-                return ExtractionResolution(
-                    transcriptFetch: { @Sendable in
+                return .transcript(TranscriptExtractionResolution(
+                    fetch: { _ in
                         let result = try await materializer.materialize()
-                        return String(data: result.data, encoding: .utf8) ?? ""
+                        return TranscriptFetchOutcome(
+                            markdown: String(data: result.data, encoding: .utf8) ?? "")
                     },
-                    technique: "apple-ttml",
-                    filename: "transcript")
+                    filename: "transcript",
+                    resultMode: .builtInTool(.appleTTML)))
                 #else
                 return nil
                 #endif
@@ -108,97 +124,88 @@ final class DaemonQueueExtractionProvider: InstalledPackageExtractionPersisting 
         let preparation = try await extractionServices.prepare(
             backendOverride: backendOverride)
 
-        return ExtractionResolution(
+        return .bytes(BytesExtractionResolution(
             extractor: preparation.extractor,
-            pdfData: bytes,
+            sourceBytes: bytes,
             filename: source.filename,
             backend: preparation.backend,
             modelVersion: preparation.modelVersion,
-            packageProvenance: preparation.packageProvenance
-        )
+            packageProducer: preparation.packageProvenance))
     }
 
-    func persistExtraction(
+    func persistBytesExtraction(
         wikiID: WikiID,
         sourceID: SourceID,
-        markdown: String,
-        backend: ExtractionBackend,
-        modelVersion: String?,
-        technique: String?
-    ) async throws {
-        try await persistExtractionImpl(
-            wikiID: wikiID,
-            sourceID: sourceID,
-            markdown: markdown,
-            backend: backend,
-            modelVersion: modelVersion,
-            technique: technique,
-            packageProvenance: nil)
-    }
-
-    func persistInstalledPackageExtraction(
-        wikiID: WikiID,
-        sourceID: SourceID,
-        markdown: String,
-        backend: ExtractionBackend,
-        modelVersion: String?,
-        packageProvenance: ExtractionInstalledPackageProducer?
-    ) async throws {
-        try await persistExtractionImpl(
-            wikiID: wikiID,
-            sourceID: sourceID,
-            markdown: markdown,
-            backend: backend,
-            modelVersion: modelVersion,
-            technique: nil,
-            packageProvenance: packageProvenance)
-    }
-
-    private func persistExtractionImpl(
-        wikiID: WikiID,
-        sourceID: SourceID,
-        markdown: String,
-        backend: ExtractionBackend,
-        modelVersion: String?,
-        technique: String?,
-        packageProvenance: ExtractionInstalledPackageProducer?
+        resolution: BytesExtractionResolution,
+        markdown: String
     ) async throws {
         guard let store = storeResolver(wikiID) else {
-            DebugLog.extraction("DaemonQueueExtractionProvider: persistExtraction — no store for wikiID=\(wikiID.rawValue)")
+            DebugLog.extraction("DaemonQueueExtractionProvider: persistBytesExtraction — no store for wikiID=\(wikiID.rawValue)")
             return
         }
-        if let technique {
-            _ = DebugLog.trying("appendDerivedMarkdown", operation: {
-                try store.appendDerivedMarkdown(
-                    sourceID: sourceID, content: markdown, origin: .transcript,
-                    producer: .tool(Self.transcriptTool(for: technique)), providerID: nil,
-                    modelID: nil, toolVersion: nil, sourceVersionID: nil, note: nil)
-            })
-        } else if let packageProvenance {
-            _ = DebugLog.trying("appendInstalledPackageMarkdown", operation: {
-                try store.appendInstalledPackageMarkdown(
-                    sourceID: sourceID, content: markdown, package: packageProvenance,
-                    toolVersion: modelVersion, sourceVersionID: nil, note: nil)
-            })
+        if let packageProducer = resolution.packageProducer {
+            do {
+                _ = try store.appendInstalledPackageMarkdown(
+                    sourceID: sourceID, content: markdown, package: packageProducer,
+                    origin: .extraction, toolVersion: resolution.modelVersion,
+                    sourceVersionID: nil, note: nil)
+            } catch {
+                DebugLog.store("DaemonQueueExtractionProvider: package write failed (source=\(sourceID.rawValue)): \(error)")
+                throw error
+            }
         } else {
             _ = DebugLog.trying("recordMarkdownExtraction", operation: {
                 try store.recordMarkdownExtraction(
                     sourceID: sourceID, content: markdown,
-                    backend: backend,
-                    sourceVersionID: nil, note: nil, modelVersion: modelVersion)
+                    backend: resolution.backend,
+                    sourceVersionID: nil, note: nil, modelVersion: resolution.modelVersion)
             })
         }
         DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
     }
 
-    private static func transcriptTool(for technique: String) -> ExtractionTool {
-        switch technique {
-        case ExtractionTool.youtubeCaptions.rawValue: return .youtubeCaptions
-        case ExtractionTool.rssPodcastTranscript.rawValue: return .rssPodcastTranscript
-        case ExtractionTool.appleTTML.rawValue: return .appleTTML
-        case ExtractionTool.vimeoTranscript.rawValue: return .vimeoTranscript
-        default: return .transcript
+    func persistTranscriptExtraction(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        resolution: TranscriptExtractionResolution,
+        outcome: TranscriptFetchOutcome
+    ) async throws {
+        guard let store = storeResolver(wikiID) else {
+            DebugLog.extraction("DaemonQueueExtractionProvider: persistTranscriptExtraction — no store for wikiID=\(wikiID.rawValue)")
+            return
         }
+        switch resolution.resultMode {
+        case .builtInTool(let tool):
+            _ = DebugLog.trying("appendDerivedMarkdown", operation: {
+                try store.appendDerivedMarkdown(
+                    sourceID: sourceID, content: outcome.markdown, origin: .transcript,
+                    producer: .tool(tool), providerID: nil,
+                    modelID: nil, toolVersion: nil, sourceVersionID: nil, note: nil)
+            })
+
+        case .installedPackage(let baseProducer):
+            // Package transcript: resolve the source's immutable initial
+            // version FIRST and fail before writing when absent (issue #251).
+            guard let initialVersion = try store.initialContentVersion(sourceID: sourceID) else {
+                DebugLog.store("DaemonQueueExtractionProvider: package transcript has no initial source version (source=\(sourceID.rawValue))")
+                throw AppendDerivedMarkdownError.missingInitialSourceVersion(sourceID)
+            }
+            let producer = ExtractionInstalledPackageProducer(
+                revision: baseProducer.revision,
+                registrationID: baseProducer.registrationID,
+                protocolRevision: baseProducer.protocolRevision,
+                reportedMetadata: outcome.reportedMetadata)
+            do {
+                _ = try store.appendInstalledPackageMarkdown(
+                    sourceID: sourceID, content: outcome.markdown, package: producer,
+                    origin: .transcript, toolVersion: nil,
+                    sourceVersionID: initialVersion.id, note: nil)
+            } catch {
+                DebugLog.store("DaemonQueueExtractionProvider: package transcript write failed (source=\(sourceID.rawValue)): \(error)")
+                throw error
+            }
+        }
+        DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
     }
 }
 

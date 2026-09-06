@@ -32,7 +32,10 @@ public enum ExtractionBackendAdapter: Sendable {
     case html(any HtmlMarkdownExtractor)
     case docx(any DocxMarkdownExtractor)
     case youtubeTranscript(any YouTubeTranscriptFetching)
-    case rssPodcastTranscript(any RSSFeedTranscriptFetching)
+    /// The process-backed RSS podcast transcript adapter. Carries the
+    /// prepared package operation, so results keep exact package provenance
+    /// — the former built-in fetcher case could not, and was removed.
+    case podcastTranscript(ProcessPackagePodcastTranscript)
     case applePodcastTranscript(any PodcastTranscriptFetching)
 }
 
@@ -400,26 +403,22 @@ public extension ExtractionBackendRegistry {
         return RegisteredExtractionInputs(claims: claims)
     }
 
-    /// Snapshot of every active installed (exact) PDF, HTML, and DOCX
-    /// registration, highest revision first within a deterministic package
-    /// sort. Transcript kinds are out of scope for revision 1. A package that
-    /// stopped being admitted (removed, failed activation) simply stops
-    /// appearing.
+    /// Snapshot of every active installed registration — every kind with a
+    /// live registration — derived from the registration map, not a
+    /// hard-coded kind list, so a newly installed package kind appears
+    /// without a host change. A package that stopped being admitted (removed,
+    /// failed activation) simply stops appearing.
     func installedPackageRows() async -> [ExtractorPackageSettingsRow] {
         var rows: [ExtractorPackageSettingsRow] = []
-        for kind in [ExtractionBackendKind.pdf, .html, .docx] {
-            // Actor-isolated by default (extension of an actor), so the sync
-            // registry read needs no hop.
-            for match in installedMatches(kind: kind) {
-                guard case .installed(_, let reference) = match.key else { continue }
-                rows.append(ExtractorPackageSettingsRow(
-                    kind: kind,
-                    packageID: reference.revision.packageID.rawValue,
-                    version: reference.revision.version.rawValue,
-                    digestPrefix: String(reference.revision.digest.hex.prefix(12)),
-                    registrationID: reference.registrationID.rawValue,
-                    revision: reference.revision))
-            }
+        for (key, _) in registrations {
+            guard case .installed(let kind, let reference) = key else { continue }
+            rows.append(ExtractorPackageSettingsRow(
+                kind: kind,
+                packageID: reference.revision.packageID.rawValue,
+                version: reference.revision.version.rawValue,
+                digestPrefix: String(reference.revision.digest.hex.prefix(12)),
+                registrationID: reference.registrationID.rawValue,
+                revision: reference.revision))
         }
         return rows.sorted { $0.id < $1.id }
     }

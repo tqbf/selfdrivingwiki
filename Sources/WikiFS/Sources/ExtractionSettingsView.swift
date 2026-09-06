@@ -706,7 +706,7 @@ struct ExtractionSettingsView: View {
             } header: {
                 Text("Default Extractors")
             } footer: {
-                Text("Reviewed packages run outside the app through the extractor protocol. Installed packages are local additions. Connected services use host-managed providers. Podcast transcripts are not package-backed in protocol revision 1.")
+                Text("Reviewed packages run outside the app through the extractor protocol. Installed packages are local additions. Connected services use host-managed providers. Podcast feed transcripts run through the reviewed podcast-transcript package.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -738,7 +738,7 @@ struct ExtractionSettingsView: View {
                         // Technical MIME identity lives in help text, not a column.
                         .help("MIME type: \(routeRow.route.mimeType.rawValue)")
                 case .podcastTranscript:
-                    Label(Self.podcastTranscriptRowTitle, systemImage: "waveform")
+                    Label(Self.podcastTranscriptRowTitle, systemImage: "apple.logo")
                         .help(Self.podcastTranscriptHelp)
                 }
             }
@@ -825,8 +825,8 @@ struct ExtractionSettingsView: View {
         }
     }
 
-    static let podcastTranscriptRowTitle = "Podcast transcript"
-    static let podcastTranscriptHelp = "Podcast transcripts are not package-backed in protocol revision 1. They resolve through a host adapter."
+    static let podcastTranscriptRowTitle = "Apple transcript"
+    static let podcastTranscriptHelp = "Apple Podcasts transcripts use the separate Apple TTML backend. RSS podcast feed transcripts are a standard route above, resolved through the reviewed podcast-transcript package."
 
     /// Every default the table shows: the registration-driven extraction
     /// routes, then the podcast transcript default.
@@ -835,11 +835,13 @@ struct ExtractionSettingsView: View {
             + [.podcastTranscript(draftPodcastBackend)]
     }
 
-    /// The transcript row's pop-up. It writes a `PodcastTranscriptionBackend`,
-    /// not an `ExtractorRouteSettingsSelection`, which is exactly why the row
-    /// is its own case rather than a synthesized route.
+    /// The Apple transcript row's pop-up. It writes a
+    /// `PodcastTranscriptionBackend`, not an `ExtractorRouteSettingsSelection`,
+    /// which is why the row is its own case rather than a synthesized route.
+    /// The RSS podcast transcript route itself is a standard row now; this
+    /// control stays until the Apple TTML packaging follow-up.
     private var podcastTranscriptPicker: some View {
-        Picker("Podcast Transcript", selection: podcastBackendBinding) {
+        Picker("Apple Transcript", selection: podcastBackendBinding) {
             Text("Prompt me when transcribing").tag(nil as PodcastTranscriptionBackend?)
             ForEach(PodcastTranscriptionBackend.allCases, id: \.self) { backend in
                 Text(backend.displayName).tag(backend as PodcastTranscriptionBackend?)
@@ -849,7 +851,7 @@ struct ExtractionSettingsView: View {
         .frame(maxWidth: 260)
         .onChange(of: draftPodcastBackend) { persistAll() }
         .accessibilityIdentifier(RouteAccessibility.podcastPicker)
-        .accessibilityLabel("Default podcast transcript extractor")
+        .accessibilityLabel("Default Apple podcast transcript backend")
         .accessibilityValue(draftPodcastBackend?.displayName ?? "Prompt me when transcribing")
     }
 

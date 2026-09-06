@@ -74,7 +74,7 @@ final class SessionLookupBox: @unchecked Sendable {
 /// the main actor for each call. The actual `convert()` runs off-main inside
 /// the worker (the `MarkdownExtractor` is `Sendable`).
 @MainActor
-final class AppQueueExtractionProvider: InstalledPackageExtractionPersisting {
+final class AppQueueExtractionProvider: QueueExtractionProvider {
     private let extractionServices: any ExtractionServices
     private let sessionBox: SessionLookupBox
 
@@ -98,10 +98,8 @@ final class AppQueueExtractionProvider: InstalledPackageExtractionPersisting {
             return nil
         }
 
-        // Check if this is a transcript source (YouTube, podcast, etc.) —
-        // transcript sources have no local bytes; the markdown comes from a
-        // network/subprocess fetch. Merged from the former
-        // `AppQueueTranscriptionProvider` + `QueueTranscriptionProvider`.
+        // Transcript sources have no local bytes; the markdown comes from a
+        // URL-backed fetch resolved through the extraction services.
         if let origin = store.sourceOrigin(for: sourceID),
            let providerKind = origin.provider {
             switch providerKind {
@@ -110,28 +108,43 @@ final class AppQueueExtractionProvider: InstalledPackageExtractionPersisting {
                     ?? MediaEmbedURL.youtube(origin.plan ?? "")?.externalIdentity
                 guard let videoID else { return nil }
                 let svc = YouTubeTranscriptService()
-                return ExtractionResolution(
-                    transcriptFetch: { @Sendable in
-                        try await svc.transcript(forVideoID: videoID).markdown
+                return .transcript(TranscriptExtractionResolution(
+                    fetch: { _ in
+                        TranscriptFetchOutcome(
+                            markdown: try await svc.transcript(forVideoID: videoID).markdown)
                     },
-                    technique: "youtube-captions",
-                    filename: "transcript")
+                    filename: "transcript",
+                    resultMode: .builtInTool(.youtubeCaptions)))
 
             case .podcast:
+                // RSS podcast transcripts run through the reviewed/selected
+                // extractor package. The source URL becomes the typed
+                // operation input only after host URL validation.
                 guard let planURLString = origin.plan,
-                      let sourceURL = URL(string: planURLString) else {
+                      let validatedURL = ExtractorRemoteSourceURL(rawValue: planURLString) else {
                     return nil
                 }
-                let svc = RSSPodcastTranscriptService()
-                return ExtractionResolution(
-                    transcriptFetch: { @Sendable in
-                        try await svc.transcript(forFeedURL: sourceURL).markdown
+                let adapter = try await extractionServices.preparePodcastTranscript()
+                let producer = adapter.packageProvenance
+                return .transcript(TranscriptExtractionResolution(
+                    fetch: { onProgress in
+                        let outcome = try await adapter.transcript(
+                            for: validatedURL.url, onProgress: onProgress)
+                        return TranscriptFetchOutcome(
+                            markdown: outcome.markdown,
+                            reportedMetadata: outcome.reportedMetadata)
                     },
-                    technique: "rss-podcast-transcript",
-                    filename: "transcript")
+                    filename: "transcript",
+                    resultMode: .installedPackage(producer),
+                    requiresInitialSourceVersion: true))
 
             case .applePodcast:
                 #if PODCAST_TRANSCRIPTS
+                // Apple TTML keeps its built-in materializer and its current
+                // RSS fallback (issue #812 no-signing-helper rationale). The
+                // fallback sites below are allow-listed for
+                // ExtractionCompositionBoundaryTests and removed by the Apple
+                // TTML packaging follow-up.
                 guard let planURLString = origin.plan,
                       let pageURL = URL(string: planURLString),
                       let episode = PodcastEpisodeURL.parse(planURLString) else {
@@ -142,13 +155,14 @@ final class AppQueueExtractionProvider: InstalledPackageExtractionPersisting {
                     ?? RSSPodcastTranscriptService(sourceURL: pageURL)
                 let materializer = ApplePodcastMaterializer(
                     episode: episode, pageURL: pageURL, fetcher: fetcher)
-                return ExtractionResolution(
-                    transcriptFetch: { @Sendable in
+                return .transcript(TranscriptExtractionResolution(
+                    fetch: { _ in
                         let result = try await materializer.materialize()
-                        return String(data: result.data, encoding: .utf8) ?? ""
+                        return TranscriptFetchOutcome(
+                            markdown: String(data: result.data, encoding: .utf8) ?? "")
                     },
-                    technique: "apple-ttml",
-                    filename: "transcript")
+                    filename: "transcript",
+                    resultMode: .builtInTool(.appleTTML)))
                 #else
                 return nil
                 #endif
@@ -158,7 +172,7 @@ final class AppQueueExtractionProvider: InstalledPackageExtractionPersisting {
             }
         }
 
-        // Regular bytes-based extraction (PDF, HTML, etc.).
+        // Regular bytes-based extraction (PDF, HTML, DOCX).
         guard let source = store.sources.first(where: { $0.id == sourceID }),
               let bytes = store.sourceBytes(id: sourceID)
         else {
@@ -169,71 +183,85 @@ final class AppQueueExtractionProvider: InstalledPackageExtractionPersisting {
         let preparation = try await extractionServices.prepare(
             backendOverride: backendOverride)
 
-        return ExtractionResolution(
+        return .bytes(BytesExtractionResolution(
             extractor: preparation.extractor,
-            pdfData: bytes,
+            sourceBytes: bytes,
             filename: source.filename,
             backend: preparation.backend,
             modelVersion: preparation.modelVersion,
-            packageProvenance: preparation.packageProvenance
-        )
+            packageProducer: preparation.packageProvenance))
     }
 
-    func persistExtraction(
+    func persistBytesExtraction(
         wikiID: WikiID,
         sourceID: SourceID,
-        markdown: String,
-        backend: ExtractionBackend,
-        modelVersion: String?,
-        technique: String?
+        resolution: BytesExtractionResolution,
+        markdown: String
     ) async throws {
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
-            DebugLog.extraction("AppQueueExtractionProvider: persistExtraction — no session for wikiID=\(wikiID)")
+            DebugLog.extraction("AppQueueExtractionProvider: persistBytesExtraction — no session for wikiID=\(wikiID)")
             return
         }
-        if let technique {
-            // Transcript extraction — write as .transcript origin.
-            _ = store.appendTranscriptMarkdown(
-                for: sourceID, content: markdown, technique: technique)
+        if let packageProducer = resolution.packageProducer {
+            do {
+                _ = try store.internalStore.appendInstalledPackageMarkdown(
+                    sourceID: sourceID, content: markdown, package: packageProducer,
+                    origin: .extraction, toolVersion: resolution.modelVersion,
+                    sourceVersionID: nil, note: nil)
+            } catch {
+                DebugLog.store("AppQueueExtractionProvider: package provenance write failed (source=\(sourceID.rawValue)): \(error)")
+                throw error
+            }
         } else {
             store.seedPdfMarkdown(
                 for: sourceID,
                 content: markdown,
-                backend: backend,
-                modelVersion: modelVersion
+                backend: resolution.backend,
+                modelVersion: resolution.modelVersion
             )
         }
     }
 
-    func persistInstalledPackageExtraction(
+    func persistTranscriptExtraction(
         wikiID: WikiID,
         sourceID: SourceID,
-        markdown: String,
-        backend: ExtractionBackend,
-        modelVersion: String?,
-        packageProvenance: ExtractionInstalledPackageProducer?
+        resolution: TranscriptExtractionResolution,
+        outcome: TranscriptFetchOutcome
     ) async throws {
-        guard let packageProvenance else {
-            try await persistExtraction(
-                wikiID: wikiID,
-                sourceID: sourceID,
-                markdown: markdown,
-                backend: backend,
-                modelVersion: modelVersion,
-                technique: nil)
-            return
-        }
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
-            DebugLog.extraction("AppQueueExtractionProvider: persistExtraction — no session for wikiID=\(wikiID)")
+            DebugLog.extraction("AppQueueExtractionProvider: persistTranscriptExtraction — no session for wikiID=\(wikiID)")
             return
         }
-        do {
-            _ = try store.internalStore.appendInstalledPackageMarkdown(
-                sourceID: sourceID, content: markdown, package: packageProvenance,
-                toolVersion: modelVersion, sourceVersionID: nil, note: nil)
-        } catch {
-            DebugLog.store("AppQueueExtractionProvider: package provenance write failed (source=\(sourceID.rawValue)): \(error)")
-            throw error
+        switch resolution.resultMode {
+        case .builtInTool(let tool):
+            // Built-in tool: keep the existing log-only discipline (the fetch
+            // succeeded; a store-write failure leaves a Console.app trace).
+            _ = store.appendTranscriptMarkdown(
+                for: sourceID, content: outcome.markdown, tool: tool)
+
+        case .installedPackage(let baseProducer):
+            // Package transcript: resolve the source's immutable initial
+            // version FIRST and fail before writing when absent (issue #251).
+            guard let initialVersion = store.initialContentVersion(for: sourceID) else {
+                DebugLog.store("AppQueueExtractionProvider: package transcript has no initial source version (source=\(sourceID.rawValue))")
+                throw AppendDerivedMarkdownError.missingInitialSourceVersion(sourceID)
+            }
+            // Exact provenance: revision, registration, protocol revision,
+            // and the redacted package-reported metadata.
+            let producer = ExtractionInstalledPackageProducer(
+                revision: baseProducer.revision,
+                registrationID: baseProducer.registrationID,
+                protocolRevision: baseProducer.protocolRevision,
+                reportedMetadata: outcome.reportedMetadata)
+            do {
+                _ = try store.internalStore.appendInstalledPackageMarkdown(
+                    sourceID: sourceID, content: outcome.markdown, package: producer,
+                    origin: .transcript, toolVersion: nil,
+                    sourceVersionID: initialVersion.id, note: nil)
+            } catch {
+                DebugLog.store("AppQueueExtractionProvider: package transcript write failed (source=\(sourceID.rawValue)): \(error)")
+                throw error
+            }
         }
     }
 }

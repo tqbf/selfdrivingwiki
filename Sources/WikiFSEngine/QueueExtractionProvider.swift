@@ -21,76 +21,104 @@ public enum QueueExtractionError: Error, LocalizedError {
 
 // MARK: - ExtractionResolution
 
-/// The result of resolving an extraction request: a `Sendable` extractor +
-/// the PDF bytes + filename + backend/modelVersion for PROV tracking.
-/// Returned by `QueueExtractionProvider.resolveExtraction`.
-///
-/// Supports two modes:
-/// - **Bytes-based extraction** (PDF, HTML, etc.): `extractor` + `pdfData`
-///   are non-nil; the worker calls `extractor.convert(pdfData:…)`.
-/// - **Transcript extraction** (YouTube captions, podcast feeds): no local
-///   bytes — `transcriptFetch` is non-nil and `extractor` + `pdfData` are nil;
-///   the worker calls the closure instead. The `technique` tag records HOW the
-///   markdown was produced for PROV tracking (e.g. `"youtube-captions"`).
-public struct ExtractionResolution: Sendable {
-    /// The extractor for bytes-based extraction. Nil for transcript-only
-    /// extraction (no local bytes — the markdown comes from `transcriptFetch`).
-    public let extractor: (any MarkdownExtractor)?
-    /// The source bytes to convert. Nil for transcript-only extraction.
-    public let pdfData: Data?
+/// The result of one completed transcript fetch: the Markdown product plus
+/// the package-reported metadata (empty for built-in tools).
+public struct TranscriptFetchOutcome: Sendable, Hashable {
+    public let markdown: String
+    public let reportedMetadata: ExtractorReportedMetadata
+
+    public init(markdown: String, reportedMetadata: ExtractorReportedMetadata = .empty) {
+        self.markdown = markdown
+        self.reportedMetadata = reportedMetadata
+    }
+}
+
+/// Typed result mode for one transcript job. Persistence consumes the case
+/// tag directly — it never infers the mode from a raw technique string.
+public enum TranscriptResultMode: Sendable, Hashable {
+    /// A built-in transcript tool (YouTube captions, Apple TTML). Persists a
+    /// `.transcript` row with the typed tool producer and no source-version
+    /// link. The queue Apple path's nil linkage predates package transcripts
+    /// and is a deliberate carry-over the Apple TTML follow-up aligns.
+    case builtInTool(ExtractionTool)
+    /// An installed package transcript. Persists with `.transcript` origin,
+    /// the exact package producer (revision, registration, protocol
+    /// revision, reported metadata), and the source's REQUIRED initial
+    /// version link — the write fails before persisting when the source has
+    /// no initial version.
+    case installedPackage(ExtractionInstalledPackageProducer)
+}
+
+/// URL-backed transcript work. No local bytes exist: the fetch operation
+/// resolves the transcript itself. The payload carries the typed producer,
+/// the persistence intent, and a non-PDF capacity identity — never
+/// `pdfData`, an `ExtractionBackend`, or a nullable technique field.
+public struct TranscriptExtractionResolution: Sendable {
+    /// The fetch. Progress lines are already redacted by the producer.
+    public let fetch: @Sendable (_ onProgress: @escaping @Sendable (String) -> Void) async throws -> TranscriptFetchOutcome
+    public let filename: String
+    /// The typed persistence mode for the produced alternative.
+    public let resultMode: TranscriptResultMode
+    /// Package transcripts link the result to the source's immutable
+    /// initial version; built-in tools do not (see `TranscriptResultMode`).
+    public let requiresInitialSourceVersion: Bool
+    /// Non-PDF capacity bucket for the queue engine's concurrency config.
+    public let capacityID: String
+
+    public static let defaultCapacityID = "transcript"
+
+    public init(
+        fetch: @escaping @Sendable (_ onProgress: @escaping @Sendable (String) -> Void) async throws -> TranscriptFetchOutcome,
+        filename: String,
+        resultMode: TranscriptResultMode,
+        requiresInitialSourceVersion: Bool = false,
+        capacityID: String = TranscriptExtractionResolution.defaultCapacityID
+    ) {
+        self.fetch = fetch
+        self.filename = filename
+        self.resultMode = resultMode
+        self.requiresInitialSourceVersion = requiresInitialSourceVersion
+        self.capacityID = capacityID
+    }
+}
+
+/// File-backed conversion. The extractor converts the staged source bytes;
+/// the backend identity, model metadata, and optional exact package producer
+/// ride along for capacity routing and persistence.
+public struct BytesExtractionResolution: Sendable {
+    public let extractor: any MarkdownExtractor
+    public let sourceBytes: Data
     public let filename: String
     public let backend: ExtractionBackend
     public let modelVersion: String?
-    /// Exact package provenance for a process-backed extraction. Built-in and
-    /// transcript resolutions leave this nil and keep legacy fields unchanged.
-    public let packageProvenance: ExtractionInstalledPackageProducer?
-
-    /// Non-nil when this is a transcript extraction: no local bytes, the
-    /// markdown comes from a network/subprocess fetch. When non-nil,
-    /// `extractor` + `pdfData` are nil and the worker calls this closure
-    /// instead of `extractor.convert(...)`.
-    public let transcriptFetch: (@Sendable () async throws -> String)?
-
-    /// PROV technique tag for the processed-markdown version row.
-    /// For regular extraction: nil (the backend IS the technique).
-    /// For transcript extraction: e.g. `"youtube-captions"`.
-    public let technique: String?
+    /// Exact package provenance for a process-backed extraction. Built-in
+    /// backends leave this nil.
+    public let packageProducer: ExtractionInstalledPackageProducer?
 
     public init(
         extractor: any MarkdownExtractor,
-        pdfData: Data,
+        sourceBytes: Data,
         filename: String,
         backend: ExtractionBackend,
         modelVersion: String? = nil,
-        packageProvenance: ExtractionInstalledPackageProducer? = nil
+        packageProducer: ExtractionInstalledPackageProducer? = nil
     ) {
         self.extractor = extractor
-        self.pdfData = pdfData
+        self.sourceBytes = sourceBytes
         self.filename = filename
         self.backend = backend
         self.modelVersion = modelVersion
-        self.packageProvenance = packageProvenance
-        self.transcriptFetch = nil
-        self.technique = nil
+        self.packageProducer = packageProducer
     }
+}
 
-    /// Transcript-only initializer: no local bytes, the markdown comes from
-    /// the `fetch` closure. The `technique` tag records the provenance.
-    public init(
-        transcriptFetch: @escaping @Sendable () async throws -> String,
-        technique: String,
-        filename: String,
-        backend: ExtractionBackend = .localPdf2md
-    ) {
-        self.extractor = nil
-        self.pdfData = nil
-        self.filename = filename
-        self.backend = backend
-        self.modelVersion = nil
-        self.packageProvenance = nil
-        self.transcriptFetch = transcriptFetch
-        self.technique = technique
-    }
+/// The result of resolving an extraction request. The tag is the execution
+/// model — staged bytes or a URL-backed fetch — so an invalid
+/// bytes/transcript combination is unrepresentable and the worker switches
+/// exhaustively.
+public enum ExtractionResolution: Sendable {
+    case bytes(BytesExtractionResolution)
+    case transcript(TranscriptExtractionResolution)
 }
 
 // MARK: - QueueExtractionProvider
@@ -100,47 +128,38 @@ public struct ExtractionResolution: Sendable {
 /// resolves through the Sendable extraction service. The actual `convert()`
 /// runs off-main because `MarkdownExtractor` is `Sendable`.
 public protocol QueueExtractionProvider: Sendable {
-    /// Resolve the extractor + PDF bytes for a source. Returns `nil` if the
-    /// source has no PDF bytes (non-PDF or already-extracted — skip extraction).
+    /// Resolve the extraction for a source. Returns `nil` when there is
+    /// nothing to extract (no bytes, no route — skip extraction).
     ///
-    /// - Parameter backendOverride: When non-nil, resolve this specific backend
-    ///   instead of the configured default (used by re-extraction with a chosen
-    ///   backend). The provider passes this to `ExtractionServices.prepare`.
+    /// - Parameter backendOverride: When non-nil, resolve this specific PDF
+    ///   backend instead of the configured default (re-extraction with a
+    ///   chosen backend). Transcript routes ignore it; their selection is
+    ///   registration-driven through the extraction services.
     func resolveExtraction(
         wikiID: WikiID,
         sourceID: SourceID,
         backendOverride: ExtractionBackend?
     ) async throws -> ExtractionResolution?
 
-    /// Persist extracted markdown into the store. Carries the legacy `backend`
-    /// and `modelVersion` fields for compatibility, plus optional exact package
-    /// provenance for installed extractors.
-    ///
-    /// When `technique` is non-nil, this is a transcript extraction (YouTube
-    /// captions, podcast feed) — the provider writes it as a `.transcript`
-    /// origin processed-markdown version with the technique tag. When nil,
-    /// it's a regular bytes-based extraction written via
-    /// `recordMarkdownExtraction`.
-    func persistExtraction(
+    /// Persist a bytes-based extraction result: the legacy seeded-PDF path
+    /// for built-in backends, the exact-package path when the resolution
+    /// carries a package producer.
+    func persistBytesExtraction(
         wikiID: WikiID,
         sourceID: SourceID,
-        markdown: String,
-        backend: ExtractionBackend,
-        modelVersion: String?,
-        technique: String?
+        resolution: BytesExtractionResolution,
+        markdown: String
     ) async throws
-}
 
-/// Optional exact provenance support for providers that persist installed
-/// package results. Legacy queue providers keep their original protocol shape.
-public protocol InstalledPackageExtractionPersisting: QueueExtractionProvider {
-    func persistInstalledPackageExtraction(
+    /// Persist a transcript result with its typed mode: a built-in tool row
+    /// for `.builtInTool`, or a `.transcript`-origin package row with exact
+    /// provenance and the required initial source-version link for
+    /// `.installedPackage`.
+    func persistTranscriptExtraction(
         wikiID: WikiID,
         sourceID: SourceID,
-        markdown: String,
-        backend: ExtractionBackend,
-        modelVersion: String?,
-        packageProvenance: ExtractionInstalledPackageProducer?
+        resolution: TranscriptExtractionResolution,
+        outcome: TranscriptFetchOutcome
     ) async throws
 }
 

@@ -79,6 +79,12 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
     public static let reviewedDOCXLogical = reviewedLogical(
         package: ReviewedExtractorPackages.docx2md, registration: "document")
 
+    /// The logical reference of the reviewed podcast transcript package
+    /// registration. The bundled default-route record supplies this lineage
+    /// when the canonical podcast route has no configured selection.
+    public static let reviewedPodcastTranscriptLogical = reviewedLogical(
+        package: ReviewedExtractorPackages.podcastTranscript, registration: "feed")
+
     private static func reviewedLogical(
         package: ReviewedExtractorPackage,
         registration: String
@@ -129,6 +135,26 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
             throw ExtractionServicesError.unavailable
         }
         return extractor
+    }
+
+    /// Resolves the configured podcast transcript adapter. The selection
+    /// state machine is registration-driven:
+    ///
+    /// - stored installed reference → its active compatible registration;
+    /// - every other selection state (explicit `.none` disable, a host
+    ///   stray, or a record the bundled default policy does not cover)
+    ///   fails closed — the reviewed default is never revived over an
+    ///   explicit disable, and there is no built-in fallback. The bundled
+    ///   default-route record supplies the reviewed lineage when the user
+    ///   has never configured the route.
+    public func preparePodcastTranscript() async throws -> ProcessPackagePodcastTranscript {
+        let configuration = try input.readConfiguration()
+        let key = try await podcastTranscriptKey(configuration: configuration)
+        let adapter = try await makeAdapter(for: key)
+        guard case .podcastTranscript(let transcript) = adapter else {
+            throw ExtractionServicesError.unavailable
+        }
+        return transcript
     }
 
     public func registeredExtractionInputs() async -> RegisteredExtractionInputs {
@@ -211,6 +237,24 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
                 reference: logical)
         }
         return match.key
+    }
+
+    /// Podcast transcript key resolution. Unlike DOCX, an explicit `.none`
+    /// record stays disabled: it fails closed instead of mapping back to the
+    /// reviewed lineage. A host reference is equally dead — no built-in RSS
+    /// transcript adapter exists — and fails closed with the route
+    /// diagnostic.
+    private func podcastTranscriptKey(
+        configuration: ExtractionConfig
+    ) async throws -> ExtractionAdapterKey {
+        let record = configuration.selectionOrDefault(for: .canonicalPodcastTranscript)
+        guard case .installed(let reference)? = record else {
+            throw ExtractionServicesError.selectedExtractorUnavailable(
+                route: .canonicalPodcastTranscript,
+                reference: Self.reviewedPodcastTranscriptLogical)
+        }
+        return try await installedKey(
+            reference, kind: .rssPodcastTranscript, route: .canonicalPodcastTranscript)
     }
 
     /// Resolves an installed lineage to its exact registry key, failing

@@ -5773,14 +5773,24 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
     /// Append one package-backed result with its exact revision and registration.
     /// The tagged activity plan is authoritative. Legacy normalized columns keep
     /// the package name and digest without presenting them as a model.
+    ///
+    /// The origin is derived by the caller's typed result mode: `.extraction`
+    /// for PDF/HTML/DOCX package results, `.transcript` for package
+    /// transcripts. A package transcript REQUIRES `sourceVersionID` — the
+    /// source's immutable initial version — and the write fails before any
+    /// row is written when it is missing (issue #251 lineage).
     public func appendInstalledPackageMarkdown(
         sourceID: SourceID, content: String,
         package: ExtractionInstalledPackageProducer,
+        origin: SourceMarkdownOrigin = .extraction,
         toolVersion: String? = nil, sourceVersionID: SourceVersionID? = nil,
         note: String? = nil
     ) throws -> SourceMarkdownVersion {
-        try appendDerivedMarkdown(
-            sourceID: sourceID, content: content, origin: .extraction,
+        if origin == .transcript, sourceVersionID == nil {
+            throw AppendDerivedMarkdownError.missingInitialSourceVersion(sourceID)
+        }
+        return try appendDerivedMarkdown(
+            sourceID: sourceID, content: content, origin: origin,
             producer: .installedPackage(package), providerID: nil, modelID: nil,
             toolVersion: toolVersion, sourceVersionID: sourceVersionID, note: note)
     }

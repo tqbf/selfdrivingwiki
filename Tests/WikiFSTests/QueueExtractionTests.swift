@@ -456,15 +456,15 @@ private final class FakeExtractionProvider: QueueExtractionProvider, @unchecked 
 
         switch resolveResult {
         case .resolved(let backend):
-            return ExtractionResolution(
+            return .bytes(BytesExtractionResolution(
                 extractor: FakeMarkdownExtractor(
                     readiness: extractorReadiness,
                     convert: convertBehavior
                 ),
-                pdfData: Data([0x25, 0x50, 0x44, 0x46]), // "%PDF"
+                sourceBytes: Data([0x25, 0x50, 0x44, 0x46]), // "%PDF"
                 filename: "test.pdf",
                 backend: backend
-            )
+            ))
         case .nilResolution:
             return nil
         case .unavailableSelection:
@@ -476,13 +476,21 @@ private final class FakeExtractionProvider: QueueExtractionProvider, @unchecked 
         }
     }
 
-    func persistExtraction(
+    func persistBytesExtraction(
         wikiID: WikiID, sourceID: SourceID,
-        markdown: String, backend: ExtractionBackend,
-        modelVersion: String?, technique: String?
+        resolution: BytesExtractionResolution, markdown: String
     ) async throws {
         lock.withLock { state in
-            state.callLog.append("persist(wikiID:\(wikiID.rawValue), sourceID:\(sourceID.rawValue), backend:\(backend.rawValue))")
+            state.callLog.append("persist(wikiID:\(wikiID.rawValue), sourceID:\(sourceID.rawValue), backend:\(resolution.backend.rawValue))")
+        }
+    }
+
+    func persistTranscriptExtraction(
+        wikiID: WikiID, sourceID: SourceID,
+        resolution: TranscriptExtractionResolution, outcome: TranscriptFetchOutcome
+    ) async throws {
+        lock.withLock { state in
+            state.callLog.append("persistTranscript(wikiID:\(wikiID.rawValue), sourceID:\(sourceID.rawValue))")
         }
     }
 }

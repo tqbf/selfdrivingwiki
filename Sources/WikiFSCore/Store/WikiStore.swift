@@ -550,12 +550,15 @@ public protocol WikiStore: AnyObject, Sendable {
     ) throws -> SourceMarkdownVersion
 
     /// Append one package-backed result with exact immutable package identity.
-    /// This compatibility overload keeps package metadata in the tagged plan.
+    /// The origin is derived: `.extraction` for document packages, `.transcript`
+    /// for package transcripts (which REQUIRE `sourceVersionID` — the source's
+    /// immutable initial version).
     @discardableResult
     func appendInstalledPackageMarkdown(
         sourceID: SourceID, content: String,
         package: ExtractionInstalledPackageProducer,
-        toolVersion: String?, sourceVersionID: SourceVersionID?, note: String?
+        origin: SourceMarkdownOrigin, toolVersion: String?,
+        sourceVersionID: SourceVersionID?, note: String?
     ) throws -> SourceMarkdownVersion
 
     /// Revert to an older version by appending a NEW version whose content

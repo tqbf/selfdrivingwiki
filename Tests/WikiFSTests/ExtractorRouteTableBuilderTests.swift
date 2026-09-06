@@ -67,13 +67,17 @@ struct ExtractorRouteTableBuilderTests {
                     mimeTypes: ["text/html"]),
             ])
         let rows = ExtractorRouteTableBuilder.build(input)
-        // Host PDF + HTML + DOCX, plus the saved future route. The HTML
-        // registration covers the canonical HTML route and adds no new row.
-        #expect(rows.count == 4)
-        #expect(rows.map(\.route) == [.canonicalPDF, .canonicalHTML, .canonicalDOCX, futureRoute])
-        #expect(rows[3].savedSelection == ExtractorRouteHostCatalog.acpReference)
+        // Host PDF + HTML + DOCX + podcast transcript, plus the saved future
+        // route. The HTML registration covers the canonical HTML route and
+        // adds no new row.
+        #expect(rows.count == 5)
+        #expect(rows.map(\.route) == [
+            .canonicalPDF, .canonicalHTML, .canonicalDOCX, .canonicalPodcastTranscript,
+            futureRoute,
+        ])
+        #expect(rows[4].savedSelection == ExtractorRouteHostCatalog.acpReference)
         // No host execution exists for a future route.
-        #expect(rows[3].resolvedSelection == nil)
+        #expect(rows[4].resolvedSelection == nil)
     }
 
     @Test func rowsSortDeterministically() throws {
@@ -96,8 +100,9 @@ struct ExtractorRouteTableBuilderTests {
         // typed route order; identical inputs produce identical rows.
         #expect(first.map(\.route) == second.map(\.route))
         #expect(first == second)
-        #expect(first.map(\.route).prefix(3) == [.canonicalPDF, .canonicalHTML, .canonicalDOCX])
-        #expect(first.dropFirst(3).map(\.route) == first.dropFirst(3).map(\.route).sorted())
+        #expect(first.map(\.route).prefix(4)
+            == [.canonicalPDF, .canonicalHTML, .canonicalDOCX, .canonicalPodcastTranscript])
+        #expect(first.dropFirst(4).map(\.route) == first.dropFirst(4).map(\.route).sorted())
     }
 
     @Test func unknownMIMEUsesStableGenericLabel() throws {

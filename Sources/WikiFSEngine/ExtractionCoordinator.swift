@@ -59,6 +59,12 @@ public protocol ExtractionServices: Sendable {
     /// resolves through the configuration, defaulting to the reviewed docx2md
     /// lineage when nothing is configured.
     func prepareDOCX() async throws -> any DocxMarkdownExtractor
+    /// The podcast transcript route is also package-only: the selection
+    /// resolves through the configuration (bundled default reviewed lineage
+    /// when nothing is configured) and fails closed on an explicit disable
+    /// or an unavailable selection. The prepared adapter runs validated
+    /// `remote-url` operations with exact package provenance.
+    func preparePodcastTranscript() async throws -> ProcessPackagePodcastTranscript
     /// Active package registration claims used for import recognition.
     func registeredExtractionInputs() async -> RegisteredExtractionInputs
 }
@@ -79,6 +85,13 @@ public extension ExtractionServices {
     }
 
     func prepareDOCX() async throws -> any DocxMarkdownExtractor {
+        throw ExtractionServicesError.unavailable
+    }
+
+    /// Default for seams that never run packages (test runtimes, the legacy
+    /// coordinator). The process facade overrides it with real package
+    /// resolution.
+    func preparePodcastTranscript() async throws -> ProcessPackagePodcastTranscript {
         throw ExtractionServicesError.unavailable
     }
 
@@ -149,6 +162,10 @@ public actor MutableExtractionServices: ExtractionServices {
 
     public func prepareDOCX() async throws -> any DocxMarkdownExtractor {
         try await installed.prepareDOCX()
+    }
+
+    public func preparePodcastTranscript() async throws -> ProcessPackagePodcastTranscript {
+        try await installed.preparePodcastTranscript()
     }
 
     public func registeredExtractionInputs() async -> RegisteredExtractionInputs {

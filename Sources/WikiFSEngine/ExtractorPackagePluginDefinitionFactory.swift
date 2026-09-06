@@ -231,6 +231,16 @@ public enum ExtractorPackagePluginDefinitionFactory {
                                 return ExtractionBackendAdapter.docx(docx)
                             },
                             presentation: presentation))
+                    case .podcastTranscript:
+                        entries.append(ExtractionBatchEntry(
+                            key: .installed(kind: backendKind, reference: reference),
+                            backend: RegisteredExtractionBackend(key: legacyPlaceholderKey) {
+                                let adapter = try await provider.preparePodcastTranscript(
+                                    revision: revision,
+                                    manifest: manifest)
+                                return ExtractionBackendAdapter.podcastTranscript(adapter)
+                            },
+                            presentation: presentation))
                     }
                 }
             }
@@ -249,18 +259,25 @@ public enum ExtractorPackagePluginDefinitionFactory {
         case .pdf: return .pdf
         case .html: return .html
         case .docx: return .docx
+        case .podcastTranscript: return .rssPodcastTranscript
         }
     }
 
     private static func validate(_ manifest: ExtractorManifest) throws {
         // #1159: protocol revision 2 (credential-declaring requests) is
-        // supported alongside revision 1.
-        guard manifest.protocolRevision == .v1 || manifest.protocolRevision == .v2 else {
+        // supported alongside revision 1. Protocol revision 3 (remote-url
+        // requests) is supported alongside both; the input transport never
+        // changes what the manifest itself declares.
+        guard manifest.protocolRevision == .v1
+            || manifest.protocolRevision == .v2
+            || manifest.protocolRevision == .v3 else {
             throw FactoryError.unsupportedProtocol(manifest.protocolRevision)
         }
         for registration in manifest.registrations {
-            guard registration.kinds.isSubset(of: [.pdf, .html, .docx]) else {
-                let offending = registration.kinds.subtracting([.pdf, .html, .docx]).first.map(\.rawValue) ?? "?"
+            guard registration.kinds.isSubset(of: [.pdf, .html, .docx, .podcastTranscript]) else {
+                let offending = registration.kinds
+                    .subtracting([.pdf, .html, .docx, .podcastTranscript])
+                    .first.map(\.rawValue) ?? "?"
                 throw FactoryError.unsupportedRegistrationKind(offending)
             }
         }

@@ -128,4 +128,47 @@ struct ExtractorKindNeutralityContractTests {
                 "\(path) lost the extractor-kind-neutrality tenet marker")
         }
     }
+
+    /// The podcast transcript registration is DATA, not host policy: no
+    /// source branch may compare against `.podcastTranscript` for selection,
+    /// and the reviewed package ID literal may appear only where reviewed
+    /// identities are declared — never in a selection or execution branch.
+    /// Registration-driven route data (default-routes.json) and the typed
+    /// prepare seam stay allowed, mirroring the `.docx` rules above.
+    @Test func podcastRegistrationIsDataDriven() throws {
+        let root = try Self.locateRepositoryRoot()
+        let files = try Self.sourceFiles(under: root)
+        #expect(files.isEmpty == false, "no host sources found to scan")
+
+        // No kind comparison for the podcast kind.
+        let comparison = try NSRegularExpression(
+            pattern: #"([=!]=)\s*\.podcastTranscript\b"#)
+        // No package-ID policy literal outside the reviewed-identity table.
+        let packageIDLiteral = try NSRegularExpression(
+            pattern: #"org\.selfdrivingwiki\.podcast-transcript"#)
+        let allowedPackageIDFiles: Set<String> = ["ReviewedExtractorPackages.swift"]
+
+        for file in files {
+            var contents = try String(contentsOf: file, encoding: .utf8)
+            // Identifiers only: strip comments first so prose cannot trip
+            // the scan (mirrors forbidsKindNamedPolicySeams).
+            contents = contents.replacingOccurrences(
+                of: #"//.*"#,
+                with: "",
+                options: .regularExpression)
+            let range = NSRange(contents.startIndex..., in: contents)
+
+            let kindMatches = comparison.matches(in: contents, range: range)
+            #expect(
+                kindMatches.isEmpty,
+                "\(file.lastPathComponent) compares against the .podcastTranscript extractor kind; policy must come from registration data")
+
+            let idMatches = packageIDLiteral.matches(in: contents, range: range)
+            if allowedPackageIDFiles.contains(file.lastPathComponent) == false {
+                #expect(
+                    idMatches.isEmpty,
+                    "\(file.lastPathComponent) hard-codes the reviewed podcast package ID; eligibility must come from registration data")
+            }
+        }
+    }
 }

@@ -17,8 +17,8 @@ public enum StageRoutingKey: String, Sendable {
 public enum QueueKind: String, Hashable, Codable, Sendable {
     /// Extraction (source → extracted markdown). Covers PDF/document
     /// extraction AND transcript fetching (YouTube captions, podcast feeds) —
-    /// transcript sources resolve to a `transcriptFetch` closure in the
-    /// `ExtractionResolution` instead of bytes-based extraction.
+    /// transcript sources resolve to a `.transcript(TranscriptExtractionResolution)`
+    /// in the tagged `ExtractionResolution` instead of bytes-based extraction.
     case extraction
     /// Legacy persisted raw value for transcript jobs from before
     /// transcription merged into `.extraction`. Kept so older `queue.sqlite`
