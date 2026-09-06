@@ -19,11 +19,11 @@ struct ReviewedSourceTypeDocumentationTests {
     private static let reviewed: [ReviewedPackage] = [
         ReviewedPackage(
             folder: "Mermaid", packageID: "org.selfdrivingwiki.mermaid-readonly",
-            version: "1.1.0", canonicalMIME: "text/vnd.mermaid",
+            version: "1.1.1", canonicalMIME: "text/vnd.mermaid",
             extensions: ["mmd", "mermaid"]),
         ReviewedPackage(
             folder: "SVG", packageID: "org.selfdrivingwiki.svg-readonly",
-            version: "1.1.0", canonicalMIME: "image/svg+xml",
+            version: "1.1.1", canonicalMIME: "image/svg+xml",
             extensions: ["svg"]),
         ReviewedPackage(
             folder: "Excalidraw", packageID: "org.selfdrivingwiki.excalidraw-readonly",

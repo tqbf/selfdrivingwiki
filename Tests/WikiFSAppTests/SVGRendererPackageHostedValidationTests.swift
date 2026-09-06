@@ -27,7 +27,7 @@ struct SVGRendererPackageHostedValidationTests {
         let descriptor = try #require(package.manifest.descriptors.only)
         let claim = try #require(descriptor.fenceClaims.only)
         #expect(package.manifest.revision == RendererManifestRevision.sourceTypes)
-        #expect(descriptor.reference.version.rawValue == "1.1.0")
+        #expect(descriptor.reference.version.rawValue == "1.1.1")
         #expect(claim.alias.rawValue == "svg")
         #expect(claim.inlineMIMEType.rawValue == "image/svg+xml")
 

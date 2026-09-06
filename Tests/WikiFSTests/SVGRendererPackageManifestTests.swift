@@ -29,9 +29,9 @@ struct SVGRendererPackageManifestTests {
     func manifestDecodesWithReviewedIdentity() throws {
         #expect(manifest.revision == RendererManifestRevision.sourceTypes)
         #expect(manifest.packageID.rawValue == "org.selfdrivingwiki.svg-readonly")
-        #expect(manifest.version.rawValue == "1.1.0")
+        #expect(manifest.version.rawValue == "1.1.1")
         #expect(descriptor.reference.packageID.rawValue == "org.selfdrivingwiki.svg-readonly")
-        #expect(descriptor.reference.version.rawValue == "1.1.0")
+        #expect(descriptor.reference.version.rawValue == "1.1.1")
         #expect(descriptor.reference.registrationID.rawValue == "svg")
         #expect(descriptor.displayName == "SVG")
         #expect(descriptor.priority == 100)

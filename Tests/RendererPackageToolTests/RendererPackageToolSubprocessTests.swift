@@ -35,7 +35,7 @@ struct RendererPackageToolSubprocessTests {
 
         #expect(result.status == 0)
         #expect(output.packageID == "org.selfdrivingwiki.mermaid-readonly")
-        #expect(output.version == "1.1.0")
+        #expect(output.version == "1.1.1")
         #expect(output.registrationIDs == ["mermaid"])
         #expect(!output.packageHash.isEmpty)
         #expect(result.stderr.isEmpty)

@@ -40,7 +40,7 @@ struct MermaidRendererPackageMatchingTests {
     func identityBlockDecodes() throws {
         #expect(manifest.revision == RendererManifestRevision.sourceTypes)
         #expect(manifest.packageID.rawValue == "org.selfdrivingwiki.mermaid-readonly")
-        #expect(manifest.version.rawValue == "1.1.0")
+        #expect(manifest.version.rawValue == "1.1.1")
         #expect(descriptor.reference.registrationID.rawValue == "mermaid")
         #expect(descriptor.displayName == "Mermaid")
         #expect(descriptor.priority == 90)
