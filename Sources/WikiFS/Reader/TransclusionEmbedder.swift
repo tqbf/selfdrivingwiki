@@ -120,6 +120,13 @@ enum TransclusionEmbedder {
             return head.content
         }
         let source = try access.getSource(id: id)
+        // Cheap metadata pre-filter: never load bytes for a source no active
+        // claim and no text MIME can present.
+        let maybeTextual = MimeType.isText(source.mimeType)
+            || rendererSourceTypes.mightPresentAsText(
+                mimeType: source.mimeType,
+                filenameExtension: source.ext)
+        guard maybeTextual else { return nil }
         let data: Data
         do {
             data = try access.sourceContent(id: id)
@@ -148,6 +155,11 @@ enum TransclusionEmbedder {
             return head.content
         }
         let source = try store.getSource(id: id)
+        let maybeTextual = MimeType.isText(source.mimeType)
+            || rendererSourceTypes.mightPresentAsText(
+                mimeType: source.mimeType,
+                filenameExtension: source.ext)
+        guard maybeTextual else { return nil }
         do {
             let data = try store.sourceContent(id: id)
             let effectiveMIME = rendererSourceTypes.resolve(

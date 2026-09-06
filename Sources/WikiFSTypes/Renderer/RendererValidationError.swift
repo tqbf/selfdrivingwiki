@@ -40,7 +40,6 @@ public enum RendererValidationError: Error, Equatable, Sendable, CustomStringCon
     case assetReadRequiresWebPackage
     case assetReadRequiresRevision5
     case sourceTypeRequiresRevision6
-    case invalidSourceTypeDeclaration
     case duplicateSourceTypeMIME(String)
     case duplicateSourceTypeExtension(String)
     case sourceTypeMIMEMatcherMissing(RendererMIMEType)
@@ -97,7 +96,6 @@ public enum RendererValidationError: Error, Equatable, Sendable, CustomStringCon
         case .assetReadRequiresWebPackage: "renderer asset read is available only to Web packages"
         case .assetReadRequiresRevision5: "renderer asset read requires manifest revision 5"
         case .sourceTypeRequiresRevision6: "renderer source type declarations require manifest revision 6"
-        case .invalidSourceTypeDeclaration: "renderer source type must declare a canonical MIME routing surface"
         case let .duplicateSourceTypeMIME(value): "duplicate renderer source type MIME after normalization: \(value)"
         case let .duplicateSourceTypeExtension(value): "duplicate renderer source type extension after normalization: \(value)"
         case let .sourceTypeMIMEMatcherMissing(value): "renderer source type MIME has no matching normalizedMIME route: \(value.rawValue)"

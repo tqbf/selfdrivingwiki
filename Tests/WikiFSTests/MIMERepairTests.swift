@@ -292,6 +292,43 @@ struct MIMERepairTests {
             == ["application/vnd.chipnuts.karaoke-mmd|application/vnd.chipnuts.karaoke-mmd"])
     }
 
+    /// H1 regression: package normalization takes precedence over detector
+    /// repair for NULL-mirror rows, and a valid alias mirror survives a
+    /// NULL sibling. Both mirror shapes must land on the canonical MIME —
+    /// never on the detector's generic text/plain, which would strand the
+    /// row outside the candidate set forever.
+    @Test func packageNormalizationPrecedesDetectorRepairForNullMirrors() throws {
+        let catalog = try mermaidCatalog()
+
+        // Both mirrors NULL.
+        let bothNull = try makeFixture(
+            bytes: Data("graph TD\n    A --> B\n".utf8),
+            filename: "fresh.mmd",
+            sourceMIMEIsNull: true,
+            versionMIMEIsNull: true)
+        let store = try GRDBWikiStore(databaseURL: bothNull.url)
+        installCatalog(catalog, into: store)
+        let report = try store.repairMIME(dryRun: false)
+        #expect(report.items.first?.status == .packageAliasNormalization)
+        #expect(report.items.first?.newMIMEType == "text/vnd.mermaid")
+        #expect(try mimeRows(at: bothNull.url, sourceID: bothNull.sourceID)
+            == ["text/vnd.mermaid|text/vnd.mermaid"])
+
+        // Half-null: the karaoke alias on one mirror must survive.
+        let halfNull = try makeFixture(
+            bytes: Data("sequenceDiagram\n  A->>B: hi\n".utf8),
+            filename: "sequence.mmd",
+            sourceMIMEIsNull: false,
+            versionMIMEIsNull: true,
+            nonNullMIME: "application/vnd.chipnuts.karaoke-mmd")
+        let secondStore = try GRDBWikiStore(databaseURL: halfNull.url)
+        installCatalog(catalog, into: secondStore)
+        let secondReport = try secondStore.repairMIME(dryRun: false)
+        #expect(secondReport.items.first?.status == .packageAliasNormalization)
+        #expect(try mimeRows(at: halfNull.url, sourceID: halfNull.sourceID)
+            == ["text/vnd.mermaid|text/vnd.mermaid"])
+    }
+
     @Test func packageAliasApplyUpdatesActiveMirrors() throws {
         let fixture = try makeFixture(
             bytes: Data("graph TD\n    A --> B\n".utf8),

@@ -133,6 +133,36 @@ public struct RegisteredRendererSourceTypes: Hashable, Sendable {
         claims.contains { $0.allMIMETypes.contains(mimeType) }
     }
 
+    public func containsDeclaredExtension(_ extensionName: RendererFileExtension) -> Bool {
+        claims.contains { $0.filenameExtensions.contains(extensionName) }
+    }
+
+    public var declaredFilenameExtensions: Set<RendererFileExtension> {
+        claims.reduce(into: Set<RendererFileExtension>()) { $0.formUnion($1.filenameExtensions) }
+    }
+
+    /// Cheap metadata-only check for read paths: whether this MIME or
+    /// extension could resolve to a text-producing claim. Does not prove a
+    /// match; callers still resolve against bytes.
+    public func mightPresentAsText(mimeType: String?, filenameExtension: String?) -> Bool {
+        if let mimeType,
+           let typed = RendererMIMEType(rawValue: mimeType.lowercased()) {
+            let mimeMatches = claims.contains { claim in
+                claim.allMIMETypes.contains(typed)
+                    && claim.canonicalMIMEType.rawValue.hasPrefix("text/")
+            }
+            if mimeMatches { return true }
+        }
+        guard let filenameExtension,
+              let typed = RendererFileExtension(rawValue: filenameExtension.lowercased()) else {
+            return false
+        }
+        return claims.contains { claim in
+            claim.filenameExtensions.contains(typed)
+                && claim.canonicalMIMEType.rawValue.hasPrefix("text/")
+        }
+    }
+
     public var declaredMIMETypes: Set<RendererMIMEType> {
         claims.reduce(into: Set<RendererMIMEType>()) { $0.formUnion($1.allMIMETypes) }
     }
@@ -152,7 +182,9 @@ public struct RegisteredRendererSourceTypes: Hashable, Sendable {
     }
 
     private func coalesced(_ candidates: Set<Claim>) -> Outcome {
-        guard let first = candidates.first else { return .noMatch }
+        guard let first = candidates.min(by: {
+            $0.descriptor.stableTieBreakKey < $1.descriptor.stableTieBreakKey
+        }) else { return .noMatch }
         let equivalent = candidates.allSatisfy {
             $0.canonicalMIMEType == first.canonicalMIMEType
                 && $0.displayName == first.displayName

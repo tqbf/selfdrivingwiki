@@ -49,8 +49,16 @@ struct RendererArtifactMatcherTests {
             sniffedBytes: Data(#"{"type":"excalidraw","version":true,"elements":[]}"#.utf8),
             isComplete: true))
 
+        // The two-channel contract: boundedJSON no longer reads the sniff
+        // prefix, so a valid artifact larger than the 4 KiB sniff bound
+        // matches through the artifact channel.
+        var beyondSniff = Data(#"{"type":"excalidraw","version":2,"elements":["#.utf8)
+        beyondSniff.append(contentsOf: [UInt8](repeating: 0x20, count: RendererMatchingLimits.maximumSniffByteCount))
+        beyondSniff.append(contentsOf: #"]}"#.utf8)
+        #expect(beyondSniff.count > RendererMatchingLimits.maximumSniffByteCount)
+        #expect(excalidraw.matches(artifactInput: BoundedArtifactInput(bytes: beyondSniff, isComplete: true)))
+
         let oversized = Data(repeating: 0, count: RendererMatchingLimits.maximumSniffByteCount + 1)
-        #expect(!excalidraw.matches(sniffedBytes: oversized, isComplete: true))
         #expect(throws: RendererValidationError.invalidSizeLimit("sniff byte count \(oversized.count)")) {
             _ = try RendererMatchInput(
                 mimeType: nil,

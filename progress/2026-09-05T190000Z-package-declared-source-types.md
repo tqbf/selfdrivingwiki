@@ -114,6 +114,38 @@ presentation tests, and environment-dependent extraction/chat suites.
 They are unchanged by this branch; the named hosted filters for this
 plan all pass.
 
+## Implementation review (cross-model)
+
+An independent Claude (Opus, via Paseo) review of the committed change
+returned REQUEST_CHANGES with two blocking findings; both are fixed:
+
+- **H1 — repair precedence.** `MIMERepairDecision` ran detector repair
+  before the catalog, so a NULL-mirror `.mmd` row was written
+  `text/plain` and stranded outside the candidate set, and a half-null
+  karaoke row lost its alias. The decision now resolves the catalog
+  first (mirroring ingest: nil/octet-stream/generic-text mirrors are
+  inconclusive, so the extension claim may resolve), and detector
+  repair only follows when no claim resolves. Regression test:
+  `packageNormalizationPrecedesDetectorRepairForNullMirrors`.
+- **H2 — unbounded transclusion read.** `TransclusionEmbedder` read the
+  full blob before text gating. A cheap metadata pre-filter
+  (`mightPresentAsText`) now skips the byte read unless the stored MIME
+  or extension could resolve to a text-canonical claim.
+
+Also adopted: deterministic winning claim via `stableTieBreakKey`
+(M3), corrected the store property doc comment (M2), removed the
+unreachable conflict guard and the unused validation error case, moved
+the signature-conflict check ahead of `canonicalNoOp` (L4), and
+strengthened two artifact-bound tests (L5/L6).
+
+Rebutted/deferred: M1 (canonical MIMEs stay in the repair candidate
+set — the plan defines candidates that way, and canonical rows are
+counted as scanned no-ops, not repairable; the memory note is a
+candidate for a follow-up two-phase fetch); M4 (the unsynchronized
+catalog property mirrors the pre-existing `registeredExtractionInputs`
+pattern; the invariant is documented at the protocol and a lock-backed
+variant is a follow-up); L9/L10 recorded as intentional behavior.
+
 ## Notes
 
 - The old `.mmd` → `text/mermaid` ingest fallback is intentionally

@@ -44,7 +44,55 @@ public struct MIMERepairDecision: Equatable, Sendable {
         let versionMIME = ContentTypeDetector.normalizeMIMEType(input.versionMIMEType)
         let nonNilMirrors = [sourceMIME, versionMIME].compactMap { $0 }
         let hasBinarySignature = input.detection.evidence.contains { $0.origin == .binarySignature }
+        // Repair mirrors ingest precedence: the catalog gets the first look.
+        // A mirror that is nil, octet-stream, or the sniffer's generic text
+        // verdict is inconclusive about format identity, so the extension
+        // claim may resolve it; any other mirror must be a claim MIME or the
+        // row conflicts.
+        func isInconclusive(_ mime: String?) -> Bool {
+            mime == nil || mime == MimeType.octetStream || mime == "text/plain"
+        }
+        let mirrorsAreInconclusive = nonNilMirrors.allSatisfy { isInconclusive($0) }
+        let anyMirrorIsClaim = nonNilMirrors.contains { mirror in
+            guard let typed = RendererMIMEType(rawValue: mirror) else { return false }
+            return input.rendererSourceTypes.containsDeclaredMIME(typed)
+        }
+        if sourceMIME == nil || versionMIME == nil || anyMirrorIsClaim || mirrorsAreInconclusive {
+            let candidateMIME = nonNilMirrors.first { !isInconclusive($0) }
+                ?? nonNilMirrors.first
+            let resolution = input.rendererSourceTypes.resolve(
+                mimeType: candidateMIME,
+                filenameExtension: input.filenameExtension,
+                boundedBytes: bytes,
+                bytesAreComplete: input.bytesAreComplete,
+                artifactKind: .source,
+                allowInconclusiveMIMEExtensionFallback: candidateMIME == nil
+                    || isInconclusive(candidateMIME))
+            switch resolution {
+            case .ambiguous:
+                return .init(status: .ambiguity)
+            case .resolved(let claim):
+                let declared = claim.descriptor.sourceType?.allMIMETypes ?? []
+                let conflictingMirror = nonNilMirrors.contains { mirror in
+                    isInconclusive(mirror) == false
+                        && (RendererMIMEType(rawValue: mirror)).map { declared.contains($0) == false } == true
+                }
+                if conflictingMirror || hasBinarySignature {
+                    return .init(status: .conflict)
+                }
+                let canonical = claim.canonicalMIMEType.rawValue
+                if nonNilMirrors.isEmpty == false,
+                   nonNilMirrors.allSatisfy({ $0 == canonical }) {
+                    return .init(status: .canonicalNoOp)
+                }
+                return .init(status: .packageAliasNormalization, newMIMEType: canonical)
+            case .noMatch:
+                break
+            }
+        }
 
+        // Detector repair keeps precedence for NULL mirrors the catalog could
+        // not resolve.
         if sourceMIME == nil || versionMIME == nil {
             if let detected = input.detection.normalizedMIMEType {
                 return .init(status: .detectorRepair, newMIMEType: detected)
@@ -83,7 +131,6 @@ public struct MIMERepairDecision: Equatable, Sendable {
         }
 
         if sourceMIME != versionMIME { return .init(status: .conflict) }
-        if input.bytesAreComplete == false { return .init(status: .inconclusive) }
         return .init(status: .inconclusive)
     }
 }

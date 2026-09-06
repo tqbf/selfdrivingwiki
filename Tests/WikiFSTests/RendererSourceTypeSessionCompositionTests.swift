@@ -10,7 +10,12 @@ import WikiFSTypes
 @Suite("Renderer source-type session composition", .serialized, .timeLimit(.minutes(3)))
 @MainActor
 struct RendererSourceTypeSessionCompositionTests {
-    @Test func childSessionBootReceivesCatalog() throws {
+    @Test func sessionFanOutReceivesCatalog() throws {
+        // The fan-out seam child-session boot uses: the plugin assigns the
+        // validated preparation catalog to the model at boot, and
+        // SessionManager fans it out to every live session. The
+        // SessionsPlugin boot path itself is covered by app-composition
+        // tests; this test pins the fan-out contract.
         let dir = tempDirectory()
         let registry = makeSeededRegistry(dir: dir)
         let manager = makeSessionManager(dir: dir)

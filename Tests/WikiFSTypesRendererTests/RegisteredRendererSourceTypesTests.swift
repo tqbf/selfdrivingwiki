@@ -64,11 +64,14 @@ struct RegisteredRendererSourceTypesTests {
             .extensionFallback(try .init(validating: "example")),
             .boundedJSON(try .init(properties: [:], arrays: [:])),
         ])
+        // bytesAreComplete is true, but the artifact channel itself marks the
+        // input truncated past the 64 KiB bound — proving the bound, not the
+        // flag.
         let result = RegisteredRendererSourceTypes(descriptors: [descriptor]).resolve(
             mimeType: "application/json",
             filenameExtension: "example",
             boundedBytes: bytes,
-            bytesAreComplete: false)
+            bytesAreComplete: true)
         #expect(result == .noMatch)
     }
 

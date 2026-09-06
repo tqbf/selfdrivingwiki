@@ -4361,8 +4361,9 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
     public var registeredExtractionInputs: RegisteredExtractionInputs = .none
 
     /// Source-format claims from the active, validated renderer catalog.
-    /// Kept separate from extraction inputs and intentionally unused by ingest
-    /// and MIME repair policy.
+    /// This is the single ingest promotion seam (see ``rendererCanonicalMIME``)
+    /// and a repair-candidate input; it stays separate from extractor
+    /// registrations because renderer claims imply no extraction path.
     public var registeredRendererSourceTypes: RegisteredRendererSourceTypes = .none
 
     /// Applies registration-driven promotion to one detection result's
@@ -4409,14 +4410,10 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             artifactKind: .source,
             allowInconclusiveMIMEExtensionFallback: allowExtensionFallback)
         guard case let .resolved(claim) = resolution else { return nil }
-        // A caller-declared MIME that no claim declares is a conflict: the
-        // extension must not overwrite it.
-        if let declaredMIME,
-           declaredMIME != MimeType.octetStream,
-           let typed = RendererMIMEType(rawValue: declaredMIME),
-           claim.descriptor.sourceType?.allMIMETypes.contains(typed) == false {
-            return nil
-        }
+        // A declared non-inconclusive MIME that is not a claim MIME never
+        // reaches here as a fallback: `allowExtensionFallback` above keeps the
+        // strong tier as the only route, and the strong tier requires the
+        // MIME to be a declared claim value.
         return claim.canonicalMIMEType.rawValue
     }
 

@@ -126,9 +126,10 @@ struct SourceRendererPresentationPlanner: Sendable {
         return source.ext.lowercased() == "docx"
     }
 
-    /// Returns strict UTF-8 source text only when the canonical bounded detector
-    /// agrees that the complete byte body is textual. Binary signatures and NUL
-    /// bytes therefore fail closed even when metadata claims a text type.
+    /// Returns strict UTF-8 source text only when the bytes are safe to
+    /// present: no NUL bytes, no binary signature, and either an active
+    /// package claim resolves the source (canonical text MIME) or the bounded
+    /// detector reports textual evidence. Malformed UTF-8 fails closed.
     nonisolated static func sourceText(
         for source: SourceSummary,
         bytes: Data?,
