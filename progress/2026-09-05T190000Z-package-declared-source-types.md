@@ -146,6 +146,17 @@ catalog property mirrors the pre-existing `registeredExtractionInputs`
 pattern; the invariant is documented at the protocol and a lock-backed
 variant is a follow-up); L9/L10 recorded as intentional behavior.
 
+A second Claude review pass over the post-fix state returned no
+CRITICAL/HIGH findings and one MEDIUM, adopted: claim coalescing now
+compares only canonical MIME and display name (presentation identity),
+not the full matcher arrays — two claims that present identically but
+carry different extra routes or artifact predicates coalesce instead of
+failing closed, matching the design contract. Covered by
+`sameCanonicalAndLabelCoalesceAcrossDifferentMatcherSets` in both
+byte-aware and metadata-only resolution; the fixture helper now
+propagates `displayName`, which also restored the intended
+different-label ambiguity case.
+
 ## Notes
 
 - The old `.mmd` → `text/mermaid` ingest fallback is intentionally

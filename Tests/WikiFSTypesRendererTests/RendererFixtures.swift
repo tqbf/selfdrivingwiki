@@ -38,6 +38,7 @@ enum RendererFixtures {
         packageID: RendererPackageID = packageID,
         version: RendererPackageVersion = version,
         registrationID: RendererRegistrationID = registrationID,
+        displayName: String = "Example Web Viewer",
         matchers: [RendererMatcher] = [.artifactKind(.source)],
         sourceType: RendererSourceTypeDeclaration? = nil,
         embeddingRoles: Set<RendererEmbeddingRole> = [.disclosureRow],
@@ -51,7 +52,7 @@ enum RendererFixtures {
         guard let entry = assets.first else { throw RendererValidationError.invalidPresentation }
         return try RendererDescriptor(
             reference: .init(packageID: packageID, version: version, registrationID: registrationID),
-            displayName: "Example Web Viewer",
+            displayName: displayName,
             implementation: .webPackage(.init(path: entry.path)),
             matchers: matchers,
             sourceType: sourceType,

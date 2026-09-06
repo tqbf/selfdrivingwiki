@@ -185,10 +185,14 @@ public struct RegisteredRendererSourceTypes: Hashable, Sendable {
         guard let first = candidates.min(by: {
             $0.descriptor.stableTieBreakKey < $1.descriptor.stableTieBreakKey
         }) else { return .noMatch }
+        // Ambiguity is about presentation identity: claims that agree on the
+        // canonical MIME and display name present identically regardless of
+        // differing extra routes or artifact predicates (each candidate
+        // already passed its own full predicate to get here). Anything else
+        // fails closed.
         let equivalent = candidates.allSatisfy {
             $0.canonicalMIMEType == first.canonicalMIMEType
                 && $0.displayName == first.displayName
-                && $0.descriptor.matchers == first.descriptor.matchers
         }
         guard equivalent else { return .ambiguous }
         return .resolved(Resolution(claim: first))

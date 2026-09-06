@@ -37,6 +37,32 @@ struct RegisteredRendererSourceTypesTests {
         #expect(catalog.resolveWithoutBytes(mimeType: mime, fileExtension: nil) == .ambiguous)
     }
 
+    @Test func sameCanonicalAndLabelCoalesceAcrossDifferentMatcherSets() throws {
+        // Two claims agree on canonical MIME and display name but differ in
+        // additional routes and artifact predicates. Presentation identity is
+        // what ambiguity protects, so they coalesce in both byte-aware and
+        // metadata-only resolution.
+        let plain = try makeDescriptor(registration: "plain", displayName: "Whiteboard")
+        let variant = try makeDescriptor(
+            registration: "variant",
+            displayName: "Whiteboard",
+            aliases: ["application/x-variant"])
+        let catalog = RegisteredRendererSourceTypes(descriptors: [plain, variant])
+        let mime = try RendererMIMEType(validating: "application/json")
+
+        let byteAware = catalog.resolve(
+            mimeType: "application/json",
+            filenameExtension: "example",
+            boundedBytes: Data(#"{"anything": true}"#.utf8),
+            bytesAreComplete: true)
+        let resolution = try #require(byteAware.resolution)
+        #expect(resolution.canonicalMIMEType == mime)
+        #expect(resolution.displayName == "Whiteboard")
+
+        let metadataOnly = catalog.resolveWithoutBytes(mimeType: mime, fileExtension: nil)
+        #expect(metadataOnly.resolution?.displayName == "Whiteboard")
+    }
+
     @Test func completeArtifactBetweenLimitsMatches() throws {
         let padding = String(repeating: " ", count: RendererMatchingLimits.maximumSniffByteCount + 32)
         let bytes = Data("{\"type\":\"excalidraw\",\"version\":2,\"elements\":[]\(padding)}".utf8)
@@ -107,6 +133,7 @@ struct RegisteredRendererSourceTypesTests {
             + fileExtensions.map(RendererMatcher.extensionFallback))
         return try RendererFixtures.webDescriptor(
             registrationID: .init(validating: registration),
+            displayName: displayName,
             matchers: routes,
             sourceType: .init(
                 canonicalMIMEType: canonicalMIME,
