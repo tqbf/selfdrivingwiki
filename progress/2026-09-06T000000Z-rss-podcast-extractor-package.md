@@ -78,13 +78,12 @@ daemon.
 
 ### Tagged resolution and persistence
 
-- `ExtractionResolution` is now a tagged enum: `.bytes(...)` for file-backed
-  conversion and `.transcript(...)` for URL-backed work. The transcript
-  payload carries the fetch, filename, typed result mode
-  (`.builtInTool(tool)` or `.installedPackage(producer)`), the
-  required-initial-source-version policy, and a non-PDF capacity identity.
-  `pdfData`, `ExtractionBackend`, and nullable technique fields are gone
-  from the transcript path; the worker switches exhaustively.
+- `ExtractionResolution` is a tagged enum. The `.bytes(...)` case handles
+  file-backed conversion. The `.transcript(...)` case handles URL-backed
+  work. Its result mode is `.builtInTool(tool)` or
+  `.installedPackage(producer)`. The installed-package case requires the
+  initial source-version link. The payload does not store a second policy
+  flag. The worker switches exhaustively.
 - `QueueExtractionProvider` now has typed per-case writes
   (`persistBytesExtraction`, `persistTranscriptExtraction`); the
   `InstalledPackageExtractionPersisting` side protocol is deleted.
