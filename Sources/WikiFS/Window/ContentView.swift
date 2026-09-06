@@ -132,6 +132,9 @@ struct ContentView: View {
         // snapshot, and a change invalidates the memoized context.
         .onChange(of: installedRendererHost.inputs.availableDescriptors, initial: true) { _, descriptors in
             store.rendererAvailableDescriptors = descriptors
+            // The validated catalog follows the same host snapshot so ingest,
+            // repair, presentation, and transclusion all share one projection.
+            store.registeredRendererSourceTypes = installedRendererHost.inputs.registeredSourceTypes
         }
         // "Show In List" reveal (issue #183): a detail-view button requested the
         // sidebar reveal a page/source. Un-collapse the sidebar so the target list

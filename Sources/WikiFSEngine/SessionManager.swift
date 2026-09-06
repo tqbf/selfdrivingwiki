@@ -399,6 +399,17 @@ public final class SessionManager {
         }
     }
 
+    /// Applies the current validated renderer source-type catalog to every
+    /// live wiki model. Closed wikis receive the current catalog when their
+    /// child session starts.
+    public func refreshRegisteredRendererSourceTypesForLiveSessions(
+        _ sourceTypes: RegisteredRendererSourceTypes
+    ) {
+        for session in sessions.values {
+            session.store.registeredRendererSourceTypes = sourceTypes
+        }
+    }
+
     /// The frontmost session, if any. Resolved from ``frontmostWikiID`` —
     /// `VacuumCommands` uses this to target the correct wiki for menu-bar
     /// Vacuum/Lint/Activity Log actions.

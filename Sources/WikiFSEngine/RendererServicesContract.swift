@@ -8,6 +8,7 @@ import WikiFSTypes
 public struct RendererPreparation: Sendable {
     public let machineIndex: RendererMachineIndex
     public let availableDescriptors: [RendererDescriptor]
+    public let registeredSourceTypes: RegisteredRendererSourceTypes
     public let failureRecorder: RendererSessionFailureRecording
 
     private let providers: [RendererPackageReservation: any RendererPackageResourceProviding]
@@ -15,11 +16,14 @@ public struct RendererPreparation: Sendable {
     public init(
         machineIndex: RendererMachineIndex,
         availableDescriptors: [RendererDescriptor],
+        registeredSourceTypes: RegisteredRendererSourceTypes? = nil,
         providers: [RendererPackageReservation: any RendererPackageResourceProviding],
         failureRecorder: @escaping RendererSessionFailureRecording
     ) {
         self.machineIndex = machineIndex
         self.availableDescriptors = availableDescriptors
+        self.registeredSourceTypes = registeredSourceTypes ?? RegisteredRendererSourceTypes(
+            descriptors: availableDescriptors)
         self.providers = providers
         self.failureRecorder = failureRecorder
     }

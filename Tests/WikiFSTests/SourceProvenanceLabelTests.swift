@@ -13,9 +13,53 @@ struct SourceProvenanceLabelTests {
 
     // MARK: - contentTypeLabel
 
+    /// A fictional stand-in for the reviewed Mermaid claim: package-owned
+    /// source metadata, not host policy.
+    private let mermaidLikeCatalog: RegisteredRendererSourceTypes = {
+        let canonical = try! RendererMIMEType(validating: "text/vnd.example-diagram")
+        let aliases = try! Set(["text/mermaid", "text/x-mermaid"].map(RendererMIMEType.init(validating:)))
+        let extensions = try! Set(["mmd", "mermaid"].map(RendererFileExtension.init(validating:)))
+        let routes = [RendererMatcher.normalizedMIME(canonical)]
+            + aliases.map(RendererMatcher.normalizedMIME)
+            + extensions.map(RendererMatcher.extensionFallback)
+        let asset = RendererAsset(
+            path: try! .init(validating: "index.html"),
+            digest: try! RendererSHA256Digest(bytes: Array(repeating: 0, count: RendererSHA256Digest.byteCount)))
+        let descriptor = try! RendererDescriptor(
+            reference: .init(
+                packageID: try! .init(validating: "org.example.diagram"),
+                version: try! .init(validating: "1.0.0"),
+                registrationID: try! .init(validating: "diagram")),
+            displayName: "Mermaid",
+            implementation: .webPackage(.init(path: asset.path)),
+            matchers: routes,
+            sourceType: .init(
+                canonicalMIMEType: canonical,
+                mimeAliases: aliases,
+                filenameExtensions: extensions),
+            presentations: [.web],
+            supportedEmbeddingRoles: [.disclosureRow],
+            hasExplicitEmbeddingRoles: true,
+            approvedAssets: [asset],
+            capabilities: [.inputRead],
+            sizeLimits: try! .init(maximumInputByteCount: 1_024, maximumDecodedByteCount: 2_048),
+            linkPolicy: .none,
+            accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
+            compatibility: try! .init(minimumProtocolRevision: 1, maximumProtocolRevision: 1),
+            priority: 0)
+        return RegisteredRendererSourceTypes(descriptors: [descriptor])
+    }()
+
     @Test func contentTypeLabelByExtension() {
-        #expect(SourceProvenanceLabel.contentTypeLabel(ext: "mmd", mimeType: nil) == "Mermaid")
-        #expect(SourceProvenanceLabel.contentTypeLabel(ext: "mermaid", mimeType: nil) == "Mermaid")
+        // Package formats label from the active catalog's display name.
+        #expect(SourceProvenanceLabel.contentTypeLabel(
+            ext: "mmd", mimeType: nil,
+            rendererSourceTypes: mermaidLikeCatalog) == "Mermaid")
+        #expect(SourceProvenanceLabel.contentTypeLabel(
+            ext: "mermaid", mimeType: nil,
+            rendererSourceTypes: mermaidLikeCatalog) == "Mermaid")
+        // Without a claim the format is unrecognized (no host-side policy).
+        #expect(SourceProvenanceLabel.contentTypeLabel(ext: "mmd", mimeType: nil) == nil)
         #expect(SourceProvenanceLabel.contentTypeLabel(ext: "pdf", mimeType: nil) == "PDF")
         #expect(SourceProvenanceLabel.contentTypeLabel(ext: "md", mimeType: nil) == "Markdown")
         #expect(SourceProvenanceLabel.contentTypeLabel(ext: "markdown", mimeType: nil) == "Markdown")
@@ -24,18 +68,26 @@ struct SourceProvenanceLabelTests {
     @Test func contentTypeLabelIsCaseInsensitive() {
         // SourceSummary.ext is documented as lowercased, but the helper should
         // not silently misclassify if a caller forgets.
-        #expect(SourceProvenanceLabel.contentTypeLabel(ext: "MMD", mimeType: nil) == "Mermaid")
+        #expect(SourceProvenanceLabel.contentTypeLabel(
+            ext: "MMD", mimeType: nil,
+            rendererSourceTypes: mermaidLikeCatalog) == "Mermaid")
         #expect(SourceProvenanceLabel.contentTypeLabel(ext: "PDF", mimeType: nil) == "PDF")
         #expect(SourceProvenanceLabel.contentTypeLabel(ext: "MD", mimeType: nil) == "Markdown")
     }
 
     @Test func contentTypeLabelFallsBackToMimeWhenExtUnrecognized() {
-        // A `.txt` extension is unrecognized, but a text/mermaid MIME still
-        // classifies as Mermaid (covers legacy rows whose ext was lost).
-        #expect(SourceProvenanceLabel.contentTypeLabel(ext: "txt", mimeType: "text/mermaid") == "Mermaid")
+        // A `.txt` extension is unrecognized; the catalog's declared MIME
+        // aliases still label the row when the package is active.
+        #expect(SourceProvenanceLabel.contentTypeLabel(
+            ext: "txt", mimeType: "text/mermaid",
+            rendererSourceTypes: mermaidLikeCatalog) == "Mermaid")
+        #expect(SourceProvenanceLabel.contentTypeLabel(
+            ext: "bin", mimeType: "text/x-mermaid",
+            rendererSourceTypes: mermaidLikeCatalog) == "Mermaid")
+        // Without the claim, a legacy Mermaid MIME is unrecognized.
+        #expect(SourceProvenanceLabel.contentTypeLabel(ext: "txt", mimeType: "text/mermaid") == nil)
         #expect(SourceProvenanceLabel.contentTypeLabel(ext: "", mimeType: "application/pdf") == "PDF")
         #expect(SourceProvenanceLabel.contentTypeLabel(ext: nil, mimeType: "text/markdown") == "Markdown")
-        #expect(SourceProvenanceLabel.contentTypeLabel(ext: "bin", mimeType: "text/x-mermaid") == "Mermaid")
     }
 
     @Test func contentTypeLabelReturnsNilForUnrecognized() {
@@ -56,7 +108,8 @@ struct SourceProvenanceLabelTests {
         // The issue #644 design table — File branch.
         #expect(SourceProvenanceLabel.combine(
             provider: "File",
-            ext: "mmd", mimeType: "text/mermaid") == "File / Mermaid")
+            ext: "mmd", mimeType: "text/mermaid",
+            rendererSourceTypes: mermaidLikeCatalog) == "File / Mermaid")
         #expect(SourceProvenanceLabel.combine(
             provider: "File",
             ext: "pdf", mimeType: "application/pdf") == "File / PDF")
@@ -75,7 +128,8 @@ struct SourceProvenanceLabelTests {
             ext: "md", mimeType: "text/markdown") == "Zotero / Markdown")
         #expect(SourceProvenanceLabel.combine(
             provider: "Zotero",
-            ext: "mmd", mimeType: "text/mermaid") == "Zotero / Mermaid")
+            ext: "mmd", mimeType: "text/mermaid",
+            rendererSourceTypes: mermaidLikeCatalog) == "Zotero / Mermaid")
     }
 
     @Test func combineFolderWithContentType() {

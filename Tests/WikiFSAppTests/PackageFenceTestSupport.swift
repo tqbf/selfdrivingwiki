@@ -7,7 +7,7 @@ import WikiFSTypes
 /// and stand-in descriptors mirroring the shipped manifests.
 enum PackageFenceTestSupport {
     static let installedPackageID = RendererPackageID(rawValue: "org.selfdrivingwiki.excalidraw-readonly")!
-    static let installedPackageVersion = RendererPackageVersion(rawValue: "1.0.5")!
+    static let installedPackageVersion = RendererPackageVersion(rawValue: "1.1.0")!
     static let installedRegistrationID = RendererRegistrationID(rawValue: "excalidraw")!
     static let installedDisplayName = "Excalidraw"
 

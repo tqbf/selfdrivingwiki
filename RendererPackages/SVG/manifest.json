@@ -1,12 +1,12 @@
 {
-  "revision": 2,
+  "revision": 6,
   "packageID": "org.selfdrivingwiki.svg-readonly",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "descriptors": [
     {
       "reference": {
         "packageID": "org.selfdrivingwiki.svg-readonly",
-        "version": "1.0.1",
+        "version": "1.1.0",
         "registrationID": "svg"
       },
       "displayName": "SVG",
@@ -29,6 +29,13 @@
           }
         }
       ],
+      "sourceType": {
+        "canonicalMIMEType": "image/svg+xml",
+        "mimeAliases": [],
+        "filenameExtensions": [
+          "svg"
+        ]
+      },
       "presentations": [
         "web"
       ],

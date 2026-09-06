@@ -28,6 +28,9 @@ public struct CLIStoreProfile: Sendable {
 
     private let boot: Boot
 
+    public var resolveRendererCatalog: @Sendable () async -> RegisteredRendererSourceTypes =
+        { await RendererCatalogResolution.productionSourceTypes() }
+
     public init() {
         self.boot = CLIStoreProfile.productionBoot
     }
@@ -47,6 +50,9 @@ public struct CLIStoreProfile: Sendable {
             guard let store = service as? GRDBWikiStore else {
                 throw CLIStoreProfileError.incompatibleStore
             }
+            // Headless CLI profile: project source-type claims from the
+            // authoritative machine index (WebKit-free, best-effort).
+            store.registeredRendererSourceTypes = await resolveRendererCatalog()
             operationResult = .success(try await operation(store))
         } catch {
             operationResult = .failure(error)
@@ -573,6 +579,11 @@ public enum CLIStoreProfileError: Error {
 }
 
 public enum CLIStoreProfile {
+    /// The catalog resolver for headless store opens. Injectable so tests can
+    /// prove the wiring without machine package state.
+    public static var resolveRendererCatalog: @Sendable () async -> RegisteredRendererSourceTypes =
+        { await RendererCatalogResolution.productionSourceTypes() }
+
     public static func withStore<Result>(
         databaseURL: URL,
         wikiID: WikiID,
@@ -583,6 +594,10 @@ public enum CLIStoreProfile {
         guard let store = service as? GRDBWikiStore else {
             throw CLIStoreProfileError.incompatibleStore
         }
+        // Headless profiles project source-type claims straight from the
+        // authoritative machine index (WebKit-free). A failure keeps the
+        // empty catalog and never blocks the command.
+        store.registeredRendererSourceTypes = await resolveRendererCatalog()
         return try await operation(store)
     }
 }

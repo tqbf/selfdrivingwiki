@@ -89,43 +89,38 @@ struct SourcesTests {
         #expect(source.mimeType?.contains("markdown") == true)
     }
 
-    // MARK: - .mmd Mermaid source MIME resolution (#620)
+    // MARK: - .mmd source MIME resolution (package-owned policy)
 
-    /// A `.mmd` file has no registered UTType (UTType returns a dynamic
-    /// `dyn.…` tag, `preferredMIMEType == nil`), and its text has no magic
-    /// bytes — so before #620 the source row was written with `mime_type NULL`,
-    /// which broke `SourceDetailView.isMarkdownNative` and left every Mermaid
-    /// tab empty. The fix #1 fallback `MimeType.mime(forExtension:)` must
-    /// catch it.
-    @Test func mmdExtensionResolvesToTextMermaid() throws {
+    /// Mermaid MIME knowledge moved into the reviewed package manifest.
+    /// Without an active claim, a `.mmd` source falls back to the generic
+    /// UTF-8 text classification — readable and safe, with no hidden
+    /// Mermaid policy. An active package claim normalizes to the canonical
+    /// package MIME instead (covered by the catalog integration tests).
+    @Test func mmdExtensionWithoutClaimResolvesToGenericText() throws {
         let store = try tempStore()
         let diagram = Data("flowchart TD\n    A --> B\n    B --> C\n".utf8)
         let source = try store.addSource(
             filename: "architecture.mmd", data: diagram, mimeType: nil)
         #expect(source.ext == "mmd")
-        #expect(source.mimeType == MimeType.mermaid)
+        #expect(source.mimeType == "text/plain")
         // The gate `SourceDetailView.isMarkdownNative` reads — text/* prefix.
         #expect(MimeType.isText(source.mimeType) == true)
-        #expect(MimeType.isMermaid(source.mimeType) == true)
     }
 
-    @Test func mmdExtensionUpperCasedResolvesToTextMermaid() throws {
-        // The ext is lowercased by `addSource` before the fallback runs; the
-        // `.MMD` filename must still resolve.
+    @Test func mmdExtensionUpperCasedAlsoFallsBackToGenericText() throws {
         let store = try tempStore()
         let source = try store.addSource(
             filename: "Flow.MMD", data: Data("graph TD\n  X --> Y\n".utf8))
         #expect(source.ext == "mmd")
-        #expect(source.mimeType == MimeType.mermaid)
+        #expect(source.mimeType == "text/plain")
     }
 
-    @Test func mermaidExtensionAlsoResolvesToTextMermaid() throws {
-        // The less common `.mermaid` extension is recognized too.
+    @Test func mermaidExtensionWithoutClaimAlsoFallsBackToGenericText() throws {
         let store = try tempStore()
         let source = try store.addSource(
             filename: "seq.mermaid", data: Data("sequenceDiagram\n  A->>B: hi\n".utf8))
         #expect(source.ext == "mermaid")
-        #expect(source.mimeType == MimeType.mermaid)
+        #expect(source.mimeType == "text/plain")
     }
 
     @Test func canvasExtensionResolvesToJSONMime() throws {
@@ -146,32 +141,30 @@ struct SourcesTests {
     }
 
     @Test func mmdWithExplicitTextMermaidMimeRoundTrips() throws {
-        // A caller that passes `text/mermaid` explicitly (e.g. a future
-        // materializer that recognizes `.mmd`) must round-trip unchanged.
+        // A caller that passes `text/mermaid` explicitly must round-trip
+        // unchanged while no package claim is active.
         let store = try tempStore()
         let source = try store.addSource(
             filename: "explicit.mmd", data: Data("graph LR\n  A --> B\n".utf8),
-            mimeType: MimeType.mermaid)
-        #expect(source.mimeType == MimeType.mermaid)
+            mimeType: "text/mermaid")
+        #expect(source.mimeType == "text/mermaid")
     }
 
-    /// The gap that shipped #620: PR #601's pure-detector tests passed but no
-    /// test wired the *content path* — a nil-MIME `.mmd` source ingesting
-    /// with a resolvable MIME and readable bytes. This test closes that gap.
-    /// Post renderer-package refactor: the ingestion facts (MIME, bytes,
-    /// text presentability) are unchanged; the presentation is now the
-    /// format-neutral code-block wrap instead of a host-side diagram fence.
+    /// The content-path contract: a nil-MIME `.mmd` source ingesting with a
+    /// resolvable MIME and readable bytes. Post renderer-package refactor the
+    /// stored MIME is the generic text fallback when no claim is active; the
+    /// presentation stays the format-neutral code-block wrap.
     @Test func nilMimeMmdSourceRoundTripsThroughViewContentPath() throws {
         let store = try tempStore()
         let rawDiagram = "flowchart TD\n    A --> B\n    B --> C\n"
         let summary = try store.addSource(
             filename: "design.mmd", data: Data(rawDiagram.utf8), mimeType: nil)
 
-        // 1. Fix #1 — stored mime is now `text/mermaid` (was NULL pre-fix),
-        //    so `SourceDetailView.isMarkdownNative` (`MimeType.isText`) is
+        // 1. The stored mime is the generic UTF-8 text fallback, so
+        //    `SourceDetailView.isMarkdownNative` (`MimeType.isText`) is
         //    true and the `if isMarkdownNative` branch in
         //    `currentMarkdownContent` runs.
-        #expect(summary.mimeType == MimeType.mermaid)
+        #expect(summary.mimeType == "text/plain")
         #expect(MimeType.isText(summary.mimeType) == true)
 
         // 2. The bytes the view reads via `store.sourceBytes(id:)` /
@@ -214,7 +207,7 @@ struct SourcesTests {
         // The `.md` extension resolves via UTType, NOT the .mmd map.
         #expect(source.mimeType?.hasPrefix("text/") == true)
         #expect(source.mimeType?.contains("markdown") == true)
-        #expect(source.mimeType != MimeType.mermaid)
+        #expect(source.mimeType != "text/mermaid")
 
         // A native Markdown document keeps its rendered-document presentation
         // (no code-block wrap), so headings and the outline survive.

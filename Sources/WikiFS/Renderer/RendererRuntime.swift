@@ -245,6 +245,7 @@ actor RendererRuntime: RendererServices {
         return RendererPreparation(
             machineIndex: index,
             availableDescriptors: descriptors,
+            registeredSourceTypes: RegisteredRendererSourceTypes(descriptors: descriptors),
             providers: providers,
             failureRecorder: machineStore.sessionFailureRecorder())
     }

@@ -10,7 +10,7 @@ import WikiFSTypes
 /// suite; these run in every `swift test`.
 @Suite("Mermaid installed renderer package", .serialized, .timeLimit(.minutes(1)))
 struct MermaidRendererPackageTests {
-    @Test("reviewed package validates and declares the revision-3 validation contract")
+    @Test("reviewed package validates and declares the revision-6 source-type contract")
     func reviewedPackageValidatesAndDeclaresValidationContract() throws {
         let fixture = try PackageFixture()
         defer { fixture.remove() }
@@ -18,12 +18,12 @@ struct MermaidRendererPackageTests {
         let package = try fixture.validator.validate(directory: fixture.packageDirectory)
         let descriptor = try #require(package.manifest.descriptors.only)
 
-        #expect(package.manifest.revision == RendererManifestRevision.fenceValidation)
+        #expect(package.manifest.revision == RendererManifestRevision.sourceTypes)
         #expect(package.packageHash.hex.isEmpty == false)
 
         let claim = try #require(descriptor.fenceClaims.only)
         let expectedAlias = try RendererFenceAlias(validating: "mermaid")
-        let expectedMIME = try RendererMIMEType(validating: "text/mermaid")
+        let expectedMIME = try RendererMIMEType(validating: "text/vnd.mermaid")
         #expect(claim.alias == expectedAlias)
         #expect(claim.inlineMIMEType == expectedMIME)
         let validation = try #require(claim.validation)
@@ -34,7 +34,40 @@ struct MermaidRendererPackageTests {
         #expect(descriptor.hasFenceValidation)
     }
 
-    @Test("descriptor matches text/mermaid sources and the .mmd extension")
+    @Test("source-type declaration matches the reviewed canonical and alias surface")
+    func sourceTypeDeclarationMatchesManifest() throws {
+        let fixture = try PackageFixture()
+        defer { fixture.remove() }
+
+        let package = try fixture.validator.validate(directory: fixture.packageDirectory)
+        let descriptor = try #require(package.manifest.descriptors.only)
+        let sourceType = try #require(descriptor.sourceType)
+        let canonical = try RendererMIMEType(validating: "text/vnd.mermaid")
+        let aliases: Set<RendererMIMEType> = [
+            try .init(validating: "text/mermaid"),
+            try .init(validating: "text/x-mermaid"),
+            try .init(validating: "application/vnd.chipnuts.karaoke-mmd"),
+        ]
+        let extensions: Set<RendererFileExtension> = [
+            try .init(validating: "mmd"),
+            try .init(validating: "mermaid"),
+        ]
+
+        #expect(sourceType.canonicalMIMEType == canonical)
+        #expect(sourceType.mimeAliases == aliases)
+        #expect(sourceType.filenameExtensions == extensions)
+
+        let catalog = RegisteredRendererSourceTypes(descriptors: [descriptor])
+        let karaoke = catalog.resolve(
+            mimeType: "application/vnd.chipnuts.karaoke-mmd",
+            filenameExtension: "mmd",
+            boundedBytes: Data("graph TD\n A-->B".utf8),
+            bytesAreComplete: true)
+        #expect(karaoke.resolution?.canonicalMIMEType.rawValue == "text/vnd.mermaid")
+        #expect(karaoke.resolution?.displayName == "Mermaid")
+    }
+
+    @Test("descriptor matches canonical, alias, and extension-routed Mermaid sources")
     func descriptorMatchesMermaidSources() throws {
         let fixture = try PackageFixture()
         defer { fixture.remove() }
@@ -44,8 +77,13 @@ struct MermaidRendererPackageTests {
         let snapshot = try RendererRegistrySnapshot(
             builtInDescriptors: [],
             availableInstalledDescriptors: [descriptor])
-        let mimeInput = try RendererMatchInput(
-            mimeType: try .init(validating: "text/mermaid"),
+        let canonicalInput = try RendererMatchInput(
+            mimeType: try .init(validating: "text/vnd.mermaid"),
+            fileExtension: try .init(validating: "mmd"),
+            sniffedBytes: Data("graph TD\n A-->B".utf8),
+            artifactKind: .source)
+        let karaokeInput = try RendererMatchInput(
+            mimeType: try .init(validating: "application/vnd.chipnuts.karaoke-mmd"),
             fileExtension: try .init(validating: "mmd"),
             sniffedBytes: Data("graph TD\n A-->B".utf8),
             artifactKind: .source)
@@ -60,7 +98,8 @@ struct MermaidRendererPackageTests {
             sniffedBytes: Data("hello".utf8),
             artifactKind: .source)
 
-        #expect(snapshot.matching(mimeInput).map(\.reference) == [descriptor.reference])
+        #expect(snapshot.matching(canonicalInput).map(\.reference) == [descriptor.reference])
+        #expect(snapshot.matching(karaokeInput).map(\.reference) == [descriptor.reference])
         #expect(snapshot.matching(extensionInput).map(\.reference) == [descriptor.reference])
         #expect(snapshot.matching(otherInput).isEmpty)
     }

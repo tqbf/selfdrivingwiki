@@ -33,6 +33,8 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
     public let displayName: String
     public let implementation: RendererImplementation
     public let matchers: [RendererMatcher]
+    public let sourceType: RendererSourceTypeDeclaration?
+    public var hasSourceTypeDeclaration: Bool { sourceType != nil }
     public let presentations: Set<RendererPresentation>
     public let supportedEmbeddingRoles: Set<RendererEmbeddingRole>
     /// True only when the role set was explicitly present at the decode or
@@ -68,6 +70,7 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
         displayName: String,
         implementation: RendererImplementation,
         matchers: [RendererMatcher],
+        sourceType: RendererSourceTypeDeclaration? = nil,
         presentations: Set<RendererPresentation>,
         supportedEmbeddingRoles: Set<RendererEmbeddingRole> = [.disclosureRow],
         hasExplicitEmbeddingRoles: Bool = false,
@@ -124,6 +127,23 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
         if linkPolicy == .none && capabilities.contains(.externalLink) {
             throw RendererValidationError.forbiddenCapability(.externalLink)
         }
+        if let sourceType {
+            let declaredMIMEs = sourceType.allMIMETypes
+            let routedMIMEs = Set(matchers.compactMap { matcher -> RendererMIMEType? in
+                guard case let .normalizedMIME(value) = matcher else { return nil }
+                return value
+            })
+            for value in declaredMIMEs where routedMIMEs.contains(value) == false {
+                throw RendererValidationError.sourceTypeMIMEMatcherMissing(value)
+            }
+            let routedExtensions = Set(matchers.compactMap { matcher -> RendererFileExtension? in
+                guard case let .extensionFallback(value) = matcher else { return nil }
+                return value
+            })
+            for value in sourceType.filenameExtensions where routedExtensions.contains(value) == false {
+                throw RendererValidationError.sourceTypeExtensionMatcherMissing(value)
+            }
+        }
         let assets = approvedAssets.sorted()
         guard Set(assets.map(\.path)).count == assets.count else {
             guard let duplicate = RendererDescriptor.firstDuplicatePath(in: assets) else {
@@ -164,6 +184,7 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
         self.displayName = displayName
         self.implementation = implementation
         self.matchers = matchers
+        self.sourceType = sourceType
         self.presentations = presentations
         self.supportedEmbeddingRoles = supportedEmbeddingRoles
         self.hasExplicitEmbeddingRoles = hasExplicitEmbeddingRoles
@@ -184,6 +205,7 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
         case displayName
         case implementation
         case matchers
+        case sourceType
         case presentations
         case supportedEmbeddingRoles
         case fenceClaims
@@ -204,6 +226,9 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
         try container.encode(displayName, forKey: .displayName)
         try container.encode(implementation, forKey: .implementation)
         try container.encode(matchers, forKey: .matchers)
+        if let sourceType {
+            try container.encode(sourceType, forKey: .sourceType)
+        }
         try container.encode(presentations, forKey: .presentations)
         if hasExplicitEmbeddingRoles {
             try container.encode(supportedEmbeddingRoles, forKey: .supportedEmbeddingRoles)
@@ -238,6 +263,7 @@ public struct RendererDescriptor: Codable, Hashable, Sendable {
             displayName: container.decode(String.self, forKey: .displayName),
             implementation: container.decode(RendererImplementation.self, forKey: .implementation),
             matchers: container.decode([RendererMatcher].self, forKey: .matchers),
+            sourceType: try container.decodeIfPresent(RendererSourceTypeDeclaration.self, forKey: .sourceType),
             presentations: container.decode(Set<RendererPresentation>.self, forKey: .presentations),
             supportedEmbeddingRoles: explicitRoles ?? [.disclosureRow],
             hasExplicitEmbeddingRoles: explicitRoles != nil,

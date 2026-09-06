@@ -158,13 +158,13 @@ struct MermaidRendererPackageHostedValidationTests {
         let package = try fixture.validator.validate(directory: fixture.packageDirectory)
         let descriptor = try #require(package.manifest.descriptors.only)
 
-        // The fence claim is manifest data: alias, MIME, and the revision-3
-        // validation contract all arrive from the package. No host Swift
+        // The fence claim is manifest data: alias, MIME, and the validation
+        // contract all arrive from the package. No host Swift
         // knows the mermaid format.
         let claim = try #require(descriptor.fenceClaims.only)
         let claimedAlias = try RendererFenceAlias(validating: "mermaid")
         #expect(claim.alias == claimedAlias)
-        #expect(claim.inlineMIMEType.rawValue == "text/mermaid")
+        #expect(claim.inlineMIMEType.rawValue == "text/vnd.mermaid")
         #expect(claim.validation != nil)
 
         // Reader markup: the disclosure-row card resolves through the claim
@@ -189,7 +189,7 @@ struct MermaidRendererPackageHostedValidationTests {
             rendererActivationAdmission: admission)
         let html = MarkdownHTMLRenderer.render("```mermaid\ngraph TD\nA-->B\n```", options: options)
         #expect(html.contains("sdw-renderer-card"))
-        #expect(html.contains("data-renderer-reference=\"org.selfdrivingwiki.mermaid-readonly/1.0.0/mermaid\""))
+        #expect(html.contains("data-renderer-reference=\"org.selfdrivingwiki.mermaid-readonly/1.1.0/mermaid\""))
         #expect(html.contains("renderer-action://open"))
         #expect(html.contains("Open in Window"))
 
@@ -284,7 +284,7 @@ struct MermaidRendererPackageHostedValidationTests {
         // claimant, validation skips, and source data survives.
         let removed = await host.removeRenderer(
             packageID: try .init(validating: "org.selfdrivingwiki.mermaid-readonly"),
-            version: try .init(validating: "1.0.0"))
+            version: try .init(validating: "1.1.0"))
         #expect(removed == true)
         let indexAfterRemoval = try await machineStore.read()
         #expect(indexAfterRemoval.availableDescriptorProjection.contains {
@@ -311,7 +311,7 @@ struct MermaidRendererPackageHostedValidationTests {
         let diagram = Data("graph TD\n A-->B".utf8)
         let summary = try store.addSource(filename: "plain.mmd", data: diagram)
 
-        #expect(summary.mimeType == MimeType.mermaid)
+        #expect(summary.mimeType == "text/plain")
         #expect(MimeType.isSourceTextPresentable(summary.mimeType))
         let bytes = try store.sourceContent(id: summary.id)
         let content = try #require(String(data: bytes, encoding: .utf8))

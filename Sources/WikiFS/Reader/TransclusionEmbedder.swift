@@ -68,6 +68,7 @@ enum TransclusionEmbedder {
         target: TargetID,
         context: WikiRenderContext,
         options: MarkdownRenderOptions,
+        rendererSourceTypes: RegisteredRendererSourceTypes = .none,
         policy: RenderPolicy = .nestedStatic,
         ancestors: Set<TargetID> = []
     ) throws -> Result {
@@ -79,7 +80,10 @@ enum TransclusionEmbedder {
             raw = PageMarkdownFormat.stripped(body: page.bodyMarkdown, title: page.title)
             contentKind = .document
         case .source(let id):
-            raw = try sourceEmbedBody(access: access, id: id)
+            raw = try sourceEmbedBody(
+                access: access,
+                id: id,
+                rendererSourceTypes: rendererSourceTypes)
             contentKind = .source
         }
         guard let raw, !raw.isEmpty else { return .empty }
@@ -107,12 +111,15 @@ enum TransclusionEmbedder {
     /// Mirrors `WikiStoreModel.processedMarkdownHead(for:)`'s native-text
     /// fallback but **never writes** (no v1 seeding from verbatim bytes — that
     /// is a write and belongs on the main actor, not the read path).
-    static func sourceEmbedBody(access: borrowing WikiReadAccess, id: SourceID) throws -> String? {
+    static func sourceEmbedBody(
+        access: borrowing WikiReadAccess,
+        id: SourceID,
+        rendererSourceTypes: RegisteredRendererSourceTypes = .none
+    ) throws -> String? {
         if let head = try access.processedMarkdownHead(sourceID: id) {
             return head.content
         }
         let source = try access.getSource(id: id)
-        guard MimeType.isText(source.mimeType) else { return nil }
         let data: Data
         do {
             data = try access.sourceContent(id: id)
@@ -120,19 +127,37 @@ enum TransclusionEmbedder {
             DebugLog.reader("sourceEmbedBody sourceContent failed id=\(id.rawValue): \(error)")
             return nil
         }
+        let effectiveMIME = rendererSourceTypes.resolve(
+            mimeType: source.mimeType,
+            filenameExtension: source.ext,
+            boundedBytes: data,
+            bytesAreComplete: source.byteSize == data.count,
+            artifactKind: .source).resolution?.canonicalMIMEType.rawValue ?? source.mimeType
+        guard MimeType.isText(effectiveMIME) else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
     /// Explicit in-memory fixture fallback. Production reads use
     /// `WikiReadAccess` through `WikiReadService`.
-    static func sourceEmbedBody(testFixtureStore store: GRDBWikiStore, id: SourceID) throws -> String? {
+    static func sourceEmbedBody(
+        testFixtureStore store: GRDBWikiStore,
+        id: SourceID,
+        rendererSourceTypes: RegisteredRendererSourceTypes = .none
+    ) throws -> String? {
         if let head = try store.processedMarkdownHead(sourceID: id) {
             return head.content
         }
         let source = try store.getSource(id: id)
-        guard MimeType.isText(source.mimeType) else { return nil }
         do {
-            return String(data: try store.sourceContent(id: id), encoding: .utf8)
+            let data = try store.sourceContent(id: id)
+            let effectiveMIME = rendererSourceTypes.resolve(
+                mimeType: source.mimeType,
+                filenameExtension: source.ext,
+                boundedBytes: data,
+                bytesAreComplete: source.byteSize == data.count,
+                artifactKind: .source).resolution?.canonicalMIMEType.rawValue ?? source.mimeType
+            guard MimeType.isText(effectiveMIME) else { return nil }
+            return String(data: data, encoding: .utf8)
         } catch {
             DebugLog.reader("sourceEmbedBody sourceContent failed id=\(id.rawValue): \(error)")
             return nil

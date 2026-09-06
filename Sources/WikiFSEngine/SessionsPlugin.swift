@@ -173,6 +173,13 @@ extension AppProcessProfileOwner {
         let registeredInputs = await processServices.extraction
             .registeredExtractionInputs()
         model.registeredExtractionInputs = registeredInputs
+        do {
+            let rendererPreparation = try await processServices.renderer.prepareCurrentRegistry()
+            model.registeredRendererSourceTypes = rendererPreparation.registeredSourceTypes
+        } catch {
+            DebugLog.store("Renderer catalog preparation failed during wiki startup: \(error)")
+            model.registeredRendererSourceTypes = .none
+        }
         model.importAutoExtractionKinds = Set(registeredInputs.claims.map(\.kind))
             .subtracting(ExtractorRouteHostCatalog.hostBackendKinds)
         model.importExtractorProvider = { [extractionCoordinator] kind in

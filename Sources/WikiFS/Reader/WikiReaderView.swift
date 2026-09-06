@@ -2956,6 +2956,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
             //    empty DB); fall back to the main-actor store in that case.
             //    No transaction, no extraction — the read path invariant.
             let loadStart = DispatchTime.now()
+            let rendererSourceTypes = store.registeredRendererSourceTypes
             do {
                 let result: TransclusionEmbedder.Result
                 if let readService = store.readService {
@@ -2965,6 +2966,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                             target: target,
                             context: context,
                             options: renderOptions,
+                            rendererSourceTypes: rendererSourceTypes,
                             ancestors: ancestors)
                     }
                 } else if let grdb = store.internalStore as? GRDBWikiStore {

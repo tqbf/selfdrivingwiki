@@ -4360,6 +4360,11 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
     /// default) keeps sniff-only behavior.
     public var registeredExtractionInputs: RegisteredExtractionInputs = .none
 
+    /// Source-format claims from the active, validated renderer catalog.
+    /// Kept separate from extraction inputs and intentionally unused by ingest
+    /// and MIME repair policy.
+    public var registeredRendererSourceTypes: RegisteredRendererSourceTypes = .none
+
     /// Applies registration-driven promotion to one detection result's
     /// stored MIME. Pure aside from reading `registeredExtractionInputs`.
     private func registeredPromotedMIME(
@@ -4370,6 +4375,49 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             detectedMIME: detected.normalizedMIMEType,
             declaredMIME: hints.declaredMIME?.value,
             filenameExtension: hints.filenameExtension)
+    }
+
+    private func rendererCanonicalMIME(
+        _ detected: ContentTypeDetectionResult,
+        hints: ContentTypeDetectionHints,
+        data: Data
+    ) -> String? {
+        guard detected.evidence.contains(where: { $0.origin == .binarySignature }) == false else {
+            return nil
+        }
+        let persistedMIME = detected.normalizedMIMEType
+        let declaredMIME = ContentTypeDetector.normalizeMIMEType(hints.declaredMIME?.value)
+        let candidateMIME = declaredMIME ?? persistedMIME
+        // Extension fallback is a last resort for INCONCLUSIVE MIME only.
+        // A caller-declared MIME is authoritative: it either is a claim
+        // alias/canonical (strong match) or it conflicts. A sniffed generic
+        // result (nil, octet-stream, or probable text/plain) says nothing
+        // about format identity, so a declared extension claim may resolve it.
+        let allowExtensionFallback: Bool
+        if let declaredMIME {
+            allowExtensionFallback = declaredMIME == MimeType.octetStream
+        } else {
+            allowExtensionFallback = persistedMIME == nil
+                || persistedMIME == MimeType.octetStream
+                || persistedMIME == "text/plain"
+        }
+        let resolution = registeredRendererSourceTypes.resolve(
+            mimeType: candidateMIME,
+            filenameExtension: hints.filenameExtension,
+            boundedBytes: data,
+            bytesAreComplete: data.count <= ContentArtifactValidationLimits.maximumInputByteCount,
+            artifactKind: .source,
+            allowInconclusiveMIMEExtensionFallback: allowExtensionFallback)
+        guard case let .resolved(claim) = resolution else { return nil }
+        // A caller-declared MIME that no claim declares is a conflict: the
+        // extension must not overwrite it.
+        if let declaredMIME,
+           declaredMIME != MimeType.octetStream,
+           let typed = RendererMIMEType(rawValue: declaredMIME),
+           claim.descriptor.sourceType?.allMIMETypes.contains(typed) == false {
+            return nil
+        }
+        return claim.canonicalMIMEType.rawValue
     }
 
     private static func logContentTypeConflicts(
@@ -4450,7 +4498,8 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         // registered type even though the trusted declared MIME also loses
         // to the archive signature in `chooseEvidence` — the ACTIVE
         // registration's declared input is the more specific read.
-        let mime = registeredPromotedMIME(detection, hints: hints)
+        let mime = rendererCanonicalMIME(detection, hints: hints, data: data)
+            ?? registeredPromotedMIME(detection, hints: hints)
             ?? detection.normalizedMIMEType
         Self.logContentTypeConflicts(detection, filename: filename)
         let displayName: String?
@@ -9708,7 +9757,17 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                 self.localEvent(.source, id: $0.rawValue, change: .updated)
             }
         }) { db in
-            let limit = ContentTypeDetectionLimits.maximumPrefixByteCount
+            let limit = ContentArtifactValidationLimits.maximumInputByteCount
+            let declaredMIMEs = registeredRendererSourceTypes.declaredMIMETypes.map(\.rawValue).sorted()
+            let packagePredicate: String
+            var arguments: StatementArguments = [limit]
+            if declaredMIMEs.isEmpty {
+                packagePredicate = "0"
+            } else {
+                let placeholders = Array(repeating: "?", count: declaredMIMEs.count).joined(separator: ",")
+                packagePredicate = "s.mime_type IN (\(placeholders)) OR sv.mime_type IN (\(placeholders))"
+                arguments += StatementArguments(declaredMIMEs + declaredMIMEs)
+            }
             let rows = try Row.fetchAll(db, sql: """
             WITH active AS (
                 SELECT s.id AS source_id,
@@ -9731,9 +9790,9 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
             JOIN sources s ON s.id = a.source_id
             JOIN source_versions sv ON sv.id = a.version_id
             LEFT JOIN blobs b ON b.hash = sv.blob_hash
-            WHERE s.mime_type IS NULL OR sv.mime_type IS NULL
+            WHERE s.mime_type IS NULL OR sv.mime_type IS NULL OR \(packagePredicate)
             ORDER BY s.id;
-            """, arguments: [limit])
+            """, arguments: arguments)
 
             var items: [MIMERepairItem] = []
             var changed: [SourceID] = []
@@ -9750,18 +9809,29 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                 case (_, nil): .activeVersionOnly
                 case (_, _): .both
                 }
-                guard let _: String = row["blob_hash"],
-                      let prefixData: Data = row["content_prefix"],
-                      let totalLength: Int = row["content_length"] else {
-                    skippedByteless += 1
-                    continue
+                let prefixData: Data? = row["content_prefix"]
+                let totalLength: Int? = row["content_length"]
+                let bytesAreComplete: Bool
+                if let prefixData, let totalLength {
+                    bytesAreComplete = totalLength <= prefixData.count
+                } else {
+                    bytesAreComplete = false
                 }
-                let completeness: ContentPrefixCompleteness = totalLength <= prefixData.count ? .complete : .truncated
+                let completeness: ContentPrefixCompleteness = bytesAreComplete ? .complete : .truncated
                 let ext = (filename as NSString).pathExtension.lowercased()
                 let detection = ContentTypeDetector.detect(.init(
                     hints: .init(filenameExtension: ext.isEmpty ? nil : ext),
-                    prefix: .init(bytes: prefixData, completeness: completeness)))
-                let newMIME = detection.normalizedMIMEType
+                    prefix: .init(bytes: prefixData ?? Data(), completeness: completeness)))
+                let decision = MIMERepairDecision.decide(.init(
+                    sourceMIMEType: oldSourceMIME,
+                    versionMIMEType: oldVersionMIME,
+                    filenameExtension: ext.isEmpty ? nil : ext,
+                    detection: detection,
+                    boundedBytes: prefixData,
+                    bytesAreComplete: bytesAreComplete,
+                    rendererSourceTypes: registeredRendererSourceTypes))
+                if decision.status == .byteless { skippedByteless += 1 }
+                let newMIME = decision.newMIMEType
                 let shouldUpdate = !dryRun && newMIME != nil
                 if shouldUpdate, let newMIME {
                     try db.execute(
@@ -9781,17 +9851,21 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                     oldVersionMIMEType: oldVersionMIME,
                     newMIMEType: newMIME,
                     detection: detection,
+                    status: decision.status,
                     updated: shouldUpdate))
             }
             return RepairWork(items: items, changedSourceIDs: changed, skippedBytelessCount: skippedByteless)
         }
         let repairableCount = work.items.filter { $0.newMIMEType != nil }.count
+        let skippedInconclusive = work.items.filter {
+            [.inconclusive, .ambiguity, .conflict].contains($0.status)
+        }.count
         return MIMERepairReport(
-            scannedCount: work.items.count + work.skippedBytelessCount,
+            scannedCount: work.items.count,
             repairableCount: repairableCount,
             updatedCount: work.changedSourceIDs.count,
             skippedBytelessCount: work.skippedBytelessCount,
-            skippedInconclusiveCount: work.items.count - repairableCount,
+            skippedInconclusiveCount: skippedInconclusive,
             applied: !dryRun,
             items: work.items)
     }

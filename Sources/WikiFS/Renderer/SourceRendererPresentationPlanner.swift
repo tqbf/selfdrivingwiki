@@ -77,11 +77,16 @@ struct SourceRendererPresentationPlanner: Sendable {
         let mimeType = try normalizedMIME(for: source, origin: origin)
         let extensionFallback = try normalizedExtension(source.ext)
         let artifactKind = artifactKind(for: source, currentMarkdown: currentMarkdown, origin: origin)
+        let artifactBytes = Data((boundedBytes ?? Data()).prefix(
+            ContentArtifactValidationLimits.maximumInputByteCount))
         return try RendererMatchInput(
             mimeType: mimeType,
             fileExtension: extensionFallback,
             sniffedBytes: sniffedBytes,
             sniffedBytesAreComplete: source.byteSize == sniffedBytes.count,
+            artifactInput: BoundedArtifactInput(
+                bytes: artifactBytes,
+                isComplete: source.byteSize == artifactBytes.count),
             artifactKind: artifactKind)
     }
 
@@ -124,7 +129,11 @@ struct SourceRendererPresentationPlanner: Sendable {
     /// Returns strict UTF-8 source text only when the canonical bounded detector
     /// agrees that the complete byte body is textual. Binary signatures and NUL
     /// bytes therefore fail closed even when metadata claims a text type.
-    nonisolated static func sourceText(for source: SourceSummary, bytes: Data?) -> String? {
+    nonisolated static func sourceText(
+        for source: SourceSummary,
+        bytes: Data?,
+        rendererSourceTypes: RegisteredRendererSourceTypes = .none
+    ) -> String? {
         guard let bytes, !bytes.isEmpty, !bytes.contains(0),
               let text = String(data: bytes, encoding: .utf8) else { return nil }
         let detection = ContentTypeDetector.detect(.init(
@@ -132,10 +141,20 @@ struct SourceRendererPresentationPlanner: Sendable {
             hints: .init(
                 declaredMIME: source.mimeType.map { .init($0, origin: .trustedGenerated) },
                 filenameExtension: source.ext.isEmpty ? nil : source.ext)))
-        guard !detection.evidence.contains(where: { $0.origin == .binarySignature }),
-              detection.evidence.contains(where: {
-                  $0.origin == .utf8Text || $0.origin == .structuredBytes
-              }) else { return nil }
+        guard !detection.evidence.contains(where: { $0.origin == .binarySignature }) else { return nil }
+        let resolution = rendererSourceTypes.resolve(
+            mimeType: source.mimeType,
+            filenameExtension: source.ext,
+            boundedBytes: bytes,
+            bytesAreComplete: source.byteSize == bytes.count,
+            artifactKind: .source)
+        if let canonical = resolution.resolution?.canonicalMIMEType.rawValue {
+            guard canonical.hasPrefix(MimeType.textPrefix) else { return nil }
+            return text
+        }
+        guard detection.evidence.contains(where: {
+            $0.origin == .utf8Text || $0.origin == .structuredBytes
+        }) else { return nil }
         return text
     }
 

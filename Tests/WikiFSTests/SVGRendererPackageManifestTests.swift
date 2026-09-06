@@ -25,24 +25,28 @@ struct SVGRendererPackageManifestTests {
         descriptor = try #require(manifest.descriptors.first)
     }
 
-    @Test("the manifest decodes at revision 2 with the reviewed identity")
+    @Test("the manifest decodes at revision 6 with the reviewed identity")
     func manifestDecodesWithReviewedIdentity() throws {
-        #expect(manifest.revision == RendererManifestRevision.fenceClaims)
+        #expect(manifest.revision == RendererManifestRevision.sourceTypes)
         #expect(manifest.packageID.rawValue == "org.selfdrivingwiki.svg-readonly")
-        #expect(manifest.version.rawValue == "1.0.1")
+        #expect(manifest.version.rawValue == "1.1.0")
         #expect(descriptor.reference.packageID.rawValue == "org.selfdrivingwiki.svg-readonly")
-        #expect(descriptor.reference.version.rawValue == "1.0.1")
+        #expect(descriptor.reference.version.rawValue == "1.1.0")
         #expect(descriptor.reference.registrationID.rawValue == "svg")
         #expect(descriptor.displayName == "SVG")
         #expect(descriptor.priority == 100)
         #expect(descriptor.implementation == .webPackage(.init(path: try .init(validating: "index.html"))))
     }
 
-    @Test("revision 2 grants exactly the svg fence claim")
+    @Test("revision 6 grants exactly the svg fence claim and source type")
     func fenceClaimIsExact() throws {
         let claim = try #require(descriptor.fenceClaims.only)
         #expect(claim.alias == RendererFenceAlias(rawValue: "svg"))
         #expect(claim.inlineMIMEType == RendererMIMEType(rawValue: "image/svg+xml"))
+        let sourceType = try #require(descriptor.sourceType)
+        #expect(sourceType.canonicalMIMEType == RendererMIMEType(rawValue: "image/svg+xml"))
+        #expect(sourceType.mimeAliases.isEmpty)
+        #expect(sourceType.filenameExtensions == [RendererFileExtension(rawValue: "svg")])
     }
 
     @Test("the claim keeps the read-only contract and the disclosure role")

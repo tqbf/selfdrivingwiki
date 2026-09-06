@@ -85,7 +85,7 @@ public enum AdminCommand {
             let conflicts = item.detection.conflicts.map { $0.conflictingEvidence.origin.rawValue }.joined(separator: ",")
             let chosenMIME = item.newMIMEType ?? "inconclusive"
             lines.append(
-                "\(item.sourceID.rawValue)\t\(item.nullState.rawValue)\t\(chosenMIME)\tconfidence=\(confidence)\tevidence=\(evidence)\tconflicts=\(conflicts)")
+                "\(item.sourceID.rawValue)\t\(item.nullState.rawValue)\t\(item.status.rawValue)\t\(chosenMIME)\tconfidence=\(confidence)\tevidence=\(evidence)\tconflicts=\(conflicts)")
         }
         return lines.joined(separator: "\n")
     }

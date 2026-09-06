@@ -139,7 +139,14 @@ struct SourceDetailView: View {
     // MARK: - Computed
 
     private var isMarkdownNative: Bool {
-        MimeType.isSourceTextPresentable(file.mimeType)
+        if MimeType.isSourceTextPresentable(file.mimeType) { return true }
+        // Unrecognized MIME/extension text is not a catalog match; the
+        // failable constructors express that without error plumbing.
+        let mime = file.mimeType.flatMap { RendererMIMEType(rawValue: $0.lowercased()) }
+        let ext = RendererFileExtension(rawValue: file.ext.lowercased())
+        return installedRendererFactoryInputs.registeredSourceTypes
+            .resolveWithoutBytes(mimeType: mime, fileExtension: ext)
+            .resolution?.canonicalMIMEType.rawValue.hasPrefix(MimeType.textPrefix) == true
     }
 
     /// A PDF quote anchor is consumed only before a markdown extraction exists.
@@ -431,7 +438,9 @@ struct SourceDetailView: View {
         // while binary signatures, malformed UTF-8, and NUL-containing bodies
         // continue to fail closed to Raw Source.
         return SourceRendererPresentationPlanner.sourceText(
-            for: file, bytes: sourceBytesSnapshot)
+            for: file,
+            bytes: sourceBytesSnapshot,
+            rendererSourceTypes: installedRendererFactoryInputs.registeredSourceTypes)
     }
 
     private var findText: String? {
@@ -668,7 +677,9 @@ struct SourceDetailView: View {
                         metadataSeparator
                         let zoteroLabel = SourceProvenanceLabel.combine(
                             provider: "Zotero",
-                            ext: file.ext, mimeType: file.mimeType)
+                            ext: file.ext,
+                            mimeType: file.mimeType,
+                            rendererSourceTypes: installedRendererFactoryInputs.registeredSourceTypes)
                         if let url = zoteroItemURL(itemKey: key) {
                             // The "Zotero" tag itself is the link — clicking it jumps
                             // back to the item in the Zotero app (no separate button).
@@ -1001,7 +1012,10 @@ struct SourceDetailView: View {
             // matched when `origin.provider` is `.some(…)` (non-nil).
             let provider = origin.provider!
             let providerLabel = SourceProvenanceLabel.combine(
-                provider: provider.displayLabel, ext: file.ext, mimeType: file.mimeType)
+                provider: provider.displayLabel,
+                ext: file.ext,
+                mimeType: file.mimeType,
+                rendererSourceTypes: installedRendererFactoryInputs.registeredSourceTypes)
             let urlString = origin.plan ?? origin.externalRef ?? origin.externalIdentity ?? ""
             if let url = URL(string: urlString), url.scheme != nil {
                 Button {
@@ -1036,7 +1050,10 @@ struct SourceDetailView: View {
                 ? origin.provider!
                 : .localFile
             let providerLabel = SourceProvenanceLabel.combine(
-                provider: effective.displayLabel, ext: file.ext, mimeType: file.mimeType)
+                provider: effective.displayLabel,
+                ext: file.ext,
+                mimeType: file.mimeType,
+                rendererSourceTypes: installedRendererFactoryInputs.registeredSourceTypes)
             let path = origin.plan ?? origin.externalRef ?? origin.externalIdentity ?? ""
             if !path.isEmpty {
                 Button {

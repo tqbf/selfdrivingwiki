@@ -1,11 +1,33 @@
 ## Renderer packages
 
-The repository includes reviewed read-only Excalidraw, Mermaid, JSON Canvas, and SVG renderer packages. The app does not bundle or install these packages automatically. Import each package folder through Settings → Renderers → Advanced Local Renderer Package Import. Package identities:
+The repository includes reviewed read-only Excalidraw, Mermaid, JSON Canvas, and SVG renderer packages. The app does not bundle or install these packages automatically. Import each package folder through Settings → Renderers → Advanced Local Renderer Package Import. Package identities (manifest revision 6):
 
-- Excalidraw: `org.selfdrivingwiki.excalidraw-readonly`, version `1.0.5`, registration `excalidraw`.
-- Mermaid: `org.selfdrivingwiki.mermaid-readonly`, version `1.0.1`, registration `mermaid`.
-- JSON Canvas: `org.selfdrivingwiki.json-canvas-readonly`, version `1.1.6`, registration `json-canvas`.
-- SVG: `org.selfdrivingwiki.svg-readonly`, version `1.0.1`, registration `svg`.
+- Excalidraw: `org.selfdrivingwiki.excalidraw-readonly`, version `1.1.0`, registration `excalidraw`.
+- Mermaid: `org.selfdrivingwiki.mermaid-readonly`, version `1.1.0`, registration `mermaid`.
+- JSON Canvas: `org.selfdrivingwiki.json-canvas-readonly`, version `1.2.0`, registration `json-canvas`.
+- SVG: `org.selfdrivingwiki.svg-readonly`, version `1.1.0`, registration `svg`.
+
+### Source types (manifest revision 6)
+
+A revision 6 descriptor may declare one `sourceType` object. The declaration is package-owned source-format metadata: the canonical MIME type, the accepted MIME aliases, and the filename extensions the package recognizes.
+
+```json
+"sourceType": {
+  "canonicalMIMEType": "text/vnd.mermaid",
+  "mimeAliases": ["text/mermaid", "text/x-mermaid",
+                   "application/vnd.chipnuts.karaoke-mmd"],
+  "filenameExtensions": ["mmd", "mermaid"]
+}
+```
+
+Validation rules:
+
+- The declaration requires manifest revision 6. An earlier revision that declares it fails validation.
+- Every canonical MIME and alias needs a `normalizedMIME` matcher on the same descriptor. Every declared extension needs an `extensionFallback` matcher on the same descriptor. Recognition and rendering cannot drift.
+- Values are normalized (lowercase, no leading dot) and duplicates fail validation.
+- The declaration is metadata only. It grants no new capability.
+
+The host projects declarations from validated, non-suppressed installed descriptors into a source-type catalog. Ingest stores the canonical MIME for unique claims, presentation and labels read the same catalog, and `wikictl admin repair-mime --apply` normalizes existing rows explicitly. Removing a package drops its claims and never rewrites stored MIME.
 
 ### Scope and availability
 
@@ -49,31 +71,31 @@ An external link requires a declared link policy and a host-observed user gestur
 
 The reviewed package root is `RendererPackages/Excalidraw` in the repository. SwiftPM does not copy it into the app resource bundle. Users import the folder through Settings → Renderers → Advanced Local Renderer Package Import.
 
-The package version is `1.0.5`. Its manifest declares a bounded JSON matcher for complete objects with `type` equal to `excalidraw`, `version` equal to `2`, and an `elements` array of objects. It is a read-only Web renderer. It declares `input.read` and user-activated external links. It has 48,000-byte input and decoded-input limits. The viewer supports VoiceOver and keyboard navigation.
+The package version is `1.1.0`. Its manifest declares a bounded JSON matcher for complete objects with `type` equal to `excalidraw`, `version` equal to `2`, and an `elements` array of objects. Its revision 6 `sourceType` declaration lists the canonical `application/json` and the `excalidraw` extension. It is a read-only Web renderer. It declares `input.read` and user-activated external links. It has 48,000-byte input and decoded-input limits. The viewer supports VoiceOver and keyboard navigation.
 
 ### Reviewed SVG renderer package
 
-The reviewed package root is `RendererPackages/SVG` in the repository. SwiftPM does not copy it into the app resource bundle. Users import the folder through Settings → Renderers → Advanced Local Renderer Package Import. The package ID is `org.selfdrivingwiki.svg-readonly`. The version is `1.0.1`. The registration ID is `svg`.
+The reviewed package root is `RendererPackages/SVG` in the repository. SwiftPM does not copy it into the app resource bundle. Users import the folder through Settings → Renderers → Advanced Local Renderer Package Import. The package ID is `org.selfdrivingwiki.svg-readonly`. The version is `1.1.0`. The registration ID is `svg`.
 
-The package matches `image/svg+xml` sources plus the `.svg` extension fallback. Its revision 2 manifest claims one rich fence alias, `svg`, with the inline MIME type `image/svg+xml`. It is a read-only Web renderer. It declares `input.read` only, no external links, and 16,000,000-byte input and decoded-input limits (the retired built-in renderer's ceiling). It has priority 100 — the retired built-in's tier — and fills both embedding roles.
+The package matches `image/svg+xml` sources plus the `.svg` extension fallback. Its revision 6 manifest claims one rich fence alias, `svg`, with the inline MIME type `image/svg+xml`, and its `sourceType` declaration lists the canonical `image/svg+xml` and the `svg` extension. It is a read-only Web renderer. It declares `input.read` only, no external links, and 16,000,000-byte input and decoded-input limits (the retired built-in renderer's ceiling). It has priority 100 — the retired built-in's tier — and fills both embedding roles.
 
 The viewer mounts the exact authorized bytes as a base64 `data:` image. WebKit's restricted SVG image mode is the security boundary: script never runs, event handlers never bind, and external references never load. The generic package CSP admits `data:` in `img-src` only; `RendererCapabilityBoundaryPolicyTests` pins that `data:` never appears in any other directive. `PROVENANCE.md` records that the package carries no vendored third-party bytes.
 
 ### Reviewed Mermaid renderer package
 
-The reviewed package root is `RendererPackages/Mermaid` in the repository. SwiftPM does not copy it into the app resource bundle. Users import the folder through Settings → Renderers → Advanced Local Renderer Package Import. The package ID is `org.selfdrivingwiki.mermaid-readonly`. The version is `1.0.1`. The registration ID is `mermaid`.
+The reviewed package root is `RendererPackages/Mermaid` in the repository. SwiftPM does not copy it into the app resource bundle. Users import the folder through Settings → Renderers → Advanced Local Renderer Package Import. The package ID is `org.selfdrivingwiki.mermaid-readonly`. The version is `1.1.0`. The registration ID is `mermaid`.
 
-The package claims the `mermaid` fence alias with the inline MIME type `text/mermaid`, and it matches `text/mermaid` sources plus the `.mmd` extension fallback. It is a read-only Web renderer. It declares `input.read` only, no external links, and 48,000-byte input and decoded-input limits. It has priority 90 and fills both embedding roles.
+The package claims the `mermaid` fence alias with the inline MIME type `text/vnd.mermaid` (the package canonical MIME). Its revision 6 `sourceType` declaration lists the canonical MIME, the `text/mermaid`, `text/x-mermaid`, and `application/vnd.chipnuts.karaoke-mmd` aliases, and the `mmd` and `mermaid` extensions. It is a read-only Web renderer. It declares `input.read` only, no external links, and 48,000-byte input and decoded-input limits. It has priority 90 and fills both embedding roles.
 
 The package carries one vendored engine asset, `mermaid.min.js`, from the upstream Mermaid 11.16.0 MIT distribution. `PROVENANCE.md` records the source URL and the asset digest. The same engine asset serves rendering and validation.
 
-The manifest is revision 3. Its claim carries a fence-syntax validation declaration: the engine asset `mermaid.min.js`, the wrapper asset `validate.js`, and the entry function `__sdw_validate_fence`. The wrapper asset installs a minimal DOM and timer environment before the engine loads, because the bundled engine captures DOM state when it loads. The host evaluates the wrapper first, then the engine, then calls the entry function.
+The manifest is revision 6. Its claim carries a fence-syntax validation declaration: the engine asset `mermaid.min.js`, the wrapper asset `validate.js`, and the entry function `__sdw_validate_fence`. The wrapper asset installs a minimal DOM and timer environment before the engine loads, because the bundled engine captures DOM state when it loads. The host evaluates the wrapper first, then the engine, then calls the entry function.
 
 A revision 3 claim may declare `validation` with `engineAssetPath`, `wrapperAssetPath`, and `entryFunction`. The two asset paths must be distinct, approved by the declaring descriptor, and declared in the top-level asset list. The entry function must be one JavaScript identifier. A revision 1 or 2 manifest that carries a `validation` object is rejected.
 
 ### Reviewed JSON Canvas renderer package
 
-The reviewed package root is `RendererPackages/JSONCanvas` in the repository. SwiftPM does not copy it into the app resource bundle. Users import the folder through Settings → Renderers → Advanced Local Renderer Package Import. The package ID is `org.selfdrivingwiki.json-canvas-readonly`. The version is `1.1.6`. The registration ID is `json-canvas`. The manifest is revision 5.
+The reviewed package root is `RendererPackages/JSONCanvas` in the repository. SwiftPM does not copy it into the app resource bundle. Users import the folder through Settings → Renderers → Advanced Local Renderer Package Import. The package ID is `org.selfdrivingwiki.json-canvas-readonly`. The version is `1.2.0`. The registration ID is `json-canvas`. The manifest is revision 6.
 
 The package matches `application/json` sources with a bounded JSON matcher requiring root-object `nodes` and `edges` arrays of objects, plus the `.canvas` extension fallback. It claims the `jsoncanvas` fence alias with the inline MIME type `application/json`. It fills both embedding roles, has priority 110, and 48,000-byte input and decoded-input limits.
 

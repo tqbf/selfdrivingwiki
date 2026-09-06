@@ -872,7 +872,7 @@ struct MarkdownHTMLRendererTests {
             sourceID: sourceID,
             version: nil,
             displayName: "diagram.mmd",
-            mimeType: MimeType.mermaid,
+            mimeType: "text/mermaid",
             bytes: nil,
             externalTarget: nil)
         let resolver = DocumentEmbedResolver(inputs: .init(

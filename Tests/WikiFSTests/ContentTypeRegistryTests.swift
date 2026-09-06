@@ -152,9 +152,11 @@ struct ContentTypeRegistryTests {
         #expect(ContentKind.fromMIME("text/x-markdown") == .markdown)
     }
 
-    @Test("Mermaid mimes resolve to markdown (native text content)") func mermaidMime() {
-        #expect(ContentKind.fromMIME("text/mermaid") == .markdown)
-        #expect(ContentKind.fromMIME("text/x-mermaid") == .markdown)
+    @Test("Mermaid mimes classify as generic text without a package claim") func mermaidMime() {
+        // Mermaid MIME policy is package-owned now: without an active
+        // renderer claim, a text/mermaid row falls into the generic text kind.
+        #expect(ContentKind.fromMIME("text/mermaid") == .text)
+        #expect(ContentKind.fromMIME("text/x-mermaid") == .text)
     }
 
     @Test("Plain text mimes resolve to text") func textMime() {

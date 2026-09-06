@@ -1,12 +1,12 @@
 {
-  "revision": 3,
+  "revision": 6,
   "packageID": "org.selfdrivingwiki.mermaid-readonly",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "descriptors": [
     {
       "reference": {
         "packageID": "org.selfdrivingwiki.mermaid-readonly",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "registrationID": "mermaid"
       },
       "displayName": "Mermaid",
@@ -20,15 +20,47 @@
       "matchers": [
         {
           "normalizedMIME": {
+            "_0": "text/vnd.mermaid"
+          }
+        },
+        {
+          "normalizedMIME": {
             "_0": "text/mermaid"
+          }
+        },
+        {
+          "normalizedMIME": {
+            "_0": "text/x-mermaid"
+          }
+        },
+        {
+          "normalizedMIME": {
+            "_0": "application/vnd.chipnuts.karaoke-mmd"
           }
         },
         {
           "extensionFallback": {
             "_0": "mmd"
           }
+        },
+        {
+          "extensionFallback": {
+            "_0": "mermaid"
+          }
         }
       ],
+      "sourceType": {
+        "canonicalMIMEType": "text/vnd.mermaid",
+        "mimeAliases": [
+          "text/mermaid",
+          "text/x-mermaid",
+          "application/vnd.chipnuts.karaoke-mmd"
+        ],
+        "filenameExtensions": [
+          "mmd",
+          "mermaid"
+        ]
+      },
       "presentations": [
         "web"
       ],
@@ -39,7 +71,7 @@
       "fenceClaims": [
         {
           "alias": "mermaid",
-          "inlineMIMEType": "text/mermaid",
+          "inlineMIMEType": "text/vnd.mermaid",
           "validation": {
             "engineAssetPath": "mermaid.min.js",
             "wrapperAssetPath": "validate.js",

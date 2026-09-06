@@ -12,8 +12,11 @@ Mermaid JavaScript bytes. `MermaidSourceNeutralityTests` enforces this.
 The package follows the Excalidraw model. It is committed in the repository,
 SwiftPM does not copy it into the app, and a user imports the folder once per
 Mac through Settings → Renderers → Advanced Local Renderer Package Import.
-The package ID is `org.selfdrivingwiki.mermaid-readonly`, version `1.0.1`, and
-the registration ID is `mermaid`.
+The package ID is `org.selfdrivingwiki.mermaid-readonly`, version `1.1.0`, and
+the registration ID is `mermaid`. The manifest is at revision 6 and declares
+the package-owned source type (canonical `text/vnd.mermaid`, the
+`text/mermaid`, `text/x-mermaid`, and `application/vnd.chipnuts.karaoke-mmd`
+aliases, and the `mmd` and `mermaid` extensions).
 
 Before import, a ` ```mermaid ` fence falls back to typed raw code with the
 unavailable-renderer notice. After import, rendering works without a restart.
@@ -83,7 +86,8 @@ package-conditional.
 ## Rendering
 
 The package claims the `mermaid` fence alias (revision-2 mechanism) and
-matches `text/mermaid` sources plus the `.mmd` extension fallback. It renders
+matches its declared source-type surface: the canonical `text/vnd.mermaid`,
+the declared aliases, and the `mmd`/`mermaid` extension fallbacks. It renders
 in package sessions — disclosure rows, the source renderer pane, and inline
 embeds — through the same paths D2 and Excalidraw use. No host branch names
 the format.
@@ -117,14 +121,15 @@ driver now uses `run`.
   optional `fileExtension`, and `WikiRenderContext` gained a
   `sourceIDToExtension` map derived from source rows.
 
-## Ingestion is unchanged
+## Ingestion is package-owned (revision 6 update)
 
-`.mmd` sources still ingest with `text/mermaid` through the
-`MimeType.mime(forExtension:)` fallback, keep their "File / Mermaid"
-provenance labels, and stay native-markdown content with no extraction. These
-are content-type data rows in `MimeType.swift`, `ContentTypeRegistry.swift`,
-and `SourceProvenanceLabel.swift` — the only Swift files the neutrality suite
-allows to name the format.
+The host no longer maps `.mmd` in Swift. Without the package, an `.mmd`
+source stores the generic UTF-8 text MIME and presents readably. With the
+package active, ingest stores the canonical `text/vnd.mermaid`, and repair
+(`wikictl admin repair-mime`) normalizes existing rows — including the
+karaoke MIME macOS assigns to `.mmd` — explicitly. Provenance labels read
+the package display name from the catalog. See
+[`plans/package-declared-source-types.md`](package-declared-source-types.md).
 
 ## Known manual-only verification
 

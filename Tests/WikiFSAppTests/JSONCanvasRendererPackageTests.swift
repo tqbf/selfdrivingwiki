@@ -11,17 +11,26 @@ import WikiFSTypes
 /// `swift test`.
 @Suite("JSON Canvas installed renderer package", .serialized, .timeLimit(.minutes(1)))
 struct JSONCanvasRendererPackageTests {
-    @Test("reviewed package validates and declares the revision-5 asset-read contract")
-    func reviewedPackageValidatesAndDeclaresRevision5Contract() throws {
+    @Test("reviewed package validates and declares the revision-6 source-type contract")
+    func reviewedPackageValidatesAndDeclaresRevision6Contract() throws {
         let fixture = try PackageFixture()
         defer { fixture.remove() }
 
         let package = try fixture.validator.validate(directory: fixture.packageDirectory)
         let descriptor = try #require(package.manifest.descriptors.only)
 
-        #expect(package.manifest.revision == RendererManifestRevision.assetRead)
+        #expect(package.manifest.revision == RendererManifestRevision.sourceTypes)
         #expect(package.manifest.revision == RendererManifestRevision.current)
         #expect(package.packageHash.hex.isEmpty == false)
+
+        // Revision 6 source-type declaration: application/json with the
+        // .canvas extension; the bounded JSON matcher stays the artifact
+        // discriminator, so MIME-only JSON stays ambiguous across the two
+        // JSON packages and fails closed in the catalog.
+        let sourceType = try #require(descriptor.sourceType)
+        #expect(sourceType.canonicalMIMEType == RendererMIMEType(rawValue: "application/json"))
+        #expect(sourceType.mimeAliases.isEmpty)
+        #expect(sourceType.filenameExtensions == [RendererFileExtension(rawValue: "canvas")])
 
         #expect(descriptor.capabilities.contains(.inputRead))
         #expect(descriptor.capabilities.contains(.externalLink))

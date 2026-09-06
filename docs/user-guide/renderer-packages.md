@@ -81,7 +81,7 @@ JSON Canvas links are typed. Canonical `[[page:<ULID>]]` and `[[source:<ULID>]]`
 
 ## SVG
 
-SVG is a renderer package, not a built-in renderer. It displays `.svg` documents as a read-only image. Before you import `RendererPackages/SVG`, a `.svg` source stays readable source text. To import version `1.0.1`, open **Settings → Renderers → Advanced Local Renderer Package Import** and select the `RendererPackages/SVG` folder. The app does not update local packages automatically. After import, matching sources render through the generic renderer surface. Removed or suppressed packages restore the readable fallback.
+SVG is a renderer package, not a built-in renderer. It displays `.svg` documents as a read-only image. Before you import `RendererPackages/SVG`, a `.svg` source stays readable source text. To import version `1.1.0`, open **Settings → Renderers → Advanced Local Renderer Package Import** and select the `RendererPackages/SVG` folder. The app does not update local packages automatically. After import, matching sources render through the generic renderer surface. Removed or suppressed packages restore the readable fallback.
 
 The package also claims one rich fence alias, `svg`, with the inline MIME type `image/svg+xml`. The row starts collapsed and shows **Open in Window** at the trailing edge. You can add an optional quoted title after the fence name. An SVG fence at or below 48,384 bytes renders; a larger fence stays readable code.
 
@@ -104,6 +104,19 @@ If a package is absent or incompatible, the app keeps Source and native renderer
 Safe mode can suppress one package version after repeated failures. Resetting safe mode restores that version. It does not change source preferences.
 
 Removing a package deletes its copied payload from this Mac. It does not delete source data or source preferences.
+
+## Source types and stored MIME
+
+Packages own their source-format metadata. Each package manifest declares a source type: one canonical MIME type, optional aliases, and filename extensions. The reviewed packages declare:
+
+- Mermaid `1.1.0` (`org.selfdrivingwiki.mermaid-readonly`): canonical `text/vnd.mermaid`, aliases `text/mermaid`, `text/x-mermaid`, `application/vnd.chipnuts.karaoke-mmd`, extensions `mmd`, `mermaid`.
+- SVG `1.1.0` (`org.selfdrivingwiki.svg-readonly`): canonical `image/svg+xml`, extension `svg`.
+- Excalidraw `1.1.0` (`org.selfdrivingwiki.excalidraw-readonly`): canonical `application/json`, extension `excalidraw`.
+- JSON Canvas `1.2.0` (`org.selfdrivingwiki.json-canvas-readonly`): canonical `application/json`, extension `canvas`.
+
+A package is optional. Without it, affected sources stay generic (a `.mmd` file reads as plain text). With it, new imports record the canonical MIME, and the app labels and presents those sources from the package. Removal never rewrites stored data.
+
+To normalize existing rows after you install a package, run `wikictl admin repair-mime`. The command reports by default and changes nothing. Add `--apply` to write the canonical MIME to matching active sources and versions.
 
 ## Author a package
 

@@ -14,7 +14,9 @@ public enum RendererManifestRevision {
     /// declaration: byte reads of exact session-pinned wiki source versions
     /// through the renderer-neutral authorized asset reader.
     public static let assetRead = 5
-    public static let current = assetRead
+    /// Revision 6 added descriptor-scoped, package-owned source type metadata.
+    public static let sourceTypes = 6
+    public static let current = sourceTypes
     public static let supported: ClosedRange<Int> = legacy ... current
 }
 
@@ -70,6 +72,9 @@ public struct RendererManifest: Codable, Hashable, Sendable {
             if revision < RendererManifestRevision.assetRead,
                descriptor.capabilities.contains(.assetRead) || descriptor.hasAssetReadDeclaration {
                 throw RendererValidationError.assetReadRequiresRevision5
+            }
+            if revision < RendererManifestRevision.sourceTypes, descriptor.hasSourceTypeDeclaration {
+                throw RendererValidationError.sourceTypeRequiresRevision6
             }
             // Fence authority is revision-2-and-later only: a revision-1
             // manifest that declares claims fails closed rather than silently
@@ -137,6 +142,8 @@ public struct RendererManifest: Codable, Hashable, Sendable {
             return try encoder.encode(CanonicalManifestV4(self))
         case RendererManifestRevision.assetRead:
             return try encoder.encode(CanonicalManifestV5(self))
+        case RendererManifestRevision.sourceTypes:
+            return try encoder.encode(CanonicalManifestV6(self))
         default:
             throw RendererValidationError.unsupportedManifestRevision(revision)
         }
@@ -429,6 +436,22 @@ private struct CanonicalRendererDescriptorV2: Encodable {
     }
 }
 
+private struct CanonicalManifestV6: Encodable {
+    let revision: Int
+    let packageID: RendererPackageID
+    let version: RendererPackageVersion
+    let descriptors: [CanonicalRendererDescriptorV6]
+    let assets: [RendererAsset]
+
+    init(_ manifest: RendererManifest) throws {
+        revision = manifest.revision
+        packageID = manifest.packageID
+        version = manifest.version
+        descriptors = try manifest.descriptors.map(CanonicalRendererDescriptorV6.init)
+        assets = manifest.assets.sorted()
+    }
+}
+
 private struct CanonicalRendererDescriptorV5: Encodable {
     private struct CanonicalAssetRead: Encodable {
         let allowedRoles: [RendererAssetRole]
@@ -483,6 +506,92 @@ private struct CanonicalRendererDescriptorV5: Encodable {
         fenceClaims = descriptor.hasFenceClaims
             ? descriptor.fenceClaims.sorted { $0.alias < $1.alias }
             : nil
+        approvedAssets = descriptor.approvedAssets.sorted()
+        capabilities = descriptor.capabilities.sorted { $0.rawValue < $1.rawValue }
+        hostNavigation = descriptor.hostNavigation.map(CanonicalHostNavigation.init)
+        assetRead = descriptor.assetRead.map(CanonicalAssetRead.init)
+        sizeLimits = descriptor.sizeLimits
+        linkPolicy = descriptor.linkPolicy
+        accessibility = descriptor.accessibility
+        compatibility = descriptor.compatibility
+        priority = descriptor.priority
+    }
+
+    private static func sortedCodable<T: Encodable>(_ values: [T]) throws -> [T] {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return try values.map { (value: $0, key: try encoder.encode($0)) }
+            .sorted { $0.key.lexicographicallyPrecedes($1.key) }
+            .map(\.value)
+    }
+}
+
+private struct CanonicalRendererDescriptorV6: Encodable {
+    private struct CanonicalSourceType: Encodable {
+        let canonicalMIMEType: RendererMIMEType
+        let mimeAliases: [RendererMIMEType]
+        let filenameExtensions: [RendererFileExtension]
+
+        init(_ value: RendererSourceTypeDeclaration) {
+            canonicalMIMEType = value.canonicalMIMEType
+            mimeAliases = value.mimeAliases.sorted()
+            filenameExtensions = value.filenameExtensions.sorted()
+        }
+    }
+
+    private struct CanonicalAssetRead: Encodable {
+        let allowedRoles: [RendererAssetRole]
+        let allowedMIMETypes: [RendererMIMEType]
+        let maximumExtractedReferenceCount: Int
+        let maximumExtractorInputBytes: Int
+        let maximumExtractorOutputBytes: Int
+        let maximumExtractorExecutionSeconds: Int
+        let maximumBytesPerAsset: Int
+        let maximumAggregateSessionBytes: Int
+        let extractorAsset: RendererRelativePath
+        let extractorEntryFunction: String
+
+        init(_ value: RendererAssetReadDeclaration) {
+            allowedRoles = value.allowedRoles.sorted { $0.rawValue < $1.rawValue }
+            allowedMIMETypes = value.allowedMIMETypes.sorted()
+            maximumExtractedReferenceCount = value.maximumExtractedReferenceCount
+            maximumExtractorInputBytes = value.maximumExtractorInputBytes
+            maximumExtractorOutputBytes = value.maximumExtractorOutputBytes
+            maximumExtractorExecutionSeconds = value.maximumExtractorExecutionSeconds
+            maximumBytesPerAsset = value.maximumBytesPerAsset
+            maximumAggregateSessionBytes = value.maximumAggregateSessionBytes
+            extractorAsset = value.extractorAsset
+            extractorEntryFunction = value.extractorEntryFunction
+        }
+    }
+
+    let reference: RendererReference
+    let displayName: String
+    let implementation: RendererImplementation
+    let matchers: [RendererMatcher]
+    private let sourceType: CanonicalSourceType?
+    let presentations: [RendererPresentation]
+    let supportedEmbeddingRoles: [RendererEmbeddingRole]
+    let fenceClaims: [RendererFenceClaim]?
+    let approvedAssets: [RendererAsset]
+    let capabilities: [RendererCapability]
+    private let hostNavigation: CanonicalHostNavigation?
+    private let assetRead: CanonicalAssetRead?
+    let sizeLimits: RendererSizeLimits
+    let linkPolicy: RendererLinkPolicy
+    let accessibility: RendererAccessibility
+    let compatibility: RendererCompatibility
+    let priority: Int
+
+    init(_ descriptor: RendererDescriptor) throws {
+        reference = descriptor.reference
+        displayName = descriptor.displayName
+        implementation = descriptor.implementation
+        matchers = try Self.sortedCodable(descriptor.matchers)
+        sourceType = descriptor.sourceType.map(CanonicalSourceType.init)
+        presentations = descriptor.presentations.sorted { $0.rawValue < $1.rawValue }
+        supportedEmbeddingRoles = descriptor.supportedEmbeddingRoles.sorted { $0.rawValue < $1.rawValue }
+        fenceClaims = descriptor.hasFenceClaims ? descriptor.fenceClaims.sorted { $0.alias < $1.alias } : nil
         approvedAssets = descriptor.approvedAssets.sorted()
         capabilities = descriptor.capabilities.sorted { $0.rawValue < $1.rawValue }
         hostNavigation = descriptor.hostNavigation.map(CanonicalHostNavigation.init)

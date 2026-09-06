@@ -26,8 +26,8 @@ struct SVGRendererPackageHostedValidationTests {
         let package = try fixture.validator.validate(directory: fixture.packageDirectory)
         let descriptor = try #require(package.manifest.descriptors.only)
         let claim = try #require(descriptor.fenceClaims.only)
-        #expect(package.manifest.revision == RendererManifestRevision.fenceClaims)
-        #expect(descriptor.reference.version.rawValue == "1.0.1")
+        #expect(package.manifest.revision == RendererManifestRevision.sourceTypes)
+        #expect(descriptor.reference.version.rawValue == "1.1.0")
         #expect(claim.alias.rawValue == "svg")
         #expect(claim.inlineMIMEType.rawValue == "image/svg+xml")
 

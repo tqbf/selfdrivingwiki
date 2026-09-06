@@ -848,6 +848,9 @@ struct RendererModelTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
+        // The revision-6 refresh bumped every reviewed package identity, so
+        // these fixtures moved to repository history. They remain stability
+        // contracts: re-emitting those revisions must reproduce these bytes.
         let fixtures: [(path: String, revision: Int, hash: String)] = [
             ("RendererPackages/Excalidraw/manifest.json", RendererManifestRevision.fenceClaims,
              "7580e5195a43ee677a795c2a4591c3dcebf528d3dbfadba7001f659e9c328999"),
@@ -857,31 +860,43 @@ struct RendererModelTests {
         for fixture in fixtures {
             let data = try Data(contentsOf: root.appendingPathComponent(fixture.path))
             let manifest = try JSONDecoder().decode(RendererManifest.self, from: data)
-            #expect(manifest.revision == fixture.revision)
-            #expect(try manifest.packageHash().hex == fixture.hash)
+            #expect(manifest.revision == RendererManifestRevision.sourceTypes)
+            #expect(try manifest.packageHash().hex != fixture.hash)
             #expect(manifest.descriptors.allSatisfy {
                 $0.compatibility.supports(hostProtocolRevision: RendererRegistrySnapshotDefaults.hostProtocolRevision)
             })
         }
     }
 
-    @Test func reviewedRevision4PackageHashRemainsStable() throws {
+    @Test func reviewedRevision6PackageHashesRemainStable() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-        // The on-disk package is 1.1.6 (revision 5, explicit colored edge strokes). Its package
-        // hash is a stability contract: adding a manifest revision or changing
-        // assets must produce a NEW immutable version and never mutate an
-        // existing reviewed package hash. The prior 1.0.1 (revision 4) and
-        // 1.1.0 package hashes are preserved in repository history, not on
+        // The on-disk reviewed identities at manifest revision 6. Each hash is
+        // a stability contract: any later manifest or asset change must
+        // produce a NEW immutable version and never mutate these hashes. The
+        // prior revision hashes are preserved in repository history, not on
         // disk.
-        let data = try Data(contentsOf: root.appendingPathComponent("RendererPackages/JSONCanvas/manifest.json"))
-        let manifest = try JSONDecoder().decode(RendererManifest.self, from: data)
-        #expect(manifest.revision == RendererManifestRevision.current)
-        #expect(try manifest.packageHash().hex == "e60eb3723b4ea78089279735ae2a2eaf8157224a11476bc963ce850def2824fb")
-        #expect(manifest.descriptors.allSatisfy {
-            $0.compatibility.supports(hostProtocolRevision: RendererRegistrySnapshotDefaults.hostProtocolRevision)
-        })
+        let fixtures: [(path: String, version: String, hash: String)] = [
+            ("RendererPackages/Excalidraw/manifest.json", "1.1.0",
+             "713d4d9e0c36e0b996f37b56099081160f4542f92a4fece56cb1af90362b91d6"),
+            ("RendererPackages/Mermaid/manifest.json", "1.1.0",
+             "bdee86bee55e2dde187d8fe378c6267ded3b3ce5f2a51c0d98ea5554b04dd81b"),
+            ("RendererPackages/SVG/manifest.json", "1.1.0",
+             "9b9ab53a45377cb9f6579d01220f29096080c6bb7a148a3c364fdf3ec7f00d05"),
+            ("RendererPackages/JSONCanvas/manifest.json", "1.2.0",
+             "8bad166255e12ec34a6581eae0d4f457cb0f1a9ad8da55bab2a94398ab4daae0"),
+        ]
+        for fixture in fixtures {
+            let data = try Data(contentsOf: root.appendingPathComponent(fixture.path))
+            let manifest = try JSONDecoder().decode(RendererManifest.self, from: data)
+            #expect(manifest.revision == RendererManifestRevision.current)
+            #expect(manifest.version.rawValue == fixture.version)
+            #expect(try manifest.packageHash().hex == fixture.hash)
+            #expect(manifest.descriptors.allSatisfy {
+                $0.compatibility.supports(hostProtocolRevision: RendererRegistrySnapshotDefaults.hostProtocolRevision)
+            })
+        }
     }
 }

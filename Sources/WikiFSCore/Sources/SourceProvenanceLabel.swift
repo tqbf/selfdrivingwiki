@@ -7,7 +7,8 @@ import WikiFSTypes
 /// in which case it collapses to just the provider label.
 ///
 /// Two-dimensional provenance surfaces BOTH where a source came from AND what
-/// it is: a `.mmd` file dragged in reads "File / Mermaid" (was just "File"),
+/// it is: a package-claimed diagram file reads "File / Mermaid" from the
+/// package display name,
 /// a `.pdf` from Zotero reads "Zotero / PDF", a markdown-folder import reads
 /// "Folder / Markdown", while a YouTube source with no derivable content type
 /// reads just "YouTube". Issue #644.
@@ -31,9 +32,21 @@ public enum SourceProvenanceLabel {
     /// `ext` is the lowercased extension with no leading dot (matches
     /// `SourceSummary.ext`); passing `nil` / empty falls through to the
     /// MIME-type arm. Matching is case-insensitive on both paths.
-    public static func contentTypeLabel(ext: String?, mimeType: String?) -> String? {
+    public static func contentTypeLabel(
+        ext: String?,
+        mimeType: String?,
+        rendererSourceTypes: RegisteredRendererSourceTypes = .none
+    ) -> String? {
+        // Unrecognized MIME/extension text is simply not a catalog match;
+        // the failable constructors express that without error plumbing.
+        let rendererMIME = mimeType.flatMap { RendererMIMEType(rawValue: $0.lowercased()) }
+        let rendererExtension = ext.flatMap { RendererFileExtension(rawValue: $0.lowercased()) }
+        if case let .resolved(resolution) = rendererSourceTypes.resolveWithoutBytes(
+            mimeType: rendererMIME,
+            fileExtension: rendererExtension) {
+            return resolution.displayName
+        }
         switch (ext ?? "").lowercased() {
-        case "mmd", "mermaid": return "Mermaid"
         case "pdf":            return "PDF"
         case "docx":           return "Word"
         case "md", "markdown": return "Markdown"
@@ -44,7 +57,6 @@ public enum SourceProvenanceLabel {
         if MimeType.isPDF(mimeType) { return "PDF" }
         if MimeType.isDOCX(mimeType) { return "Word" }
         if MimeType.isMarkdown(mimeType) { return "Markdown" }
-        if MimeType.isMermaid(mimeType) { return "Mermaid" }
         return nil
     }
 
@@ -70,9 +82,13 @@ public enum SourceProvenanceLabel {
     public static func combine(
         provider: String,
         ext: String?,
-        mimeType: String?
+        mimeType: String?,
+        rendererSourceTypes: RegisteredRendererSourceTypes = .none
     ) -> String {
-        guard let contentType = contentTypeLabel(ext: ext, mimeType: mimeType) else {
+        guard let contentType = contentTypeLabel(
+            ext: ext,
+            mimeType: mimeType,
+            rendererSourceTypes: rendererSourceTypes) else {
             return provider
         }
         return "\(provider) / \(contentType)"

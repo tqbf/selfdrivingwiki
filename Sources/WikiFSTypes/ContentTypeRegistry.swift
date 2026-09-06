@@ -212,7 +212,6 @@ public extension ContentKind {
         if MimeType.isPDF(lowered)        { return .pdf }
         if MimeType.isDOCX(lowered)      { return .docx }        // OOXML Word; msword (.doc) stays binary
         if MimeType.isMarkdown(lowered)  { return .markdown }
-        if MimeType.isMermaid(lowered)   { return .markdown }   // mermaid is native text content
         if lowered == MimeType.html || lowered == MimeType.xhtml { return .html }
         if MimeType.isText(lowered)      { return .text }       // text/plain, text/csv, …
         if lowered.hasPrefix("image/")    { return .image }

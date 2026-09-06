@@ -94,6 +94,9 @@ public enum StorePlugin {
         ) { activation in
             let databaseURL = URL(fileURLWithPath: config.databasePath, isDirectory: false)
             let store: any WikiStore = try StoreBackend.current.makeStore(databaseURL: databaseURL)
+            // Headless daemon profile: project renderer source-type claims
+            // from the authoritative machine index (WebKit-free, best-effort).
+            store.registeredRendererSourceTypes = await RendererCatalogResolution.productionSourceTypes()
             let bus = WikiEventBus(wikiID: WikiID(rawValue: config.wikiID))
             store.eventBus = bus
             let readService = WikiReadService(databaseURL: databaseURL)

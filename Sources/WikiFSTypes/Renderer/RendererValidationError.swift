@@ -39,6 +39,12 @@ public enum RendererValidationError: Error, Equatable, Sendable, CustomStringCon
     case assetReadDeclarationRequiresCapability
     case assetReadRequiresWebPackage
     case assetReadRequiresRevision5
+    case sourceTypeRequiresRevision6
+    case invalidSourceTypeDeclaration
+    case duplicateSourceTypeMIME(String)
+    case duplicateSourceTypeExtension(String)
+    case sourceTypeMIMEMatcherMissing(RendererMIMEType)
+    case sourceTypeExtensionMatcherMissing(RendererFileExtension)
     case extractorAssetNotApproved(RendererRelativePath)
     case duplicateRegistration(RendererRegistrationID)
     case duplicatePath(RendererRelativePath)
@@ -90,6 +96,12 @@ public enum RendererValidationError: Error, Equatable, Sendable, CustomStringCon
         case .assetReadDeclarationRequiresCapability: "renderer asset read declaration requires the assetRead capability"
         case .assetReadRequiresWebPackage: "renderer asset read is available only to Web packages"
         case .assetReadRequiresRevision5: "renderer asset read requires manifest revision 5"
+        case .sourceTypeRequiresRevision6: "renderer source type declarations require manifest revision 6"
+        case .invalidSourceTypeDeclaration: "renderer source type must declare a canonical MIME routing surface"
+        case let .duplicateSourceTypeMIME(value): "duplicate renderer source type MIME after normalization: \(value)"
+        case let .duplicateSourceTypeExtension(value): "duplicate renderer source type extension after normalization: \(value)"
+        case let .sourceTypeMIMEMatcherMissing(value): "renderer source type MIME has no matching normalizedMIME route: \(value.rawValue)"
+        case let .sourceTypeExtensionMatcherMissing(value): "renderer source type extension has no matching extensionFallback route: \(value.rawValue)"
         case let .extractorAssetNotApproved(path): "renderer reference-extractor asset is not approved by the declaring descriptor: \(path.rawValue)"
         case let .duplicateRegistration(id): "duplicate renderer registration: \(id.rawValue)"
         case let .duplicatePath(path): "duplicate renderer path: \(path.rawValue)"

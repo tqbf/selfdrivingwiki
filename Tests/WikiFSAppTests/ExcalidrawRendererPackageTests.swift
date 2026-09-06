@@ -39,7 +39,7 @@ struct ExcalidrawRendererPackageTests {
         let package = try fixture.validator.validate(directory: fixture.packageDirectory)
         let descriptor = try #require(package.manifest.descriptors.only)
 
-        #expect(package.manifest.revision == RendererManifestRevision.fenceClaims)
+        #expect(package.manifest.revision == RendererManifestRevision.sourceTypes)
         #expect(descriptor.capabilities == [.inputRead, .externalLink])
         #expect(descriptor.linkPolicy == .userActivatedExternal)
         #expect(descriptor.presentations == [.web])

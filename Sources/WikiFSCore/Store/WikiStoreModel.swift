@@ -404,6 +404,13 @@ public final class WikiStoreModel {
         didSet { store.registeredExtractionInputs = registeredExtractionInputs }
     }
 
+    /// Source-format claims from the active, validated renderer catalog. This
+    /// remains separate from extractor registration and only propagates the
+    /// composition snapshot to the underlying store.
+    @ObservationIgnored public var registeredRendererSourceTypes: RegisteredRendererSourceTypes = .none {
+        didSet { store.registeredRendererSourceTypes = registeredRendererSourceTypes }
+    }
+
     /// Import-time auto-extraction, wired at session boot. WHICH kinds
     /// convert at import comes from package data, not host branches: the
     /// wiring derives the kinds set from the active registration claims

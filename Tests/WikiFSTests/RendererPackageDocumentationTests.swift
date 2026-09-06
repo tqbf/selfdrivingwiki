@@ -149,7 +149,7 @@ struct RendererPackageDocumentationTests {
         let alias = try #require(claim["alias"] as? String)
         let mime = try #require(claim["inlineMIMEType"] as? String)
 
-        #expect(manifest["revision"] as? Int == 2)
+        #expect(manifest["revision"] as? Int == 6)
         #expect(reference["packageID"] as? String == packageID)
         #expect(reference["version"] as? String == version)
         #expect(claims.count == 1)

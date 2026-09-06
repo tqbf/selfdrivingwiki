@@ -83,6 +83,7 @@ final class InstalledRendererHost {
         factory = InstalledRendererFactory()
         inputs = InstalledRendererFactory.Inputs(
             availableDescriptors: preparation.availableDescriptors,
+            registeredSourceTypes: preparation.registeredSourceTypes,
             resolveConfiguration: { descriptor, entryPoint in
                 let reservation = RendererPackageReservation(
                     packageID: descriptor.reference.packageID,

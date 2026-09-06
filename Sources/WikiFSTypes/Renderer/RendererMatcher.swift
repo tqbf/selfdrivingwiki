@@ -173,13 +173,17 @@ public struct RendererJSONConstraints: Codable, Hashable, Sendable {
     }
 
     public func matches(sniffedBytes: Data, isComplete: Bool) -> Bool {
-        guard isComplete, sniffedBytes.count <= RendererMatchingLimits.maximumSniffByteCount else {
+        matches(artifactInput: BoundedArtifactInput(bytes: sniffedBytes, isComplete: isComplete))
+    }
+
+    public func matches(artifactInput: BoundedArtifactInput) -> Bool {
+        guard artifactInput.isComplete else {
             return false
         }
         let object: [String: Any]
         do {
             guard let decoded = try JSONSerialization.jsonObject(
-                with: sniffedBytes,
+                with: artifactInput.bytes,
                 options: [.fragmentsAllowed]) as? [String: Any] else {
                 return false
             }
@@ -373,7 +377,7 @@ public enum RendererMatcher: Codable, Hashable, Sendable {
         case let .extensionFallback(fileExtension): input.fileExtension == fileExtension
         case let .boundedSignature(signature): input.sniffedBytes.matches(signature)
         case let .boundedJSON(constraints):
-            constraints.matches(sniffedBytes: input.sniffedBytes, isComplete: input.sniffedBytesAreComplete)
+            input.artifactInput.map(constraints.matches(artifactInput:)) ?? false
         case let .artifactKind(kind): input.artifactKind == kind
         }
     }
@@ -397,6 +401,7 @@ public struct RendererMatchInput: Hashable, Sendable {
     public let fileExtension: RendererFileExtension?
     public let sniffedBytes: Data
     public let sniffedBytesAreComplete: Bool
+    public let artifactInput: BoundedArtifactInput?
     public let artifactKind: RendererArtifactKind?
 
     public init(
@@ -404,6 +409,7 @@ public struct RendererMatchInput: Hashable, Sendable {
         fileExtension: RendererFileExtension?,
         sniffedBytes: Data,
         sniffedBytesAreComplete: Bool = true,
+        artifactInput: BoundedArtifactInput? = nil,
         artifactKind: RendererArtifactKind?
     ) throws {
         guard sniffedBytes.count <= RendererMatchingLimits.maximumSniffByteCount else {
@@ -413,6 +419,9 @@ public struct RendererMatchInput: Hashable, Sendable {
         self.fileExtension = fileExtension
         self.sniffedBytes = sniffedBytes
         self.sniffedBytesAreComplete = sniffedBytesAreComplete
+        self.artifactInput = artifactInput ?? BoundedArtifactInput(
+            bytes: sniffedBytes,
+            isComplete: sniffedBytesAreComplete)
         self.artifactKind = artifactKind
     }
 }

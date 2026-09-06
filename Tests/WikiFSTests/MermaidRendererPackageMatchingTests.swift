@@ -38,19 +38,20 @@ struct MermaidRendererPackageMatchingTests {
 
     @Test("identity block decodes with the reviewed package identity")
     func identityBlockDecodes() throws {
-        #expect(manifest.revision == 3)
+        #expect(manifest.revision == RendererManifestRevision.sourceTypes)
         #expect(manifest.packageID.rawValue == "org.selfdrivingwiki.mermaid-readonly")
-        #expect(manifest.version.rawValue == "1.0.0")
+        #expect(manifest.version.rawValue == "1.1.0")
         #expect(descriptor.reference.registrationID.rawValue == "mermaid")
         #expect(descriptor.displayName == "Mermaid")
         #expect(descriptor.priority == 90)
         #expect(descriptor.implementation == .webPackage(.init(path: try .init(validating: "index.html"))))
     }
 
-    @Test("a text/mermaid source selects the package at the strong tier")
+    @Test("a canonical or alias Mermaid source selects the package at the strong tier")
     func mermaidMIMESelectsAtStrongTier() throws {
+        #expect(descriptor.matchTier(for: try input(mimeType: "text/vnd.mermaid", fileExtension: "mmd")) == .strong)
         #expect(descriptor.matchTier(for: try input(mimeType: "text/mermaid", fileExtension: "mmd")) == .strong)
-        #expect(descriptor.matchTier(for: try input(mimeType: "text/mermaid", fileExtension: "mmd")) != .extensionFallback)
+        #expect(descriptor.matchTier(for: try input(mimeType: "application/vnd.chipnuts.karaoke-mmd", fileExtension: "mmd")) == .strong)
     }
 
     @Test("a .mmd source with no MIME selects the package at the extension-fallback tier")
@@ -58,6 +59,7 @@ struct MermaidRendererPackageMatchingTests {
         // The legacy NULL-MIME row shape: the extension fallback exists for
         // exactly this case.
         #expect(descriptor.matchTier(for: try input(mimeType: nil, fileExtension: "mmd")) == .extensionFallback)
+        #expect(descriptor.matchTier(for: try input(mimeType: nil, fileExtension: "mermaid")) == .extensionFallback)
     }
 
     @Test("a source with an empty extension constructs without throwing or matching")
@@ -92,18 +94,36 @@ struct MermaidRendererPackageMatchingTests {
         #expect(descriptor.matchTier(for: try input(mimeType: nil, fileExtension: nil)) == nil)
     }
 
-    @Test("the package declares a MIME matcher plus an extension fallback")
+    @Test("the package declares the reviewed source-type routing surface")
     func matchersAreMIMEPlusExtension() throws {
-        #expect(descriptor.matchers.count == 2)
-        #expect(descriptor.matchers.contains(.normalizedMIME(try .init(validating: "text/mermaid"))))
-        #expect(descriptor.matchers.contains(.extensionFallback(try .init(validating: "mmd"))))
+        let sourceType = try #require(descriptor.sourceType)
+        let canonical = try RendererMIMEType(validating: "text/vnd.mermaid")
+        let aliases: Set<RendererMIMEType> = [
+            try .init(validating: "text/mermaid"),
+            try .init(validating: "text/x-mermaid"),
+            try .init(validating: "application/vnd.chipnuts.karaoke-mmd"),
+        ]
+        let extensions: Set<RendererFileExtension> = [
+            try .init(validating: "mmd"),
+            try .init(validating: "mermaid"),
+        ]
+        #expect(sourceType.canonicalMIMEType == canonical)
+        #expect(sourceType.mimeAliases == aliases)
+        #expect(sourceType.filenameExtensions == extensions)
+        // Every declared value has an equivalent routing matcher.
+        for mime in sourceType.allMIMETypes {
+            #expect(descriptor.matchers.contains(.normalizedMIME(mime)))
+        }
+        for ext in sourceType.filenameExtensions {
+            #expect(descriptor.matchers.contains(.extensionFallback(ext)))
+        }
     }
 
     @Test("the fence claim carries the revision-3 validation contract")
     func fenceClaimCarriesTheValidationContract() throws {
         let claim = try #require(descriptor.fenceClaims.first)
         let alias = try RendererFenceAlias(validating: "mermaid")
-        let mime = try RendererMIMEType(validating: "text/mermaid")
+        let mime = try RendererMIMEType(validating: "text/vnd.mermaid")
         #expect(claim.alias == alias)
         #expect(claim.inlineMIMEType == mime)
         let validation = try #require(claim.validation)

@@ -45,13 +45,6 @@ public enum MimeType {
     /// `text/html`.
     public static let html = "text/html"
 
-    /// `text/mermaid` — the conventional MIME type for a standalone Mermaid
-    /// diagram source (`.mmd`).
-    public static let mermaid = "text/mermaid"
-
-    /// `text/x-mermaid` — the `x-` variant some tools emit for Mermaid sources.
-    public static let mermaidX = "text/x-mermaid"
-
     /// `application/json` — JSON Canvas files use JSON as their registered
     /// media type. The `.canvas` extension remains the format discriminator.
     public static let json = "application/json"
@@ -78,9 +71,6 @@ public enum MimeType {
 
     /// The recognized Markdown MIME variants (`text/markdown`, `text/x-markdown`).
     public static let markdownVariants: Set<String> = [markdown, markdownX]
-
-    /// The recognized Mermaid MIME variants (`text/mermaid`, `text/x-mermaid`).
-    public static let mermaidVariants: Set<String> = [mermaid, mermaidX]
 
     // MARK: - Predicates
 
@@ -125,28 +115,10 @@ public enum MimeType {
         return markdownVariants.contains(mime.lowercased())
     }
 
-    /// Whether `mime` is one of the recognized Mermaid variants
-    /// (`text/mermaid` / `text/x-mermaid`, case-insensitive). `nil` is `false`.
-    public static func isMermaid(_ mime: String?) -> Bool {
-        guard let mime else { return false }
-        return mermaidVariants.contains(mime.lowercased())
-    }
-
-    /// Extension-derived MIME for known text-by-extension cases that
-    /// `UTType.preferredMIMEType` cannot resolve (it returns a dynamic UTI tag
-    /// for unregistered extensions like `.mmd`, and `nil` for its MIME).
-    ///
-    /// This is the last-resort fallback in `GRDBWikiStore.addSource`'s MIME
-    /// chain — without it, a standalone `.mmd` Mermaid source ingests with
-    /// `mime_type = NULL`, which breaks `SourceDetailView.isMarkdownNative`
-    /// (`MimeType.isText(nil) == false`) and leaves its tabs empty
-    /// (issue #620).
-    ///
-    /// Lowercased input is assumed (callers lower-case extensions); the switch
-    /// is case-insensitive anyway. Returns `nil` for unrecognized extensions.
+    /// Extension-derived MIME for project-owned built-in and extractor formats.
+    /// Renderer-owned formats are declared by active renderer packages instead.
     public static func mime(forExtension ext: String) -> String? {
         switch ext.lowercased() {
-        case "mmd", "mermaid": return mermaid
         case "canvas": return json
         case "docx": return docx
         default: return nil

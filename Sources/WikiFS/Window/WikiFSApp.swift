@@ -304,6 +304,8 @@ struct WikiFSApp: App {
             await processProfileOwner.awaitSettled()
             if let publication = await rendererOwner.consumeStartupPreparation() {
                 publication.publish(to: rendererHost)
+                sm.refreshRegisteredRendererSourceTypesForLiveSessions(
+                    publication.preparation.registeredSourceTypes)
             }
         }
         _windowTracker = State(initialValue: WindowListTracker())

@@ -9,27 +9,17 @@ import WikiFSTypes
 /// retirement: non-Markdown text sources (including `.mmd`) render as
 /// neutral code blocks, the outline derives from the rendered-document
 /// presentation, and the only reader-projected diagram tab left belongs to
-/// JSON Canvas (still a native built-in). Ingestion metadata
-/// (`MimeType.isMermaid`, the `.mmd` MIME fallback) stays covered here too.
+/// JSON Canvas (still a native built-in). Mermaid MIME knowledge is
+/// package-owned; without an active claim the format falls back generically.
 struct SourceTextPresentationTests {
 
-    // MARK: - MimeType.isMermaid (ingestion data; unchanged)
+    // MARK: - Renderer-owned extensions have no host MIME fallback
 
-    @Test func mimeTypeIsMermaidRecognizesVariants() {
-        #expect(MimeType.isMermaid("text/mermaid"))
-        #expect(MimeType.isMermaid("text/x-mermaid"))
-        // Case-insensitive (RFC 2045).
-        #expect(MimeType.isMermaid("TEXT/Mermaid"))
-        #expect(!MimeType.isMermaid("text/markdown"))
-        #expect(!MimeType.isMermaid("text/plain"))
-        #expect(!MimeType.isMermaid(nil))
-    }
-
-    @Test func mmdExtensionStillResolvesAMIMEFallback() {
-        // The ingestion chain keeps classifying `.mmd` as `text/mermaid`
-        // (issue #620) — this is content-type metadata, not renderer policy.
-        #expect(MimeType.mime(forExtension: "mmd") == MimeType.mermaid)
-        #expect(MimeType.mime(forExtension: "mermaid") == MimeType.mermaid)
+    @Test func mmdExtensionHasNoHostMIMEFallback() {
+        // Mermaid MIME policy moved into the reviewed package manifest. The
+        // host table keeps only project-owned formats (JSON Canvas metadata).
+        #expect(MimeType.mime(forExtension: "mmd") == nil)
+        #expect(MimeType.mime(forExtension: "mermaid") == nil)
         #expect(MimeType.mime(forExtension: "canvas") == MimeType.json)
         #expect(MimeType.mime(forExtension: "zzz") == nil)
     }
@@ -40,14 +30,14 @@ struct SourceTextPresentationTests {
         // No language tag: the Source tab shows the bytes as code — whatever
         // renderer package may claim the format.
         let raw = "flowchart TD\n    A --> B\n    B --> C"
-        let source = fixtureSource(filename: "diagram.mmd", ext: "mmd", mimeType: MimeType.mermaid)
+        let source = fixtureSource(filename: "diagram.mmd", ext: "mmd", mimeType: "text/mermaid")
         #expect(SourceRendererPresentationPlanner.sourceMarkdown(for: source, content: raw)
                 == "````\nflowchart TD\n    A --> B\n    B --> C\n````")
     }
 
     @Test func sourceMarkdownTrimsTrailingBlankLinesBeforeWrapping() {
         let raw = "graph LR\n  X --> Y\n\n\n"
-        let source = fixtureSource(filename: "diagram.mmd", ext: "mmd", mimeType: MimeType.mermaid)
+        let source = fixtureSource(filename: "diagram.mmd", ext: "mmd", mimeType: "text/mermaid")
         #expect(SourceRendererPresentationPlanner.sourceMarkdown(for: source, content: raw)
                 == "````\ngraph LR\n  X --> Y\n````")
     }
@@ -61,7 +51,7 @@ struct SourceTextPresentationTests {
     }
 
     @Test func sourceMarkdownKeepsEmptyContentUnchanged() {
-        let source = fixtureSource(filename: "blank.mmd", ext: "mmd", mimeType: MimeType.mermaid)
+        let source = fixtureSource(filename: "blank.mmd", ext: "mmd", mimeType: "text/mermaid")
         #expect(SourceRendererPresentationPlanner.sourceMarkdown(for: source, content: "") == "")
         #expect(SourceRendererPresentationPlanner.sourceMarkdown(for: source, content: "   \n\t ") == "   \n\t ")
     }
@@ -70,7 +60,7 @@ struct SourceTextPresentationTests {
         // A 4-backtick outer fence stays open even if the content contains a
         // 3-backtick run; the inner fence is content, not a terminator.
         let raw = "comment\n```\nflowchart TD\n  A --> B\n```"
-        let source = fixtureSource(filename: "diagram.mmd", ext: "mmd", mimeType: MimeType.mermaid)
+        let source = fixtureSource(filename: "diagram.mmd", ext: "mmd", mimeType: "text/mermaid")
         #expect(SourceRendererPresentationPlanner.sourceMarkdown(for: source, content: raw)
                 == "````\ncomment\n```\nflowchart TD\n  A --> B\n```\n````")
     }
@@ -96,7 +86,7 @@ struct SourceTextPresentationTests {
         // A .mmd source: text-presentable, but not a Markdown document and
         // no extraction head — no outline.
         #expect(!SourceDetailView.outlineApplicablePresentation(
-            mimeType: MimeType.mermaid, ext: "mmd", hasMarkdown: false))
+            mimeType: "text/mermaid", ext: "mmd", hasMarkdown: false))
         // Other package text formats: same derivation.
         #expect(!SourceDetailView.outlineApplicablePresentation(
             mimeType: "application/json", ext: "excalidraw", hasMarkdown: false))
@@ -108,9 +98,9 @@ struct SourceTextPresentationTests {
 
     @Test func mmdSourceStaysTextPresentable() {
         // A `.mmd` source still qualifies for the readable Source tab: its
-        // MIME is text-presentable and its bytes are UTF-8. This is what
-        // keeps the code-block presentation reachable at all.
-        let source = fixtureSource(filename: "diagram.mmd", ext: "mmd", mimeType: MimeType.mermaid)
+        // bytes are UTF-8 text, so the generic fallback keeps the code-block
+        // presentation reachable even without an active package claim.
+        let source = fixtureSource(filename: "diagram.mmd", ext: "mmd", mimeType: "text/mermaid")
         let bytes = Data("flowchart TD\n    A --> B".utf8)
         #expect(MimeType.isSourceTextPresentable(source.mimeType))
         #expect(SourceRendererPresentationPlanner.usesMarkdownSourcePresentation(

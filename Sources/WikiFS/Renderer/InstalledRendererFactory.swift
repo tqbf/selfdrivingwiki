@@ -333,15 +333,19 @@ struct InstalledRendererFactory {
     @MainActor
     struct Inputs {
         let availableDescriptors: [RendererDescriptor]
+        let registeredSourceTypes: RegisteredRendererSourceTypes
         let hostNavigationRouting: RendererHostNavigationRouting
         private let resolveConfiguration: ConfigurationResolver
 
         init(
             availableDescriptors: [RendererDescriptor] = [],
+            registeredSourceTypes: RegisteredRendererSourceTypes? = nil,
             hostNavigationRouting: RendererHostNavigationRouting = .unavailable,
             resolveConfiguration: @escaping ConfigurationResolver
         ) {
             self.availableDescriptors = availableDescriptors
+            self.registeredSourceTypes = registeredSourceTypes ?? RegisteredRendererSourceTypes(
+                descriptors: availableDescriptors)
             self.hostNavigationRouting = hostNavigationRouting
             self.resolveConfiguration = resolveConfiguration
         }
@@ -351,6 +355,7 @@ struct InstalledRendererFactory {
         func withHostNavigationRouting(_ routing: RendererHostNavigationRouting) -> Self {
             Self(
                 availableDescriptors: availableDescriptors,
+                registeredSourceTypes: registeredSourceTypes,
                 hostNavigationRouting: routing,
                 resolveConfiguration: resolveConfiguration)
         }

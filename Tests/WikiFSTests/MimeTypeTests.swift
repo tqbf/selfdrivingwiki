@@ -62,13 +62,9 @@ struct MimeTypeTests {
         #expect(MimeType.isPDF(nil) == false)
     }
 
-    // MARK: - isMarkdown / isMermaid (nil guards)
+    // MARK: - isMarkdown (nil guard)
 
     @Test func isMarkdownReturnsFalseForNil() {
         #expect(MimeType.isMarkdown(nil) == false)
-    }
-
-    @Test func isMermaidReturnsFalseForNil() {
-        #expect(MimeType.isMermaid(nil) == false)
     }
 }
