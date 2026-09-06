@@ -80,6 +80,24 @@ helper discovery.
 - `ExtractionConfig.podcastBackend` is now decode-only compatibility data;
   nothing writes it and no control reads it for Apple routing.
 
+## Drift audit round (same day)
+
+A Claude/Paseo conceptual drift audit of the branch (verdict FIX-FIRST,
+zero live defects) found the new source-scan guard `noApplePolicyBranch`
+scanning roots that could never contain its allow-listed files — a
+silently vacuous guard — plus stale doc comments describing the deleted
+materializer path, the write-only support-grant role with a hardcoded
+configuration mapping, the dead `RSSPodcastTranscriptService` family, and
+the vestigial `podcastBackend` setting. All findings are fixed in commit
+`55962995`: the guard now scans the engine/extractor roots and asserts its
+allow-list is reachable; the support configuration is selected by grant
+role with a single-writer precondition; the dead types, setting, resolver
+plumbing, and re-transcribe submenu are removed (legacy config keys decode
+as ignored); the grant trust anchor and the staging-failure-fails-closed
+behavior are directly tested; and the rename→`link(2)` documentation is
+corrected. Full gates re-run green (4201 tests, lint, opt-in app suites,
+drift check).
+
 ## Verification
 
 - Package gates: `scripts/sync-extractor-packages.sh` (sync and
@@ -93,5 +111,6 @@ helper discovery.
   (4), credential tests (13), and the touched routing, refresh, and
   materializer suites pass. `AppleQueueExtractionProviderTests` (3,
   opt-in) covers installed-package provenance in both hosts.
-- Full `make test`, `WIKIFS_APP_STORE=1 swift build`, and
-  `git diff --check` pass on the branch.
+- Full `make test` (4201 tests after the drift fixes), `make lint`,
+  `WIKIFS_APP_STORE=1 swift build`, and `git diff --check` pass on the
+  branch.
