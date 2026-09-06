@@ -32,12 +32,18 @@ public struct RegisteredRendererSourceTypes: Hashable, Sendable {
         public let displayName: String
         public let reference: RendererReference
         public let descriptor: RendererDescriptor
+        /// Every MIME value declared by the claims sharing this resolution's
+        /// presentation identity (canonical MIME + display name). Claims that
+        /// present identically accept each other's declared aliases, so
+        /// repair can treat any of them as evidence for the shared identity.
+        public let declaredMIMETypes: Set<RendererMIMEType>
 
-        fileprivate init(claim: Claim) {
+        fileprivate init(claim: Claim, declaredMIMETypes: Set<RendererMIMEType>) {
             canonicalMIMEType = claim.canonicalMIMEType
             displayName = claim.displayName
             reference = claim.reference
             descriptor = claim.descriptor
+            self.declaredMIMETypes = declaredMIMETypes
         }
     }
 
@@ -195,7 +201,16 @@ public struct RegisteredRendererSourceTypes: Hashable, Sendable {
                 && $0.displayName == first.displayName
         }
         guard equivalent else { return .ambiguous }
-        return .resolved(Resolution(claim: first))
+        // The declared set spans the whole presentation group, not just the
+        // winning descriptor: a mirror carrying another group member's alias
+        // is evidence for the same identity, not a conflict.
+        let presentation = claims.filter {
+            $0.canonicalMIMEType == first.canonicalMIMEType
+                && $0.displayName == first.displayName
+        }
+        return .resolved(Resolution(
+            claim: first,
+            declaredMIMETypes: Set(presentation.flatMap(\.allMIMETypes))))
     }
 
     private static func mimeAllowsExtensionFallback(

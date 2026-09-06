@@ -9804,7 +9804,7 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
                 case (nil, nil): .both
                 case (nil, _): .sourceOnly
                 case (_, nil): .activeVersionOnly
-                case (_, _): .both
+                case (_, _): .neither
                 }
                 let prefixData: Data? = row["content_prefix"]
                 let totalLength: Int? = row["content_length"]

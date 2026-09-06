@@ -185,7 +185,8 @@ struct MIMERepairTests {
         filename: String = "renamed.txt",
         sourceMIMEIsNull: Bool,
         versionMIMEIsNull: Bool,
-        nonNullMIME: String = "application/pdf"
+        nonNullMIME: String = "application/pdf",
+        versionMIME: String? = nil
     ) throws -> Fixture {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("mime-repair-\(UUID().uuidString)", isDirectory: true)
@@ -195,7 +196,8 @@ struct MIMERepairTests {
         let source = try store.addSource(filename: filename, data: bytes)
         let version = try #require(try store.activeContentVersion(sourceID: source.id))
         let sourceValue = sourceMIMEIsNull ? "NULL" : sql(nonNullMIME)
-        let versionValue = versionMIMEIsNull ? "NULL" : sql(nonNullMIME)
+        let versionValue = versionMIMEIsNull
+            ? "NULL" : sql(versionMIME ?? nonNullMIME)
         let statement =
             "UPDATE sources SET mime_type = \(sourceValue) WHERE id = \(sql(source.id.rawValue));" +
             "UPDATE source_versions SET mime_type = \(versionValue) WHERE id = \(sql(version.id.rawValue));"
@@ -445,6 +447,84 @@ struct MIMERepairTests {
         #expect(report.updatedCount == 0)
         #expect(try mimeRows(at: fixture.url, sourceID: fixture.sourceID)
             == ["application/vnd.chipnuts.karaoke-mmd|application/vnd.chipnuts.karaoke-mmd"])
+    }
+
+    /// A canonical mirror paired with a NULL sibling is a repair, not a
+    /// no-op: the no-op check must compare BOTH mirror positions, or the
+    /// NULL sibling stays stranded outside the candidate set forever.
+    @Test func canonicalMirrorWithNullSiblingStillNormalizes() throws {
+        let catalog = try mermaidCatalog()
+        for (sourceMIMEIsNull, versionMIMEIsNull) in [(false, true), (true, false)] {
+            let fixture = try makeFixture(
+                bytes: Data("graph TD\n    A --> B\n".utf8),
+                filename: "diagram.mmd",
+                sourceMIMEIsNull: sourceMIMEIsNull,
+                versionMIMEIsNull: versionMIMEIsNull,
+                nonNullMIME: "text/vnd.mermaid")
+            let store = try GRDBWikiStore(databaseURL: fixture.url)
+            installCatalog(catalog, into: store)
+
+            let report = try store.repairMIME(dryRun: false)
+
+            #expect(report.items.first?.status == .packageAliasNormalization)
+            #expect(report.items.first?.newMIMEType == "text/vnd.mermaid")
+            #expect(try mimeRows(at: fixture.url, sourceID: fixture.sourceID)
+                == ["text/vnd.mermaid|text/vnd.mermaid"])
+        }
+    }
+
+    /// Claims that share a presentation identity (canonical MIME + display
+    /// name) accept each other's declared aliases: a row whose mirrors carry
+    /// aliases from different coalesced claims normalizes to the shared
+    /// canonical instead of conflicting against one descriptor. Both mirrors
+    /// carry a value, so the row reports the `.neither` state.
+    @Test func equivalentPresentationClaimsAcceptEachOthersAliases() throws {
+        func descriptor(registration: String, alias: String) throws -> RendererDescriptor {
+            let canonicalMIME = try RendererMIMEType(validating: "text/vnd.wb")
+            let aliasMIME = try RendererMIMEType(validating: alias)
+            let asset = RendererAsset(
+                path: try .init(validating: "index.html"),
+                digest: try RendererSHA256Digest(bytes: Array(repeating: 0, count: RendererSHA256Digest.byteCount)))
+            return try RendererDescriptor(
+                reference: .init(
+                    packageID: try .init(validating: "org.example.\(registration)"),
+                    version: try .init(validating: "1.0.0"),
+                    registrationID: try .init(validating: registration)),
+                displayName: "Whiteboard",
+                implementation: .webPackage(.init(path: asset.path)),
+                matchers: [.normalizedMIME(canonicalMIME), .normalizedMIME(aliasMIME)],
+                sourceType: .init(canonicalMIMEType: canonicalMIME, mimeAliases: [aliasMIME]),
+                presentations: [.web],
+                supportedEmbeddingRoles: [.disclosureRow],
+                hasExplicitEmbeddingRoles: true,
+                approvedAssets: [asset],
+                capabilities: [.inputRead],
+                sizeLimits: try .init(maximumInputByteCount: 1_024, maximumDecodedByteCount: 2_048),
+                linkPolicy: .none,
+                accessibility: .init(supportsVoiceOver: true, supportsKeyboardNavigation: true),
+                compatibility: try .init(minimumProtocolRevision: 1, maximumProtocolRevision: 1),
+                priority: 0)
+        }
+        let catalog = RegisteredRendererSourceTypes(descriptors: [
+            try descriptor(registration: "wb-one", alias: "application/x-wb-one"),
+            try descriptor(registration: "wb-two", alias: "application/x-wb-two"),
+        ])
+        let fixture = try makeFixture(
+            bytes: Data("whiteboard content".utf8),
+            filename: "board.wb",
+            sourceMIMEIsNull: false,
+            versionMIMEIsNull: false,
+            nonNullMIME: "application/x-wb-one",
+            versionMIME: "application/x-wb-two")
+        let store = try GRDBWikiStore(databaseURL: fixture.url)
+        installCatalog(catalog, into: store)
+
+        let report = try store.repairMIME(dryRun: false)
+
+        #expect(report.items.first?.status == .packageAliasNormalization)
+        #expect(report.items.first?.nullState == .neither)
+        #expect(try mimeRows(at: fixture.url, sourceID: fixture.sourceID)
+            == ["text/vnd.wb|text/vnd.wb"])
     }
 
     /// A fictional artifact-gated claim: a valid artifact between the 4 KiB

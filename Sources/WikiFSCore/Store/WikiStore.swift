@@ -100,6 +100,8 @@ public enum MIMERepairNullState: String, Codable, Equatable, Sendable {
     case sourceOnly
     case activeVersionOnly
     case both
+    /// Neither stored MIME value is NULL: both mirrors carry a value.
+    case neither
 }
 
 public enum MIMERepairStatus: String, Codable, Equatable, Sendable {
