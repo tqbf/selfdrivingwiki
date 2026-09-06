@@ -10680,6 +10680,23 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         }
     }
 
+    public func initialContentVersion(sourceID: SourceID) throws -> SourceVersion? {
+        try dbWriter.read { db in
+            guard let row = try Row.fetchOne(
+                db,
+                sql: """
+                SELECT id, source_id, parent_id, blob_hash, mime_type,
+                       activity_id, external_identity, fetched_at
+                FROM source_versions
+                WHERE source_id = ? AND parent_id IS NULL
+                LIMIT 1;
+                """,
+                arguments: [sourceID.rawValue]
+            ) else { return nil }
+            return try Self.readSourceVersion(from: row)
+        }
+    }
+
     public func sourceVersion(id: SourceVersionID) throws -> SourceVersion? {
         try dbWriter.read { db in
             guard let row = try Row.fetchOne(

@@ -262,6 +262,8 @@ struct SourceVersionIDPersistenceTests {
         let source = try store.addSource(filename: "live.txt", data: Data("v1".utf8))
         let versionV1 = try #require(try store.activeContentVersion(sourceID: source.id))
         let versionV2 = try store.appendContentVersion(sourceID: source.id, data: Data("v2".utf8))
+        let initialVersion = try #require(try store.initialContentVersion(sourceID: source.id))
+        let activeVersion = try #require(try store.activeContentVersion(sourceID: source.id))
         let markdown = try store.recordMarkdownExtraction(
             sourceID: source.id,
             content: "# extracted",
@@ -271,6 +273,8 @@ struct SourceVersionIDPersistenceTests {
             modelVersion: "claude-x"
         )
 
+        #expect(initialVersion.id == versionV1.id)
+        #expect(activeVersion.id == versionV2.id)
         #expect(try normalizedRows(
             """
             SELECT id, parent_id

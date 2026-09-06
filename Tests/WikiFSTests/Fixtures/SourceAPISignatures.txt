@@ -21,6 +21,7 @@ Sources/WikiFSCore/Store/WikiStore.swift	func deleteSource(id: SourceID) throws
 Sources/WikiFSCore/Store/WikiStore.swift	func sourceOrigin(sourceID: SourceID) throws -> SourceOrigin?
 Sources/WikiFSCore/Store/WikiStore.swift	func sourceEditHistory(sourceID: SourceID) throws -> [SourceOrigin]
 Sources/WikiFSCore/Store/WikiStore.swift	func activeContentVersion(sourceID: SourceID) throws -> SourceVersion?
+Sources/WikiFSCore/Store/WikiStore.swift	func initialContentVersion(sourceID: SourceID) throws -> SourceVersion?
 Sources/WikiFSCore/Store/WikiStore.swift	func renameSource(id: SourceID, to newDisplayName: String) throws
 Sources/WikiFSCore/Store/WikiStore.swift	func setSourceDisplayName(id: SourceID, displayName: String) throws
 Sources/WikiFSCore/Store/WikiStore.swift	func markSourceIngested(id: SourceID) throws
@@ -63,6 +64,7 @@ Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func setActiveMarkdown(sourc
 Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func storeSourceChunks(id: SourceID, chunks: [Data]) throws
 Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func missingSourceEmbeddingWork() -> [(id: SourceID, text: String)]
 Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func activeContentVersion(sourceID: SourceID) throws -> SourceVersion?
+Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func initialContentVersion(sourceID: SourceID) throws -> SourceVersion?
 Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func rollbackSourceContent(sourceID: SourceID, to versionID: SourceVersionID) throws
 Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func contentVersionHistory(sourceID: SourceID) throws -> [SourceVersion]
 Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func sourceLinkPin(from pageID: PageID, to sourceID: SourceID,

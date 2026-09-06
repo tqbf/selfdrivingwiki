@@ -427,6 +427,10 @@ public protocol WikiStore: AnyObject, Sendable {
     /// `GRDBWikiStore` implement this identically.
     func activeContentVersion(sourceID: SourceID) throws -> SourceVersion?
 
+    /// The immutable root content version created when a source is ingested.
+    /// Returns nil when the source has no version rows.
+    func initialContentVersion(sourceID: SourceID) throws -> SourceVersion?
+
     /// Rename a source's display_name and rewrite every `[[source:<old>…]]` link
     /// that points at it. Transactional — source row + all affected pages + their
     /// link rows in one commit. Fragment and alias are preserved.

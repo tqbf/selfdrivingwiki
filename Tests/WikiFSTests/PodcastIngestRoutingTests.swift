@@ -279,6 +279,10 @@ struct PodcastIngestRoutingTests {
         // Sanity: no transcript at ingest (the PR4 invariant).
         #expect(try store.processedMarkdownHead(sourceID: stored.id) == nil)
 
+        let sourceV1 = try #require(
+            try store.contentVersionHistory(sourceID: stored.id)
+                .first(where: { $0.parentID == nil }))
+
         // 2. Transcribe — the user clicks the Transcribe button. PR5: the
         // public entry point is `transcribe(sourceID:podcastFetcher:)`.
         let head = try #require(
@@ -296,6 +300,15 @@ struct PodcastIngestRoutingTests {
         #expect(persisted.content == "SPEAKER_1: First transcript.")
         #expect(persisted.origin == .transcript)
         #expect(persisted.technique == "apple-ttml")
+        #expect(persisted.sourceVersionID == sourceV1.id)
+
+        // #251: the transcript-level extraction activity is associated with
+        // the apple-ttml agent and records the byteless source's v1 as input.
+        let provenance = try #require(
+            try store.extractionProvenance(markdownVersionID: persisted.id))
+        #expect(provenance.origin == .transcript)
+        #expect(provenance.producer == .tool(.appleTTML))
+        #expect(provenance.sourceVersionID == sourceV1.id)
     }
 
     // MARK: - Defensive guard: non-podcast source

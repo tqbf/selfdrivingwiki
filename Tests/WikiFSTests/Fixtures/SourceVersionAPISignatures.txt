@@ -13,12 +13,14 @@ source-markdown-version.source-version-id	typed	Sources/WikiFSCore/Sources/Sourc
 source-markdown-version.init	typed	Sources/WikiFSCore/Sources/SourceMarkdownVersion.swift	sourceVersionID: SourceVersionID? = nil,
 wiki-store.error	typed	Sources/WikiFSCore/Store/WikiStore.swift	case sourceVersionNotFound(SourceVersionID)
 wiki-store.active-content-version	surface	Sources/WikiFSCore/Store/WikiStore.swift	func activeContentVersion(sourceID: SourceID) throws -> SourceVersion?
+wiki-store.initial-content-version	surface	Sources/WikiFSCore/Store/WikiStore.swift	func initialContentVersion(sourceID: SourceID) throws -> SourceVersion?
 wiki-store.append-content-version	surface	Sources/WikiFSCore/Store/WikiStore.swift	) throws -> SourceVersion
 wiki-store.record-markdown-extraction	typed	Sources/WikiFSCore/Store/WikiStore.swift	sourceVersionID: SourceVersionID?, note: String?, modelVersion: String?
 grdb.source-origin.routes-through-origin-from	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	return Self.originFrom(row: row)
 grdb.source-edit-history.routes-through-origin-from	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	return rows.map { Self.originFrom(row: $0) }
 grdb.private-active-content-version	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	private func activeContentVersion(sourceID: SourceID, on db: Database) throws -> SourceVersion?
 grdb.public-active-content-version	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func activeContentVersion(sourceID: SourceID) throws -> SourceVersion?
+grdb.public-initial-content-version	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	public func initialContentVersion(sourceID: SourceID) throws -> SourceVersion?
 grdb.read-source-version	surface	Sources/WikiFSCore/Store/GRDBWikiStore.swift	private static func readSourceVersion(from row: Row) throws -> SourceVersion
 grdb.read-source-version.decode-id	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	id: SourceVersionID(rawValue: id),
 grdb.origin-from	typed	Sources/WikiFSCore/Store/GRDBWikiStore.swift	let versionID = SourceVersionID(rawValue: (row[0] as String?) ?? "")

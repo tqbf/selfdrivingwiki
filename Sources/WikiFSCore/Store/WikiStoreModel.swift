@@ -3880,10 +3880,16 @@ public final class WikiStoreModel {
         let transcript = try await provider.materialize()
         let markdown = String(data: transcript.data, encoding: .utf8) ?? ""
         do {
+            // #251: link the extraction to the immutable v1 created at ingest,
+            // regardless of which content version is currently active.
+            guard let sourceVersionID = try store.initialContentVersion(sourceID: sourceID)?.id else {
+                throw WikiStoreError.unexpected(
+                    "apple podcast source has no initial content version: \(sourceID.rawValue)")
+            }
             return try store.appendDerivedMarkdown(
                 sourceID: sourceID, content: markdown, origin: .transcript,
                 producer: .tool(.appleTTML), providerID: nil, modelID: nil, toolVersion: nil,
-                sourceVersionID: nil, note: nil)
+                sourceVersionID: sourceVersionID, note: nil)
         } catch {
             // #475/#492: never silently swallow — a transcription failure
             // (after network round-trips) must leave a Console.app trace.
