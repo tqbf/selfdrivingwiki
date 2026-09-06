@@ -180,7 +180,6 @@ public final class ProfileWikiSession: WikiSessionProtocol {
         queueEngine: any QueueEngineClient,
         extractionProvider: any QueueExtractionProvider,
         htmlBackend: HtmlExtractionBackend? = nil,
-        podcastBackend: PodcastTranscriptionBackend? = nil,
         profileLifetime: ProfileLifetime
     ) {
         self.profileLifetime = profileLifetime
@@ -204,7 +203,6 @@ public final class ProfileWikiSession: WikiSessionProtocol {
         // UI adaptation only: the child profile has already constructed all
         // per-wiki domain services before this observable facade is initialized.
         store.htmlBackend = htmlBackend
-        store.podcastBackend = podcastBackend
     }
 
     internal func scopeIdentitySnapshot(
@@ -232,8 +230,7 @@ public final class ProfileWikiSession: WikiSessionProtocol {
         extractionCoordinator: ExtractionCoordinator,
         queueEngine: any QueueEngineClient,
         extractionProvider: any QueueExtractionProvider,
-        htmlBackend: HtmlExtractionBackend? = nil,
-        podcastBackend: PodcastTranscriptionBackend? = nil
+        htmlBackend: HtmlExtractionBackend? = nil
     ) {
         self.profileLifetime = nil
         self.wikiID = wikiID
@@ -253,7 +250,6 @@ public final class ProfileWikiSession: WikiSessionProtocol {
         }
         self.descriptor = sessionDescriptor
         store.htmlBackend = htmlBackend
-        store.podcastBackend = podcastBackend
     }
 
     // MARK: - Descriptor updates

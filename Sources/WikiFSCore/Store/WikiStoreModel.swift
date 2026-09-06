@@ -380,18 +380,6 @@ public final class WikiStoreModel {
     /// adapter when extraction starts.
     @ObservationIgnored public var htmlBackend: HtmlExtractionBackend?
 
-    /// The configured podcast transcription backend (issue #799 PR4). Set at
-    /// app wiring time from `ExtractionConfig.podcastBackend` so the
-    /// Transcribe button and the "Re-transcribe with" menu have a default
-    /// when the user taps Transcribe without picking a backend explicitly.
-    /// `nil` = no default chosen (a fresh install, or a config file written
-    /// before this field shipped); the View-level `runTranscription` falls
-    /// back to `.appleTranscript` directly (the only backend today). Mirrors
-    /// the `htmlBackend` injection pattern (the model is deliberately NOT
-    /// config-aware; config is read by `ExtractionCoordinator` in
-    /// `WikiFSEngine`).
-    @ObservationIgnored public var podcastBackend: PodcastTranscriptionBackend?
-
     /// The active extractor registrations' declared input surface, set at app
     /// wiring time from `ExtractionBackendRegistry.registeredExtractionInputs()`
     /// and pushed straight to the store. Registration-driven recognition: a
@@ -3693,11 +3681,9 @@ public final class WikiStoreModel {
     /// ingest — mirrors the podcast PR4 contract, now generalized to YouTube).
     ///
     /// Dispatch table (per `SourceProvider.supportsTranscription`):
-    /// - `.applePodcast` → `transcribePodcast(sourceID:origin:fetcher:)` (PR4):
-    ///   reconstructs the episode URL from `origin.plan`, calls
-    ///   `ApplePodcastMaterializer.materialize()` (signed bearer → AMP → TTML →
-    ///   parse → markdown), writes via `appendDerivedMarkdown` using the
-    ///   `.appleTTML` transcript tool. Behind `#if PODCAST_TRANSCRIPTS`.
+    /// - `.applePodcast, .podcast` → throws `.podcastQueueRequired`. Callers
+    ///   enqueue the durable extraction job. The queue provider resolves the
+    ///   package and writes installed-package provenance.
     /// - `.youtube` → `transcribeYouTube(sourceID:origin:fetcher:)` (PR5, NEW):
     ///   reads `origin.externalIdentity` (the 11-char video ID), calls
     ///   `YouTubeTranscriptService.transcript(forVideoID:)` (pure-Swift watch-
@@ -3707,17 +3693,11 @@ public final class WikiStoreModel {
     /// - every other provider → throws `.notRefreshable` (no transcript pipeline
     ///   today; Vimeo is a future extension that needs OAuth — #564 Phase 4).
     ///
-    /// The `.podcast` (generic RSS) arm is queue-only now: RSS podcast
-    /// transcripts run through the app's extraction queue via the reviewed
-    /// podcast-transcript package. The inline path throws
-    /// `.podcastQueueRequired` so callers enqueue the durable job instead.
-    ///
     /// Throws `.notRefreshable("unknown")` when the source has no origin or the
     /// provider is missing (e.g. a legacy / nil-origin row), and
     /// `.notRefreshable(origin.agentName)` for unsupported providers. Each
     /// per-provider helper adds its own throws for its specific failures
-    /// (`PodcastTranscriptError.signatureUnavailable`,
-    /// `SourceRefreshService.RefreshError.missingPlan`, `YouTubeTranscriptError.*`).
+    /// (`SourceRefreshService.RefreshError.missingPlan`, `YouTubeTranscriptError.*`).
     ///
     /// `appendDerivedMarkdown` always appends — the FIRST call creates the
     /// HEAD; subsequent calls (re-transcribe) append coexisting alternatives
@@ -3802,9 +3782,8 @@ public final class WikiStoreModel {
             // in production UI; the throw keeps the model honest.
             throw SourceRefreshService.RefreshError.notRefreshable("youtube")
         }
-        // The transcript fetch (watch page + caption download + parse) runs
-        // off-main in a detached Task (mirrors `ApplePodcastMaterializer`'s
-        // shape); the model never touches the store inside this `await`.
+        // The transcript fetch runs off-main. The model does not access the
+        // store inside this await.
         let videoIDCopy = videoID
         let fetcherCopy = fetcher
         let transcript = try await Task.detached(priority: .userInitiated) {
@@ -3858,10 +3837,9 @@ public final class WikiStoreModel {
     /// (issue #799 PR4): `<slug>-<id>` when the URL carried a slug, else
     /// `podcast-<id>`. Mirrors the YouTube/Vimeo `youtube-<id>` /
     /// `vimeo-<id>` byteless-source filename convention. The `-transcript.md`
-    /// suffix is deliberately NOT used — that's reserved for the transcript
-    /// **markdown version**'s filename (written by the Transcribe trigger
-    /// through `ApplePodcastMaterializer.materialize()`, not by the ingest
-    /// path). The episode ID segment alone wouldn't survive
+    /// suffix is deliberately NOT used. The queue package writes the transcript
+    /// markdown version, while this ingest path writes the source filename.
+    /// The episode ID segment alone would not survive
     /// `FilenameEscaping.escapeTitle`'s spaces-as-underscores rule applied to
     /// a slug, so we escape the joined stem.
     private static func podcastEmbedFilename(for episode: PodcastEpisodeURL.EpisodeRef) -> String {

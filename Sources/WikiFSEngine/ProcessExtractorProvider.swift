@@ -658,7 +658,13 @@ public final class PreparedProcessOperation: Sendable {
                 requestName: name)
             supportSubdirectory = staged.supportDirectoryURL
             requestStagedSupport = staged
-            configuration = .applePodcastTranscript(helperPath: staged.relativePath)
+            precondition(
+                configuration == nil,
+                "operation support and operation configuration cannot both configure one request")
+            switch grant.role {
+            case .podcastTokenHelper:
+                configuration = .applePodcastTranscript(helperPath: staged.relativePath)
+            }
         } else {
             requestStagedSupport = nil
         }

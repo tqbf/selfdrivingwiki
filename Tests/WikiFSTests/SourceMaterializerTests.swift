@@ -480,8 +480,8 @@ struct SourceMaterializerTests {
     /// source files, not compiled symbols — meaningful regardless of the flag).
     @Test func agentSurfaceHasNoPodcastReferences() throws {
         // Coarse: every podcast type/token in this feature is `Podcast`-prefixed
-        // (`PodcastEpisodeURL`, `PodcastTranscriptFetching`, `PodcastTokenProviding`,
-        // `PodcastHTTPClient`, `PodcastTranscriptError`, `ApplePodcast*`,
+        // (`PodcastEpisodeURL`, `PodcastTokenProviding`, `PodcastHTTPClient`,
+        // `ApplePodcast*`,
         // `HelperPodcastToken*`, `podcastFetcher`). Any occurrence of "Podcast" in
         // an agent-surface file is itself a smell, so a single token catches them all.
         let symbols = ["ApplePodcast", "Podcast", "podcastFetcher", "HelperPodcastToken"]

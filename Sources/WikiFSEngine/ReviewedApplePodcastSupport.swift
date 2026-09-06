@@ -16,10 +16,26 @@ import WikiFSTypes
 /// revision is not the exact reviewed one.
 public struct ReviewedApplePodcastSupportProvider: ExtractorOperationSupportProviding {
     private let revision: ExtractorPackageRevisionID
+    #if PODCAST_TRANSCRIPTS
+    private let helperURLResolver: @Sendable () -> URL?
+    #endif
 
     public init(revision: ExtractorPackageRevisionID) {
         self.revision = revision
+        #if PODCAST_TRANSCRIPTS
+        self.helperURLResolver = HelperPodcastTokenProvider.resolveHelperURL
+        #endif
     }
+
+    #if PODCAST_TRANSCRIPTS
+    init(
+        revision: ExtractorPackageRevisionID,
+        helperURLResolver: @escaping @Sendable () -> URL?
+    ) {
+        self.revision = revision
+        self.helperURLResolver = helperURLResolver
+    }
+    #endif
 
     public func operationSupport(
         for revision: ExtractorPackageRevisionID
@@ -27,7 +43,7 @@ public struct ReviewedApplePodcastSupportProvider: ExtractorOperationSupportProv
         // Exact identity only — including the digest, not just the ID.
         guard revision == self.revision else { return nil }
         #if PODCAST_TRANSCRIPTS
-        guard let helperURL = HelperPodcastTokenProvider.resolveHelperURL() else {
+        guard let helperURL = helperURLResolver() else {
             // A build without the helper is a supported state: the package
             // uses its RSS fallback. Not a host preparation failure.
             return nil

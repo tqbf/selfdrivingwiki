@@ -170,8 +170,8 @@ struct ExtractionRouteTableHostedTests {
         defer { lease.release() }
         let dir = try tempDirectory("route-table-render")
         // A real registration whose MIME is outside the host routes: the table
-        // then holds four rows (PDF, HTML, Word, and the registration-derived
-        // epub route). Row views only exist after the async snapshot load rebuilds
+        // then holds six rows: five canonical routes and one registration-derived
+        // EPUB route. Row views only exist after the async snapshot load rebuilds
         // routeRows, so the wait below observes the actual load instead of the
         // initial layout.
         let view = makeView(directory: dir, snapshot: snapshot(registrations: [
@@ -191,16 +191,15 @@ struct ExtractionRouteTableHostedTests {
         let window = mount(view)
 
         try await waitUntil {
-            self.tableViewRowCounts(window).contains(5)
+            self.tableViewRowCounts(window).contains(6)
         }
         // The hosted hierarchy contains a native table (row views) inside a
         // clip view — the scrollable, window-bounded layout.
         let content = try #require(window.contentView)
         #expect(containsDescendant(content) { $0 is NSClipView })
-        // Four route rows plus the podcast transcript row. The packages pane
-        // is a separate tab, so its table is not mounted here — which is also
-        // what pins the default pane.
-        #expect(tableViewRowCounts(window) == [5])
+        // Five canonical routes plus the registration-derived EPUB route.
+        // The packages pane is not mounted on the default tab.
+        #expect(tableViewRowCounts(window) == [6])
         // Under the metrics ceiling every row has to be visible, not merely
         // present. The transcript row is last, so a table sized one row short
         // hides exactly it.
@@ -406,7 +405,6 @@ struct ExtractionRouteTableHostedTests {
         // bespoke Apple TTML backend row is GONE with the packaging.
         #expect(source.contains("podcastBackendBinding") == false)
         #expect(source.contains("Picker(\"Apple Transcript\"") == false)
-        #expect(source.contains("case podcastTranscript(PodcastTranscriptionBackend?)") == false)
         #expect(source.contains("extraction.routes.picker.podcast") == false)
         #expect(source.contains("Podcast feed transcripts run through the reviewed podcast-transcript package."))
         #expect(source.contains("not package-backed") == false)
@@ -432,23 +430,27 @@ struct ExtractionRouteTableHostedTests {
         #expect(source.contains(".sheet(item: $serviceConfigurationDialog) { dialog in\n            serviceConfigurationSheet(dialog)"))
     }
 
-    @Test("every table row is a route row with one id space")
-    func transcriptRowIsItsOwnIdentity() throws {
-        let routeRow = ExtractorRouteSettingsRow(
-            descriptor: ExtractorRouteDescriptor(
-                route: .canonicalPDF,
-                displayName: "PDF",
-                systemImage: "doc.richtext"),
-            savedSelection: nil,
-            resolvedSelection: nil,
-            choices: [],
-            status: .ready)
+    @Test("table row identifiers are unique")
+    func tableRowIdentifiersAreUnique() throws {
+        let rows = [
+            ExtractorRouteDescriptor(
+                route: .canonicalPDF, displayName: "PDF", systemImage: "doc.richtext"),
+            ExtractorRouteDescriptor(
+                route: .canonicalHTML, displayName: "HTML", systemImage: "doc.text"),
+            ExtractorRouteDescriptor(
+                route: .canonicalApplePodcastTranscript,
+                displayName: "Apple Podcasts transcript",
+                systemImage: "quote.bubble"),
+        ].map { descriptor in
+            ExtractionDefaultsTableRow.route(ExtractorRouteSettingsRow(
+                descriptor: descriptor,
+                savedSelection: nil,
+                resolvedSelection: nil,
+                choices: [],
+                status: .ready))
+        }
 
-        let route = ExtractionDefaultsTableRow.route(routeRow)
-
-        // The former bespoke transcript row case is gone; every row is a
-        // route row, so ids are route-scoped by construction.
-        #expect(route.id == "route/\(routeRow.id)")
+        #expect(Set(rows.map(\.id)).count == rows.count)
     }
 
     @Test("picker options show only extractor names")

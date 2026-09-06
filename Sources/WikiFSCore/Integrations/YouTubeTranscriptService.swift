@@ -23,15 +23,13 @@ public struct YouTubeTranscript: Equatable, Sendable {
 }
 
 /// The one thing ingest calls: video ID → transcript. Injected so `WikiStoreModel`
-/// (Add from URL) and tests can substitute a fake. Mirrors
-/// `PodcastTranscriptFetching`.
+/// (Add from URL) and tests can substitute a fake.
 public protocol YouTubeTranscriptFetching: Sendable {
     func transcript(forVideoID videoID: String) async throws -> YouTubeTranscript
 }
 
 /// Errors for the YouTube video → transcript pipeline, user-readable so the
-/// Add-from-URL sheet can surface them directly. Mirrors
-/// `PodcastTranscriptError`.
+/// Add-from-URL sheet can surface them directly.
 public enum YouTubeTranscriptError: Error, LocalizedError, Equatable {
     /// The video page or caption download returned a non-2xx status.
     case badResponse(Int)

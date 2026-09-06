@@ -18,6 +18,12 @@ struct ProcessExtractorOperationSupportTests {
         return dir
     }
 
+    private func removeTestDirectory(_ url: URL) {
+        // Test cleanup must not hide the assertion result.
+        // swiftlint:disable:next silent_try_optional
+        try? FileManager.default.removeItem(at: url)
+    }
+
     private func makeHelper(at url: URL, bytes: String = "#!/bin/sh\necho token\n") throws -> String {
         let data = Data(bytes.utf8)
         try data.write(to: url)
@@ -45,49 +51,59 @@ struct ProcessExtractorOperationSupportTests {
 
     // MARK: - Exact-revision admission (AC.6)
 
-    @Test func grantsExactReviewedRevisionOnly() async throws {
+    #if PODCAST_TRANSCRIPTS
+    @Test func directGrantMatchesFixtureIdentity() throws {
+        let root = try tempDirectory()
+        defer {
+            // Test cleanup must not hide the assertion result.
+            // swiftlint:disable:next silent_try_optional
+            try? FileManager.default.removeItem(at: root)
+        }
+        let helper = root.appendingPathComponent("fixture-helper")
+        let bytes = Data("fixture helper bytes".utf8)
+        try bytes.write(to: helper)
+
+        let grant = try #require(
+            ReviewedApplePodcastSupportProvider.grant(helperURL: helper))
+        #expect(grant.expectedSHA256 == ExtractorSHA256.digest(bytes).hex)
+        #expect(grant.expectedByteCount == bytes.count)
+        #expect(grant.destinationFileName.rawValue == "podcast-token-helper")
+    }
+
+    @Test func grantsExactReviewedRevisionOnly() throws {
+        let root = try tempDirectory()
+        defer {
+            // Test cleanup must not hide the assertion result.
+            // swiftlint:disable:next silent_try_optional
+            try? FileManager.default.removeItem(at: root)
+        }
+        let helper = root.appendingPathComponent("fixture-helper")
+        _ = try makeHelper(at: helper)
         let reviewed = ReviewedExtractorPackages.applePodcastTranscript.revision
-        let provider = ReviewedApplePodcastSupportProvider(revision: reviewed)
-        // Same packageID + version but a DIFFERENT digest: an imported
-        // lookalike must receive nothing.
+        let provider = ReviewedApplePodcastSupportProvider(
+            revision: reviewed, helperURLResolver: { helper })
         let lookalike = ExtractorPackageRevisionID(
             packageID: reviewed.packageID,
             version: reviewed.version,
             digest: try ExtractorPackageDigest(hex: String(repeating: "ab", count: 32)))
-        #if PODCAST_TRANSCRIPTS
-        // On a helper-enabled machine the exact revision MAY receive a grant;
-        // the lookalike NEVER does. On a machine without the helper both are
-        // nil (the supported no-helper state).
-        if let _ = provider.operationSupport(for: reviewed) {
-            #expect(provider.operationSupport(for: lookalike) == nil)
-        } else {
-            #expect(provider.operationSupport(for: lookalike) == nil)
-        }
-        #else
-        #expect(provider.operationSupport(for: reviewed) == nil)
-        #endif
+
+        #expect(provider.operationSupport(for: reviewed) != nil)
         #expect(provider.operationSupport(for: lookalike) == nil)
     }
 
-    @Test func missingHelperIsASupportedNoGrantState() throws {
-        // resolveHelperURL() is nil inside the test runner's bundle layout,
-        // which must produce NO grant — never a preparation failure.
-        #if PODCAST_TRANSCRIPTS
-        if HelperPodcastTokenProvider.resolveHelperURL() == nil {
-            let provider = ReviewedApplePodcastSupportProvider(
-                revision: ReviewedExtractorPackages.applePodcastTranscript.revision)
-            #expect(
-                provider.operationSupport(
-                    for: ReviewedExtractorPackages.applePodcastTranscript.revision) == nil)
-        }
-        #endif
+    @Test func missingHelperIsASupportedNoGrantState() {
+        let reviewed = ReviewedExtractorPackages.applePodcastTranscript.revision
+        let provider = ReviewedApplePodcastSupportProvider(
+            revision: reviewed, helperURLResolver: { nil })
+        #expect(provider.operationSupport(for: reviewed) == nil)
     }
+    #endif
 
     // MARK: - Staging (AC.7, AC.8)
 
     @Test func stagesOwnerOnlyExecutableAndCleansUp() throws {
         let root = try tempDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
+        defer { removeTestDirectory(root) }
         let source = root.appendingPathComponent("helper-source")
         let sha = try makeHelper(at: source)
 
@@ -110,7 +126,7 @@ struct ProcessExtractorOperationSupportTests {
 
     @Test func rejectsSymlinkedSource() throws {
         let root = try tempDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
+        defer { removeTestDirectory(root) }
         let real = root.appendingPathComponent("real-helper")
         _ = try makeHelper(at: real)
         let link = root.appendingPathComponent("helper-source")
@@ -126,7 +142,7 @@ struct ProcessExtractorOperationSupportTests {
 
     @Test func rejectsChangedSourceIdentity() throws {
         let root = try tempDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
+        defer { removeTestDirectory(root) }
         let source = root.appendingPathComponent("helper-source")
         let sha = try makeHelper(at: source)
         // Mutate AFTER computing the expected identity.
@@ -142,7 +158,7 @@ struct ProcessExtractorOperationSupportTests {
 
     @Test func rejectsHashMismatchDuringCopy() throws {
         let root = try tempDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
+        defer { removeTestDirectory(root) }
         let source = root.appendingPathComponent("helper-source")
         _ = try makeHelper(at: source)
 
@@ -162,7 +178,7 @@ struct ProcessExtractorOperationSupportTests {
 
     @Test func rejectsDestinationPathTraversalAndExistingDestination() throws {
         let root = try tempDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
+        defer { removeTestDirectory(root) }
         let source = root.appendingPathComponent("helper-source")
         let sha = try makeHelper(at: source)
 
@@ -258,6 +274,16 @@ struct ProcessExtractorOperationSupportTests {
             ExtractorOperationConfiguration.self,
             from: Data(#"{"endpoint": "http://127.0.0.1:8000", "timeoutMilliseconds": 5}"#.utf8))
         #expect(legacy == .doclingServe(endpoint: "http://127.0.0.1:8000", timeoutMilliseconds: 5))
+        for invalidLegacy in [
+            #"{"endpoint": 5}"#,
+            #"{"timeoutMilliseconds": "x"}"#,
+        ] {
+            #expect(throws: ExtractorValidationError.self) {
+                try JSONDecoder().decode(
+                    ExtractorOperationConfiguration.self,
+                    from: Data(invalidLegacy.utf8))
+            }
+        }
         // Non-http endpoint is rejected in both construction paths.
         #expect(throws: ExtractorValidationError.self) {
             try ExtractorOperationConfiguration(endpoint: "file:///etc", timeoutMilliseconds: nil)

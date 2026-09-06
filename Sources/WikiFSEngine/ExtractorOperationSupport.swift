@@ -103,8 +103,9 @@ public struct StagedExecutableIdentity: Sendable, Equatable {
 /// Stages a grant into `<operationRoot>/support/<request>/` with a
 /// race-resistant copy: open the source WITHOUT following links, inspect the
 /// open descriptor, copy from that descriptor while hashing, verify size and
-/// hash, fsync + close, set mode 0500, publish with an exclusive rename, then
-/// reopen and re-verify the staged inode. Every step fails closed.
+/// hash, fsync + close, set mode 0500, publish with exclusive `link(2)`, then
+/// reopen and re-verify the staged inode. POSIX rename silently replaces an
+/// existing destination on macOS, while `link(2)` fails when one exists.
 public enum ExtractorOperationSupportStager {
 
     /// Stages the grant's executable for one request. `requestName` is the
@@ -213,8 +214,11 @@ public enum ExtractorOperationSupportStager {
         // Flush before verification and publication.
         if copyFailed == false, fsync(temporaryFD) != 0 { copyFailed = true }
         close(temporaryFD)
-        guard copyFailed == false,
-              copied == grant.expectedByteCount,
+        guard copyFailed == false else {
+            removeTemporaryBestEffort(temporaryURL)
+            throw ExtractorOperationSupportError.stagingFailed
+        }
+        guard copied == grant.expectedByteCount,
               hasher.finalHex() == grant.expectedSHA256.lowercased() else {
             removeTemporaryBestEffort(temporaryURL)
             throw copied == grant.expectedByteCount

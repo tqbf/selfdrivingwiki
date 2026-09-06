@@ -64,12 +64,10 @@ struct ExtractionCompositionBoundaryTests {
         }
     }
 
-    /// The reviewed Apple package's identity appears in exactly TWO host
-    /// seams: the compiled reviewed-registration data (ReviewedExtractorPackages
-    /// + the default-route record) and the exact-revision support grant. No
-    /// general host policy may branch on the Apple package ID or the
-    /// `apple-podcast-transcript` kind — routing, selection, and persistence
-    /// treat it like every other package.
+    /// Apple identity is confined to the reviewed registration and identity
+    /// seams, the route presentation table (display data), the process service
+    /// lineage constants, and the engine's exact-revision support grant. No
+    /// general host policy may branch on the Apple package ID or kind.
     @Test("no Apple kind or package policy branch outside the reviewed seams")
     func noApplePolicyBranch() throws {
         let root = repositoryRoot()
@@ -78,6 +76,8 @@ struct ExtractionCompositionBoundaryTests {
             "Sources/wikid",
             "Sources/WikiFSCore/Store",
             "Sources/WikiFSCore/Sources",
+            "Sources/WikiFSCore/Extractor",
+            "Sources/WikiFSEngine",
         ]
         // Host files allowed to NAME the Apple lineage: the compiled reviewed
         // identity, the engine's exact-revision support grant, the route
@@ -89,6 +89,8 @@ struct ExtractionCompositionBoundaryTests {
             "ExtractorPackagePluginDefinitionFactory.swift",
             "ExtractorRoutePresentation.swift",
             "ProcessExtractionServices.swift",
+            "ProcessExtractorProvider.swift",
+            "ExtractorSelectionResolver.swift",
         ]
 
         var files: [URL] = []
@@ -105,6 +107,9 @@ struct ExtractionCompositionBoundaryTests {
             }
         }
         #expect(files.isEmpty == false, "no production sources found to scan")
+        #expect(
+            files.contains { allowedFiles.contains($0.lastPathComponent) },
+            "no allow-listed Apple identity seam exists in the scanned tree")
 
         for file in files {
             guard allowedFiles.contains(file.lastPathComponent) == false else { continue }

@@ -78,11 +78,14 @@ struct ExtractorRouteTableBuilderTests {
             .canonicalApplePodcastTranscript,
             futureRoute,
         ])
-        #expect(rows[3].savedSelection == nil)
+        let appleRow = try #require(
+            rows.first { $0.route == .canonicalApplePodcastTranscript })
+        #expect(appleRow.savedSelection == nil)
+        let futureRow = try #require(rows.first { $0.route == futureRoute })
         // The saved future route keeps its host (ACP) selection identity.
-        #expect(rows[5].savedSelection == ExtractorRouteHostCatalog.acpReference)
+        #expect(futureRow.savedSelection == ExtractorRouteHostCatalog.acpReference)
         // No host execution exists for a future route.
-        #expect(rows[5].resolvedSelection == nil)
+        #expect(futureRow.resolvedSelection == nil)
     }
 
     @Test func rowsSortDeterministically() throws {

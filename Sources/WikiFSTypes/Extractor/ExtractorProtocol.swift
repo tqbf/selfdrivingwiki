@@ -440,11 +440,21 @@ extension ExtractorOperationConfiguration: Codable {
         }
         switch raw[CodingKeys.kind.rawValue]?.stringValue {
         case nil:
-            // Legacy flat shape (Docling). A helperPath here is a mixed
-            // shape and is rejected.
+            // Legacy flat shape (Docling). A helper path or a known field with
+            // an invalid value type makes the shape invalid.
             guard raw[CodingKeys.helperPath.rawValue] == nil else {
                 throw ExtractorValidationError.invalidManifest(
-                    "helper path requires the apple-podcast-transcript configuration")
+                    "invalid legacy operation configuration")
+            }
+            if let endpointValue = raw[CodingKeys.endpoint.rawValue],
+               case .string = endpointValue {} else if raw[CodingKeys.endpoint.rawValue] != nil {
+                throw ExtractorValidationError.invalidManifest(
+                    "invalid legacy operation configuration endpoint")
+            }
+            if let timeoutValue = raw[CodingKeys.timeoutMilliseconds.rawValue],
+               case .number = timeoutValue {} else if raw[CodingKeys.timeoutMilliseconds.rawValue] != nil {
+                throw ExtractorValidationError.invalidManifest(
+                    "invalid legacy operation configuration timeout")
             }
             let endpoint = raw[CodingKeys.endpoint.rawValue]?.stringValue
             let timeout = raw[CodingKeys.timeoutMilliseconds.rawValue]?.intValue

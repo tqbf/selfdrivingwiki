@@ -9,12 +9,8 @@ import Foundation
 ///
 /// Provider reconstruction keys off `SourceOrigin.agentName`:
 /// - `"website"` → `WebsiteMaterializer` (refresh appends a content version).
-/// - `"apple-podcast"` → `ApplePodcastMaterializer` (refresh appends a derived
-///   markdown version — byteless sources have no content to refresh).
-/// - `"podcast"` (generic RSS) → `.podcastQueueRequired`: RSS podcast
-///   transcripts run through the app's extraction queue (the extractor-package
-///   route). There is no direct re-fetch path; the app's Transcribe and
-///   refresh actions enqueue the same durable extraction job.
+/// - `"apple-podcast"` and `"podcast"` → `.podcastQueueRequired`. Refresh and
+///   Transcribe enqueue the same durable package extraction job.
 /// - Everything else (`local-file`, `zotero`, `markdown-folder`,
 ///   `legacy-import`, `unknown`) → `.notRefreshable` (import-only).
 ///

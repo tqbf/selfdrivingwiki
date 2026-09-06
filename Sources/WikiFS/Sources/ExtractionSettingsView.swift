@@ -2323,9 +2323,9 @@ enum ExtractionSettingsPane: String, CaseIterable, Identifiable, Hashable, Senda
 /// One row of the Default Extractors table. A packaged extraction route and the
 /// podcast transcript default are different operation domains: a route resolves
 /// through the package protocol's registrations and writes an
-/// `ExtractorRouteSettingsSelection`, while a transcript resolves through a host
-/// adapter and writes a `PodcastTranscriptionBackend`. They share a table but
-/// not a selection type and not an id space, so the case tag is what lets one
+/// `ExtractorRouteSettingsSelection`. They share one table, but the row case
+/// keeps the route identity explicit and prevents unrelated id spaces from
+/// comparing equal. The case tag lets one
 /// table show both without either pretending to be the other.
 enum ExtractionDefaultsTableRow: Identifiable, Hashable, Sendable {
     case route(ExtractorRouteSettingsRow)

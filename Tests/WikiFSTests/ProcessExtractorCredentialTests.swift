@@ -63,7 +63,8 @@ private func makeOperation(
     manifest: ExtractorManifest,
     resolver: (any ExtractorOperationCredentialResolving)?,
     executor: StubCredentialExecutor,
-    configuration: (@Sendable (ExtractorPackageRevisionID) -> ExtractorOperationConfiguration?)? = nil
+    configuration: (@Sendable (ExtractorPackageRevisionID) -> ExtractorOperationConfiguration?)? = nil,
+    operationSupport: (any ExtractorOperationSupportProviding)? = nil
 ) throws -> PreparedProcessOperation {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("op-\(UUID().uuidString)", isDirectory: true)
@@ -87,6 +88,7 @@ private func makeOperation(
         launchGate: nil,
         operationCredentials: resolver,
         operationConfiguration: configuration,
+        operationSupport: operationSupport,
         runtimeResolution: nil)
 }
 
@@ -152,6 +154,16 @@ final class StubCredentialExecutor: ManagedProcessExecuting, @unchecked Sendable
             standardOutputByteCount: 0,
             standardError: Data(),
             executableURL: operation.paths.packageRoot)
+    }
+}
+
+private struct FixedOperationSupportProvider: ExtractorOperationSupportProviding {
+    let grant: ExtractorOperationSupportGrant
+
+    func operationSupport(
+        for revision: ExtractorPackageRevisionID
+    ) -> ExtractorOperationSupportGrant? {
+        grant
     }
 }
 
@@ -262,6 +274,8 @@ struct ProcessExtractorCredentialTests {
                 endpoint: "http://127.0.0.1:8000",
                 timeoutMilliseconds: ExtractorHostLimits.maximumDurationMilliseconds + 1)
         }
+        // The test unwraps the valid fixture below.
+        // swiftlint:disable:next silent_try_optional
         let valid = try? ExtractorOperationConfiguration(
             endpoint: "http://127.0.0.1:8000", timeoutMilliseconds: 600_000)
         guard case .doclingServe(_, .some(let timeout)) = valid else {
@@ -322,8 +336,11 @@ struct ProcessExtractorCredentialTests {
             kind: .pdf, input: Data(), filename: "x.pdf", onProgress: nil)
         // Success: credentials directory holds no request subdirectories.
         let credentialsRoot = operation.directoryRoot.appendingPathComponent("credentials")
-        #expect(
-            (try? FileManager.default.contentsOfDirectory(atPath: credentialsRoot.path))?.isEmpty ?? true)
+        // A missing cleanup directory is equivalent to an empty directory.
+        // swiftlint:disable:next silent_try_optional
+        let remainingCredentials = try? FileManager.default.contentsOfDirectory(
+            atPath: credentialsRoot.path)
+        #expect(remainingCredentials?.isEmpty ?? true)
 
         // Failure: the executor throws AFTER the file was verified to exist.
         let failingExecutor = StubCredentialExecutor()
@@ -339,8 +356,39 @@ struct ProcessExtractorCredentialTests {
         }
         let failingCredentialsRoot =
             failingOperation.directoryRoot.appendingPathComponent("credentials")
+        // A missing cleanup directory is equivalent to an empty directory.
+        // swiftlint:disable:next silent_try_optional
+        let remainingFailingCredentials = try? FileManager.default.contentsOfDirectory(
+            atPath: failingCredentialsRoot.path)
+        #expect(remainingFailingCredentials?.isEmpty ?? true)
+    }
+
+    @Test func operationSupportStagingFailurePreventsLaunchAndOutput() async throws {
+        let manifest = try v2Manifest(requirements: [])
+        let executor = StubCredentialExecutor()
+        let missingSource = FileManager.default.temporaryDirectory
+            .appendingPathComponent("missing-support-\(UUID().uuidString)")
+        let grant = try #require(ExtractorOperationSupportGrant(
+            role: .podcastTokenHelper,
+            sourceURL: missingSource,
+            destinationFileName: "podcast-token-helper",
+            expectedSHA256: String(repeating: "0", count: 64),
+            expectedByteCount: 1))
+        let operation = try makeOperation(
+            manifest: manifest,
+            resolver: nil,
+            executor: executor,
+            operationSupport: FixedOperationSupportProvider(grant: grant))
+
+        await #expect(throws: ExtractorOperationSupportError.sourceUnavailable) {
+            _ = try await operation.execute(
+                kind: .pdf, input: Data("pdf".utf8), filename: "x.pdf", onProgress: nil)
+        }
+        #expect(executor.capturedRequests.isEmpty)
         #expect(
-            (try? FileManager.default.contentsOfDirectory(atPath: failingCredentialsRoot.path))?.isEmpty ?? true)
+            FileManager.default.fileExists(
+                atPath: operation.directoryRoot.appendingPathComponent("output/result.md").path)
+                == false)
     }
 
     @Test func rotationAffectsNextCredentialExecute() async throws {

@@ -31,9 +31,10 @@ operation root for one exact reviewed revision only.
   string never grants support. An imported lookalike with the same ID and
   version but a different digest receives nothing.
 - Staging copies from an `O_NOFOLLOW`-opened descriptor while hashing,
-  verifies size and hash, sets mode 0500, publishes with an exclusive
-  rename, and re-verifies the staged inode. Symlinks, hard links, identity
-  changes, and planted destinations all fail closed.
+  verifies size and hash, sets mode 0500, publishes with exclusive `link(2)`,
+  and re-verifies the staged inode. POSIX rename silently replaces an existing
+  destination on macOS, while `link(2)` fails when one exists. Symlinks, hard
+  links, identity changes, and planted destinations all fail closed.
 - The request's operation-configuration file carries only the staged
   helper's RELATIVE path. The configuration envelope is now a closed tagged
   model: `.doclingServe(endpoint:timeout:)` keeps the legacy flat wire shape
