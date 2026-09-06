@@ -77,8 +77,139 @@ struct ReviewedExtractorPackageTests {
         #expect(arguments.isEmpty)
     }
 
+    /// The reviewed podcast transcript package: manifest revision 1 with
+    /// protocol revision 3 — the new kind is registration data, not a new
+    /// manifest field. `remote-url` is its only input transport, `network`
+    /// its only capability, and the Whisper fallback is not registered.
+    @Test func podcastTranscriptRevisionMatchesGolden() throws {
+        let output = try validate("PodcastTranscript")
+
+        #expect(output.packageID == "org.selfdrivingwiki.podcast-transcript")
+        #expect(output.protocolRevision == 3)
+        #expect(output.registrationIDs == ["feed"])
+
+        let manifest = try manifest("PodcastTranscript")
+        #expect(manifest.manifestRevision == .v1)
+        let registration = try #require(manifest.registrations.first)
+        #expect(registration.kinds == [.podcastTranscript])
+        #expect(registration.mimeTypes == [try ExtractorMIMEType(validating: "audio/podcast")])
+        #expect(registration.credentialRequirements.isEmpty)
+        #expect(manifest.capabilities == [.network])
+        guard case .runtime(let command, let arguments) = manifest.launch else {
+            Issue.record("podcast-transcript must launch through a runtime")
+            return
+        }
+        #expect(command.rawValue == "uv")
+        #expect(arguments == ["run", "--script"])
+
+        // The exact reviewed identity is pinned byte-for-byte; a regenerated
+        // package whose digest changed fails this gate with the new value.
+        #expect(output.packageDigest
+            == "8bfc2f5cab3e8e7a7cba421cf34afc11e1f2e4bd5bb8fcf5aae05fb4c87db54a")
+    }
+
+    /// The registered source URL never appears in the committed package
+    /// bytes, and the reviewed registration never declares the Whisper
+    /// transcription fallback or model capabilities.
+    @Test func podcastTranscriptDeclaresNoModelOrSharedCacheCapabilities() throws {
+        let manifest = try manifest("PodcastTranscript")
+        #expect(manifest.capabilities.contains(.modelDownload) == false)
+        #expect(manifest.capabilities.contains(.sharedRuntimeCache) == false)
+
+        let payload = try String(
+            contentsOf: Self.packageURL("PodcastTranscript")
+                .appendingPathComponent("PROVENANCE.md"),
+            encoding: .utf8)
+        #expect(payload.contains("model-download") == false)
+        #expect(payload.contains("shared-runtime-cache") == false)
+    }
+
+    /// AC.3: recorded success and bounded-failure frame sequences from the
+    /// committed bundle replay through `protocol-smoke`. The tool never
+    /// launches the process — it validates the directory and replays the
+    /// recorded frames against the manifest's limits.
+    @Test func podcastTranscriptRecordedProtocolFramesReplayThroughProtocolSmoke() throws {
+        let fixtures = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/PodcastTranscript", isDirectory: true)
+        let request = fixtures.appendingPathComponent("request.json").path
+
+        let success = try ExtractorPackageToolExecutor().execute(arguments: [
+            "protocol-smoke",
+            Self.packageURL("PodcastTranscript").path,
+            request,
+            fixtures.appendingPathComponent("frames.jsonl").path,
+        ])
+        #expect(success.packageID == "org.selfdrivingwiki.podcast-transcript")
+        #expect(success.terminalKind == "result")
+        #expect(success.progressEventCount == 3)
+
+        let missingTranscript = try ExtractorPackageToolExecutor().execute(arguments: [
+            "protocol-smoke",
+            Self.packageURL("PodcastTranscript").path,
+            request,
+            fixtures.appendingPathComponent("frames-missing-transcript.jsonl").path,
+        ])
+        #expect(missingTranscript.terminalKind == "failure")
+
+        let networkFailure = try ExtractorPackageToolExecutor().execute(arguments: [
+            "protocol-smoke",
+            Self.packageURL("PodcastTranscript").path,
+            request,
+            fixtures.appendingPathComponent("frames-network-failure.jsonl").path,
+        ])
+        #expect(networkFailure.terminalKind == "failure")
+    }
+
+    /// A `remote-url` request must be rejected for a revision-1 package and
+    /// an `operation-file` request must be rejected for this revision-3
+    /// package: the transports are revision-scoped in both directions.
+    @Test func podcastTranscriptRejectsWrongTransportAndRevision() throws {
+        let fixtures = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/PodcastTranscript", isDirectory: true)
+        let request = try Data(contentsOf: fixtures.appendingPathComponent("request.json"))
+
+        // A valid v1 operation-file request document with this package: the
+        // tool's revision gate rejects the mismatch.
+        let v1Request = String(decoding: request, as: UTF8.self)
+            .replacing("\"protocolRevision\":3", with: "\"protocolRevision\":1")
+            .replacing(
+                "\"inputTransport\":\"remote-url\",\"remoteURL\":\"https://example.com/feed.rss\"",
+                with: "\"inputTransport\":\"operation-file\",\"inputPath\":\"input/source\"")
+        let v1URL = fixtures.appendingPathComponent("request-v1.json")
+        try v1Request.write(to: v1URL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: v1URL) }
+        #expect(throws: ExtractorPackageToolFailure.protocolRevisionMismatch) {
+            try ExtractorPackageToolExecutor().execute(arguments: [
+                "protocol-smoke",
+                Self.packageURL("PodcastTranscript").path,
+                v1URL.path,
+                fixtures.appendingPathComponent("frames.jsonl").path,
+            ])
+        }
+
+        // An operation-file request document for this package: revision
+        // matches, but the registration does not claim the docx MIME type.
+        let fileRequest = String(decoding: request, as: UTF8.self)
+            .replacing("\"inputTransport\":\"remote-url\",\"remoteURL\":\"https://example.com/feed.rss\"", with: "\"inputTransport\":\"operation-file\",\"inputPath\":\"input/source\"")
+            .replacing("\"kind\":\"podcast-transcript\"", with: "\"kind\":\"pdf\"")
+            .replacing("\"mimeType\":\"audio/podcast\"", with: "\"mimeType\":\"application/pdf\"")
+        let fileURL = fixtures.appendingPathComponent("request-file.json")
+        try fileRequest.write(to: fileURL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+        #expect(throws: ExtractorPackageToolFailure.unsupportedRegistration) {
+            try ExtractorPackageToolExecutor().execute(arguments: [
+                "protocol-smoke",
+                Self.packageURL("PodcastTranscript").path,
+                fileURL.path,
+                fixtures.appendingPathComponent("frames.jsonl").path,
+            ])
+        }
+    }
+
     @Test func reviewedDigestsAreStableAcrossRepeatedValidation() throws {
-        for name in ["Defuddle", "Pdf2md", "DoclingServe", "Docx2md"] {
+        for name in ["Defuddle", "Pdf2md", "DoclingServe", "Docx2md", "PodcastTranscript"] {
             let first = try validate(name)
             let second = try validate(name)
             #expect(first.packageDigest == second.packageDigest)
@@ -95,15 +226,18 @@ struct ReviewedExtractorPackageTests {
     }
 
     /// Revision 1 supports PDF, HTML, and DOCX byte extraction, and every
-    /// reviewed package must claim a distinct kind.
+    /// reviewed package must claim a distinct kind. The podcast transcript
+    /// package is the revision-3 `podcast-transcript` member.
     @Test func reviewedPackagesCoverDistinctKinds() throws {
         let defuddle = try manifest("Defuddle")
         let pdf2md = try manifest("Pdf2md")
         let docx2md = try manifest("Docx2md")
+        let podcast = try manifest("PodcastTranscript")
 
         #expect(defuddle.registrations.allSatisfy { $0.kinds == [.html] })
         #expect(pdf2md.registrations.allSatisfy { $0.kinds == [.pdf] })
         #expect(docx2md.registrations.allSatisfy { $0.kinds == [.docx] })
+        #expect(podcast.registrations.allSatisfy { $0.kinds == [.podcastTranscript] })
     }
 
     /// AC.4: a frames.jsonl + request.json pair recorded from a real run of
