@@ -177,5 +177,5 @@ the digest regeneration they caused).
   YouTube's manifest duration is 600 s for first-run headroom. Reproduced
   end to end in the sandboxed host environment; warm runs complete in well
   under a minute. New digests: youtube
-  `616528605349683e83ea773d685ceb7bf5dfd9862594e4f66d5662630a4c0787`,
+  `8f87ff4a0c8c5fac1d5ff19c6d1dff6a816a27c081fb106de3bc6c92b8c7e1a1`,
   podcast `8b083ec85664e9d0c1a2afe8b96beee100660c1882f6d7c75d627da918f6caa6`.
