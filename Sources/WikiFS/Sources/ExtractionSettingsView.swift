@@ -2171,7 +2171,13 @@ enum ExtractorRouteSettingsMapping {
         _ logical: LogicalExtractorReference,
         row: ExtractorRouteSettingsRow
     ) -> ExtractorRouteSettingsSelection {
-        row.choices.contains { $0.category == .installedPackage && $0.reference == .installed(logical) }
+        // A choice is identified by its reference; the category is picker
+        // presentation only. Reviewed packages project `.reviewedPackage`
+        // from the catalog while active imports project `.installedPackage`,
+        // so matching on the category would reclassify a just-picked
+        // reviewed lineage as unavailable on the next rebuild — blanking
+        // the picker.
+        row.choices.contains { $0.reference == .installed(logical) }
             ? .installed(logical)
             : .unavailableInstalled(logical)
     }

@@ -204,6 +204,11 @@ struct ExtractorPackageSettingsTests {
         for lineage in lineages {
             let descriptor = try #require(
                 ExtractorRouteHostCatalog.descriptors.first { $0.route == lineage.route })
+            // The reviewed choice carries the category the extraction context
+            // projects for reviewed packages — `.reviewedPackage`, not
+            // `.installedPackage`. Matching on the category reclassified a
+            // just-picked reviewed lineage as unavailable on the next row
+            // rebuild, which blanked the picker.
             let row = ExtractorRouteSettingsRow(
                 descriptor: descriptor,
                 savedSelection: nil,
@@ -218,7 +223,7 @@ struct ExtractorPackageSettingsTests {
                         route: lineage.route,
                         reference: .installed(lineage.logical),
                         displayName: lineage.name,
-                        category: .installedPackage,
+                        category: .reviewedPackage,
                         exactSummary: "1.0.0 · abcdef123456"),
                 ],
                 status: .ready)
@@ -232,18 +237,54 @@ struct ExtractorPackageSettingsTests {
 
             // The picker tag for the reviewed choice carries the generic
             // installed lineage (never a legacy display case), and the pick
-            // persists and reads back.
+            // persists and reads back without degrading to unavailable.
             let tag = ExtractionSettingsView.selection(for: row.choices[1])
             #expect(tag == .installed(lineage.logical))
 
             var config = ExtractionConfig()
             ExtractorRouteSettingsMapping.write(tag, route: lineage.route, into: &config)
             #expect(config.extractorSelection(for: lineage.route) == .installed(lineage.logical))
-            #expect(
-                ExtractorRouteSettingsMapping.selection(
-                    route: lineage.route, config: config, row: row)
-                == .installed(lineage.logical))
+            let afterPick = ExtractorRouteSettingsMapping.selection(
+                route: lineage.route, config: config, row: row)
+            #expect(afterPick == .installed(lineage.logical))
+            #expect(afterPick != .unavailableInstalled(lineage.logical))
         }
+
+        // An imported third-party package keeps the same contract: its
+        // `.installedPackage` choice displays, persists, and reads back.
+        let importedLogical = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.example.youtube"),
+            registrationID: try ExtractorRegistrationID(validating: "captions"))
+        let importedRow = ExtractorRouteSettingsRow(
+            descriptor: try #require(
+                ExtractorRouteHostCatalog.descriptors.first { $0.route == .canonicalYouTubeTranscript }),
+            savedSelection: nil,
+            resolvedSelection: nil,
+            choices: [
+                ExtractorRouteChoice(
+                    route: .canonicalYouTubeTranscript,
+                    reference: .none,
+                    displayName: "No default (disable)",
+                    category: .prompt),
+                ExtractorRouteChoice(
+                    route: .canonicalYouTubeTranscript,
+                    reference: .installed(importedLogical),
+                    displayName: "Example YouTube Package",
+                    category: .installedPackage,
+                    exactSummary: "1.0.0 · abcdef123456"),
+            ],
+            status: .ready)
+        #expect(
+            ExtractorRouteSettingsMapping.selection(
+                route: .canonicalYouTubeTranscript, config: ExtractionConfig(), row: importedRow)
+            == .prompt)
+        var importedConfig = ExtractionConfig()
+        ExtractorRouteSettingsMapping.write(
+            .installed(importedLogical), route: .canonicalYouTubeTranscript, into: &importedConfig)
+        #expect(
+            ExtractorRouteSettingsMapping.selection(
+                route: .canonicalYouTubeTranscript, config: importedConfig, row: importedRow)
+            == .installed(importedLogical))
 
         // The explicit disable choice still maps to the prompt record.
         #expect(ExtractionSettingsView.selection(for: ExtractorRouteChoice(
