@@ -23,7 +23,10 @@ func run() async -> Int32 {
     do {
         invocation = try ArgumentParser.parse(arguments) { ProcessInfo.processInfo.environment[$0] }
     } catch let failure as ArgumentParser.Failure {
-        FileHandle.standardError.write(Data("wikictl: \(failure)\n\n\(ArgumentParser.usageText)\n".utf8))
+        // Scoped help exists (#1224), so the error path points at the nearest
+        // help surface instead of dumping the full usage on every typo.
+        FileHandle.standardError.write(
+            Data("wikictl: \(failure)\nRun `wikictl --help` (or `wikictl <command> --help`) for usage.\n".utf8))
         return 2
     } catch {
         FileHandle.standardError.write(Data("wikictl: \(error)\n".utf8))
@@ -31,8 +34,11 @@ func run() async -> Int32 {
     }
 
     // Help and version don't need a wiki — print and exit before wiki resolution.
-    if case .help = invocation.command {
-        print(ArgumentParser.usageText)
+    // The scope selects which surface to print: top-level, one family
+    // (`wikictl source --help`), one subcommand (`source add --help`), or one
+    // OKF operation (`page okf verify --help`) (#1224).
+    if case .help(let scope) = invocation.command {
+        print(CLIReference.helpText(for: scope))
         return 0
     }
 

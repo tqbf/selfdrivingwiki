@@ -21,7 +21,7 @@ struct WikiCtlCommandTests {
     @Test func parsesTopLevelHelpWithoutWikiSelector() throws {
         let invocation = try ArgumentParser.parse(["--help"], env: noEnv)
         #expect(invocation.wikiSelector.isEmpty)
-        #expect(invocation.command == .help)
+        #expect(invocation.command == .help(.topLevel))
     }
 
     @Test func usageDocumentsPipeAndHeredocBodyFiles() {
