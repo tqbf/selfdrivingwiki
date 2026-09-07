@@ -347,7 +347,11 @@ public enum PageCommand {
             let resultID = try store.workspaceWritePage(
                 workspaceID: WorkspaceID(rawValue: workspace), pageID: pageID, title: title, body: fixed,
                 author: author, provenance: provenance)
-            return Result(output: resultID?.rawValue ?? "", didCommit: true, stderrOutput: notice)
+            // #1228: resultID IS the staged version, so echo it directly —
+            // a workspace CAS chain threads exactly like a main-line one.
+            return Result(
+                output: resultID?.rawValue ?? "", didCommit: true,
+                stderrOutput: joinedStderr(notice, headVersionDiagnostic(resultID)))
         }
 
         // 3. The SHARED seam: identical create-or-update + `[[link]]` reparse as
@@ -356,7 +360,13 @@ public enum PageCommand {
         let outcome = try PageUpsert.upsert(in: store, id: id, title: title, body: fixed,
                                              expectedHeadVersionID: expectHead, author: author,
                                              provenance: provenance)
-        return Result(output: outcome.id.rawValue, didCommit: true, stderrOutput: notice)
+        // #1228: echo the new head so the agent's CAS loop can chain the next
+        // --expect-head write without a separate `page get`. Same stderr
+        // convention as `get`; stdout stays the page id (compatibility contract).
+        let head = try store.pageHeadVersionID(pageID: outcome.id)
+        return Result(
+            output: outcome.id.rawValue, didCommit: true,
+            stderrOutput: joinedStderr(notice, headVersionDiagnostic(head)))
     }
 
     /// Apply `MarkdownLinter.fix` to `body`, returning the normalized text. When
@@ -432,7 +442,12 @@ public enum PageCommand {
     ) throws -> Result {
         let id = try resolve(selector, in: store)
         try store.revertPage(pageID: id, to: versionID)
-        return Result(output: "reverted \(id.rawValue) to \(versionID.rawValue)", didCommit: true)
+        // #1228: the head moved; report it (axi.md action-result coupling).
+        let head = try store.pageHeadVersionID(pageID: id)
+        return Result(
+            output: "reverted \(id.rawValue) to \(versionID.rawValue)",
+            didCommit: true,
+            stderrOutput: headVersionDiagnostic(head))
     }
 
     // MARK: - info (page provenance, #page-provenance)
@@ -513,5 +528,12 @@ public enum PageCommand {
     private static func headVersionDiagnostic(_ headVersionID: PageVersionID?) -> String? {
         guard let headVersionID else { return nil }
         return "head_version_id: \(headVersionID.rawValue)\n"
+    }
+
+    /// Join optional stderr fragments (the fence-validation notice, the
+    /// head_version_id echo) into one stderr payload; nil when both are empty.
+    private static func joinedStderr(_ parts: String?...) -> String? {
+        let joined = parts.compactMap { $0 }.joined()
+        return joined.isEmpty ? nil : joined
     }
 }
