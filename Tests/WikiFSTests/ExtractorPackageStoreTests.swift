@@ -334,6 +334,30 @@ struct ExtractorPackageStoreTests {
         #expect(FileManager.default.fileExists(atPath: appSentinel.path))
     }
 
+    /// A killed operation leaves behind its admission-normalized snapshot:
+    /// directories at 0500 with 0400 files. Stale-session cleanup must chmod
+    /// through those modes — the exact failure that dead-ended daemon-side
+    /// transcriptions after the first timeout.
+    @Test func cleanupRemovesReadOnlyAdmissionTrees() throws {
+        let session = ExtractorStagingID(rawValue: "current")!
+        let layout = try makeLayout(role: .daemon, processSessionID: session)
+        let stale = layout.operationsRoot
+            .appendingPathComponent("daemon/999999-stale", isDirectory: true)
+        let nested = stale.appendingPathComponent("pkg/bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        let entryPath = nested.appendingPathComponent("entry")
+        try Data("x".utf8).write(to: entryPath)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o400], ofItemAtPath: entryPath.path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: nested.path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: stale.path)
+
+        try ExtractorDirectoryValidator.cleanupOperationSessions(
+            layout: layout,
+            scope: .staleSessions)
+        #expect(FileManager.default.fileExists(atPath: stale.path) == false)
+    }
+
     @Test func concurrentReadersSeeOnlyCompleteGenerations() async throws {
         let layout = try makeLayout()
         let writer = try ExtractorPackageCatalogWriter.testing(layout: layout)

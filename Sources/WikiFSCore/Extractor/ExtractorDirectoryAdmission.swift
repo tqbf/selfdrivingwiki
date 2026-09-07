@@ -818,13 +818,25 @@ public enum ExtractorDirectoryValidator {
         guard sameIdentity(before, opened), opened.st_mode & S_IFMT == S_IFDIR else {
             throw ExtractorDirectoryAdmissionError.preparationFailed
         }
+        // Admission normalizes tree contents to owner-read-only (0400 files
+        // inside 0500 directories) for snapshot immutability. Unlinking an
+        // entry needs write permission on the directory holding it, so make
+        // this directory owner-writable before removing children. We already
+        // verified the tree is owned by this process.
+        if fchmod(descriptor, 0o700) != 0 {
+            throw ExtractorDirectoryAdmissionError.preparationFailed
+        }
         for child in try directoryEntryNames(descriptor) {
             let childStatus = try status(at: descriptor, name: child, noFollow: true)
             switch childStatus.st_mode & S_IFMT {
             case S_IFDIR:
                 try removeStoreTree(named: child, from: descriptor)
-            case S_IFREG:
-                guard childStatus.st_uid == getuid(), childStatus.st_nlink == 1 else {
+            case S_IFREG, S_IFLNK:
+                // Operation sessions legitimately contain uv-managed content:
+                // hardlinked wheels (st_nlink > 1) and venv symlinks. Ownership
+                // is the safety boundary here; deleting one hardlink removes
+                // only this directory entry, never the other link's content.
+                guard childStatus.st_uid == getuid() else {
                     throw ExtractorDirectoryAdmissionError.preparationFailed
                 }
                 guard child.withCString({ unlinkat(descriptor, $0, 0) }) == 0 else {

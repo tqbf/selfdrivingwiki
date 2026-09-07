@@ -161,8 +161,10 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
         markdown: String
     ) async throws {
         guard let store = storeResolver(wikiID) else {
+            // A finished extraction whose store vanished mid-flight is data
+            // loss — fail the item loudly instead of silently completing.
             DebugLog.extraction("DaemonQueueExtractionProvider: persistBytesExtraction — no store for wikiID=\(wikiID.rawValue)")
-            return
+            throw DaemonStoreUnavailableError(wikiID: wikiID)
         }
         if let packageProducer = resolution.packageProducer {
             do {
@@ -192,8 +194,10 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
         outcome: TranscriptFetchOutcome
     ) async throws {
         guard let store = storeResolver(wikiID) else {
+            // A finished extraction whose store vanished mid-flight is data
+            // loss — fail the item loudly instead of silently completing.
             DebugLog.extraction("DaemonQueueExtractionProvider: persistTranscriptExtraction — no store for wikiID=\(wikiID.rawValue)")
-            return
+            throw DaemonStoreUnavailableError(wikiID: wikiID)
         }
         switch resolution.resultMode {
         case .builtInTool(let tool):
@@ -227,6 +231,17 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
             }
         }
         DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
+    }
+}
+
+/// Thrown when a finished extraction cannot be persisted because the wiki's
+/// store disappeared mid-flight. Failing the item loudly (never silently
+/// completing) keeps the queue's terminal state truthful.
+struct DaemonStoreUnavailableError: Error, LocalizedError {
+    let wikiID: WikiID
+
+    var errorDescription: String? {
+        "The wiki's store is no longer available; the extraction result could not be saved."
     }
 }
 

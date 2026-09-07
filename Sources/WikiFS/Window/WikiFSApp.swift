@@ -514,11 +514,27 @@ struct WikiFSApp: App {
         appDelegate.shutdownForTermination = { [
             daemonTransportCoordinator,
             sessionManager,
-            processProfileOwner
+            processProfileOwner,
+            containerDirectory
         ] in
             await daemonTransportCoordinator.shutdown()
             await sessionManager.shutdownSearchRuntimes()
             await processProfileOwner.shutdown()
+            // Remove this session's extractor operation directories. Each run
+            // leaves a private operation root (input/output/home/cache); a
+            // clean close is the moment to reclaim it. Stale sessions from
+            // crashes are reclaimed by the daemon at its startup.
+            do {
+                let layout = try ExtractorPackageStoreLayout(
+                    appGroupContainerRoot: containerDirectory,
+                    processRole: .app)
+                try ExtractorDirectoryValidator.cleanupOperationSessions(
+                    layout: layout,
+                    scope: .currentSession)
+            } catch {
+                DebugLog.extraction(
+                    "App close: extractor operation cleanup failed: \(error)")
+            }
         }
         appDelegate.unregisterDaemon = {
             // The daemon is a bundled XPC service — the system manages its
