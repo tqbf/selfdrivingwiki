@@ -14,6 +14,10 @@ import WikiFSCore
 ///   wikictl [--wiki <id>] log append --kind ingest|query|lint --title X [--note N] [--source <file-id>]
 ///   wikictl [--wiki <id>] index set --body-file <path|->
 ///
+/// `--help`/`-h` on the command path (`wikictl source list --help`) prints
+/// scoped help generated from `CLIReference` — the same table that drives
+/// subcommand recognition and option validation (#1224).
+///
 /// `--wiki` may be omitted when the `WIKI_DB` env var supplies the selector.
 public enum ArgumentParser {
 
@@ -55,8 +59,9 @@ public enum ArgumentParser {
         case bookmark(BookmarkCommand.Action)
         /// Workspace commands (W1, PR #312): create, status, abandon, merge.
         case workspace(WorkspaceCommand.Action)
-        /// Print command usage. Does not require a wiki selection.
-        case help
+        /// Print scoped command usage (`wikictl [source [add]] --help`).
+        /// Does not require a wiki selection (#1224).
+        case help(CLIHelpScope)
         /// Print build version info. Does not require a wiki selection.
         case version(json: Bool)
         /// Print the resolved Cordis profile. Does not require a wiki selection.
@@ -86,107 +91,10 @@ public enum ArgumentParser {
         }
     }
 
-    public static let usageText = """
-    usage: wikictl [--wiki <id>] <command>
-
-    Selects the wiki by --wiki <id-or-name> or the WIKI_DB env var.
-    `version` / `--version` / `-v` prints build info and needs no wiki.
-
-    commands:
-      version [--json]                       print build version info; --json for machine-readable
-      --dump-config [--patch <yaml>]          print the resolved Cordis profile
-      page list [--json]                     list pages (TSV, or JSON lines)
-      page get  (--title X | --id Y) [--json] [--workspace W]
-                                              print a page body; --json adds head_version_id;
-                                              --workspace W reads the staged version
-      page add --title X [--id Y] --body-file <path|-> [--expect-head <ver>] [--workspace W] [--author <who>] [--source <source-id[:role]> ...]
-                                              create-or-update a page; use --body-file -
-                                              with a pipe or heredoc;
-                                              --expect-head enables CAS (exit 3 on conflict);
-                                              --workspace W writes into workspace W;
-                                              --author <who> stamps created_by/last_edited_by (defaults to WIKI_AUTHOR env)
-      page delete --id Y                     delete a page
-      page search --query X [--limit N]       semantic search (cosine similarity);
-                                              falls back to LIKE title match
-      page history (--title X | --id Y)       show version history (W0)
-      page revert (--title X | --id Y) --version V
-                                              revert a page to version V (W0)
-      page info (--title X | --id Y)          print page identity + origin provenance
-                                              (HEAD's agent/activity + full edit history)
-      page okf <operation> --version <page-version-id> [options]
-                                              inspect or author exact-version OKF metadata
-      log append --kind ingest|query|lint --title X [--note N] [--source <file-id>]
-                                              append one dated row to log.md;
-                                              --source stamps that file "Processed"
-      index set --body-file <path|-> [--workspace W]
-                                              rewrite the curated index.md body;
-                                              --workspace W stages into workspace W
-      source list [--json]                    list sources (TSV, or JSON lines)
-      source add (--url URL [--allow-duplicate] | --body-file <path|-> [--name NAME])
-                                              fetch a URL or add raw file/stdin bytes;
-                                              use --body-file - with a pipe or heredoc;
-                                              --name is required for stdin
-      source cat  (--id X | --name N) [--markdown]
-                                              write raw source bytes (or extracted markdown
-                                              with --markdown) to stdout
-      source export (--id X | --name N) [--out <path>] [--markdown]
-                                              materialize a source to disk, print its path; --markdown exports the .md sibling
-      source edit-markdown (--id X | --name N) (--content <md> | --file <path|->)
-                                              replace the processed-markdown HEAD
-      source search --query X [--limit N]    semantic search of sources (cosine;
-                                              falls back to LIKE name match)
-      source set-active (--id X | --name N) --version <smv-id>
-                                              nominate a processed-markdown version
-                                              as the active HEAD (extraction alt)
-      source rename (--id X | --name N) --to <new-name>
-                                              rename a source's display name
-      source refresh (--id X | --name N)      re-fetch a website source via its
-                                               provider, appending a new version
-      source okf <operation> --version <source-markdown-version-id> [options]
-                                              inspect or author exact-version OKF metadata
-      okf operations: inspect [--json]; status (--status draft|stable|deprecated | --clear);
-        freshness (--stale-after <ISO-8601> | --ttl <30s|15m|24h|7d> [--anchor generated|verification] [--verification ID] | --clear);
-        verify --by <actor> [--at <ISO-8601>] --basis <kind> [--evidence source:ID|url:URL ...] [--note TEXT] [--ttl DURATION];
-        correct --verification ID --by <actor> [--at <ISO-8601>] [--reason TEXT].
-        Verification/correction timestamps default to command time when --at is omitted.
-      admin vacuum-blobs [--apply] [--json]   report (and with --apply, reclaim)
-                                               blobs no version row references
-      admin vacuum-activities [--apply] [--json]
-                                              report (and with --apply, reclaim)
-                                                activities no version row references
-      admin vacuum-page-versions [--apply] [--json]
-                                              report (and with --apply, reclaim)
-                                                page versions no ref/workspace references
-      admin vacuum-all [--apply] [--json]    report (and with --apply, reclaim)
-                                                orphaned blobs, activities, and page versions
-      admin repair-mime [--apply] [--json]   detect active NULL MIME values
-                                                (dry-run unless --apply is present)
-      chat list [--json]                     list chats (TSV, or JSON lines)
-      chat get  (--id X | --title T)         print a chat transcript as markdown
-      chat search --query X [--limit N]      semantic + keyword search of chats
-      chat rename (--id X | --title T) --to <new-title>
-                                               rename a chat
-      bookmark list [--json]                   list bookmark nodes (TSV, or JSON)
-      bookmark create-folder [--parent ID] --name <name>
-                                               create a bookmark folder
-      bookmark add-ref [--parent ID] --kind <page|source|chat> --target <id>
-                                               add a page/source/chat ref to bookmarks
-      bookmark rename --id <node-id> --to <new-name>
-                                               rename a bookmark folder
-      bookmark delete --id <node-id>           delete a bookmark node (cascades)
-      bookmark move --id <node-id> [--parent ID] [--position N]
-                                               move a bookmark node
-      workspace create [--name N]              create a workspace (prints ID)
-      workspace status --id W                  show workspace status + pages
-      workspace abandon --id W                abandon a workspace (GC refs)
-      workspace merge --id W                   fast-forward merge into main
-      workspace refresh --id W                 re-base workspace against current main
-      workspace conflicts --id W               list per-page conflict details
-      workspace resolve --id W --page P --body-file <path|->
-                                               resolve a conflict with the given body
-      workspace retry --id W                   re-open + re-merge after resolving conflicts
-      workspace reap [--ttl <seconds>]         abandon stale open workspaces (default 3600s)
-    """
+    /// The top-level usage text, GENERATED from the `CLIReference` spec the
+    /// parser routes with — a hand-maintained copy drifts by construction
+    /// (#1224).
+    public static var usageText: String { CLIReference.helpText(for: .topLevel) }
 
     /// Parse `arguments` (WITHOUT the executable name) plus an env lookup into an
     /// `Invocation`. Throws `Failure.usage` with a specific message on any
@@ -197,21 +105,29 @@ public enum ArgumentParser {
     ) throws -> Invocation {
         var args = arguments
 
+        // #1224: `--help`/`-h` on the command path — top level, family,
+        // subcommand, or OKF operation — returns scoped help BEFORE the
+        // wiki-selector requirement (help never needs --wiki or WIKI_DB).
+        if let scope = CLIReference.resolveHelpScope(args) {
+            return Invocation(wikiSelector: "", command: .help(scope))
+        }
+
         // Help and version commands are intercepted BEFORE the wiki selector
         // requirement so they work without --wiki or WIKI_DB.
         if let first = args.first {
-            if first == "--help" {
-                return Invocation(wikiSelector: "", command: .help)
-            }
             if first == "version" {
-                let options = try Options(Array(args.dropFirst()), booleanFlags: ["--json"])
+                let options = try Options(
+                    Array(args.dropFirst()),
+                    options: CLIReference.options(forTopLevelCommand: "version"))
                 return Invocation(wikiSelector: "", command: .version(json: options.flag("--json")))
             }
             if first == "--version" || first == "-v" {
                 return Invocation(wikiSelector: "", command: .version(json: false))
             }
             if first == "--dump-config" {
-                let options = try Options(Array(args.dropFirst()))
+                let options = try Options(
+                    Array(args.dropFirst()),
+                    options: CLIReference.options(forTopLevelCommand: "--dump-config"))
                 return Invocation(wikiSelector: "", command: .dumpConfig(overlay: options.value("--patch")))
             }
             // `wiki` subcommands — registry operations via the wikid daemon.
@@ -259,12 +175,20 @@ public enum ArgumentParser {
     }
 
     private static func parsePageCommand(_ args: [String]) throws -> Command {
-        guard let sub = args.first else { throw Failure.usage("page: missing subcommand") }
+        guard let sub = args.first else {
+            throw Failure.usage(CLIReference.missingSubcommandMessage(familyName: "page"))
+        }
+        guard CLIReference.leaf(family: "page", named: sub) != nil else {
+            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "page", given: sub))
+        }
         let rest = Array(args.dropFirst())
         if sub == "okf" {
             return .page(try parsePageOKFCommand(rest))
         }
-        let options = try Options(rest, booleanFlags: ["--json"])
+        // One bag for the family: its option set is the union of the leaves'
+        // spec'd options, so an unlisted option is rejected by the same table
+        // the help text is generated from (#1224).
+        let options = try Options(rest, options: CLIReference.options(forFamily: "page"))
 
         switch sub {
         case "list":
@@ -321,7 +245,8 @@ public enum ArgumentParser {
             return .page(.info(try options.requireSelector()))
 
         default:
-            throw Failure.usage("page: unknown subcommand \(sub.debugDescription)")
+            // Unreachable: recognition is the CLIReference leaf table above.
+            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "page", given: sub))
         }
     }
 
@@ -359,7 +284,10 @@ public enum ArgumentParser {
         _ args: [String], version: (String) -> VersionID
     ) throws -> ParsedOKFCommand<VersionID> {
         guard let operation = args.first else { throw Failure.usage("okf: missing operation") }
-        let options = try Options(Array(args.dropFirst()), booleanFlags: ["--json", "--clear"])
+        guard let op = CLIReference.okfOperation(named: operation) else {
+            throw Failure.usage(CLIReference.unknownOKFOperationMessage(given: operation))
+        }
+        let options = try Options(Array(args.dropFirst()), options: op.options)
         guard let rawVersion = options.value("--version"), !rawVersion.isEmpty else {
             throw Failure.usage("okf \(operation): --version is required")
         }
@@ -413,7 +341,8 @@ public enum ArgumentParser {
                 verifier: verifier, correctedAt: correctedAt,
                 reason: options.value("--reason").map(OKFVerificationCorrectionReason.init(reason:))))
         default:
-            throw Failure.usage("okf: unknown operation \(operation.debugDescription)")
+            // Unreachable: recognition is the CLIReference operation table above.
+            throw Failure.usage(CLIReference.unknownOKFOperationMessage(given: operation))
         }
     }
 
@@ -446,11 +375,13 @@ public enum ArgumentParser {
     }
 
     private static func parseLogCommand(_ args: [String]) throws -> Command {
-        guard let sub = args.first else { throw Failure.usage("log: missing subcommand") }
-        guard sub == "append" else {
-            throw Failure.usage("log: unknown subcommand \(sub.debugDescription)")
+        guard let sub = args.first else {
+            throw Failure.usage(CLIReference.missingSubcommandMessage(familyName: "log"))
         }
-        let options = try Options(Array(args.dropFirst()))
+        guard sub == "append" else {
+            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "log", given: sub))
+        }
+        let options = try Options(Array(args.dropFirst()), options: CLIReference.options(forFamily: "log"))
         guard let kindRaw = options.value("--kind") else {
             throw Failure.usage("log append: --kind is required (ingest|query|lint)")
         }
@@ -466,14 +397,19 @@ public enum ArgumentParser {
     }
 
     private static func parseSourceCommand(_ args: [String]) throws -> Command {
-        guard let sub = args.first else { throw Failure.usage("source: missing subcommand") }
+        guard let sub = args.first else {
+            throw Failure.usage(CLIReference.missingSubcommandMessage(familyName: "source"))
+        }
+        guard CLIReference.leaf(family: "source", named: sub) != nil else {
+            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "source", given: sub))
+        }
         let rest = Array(args.dropFirst())
         if sub == "okf" {
             return .source(try parseSourceOKFCommand(rest))
         }
-        // `--markdown` applies to `cat` and `export`; include it here so the
-        // outer parse doesn't reject it as a value flag needing an argument.
-        let options = try Options(rest, booleanFlags: ["--json", "--markdown", "--allow-duplicate"])
+        // Family-wide bag: `--markdown` applies to `cat` and `export`, etc. —
+        // the spec union drives both acceptance and help (#1224).
+        let options = try Options(rest, options: CLIReference.options(forFamily: "source"))
 
         switch sub {
         case "add":
@@ -560,48 +496,56 @@ public enum ArgumentParser {
             return .source(.search(query: query, limit: limit))
 
         default:
-            throw Failure.usage("source: unknown subcommand \(sub.debugDescription)")
+            // Unreachable: recognition is the CLIReference leaf table above.
+            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "source", given: sub))
         }
     }
 
     private static func parseAdminCommand(_ args: [String]) throws -> Command {
-        guard let sub = args.first else { throw Failure.usage("admin: missing subcommand") }
+        guard let sub = args.first else {
+            throw Failure.usage(CLIReference.missingSubcommandMessage(familyName: "admin"))
+        }
+        guard CLIReference.leaf(family: "admin", named: sub) != nil else {
+            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "admin", given: sub))
+        }
         let rest = Array(args.dropFirst())
+        // `--apply` opts INTO deletion/repair; the default is a safe dry run.
+        // `--json` selects machine-readable output.
+        let options = try Options(rest, options: CLIReference.options(forFamily: "admin"))
         switch sub {
         case "vacuum-blobs":
-            // `--apply` opts INTO deletion; the default is a safe dry run.
-            // `--json` selects machine-readable output.
-            let options = try Options(rest, booleanFlags: ["--apply", "--json"])
             return .admin(.vacuumBlobs(
                 dryRun: !options.flag("--apply"), json: options.flag("--json")))
         case "vacuum-activities":
             // Same flags as vacuum-blobs (issue #257).
-            let options = try Options(rest, booleanFlags: ["--apply", "--json"])
             return .admin(.vacuumActivities(
                 dryRun: !options.flag("--apply"), json: options.flag("--json")))
         case "vacuum-page-versions":
             // Same flags as vacuum-blobs (Phase 4 — multi-writer hardening).
-            let options = try Options(rest, booleanFlags: ["--apply", "--json"])
             return .admin(.vacuumPageVersions(
                 dryRun: !options.flag("--apply"), json: options.flag("--json")))
         case "vacuum-all":
             // Combined: blobs + activities + page versions in one pass.
-            let options = try Options(rest, booleanFlags: ["--apply", "--json"])
             return .admin(.vacuumAll(
                 dryRun: !options.flag("--apply"), json: options.flag("--json")))
         case "repair-mime":
-            let options = try Options(rest, booleanFlags: ["--apply", "--json"])
             return .admin(.repairMIME(
                 dryRun: !options.flag("--apply"), json: options.flag("--json")))
         default:
-            throw Failure.usage("admin: unknown subcommand \(sub.debugDescription)")
+            // Unreachable: recognition is the CLIReference leaf table above.
+            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "admin", given: sub))
         }
     }
 
     private static func parseChatCommand(_ args: [String]) throws -> Command {
-        guard let sub = args.first else { throw Failure.usage("chat: missing subcommand") }
+        guard let sub = args.first else {
+            throw Failure.usage(CLIReference.missingSubcommandMessage(familyName: "chat"))
+        }
+        guard CLIReference.leaf(family: "chat", named: sub) != nil else {
+            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "chat", given: sub))
+        }
         let rest = Array(args.dropFirst())
-        let options = try Options(rest)
+        let options = try Options(rest, options: CLIReference.options(forFamily: "chat"))
 
         switch sub {
         case "list":
@@ -659,16 +603,19 @@ public enum ArgumentParser {
             return .daemonChatStop(chatID: chatID)
 
         default:
-            throw Failure.usage("chat: unknown subcommand \(sub.debugDescription)")
+            // Unreachable: recognition is the CLIReference leaf table above.
+            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "chat", given: sub))
         }
     }
 
     private static func parseIndexCommand(_ args: [String]) throws -> Command {
-        guard let sub = args.first else { throw Failure.usage("index: missing subcommand") }
-        guard sub == "set" else {
-            throw Failure.usage("index: unknown subcommand \(sub.debugDescription)")
+        guard let sub = args.first else {
+            throw Failure.usage(CLIReference.missingSubcommandMessage(familyName: "index"))
         }
-        let options = try Options(Array(args.dropFirst()))
+        guard sub == "set" else {
+            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "index", given: sub))
+        }
+        let options = try Options(Array(args.dropFirst()), options: CLIReference.options(forFamily: "index"))
         guard let bodyFile = options.value("--body-file") else {
             throw Failure.usage("index set: --body-file is required (path or -)")
         }
@@ -678,9 +625,14 @@ public enum ArgumentParser {
     // MARK: - bookmark
 
     private static func parseBookmarkCommand(_ args: [String]) throws -> Command {
-        guard let sub = args.first else { throw Failure.usage("bookmark: missing subcommand") }
+        guard let sub = args.first else {
+            throw Failure.usage(CLIReference.missingSubcommandMessage(familyName: "bookmark"))
+        }
+        guard CLIReference.leaf(family: "bookmark", named: sub) != nil else {
+            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "bookmark", given: sub))
+        }
         let rest = Array(args.dropFirst())
-        let options = try Options(rest)
+        let options = try Options(rest, options: CLIReference.options(forFamily: "bookmark"))
 
         switch sub {
         case "list":
@@ -751,13 +703,19 @@ public enum ArgumentParser {
             return .bookmark(.move(id: id, toParentID: toParent, position: position))
 
         default:
-            throw Failure.usage("bookmark: unknown subcommand \(sub.debugDescription)")
+            // Unreachable: recognition is the CLIReference leaf table above.
+            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "bookmark", given: sub))
         }
     }
 
     private static func parseWorkspaceCommand(_ args: [String]) throws -> Command {
-        guard let sub = args.first else { throw Failure.usage("workspace: missing subcommand") }
-        let options = try Options(Array(args.dropFirst()))
+        guard let sub = args.first else {
+            throw Failure.usage(CLIReference.missingSubcommandMessage(familyName: "workspace"))
+        }
+        guard CLIReference.leaf(family: "workspace", named: sub) != nil else {
+            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "workspace", given: sub))
+        }
+        let options = try Options(Array(args.dropFirst()), options: CLIReference.options(forFamily: "workspace"))
 
         switch sub {
         case "create":
@@ -816,35 +774,43 @@ public enum ArgumentParser {
             return .workspace(.reap(ttl: ttl))
 
         default:
-            throw Failure.usage("workspace: unknown subcommand \(sub.debugDescription)")
+            // Unreachable: recognition is the CLIReference leaf table above.
+            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "workspace", given: sub))
         }
     }
 
-    /// A tiny `--key value` / `--flag` option bag. Tolerates options in any order;
-    /// rejects an unbalanced trailing `--key` with no value.
-    private struct Options {
+    /// A tiny `--key value` / `--flag` option bag. Tolerates options in any
+    /// order; rejects an unbalanced trailing `--key` with no value.
+    ///
+    /// `allowed` comes from the `CLIReference` spec — the same definitions the
+    /// help text is generated from — so an unlisted option is a loud usage
+    /// error here instead of a silently-ignored token (#1224).
+    struct Options {
         private var valuesByKey: [String: [String]] = [:]
         private var flags: Set<String> = []
 
-        init(_ tokens: [String], booleanFlags: Set<String> = ["--json"]) throws {
+        init(_ tokens: [String], options allowed: [CLIReference.CLIOption]) throws {
+            let byName = Dictionary(allowed.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
             var index = 0
             while index < tokens.count {
                 let token = tokens[index]
                 guard token.hasPrefix("--") else {
                     throw Failure.usage("unexpected argument \(token.debugDescription)")
                 }
-                // A valueless boolean flag (e.g. `--json`, `--apply`); everything
-                // else takes a value.
-                if booleanFlags.contains(token) {
+                guard let spec = byName[token] else {
+                    throw Failure.usage(
+                        "unexpected option \(token.debugDescription) — run with --help for usage")
+                }
+                if spec.takesValue {
+                    guard index + 1 < tokens.count else {
+                        throw Failure.usage("\(token) requires a value")
+                    }
+                    valuesByKey[token, default: []].append(tokens[index + 1])
+                    index += 2
+                } else {
                     flags.insert(token)
                     index += 1
-                    continue
                 }
-                guard index + 1 < tokens.count else {
-                    throw Failure.usage("\(token) requires a value")
-                }
-                valuesByKey[token, default: []].append(tokens[index + 1])
-                index += 2
             }
         }
 
@@ -898,8 +864,13 @@ public enum ArgumentParser {
     /// `wikictl wiki list/create/delete/rename` — registry operations routed
     /// through the `wikid` daemon via XPC.
     private static func parseWikiCommand(_ args: [String]) throws -> Command {
-        guard let sub = args.first else { throw Failure.usage("wiki: missing subcommand (list, create, delete, rename)") }
-        let options = try Options(Array(args.dropFirst()))
+        guard let sub = args.first else {
+            throw Failure.usage(CLIReference.missingSubcommandMessage(familyName: "wiki"))
+        }
+        guard CLIReference.leaf(family: "wiki", named: sub) != nil else {
+            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "wiki", given: sub))
+        }
+        let options = try Options(Array(args.dropFirst()), options: CLIReference.options(forFamily: "wiki"))
 
         switch sub {
         case "list":
@@ -925,7 +896,8 @@ public enum ArgumentParser {
             return .wikiRename(id: id, name: name)
 
         default:
-            throw Failure.usage("wiki: unknown subcommand \(sub.debugDescription) (list, create, delete, rename)")
+            // Unreachable: recognition is the CLIReference leaf table above.
+            throw Failure.usage(CLIReference.unknownSubcommandMessage(familyName: "wiki", given: sub))
         }
     }
 
