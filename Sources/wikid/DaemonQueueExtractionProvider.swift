@@ -18,13 +18,19 @@ import WikiFSEngine
 final class DaemonQueueExtractionProvider: QueueExtractionProvider {
     private let extractionServices: any ExtractionServices
     private let storeResolver: @Sendable (WikiID) -> GRDBWikiStore?
+    /// Prepares the wiki's store on demand (`WikiDaemon.openStore`). A fresh
+    /// relaunch may not have the store ready when a queued item is claimed;
+    /// without this, the item starves between claim and resolution.
+    private let openStore: @Sendable (WikiID) async -> Bool
 
     init(
         extractionServices: any ExtractionServices,
-        storeResolver: @escaping @Sendable (WikiID) -> GRDBWikiStore?
+        storeResolver: @escaping @Sendable (WikiID) -> GRDBWikiStore?,
+        openStore: @escaping @Sendable (WikiID) async -> Bool = { _ in false }
     ) {
         self.extractionServices = extractionServices
         self.storeResolver = storeResolver
+        self.openStore = openStore
     }
 
     // MARK: - QueueExtractionProvider
@@ -34,7 +40,14 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
         sourceID: SourceID,
         backendOverride: ExtractionBackend?
     ) async throws -> ExtractionResolution? {
-        guard let store = storeResolver(wikiID) else {
+        var store = storeResolver(wikiID)
+        if store == nil {
+            // A fresh relaunch may not have this wiki's store prepared yet.
+            // Prepare it on demand instead of starving the queued item.
+            _ = await openStore(wikiID)
+            store = storeResolver(wikiID)
+        }
+        guard let store else {
             DebugLog.extraction("DaemonQueueExtractionProvider: no store for wikiID=\(wikiID.rawValue)")
             return nil
         }
