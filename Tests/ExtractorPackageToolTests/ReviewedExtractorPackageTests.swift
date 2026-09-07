@@ -225,7 +225,10 @@ struct ReviewedExtractorPackageTests {
         #expect(registration.kinds == [.youtubeTranscript])
         #expect(registration.mimeTypes == [try ExtractorMIMEType(validating: "video/youtube")])
         #expect(registration.credentialRequirements.isEmpty)
-        #expect(manifest.capabilities == [.network])
+        // Network for the caption fetch; shared-runtime-cache keeps uv's
+        // CPython install and wheel cache warm across operations.
+        #expect(manifest.capabilities == [.network, .sharedRuntimeCache])
+        #expect(manifest.limits.maximumDurationMilliseconds == 600_000)
         guard case .runtime(let command, let arguments) = manifest.launch else {
             Issue.record("youtube-transcript must launch through a runtime")
             return
@@ -236,15 +239,16 @@ struct ReviewedExtractorPackageTests {
         // The exact reviewed identity is pinned byte-for-byte; a regenerated
         // package whose digest changed fails this gate with the new value.
         #expect(output.packageDigest
-            == "090301ccad8d8b7ac41778e0b6fb61f9d9ac8a568a4d689c5a7f1b9c67b326a7")
+            == "8f87ff4a0c8c5fac1d5ff19c6d1dff6a816a27c081fb106de3bc6c92b8c7e1a1")
     }
 
-    /// The reviewed YouTube package never claims model or shared-cache
-    /// capabilities: it fetches captions YouTube exposes and does nothing else.
-    @Test func youtubeTranscriptDeclaresNoModelOrSharedCacheCapabilities() throws {
+    /// The reviewed YouTube package never claims model download: it fetches
+    /// captions YouTube exposes and does nothing else. The shared runtime
+    /// cache keeps its uv runtime warm across operations.
+    @Test func youtubeTranscriptDeclaresNoModelCapabilities() throws {
         let manifest = try manifest("YouTubeTranscript")
         #expect(manifest.capabilities.contains(.modelDownload) == false)
-        #expect(manifest.capabilities.contains(.sharedRuntimeCache) == false)
+        #expect(manifest.capabilities.contains(.sharedRuntimeCache))
     }
 
     /// Recorded success, no-caption, and blocked-request frame sequences from

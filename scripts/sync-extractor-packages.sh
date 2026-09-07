@@ -759,8 +759,11 @@ PY
   interface that can change without notice, and YouTube can block requests.
   Caption absence, disabled captions, unavailable videos, and blocked
   requests are bounded typed failures.
-- Capabilities: network only. The package fetches captions YouTube exposes;
-  it never downloads media and never runs speech-to-text.
+- Capabilities: network and shared-runtime-cache. The shared cache keeps
+  uv's CPython install and wheel cache warm across operations (a per-
+  operation cache would re-download a CPython every run). The package
+  fetches captions YouTube exposes; it never downloads media and never
+  runs speech-to-text.
 - Regenerate: scripts/sync-extractor-packages.sh
 - Drift gate: ExtractorPackages/sources.lock.json records source digests
 EOF
@@ -790,9 +793,12 @@ manifest = {
             "mimeTypes": ["video/youtube"],
         }
     ],
-    # The package fetches captions from the network. It declares nothing
-    # else: no model download, no shared runtime cache.
-    "capabilities": ["network"],
+    # The package fetches captions from the network and launches through uv.
+    # A shared runtime cache keeps uv's CPython install and wheel cache warm
+    # across operations: without it every transcription re-downloads a
+    # CPython inside a per-operation private cache and can exceed the
+    # duration limit. It declares nothing else: no model download.
+    "capabilities": ["network", "shared-runtime-cache"],
     "files": [
         {"path": "PROVENANCE.md", "digest": provenance_digest},
         {"path": "bin/youtube-transcript", "digest": script_digest},
@@ -804,7 +810,9 @@ manifest = {
         # bounds inside the script; tests fail if either side drifts.
         "maximumInputByteCount": 1048576,
         "maximumMarkdownOutputByteCount": 33554432,
-        "maximumDurationMilliseconds": 300000,
+        # 600 s: the first operation on a machine also pays uv's one-time
+        # CPython download into the shared runtime cache.
+        "maximumDurationMilliseconds": 600000,
         "maximumProgressEventCount": 64,
     },
 }

@@ -669,7 +669,7 @@ class TestManifestParity:
         assert manifest["packageID"] == "org.selfdrivingwiki.youtube-transcript"
         assert manifest["version"] == "1.0.0"
         assert manifest["protocolRevision"] == _yt.PROTOCOL_REVISION == 3
-        assert manifest["capabilities"] == ["network"]
+        assert manifest["capabilities"] == ["network", "shared-runtime-cache"]
 
         registration = manifest["registrations"][0]
         assert registration["id"] == "captions"

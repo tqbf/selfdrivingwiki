@@ -30,7 +30,7 @@ Plan: [`plans/youtube-transcript-extractor-package.md`](../plans/youtube-transcr
   point, PodcastTranscript pattern); the source digest is pinned in
   `ExtractorPackages/sources.lock.json` and `--check` compares generated
   bytes. Reviewed digest:
-  `090301ccad8d8b7ac41778e0b6fb61f9d9ac8a568a4d689c5a7f1b9c67b326a7`.
+  `8f87ff4a0c8c5fac1d5ff19c6d1dff6a816a27c081fb106de3bc6c92b8c7e1a1`.
 - **The script.** `tools/youtube-transcript/youtube-transcript` keeps its
   CLI behavior and gains `run_extractor_protocol`: strict request validation
   before any network work, strict URL normalization (watch, `youtu.be`,

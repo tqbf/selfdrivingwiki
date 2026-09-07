@@ -11,7 +11,10 @@
   interface that can change without notice, and YouTube can block requests.
   Caption absence, disabled captions, unavailable videos, and blocked
   requests are bounded typed failures.
-- Capabilities: network only. The package fetches captions YouTube exposes;
-  it never downloads media and never runs speech-to-text.
+- Capabilities: network and shared-runtime-cache. The shared cache keeps
+  uv's CPython install and wheel cache warm across operations (a per-
+  operation cache would re-download a CPython every run). The package
+  fetches captions YouTube exposes; it never downloads media and never
+  runs speech-to-text.
 - Regenerate: scripts/sync-extractor-packages.sh
 - Drift gate: ExtractorPackages/sources.lock.json records source digests

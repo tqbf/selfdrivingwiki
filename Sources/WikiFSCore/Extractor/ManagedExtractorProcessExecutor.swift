@@ -387,6 +387,13 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
         if operation.manifest.capabilities.contains(.sharedRuntimeCache),
            let shared = operation.paths.sharedRuntimeCacheRoot {
             environment["WIKI_EXTRACTOR_SHARED_RUNTIME_CACHE"] = shared.path
+            // uv-based packages (`uv run --script` runtime launch) keep
+            // their CPython installs and wheel cache warm across
+            // operations. Without these, uv's defaults live under the
+            // operation-private HOME/cache and every run re-downloads a
+            // CPython — exceeding the duration limit on slow links.
+            environment["UV_CACHE_DIR"] = shared.appendingPathComponent("uv-cache").path
+            environment["UV_PYTHON_INSTALL_DIR"] = shared.appendingPathComponent("uv-python").path
         }
         if operation.manifest.capabilities.contains(.modelDownload),
            let shared = operation.paths.sharedModelCacheRoot {
