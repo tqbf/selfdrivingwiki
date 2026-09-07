@@ -329,7 +329,7 @@ public struct ProcessExtractorProvider: Sendable {
                 withIntermediateDirectories: true,
                 attributes: [.posixPermissions: 0o700])
             guard try Self.isOwnerPrivateDirectory(sharedRoot) else {
-                throw ExtractorDirectoryAdmissionError.preparationFailed
+                throw ExtractorDirectoryAdmissionError.preparationFailure("shared cache directory verification failed")
             }
         }
         let materializedRevision = try ExtractorDirectoryValidator.materializeOperationPackage(
@@ -390,7 +390,7 @@ public struct ProcessExtractorProvider: Sendable {
     private static func isOwnerPrivateDirectory(_ url: URL) throws -> Bool {
         var status = stat()
         guard lstat(url.path, &status) == 0 else {
-            throw ExtractorDirectoryAdmissionError.preparationFailed
+            throw ExtractorDirectoryAdmissionError.preparationFailure(errno: errno, stage: "lstat directory")
         }
         return status.st_mode & S_IFMT == S_IFDIR
             && status.st_uid == getuid()
@@ -974,13 +974,13 @@ public final class PreparedProcessOperation: Sendable {
         // Refuse to overwrite anything that already exists (a planted symlink
         // at the target must never be written through).
         guard FileManager.default.fileExists(atPath: url.path) == false else {
-            throw ExtractorDirectoryAdmissionError.preparationFailed
+            throw ExtractorDirectoryAdmissionError.preparationFailure("request output path already exists")
         }
         let fd = url.path.withCString {
             open($0, O_WRONLY | O_CREAT | O_EXCL, 0o400)
         }
         guard fd >= 0 else {
-            throw ExtractorDirectoryAdmissionError.preparationFailed
+            throw ExtractorDirectoryAdmissionError.preparationFailure(errno: errno, stage: "open request output file")
         }
         defer { close(fd) }
         let result: Int = data.withUnsafeBytes { raw in
@@ -997,7 +997,7 @@ public final class PreparedProcessOperation: Sendable {
             return total
         }
         guard result == data.count else {
-            throw ExtractorDirectoryAdmissionError.preparationFailed
+            throw ExtractorDirectoryAdmissionError.preparationFailure(errno: errno, stage: "write request output file")
         }
         try verifyOwnerReadOnlyFile(fd: fd, at: url)
     }
@@ -1013,7 +1013,7 @@ public final class PreparedProcessOperation: Sendable {
         var viaPath = stat()
         guard fstat(fd, &viaFD) == 0,
               lstat(url.path, &viaPath) == 0 else {
-            throw ExtractorDirectoryAdmissionError.preparationFailed
+            throw ExtractorDirectoryAdmissionError.preparationFailure(errno: errno, stage: "fstat/lstat request output file")
         }
         guard viaFD.st_dev == viaPath.st_dev,
               viaFD.st_ino == viaPath.st_ino,
@@ -1021,7 +1021,7 @@ public final class PreparedProcessOperation: Sendable {
               viaFD.st_uid == getuid(),
               viaFD.st_nlink == 1,
               viaFD.st_mode & 0o777 == 0o400 else {
-            throw ExtractorDirectoryAdmissionError.preparationFailed
+            throw ExtractorDirectoryAdmissionError.preparationFailure("request output file verification failed")
         }
     }
 }

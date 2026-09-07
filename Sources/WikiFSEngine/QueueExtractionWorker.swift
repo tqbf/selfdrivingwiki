@@ -60,8 +60,13 @@ public struct QueueExtractionWorkerFactory: QueueWorkerFactory {
             DebugLog.store("QueueExtractionWorker.resolveExtraction blocked: \(error)")
             return ProviderID(rawValue: "blocked-extraction")
         } catch {
+            // Any other resolve failure is a real per-item fault: bad legacy
+            // identity data, admission failure, or a lost store. Route the
+            // item through the neutral capacity bucket so dispatch claims it
+            // and the worker surfaces the error on the item, instead of
+            // silently returning it to .queued forever.
             DebugLog.store("QueueExtractionWorker.resolveExtraction: \(error)")
-            return nil
+            return ProviderID(rawValue: "blocked-extraction")
         }
         guard let resolved else { return nil }
 

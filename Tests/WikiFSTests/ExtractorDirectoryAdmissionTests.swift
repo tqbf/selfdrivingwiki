@@ -172,10 +172,16 @@ struct ExtractorDirectoryAdmissionTests {
         #expect(try mode(target) == 0o700)
         #expect(try mode(target.appendingPathComponent("bin")) == 0o700)
         #expect(try mode(target.appendingPathComponent("bin/extractor")) == 0o500)
-        #expect(throws: ExtractorDirectoryAdmissionError.preparationFailed) {
+        do {
             _ = try ExtractorDirectoryValidator.materializeOperationPackage(
                 from: admitted,
                 into: target)
+            Issue.record("expected preparationFailed")
+        } catch let error as ExtractorDirectoryAdmissionError {
+            guard case .preparationFailed = error else {
+                Issue.record("expected .preparationFailed, got \(error)")
+                return
+            }
         }
     }
 
@@ -186,8 +192,14 @@ struct ExtractorDirectoryAdmissionTests {
         let redirect = uniqueURL("redirect").resolvingSymlinksInPath()
         try FileManager.default.createDirectory(at: redirect, withIntermediateDirectories: true)
         try FileManager.default.createSymbolicLink(at: layout.stagingRoot, withDestinationURL: redirect)
-        #expect(throws: ExtractorDirectoryAdmissionError.preparationFailed) {
+        do {
             _ = try ExtractorDirectoryValidator.admit(source: fixture.root, layout: layout)
+            Issue.record("expected preparationFailed")
+        } catch let error as ExtractorDirectoryAdmissionError {
+            guard case .preparationFailed = error else {
+                Issue.record("expected .preparationFailed, got \(error)")
+                return
+            }
         }
     }
 
@@ -222,7 +234,7 @@ struct ExtractorDirectoryAdmissionTests {
                 at: layout.stagingRoot,
                 includingPropertiesForKeys: nil)
             guard let destination = entries.first else {
-                throw ExtractorDirectoryAdmissionError.preparationFailed
+                throw ExtractorDirectoryAdmissionError.preparationFailure("injected staging failure")
             }
             let parked = destination.appendingPathExtension("parked")
             try FileManager.default.moveItem(at: destination, to: parked)

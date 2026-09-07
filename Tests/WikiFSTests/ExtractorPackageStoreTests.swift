@@ -242,8 +242,14 @@ struct ExtractorPackageStoreTests {
             at: layout.stagingRoot.appendingPathComponent("attacker"),
             withDestinationURL: outside)
 
-        await #expect(throws: ExtractorDirectoryAdmissionError.preparationFailed) {
-            try await writer.recover()
+        do {
+            _ = try await writer.recover()
+            Issue.record("expected preparationFailed")
+        } catch let error as ExtractorDirectoryAdmissionError {
+            guard case .preparationFailed = error else {
+                Issue.record("expected .preparationFailed, got \(error)")
+                return
+            }
         }
         #expect(try Data(contentsOf: sentinel) == Data("retain".utf8))
     }

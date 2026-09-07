@@ -137,6 +137,32 @@ struct QueueExtractionTests {
         store.close()
     }
 
+    @Test func testResolveThrowFailsInsteadOfStayingQueued() async throws {
+        let store = try QueueStore(databaseURL: tempDatabaseURL())
+
+        // Any other resolve throw (bad legacy identity data, an extractor
+        // admission failure, a lost store) is a real per-item fault.
+        // providerID(for:) hands the item the neutral capacity bucket so
+        // dispatch claims it and the engine marks it failed with the error
+        // detail. It must never return to .queued silently.
+        let provider = FakeExtractionProvider(resolveResult: .admissionFailure)
+        let factory = QueueExtractionWorkerFactory(
+            provider: provider, emitProgress: { _, _ in })
+        let engine = QueueEngine(store: store, workerFactory: factory)
+        await engine.start()
+
+        let id = try await engine.enqueue(
+            QueueItemRequest(queue: .extraction, wikiID: WikiID(rawValue: "wiki1"), payload: makePayload()))
+
+        try await Task.sleep(nanoseconds: 300_000_000)
+
+        let item = try store.getItem(id)
+        #expect(item?.state == .failed)
+        #expect(item?.error?.contains("preparationFailed") == true)
+        #expect(item?.error?.contains("Operation not permitted") == true)
+        store.close()
+    }
+
     // MARK: - AC.4: Readiness check
 
     @Test func testReadinessCheckMarksFailed() async throws {
@@ -421,6 +447,9 @@ private final class FakeExtractionProvider: QueueExtractionProvider, @unchecked 
         /// The typed fail-closed error for an explicit selection with no
         /// active registration.
         case unavailableSelection
+        /// A generic resolve throw, e.g. an extractor directory admission
+        /// failure with its bounded stage detail.
+        case admissionFailure
     }
 
     private let lock = OSAllocatedUnfairLock(initialState: State())
@@ -474,6 +503,8 @@ private final class FakeExtractionProvider: QueueExtractionProvider, @unchecked 
                 registrationID: ExtractorRegistrationID(validating: "main"))
             throw ExtractionServicesError.selectedExtractorUnavailable(
                 route: .canonicalPDF, reference: logical)
+        case .admissionFailure:
+            throw ExtractorDirectoryAdmissionError.preparationFailure(errno: 1, stage: "fchmod directory")
         }
     }
 
