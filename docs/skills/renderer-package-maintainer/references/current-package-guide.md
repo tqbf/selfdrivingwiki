@@ -3,9 +3,9 @@
 The repository includes reviewed read-only Excalidraw, Mermaid, JSON Canvas, and SVG renderer packages. The app does not bundle or install these packages automatically. Import each package folder through Settings → Renderers → Advanced Local Renderer Package Import. Package identities (manifest revision 6):
 
 - Excalidraw: `org.selfdrivingwiki.excalidraw-readonly`, version `1.1.0`, registration `excalidraw`.
-- Mermaid: `org.selfdrivingwiki.mermaid-readonly`, version `1.1.0`, registration `mermaid`.
+- Mermaid: `org.selfdrivingwiki.mermaid-readonly`, version `1.1.1`, registration `mermaid`.
 - JSON Canvas: `org.selfdrivingwiki.json-canvas-readonly`, version `1.2.0`, registration `json-canvas`.
-- SVG: `org.selfdrivingwiki.svg-readonly`, version `1.1.0`, registration `svg`.
+- SVG: `org.selfdrivingwiki.svg-readonly`, version `1.1.1`, registration `svg`.
 
 ### Source types (manifest revision 6)
 
@@ -75,7 +75,7 @@ The package version is `1.1.0`. Its manifest declares a bounded JSON matcher for
 
 ### Reviewed SVG renderer package
 
-The reviewed package root is `RendererPackages/SVG` in the repository. SwiftPM does not copy it into the app resource bundle. Users import the folder through Settings → Renderers → Advanced Local Renderer Package Import. The package ID is `org.selfdrivingwiki.svg-readonly`. The version is `1.1.0`. The registration ID is `svg`.
+The reviewed package root is `RendererPackages/SVG` in the repository. SwiftPM does not copy it into the app resource bundle. Users import the folder through Settings → Renderers → Advanced Local Renderer Package Import. The package ID is `org.selfdrivingwiki.svg-readonly`. The version is `1.1.1`. The registration ID is `svg`.
 
 The package matches `image/svg+xml` sources plus the `.svg` extension fallback. Its revision 6 manifest claims one rich fence alias, `svg`, with the inline MIME type `image/svg+xml`, and its `sourceType` declaration lists the canonical `image/svg+xml` and the `svg` extension. It is a read-only Web renderer. It declares `input.read` only, no external links, and 16,000,000-byte input and decoded-input limits (the retired built-in renderer's ceiling). It has priority 100 — the retired built-in's tier — and fills both embedding roles.
 
@@ -83,7 +83,7 @@ The viewer mounts the exact authorized bytes as a base64 `data:` image. WebKit's
 
 ### Reviewed Mermaid renderer package
 
-The reviewed package root is `RendererPackages/Mermaid` in the repository. SwiftPM does not copy it into the app resource bundle. Users import the folder through Settings → Renderers → Advanced Local Renderer Package Import. The package ID is `org.selfdrivingwiki.mermaid-readonly`. The version is `1.1.0`. The registration ID is `mermaid`.
+The reviewed package root is `RendererPackages/Mermaid` in the repository. SwiftPM does not copy it into the app resource bundle. Users import the folder through Settings → Renderers → Advanced Local Renderer Package Import. The package ID is `org.selfdrivingwiki.mermaid-readonly`. The version is `1.1.1`. The registration ID is `mermaid`.
 
 The package claims the `mermaid` fence alias with the inline MIME type `text/vnd.mermaid` (the package canonical MIME). Its revision 6 `sourceType` declaration lists the canonical MIME, the `text/mermaid`, `text/x-mermaid`, and `application/vnd.chipnuts.karaoke-mmd` aliases, and the `mmd` and `mermaid` extensions. It is a read-only Web renderer. It declares `input.read` only, no external links, and 48,000-byte input and decoded-input limits. It has priority 90 and fills both embedding roles.
 

@@ -177,13 +177,18 @@ private struct QueueRuntimeExtractionProvider: QueueExtractionProvider {
         nil
     }
 
-    func persistExtraction(
+    func persistBytesExtraction(
         wikiID: WikiID,
         sourceID: SourceID,
-        markdown: String,
-        backend: ExtractionBackend,
-        modelVersion: String?,
-        technique: String?
+        resolution: BytesExtractionResolution,
+        markdown: String
+    ) async throws {}
+
+    func persistTranscriptExtraction(
+        wikiID: WikiID,
+        sourceID: SourceID,
+        resolution: TranscriptExtractionResolution,
+        outcome: TranscriptFetchOutcome
     ) async throws {}
 }
 

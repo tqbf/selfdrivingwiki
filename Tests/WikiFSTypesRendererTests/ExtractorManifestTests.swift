@@ -81,6 +81,54 @@ struct ExtractorManifestTests {
         #expect(throws: Error.self) { _ = try JSONDecoder().decode(ExtractorLaunch.self, from: invalid) }
     }
 
+    /// AC.1: a `podcast-transcript` registration is valid registration data
+    /// on a manifest-revision-1 package carrying protocol revision 3. A
+    /// registration with an empty MIME set is rejected — the synthetic
+    /// `audio/podcast` source MIME is the route the package must declare.
+    @Test func podcastTranscriptRegistrationValidation() throws {
+        let podcastRegistration = try ExtractorRegistration(
+            id: ExtractorRegistrationID(validating: "feed"),
+            displayName: "RSS Podcast Transcript",
+            kinds: [.podcastTranscript],
+            mimeTypes: [ExtractorMIMEType(validating: "audio/podcast")])
+
+        let entry = try file("bin/extractor", byte: 7)
+        let manifest = try ExtractorManifest(
+            manifestRevision: .v1,
+            packageID: ExtractorPackageID(validating: "org.example.podcast"),
+            version: ExtractorPackageVersion(validating: "1.0.0"),
+            displayName: "Podcast Transcript",
+            protocolRevision: .v3,
+            entryPoint: entry.path,
+            launch: .direct,
+            registrations: [podcastRegistration],
+            capabilities: [.network],
+            files: [entry],
+            limits: ExtractorOperationLimits(
+                maximumInputByteCount: 1_024,
+                maximumMarkdownOutputByteCount: 2_048,
+                maximumDurationMilliseconds: 30_000,
+                maximumProgressEventCount: 20))
+
+        #expect(manifest.registrations.first?.kinds == [.podcastTranscript])
+        let decoded = try JSONDecoder().decode(
+            ExtractorManifest.self, from: JSONEncoder().encode(manifest))
+        #expect(decoded == manifest)
+        // Canonical digest accepts the new kind: the manifest revision that
+        // defines the digest namespace is unchanged.
+        #expect(try manifest.packageDigest() == decoded.packageDigest())
+
+        // Empty MIME set: no route is declared, so the registration is
+        // malformed.
+        #expect(throws: ExtractorValidationError.self) {
+            try ExtractorRegistration(
+                id: ExtractorRegistrationID(validating: "feed"),
+                displayName: "RSS Podcast Transcript",
+                kinds: [.podcastTranscript],
+                mimeTypes: [])
+        }
+    }
+
     private func manifest(
         registrations: [ExtractorRegistration]? = nil,
         capabilities: Set<ExtractorCapability> = [],

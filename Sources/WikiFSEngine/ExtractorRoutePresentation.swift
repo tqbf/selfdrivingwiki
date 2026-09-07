@@ -245,8 +245,8 @@ public enum ExtractorRouteHostCatalog {
         }
     }
 
-    /// Canonical routes in host display order (PDF first, then HTML, then
-    /// DOCX).
+    /// Canonical routes in host display order (PDF first, then HTML, DOCX,
+    /// and the podcast transcript route).
     public static let descriptors: [ExtractorRouteDescriptor] = [
         ExtractorRouteDescriptor(
             route: .canonicalPDF,
@@ -260,6 +260,10 @@ public enum ExtractorRouteHostCatalog {
             route: .canonicalDOCX,
             displayName: "Word",
             systemImage: "doc.text"),
+        ExtractorRouteDescriptor(
+            route: .canonicalPodcastTranscript,
+            displayName: "Podcast transcript",
+            systemImage: "mic"),
     ]
 
     /// The host's fixed choices for one route. Only canonical routes have
@@ -298,6 +302,18 @@ public enum ExtractorRouteHostCatalog {
                     route: route,
                     reference: .none,
                     displayName: "No default (use the reviewed package)",
+                    category: .prompt),
+            ]
+        }
+        if route == .canonicalPodcastTranscript {
+            // Package-only, and unlike DOCX the explicit no-default record
+            // DISABLES the route — it does not map back to the reviewed
+            // package. Package choices come from the registration snapshot.
+            return [
+                ExtractorRouteChoice(
+                    route: route,
+                    reference: .none,
+                    displayName: "No default (disable podcast transcripts)",
                     category: .prompt),
             ]
         }

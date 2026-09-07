@@ -91,4 +91,7 @@ public enum AppendDerivedMarkdownError: Error, Equatable, Sendable {
     case invalidInstalledPackageProducer
     case foreignSourceVersion(SourceVersionID)
     case missingSource(SourceID)
+    /// A package transcript was requested without the source's immutable
+    /// initial version. The write is refused before any row is written.
+    case missingInitialSourceVersion(SourceID)
 }

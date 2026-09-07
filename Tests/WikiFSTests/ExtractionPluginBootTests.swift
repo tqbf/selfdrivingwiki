@@ -31,7 +31,6 @@ struct ExtractionPluginBootTests {
                 ]),
             Entry(id: EntryID("defuddle"), plugin: DefuddleExtractionPlugin.id),
             Entry(id: EntryID("youtube"), plugin: YouTubeTranscriptPlugin.id),
-            Entry(id: EntryID("rss-podcast"), plugin: RSSPodcastTranscriptPlugin.id),
             Entry(id: EntryID("apple-podcast"), plugin: ApplePodcastTranscriptPlugin.id),
         ]
         let booted = try await CordisBoot.boot(CordisBoot.Options(
@@ -44,7 +43,6 @@ struct ExtractionPluginBootTests {
                 GeminiExtractionPlugin.definition(readCredential: { _ in nil }, fetcher: http),
                 DefuddleExtractionPlugin.definition { FixtureHTMLExtractor() },
                 YouTubeTranscriptPlugin.definition { FixtureYouTubeFetcher() },
-                RSSPodcastTranscriptPlugin.definition { FixtureRSSPodcastFetcher() },
                 ApplePodcastTranscriptPlugin.definition { FixtureApplePodcastFetcher() },
             ]),
             layers: [PatchFile(entries: entries)]))
@@ -56,7 +54,6 @@ struct ExtractionPluginBootTests {
             ApplePodcastTranscriptPlugin.key,
             DefuddleExtractionPlugin.key,
             GeminiExtractionPlugin.key,
-            RSSPodcastTranscriptPlugin.key,
             YouTubeTranscriptPlugin.key,
         ].sorted { $0.description < $1.description })
 
@@ -87,12 +84,6 @@ private struct FixtureHTMLExtractor: HtmlMarkdownExtractor {
 private struct FixtureYouTubeFetcher: YouTubeTranscriptFetching {
     func transcript(forVideoID videoID: String) async throws -> YouTubeTranscript {
         YouTubeTranscript(videoID: videoID, title: "fixture", markdown: "fixture", filename: "fixture.md")
-    }
-}
-
-private struct FixtureRSSPodcastFetcher: RSSFeedTranscriptFetching {
-    func transcript(forFeedURL url: URL) async throws -> PodcastTranscript {
-        PodcastTranscript(episodeID: "fixture", markdown: "fixture", filename: "fixture.md")
     }
 }
 

@@ -25,6 +25,19 @@
           "registrationID": "document"
         }
       }
+    },
+    {
+      "route": {
+        "kind": "podcast-transcript",
+        "mimeType": "audio/podcast"
+      },
+      "extractor": {
+        "kind": "installed",
+        "installed": {
+          "packageID": "org.selfdrivingwiki.podcast-transcript",
+          "registrationID": "feed"
+        }
+      }
     }
   ]
 }

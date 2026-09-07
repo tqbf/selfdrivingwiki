@@ -196,6 +196,20 @@ public struct ProcessExtractorProvider: Sendable {
         return ProcessPackageDOCXExtractor(operation: operation)
     }
 
+    /// Prepares the process-backed podcast transcript adapter for one exact
+    /// package revision. The adapter accepts a typed source URL and runs a
+    /// `remote-url` revision-3 operation against the pinned snapshot — no
+    /// input bytes are staged. Readiness, cancellation, deadline, redaction,
+    /// and output validation reuse the shared operation path.
+    public func preparePodcastTranscript(
+        revision: ExtractorPackageRevisionID,
+        manifest: ExtractorManifest
+    ) async throws -> ProcessPackagePodcastTranscript {
+        let operation = try await prepareOperation(
+            kind: .podcastTranscript, revision: revision, manifest: manifest)
+        return ProcessPackagePodcastTranscript(operation: operation)
+    }
+
     public static func packageProvenance(
         revision: ExtractorPackageRevisionID,
         manifest: ExtractorManifest,
@@ -498,9 +512,44 @@ public final class PreparedProcessOperation: Sendable {
         filename: String,
         onProgress: (@Sendable (String) -> Void)?
     ) async throws -> ProcessPackageExecutionOutcome {
+        try await execute(
+            kind: kind,
+            payload: .bytes(input),
+            filename: filename,
+            onProgress: onProgress)
+    }
+
+    /// Runs exactly one one-shot `remote-url` conversion against the pinned
+    /// snapshot. No input bytes exist, so nothing is staged; the request
+    /// carries the validated source URL only.
+    func execute(
+        kind: ExtractorKind,
+        remoteURL: ExtractorRemoteSourceURL,
+        filename: String,
+        onProgress: (@Sendable (String) -> Void)?
+    ) async throws -> ProcessPackageExecutionOutcome {
+        try await execute(
+            kind: kind,
+            payload: .remoteURL(remoteURL),
+            filename: filename,
+            onProgress: onProgress)
+    }
+
+    /// The internal operation payload: staged bytes for the `operation-file`
+    /// transport, or the validated source URL for `remote-url`.
+    private enum ProcessOperationPayload: Sendable {
+        case bytes(Data)
+        case remoteURL(ExtractorRemoteSourceURL)
+    }
+
+    private func execute(
+        kind: ExtractorKind,
+        payload: ProcessOperationPayload,
+        filename: String,
+        onProgress: (@Sendable (String) -> Void)?
+    ) async throws -> ProcessPackageExecutionOutcome {
         let requestID = UUID()
         let name = requestID.uuidString.lowercased()
-        let inputPath = "input/\(name)/source"
         let outputPath = "output/\(name)/result.md"
         let runtimeCacheRoot = manifest.capabilities.contains(.sharedRuntimeCache)
             ? self.sharedRuntimeCacheRoot
@@ -509,8 +558,8 @@ public final class PreparedProcessOperation: Sendable {
             ? self.sharedModelCacheRoot
             : nil
 
-        // ---- Operation input preparation (revision 2 + declared requirements)
-        let declaresRequirements = manifest.protocolRevision == .v2
+        // ---- Operation input preparation (revision 2+ and declared requirements)
+        let declaresRequirements = manifest.protocolRevision >= .v2
             && registration.credentialRequirements.isEmpty == false
         var resolvedValues: [ExtractorCredentialRequirementID: String] = [:]
         var configuration: ExtractorOperationConfiguration?
@@ -550,7 +599,7 @@ public final class PreparedProcessOperation: Sendable {
                 }
             }
         }
-        if manifest.protocolRevision == .v2 {
+        if manifest.protocolRevision >= .v2 {
             configuration = operationConfiguration?(revision)
         }
 
@@ -614,6 +663,16 @@ public final class PreparedProcessOperation: Sendable {
         // Immutable snapshots of the request paths for the @Sendable body.
         let requestCredentialPath = credentialFilePath
         let requestConfigurationPath = configurationFilePath
+        // Operation-file requests stage exactly one input file inside the
+        // private operation root. Remote-url requests stage nothing: the
+        // request carries the validated source URL and the package fetches
+        // the source itself.
+        let stagedInputPath: String?
+        if case .bytes = payload {
+            stagedInputPath = "input/\(name)/source"
+        } else {
+            stagedInputPath = nil
+        }
         // The retained success, consumed by the executor's launch. A retained
         // failure never reaches this point (it threw above).
         let retainedRuntimeResolution: RuntimeCommandResolution?
@@ -626,12 +685,15 @@ public final class PreparedProcessOperation: Sendable {
             redactor: redactor,
             onProgress: onProgress
         ) {
-            let inputURL = self.directoryRoot.appendingPathComponent(inputPath)
-            try FileManager.default.createDirectory(
-                at: inputURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700])
-            try input.write(to: inputURL, options: [.atomic])
+            if let stagedInputPath,
+               case .bytes(let input) = payload {
+                let inputURL = self.directoryRoot.appendingPathComponent(stagedInputPath)
+                try FileManager.default.createDirectory(
+                    at: inputURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true,
+                    attributes: [.posixPermissions: 0o700])
+                try input.write(to: inputURL, options: [.atomic])
+            }
 
             // Explicit per-kind input MIME default: the registration's declared
             // MIME types win; the fallback matches the kind's canonical input
@@ -640,19 +702,39 @@ public final class PreparedProcessOperation: Sendable {
             case .pdf: MimeType.pdf
             case .html: MimeType.html
             case .docx: MimeType.docx
+            case .podcastTranscript: MimeType.audioPodcast
             }
-            let request = try ExtractorProtocolRequest(
-                requestID: ExtractorRequestID(),
-                protocolRevision: self.manifest.protocolRevision,
-                kind: kind,
-                mimeType: ExtractorMIMEType(validating: self.mimeType(defaulting: fallbackMIMEType)),
-                originalFilename: filename,
-                inputPath: ExtractorRelativePath(validating: inputPath),
-                outputPath: ExtractorRelativePath(validating: outputPath),
-                deadlineMillisecondsSince1970: Int64(Date().timeIntervalSince1970 * 1_000)
-                    + max(Int64(self.manifest.limits.maximumDurationMilliseconds), 1),
-                credentialFilePath: requestCredentialPath,
-                operationConfigurationPath: requestConfigurationPath)
+            let mimeType = try ExtractorMIMEType(
+                validating: self.mimeType(defaulting: fallbackMIMEType))
+            let deadlineMillisecondsSince1970 = Int64(Date().timeIntervalSince1970 * 1_000)
+                + max(Int64(self.manifest.limits.maximumDurationMilliseconds), 1)
+            let request: ExtractorProtocolRequest
+            switch payload {
+            case .bytes:
+                request = try ExtractorProtocolRequest(
+                    requestID: ExtractorRequestID(),
+                    protocolRevision: self.manifest.protocolRevision,
+                    kind: kind,
+                    mimeType: mimeType,
+                    originalFilename: filename,
+                    inputPath: ExtractorRelativePath(validating: stagedInputPath ?? ""),
+                    outputPath: ExtractorRelativePath(validating: outputPath),
+                    deadlineMillisecondsSince1970: deadlineMillisecondsSince1970,
+                    credentialFilePath: requestCredentialPath,
+                    operationConfigurationPath: requestConfigurationPath)
+            case .remoteURL(let sourceURL):
+                request = try ExtractorProtocolRequest(
+                    requestID: ExtractorRequestID(),
+                    protocolRevision: self.manifest.protocolRevision,
+                    kind: kind,
+                    mimeType: mimeType,
+                    originalFilename: filename,
+                    remoteURL: sourceURL,
+                    outputPath: ExtractorRelativePath(validating: outputPath),
+                    deadlineMillisecondsSince1970: deadlineMillisecondsSince1970,
+                    credentialFilePath: requestCredentialPath,
+                    operationConfigurationPath: requestConfigurationPath)
+            }
 
             let managedRequest = ManagedExtractorProcessRequest(
                 revision: self.revision,
@@ -670,8 +752,12 @@ public final class PreparedProcessOperation: Sendable {
             // Final launch-seam gate: the LAST thing before spawn, after the
             // request snapshot is fully constructed (PR 3 review HIGH-1).
             // Revision-1 prepared operations never re-consult admission
-            // (their pinned-snapshot semantics are preserved).
-            if declaresRequirements, let launchGate = self.launchGate {
+            // (their pinned-snapshot semantics are preserved). Every
+            // revision-2+ operation rechecks for EVERY launch — the gate
+            // protects admission and catalog membership, not just
+            // credentials, so a credential-free revision-3 package (the
+            // podcast transcript package) is rechecked too.
+            if manifest.protocolRevision >= .v2, let launchGate = self.launchGate {
                 try await launchGate()
             }
             let outcome = try await self.executor.execute(managedRequest) { [redactor] (frame: ExtractorProtocolFrame) in
@@ -1022,5 +1108,70 @@ public struct ProcessPackageDOCXExtractor: DocxMarkdownExtractor, ProcessPackage
     /// the user's setup guidance.
     public func readiness() async -> ExtractionReadiness {
         operation.readiness()
+    }
+}
+
+/// The process-backed podcast transcript adapter for one exact package
+/// revision. Accepts a typed source URL, executes one prepared revision-3
+/// `remote-url` operation against the pinned snapshot, and returns Markdown
+/// plus the package-reported metadata. No input bytes are staged.
+public struct ProcessPackagePodcastTranscript: Sendable, ProcessPackageProvenanceProviding {
+    public var displayName: String { operation.manifest.displayName }
+    public var packageProvenance: ExtractorPackageExecutionProvenance {
+        ExtractorPackageExecutionProvenance(
+            revision: operation.revision,
+            registrationID: operation.registrationID,
+            protocolRevision: operation.protocolRevision)
+    }
+
+    let operation: PreparedProcessOperation
+
+    init(operation: PreparedProcessOperation) {
+        self.operation = operation
+    }
+
+    /// The shared operation-level readiness answer (runtime resolution,
+    /// entry-point presence). The podcast package is `runtime`-launched
+    /// through `uv`, so a missing runtime surfaces here as setup guidance.
+    public func readiness() async -> ExtractionReadiness {
+        operation.readiness()
+    }
+
+    /// One outcome of one transcript fetch: the Markdown product plus the
+    /// package-reported metadata for provenance.
+    public struct Outcome: Sendable {
+        public let markdown: String
+        public let reportedMetadata: ExtractorReportedMetadata
+
+        public init(markdown: String, reportedMetadata: ExtractorReportedMetadata) {
+            self.markdown = markdown
+            self.reportedMetadata = reportedMetadata
+        }
+    }
+
+    /// Fetches and converts the transcript at `sourceURL`. Progress lines
+    /// are package-controlled text already redacted by the operation.
+    public func transcript(
+        for sourceURL: URL,
+        onProgress: (@Sendable (String) -> Void)? = nil
+    ) async throws -> Outcome {
+        do {
+            let outcome = try await operation.execute(
+                kind: .podcastTranscript,
+                remoteURL: ExtractorRemoteSourceURL(
+                    validating: sourceURL.absoluteString),
+                filename: "feed",
+                onProgress: onProgress)
+            return Outcome(
+                markdown: outcome.markdown,
+                reportedMetadata: outcome.reportedMetadata)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch ManagedExtractorProcessError.cancellation {
+            throw CancellationError()
+        } catch {
+            throw ProcessPackageError(
+                message: ProcessPackageFailureMapper.message(error))
+        }
     }
 }

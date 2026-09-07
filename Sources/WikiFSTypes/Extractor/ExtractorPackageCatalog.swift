@@ -27,7 +27,7 @@ public struct ExtractorPackageAdmissionDiagnostic: Codable, Hashable, Sendable {
 /// Durable metadata for one exact immutable package revision.
 public struct ExtractorPackageCatalogRecord: Codable, Hashable, Sendable, Comparable {
     private enum CodingKeys: String, CodingKey {
-        case revision, displayName, protocolRevision, launch, registrations
+        case revision, displayName, protocolRevision, manifestRevision, launch, registrations
         case capabilities, installedAt, admissionDiagnostics
     }
 
@@ -36,6 +36,12 @@ public struct ExtractorPackageCatalogRecord: Codable, Hashable, Sendable, Compar
     public let revision: ExtractorPackageRevisionID
     public let displayName: String
     public let protocolRevision: ExtractorProtocolRevision
+    /// The manifest revision the stored registrations decode under. Persisted
+    /// explicitly because the protocol revision no longer implies it: a
+    /// manifest-revision-1 package may carry protocol revision 3. Records
+    /// written before this field existed derive it from the protocol
+    /// revision on decode.
+    public let manifestRevision: ExtractorManifestRevision
     public let launch: ExtractorLaunch
     public let registrations: [ExtractorRegistration]
     public let capabilities: Set<ExtractorCapability>
@@ -46,6 +52,7 @@ public struct ExtractorPackageCatalogRecord: Codable, Hashable, Sendable, Compar
         revision: ExtractorPackageRevisionID,
         displayName: String,
         protocolRevision: ExtractorProtocolRevision,
+        manifestRevision: ExtractorManifestRevision? = nil,
         launch: ExtractorLaunch,
         registrations: [ExtractorRegistration],
         capabilities: Set<ExtractorCapability>,
@@ -64,11 +71,25 @@ public struct ExtractorPackageCatalogRecord: Codable, Hashable, Sendable, Compar
         self.revision = revision
         self.displayName = displayName
         self.protocolRevision = protocolRevision
+        self.manifestRevision = manifestRevision ?? Self.derivedManifestRevision(
+            protocolRevision: protocolRevision)
         self.launch = launch
         self.registrations = registrations.sorted()
         self.capabilities = capabilities
         self.installedAt = installedAt
         self.admissionDiagnostics = admissionDiagnostics
+    }
+
+    /// Legacy derivation for records written before `manifestRevision` was
+    /// persisted. Protocol revisions 1 and 2 always paired with the same
+    /// manifest revision, so the derivation is total for every record an
+    /// older host could have written.
+    private static func derivedManifestRevision(
+        protocolRevision: ExtractorProtocolRevision
+    ) -> ExtractorManifestRevision {
+        // Unreachable for legacy records (older hosts only ever wrote 1|2),
+        // but total: fall back to v1 rather than poisoning the catalog.
+        ExtractorManifestRevision(rawValue: protocolRevision.rawValue) ?? .v1
     }
 
     public init(from decoder: any Decoder) throws {
@@ -77,14 +98,17 @@ public struct ExtractorPackageCatalogRecord: Codable, Hashable, Sendable, Compar
         guard Set(capabilities).count == capabilities.count else {
             throw ExtractorPackageCatalogError.invalidRecord
         }
-        // Registrations decode under the record's own protocol revision: a
+        // Registrations decode under the record's own manifest revision: a
         // v2 registration carries credential declarations that the plain v1
-        // decoder rejects, which made the whole catalog unreadable.
+        // decoder rejects, which made the whole catalog unreadable. The
+        // manifest revision is persisted; records without it (legacy) derive
+        // it from the protocol revision, which implied it before protocol 3
+        // decoupled the two.
         let protocolRevision = try container.decode(
             ExtractorProtocolRevision.self, forKey: .protocolRevision)
-        guard let manifestRevision = ExtractorManifestRevision(rawValue: protocolRevision.rawValue) else {
-            throw ExtractorValidationError.invalidRevision(protocolRevision.rawValue)
-        }
+        let manifestRevision = try container.decodeIfPresent(
+            ExtractorManifestRevision.self, forKey: .manifestRevision)
+            ?? Self.derivedManifestRevision(protocolRevision: protocolRevision)
         var registrationContainer = try container.nestedUnkeyedContainer(forKey: .registrations)
         let registrations = try ExtractorRegistration.decodeArray(
             from: &registrationContainer, manifestRevision: manifestRevision)
@@ -92,6 +116,7 @@ public struct ExtractorPackageCatalogRecord: Codable, Hashable, Sendable, Compar
             revision: container.decode(ExtractorPackageRevisionID.self, forKey: .revision),
             displayName: container.decode(String.self, forKey: .displayName),
             protocolRevision: protocolRevision,
+            manifestRevision: manifestRevision,
             launch: container.decode(ExtractorLaunch.self, forKey: .launch),
             registrations: registrations,
             capabilities: Set(capabilities),
@@ -111,6 +136,7 @@ public struct ExtractorPackageCatalogRecord: Codable, Hashable, Sendable, Compar
             revision: revision,
             displayName: validatedManifest.displayName,
             protocolRevision: validatedManifest.protocolRevision,
+            manifestRevision: validatedManifest.manifestRevision,
             launch: validatedManifest.launch,
             registrations: validatedManifest.registrations,
             capabilities: validatedManifest.capabilities,

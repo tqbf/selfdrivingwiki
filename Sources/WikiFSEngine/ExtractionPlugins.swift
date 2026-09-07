@@ -165,18 +165,12 @@ public enum YouTubeTranscriptPlugin {
     }
 }
 
-public enum RSSPodcastTranscriptPlugin {
-    public static let id = PluginID("wiki.extraction.rss-podcast-transcript")
-    public static let key = ExtractionBackendKey(kind: .rssPodcastTranscript, backendID: "rss")
-
-    public static func definition(
-        makeFetcher: @escaping @Sendable () async -> any RSSFeedTranscriptFetching
-    ) -> PluginDefinition {
-        adapterDefinition(id: id, label: "RSS podcast transcripts", key: key) {
-            .rssPodcastTranscript(await makeFetcher())
-        }
-    }
-}
+// `RSSPodcastTranscriptPlugin` was REMOVED: RSS podcast transcripts run
+// through the reviewed podcast-transcript package, whose prepared
+// `.podcastTranscript` adapter carries exact package provenance. The former
+// built-in fetcher registration could not carry provenance and was never
+// part of a production composition. The Apple built-in plugin below stays
+// until the Apple-native TTML packaging follow-up.
 
 public enum ApplePodcastTranscriptPlugin {
     public static let id = PluginID("wiki.extraction.apple-podcast-transcript")

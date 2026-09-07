@@ -147,74 +147,41 @@ struct RSSPodcastTranscriptionTests {
         _ = svc
     }
 
-    // MARK: - Dispatch (AC.4 — inject fake fetcher)
+    // MARK: - Dispatch (AC.15 — queue is the only .podcast path)
 
-    /// A fake `RSSFeedTranscriptFetching` returning canned markdown, so the
-    /// dispatch test asserts routing + append without spawning `uv`.
-    private struct FakeRSSFeedFetcher: RSSFeedTranscriptFetching {
-        let cannedMarkdown: String
-        var shouldThrow: Bool = false
-
-        func transcript(forFeedURL url: URL) async throws -> PodcastTranscript {
-            if shouldThrow {
-                throw PodcastTranscriptError.noTranscriptAvailable
-            }
-            return PodcastTranscript(
-                episodeID: url.absoluteString,
-                markdown: cannedMarkdown,
-                filename: "podcast-fake-transcript.md")
-        }
-    }
-
-    @Test func transcribeDispatchesToRSSPodcastAndAppends() async throws {
+    /// The model's `transcribe` dispatch no longer fetches RSS feeds inline:
+    /// a `.podcast` source throws the typed queue-required error whose
+    /// message names the app's extraction queue. The queue provider resolves
+    /// the route through the extractor package instead.
+    @Test func transcribeOnPodcastSourceThrowsQueueRequired() async throws {
         let store = try Self.tempStore()
         let model = WikiStoreModel(store: store)
 
-        // Create a byteless .podcast source (intake).
         _ = try await model.addPodcastFeedURL("https://feeds.example.com/show.xml")
         model.reloadFromStore()
         let sourceID = try #require(model.sources.first?.id)
 
-        // No markdown version exists yet (no transcript at ingest).
+        // No markdown version exists yet (no transcript at ingest, AC.11).
         #expect(model.hasProcessedMarkdown(for: sourceID) == false)
 
-        // Transcribe with an injected fake fetcher returning canned markdown.
-        let fake = FakeRSSFeedFetcher(cannedMarkdown: "# Fake Transcript\n\nHello world.")
-        let version = try await model.transcribe(
-            sourceID: sourceID,
-            rssPodcastFetcher: fake)
-
-        // The dispatch reached the RSS path and appended a markdown version.
-        let appended = try #require(version)
-        #expect(appended.content.contains("Fake Transcript"))
-        #expect(appended.technique == "rss-podcast-transcript")
-        #expect(model.hasProcessedMarkdown(for: sourceID) == true)
-    }
-
-    @Test func transcribePodcastNoTranscriptSurfacesError() async throws {
-        // AC.5: when the feed has no transcript tag, the fetcher throws
-        // .noTranscriptAvailable and the dispatch propagates it (does NOT
-        // silently return nil).
-        let store = try Self.tempStore()
-        let model = WikiStoreModel(store: store)
-
-        _ = try await model.addPodcastFeedURL("https://feeds.example.com/notranscript.xml")
-        model.reloadFromStore()
-        let sourceID = try #require(model.sources.first?.id)
-
-        let fake = FakeRSSFeedFetcher(cannedMarkdown: "", shouldThrow: true)
-        await #expect(throws: PodcastTranscriptError.self) {
-            _ = try await model.transcribe(sourceID: sourceID, rssPodcastFetcher: fake)
+        do {
+            _ = try await model.transcribe(sourceID: sourceID)
+            Issue.record("expected .podcastQueueRequired")
+        } catch let error as SourceRefreshService.RefreshError {
+            #expect(error == .podcastQueueRequired)
+            #expect(error.localizedDescription.contains("extraction queue"))
         }
+        // The failed dispatch wrote no transcript (AC.7).
+        #expect(model.hasProcessedMarkdown(for: sourceID) == false)
     }
 
-    @Test func transcribePodcastMissingPlanThrowsMissingPlan() async throws {
-        // A .podcast source with no plan URL → .missingPlan.
+    @Test func transcribeOnPodcastSourceWithoutPlanStillThrowsQueueRequired() async throws {
+        // A .podcast source with no plan URL hits the same queue-required
+        // dispatch arm (not a "missing plan" claim about re-fetching).
         let store = try Self.tempStore()
         let model = WikiStoreModel(store: store)
 
-        // Manually create a source with .podcast provider but no plan URL.
-        let summary = try store.addBytelessSource(
+        _ = try store.addBytelessSource(
             filename: "podcast-orphan",
             mimeType: "audio/podcast",
             provenance: SourceProvenance(
@@ -222,10 +189,10 @@ struct RSSPodcastTranscriptionTests {
                 activityKind: "fetch",
                 plan: nil, externalRef: nil, externalIdentity: nil),
             role: .primary)
+        model.reloadFromStore()
 
-        let fake = FakeRSSFeedFetcher(cannedMarkdown: "x")
-        await #expect(throws: SourceRefreshService.RefreshError.self) {
-            _ = try await model.transcribe(sourceID: summary.id, rssPodcastFetcher: fake)
+        await #expect(throws: SourceRefreshService.RefreshError.podcastQueueRequired) {
+            _ = try await model.transcribe(sourceID: try #require(model.sources.first?.id))
         }
     }
 

@@ -5,7 +5,7 @@ import Foundation
 public struct ExtractorProtocolRequest: Codable, Hashable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case requestID, protocolRevision, kind, mimeType, originalFilename
-        case inputTransport, inputPath, outputPath, deadlineMillisecondsSince1970
+        case inputTransport, inputPath, remoteURL, outputPath, deadlineMillisecondsSince1970
         case credentialFilePath, operationConfigurationPath
     }
 
@@ -15,7 +15,11 @@ public struct ExtractorProtocolRequest: Codable, Hashable, Sendable {
     public let mimeType: ExtractorMIMEType
     public let originalFilename: String
     public let inputTransport: ExtractorInputTransport
-    public let inputPath: ExtractorRelativePath
+    /// Mandatory for `.operationFile` input; always nil for `.remoteURL`.
+    public let inputPath: ExtractorRelativePath?
+    /// Mandatory for `.remoteURL` input; always nil for `.operationFile`.
+    /// Protocol revision 3 only.
+    public let remoteURL: ExtractorRemoteSourceURL?
     public let outputPath: ExtractorRelativePath
     public let deadlineMillisecondsSince1970: Int64
     /// Protocol revision 2 only: RELATIVE path (inside the private operation
@@ -27,26 +31,91 @@ public struct ExtractorProtocolRequest: Codable, Hashable, Sendable {
     /// revision 1.
     public let operationConfigurationPath: ExtractorRelativePath?
 
+    /// The tagged operation input. `inputPath` is mandatory only for
+    /// `.operationFile`; a `.remoteURL` request carries exactly one
+    /// validated source URL and stages no bytes.
+    public var operationInput: ExtractorOperationInput {
+        if let remoteURL {
+            return .remoteURL(remoteURL)
+        }
+        if let inputPath {
+            return .operationFile(inputPath)
+        }
+        // Unreachable: the constructors reject an empty input.
+        preconditionFailure("ExtractorProtocolRequest has no operation input")
+    }
+
+    /// The file-based (staged-bytes) request constructor. Every revision
+    /// supports this transport.
     public init(
         requestID: ExtractorRequestID,
         protocolRevision: ExtractorProtocolRevision,
         kind: ExtractorKind,
         mimeType: ExtractorMIMEType,
         originalFilename: String,
-        inputTransport: ExtractorInputTransport = .operationFile,
         inputPath: ExtractorRelativePath,
         outputPath: ExtractorRelativePath,
         deadlineMillisecondsSince1970: Int64,
         credentialFilePath: ExtractorRelativePath? = nil,
         operationConfigurationPath: ExtractorRelativePath? = nil
     ) throws {
+        try self.init(
+            requestID: requestID,
+            protocolRevision: protocolRevision,
+            kind: kind,
+            mimeType: mimeType,
+            originalFilename: originalFilename,
+            operationInput: .operationFile(inputPath),
+            outputPath: outputPath,
+            deadlineMillisecondsSince1970: deadlineMillisecondsSince1970,
+            credentialFilePath: credentialFilePath,
+            operationConfigurationPath: operationConfigurationPath)
+    }
+
+    /// The remote-URL request constructor (protocol revision 3). No input
+    /// bytes exist; the package fetches the source itself.
+    public init(
+        requestID: ExtractorRequestID,
+        protocolRevision: ExtractorProtocolRevision,
+        kind: ExtractorKind,
+        mimeType: ExtractorMIMEType,
+        originalFilename: String,
+        remoteURL: ExtractorRemoteSourceURL,
+        outputPath: ExtractorRelativePath,
+        deadlineMillisecondsSince1970: Int64,
+        credentialFilePath: ExtractorRelativePath? = nil,
+        operationConfigurationPath: ExtractorRelativePath? = nil
+    ) throws {
+        try self.init(
+            requestID: requestID,
+            protocolRevision: protocolRevision,
+            kind: kind,
+            mimeType: mimeType,
+            originalFilename: originalFilename,
+            operationInput: .remoteURL(remoteURL),
+            outputPath: outputPath,
+            deadlineMillisecondsSince1970: deadlineMillisecondsSince1970,
+            credentialFilePath: credentialFilePath,
+            operationConfigurationPath: operationConfigurationPath)
+    }
+
+    private init(
+        requestID: ExtractorRequestID,
+        protocolRevision: ExtractorProtocolRevision,
+        kind: ExtractorKind,
+        mimeType: ExtractorMIMEType,
+        originalFilename: String,
+        operationInput: ExtractorOperationInput,
+        outputPath: ExtractorRelativePath,
+        deadlineMillisecondsSince1970: Int64,
+        credentialFilePath: ExtractorRelativePath?,
+        operationConfigurationPath: ExtractorRelativePath?
+    ) throws {
         guard originalFilename.isEmpty == false,
               originalFilename.utf8.count <= 1_024,
               originalFilename.contains("\0") == false else {
             throw ExtractorValidationError.invalidManifest("original filename")
         }
-        guard inputPath != outputPath else { throw ExtractorValidationError.invalidManifest("input and output paths match") }
-        guard deadlineMillisecondsSince1970 > 0 else { throw ExtractorValidationError.invalidManifest("deadline") }
         // A revision 1 request can neither declare nor receive credentials:
         // operation input paths must be absent.
         if protocolRevision == .v1,
@@ -54,13 +123,33 @@ public struct ExtractorProtocolRequest: Codable, Hashable, Sendable {
             throw ExtractorValidationError.invalidManifest(
                 "credential input requires protocol revision 2")
         }
+        // The remote-url transport is a revision-3 feature. Revisions 1 and
+        // 2 keep their exact old wire contract.
+        if protocolRevision.rawValue < 3,
+           case .remoteURL = operationInput {
+            throw ExtractorValidationError.invalidManifest(
+                "remote-url input requires protocol revision 3")
+        }
+        if case .operationFile(let inputPath) = operationInput {
+            guard inputPath != outputPath else {
+                throw ExtractorValidationError.invalidManifest("input and output paths match")
+            }
+        }
+        guard deadlineMillisecondsSince1970 > 0 else { throw ExtractorValidationError.invalidManifest("deadline") }
         self.requestID = requestID
         self.protocolRevision = protocolRevision
         self.kind = kind
         self.mimeType = mimeType
         self.originalFilename = originalFilename
-        self.inputTransport = inputTransport
-        self.inputPath = inputPath
+        self.inputTransport = operationInput.transport
+        switch operationInput {
+        case .operationFile(let path):
+            self.inputPath = path
+            self.remoteURL = nil
+        case .remoteURL(let url):
+            self.inputPath = nil
+            self.remoteURL = url
+        }
         self.outputPath = outputPath
         self.deadlineMillisecondsSince1970 = deadlineMillisecondsSince1970
         self.credentialFilePath = credentialFilePath
@@ -79,14 +168,40 @@ public struct ExtractorProtocolRequest: Codable, Hashable, Sendable {
             throw ExtractorValidationError.invalidManifest(
                 "credential input requires protocol revision 2")
         }
+        // Decode the input transport explicitly, then enforce the revision's
+        // exact wire shape. `remoteURL` is rejected wherever it may not
+        // appear, so old revisions never silently ignore a revision-3 key
+        // and no revision accepts a mixed shape.
+        let transport = try container.decode(
+            ExtractorInputTransport.self, forKey: .inputTransport)
+        let input: ExtractorOperationInput
+        switch transport {
+        case .operationFile:
+            guard container.contains(.remoteURL) == false else {
+                throw ExtractorValidationError.invalidManifest(
+                    "operation-file input cannot carry remoteURL")
+            }
+            input = .operationFile(try container.decode(
+                ExtractorRelativePath.self, forKey: .inputPath))
+        case .remoteURL:
+            guard revision == .v3 else {
+                throw ExtractorValidationError.invalidManifest(
+                    "remote-url input requires protocol revision 3")
+            }
+            guard container.contains(.inputPath) == false else {
+                throw ExtractorValidationError.invalidManifest(
+                    "remote-url input cannot carry inputPath")
+            }
+            input = .remoteURL(try container.decode(
+                ExtractorRemoteSourceURL.self, forKey: .remoteURL))
+        }
         try self.init(
             requestID: container.decode(ExtractorRequestID.self, forKey: .requestID),
             protocolRevision: revision,
             kind: container.decode(ExtractorKind.self, forKey: .kind),
             mimeType: container.decode(ExtractorMIMEType.self, forKey: .mimeType),
             originalFilename: container.decode(String.self, forKey: .originalFilename),
-            inputTransport: container.decode(ExtractorInputTransport.self, forKey: .inputTransport),
-            inputPath: container.decode(ExtractorRelativePath.self, forKey: .inputPath),
+            operationInput: input,
             outputPath: container.decode(ExtractorRelativePath.self, forKey: .outputPath),
             deadlineMillisecondsSince1970: container.decode(Int64.self, forKey: .deadlineMillisecondsSince1970),
             credentialFilePath: container.decodeIfPresent(
@@ -94,6 +209,106 @@ public struct ExtractorProtocolRequest: Codable, Hashable, Sendable {
             operationConfigurationPath: container.decodeIfPresent(
                 ExtractorRelativePath.self, forKey: .operationConfigurationPath))
     }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(requestID, forKey: .requestID)
+        try container.encode(protocolRevision, forKey: .protocolRevision)
+        try container.encode(kind, forKey: .kind)
+        try container.encode(mimeType, forKey: .mimeType)
+        try container.encode(originalFilename, forKey: .originalFilename)
+        try container.encode(inputTransport, forKey: .inputTransport)
+        switch operationInput {
+        case .operationFile(let path):
+            try container.encode(path, forKey: .inputPath)
+        case .remoteURL(let url):
+            try container.encode(url, forKey: .remoteURL)
+        }
+        try container.encode(outputPath, forKey: .outputPath)
+        try container.encode(deadlineMillisecondsSince1970, forKey: .deadlineMillisecondsSince1970)
+        if let credentialFilePath {
+            try container.encode(credentialFilePath, forKey: .credentialFilePath)
+        }
+        if let operationConfigurationPath {
+            try container.encode(operationConfigurationPath, forKey: .operationConfigurationPath)
+        }
+    }
+}
+
+// MARK: - Operation input transports (protocol revision 3)
+
+/// The tagged operation input of one extractor request: staged operation
+/// bytes (`operation-file`, every revision) or one validated remote source
+/// URL (`remote-url`, revision 3). The tag and its payload are mutually
+/// exclusive by construction.
+public enum ExtractorOperationInput: Hashable, Sendable {
+    case operationFile(ExtractorRelativePath)
+    case remoteURL(ExtractorRemoteSourceURL)
+
+    public var transport: ExtractorInputTransport {
+        switch self {
+        case .operationFile: .operationFile
+        case .remoteURL: .remoteURL
+        }
+    }
+}
+
+/// One normalized HTTP or HTTPS source URL carried by a `remote-url`
+/// request. Validation happens at construction, before the host ever spawns
+/// a package process: other schemes (`file:`, `data:`, ftp:), embedded
+/// credentials, fragments, missing hosts, NUL bytes, and over-limit strings
+/// are all rejected. The stored value is normalized — lowercase scheme and
+/// host, no default port — so one source has exactly one wire identity.
+public struct ExtractorRemoteSourceURL: Hashable, Codable, Sendable, CustomStringConvertible {
+    /// Bounded like every other host-supplied request string; matches the
+    /// operation-configuration endpoint bound.
+    public static let maximumByteCount = 2_048
+
+    public let rawValue: String
+
+    public init?(rawValue: String) {
+        guard rawValue.isEmpty == false,
+              rawValue.utf8.count <= Self.maximumByteCount,
+              rawValue.contains("\0") == false,
+              let components = URLComponents(string: rawValue),
+              let scheme = components.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let host = components.host,
+              host.isEmpty == false,
+              components.user == nil,
+              components.password == nil,
+              components.fragment == nil
+        else { return nil }
+        var normalized = components
+        normalized.scheme = scheme
+        normalized.host = host.lowercased()
+        if normalized.port == (scheme == "https" ? 443 : 80) {
+            normalized.port = nil
+        }
+        guard let value = normalized.string else { return nil }
+        self.rawValue = value
+    }
+
+    public init(validating rawValue: String) throws {
+        guard let value = Self(rawValue: rawValue) else {
+            throw ExtractorValidationError.invalidIdentifier(
+                kind: "extractor remote source URL", value: rawValue)
+        }
+        self = value
+    }
+
+    /// The parsed URL. Construction already validated it, so this is
+    /// non-optional for every stored value.
+    public var url: URL {
+        guard let url = URL(string: rawValue) else {
+            preconditionFailure("validated remote source URL re-parses: \(rawValue)")
+        }
+        return url
+    }
+
+    public init(from decoder: any Decoder) throws { try self.init(validating: String(from: decoder)) }
+    public func encode(to encoder: any Encoder) throws { var container = encoder.singleValueContainer(); try container.encode(rawValue) }
+    public var description: String { rawValue }
 }
 
 // MARK: - Operation input envelopes (protocol revision 2)

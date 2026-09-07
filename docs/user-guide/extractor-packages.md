@@ -1,8 +1,8 @@
 # Extractor packages
 
-An extractor package converts one source format to Markdown. The app uses extractor packages when it converts a PDF, HTML, or Word source and produces a Markdown page. A package is one folder that contains `manifest.json` and the files the manifest declares.
+An extractor package converts one source format to Markdown. The app uses extractor packages when it converts a PDF, HTML, or Word source, transcribes a podcast feed, and produces a Markdown page. A package is one folder that contains `manifest.json` and the files the manifest declares.
 
-This Mac ships with four reviewed packages:
+This Mac ships with five reviewed packages:
 
 | Package | Format | What it does | Runtime it needs |
 | --- | --- | --- | --- |
@@ -10,6 +10,28 @@ This Mac ships with four reviewed packages:
 | pdf2md | PDF | Converts a PDF to Markdown. It can download its model. | [uv](https://docs.astral.sh/uv/) |
 | Docling Serve | PDF | Sends the PDF to your self-hosted [Docling Serve](https://github.com/DS4SD/docling-serve) and stores the Markdown it returns. Optional API token; endpoint and timeout are set in Settings. | [`python3`](https://www.python.org) |
 | docx2md | Word (.docx) | Converts a Word document to Markdown offline at import. **Extract** retries a failed conversion. | [Bun](https://bun.sh) |
+| Podcast Transcript | Podcast feed | Fetches the feed and converts the published `<podcast:transcript>` attachment to Markdown. Network access only. | [uv](https://docs.astral.sh/uv/) |
+
+### Podcast feed transcripts
+
+Add a podcast feed URL and the source stays byteless until you transcribe.
+The Transcribe action enqueues the job through the extraction queue, and the
+reviewed Podcast Transcript package fetches the feed, selects the published
+`<podcast:transcript>` attachment, and converts VTT, SRT, HTML, or plain
+text to Markdown.
+
+- The package needs [uv](https://docs.astral.sh/uv/). If uv is missing, the
+  job fails with setup guidance instead of running something else.
+- The route is a standard row in Settings → Extraction → Default Extractors.
+  The choice "No default (disable podcast transcripts)" turns RSS podcast
+  transcription off; it does not fall back to another extractor.
+- The transcript is stored as an alternative with the exact package version
+  in its provenance, linked to the source's first version. Re-transcribing
+  appends a new alternative; earlier ones are kept.
+- A failed fetch (no transcript published, network error, timeout) writes
+  nothing and reports a short cause.
+- Apple Podcasts transcripts use a separate Apple-native backend, not this
+  package.
 
 ### Word documents (.docx)
 
@@ -47,7 +69,7 @@ The capability list in a manifest (network, shared caches, model download) is a 
 
 ## Selection and route status
 
-Open **Settings** → **Extraction** and use the **Default Extractors** section. The table has one row for each extraction route. The current routes are PDF, HTML, and Word (.docx). A registration can add a row for a new format without an app update. Formats without a route do not have an extraction adapter yet.
+Open **Settings** → **Extraction** and use the **Default Extractors** section. The table has one row for each extraction route. The current routes are PDF, HTML, Word (.docx), and Podcast transcript. A registration can add a row for a new format without an app update. Formats without a route do not have an extraction adapter yet.
 
 Each row has four columns:
 

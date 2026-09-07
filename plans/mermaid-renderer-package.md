@@ -12,7 +12,7 @@ Mermaid JavaScript bytes. `MermaidSourceNeutralityTests` enforces this.
 The package follows the Excalidraw model. It is committed in the repository,
 SwiftPM does not copy it into the app, and a user imports the folder once per
 Mac through Settings → Renderers → Advanced Local Renderer Package Import.
-The package ID is `org.selfdrivingwiki.mermaid-readonly`, version `1.1.0`, and
+The package ID is `org.selfdrivingwiki.mermaid-readonly`, version `1.1.1`, and
 the registration ID is `mermaid`. The manifest is at revision 6 and declares
 the package-owned source type (canonical `text/vnd.mermaid`, the
 `text/mermaid`, `text/x-mermaid`, and `application/vnd.chipnuts.karaoke-mmd`

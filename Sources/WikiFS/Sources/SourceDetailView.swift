@@ -958,6 +958,9 @@ struct SourceDetailView: View {
     /// materialization (network fetch) runs off-main inside the service; the
     /// store write + `reloadSources` happen on-main inside `refreshSource`.
     /// On success, reloads the head markdown so the reader updates.
+    /// RSS podcast sources are queue-routed: the typed
+    /// `.podcastQueueRequired` error from the refresh service triggers the
+    /// same durable extraction enqueue the Transcribe action uses.
     private func runRefresh() async {
         isRefreshing = true
         refreshError = nil
@@ -969,6 +972,11 @@ struct SourceDetailView: View {
             refreshError = "This \(agent) source can't be refreshed."
         } catch SourceRefreshService.RefreshError.snapshotWithImages {
             refreshError = "This snapshot source includes images; re-snapshotting on refresh is coming soon."
+        } catch SourceRefreshService.RefreshError.podcastQueueRequired {
+            await runTranscription()
+            if let head = store.processedMarkdownHead(for: file) {
+                headVersion = head
+            }
         } catch {
             refreshError = "Refresh failed: \(error.localizedDescription)"
         }

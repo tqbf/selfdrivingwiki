@@ -1,0 +1,2 @@
+{"kind":"progress","payload":{"requestID":"4f25e76a-be09-467f-b71e-68c02da4d16a","completedUnitCount":0,"totalUnitCount":3,"message":"fetching feed"}}
+{"kind":"failure","payload":{"requestID":"4f25e76a-be09-467f-b71e-68c02da4d16a","cause":"unsupported-input","message":"no transcript available for this episode"}}

@@ -46,14 +46,14 @@ struct RendererSourceTypeRuntimeTests {
         // Reset restores it.
         _ = try await handle.services.resetSafeMode(
             packageID: .init(validating: "org.selfdrivingwiki.mermaid-readonly"),
-            version: .init(validating: "1.1.0"))
+            version: .init(validating: "1.1.1"))
         let afterReset = try await handle.services.prepareCurrentRegistry()
         #expect(afterReset.registeredSourceTypes.containsDeclaredMIME(mermaidMIME))
 
         // Removal drops it again.
         _ = try await handle.services.removePackage(
             packageID: .init(validating: "org.selfdrivingwiki.mermaid-readonly"),
-            version: .init(validating: "1.1.0"))
+            version: .init(validating: "1.1.1"))
         let afterRemoval = try await handle.services.prepareCurrentRegistry()
         #expect(afterRemoval.registeredSourceTypes.isEmpty)
     }
@@ -68,7 +68,7 @@ struct RendererSourceTypeRuntimeTests {
         try await fixture.suppressMermaid()
         _ = try await handle.services.resetSafeMode(
             packageID: .init(validating: "org.selfdrivingwiki.mermaid-readonly"),
-            version: .init(validating: "1.1.0"))
+            version: .init(validating: "1.1.1"))
         let preparation = try await handle.services.prepareCurrentRegistry()
         #expect(preparation.registeredSourceTypes.containsDeclaredMIME(
             try .init(validating: "text/vnd.mermaid")))
@@ -95,7 +95,7 @@ struct RendererSourceTypeRuntimeTests {
         let afterInstall = try store.getSource(id: source.id)
         _ = try await handle.services.removePackage(
             packageID: .init(validating: "org.selfdrivingwiki.mermaid-readonly"),
-            version: .init(validating: "1.1.0"))
+            version: .init(validating: "1.1.1"))
         let afterRemoval = try store.getSource(id: source.id)
 
         #expect(before.mimeType == "text/plain")

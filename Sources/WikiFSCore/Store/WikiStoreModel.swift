@@ -491,11 +491,9 @@ public final class WikiStoreModel {
     /// same provenance label.
     private static let youtubeCaptionsTechnique = "youtube-captions"
     /// Technique label for the generic RSS-feed podcast transcript markdown
-    /// written by `transcribeRSSPodcast(sourceID:origin:fetcher:)` (issue
-    /// podcast-generalize). Mirrors the `podcastTtmlTechnique` shape: stamped
-    /// on the `source_markdown_versions` row so the provenance chip reports the
-    /// producer. The generic path fetches the `<podcast:transcript>` tag via
-    /// the `podcast-transcript` `uv` script (no FairPlay helper).
+    /// written by the pre-package inline path. New RSS podcast transcripts
+    /// carry the installed-package producer instead; this label survives only
+    /// as the legacy-row mapping in `transcriptTool(for:)`.
     private static let rssPodcastTranscriptTechnique = "rss-podcast-transcript"
 
     private static func transcriptTool(for technique: String) -> ExtractionTool {
@@ -3242,6 +3240,11 @@ public final class WikiStoreModel {
     ///   (the single-source refresh guard, D3, would orphan them).
     /// - `"apple-podcast"` → refreshable only when this build compiled podcast
     ///   support AND the `podcast-token-helper` binary is present at runtime.
+    /// - `"podcast"` (generic RSS) → refreshable on every build: the app's
+    ///   refresh action enqueues the durable extraction job (RSS podcast
+    ///   transcripts run through the extractor-package route in the queue —
+    ///   the refresh service itself throws `.podcastQueueRequired`, which the
+    ///   app's `runRefresh` handles by enqueueing).
     /// - Everything else (local-file, Zotero, folder, unknown, missing origin)
     ///   is import-only and not refreshable.
     public func isSourceRefreshable(for id: SourceID) -> Bool {
@@ -3497,6 +3500,33 @@ public final class WikiStoreModel {
         }
     }
 
+    /// Typed transcript append: the producer is an `ExtractionTool`, not a
+    /// raw technique string. Queue persistence uses this variant; the
+    /// technique-string variant above stays for the model transcription
+    /// entry point.
+    @discardableResult
+    public func appendTranscriptMarkdown(
+        for sourceID: SourceID, content: String, tool: ExtractionTool
+    ) -> SourceMarkdownVersion? {
+        do {
+            return try store.appendDerivedMarkdown(
+                sourceID: sourceID, content: content, origin: .transcript,
+                producer: .tool(tool), providerID: nil, modelID: nil,
+                toolVersion: nil, sourceVersionID: nil, note: nil)
+        } catch {
+            DebugLog.store("WikiStoreModel.appendTranscriptMarkdown(tool) failed (source=\(sourceID.rawValue)): \(error)")
+            return nil
+        }
+    }
+
+    /// The source's immutable initial content version — the link target a
+    /// package transcript requires.
+    public func initialContentVersion(for sourceID: SourceID) -> SourceVersion? {
+        DebugLog.trying("initialContentVersion", operation: {
+            try store.initialContentVersion(sourceID: sourceID)
+        })
+    }
+
     /// Re-extract a source's content with a given extractor + backend, appending
     /// a COEXISTING alternative (never clobbers the existing head). Resolves the
     /// source bytes + active content version from the store, runs the extractor,
@@ -3732,12 +3762,10 @@ public final class WikiStoreModel {
     /// - every other provider → throws `.notRefreshable` (no transcript pipeline
     ///   today; Vimeo is a future extension that needs OAuth — #564 Phase 4).
     ///
-    /// Inline — does NOT route through the queue engine (the queue is PDF-coupled
-    /// via `ExtractionResolution.pdfData` / `convert(pdfData:)` /
-    /// `seedPdfMarkdown`; transcript "extraction" is a NETWORK FETCH with a
-    /// different input shape — there are no stored bytes to convert, the
-    /// "backend" picks the network pipeline). Generalizing the queue is a
-    /// deferred sub-project per the parent plan's "Out of scope" section.
+    /// The `.podcast` (generic RSS) arm is queue-only now: RSS podcast
+    /// transcripts run through the app's extraction queue via the reviewed
+    /// podcast-transcript package. The inline path throws
+    /// `.podcastQueueRequired` so callers enqueue the durable job instead.
     ///
     /// Throws `.notRefreshable("unknown")` when the source has no origin or the
     /// provider is missing (e.g. a legacy / nil-origin row), and
@@ -3775,8 +3803,7 @@ public final class WikiStoreModel {
     public func transcribe(
         sourceID: SourceID,
         podcastFetcher: (any PodcastTranscriptFetching)? = ApplePodcastTranscriptService.bundled(),
-        youtubeFetcher: (any YouTubeTranscriptFetching)? = YouTubeTranscriptService(),
-        rssPodcastFetcher: (any RSSFeedTranscriptFetching)? = RSSPodcastTranscriptService()
+        youtubeFetcher: (any YouTubeTranscriptFetching)? = YouTubeTranscriptService()
     ) async throws -> SourceMarkdownVersion? {
         guard let origin = sourceOrigin(for: sourceID),
               let provider = origin.provider else {
@@ -3787,8 +3814,10 @@ public final class WikiStoreModel {
             return try await transcribePodcast(
                 sourceID: sourceID, origin: origin, fetcher: podcastFetcher)
         case .podcast:
-            return try await transcribeRSSPodcast(
-                sourceID: sourceID, origin: origin, fetcher: rssPodcastFetcher)
+            // RSS podcast transcripts run through the app's extraction queue
+            // (the extractor-package route) — the model has no direct fetch
+            // path and `WikiFSCore` cannot reach the queue engine.
+            throw SourceRefreshService.RefreshError.podcastQueueRequired
         case .youtube:
             return try await transcribeYouTube(
                 sourceID: sourceID, origin: origin, fetcher: youtubeFetcher)
@@ -3802,8 +3831,7 @@ public final class WikiStoreModel {
     public func transcribe(
         sourceID: SourceID,
         podcastFetcher: Any? = nil,
-        youtubeFetcher: (any YouTubeTranscriptFetching)? = YouTubeTranscriptService(),
-        rssPodcastFetcher: (any RSSFeedTranscriptFetching)? = RSSPodcastTranscriptService()
+        youtubeFetcher: (any YouTubeTranscriptFetching)? = YouTubeTranscriptService()
     ) async throws -> SourceMarkdownVersion? {
         guard let origin = sourceOrigin(for: sourceID),
               let provider = origin.provider else {
@@ -3821,11 +3849,9 @@ public final class WikiStoreModel {
             _ = podcastFetcher  // unused on the phase-out build
             throw SourceRefreshService.RefreshError.notRefreshable(origin.agentName)
         case .podcast:
-            // Generic RSS-feed podcast: ALWAYS compiled (no FairPlay dependency).
-            // Works on WIKIFS_APP_STORE=1 builds — the transcript fetch needs
-            // only the `podcast-transcript` `uv` script.
-            return try await transcribeRSSPodcast(
-                sourceID: sourceID, origin: origin, fetcher: rssPodcastFetcher)
+            // RSS podcast transcripts run through the app's extraction queue
+            // (the extractor-package route) on every build.
+            throw SourceRefreshService.RefreshError.podcastQueueRequired
         case .youtube:
             return try await transcribeYouTube(
                 sourceID: sourceID, origin: origin, fetcher: youtubeFetcher)
@@ -3977,62 +4003,6 @@ public final class WikiStoreModel {
     }
 
     /// Generic RSS-feed podcast arm of the unified dispatch (podcast-generalize).
-    /// Reads `origin.plan` (the feed URL recorded at ingest by
-    /// `addPodcastFeedURL`), calls `RSSPodcastTranscriptService.transcript(forFeedURL:)`
-    /// (spawns the `podcast-transcript` `uv` script → fetches the feed → parses
-    /// `<podcast:transcript>`), and writes via `appendDerivedMarkdown` with
-    /// the `.rssPodcastTranscript` tool.
-    ///
-    /// **Always compiled** (outside `#if PODCAST_TRANSCRIPTS`) — the generic
-    /// `.podcast` path needs no FairPlay signing helper, only `uv`. So it works
-    /// on `WIKIFS_APP_STORE=1` builds, mirroring how `transcribeYouTube` is
-    /// always compiled.
-    ///
-    /// The injected `fetcher` (H2) lets tests fake the subprocess: pass an
-    /// `RSSFeedTranscriptFetching` conformer returning canned markdown and assert
-    /// the dispatch + append without spawning `uv`. Production defaults to
-    /// `RSSPodcastTranscriptService()` (constructed at the dispatch entry point).
-    ///
-    /// Mirrors `transcribeYouTube`'s error discipline: on a fetch failure the
-    /// error propagates (so `SourceDetailView.runTranscription` surfaces it);
-    /// on a store-write failure, logs + returns nil (the fetch succeeded but
-    /// the write didn't — a Console.app trace is left per #475/#492).
-    private func transcribeRSSPodcast(
-        sourceID: SourceID, origin: SourceOrigin,
-        fetcher: (any RSSFeedTranscriptFetching)?
-    ) async throws -> SourceMarkdownVersion? {
-        guard let planURLString = origin.plan,
-              let sourceURL = URL(string: planURLString) else {
-            throw SourceRefreshService.RefreshError.missingPlan
-        }
-        guard let fetcher else {
-            // No fetcher: a test injected nil explicitly. Production's default
-            // (constructed at the dispatch entry point) is a real
-            // RSSPodcastTranscriptService instance, so this branch is unreachable
-            // in production UI; the throw keeps the model honest.
-            throw SourceRefreshService.RefreshError.notRefreshable("podcast")
-        }
-        // The transcript fetch (feed download + <podcast:transcript> parse) runs
-        // off-main via the subprocess; the model never touches the store inside
-        // this `await`.
-        let fetcherCopy = fetcher
-        let urlCopy = sourceURL
-        let transcript = try await Task.detached(priority: .userInitiated) {
-            try await fetcherCopy.transcript(forFeedURL: urlCopy)
-        }.value
-        do {
-            return try store.appendDerivedMarkdown(
-                sourceID: sourceID, content: transcript.markdown, origin: .transcript,
-                producer: .tool(.rssPodcastTranscript), providerID: nil, modelID: nil, toolVersion: nil,
-                sourceVersionID: nil, note: nil)
-        } catch {
-            // #475/#492: never silently swallow — a transcription failure
-            // (after a network round-trip) must leave a Console.app trace.
-            DebugLog.store("WikiStoreModel.transcribe (podcast) appendDerivedMarkdown failed (source=\(sourceID.rawValue)): \(error)")
-            return nil
-        }
-    }
-
     /// Pure dispatch from the caller's resolved extractor to a concrete
     /// extractor call. Returns `(markdown, techniqueTag)` so the caller can
     /// stamp the right technique on the processed-markdown version row

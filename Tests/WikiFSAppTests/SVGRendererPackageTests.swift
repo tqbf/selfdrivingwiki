@@ -11,7 +11,7 @@ import WikiFSTypes
 /// app test target runs only with `WIKIFS_APP_TESTS=1`.
 @Suite("SVG installed renderer package", .serialized, .timeLimit(.minutes(1)))
 struct SVGRendererPackageTests {
-    @Test("reviewed package validates at manifest revision 6 and version 1.1.0")
+    @Test("reviewed package validates at manifest revision 6 and version 1.1.1")
     func reviewedPackageValidates() throws {
         let fixture = try PackageFixture()
         defer { fixture.remove() }
@@ -20,10 +20,10 @@ struct SVGRendererPackageTests {
         let descriptor = try #require(package.manifest.descriptors.only)
 
         #expect(package.manifest.revision == RendererManifestRevision.sourceTypes)
-        #expect(package.manifest.version.rawValue == "1.1.0")
+        #expect(package.manifest.version.rawValue == "1.1.1")
         #expect(package.packageHash.hex.isEmpty == false)
         #expect(descriptor.reference.packageID.rawValue == "org.selfdrivingwiki.svg-readonly")
-        #expect(descriptor.reference.version.rawValue == "1.1.0")
+        #expect(descriptor.reference.version.rawValue == "1.1.1")
         #expect(descriptor.reference.registrationID.rawValue == "svg")
         let claim = try #require(descriptor.fenceClaims.only)
         #expect(claim.alias == RendererFenceAlias(rawValue: "svg"))
@@ -55,7 +55,7 @@ struct SVGRendererPackageTests {
                     pageVersionID: PageVersionID(rawValue: "01HTESTPV00000000000000001"),
                     capability: .init(rawValue: "svg-test"), generation: 1)))
         #expect(html.contains("sdw-renderer-card"))
-        #expect(html.contains("data-renderer-reference=\"org.selfdrivingwiki.svg-readonly/1.1.0/svg\""))
+        #expect(html.contains("data-renderer-reference=\"org.selfdrivingwiki.svg-readonly/1.1.1/svg\""))
         // Untitled rows use the descriptor display name.
         #expect(html.contains("title=\"SVG\""))
         #expect(html.contains(">SVG</span>"))
@@ -106,7 +106,7 @@ struct SVGRendererPackageTests {
         ]
         #expect(genericRowMarkers.allSatisfy { svgHTML.contains($0) })
         #expect(genericRowMarkers.allSatisfy { excalidrawHTML.contains($0) })
-        #expect(svgHTML.contains("data-renderer-reference=\"org.selfdrivingwiki.svg-readonly/1.1.0/svg\""))
+        #expect(svgHTML.contains("data-renderer-reference=\"org.selfdrivingwiki.svg-readonly/1.1.1/svg\""))
         #expect(excalidrawHTML.contains("data-renderer-reference=\"org.selfdrivingwiki.excalidraw-readonly/1.1.0/excalidraw\""))
     }
 

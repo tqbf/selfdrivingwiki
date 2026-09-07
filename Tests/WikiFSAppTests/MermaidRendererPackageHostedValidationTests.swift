@@ -189,7 +189,7 @@ struct MermaidRendererPackageHostedValidationTests {
             rendererActivationAdmission: admission)
         let html = MarkdownHTMLRenderer.render("```mermaid\ngraph TD\nA-->B\n```", options: options)
         #expect(html.contains("sdw-renderer-card"))
-        #expect(html.contains("data-renderer-reference=\"org.selfdrivingwiki.mermaid-readonly/1.1.0/mermaid\""))
+        #expect(html.contains("data-renderer-reference=\"org.selfdrivingwiki.mermaid-readonly/1.1.1/mermaid\""))
         #expect(html.contains("renderer-action://open"))
         #expect(html.contains("Open in Window"))
 
@@ -284,7 +284,7 @@ struct MermaidRendererPackageHostedValidationTests {
         // claimant, validation skips, and source data survives.
         let removed = await host.removeRenderer(
             packageID: try .init(validating: "org.selfdrivingwiki.mermaid-readonly"),
-            version: try .init(validating: "1.1.0"))
+            version: try .init(validating: "1.1.1"))
         #expect(removed == true)
         let indexAfterRemoval = try await machineStore.read()
         #expect(indexAfterRemoval.availableDescriptorProjection.contains {

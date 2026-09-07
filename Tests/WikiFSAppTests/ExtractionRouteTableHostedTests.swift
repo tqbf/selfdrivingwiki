@@ -400,14 +400,16 @@ struct ExtractionRouteTableHostedTests {
         #expect(source.contains("MIME type: \\(routeRow.route.mimeType.rawValue)"))
         #expect(source.contains("Text(\"\\(routeRow.route.mimeType.rawValue)\")") == false)
 
-        // The podcast transcript default is a row of the same table, not its
-        // own section: it is a default extractor like any other, even though a
-        // host adapter resolves it rather than a package registration.
+        // The podcast transcript default is a standard route row of the same
+        // table (registration-driven, resolved through the reviewed
+        // podcast-transcript package). The separate Apple TTML backend
+        // control remains its own row until the Apple follow-up.
         #expect(source.contains("podcastBackendBinding"))
-        #expect(source.contains("Picker(\"Podcast Transcript\", selection: podcastBackendBinding)"))
+        #expect(source.contains("Picker(\"Apple Transcript\", selection: podcastBackendBinding)"))
         #expect(source.contains("case podcastTranscript(PodcastTranscriptionBackend?)"))
         #expect(source.contains("extraction.routes.picker.podcast"))
-        #expect(source.contains("Podcast transcripts are not package-backed in protocol revision 1."))
+        #expect(source.contains("Podcast feed transcripts run through the reviewed podcast-transcript package."))
+        #expect(source.contains("not package-backed") == false)
         #expect(!source.contains("Text(\"Transcripts\")"))
     }
 

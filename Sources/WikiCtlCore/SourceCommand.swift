@@ -466,11 +466,13 @@ public enum SourceCommand {
     ///
     /// wikictl is a CLI process (no `@MainActor`), so the store write happens
     /// directly after the off-main materialize — the Phase-0 `@MainActor`
-    /// invariant applies to the APP process, not wikictl. The service is
-    /// constructed with `podcastFetcher: nil` (no bundled signing helper in the
-    /// CLI context), so podcast refresh throws `.signatureUnavailable` and only
-    /// website sources are refreshable from the CLI. Commits — the caller posts
-    /// the Darwin notification on `didCommit`.
+    /// invariant applies to the APP process, not wikictl. RSS podcast
+    /// (`audio/podcast`) sources are queue-routed: `materialize(origin:)`
+    /// throws `.podcastQueueRequired`, whose message names the app's
+    /// extraction queue (a feed source HAS a URL — the direct re-fetch path
+    /// just no longer exists). Only website sources are refreshable from the
+    /// CLI. Commits — the caller posts the Darwin notification on
+    /// `didCommit`.
     public static func runRefresh(
         _ selector: Selector,
         in store: WikiStore,

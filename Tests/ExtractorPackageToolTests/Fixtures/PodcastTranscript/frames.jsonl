@@ -1,0 +1,4 @@
+{"kind":"progress","payload":{"requestID":"4f25e76a-be09-467f-b71e-68c02da4d16a","completedUnitCount":0,"totalUnitCount":3,"message":"fetching feed"}}
+{"kind":"progress","payload":{"requestID":"4f25e76a-be09-467f-b71e-68c02da4d16a","completedUnitCount":1,"totalUnitCount":3,"message":"writing markdown"}}
+{"kind":"progress","payload":{"requestID":"4f25e76a-be09-467f-b71e-68c02da4d16a","completedUnitCount":2,"totalUnitCount":3,"message":"done"}}
+{"kind":"result","payload":{"requestID":"4f25e76a-be09-467f-b71e-68c02da4d16a","outputPath":"output/result.md","markdownByteCount":293,"metadata":{"toolName":"podcast-transcript"}}}

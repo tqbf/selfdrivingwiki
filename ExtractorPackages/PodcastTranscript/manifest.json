@@ -1,0 +1,51 @@
+{
+  "capabilities": [
+    "network"
+  ],
+  "displayName": "Podcast Transcript",
+  "entryPoint": "bin/podcast-transcript-extractor",
+  "files": [
+    {
+      "digest": "4eb7eff10fc7fe3a6430067baff4057fd01b5566357e68a1afd4a1e62aaa1fd2",
+      "path": "PROVENANCE.md"
+    },
+    {
+      "digest": "eb4bede5a2a1670db2762b7da80432129eb49bd1510d6ded415838789306372a",
+      "path": "bin/podcast-transcript"
+    },
+    {
+      "digest": "f2ba6f004c2aefe066ee98948943284675fdb1d385c194eef0a8e4ec47f8c7d5",
+      "path": "bin/podcast-transcript-extractor"
+    }
+  ],
+  "launch": {
+    "arguments": [
+      "run",
+      "--script"
+    ],
+    "command": "uv",
+    "mode": "runtime"
+  },
+  "limits": {
+    "maximumDurationMilliseconds": 300000,
+    "maximumInputByteCount": 1048576,
+    "maximumMarkdownOutputByteCount": 33554432,
+    "maximumProgressEventCount": 64
+  },
+  "manifestRevision": 1,
+  "packageID": "org.selfdrivingwiki.podcast-transcript",
+  "protocolRevision": 3,
+  "registrations": [
+    {
+      "displayName": "RSS Podcast Transcript",
+      "id": "feed",
+      "kinds": [
+        "podcast-transcript"
+      ],
+      "mimeTypes": [
+        "audio/podcast"
+      ]
+    }
+  ],
+  "version": "1.0.0"
+}

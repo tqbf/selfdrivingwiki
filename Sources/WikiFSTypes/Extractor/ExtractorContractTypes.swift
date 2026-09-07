@@ -6,6 +6,10 @@ public enum ExtractorKind: String, Codable, CaseIterable, Hashable, Sendable {
     case pdf
     case html
     case docx
+    /// URL-backed podcast transcript conversion. The source input is a
+    /// normalized HTTP or HTTPS URL carried by the request, never staged
+    /// bytes (`podcast-transcript` on the wire).
+    case podcastTranscript = "podcast-transcript"
 }
 
 public enum ExtractorLaunchMode: String, Codable, CaseIterable, Hashable, Sendable {
@@ -21,6 +25,9 @@ public enum ExtractorCapability: String, Codable, CaseIterable, Hashable, Sendab
 
 public enum ExtractorInputTransport: String, Codable, CaseIterable, Hashable, Sendable {
     case operationFile = "operation-file"
+    /// Protocol revision 3: the request carries one normalized HTTP or HTTPS
+    /// source URL in `remoteURL` instead of a staged input file.
+    case remoteURL = "remote-url"
 }
 
 public enum ExtractorEventKind: String, Codable, CaseIterable, Hashable, Sendable {

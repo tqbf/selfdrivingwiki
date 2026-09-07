@@ -253,8 +253,13 @@ public struct ExtractorProtocolRevision: RawRepresentable, Codable, Hashable, Se
     /// requests keep their exact old shape and can neither declare nor
     /// receive credentials.
     public static let v2 = Self(validatedRawValue: 2)
+    /// Revision 3 adds the `remote-url` operation input transport: the request
+    /// carries one normalized HTTP or HTTPS source URL instead of staged input
+    /// bytes. Revisions 1 and 2 keep their exact old wire shape; a v1/v2
+    /// request can neither declare nor receive a remote URL.
+    public static let v3 = Self(validatedRawValue: 3)
     public init?(rawValue: Int) {
-        guard rawValue == 1 || rawValue == 2 else { return nil }
+        guard rawValue == 1 || rawValue == 2 || rawValue == 3 else { return nil }
         self.rawValue = rawValue
     }
     private init(validatedRawValue: Int) { self.rawValue = validatedRawValue }

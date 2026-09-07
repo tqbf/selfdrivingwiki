@@ -54,7 +54,15 @@ public enum ReviewedExtractorPackages {
         version: "1.0.0",
         digest: "ae5247e9108a0da5b8deb4f1dda154f72939c758f9f3db8f12d4dbb61977d42e")
 
-    public static let all: [ReviewedExtractorPackage] = [defuddle, pdf2md, doclingServe, docx2md]
+    public static let podcastTranscript = make(
+        directoryName: "PodcastTranscript",
+        packageID: "org.selfdrivingwiki.podcast-transcript",
+        version: "1.0.0",
+        digest: "8bfc2f5cab3e8e7a7cba421cf34afc11e1f2e4bd5bb8fcf5aae05fb4c87db54a")
+
+    public static let all: [ReviewedExtractorPackage] = [
+        defuddle, pdf2md, doclingServe, docx2md, podcastTranscript,
+    ]
 
     /// Locates the reviewed payload. `Bundle.main` resolves in both hosts:
     /// `build.sh` copies the same tree into the application resources and into

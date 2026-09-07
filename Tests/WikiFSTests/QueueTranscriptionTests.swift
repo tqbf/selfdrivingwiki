@@ -371,25 +371,34 @@ private final class FakeTranscriptionProvider: QueueExtractionProvider, @uncheck
 
         switch resolveResult {
         case .resolved:
-            return ExtractionResolution(
-                transcriptFetch: { @Sendable in
+            return .transcript(TranscriptExtractionResolution(
+                fetch: { _ in
                     try await self.fetchBehavior()
-                    return "# Transcript markdown"
+                    return TranscriptFetchOutcome(markdown: "# Transcript markdown")
                 },
-                technique: "youtube-captions",
-                filename: "transcript")
+                filename: "transcript",
+                resultMode: .builtInTool(.youtubeCaptions)))
         case .nilResolution:
             return nil
         }
     }
 
-    func persistExtraction(
+    func persistBytesExtraction(
         wikiID: WikiID, sourceID: SourceID,
-        markdown: String, backend: ExtractionBackend,
-        modelVersion: String?, technique: String?
+        resolution: BytesExtractionResolution, markdown: String
     ) async throws {
         lock.withLock { state in
-            state.callLog.append("persist(wikiID:\(wikiID.rawValue), sourceID:\(sourceID.rawValue), technique:\(technique ?? "nil"))")
+            state.callLog.append("persistBytes(wikiID:\(wikiID.rawValue), sourceID:\(sourceID.rawValue))")
+        }
+    }
+
+    func persistTranscriptExtraction(
+        wikiID: WikiID, sourceID: SourceID,
+        resolution: TranscriptExtractionResolution, outcome: TranscriptFetchOutcome
+    ) async throws {
+        lock.withLock { state in
+            state.callLog.append("persist(wikiID:\(wikiID.rawValue), sourceID:\(sourceID.rawValue), tool:\(resolution.resultMode))")
+            state.lastTechnique = "youtube-captions"
         }
     }
 }
