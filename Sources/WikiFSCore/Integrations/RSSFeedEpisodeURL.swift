@@ -82,3 +82,21 @@ public enum RSSFeedEpisodeURL {
         return String(parts[parts.count - 2])
     }
 }
+
+extension String {
+    /// Collapses repeated hyphens and removes hyphens at both ends.
+    func repeatingHyphensCollapsed() -> String {
+        var output = ""
+        var previousWasHyphen = false
+        for character in self {
+            if character == "-" {
+                if previousWasHyphen == false { output.append(character) }
+                previousWasHyphen = true
+            } else {
+                output.append(character)
+                previousWasHyphen = false
+            }
+        }
+        return output.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    }
+}

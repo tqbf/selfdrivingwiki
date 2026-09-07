@@ -96,20 +96,19 @@ Re-transcription appends a coexisting alternative; earlier alternatives are
 never changed or deleted. A failed fetch, timeout, cancellation, or missing
 transcript writes no activity and no Markdown row.
 
-## Apple TTML follow-up boundary
+## Apple TTML follow-up status
 
-Apple Podcasts transcripts are NOT packaged in this change. `.applePodcast`
-sources keep the Apple materializer, the `#if PODCAST_TRANSCRIPTS`
-conditional compilation, the `podcast-token-helper`, and the current
-built-in RSS fallback. The three allow-listed `RSSPodcastTranscriptService`
-constructions (both queue providers' `.applePodcast` arms and the
-`transcribePodcast` helper) carry that fallback and are removed by the Apple
-TTML packaging follow-up. Apple results written through the model entry
-point keep `.tool(.appleTTML)` with the source-v1 link (issue #251); the
-queue Apple path's nil source-version link predates this change and is a
-documented carry-over the same follow-up aligns. The Extraction settings
-route table shows the RSS podcast transcript route as a standard row and
-keeps the Apple TTML backend control as its own separate row.
+COMPLETE. The Apple TTML packaging follow-up landed as the reviewed
+`org.selfdrivingwiki.apple-podcast-transcript` package (see
+`plans/apple-ttml-extractor-package.md`). `.applePodcast` sources run through
+that package route in both queue providers; the built-in Apple materializer,
+the `podcastFetcher` seams, and the three allow-listed
+`RSSPodcastTranscriptService` constructions are gone
+(`ExtractionCompositionBoundaryTests` now enforces zero). Apple results
+persist with installed-package provenance, `.transcript` origin, and the
+source-v1 link; the package's RSS fallback runs only when no helper was
+staged. The Extraction settings table shows both podcast routes as standard
+rows; the bespoke Apple TTML backend row was removed.
 
 YouTube captions are unchanged: they stay a built-in transcript adapter with
 `.tool(.youtubeCaptions)` provenance.

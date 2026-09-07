@@ -67,17 +67,25 @@ struct ExtractorRouteTableBuilderTests {
                     mimeTypes: ["text/html"]),
             ])
         let rows = ExtractorRouteTableBuilder.build(input)
-        // Host PDF + HTML + DOCX + podcast transcript, plus the saved future
-        // route. The HTML registration covers the canonical HTML route and
-        // adds no new row.
-        #expect(rows.count == 5)
+        // Host PDF + HTML + DOCX + both podcast transcript routes, plus the
+        // saved future route. The HTML registration covers the canonical HTML
+        // route and adds no new row. The Apple route row comes from the
+        // bundled default-route record (the reviewed apple-podcast-transcript
+        // lineage), saved as unavailable when no registration is active.
+        #expect(rows.count == 6)
         #expect(rows.map(\.route) == [
             .canonicalPDF, .canonicalHTML, .canonicalDOCX, .canonicalPodcastTranscript,
+            .canonicalApplePodcastTranscript,
             futureRoute,
         ])
-        #expect(rows[4].savedSelection == ExtractorRouteHostCatalog.acpReference)
+        let appleRow = try #require(
+            rows.first { $0.route == .canonicalApplePodcastTranscript })
+        #expect(appleRow.savedSelection == nil)
+        let futureRow = try #require(rows.first { $0.route == futureRoute })
+        // The saved future route keeps its host (ACP) selection identity.
+        #expect(futureRow.savedSelection == ExtractorRouteHostCatalog.acpReference)
         // No host execution exists for a future route.
-        #expect(rows[4].resolvedSelection == nil)
+        #expect(futureRow.resolvedSelection == nil)
     }
 
     @Test func rowsSortDeterministically() throws {

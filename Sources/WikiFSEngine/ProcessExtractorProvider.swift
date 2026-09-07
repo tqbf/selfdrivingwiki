@@ -109,6 +109,15 @@ public struct ProcessExtractorProvider: Sendable {
     /// operation-configuration file, never the credential file.
     let operationConfiguration:
         (@Sendable (ExtractorPackageRevisionID) -> ExtractorOperationConfiguration?)?
+    /// Reviewed-only operation support (the staged token helper). The
+    /// provider admits by exact revision; nil for hosts and tests that never
+    /// stage support.
+    let operationSupport: (any ExtractorOperationSupportProviding)?
+    /// The host-owned durable token-cache root for one exact revision (the
+    /// reviewed Apple package). Nil for every other revision; the closure —
+    /// not this engine — owns the exact-revision admission decision.
+    let durableTokenCacheRoot:
+        (@Sendable (ExtractorPackageRevisionID) -> URL?)?
     /// The one extractor runtime locator. Preparation resolves each runtime
     /// command through it exactly once and retains the outcome.
     let runtimeLocator: any ExtractorRuntimeLocating
@@ -125,6 +134,8 @@ public struct ProcessExtractorProvider: Sendable {
         sharedModelCacheRoot: URL? = nil,
         operationCredentials: (any ExtractorOperationCredentialResolving)? = nil,
         operationConfiguration: (@Sendable (ExtractorPackageRevisionID) -> ExtractorOperationConfiguration?)? = nil,
+        operationSupport: (any ExtractorOperationSupportProviding)? = nil,
+        durableTokenCacheRoot: (@Sendable (ExtractorPackageRevisionID) -> URL?)? = nil,
         runtimeLocator: (any ExtractorRuntimeLocating)? = nil
     ) {
         self.layout = layout
@@ -137,6 +148,8 @@ public struct ProcessExtractorProvider: Sendable {
         self.sharedModelCacheRoot = sharedModelCacheRoot
         self.operationCredentials = operationCredentials
         self.operationConfiguration = operationConfiguration
+        self.operationSupport = operationSupport
+        self.durableTokenCacheRoot = durableTokenCacheRoot
         self.runtimeLocator = runtimeLocator ?? RuntimeCommandLocator()
     }
 
@@ -208,6 +221,20 @@ public struct ProcessExtractorProvider: Sendable {
         let operation = try await prepareOperation(
             kind: .podcastTranscript, revision: revision, manifest: manifest)
         return ProcessPackagePodcastTranscript(operation: operation)
+    }
+
+    /// Prepares the process-backed Apple Podcasts transcript adapter for one
+    /// exact package revision. Same `remote-url` revision-3 operation shape
+    /// as the RSS sibling; the Apple package decides between its Apple TTML
+    /// workflow and its RSS fallback from the host-staged operation support,
+    /// never from a request field.
+    public func prepareApplePodcastTranscript(
+        revision: ExtractorPackageRevisionID,
+        manifest: ExtractorManifest
+    ) async throws -> ProcessPackageApplePodcastTranscript {
+        let operation = try await prepareOperation(
+            kind: .applePodcastTranscript, revision: revision, manifest: manifest)
+        return ProcessPackageApplePodcastTranscript(operation: operation)
     }
 
     public static func packageProvenance(
@@ -341,6 +368,8 @@ public struct ProcessExtractorProvider: Sendable {
             },
             operationCredentials: operationCredentials,
             operationConfiguration: operationConfiguration,
+            operationSupport: operationSupport,
+            durableTokenCacheRoot: durableTokenCacheRoot,
             runtimeResolution: runtimeResolution)
     }
 
@@ -396,6 +425,12 @@ public final class PreparedProcessOperation: Sendable {
     let operationCredentials: (any ExtractorOperationCredentialResolving)?
     let operationConfiguration:
         (@Sendable (ExtractorPackageRevisionID) -> ExtractorOperationConfiguration?)?
+    /// Reviewed-only operation support staging (exact-revision admitted).
+    let operationSupport: (any ExtractorOperationSupportProviding)?
+    /// The host-owned durable token-cache root closure (exact-revision
+    /// admitted by the closure itself).
+    let durableTokenCacheRoot:
+        (@Sendable (ExtractorPackageRevisionID) -> URL?)?
     /// The one retained runtime resolution. Nil for a `direct` launch; for a
     /// `runtime` launch it holds the single success or typed failure resolved
     /// at preparation. Readiness and every execute consume exactly this
@@ -420,6 +455,8 @@ public final class PreparedProcessOperation: Sendable {
         launchGate: (@Sendable () async throws -> Void)?,
         operationCredentials: (any ExtractorOperationCredentialResolving)?,
         operationConfiguration: (@Sendable (ExtractorPackageRevisionID) -> ExtractorOperationConfiguration?)?,
+        operationSupport: (any ExtractorOperationSupportProviding)? = nil,
+        durableTokenCacheRoot: (@Sendable (ExtractorPackageRevisionID) -> URL?)? = nil,
         runtimeResolution: RuntimeCommandOutcome?
     ) {
         self.directoryRoot = directoryRoot
@@ -439,6 +476,8 @@ public final class PreparedProcessOperation: Sendable {
         self.launchGate = launchGate
         self.operationCredentials = operationCredentials
         self.operationConfiguration = operationConfiguration
+        self.operationSupport = operationSupport
+        self.durableTokenCacheRoot = durableTokenCacheRoot
         self.runtimeResolution = runtimeResolution
     }
 
@@ -603,6 +642,38 @@ public final class PreparedProcessOperation: Sendable {
             configuration = operationConfiguration?(revision)
         }
 
+        // Reviewed-only operation support (Phase 2): the provider admits by
+        // EXACT revision, so a grant exists only for the reviewed Apple
+        // package revision. Staging happens per execute inside the private
+        // operation root; the request carries only the staged file's
+        // RELATIVE path through the operation-configuration file. Cleanup is
+        // armed by the defer below together with the credential and
+        // configuration subdirectories.
+        var supportSubdirectory: URL?
+        let requestStagedSupport: StagedExtractorOperationSupport?
+        if let operationSupport, let grant = operationSupport.operationSupport(for: revision) {
+            let staged = try ExtractorOperationSupportStager.stage(
+                grant: grant,
+                operationRoot: directoryRoot,
+                requestName: name)
+            supportSubdirectory = staged.supportDirectoryURL
+            requestStagedSupport = staged
+            precondition(
+                configuration == nil,
+                "operation support and operation configuration cannot both configure one request")
+            switch grant.role {
+            case .podcastTokenHelper:
+                configuration = .applePodcastTranscript(helperPath: staged.relativePath)
+            }
+        } else {
+            requestStagedSupport = nil
+        }
+        // The durable private token-cache root: the host closure admits by
+        // exact revision and returns nil otherwise. Passed to the executor
+        // as a typed request field, which exposes it to the child only
+        // through its dedicated environment key.
+        let requestTokenCacheRoot = durableTokenCacheRoot?(revision)
+
         // The redactor covers every resolved value for THIS request; it is
         // constructed even when empty so call sites stay uniform.
         let redactor = ExtractorSecretRedactor(
@@ -635,7 +706,7 @@ public final class PreparedProcessOperation: Sendable {
         // block below — still deletes it. Fires on success, every error, and
         // cancellation.
         defer {
-            for subdirectory in [credentialSubdirectory, configurationSubdirectory]
+            for subdirectory in [credentialSubdirectory, configurationSubdirectory, supportSubdirectory]
             .compactMap({ $0 }) {
                 do {
                     try FileManager.default.removeItem(at: subdirectory)
@@ -703,6 +774,7 @@ public final class PreparedProcessOperation: Sendable {
             case .html: MimeType.html
             case .docx: MimeType.docx
             case .podcastTranscript: MimeType.audioPodcast
+            case .applePodcastTranscript: MimeType.audioApplePodcast
             }
             let mimeType = try ExtractorMIMEType(
                 validating: self.mimeType(defaulting: fallbackMIMEType))
@@ -748,7 +820,8 @@ public final class PreparedProcessOperation: Sendable {
                     privateCacheRoot: self.cacheRoot,
                     sharedRuntimeCacheRoot: runtimeCacheRoot,
                     sharedModelCacheRoot: modelCacheRoot),
-                runtimeResolution: retainedRuntimeResolution)
+                runtimeResolution: retainedRuntimeResolution,
+                durableTokenCacheRoot: requestTokenCacheRoot)
             // Final launch-seam gate: the LAST thing before spawn, after the
             // request snapshot is fully constructed (PR 3 review HIGH-1).
             // Revision-1 prepared operations never re-consult admission
@@ -759,6 +832,15 @@ public final class PreparedProcessOperation: Sendable {
             // podcast transcript package) is rechecked too.
             if manifest.protocolRevision >= .v2, let launchGate = self.launchGate {
                 try await launchGate()
+            }
+            // Pre-launch staged-identity re-verification (reviewed Apple
+            // support): the LAST descriptor-based check before spawn, so a
+            // replacement between staging and launch fails closed.
+            if let requestStagedSupport {
+                try ExtractorOperationSupportStager.verifyPublishedIdentity(
+                    requestStagedSupport.publishedIdentity,
+                    at: requestStagedSupport.relativePath,
+                    operationRoot: self.directoryRoot)
             }
             let outcome = try await self.executor.execute(managedRequest) { [redactor] (frame: ExtractorProtocolFrame) in
                 if case .progress(let progress) = frame, let message = progress.message {
@@ -1161,6 +1243,72 @@ public struct ProcessPackagePodcastTranscript: Sendable, ProcessPackageProvenanc
                 remoteURL: ExtractorRemoteSourceURL(
                     validating: sourceURL.absoluteString),
                 filename: "feed",
+                onProgress: onProgress)
+            return Outcome(
+                markdown: outcome.markdown,
+                reportedMetadata: outcome.reportedMetadata)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch ManagedExtractorProcessError.cancellation {
+            throw CancellationError()
+        } catch {
+            throw ProcessPackageError(
+                message: ProcessPackageFailureMapper.message(error))
+        }
+    }
+}
+
+/// The process-backed Apple Podcasts transcript adapter for one exact package
+/// revision. Accepts a validated episode page URL and executes one prepared
+/// revision-3 `remote-url` operation against the pinned snapshot. The package
+/// picks its Apple TTML workflow or its RSS fallback from the host-staged
+/// operation support; the adapter never branches on a kind or a package ID.
+public struct ProcessPackageApplePodcastTranscript: Sendable, ProcessPackageProvenanceProviding {
+    public var displayName: String { operation.manifest.displayName }
+    public var packageProvenance: ExtractorPackageExecutionProvenance {
+        ExtractorPackageExecutionProvenance(
+            revision: operation.revision,
+            registrationID: operation.registrationID,
+            protocolRevision: operation.protocolRevision)
+    }
+
+    let operation: PreparedProcessOperation
+
+    init(operation: PreparedProcessOperation) {
+        self.operation = operation
+    }
+
+    /// The shared operation-level readiness answer (runtime resolution,
+    /// entry-point presence). The Apple package is `runtime`-launched through
+    /// `uv`, so a missing runtime surfaces here as setup guidance.
+    public func readiness() async -> ExtractionReadiness {
+        operation.readiness()
+    }
+
+    /// One outcome of one transcript fetch: the Markdown product plus the
+    /// package-reported metadata for provenance.
+    public struct Outcome: Sendable {
+        public let markdown: String
+        public let reportedMetadata: ExtractorReportedMetadata
+
+        public init(markdown: String, reportedMetadata: ExtractorReportedMetadata) {
+            self.markdown = markdown
+            self.reportedMetadata = reportedMetadata
+        }
+    }
+
+    /// Fetches and converts the transcript at `sourceURL`. Progress lines
+    /// are package-controlled text already redacted by the operation.
+    public func transcript(
+        for sourceURL: URL,
+        onProgress: (@Sendable (String) -> Void)? = nil
+    ) async throws -> Outcome {
+        do {
+            let outcome = try await operation.execute(
+                kind: .applePodcastTranscript,
+                remoteURL: ExtractorRemoteSourceURL(
+                    validating: sourceURL.absoluteString),
+                filename: "episode",
                 onProgress: onProgress)
             return Outcome(
                 markdown: outcome.markdown,

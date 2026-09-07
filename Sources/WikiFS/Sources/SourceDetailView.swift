@@ -219,10 +219,8 @@ struct SourceDetailView: View {
     /// `false` until `origin` loads, so the predicate is re-evaluated when
     /// `.task(id: file.id)` finishes loading origin — same shape as
     /// `isRefreshable`.
-    private var isPodcastEmbed: Bool { origin?.provider == .applePodcast }
-
-    /// `true` for byteless YouTube embed sources (issue #799 PR5). Mirrors
-    /// `isPodcastEmbed` — `origin.provider` is the single source of truth.
+    /// `true` for byteless YouTube embed sources (issue #799 PR5).
+    /// `origin.provider` is the single source of truth.
     /// Returns `false` until `origin` loads, same shape as `isRefreshable`.
     private var isYouTubeEmbed: Bool { origin?.provider == .youtube }
 
@@ -238,22 +236,20 @@ struct SourceDetailView: View {
     /// PR4 AC.16, generalized to YouTube in PR5). The registry half of the
     /// gate (PR2 §5.4) consults `contentKind.capabilities.hasTranscriptBackend`
     /// (true only for `.podcastTranscript` / `.youtubeTranscript`), then
-    /// runtime guards layer on top: the podcast runtime guard (bundled
-    /// signing helper present AND this build compiles podcast support via
-    /// `#if PODCAST_TRANSCRIPTS`) delegates to
-    /// `store.isSourceRefreshable(for:)` so the predicate is identical to
-    /// the Refresh button's guard for podcasts. YouTube and generic RSS need
-    /// no signing helper, so they're always "available" once the provider
-    /// matches (the model throws `.missingPlan` when the ID is missing,
-    /// surfaced by `runTranscription`).
+    /// route availability layers on top: the Apple Podcasts arm delegates to
+    /// `store.isSourceRefreshable(for:)`, which derives availability from the
+    /// reviewed package route (not from signing-helper presence — a missing
+    /// helper keeps the route usable through the package's RSS fallback).
+    /// YouTube and generic RSS need no runtime guard, so they're always
+    /// "available" once the provider matches (the model throws
+    /// `.missingPlan` when the ID is missing, surfaced by `runTranscription`).
     private var isTranscribable: Bool {
         guard contentKind.capabilities.hasTranscriptBackend else { return false }
         switch origin?.provider {
         case .applePodcast:
-            // Mirror the Refresh button's runtime guard (helper present +
-            // build compiles podcast support). The predicate returns `false`
-            // for `.applePodcast` outside `#if PODCAST_TRANSCRIPTS` or when
-            // `ApplePodcastTranscriptService.bundled()` is nil.
+            // The reviewed package route decides: route disabled in
+            // settings → not transcribable; a missing signing helper does
+            // NOT disable the route (the package falls back to RSS).
             return store.isSourceRefreshable(for: file.id)
         case .podcast:
             // Generic RSS-feed podcast: always transcribable on every build —
@@ -1682,28 +1678,10 @@ struct SourceDetailView: View {
         await runDocxExtraction()
     }
 
-    /// Transcription trigger (issue #799 PR4 for podcasts; generalized to
-    /// YouTube in PR5). Inline — does NOT route through the queue engine
-    /// (the queue is PDF-coupled via `ExtractionResolution.pdfData` /
-    /// `convert(pdfData:)` / `seedPdfMarkdown`; transcript "extraction" is a
-    /// NETWORK FETCH with a different input shape — signed bearer → AMP →
-    /// TTML → parse for podcasts; watch-page scrape → caption track → parse
-    /// for YouTube). Mirrors `runHtmlExtraction` (PR2) but calls
-    /// `WikiStoreModel.transcribe(sourceID:podcastFetcher:youtubeFetcher:)`
-    /// (the PR5 unified dispatch that routes per provider — the per-provider
-    /// helpers stay private on the model). Uses the configured
-    /// `store.podcastBackend` when set; otherwise falls back to
-    /// `.appleTranscript` (only backend today) for podcasts. YouTube has no
-    /// backend choice today (only the captions-scrape path).
-    /// On a build without `PODCAST_TRANSCRIPTS`, the predicate
-    /// `needsTranscription` returns `false` for `.applePodcast` (its
-    /// underlying `isTranscribable` returns `false` via
-    /// `isSourceRefreshable`'s phase-out arm), so the podcast path is
-    /// unreachable in production; the YouTube path stays available.
-    /// Run transcription through the queue engine instead of calling
-    /// `store.transcribe(sourceID:)` inline (#842). Enqueues a durable
-    /// `.extraction` queue job (transcription merged into extraction — the
-    /// provider resolves transcript sources to a `transcriptFetch` closure),
+    /// Enqueues a durable `.extraction` queue job for transcription. The queue
+    /// provider resolves the transcript fetch. For Apple Podcasts, the reviewed
+    /// package selects TTML or RSS from the host-staged operation support.
+    /// The job
     /// waits for completion, and refreshes the head version on success —
     /// mirroring `runExtraction()`. Errors land on the queue item's `error`
     /// field + Activity window (not inline `transcribeError`, which was
@@ -1726,32 +1704,6 @@ struct SourceDetailView: View {
             }
         } catch {
             DebugLog.extraction("SourceDetailView: transcribe enqueue failed (\(file.id.rawValue)): \(error)")
-        }
-    }
-
-    /// Re-transcription trigger (issue #799 PR4). Now enqueues through the
-    /// queue engine too (#842) — the `backend` parameter rides in
-    /// `payload.stageRouting` (placeholder for future backends; only
-    /// `.appleTranscript` exists today).
-    private func runTranscription(with backend: PodcastTranscriptionBackend) async {
-        DebugLog.extraction("SourceDetailView: Re-transcribe tapped — id=\(file.id.rawValue), backend=\(backend.rawValue)")
-        do {
-            let request = QueueItemRequest(
-                queue: .extraction, wikiID: store.eventBus?.wikiID ?? WikiID(rawValue: ""),
-                payload: QueueItemPayload(sourceIDs: [file.id]))
-            let itemID = try await queueEngine.enqueue(request)
-            let result = try await queueEngine.waitForCompletion(of: itemID)
-
-            switch result {
-            case .success:
-                if let head = store.processedMarkdownHead(for: file) {
-                    headVersion = head
-                }
-            case .failure:
-                break
-            }
-        } catch {
-            DebugLog.extraction("SourceDetailView: re-transcribe enqueue failed (\(file.id.rawValue)): \(error)")
         }
     }
 
@@ -1798,26 +1750,8 @@ struct SourceDetailView: View {
                       : "Re-extract with another backend to enable compare")
             }
             Section("Re-extract with") {
-                // Content-type-aware: HTML sources list `HtmlExtractionBackend`
-                // (defuddle, tag-based), PDF sources list `ExtractionBackend`
-                // (local pdf2md, ACP, Anthropic, Gemini, Docling Serve),
-                // podcast sources list `PodcastTranscriptionBackend`
-                // (currently just `appleTranscript`; issue #799 PR4) and
-                // route to `runTranscription(with:)`. YouTube sources (PR5,
-                // issue #799 PR5) have a single entry today (the captions
-                // scrape — no `YouTubeTranscriptionBackend` enum added yet;
-                // revisit when the Python-subprocess backend lands, #584)
-                // and route to the parameterless `runTranscription()`. DOCX
-                // sources have a single entry too (the reviewed docx2md
-                // package — package-only, no backend enum) routing to the
-                // parameterless `runDocxReExtraction()`. A source is HTML xor
-                // DOCX xor PDF xor podcast xor YouTube xor other — the
-                // branches are mutually exclusive. The HTML, DOCX, podcast,
-                // and YouTube branches route through the inline `extractHtml`
-                // / `extractDocx` / `transcribe` paths (issues #799 PR2 +
-                // PR4 + PR5 — the queue engine is PDF-coupled; generalizing
-                // it is a deferred sub-project per the parent plan's "Out of
-                // scope" section).
+                // HTML and PDF sources offer backend choices. Transcript
+                // sources and DOCX use one package-driven action.
                 if SourceRendererPresentationPlanner.isHTMLSource(file) {
                     ForEach(HtmlExtractionBackend.allCases, id: \.self) { backend in
                         Button(backend.displayName) {
@@ -1828,30 +1762,8 @@ struct SourceDetailView: View {
                         .disabled(isThisFileExtracting
                                   || tracker.isSlotBusyForOtherSource(file.id))
                     }
-                } else if isPodcastEmbed {
-                    ForEach(PodcastTranscriptionBackend.allCases, id: \.self) { backend in
-                        Button(backend.displayName) {
-                            Task {
-                                await runTranscription(with: backend)
-                            }
-                        }
-                        .disabled(isTranscribing
-                                  || isThisFileExtracting
-                                  || tracker.isSlotBusyForOtherSource(file.id))
-                    }
-                } else if isYouTubeEmbed {
-                    // Issue #799 PR5: YouTube has a single transcript backend
-                    // today (the pure-Swift watch-page → caption-scrape path in
-                    // `YouTubeTranscriptService`). The menu entry dispatches
-                    // through the parameterless `runTranscription()` (which
-                    // calls `WikiStoreModel.transcribe(sourceID:)`, routing by
-                    // provider → `transcribeYouTube`). When a future backend
-                    // (e.g. a Python `youtube-transcript-api` subprocess, #584)
-                    // lands and we add a `YouTubeTranscriptionBackend` enum,
-                    // this branch mirrors the podcast arm: a `ForEach` over
-                    // `YouTubeTranscriptionBackend.allCases` calling
-                    // `runTranscription(with:)`.
-                    Button("YouTube captions") {
+                } else if contentKind.capabilities.hasTranscriptBackend {
+                    Button("Transcript") {
                         Task { await runTranscription() }
                     }
                     .disabled(isTranscribing

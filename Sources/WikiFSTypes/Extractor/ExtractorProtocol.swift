@@ -351,20 +351,37 @@ public struct ExtractorCredentialInputEnvelope: Codable, Hashable, Sendable {
 }
 
 /// The PUBLIC, non-secret operation-configuration envelope (protocol
-/// revision 2). Its closed field set is the construction seam: endpoint and
-/// timeout are the only representable fields, so a secret cannot be encoded
-/// even by mistake. Values arrive from typed host settings.
-public struct ExtractorOperationConfiguration: Codable, Hashable, Sendable {
-    private enum CodingKeys: String, CodingKey, CaseIterable {
-        case endpoint, timeoutMilliseconds
-    }
+/// revision 2+). A closed tagged model: one case per supported configuration
+/// family, and the case tag is the construction seam — a Docling endpoint
+/// cannot carry a helper path and an Apple helper grant cannot carry an
+/// endpoint, so a secret or an arbitrary path cannot be encoded even by
+/// mistake. Values arrive from typed host settings.
+///
+/// Wire shapes:
+/// - `.doclingServe` encodes the legacy flat shape
+///   (`{"endpoint": …, "timeoutMilliseconds": …}`) because the installed
+///   reviewed Docling Serve protocol-v2 package reads exactly that shape.
+/// - `.applePodcastTranscript` encodes the tagged shape
+///   (`{"kind": "apple-podcast-transcript", "helperPath": …}`). The path is
+///   RELATIVE to the operation root and names a host-staged, owner-private
+///   executable (see the engine's operation-support staging); it is not a
+///   secret and is never an absolute path.
+public enum ExtractorOperationConfiguration: Hashable, Sendable {
+    /// The Docling Serve endpoint + timeout. Both fields optional; the
+    /// package reports a clear setup failure when its endpoint is missing.
+    case doclingServe(endpoint: String?, timeoutMilliseconds: Int?)
+    /// The reviewed Apple package's staged helper grant: the helper's
+    /// relative path inside the operation root. No absolute path, no
+    /// argument, no endpoint — the package resolves it against its own
+    /// operation root.
+    case applePodcastTranscript(helperPath: ExtractorRelativePath)
 
     public static let maximumEndpointByteCount = 2_048
     public static let maximumTimeoutMilliseconds = ExtractorHostLimits.maximumDurationMilliseconds
+    static let appleKindValue = "apple-podcast-transcript"
 
-    public let endpoint: String?
-    public let timeoutMilliseconds: Int?
-
+    /// The legacy-compatible Docling construction. Validation matches the
+    /// original struct: bounded http/https endpoint, in-policy timeout.
     public init(endpoint: String?, timeoutMilliseconds: Int?) throws {
         if let endpoint {
             guard endpoint.isEmpty == false,
@@ -388,15 +405,122 @@ public struct ExtractorOperationConfiguration: Codable, Hashable, Sendable {
                 throw ExtractorValidationError.limitExceedsHostPolicy("operation timeout")
             }
         }
-        self.endpoint = endpoint
-        self.timeoutMilliseconds = timeoutMilliseconds
+        self = .doclingServe(endpoint: endpoint, timeoutMilliseconds: timeoutMilliseconds)
+    }
+}
+
+extension ExtractorOperationConfiguration: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case kind, endpoint, timeoutMilliseconds, helperPath
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .doclingServe(let endpoint, let timeoutMilliseconds):
+            // Legacy flat shape — the installed reviewed Docling Serve
+            // package decodes exactly these two keys.
+            if let endpoint { try container.encode(endpoint, forKey: .endpoint) }
+            if let timeoutMilliseconds {
+                try container.encode(timeoutMilliseconds, forKey: .timeoutMilliseconds)
+            }
+        case .applePodcastTranscript(let helperPath):
+            try container.encode(Self.appleKindValue, forKey: .kind)
+            try container.encode(helperPath, forKey: .helperPath)
+        }
     }
 
     public init(from decoder: any Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        try self.init(
-            endpoint: container.decodeIfPresent(String.self, forKey: .endpoint),
-            timeoutMilliseconds: container.decodeIfPresent(Int.self, forKey: .timeoutMilliseconds))
+        // Decode through a raw key/value map so UNKNOWN fields are rejected
+        // instead of silently ignored, and mixed-shape documents fail closed.
+        let raw = try [String: ExtractorConfigurationWireValue](from: decoder)
+        for key in raw.keys where CodingKeys(rawValue: key) == nil {
+            throw ExtractorValidationError.invalidManifest(
+                "unknown operation configuration field")
+        }
+        switch raw[CodingKeys.kind.rawValue]?.stringValue {
+        case nil:
+            // Legacy flat shape (Docling). A helper path or a known field with
+            // an invalid value type makes the shape invalid.
+            guard raw[CodingKeys.helperPath.rawValue] == nil else {
+                throw ExtractorValidationError.invalidManifest(
+                    "invalid legacy operation configuration")
+            }
+            if let endpointValue = raw[CodingKeys.endpoint.rawValue],
+               case .string = endpointValue {} else if raw[CodingKeys.endpoint.rawValue] != nil {
+                throw ExtractorValidationError.invalidManifest(
+                    "invalid legacy operation configuration endpoint")
+            }
+            if let timeoutValue = raw[CodingKeys.timeoutMilliseconds.rawValue],
+               case .number = timeoutValue {} else if raw[CodingKeys.timeoutMilliseconds.rawValue] != nil {
+                throw ExtractorValidationError.invalidManifest(
+                    "invalid legacy operation configuration timeout")
+            }
+            let endpoint = raw[CodingKeys.endpoint.rawValue]?.stringValue
+            let timeout = raw[CodingKeys.timeoutMilliseconds.rawValue]?.intValue
+            try self.init(endpoint: endpoint, timeoutMilliseconds: timeout)
+        case Self.appleKindValue:
+            // Tagged Apple shape: helper path required; Docling fields must
+            // be absent.
+            guard raw[CodingKeys.endpoint.rawValue] == nil,
+                  raw[CodingKeys.timeoutMilliseconds.rawValue] == nil else {
+                throw ExtractorValidationError.invalidManifest(
+                    "apple-podcast-transcript configuration accepts a helper path only")
+            }
+            guard let helperRaw = raw[CodingKeys.helperPath.rawValue]?.stringValue,
+                let helperPath = ExtractorRelativePath(rawValue: helperRaw) else {
+                throw ExtractorValidationError.invalidManifest(
+                    "apple-podcast-transcript helper path")
+            }
+            self = .applePodcastTranscript(helperPath: helperPath)
+        case .some:
+            throw ExtractorValidationError.invalidManifest(
+                "unknown operation configuration kind")
+        }
+    }
+}
+
+/// Raw JSON value probe for closed-envelope decoding. Only the shapes the
+/// operation-configuration envelope reads are distinguished; every other
+/// JSON shape fails the field probe and the envelope rejects the document.
+public enum ExtractorConfigurationWireValue: Codable, Hashable, Sendable {
+    case string(String)
+    case number(Int)
+    case other
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        // Field probing is the closed-envelope decode strategy: a value that
+        // matches no readable shape falls through to `.other` and the
+        // envelope rejects the document.
+        // swiftlint:disable:next silent_try_optional
+        if let value = try? container.decode(String.self) {
+            self = .string(value)
+        // swiftlint:disable:next silent_try_optional
+        } else if let value = try? container.decode(Int.self) {
+            self = .number(value)
+        } else {
+            self = .other
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .string(let value): try container.encode(value)
+        case .number(let value): try container.encode(value)
+        case .other: try container.encodeNil()
+        }
+    }
+
+    var stringValue: String? {
+        if case .string(let value) = self { return value }
+        return nil
+    }
+
+    var intValue: Int? {
+        if case .number(let value) = self { return value }
+        return nil
     }
 }
 

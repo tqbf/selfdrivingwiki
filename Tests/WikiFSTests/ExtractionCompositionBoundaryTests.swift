@@ -23,11 +23,13 @@ struct ExtractionCompositionBoundaryTests {
         #expect(!source.contains("extractionCoordinator.fetcher"))
     }
 
-    /// Temporary architecture guard for the Apple TTML follow-up. Production
-    /// code must not construct `RSSPodcastTranscriptService` outside the three
-    /// known `.applePodcast` fallback sites. Public behavior tests cover RSS
-    /// queue routing. This source scan only prevents a new legacy-service site.
-    @Test("no production RSS podcast subprocess path outside the Apple fallback sites")
+    /// Architecture guard, now permanent: production code constructs NO
+    /// `RSSPodcastTranscriptService` anywhere. The temporary Apple
+    /// `.applePodcast` fallback sites were removed when Apple transcripts
+    /// moved to the reviewed apple-podcast-transcript package; both podcast
+    /// source classes run through their package routes in the queue
+    /// providers. This scan prevents any new legacy-service site.
+    @Test("no production RSS podcast subprocess path remains")
     func noProductionRSSPodcastSubprocessPath() throws {
         let root = repositoryRoot()
         let productionRoot = root.appendingPathComponent("Sources", isDirectory: true)
@@ -41,15 +43,6 @@ struct ExtractionCompositionBoundaryTests {
             }
         }
         #expect(files.isEmpty == false, "no production sources found to scan")
-
-        // The exact allow-list: each construction site must appear in one of
-        // these files, inside its `.applePodcast` arm, and each file may
-        // carry at most the pinned count of constructions.
-        let allowList: [String: Int] = [
-            "AppQueueExtractionProvider.swift": 1,
-            "DaemonQueueExtractionProvider.swift": 1,
-            "WikiStoreModel.swift": 1,
-        ]
 
         for file in files {
             var contents = try String(contentsOf: file, encoding: .utf8)
@@ -65,41 +58,73 @@ struct ExtractionCompositionBoundaryTests {
                 searchStart = range.upperBound
             }
 
-            guard occurrences.isEmpty == false else { continue }
-            let fileName = file.lastPathComponent
-            let allowedCount = allowList[fileName] ?? 0
             #expect(
-                occurrences.count <= allowedCount,
-                "\(fileName) constructs RSSPodcastTranscriptService \(occurrences.count) time(s); only the allow-listed .applePodcast fallback sites are permitted")
+                occurrences.isEmpty,
+                "\(file.lastPathComponent) constructs RSSPodcastTranscriptService; podcast transcripts run through the package routes only")
+        }
+    }
 
-            // Every allowed site must sit inside an `.applePodcast` context:
-            // either the nearest preceding provider `case .applePodcast:`
-            // marker is closer than any other provider case marker, or (for
-            // WikiStoreModel) the site sits inside the `transcribePodcast`
-            // helper, which only the `.applePodcast` dispatch arm reaches.
-            for range in occurrences {
-                let prefix = contents[..<range.lowerBound]
-                let appleMarker = prefix.range(of: "case .applePodcast:", options: .backwards)
-                let otherMarkers = ["case .youtube:", "case .podcast:", "case .website:",
-                                    "case .localFile:", "case .vimeo:"].compactMap {
-                    prefix.range(of: $0, options: .backwards)
+    /// Apple identity is confined to the reviewed registration and identity
+    /// seams, the route presentation table (display data), the process service
+    /// lineage constants, and the engine's exact-revision support grant. No
+    /// general host policy may branch on the Apple package ID or kind.
+    @Test("no Apple kind or package policy branch outside the reviewed seams")
+    func noApplePolicyBranch() throws {
+        let root = repositoryRoot()
+        let scanned = [
+            "Sources/WikiFS",
+            "Sources/wikid",
+            "Sources/WikiFSCore/Store",
+            "Sources/WikiFSCore/Sources",
+            "Sources/WikiFSCore/Extractor",
+            "Sources/WikiFSEngine",
+        ]
+        // Host files allowed to NAME the Apple lineage: the compiled reviewed
+        // identity, the engine's exact-revision support grant, the route
+        // presentation table (display data), the process service lineage
+        // constants, and the neutrality test fixture itself.
+        let allowedFiles: Set<String> = [
+            "ReviewedExtractorPackages.swift",
+            "ReviewedApplePodcastSupport.swift",
+            "ExtractorPackagePluginDefinitionFactory.swift",
+            "ExtractorRoutePresentation.swift",
+            "ProcessExtractionServices.swift",
+            "ProcessExtractorProvider.swift",
+            "ExtractorSelectionResolver.swift",
+        ]
+
+        var files: [URL] = []
+        for directory in scanned {
+            let directoryURL = root.appendingPathComponent(directory, isDirectory: true)
+            guard FileManager.default.fileExists(atPath: directoryURL.path) else { continue }
+            if let enumerator = FileManager.default.enumerator(
+                at: directoryURL,
+                includingPropertiesForKeys: [.isRegularFileKey],
+                options: [.skipsHiddenFiles]) {
+                while let candidate = enumerator.nextObject() as? URL {
+                    if candidate.pathExtension == "swift" { files.append(candidate) }
                 }
-                let nearestOther = otherMarkers.max { $0.lowerBound < $1.lowerBound }
-                let insideAppleSwitch = appleMarker.map { apple in
-                    nearestOther.map { $0.lowerBound < apple.lowerBound } ?? true
-                } ?? false
-                var insideTranscribePodcastHelper = false
-                if fileName == "WikiStoreModel.swift" {
-                    let helper = prefix.range(of: "func transcribePodcast(", options: .backwards)
-                    let nextHelper = prefix.range(of: "private func transcribeYouTube(", options: .backwards)
-                    if let helper {
-                        insideTranscribePodcastHelper = nextHelper.map { helper.lowerBound < $0.lowerBound } ?? true
-                    }
-                }
-                if !insideAppleSwitch && !insideTranscribePodcastHelper {
-                    Issue.record(
-                        "\(fileName) constructs RSSPodcastTranscriptService outside its .applePodcast arm")
-                }
+            }
+        }
+        #expect(files.isEmpty == false, "no production sources found to scan")
+        #expect(
+            files.contains { allowedFiles.contains($0.lastPathComponent) },
+            "no allow-listed Apple identity seam exists in the scanned tree")
+
+        for file in files {
+            guard allowedFiles.contains(file.lastPathComponent) == false else { continue }
+            var contents = try String(contentsOf: file, encoding: .utf8)
+            contents = contents.replacingOccurrences(
+                of: #"//.*"#, with: "", options: .regularExpression)
+            let forbidden = [
+                "org.selfdrivingwiki.apple-podcast-transcript",
+                ".applePodcastTranscript",
+                "ReviewedApplePodcast",
+            ]
+            for needle in forbidden {
+                #expect(
+                    !contents.contains(needle),
+                    "\(file.lastPathComponent) references \(needle); Apple identity is allowed only in the reviewed registration and exact-revision support seams")
             }
         }
     }

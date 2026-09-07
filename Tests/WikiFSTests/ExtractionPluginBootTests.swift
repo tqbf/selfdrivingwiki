@@ -31,7 +31,6 @@ struct ExtractionPluginBootTests {
                 ]),
             Entry(id: EntryID("defuddle"), plugin: DefuddleExtractionPlugin.id),
             Entry(id: EntryID("youtube"), plugin: YouTubeTranscriptPlugin.id),
-            Entry(id: EntryID("apple-podcast"), plugin: ApplePodcastTranscriptPlugin.id),
         ]
         let booted = try await CordisBoot.boot(CordisBoot.Options(
             catalog: try PluginCatalog([
@@ -43,7 +42,6 @@ struct ExtractionPluginBootTests {
                 GeminiExtractionPlugin.definition(readCredential: { _ in nil }, fetcher: http),
                 DefuddleExtractionPlugin.definition { FixtureHTMLExtractor() },
                 YouTubeTranscriptPlugin.definition { FixtureYouTubeFetcher() },
-                ApplePodcastTranscriptPlugin.definition { FixtureApplePodcastFetcher() },
             ]),
             layers: [PatchFile(entries: entries)]))
 
@@ -51,7 +49,6 @@ struct ExtractionPluginBootTests {
         #expect(await registry.keys() == [
             ACPExtractionPlugin.key,
             AnthropicExtractionPlugin.key,
-            ApplePodcastTranscriptPlugin.key,
             DefuddleExtractionPlugin.key,
             GeminiExtractionPlugin.key,
             YouTubeTranscriptPlugin.key,
@@ -84,12 +81,6 @@ private struct FixtureHTMLExtractor: HtmlMarkdownExtractor {
 private struct FixtureYouTubeFetcher: YouTubeTranscriptFetching {
     func transcript(forVideoID videoID: String) async throws -> YouTubeTranscript {
         YouTubeTranscript(videoID: videoID, title: "fixture", markdown: "fixture", filename: "fixture.md")
-    }
-}
-
-private struct FixtureApplePodcastFetcher: PodcastTranscriptFetching {
-    func transcript(for episode: PodcastEpisodeURL.EpisodeRef) async throws -> PodcastTranscript {
-        PodcastTranscript(episodeID: episode.id, markdown: "fixture", filename: "fixture.md")
     }
 }
 #endif

@@ -480,8 +480,8 @@ struct SourceMaterializerTests {
     /// source files, not compiled symbols — meaningful regardless of the flag).
     @Test func agentSurfaceHasNoPodcastReferences() throws {
         // Coarse: every podcast type/token in this feature is `Podcast`-prefixed
-        // (`PodcastEpisodeURL`, `PodcastTranscriptFetching`, `PodcastTokenProviding`,
-        // `PodcastHTTPClient`, `PodcastTranscriptError`, `ApplePodcast*`,
+        // (`PodcastEpisodeURL`, `PodcastTokenProviding`, `PodcastHTTPClient`,
+        // `ApplePodcast*`,
         // `HelperPodcastToken*`, `podcastFetcher`). Any occurrence of "Podcast" in
         // an agent-surface file is itself a smell, so a single token catches them all.
         let symbols = ["ApplePodcast", "Podcast", "podcastFetcher", "HelperPodcastToken"]
@@ -526,46 +526,11 @@ struct SourceMaterializerTests {
     }
 
     #if PODCAST_TRANSCRIPTS
-    /// A fake transcript fetcher returning a canned transcript — same shape the
-    /// routing/service tests use. `@unchecked Sendable` because it records into
-    /// mutable state (serial test access only — read after `await` on one actor).
-    final class FakePodcastFetcher: PodcastTranscriptFetching, @unchecked Sendable {
-        func transcript(for episode: PodcastEpisodeURL.EpisodeRef) async throws -> PodcastTranscript {
-            PodcastTranscript(
-                episodeID: episode.id,
-                markdown: "SPEAKER_1: Hello from the episode.",
-                filename: "chinatalk-\(episode.id)-transcript.md")
-        }
-    }
-
-    private static let chinaTalkEpisode = PodcastEpisodeURL.EpisodeRef(id: "1000774368453", slug: "chinatalk")
-    private static let chinaTalkPageURL = URL(string: "https://podcasts.apple.com/us/podcast/chinatalk/id1289062927?i=1000774368453")!
-
-    /// AC.5 — `ApplePodcastMaterializer.materialize()` produces provenance that
-    /// survives a store round-trip: agentName, externalIdentity (episode ID),
-    /// plan (the page URL), and the displayLabel.
-    @Test func applePodcastProviderPersistsProvenance() async throws {
-        let store = try tempStore()
-        let provider = ApplePodcastMaterializer(
-            episode: Self.chinaTalkEpisode,
-            pageURL: Self.chinaTalkPageURL,
-            fetcher: FakePodcastFetcher())
-        let source = try await provider.materialize()
-        let summary = try store.addSource(
-            filename: source.filename, data: source.data,
-            zoteroItemKey: nil, zoteroItemTitle: nil,
-            mimeType: source.mimeType, provenance: source.provenance)
-
-        let origin = try requireOrigin(store, summary.id)
-        #expect(origin.agentName == "apple-podcast")
-        #expect(origin.activityKind == "fetch")
-        #expect(origin.externalIdentity == "1000774368453")
-        #expect(origin.plan == Self.chinaTalkPageURL.absoluteString)
-        #expect(origin.displayLabel == "Apple Podcast")
-    }
-
     /// displayLabel unit test — the `apple-podcast` arm renders "Apple Podcast",
-    /// not the `.capitalized` fallback ("Apple-podcast").
+    /// not the `.capitalized` fallback ("Apple-podcast"). (The materializer
+    /// provenance test moved with the Apple TTML packaging: ingest creates the
+    /// byteless source directly in `WikiStoreModel.addURL`, and transcript
+    /// provenance is installed-package provenance asserted by the queue tests.)
     @Test func applePodcastDisplayLabel() {
         let origin = SourceOrigin(
             versionID: SourceVersionID(rawValue: "test"), agentName: "apple-podcast", agentKind: "software",

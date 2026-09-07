@@ -117,65 +117,40 @@ struct SourceRefreshTests {
         }
     }
 
-    // MARK: - AC.5: Podcast refresh (guarded)
+    // MARK: - AC.5: Podcast refresh routes through the queue
 
-    #if PODCAST_TRANSCRIPTS
-    /// Issue #799 PR4 — the v1 transcript is now seeded via
-    /// `transcribe(sourceID:)` (NOT via `addURL` — PR4 stopped auto-
-    /// transcription at ingest, so a fresh podcast source has no transcript
-    /// markdown). PR5 renamed the trigger from `transcribePodcast(sourceID:
-    /// fetcher:)` to the unified `transcribe(sourceID:podcastFetcher:)`
-    /// dispatch entry point; the call site injects the fetcher via the
-    /// `podcastFetcher:` parameter on the public entry point. The v2 refresh
-    /// comes from `refreshSource(_:)`, which calls
-    /// `SourceRefreshService.materializePodcast(origin:)` → fetches v2 via
-    /// the same fetcher; the v2 markdown lands as a derived-markdown version
-    /// through the same `appendProcessedMarkdown(origin: .transcript)` path.
-    /// `podcastRefreshAppendsDerivedMarkdown` thus exercises refresh of an
-    /// ALREADY-transcribed podcast (mirrors the user flow: ingest → transcribe
-    /// → at some later point the user clicks Refresh for a fresh transcript).
-    @Test func podcastRefreshAppendsDerivedMarkdown() async throws {
+    /// The Apple TTML packaging: BOTH podcast refresh arms route through the
+    /// extraction queue's package routes. `refreshSource(_:)` on an Apple
+    /// episode source throws `.podcastQueueRequired` (the caller enqueues),
+    /// and the queue's installed-package adapter preserves the v1 lineage via
+    /// the initial source-version link (asserted by the app/daemon queue
+    /// provider tests). This test pins the model-level contract and the
+    /// refreshability predicate, which now derives from the package ROUTE —
+    /// not from signing-helper presence (a missing helper keeps the route
+    /// usable through the package's RSS fallback).
+    @Test func applePodcastRefreshRequiresQueueEnqueueAndRouteAvailability() async throws {
         let store = try tempStore()
         let model = WikiStoreModel(store: store)
 
-        // Seed a fake podcast fetcher (returns the markdown it carries).
-        final class FakePodcast: PodcastTranscriptFetching, @unchecked Sendable {
-            var markdown: String
-            init(_ markdown: String) { self.markdown = markdown }
-            func transcript(for episode: PodcastEpisodeURL.EpisodeRef) async throws -> PodcastTranscript {
-                PodcastTranscript(
-                    episodeID: episode.id, markdown: markdown,
-                    filename: "podcast-\(episode.id)-transcript.md")
-            }
-        }
-        let podcast = FakePodcast("SPEAKER_1: v1 transcript.")
+        // Ingest — byteless only, no transcript.
         let url = "https://podcasts.apple.com/us/podcast/test/id1?i=100"
-        // 1. Ingest — byteless only (PR4 contract: no transcript at ingest).
         _ = try await model.addURL(
-            url, fetcher: SwapFetcher(htmlResponse("", url: "https://x")),
-            podcastFetcher: podcast)
+            url, fetcher: SwapFetcher(htmlResponse("", url: "https://x")))
         let source = try #require(try store.listSources().first)
-        // Sanity: ingest wrote no transcript.
         #expect(try store.processedMarkdownHead(sourceID: source.id) == nil)
 
-        // 2. Transcribe — the user clicks the Transcribe button. PR5: the
-        // public entry point is now `transcribe(sourceID:podcastFetcher:)`.
-        _ = try await model.transcribe(sourceID: source.id, podcastFetcher: podcast)
-        let headBefore = try #require(try store.processedMarkdownHead(sourceID: source.id))
-        #expect(headBefore.content == "SPEAKER_1: v1 transcript.")
+        // Refresh MUST direct the caller to the extraction queue — and write
+        // nothing itself.
+        await #expect(throws: SourceRefreshService.RefreshError.podcastQueueRequired) {
+            _ = try await model.refreshSource(
+                source.id, fetcher: SwapFetcher(htmlResponse("", url: "https://x")))
+        }
+        #expect(try store.processedMarkdownHead(sourceID: source.id) == nil)
 
-        // 3. Swap transcript and refresh (the existing Refresh button —
-        // re-fetches via the same fetcher and appends v2).
-        podcast.markdown = "SPEAKER_1: v2 transcript."
-        _ = try await model.refreshSource(
-            source.id, fetcher: SwapFetcher(htmlResponse("", url: "https://x")),
-            podcastFetcher: podcast)
-
-        // A new derived markdown version was appended.
-        let headAfter = try #require(try store.processedMarkdownHead(sourceID: source.id))
-        #expect(headAfter.content == "SPEAKER_1: v2 transcript.")
+        // Availability comes from the route, not helper presence: an Apple
+        // source is refreshable (transcribable) on every build.
+        #expect(model.isSourceRefreshable(for: source.id) == true)
     }
-    #endif
 
     // MARK: - Refreshability gate (#218): the detail view should only offer
     // Refresh when `refreshSource(_:)` would actually succeed.

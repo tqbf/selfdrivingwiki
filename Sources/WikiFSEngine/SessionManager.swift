@@ -141,14 +141,6 @@ public final class SessionManager {
     /// backend is injected from the app layer that owns the config file).
     public let htmlBackendResolver: @MainActor () -> HtmlExtractionBackend?
 
-    /// Resolver for the configured podcast transcription backend (issue #799
-    /// PR4). Called once per session at creation. Reads
-    /// `ExtractionConfig.podcastBackend` at the app wiring time and returns
-    /// the chosen `PodcastTranscriptionBackend`, or `nil` if no default is
-    /// set. Mirrors the `htmlBackendResolver` injection shape above (the
-    /// model is deliberately NOT config-aware).
-    public let podcastBackendResolver: @MainActor () -> PodcastTranscriptionBackend?
-
     /// Injection seam for the store factory (mirrors `WikiSession.makeStore`).
     /// Defaults to `StoreBackend.current.makeStore(databaseURL:)`. Tests inject
     /// a throwing closure to exercise the open-failure path (issue #881)
@@ -165,7 +157,6 @@ public final class SessionManager {
         pdf2mdScriptPathResolver: @escaping () -> String? = { nil },
         htmlMarkdownExtractorFactory: @escaping @MainActor () -> (any HtmlMarkdownExtractor)? = { nil },
         htmlBackendResolver: @escaping @MainActor () -> HtmlExtractionBackend? = { nil },
-        podcastBackendResolver: @escaping @MainActor () -> PodcastTranscriptionBackend? = { nil },
         interactiveUsageRecorder: @escaping (@MainActor (SessionUsage) -> Void) = { _ in },
         makeStore: @escaping @Sendable (URL) throws -> WikiStore = { try StoreBackend.current.makeStore(databaseURL: $0) },
         asyncSessionLoader: AsyncSessionLoader? = nil,
@@ -180,7 +171,6 @@ public final class SessionManager {
         self.pdf2mdScriptPathResolver = pdf2mdScriptPathResolver
         self.htmlMarkdownExtractorFactory = htmlMarkdownExtractorFactory
         self.htmlBackendResolver = htmlBackendResolver
-        self.podcastBackendResolver = podcastBackendResolver
         self.interactiveUsageRecorder = interactiveUsageRecorder
         self.makeStore = makeStore
         self.asyncSessionLoader = asyncSessionLoader

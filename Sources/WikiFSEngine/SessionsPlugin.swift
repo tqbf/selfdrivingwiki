@@ -77,7 +77,6 @@ extension ProfileWikiSession {
         makeStore: (URL) throws -> any WikiStore = { try StoreBackend.current.makeStore(databaseURL: $0) },
         pdf2mdScriptPathResolver: @escaping () -> String? = { nil },
         htmlBackendResolver: @escaping @MainActor () -> HtmlExtractionBackend? = { nil },
-        podcastBackendResolver: @escaping @MainActor () -> PodcastTranscriptionBackend? = { nil },
         interactiveUsageRecorder: @escaping @MainActor (SessionUsage) -> Void = { _ in }
     ) throws {
         let databaseURL = containerDirectory.appendingPathComponent("\(wikiID.rawValue).sqlite", isDirectory: false)
@@ -119,8 +118,7 @@ extension ProfileWikiSession {
             extractionCoordinator: extractionCoordinator,
             queueEngine: queueEngine,
             extractionProvider: extractionProvider,
-            htmlBackend: htmlBackendResolver(),
-            podcastBackend: podcastBackendResolver())
+            htmlBackend: htmlBackendResolver())
     }
 }
 
@@ -137,7 +135,6 @@ extension AppProcessProfileOwner {
         searchRuntimeRegistry: SearchRuntimeRegistry = SearchRuntimeRegistry(),
         pdf2mdScriptPathResolver: @escaping () -> String? = { nil },
         htmlBackendResolver: @escaping @MainActor () -> HtmlExtractionBackend? = { nil },
-        podcastBackendResolver: @escaping @MainActor () -> PodcastTranscriptionBackend? = { nil },
         interactiveUsageRecorder: @escaping (@MainActor (SessionUsage) -> Void) = { _ in }
     ) async throws -> ProfileWikiSession {
         let (lifetime, processServices) = try await readyComposition()
@@ -196,7 +193,6 @@ extension AppProcessProfileOwner {
             queueEngine: processServices.queue,
             extractionProvider: extractionProvider,
             htmlBackend: htmlBackendResolver(),
-            podcastBackend: podcastBackendResolver(),
             profileLifetime: childServices.lifetime)
     }
 }

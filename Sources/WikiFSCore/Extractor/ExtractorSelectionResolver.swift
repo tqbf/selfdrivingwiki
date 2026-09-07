@@ -68,6 +68,9 @@ public enum ExtractorSelectionResolver {
         if route == .canonicalPodcastTranscript {
             return resolvePodcastTranscript(configuration: configuration, activeRegistrations: activeRegistrations)
         }
+        if route == .canonicalApplePodcastTranscript {
+            return resolveApplePodcastTranscript(configuration: configuration, activeRegistrations: activeRegistrations)
+        }
         return nil
     }
 
@@ -106,6 +109,19 @@ public enum ExtractorSelectionResolver {
         activeRegistrations: [ActiveExtractorRegistration]
     ) -> ExtractionSelectionDecision {
         resolve(.canonicalPodcastTranscript, kind: .podcastTranscript, configuration: configuration, activeRegistrations: activeRegistrations)
+    }
+
+    /// Apple Podcasts transcript resolution: the same generic precedence
+    /// over the Apple route and the `apple-podcast-transcript` kind. The
+    /// bundled default record supplies the reviewed Apple lineage when the
+    /// user has never configured the route; an explicit `.none` disables;
+    /// an unresolvable saved reference fails closed. No Apple-specific
+    /// policy lives here.
+    public static func resolveApplePodcastTranscript(
+        configuration: ExtractionConfig,
+        activeRegistrations: [ActiveExtractorRegistration]
+    ) -> ExtractionSelectionDecision {
+        resolve(.canonicalApplePodcastTranscript, kind: .applePodcastTranscript, configuration: configuration, activeRegistrations: activeRegistrations)
     }
 
     /// The single generic precedence: the stored route record first, then the

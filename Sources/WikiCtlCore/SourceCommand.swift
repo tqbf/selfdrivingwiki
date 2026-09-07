@@ -482,11 +482,7 @@ public enum SourceCommand {
         guard let origin = try store.sourceOrigin(sourceID: id) else {
             throw Failure.message("source has no origin provenance: \(id.rawValue)")
         }
-        #if PODCAST_TRANSCRIPTS
-        let service = SourceRefreshService(fetcher: fetcher, podcastFetcher: nil)
-        #else
         let service = SourceRefreshService(fetcher: fetcher)
-        #endif
         let material = try await service.materialize(origin: origin)
         try persistRefreshMaterial(material, sourceID: id, in: store)
         return Result(

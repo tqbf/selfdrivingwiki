@@ -166,19 +166,6 @@ struct ExtractionConfigTests {
         #expect(loaded.acpProviderId == nil)
     }
 
-    // MARK: - Podcast backend (a transcript setting, not a route selection)
-
-    @Test func podcastBackendRoundTrips() throws {
-        let dir = tempDirectory()
-        var config = ExtractionConfig()
-        config.podcastBackend = .appleTranscript
-        try config.save(to: dir)
-
-        let loaded = ExtractionConfig.load(from: dir)
-        #expect(loaded == persisted(config))
-        #expect(loaded.podcastBackend == .appleTranscript)
-    }
-
     /// The retired `htmlBackend` key is a decode-only migration input: a
     /// decode adopts it into an HTML route record, and a re-encode never
     /// writes the key again.
@@ -192,22 +179,13 @@ struct ExtractionConfigTests {
         #expect(object?["htmlBackend"] == nil)
     }
 
-    @Test func podcastBackendDecodesAsNilWhenAbsent() throws {
-        let json = Data(#"{"backend":"anthropic"}"#.utf8)
-        let config = try JSONDecoder().decode(ExtractionConfig.self, from: json)
-        #expect(config.podcastBackend == nil)
-    }
-
-    /// Unknown raw values for the retired optional keys degrade silently to
-    /// nil — the whole config still loads and no route record is produced.
-    @Test func unknownHtmlAndPodcastBackendValuesDegradeToNil() throws {
+    /// Keyed decoding ignores the retired podcast backend key. Existing config
+    /// files still load, while the unknown HTML value contributes no route.
+    @Test func retiredPodcastBackendKeyIsIgnored() throws {
         let json = Data(#"""
-        {"backend":"anthropic","htmlBackend":"whisper","podcastBackend":"rev_ai"}
+        {"backend":"anthropic","htmlBackend":"whisper","podcastBackend":"apple_transcript"}
         """#.utf8)
         let config = try JSONDecoder().decode(ExtractionConfig.self, from: json)
-        #expect(config.podcastBackend == nil)
-        // The unknown HTML/podcast values contribute nothing, but the backend
-        // key still migrates into its PDF host record.
         #expect(config.extractorSelection(for: .canonicalPDF) == host("anthropic"))
         #expect(config.extractorSelection(for: .canonicalHTML) == nil)
     }

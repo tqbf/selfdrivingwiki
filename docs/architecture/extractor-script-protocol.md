@@ -44,7 +44,7 @@ The host encodes one `ExtractorProtocolRequest` as JSON, appends a newline, writ
 | --- | --- | --- |
 | `requestID` | UUID string | Identifies the operation. Every frame must repeat it. |
 | `protocolRevision` | integer | `1`, `2`, or `3`. Must equal the manifest `protocolRevision`. |
-| `kind` | string | `pdf`, `html`, `docx`, or `podcast-transcript`. |
+| `kind` | string | `pdf`, `html`, `docx`, `podcast-transcript`, or `apple-podcast-transcript`. |
 | `mimeType` | string | Normalized lowercase MIME type. |
 | `originalFilename` | string | 1 to 1,024 bytes, no NUL. |
 | `inputTransport` | string | `operation-file` (all revisions) or `remote-url` (revision 3). |
@@ -54,6 +54,17 @@ The host encodes one `ExtractorProtocolRequest` as JSON, appends a newline, writ
 | `deadlineMillisecondsSince1970` | integer | Positive. The host cancels the operation at this deadline. |
 | `credentialFilePath` | string | Revision 2 and 3 only. Package-relative path to the private credential input file. Must be absent in revision 1. |
 | `operationConfigurationPath` | string | Revision 2 and 3 only. Package-relative path to the public operation-configuration file. Must be absent in revision 1. |
+
+### Operation configuration envelope
+
+The configuration file is a closed, non-secret envelope. One case per supported family; the case tag is the construction seam, so a secret or an arbitrary path cannot be encoded.
+
+| Family | Wire shape | Fields |
+| --- | --- | --- |
+| Docling Serve | `{"endpoint": …, "timeoutMilliseconds": …}` (flat; the installed reviewed package reads this shape) | Bounded `http`/`https` endpoint, in-policy timeout. Both optional. |
+| Apple Podcasts | `{"kind": "apple-podcast-transcript", "helperPath": …}` | `helperPath` is a RELATIVE path inside the operation root naming the host-staged, owner-private token helper. |
+
+Unknown fields, mixed fields, unknown kinds, absolute paths, and traversal are rejected on decode. The staged helper is REVIEWED-ONLY host support: the host stages the executable into the operation's private `support/<request-id>/` directory for one exact reviewed revision (package ID, version, and digest), never for a kind, MIME type, capability, or any package-controlled value. The support directory is deleted on every terminal path.
 
 Example request (revision 1, operation-file):
 

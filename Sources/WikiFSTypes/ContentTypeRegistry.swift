@@ -305,16 +305,16 @@ public extension ContentKind {
 
     /// The content kind a registered extractor kind extracts. Registered
     /// pdf/html kinds already classify through their MIME arms; this maps
-    /// the closed kind set onto the registry's table. The podcast
-    /// transcript kind is URL-backed — it has no content-kind row (no
-    /// staged content to classify), so its registration claims never feed
+    /// the closed kind set onto the registry's table. The transcript
+    /// kinds are URL-backed — they have no content-kind row (no staged
+    /// content to classify), so their registration claims never feed
     /// file classification.
     private static func contentKind(for kind: ExtractorKind) -> ContentKind {
         switch kind {
         case .pdf:   return .pdf
         case .html:  return .html
         case .docx:  return .docx
-        case .podcastTranscript: return .unknown
+        case .podcastTranscript, .applePodcastTranscript: return .unknown
         }
     }
 }

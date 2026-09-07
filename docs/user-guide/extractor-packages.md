@@ -30,8 +30,25 @@ text to Markdown.
   appends a new alternative; earlier ones are kept.
 - A failed fetch (no transcript published, network error, timeout) writes
   nothing and reports a short cause.
-- Apple Podcasts transcripts use a separate Apple-native backend, not this
-  package.
+- Apple Podcasts episodes have their own reviewed package. It converts
+  Apple's TTML transcript when the signed helper is available, and it falls
+  back to the RSS transcript algorithm when it is not. A missing helper is
+  a supported state, not an error: the package keeps working through RSS.
+
+### Apple Podcasts episodes
+
+Ingest an `podcasts.apple.com` episode link and the source stays byteless
+until you transcribe, exactly like a podcast feed.
+
+- The reviewed `apple-podcast-transcript` package serves the route. When the
+  host has staged the signed token helper for it (developer builds), the
+  package fetches Apple's transcript (bearer token → metadata → TTML) and
+  converts it to Markdown.
+- When no helper is staged (for example an App Store build), the package
+  uses the RSS transcript algorithm instead. If the feed publishes no
+  transcript, the fetch fails with a short cause and nothing is written.
+- The choice "No default (disable Apple Podcasts transcripts)" turns Apple
+  transcription off; the Transcribe action then reports a typed failure.
 
 ### Word documents (.docx)
 

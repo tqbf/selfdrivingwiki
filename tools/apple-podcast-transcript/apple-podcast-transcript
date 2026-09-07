@@ -1,0 +1,1081 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12,<3.14"
+# dependencies = [
+#     "requests>=2.31",
+#     "webvtt-py>=0.5",
+#     "srt>=3.5",
+# ]
+# ///
+"""apple-podcast-transcript — Apple Podcasts TTML extractor package source.
+
+Reviewed extractor package source (protocol revision 3). Serves ONE request:
+a revision-3 `ExtractorProtocolRequest` JSON object on stdin and JSON Lines
+frames on stdout. The request carries a validated Apple Podcasts episode URL
+(inputTransport "remote-url") — no input bytes exist.
+
+Workflow:
+  - With staged host support (the signed `podcast-token-helper`, staged by
+    the host into the private operation root for this exact reviewed
+    revision): acquire a bearer token (via the staged helper, cached in the
+    host-owned revision-scoped token cache), call the Apple AMP transcripts
+    endpoint, retry ONCE with a forced token refresh on Apple error 40012,
+    download the access-keyed TTML, and convert it to Markdown with the same
+    semantics as the former Swift parser.
+  - Without staged host support: run the RSS transcript algorithm (iTunes
+    lookup → feed → <podcast:transcript> attachment; VTT/SRT/HTML/plain).
+
+The RSS path runs ONLY when no helper was staged. A failure after the helper
+was staged never falls back to RSS — the failure frame is the report.
+
+Failure messages are bounded and never contain the source URL, the helper
+path, the bearer token, or any transcript/feed bytes.
+"""
+
+from __future__ import annotations
+
+import datetime
+import json
+import os
+import re
+import select
+import signal
+import stat
+import sys
+import time
+import urllib.parse
+import xml.etree.ElementTree as ET
+from html.parser import HTMLParser
+from pathlib import Path
+
+import requests
+import srt
+import webvtt
+
+PROTOCOL_REVISION = 3
+PROTOCOL_KIND = "apple-podcast-transcript"
+PROTOCOL_TRANSPORT = "remote-url"
+_TOOL_METADATA = {"toolName": "apple-podcast-transcript"}
+
+# ── Network bounds ─────────────────────────────────────────────────────────
+
+_AMP_URL_TEMPLATE = (
+    "https://amp-api.podcasts.apple.com/v1/catalog/us/podcast-episodes/"
+    "{episode_id}/transcripts"
+)
+_ITUNES_LOOKUP_URL = "https://itunes.apple.com/lookup"
+_AMPLITUDE_ORIGIN = "https://podcasts.apple.com"
+
+_HTTP_TIMEOUT_SECONDS = 30
+_TTML_MAXIMUM_BYTES = 32 * 1024 * 1024
+_FEED_MAXIMUM_BYTES = 8 * 1024 * 1024
+
+# Token cache: host-owned, revision-scoped, owner-private. The env var is
+# supplied by the host ONLY for this exact reviewed revision.
+_TOKEN_CACHE_ENV = "WIKI_EXTRACTOR_PACKAGE_TOKEN_CACHE"
+_TOKEN_CACHE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60  # ~30 days
+
+# Helper supervision bounds.
+_HELPER_OUTPUT_CAP_BYTES = 64 * 1024
+_HELPER_DEFAULT_TIMEOUT_SECONDS = 20
+_HELPER_TERM_GRACE_SECONDS = 2
+
+_JWT_RE = re.compile(r"\A[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\Z")
+
+_SHOW_ID_RE = re.compile(r"/id(\d+)")
+_EPISODE_ID_RE = re.compile(r"[?&]i=(\d+)")
+_PODCAST_NS = {"podcast": "https://podcastindex.org/namespace/1.0"}
+
+
+class WorkflowError(Exception):
+    """A typed workflow failure. `cause` maps onto a protocol failure cause;
+    `message` is bounded and value-free."""
+
+    def __init__(self, cause: str, message: str) -> None:
+        super().__init__(message)
+        self.cause = cause
+        self.message = message
+
+
+class ConfigError(WorkflowError):
+    pass
+
+
+# ── Frame helpers (mirrors the podcast-transcript package) ─────────────────
+
+
+def build_protocol_frame(kind: str, payload: dict) -> dict:
+    return {"kind": kind, "payload": payload}
+
+
+def _emit(frame: dict, stream) -> None:
+    stream.write(json.dumps(frame, separators=(",", ":")))
+    stream.write("\n")
+    stream.flush()
+
+
+def _progress(request_id: str, completed: int, total: int, message: str) -> dict:
+    return build_protocol_frame(
+        "progress",
+        {
+            "requestID": request_id,
+            "completedUnitCount": completed,
+            "totalUnitCount": total,
+            "message": message,
+        },
+    )
+
+
+def _failure(request_id: str, cause: str, message: str) -> dict:
+    return build_protocol_frame(
+        "failure",
+        {
+            "requestID": request_id,
+            "cause": cause,
+            "message": message[:4096],
+        },
+    )
+
+
+def _fail(request_id: str, cause: str, message: str, out_stream) -> int:
+    """Emit exactly one terminal failure frame. The frame is the report."""
+    _emit(_failure(request_id, cause, message), out_stream)
+    return 0
+
+
+# ── Episode URL parsing (same rules as the Swift host validation) ──────────
+
+
+def parse_apple_episode(url: str) -> str:
+    """Extract the numeric episode ID from an Apple Podcasts episode URL."""
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if host != "podcasts.apple.com" and not host.endswith(".podcasts.apple.com"):
+        raise WorkflowError("invalid-request", "unsupported source URL")
+    episode_match = _EPISODE_ID_RE.search(url)
+    if not episode_match:
+        raise WorkflowError("invalid-request", "unsupported source URL")
+    episode_id = episode_match.group(1)
+    if not episode_id.isdigit():
+        raise WorkflowError("invalid-request", "unsupported source URL")
+    return episode_id
+
+
+def parse_show_id(url: str) -> str:
+    show_match = _SHOW_ID_RE.search(url)
+    if not show_match:
+        raise WorkflowError("invalid-request", "unsupported source URL")
+    return show_match.group(1)
+
+
+# ── Operation configuration (the staged helper grant) ──────────────────────
+
+
+def read_helper_path(cwd: str) -> str | None:
+    """Read the operation-configuration file and return the staged helper's
+    path, or None when no helper was staged.
+
+    The request's `operationConfigurationPath` is relative to the operation
+    root (the process working directory). The configuration is the closed
+    tagged shape: `{"kind": "apple-podcast-transcript", "helperPath": …}`.
+    The helper path must be relative, stay inside the operation root, and
+    name a regular executable file — never a symlink, never a directory,
+    never an absolute path, never a traversal.
+    """
+    config_relative = _request_configuration_path
+    if not config_relative:
+        return None
+    if os.path.isabs(config_relative) or ".." in Path(config_relative).parts:
+        raise ConfigError("invalid-request", "invalid operation configuration path")
+    config_file = Path(cwd) / config_relative
+    try:
+        raw = config_file.read_text(encoding="utf-8")
+    except OSError as error:
+        # The host NAMED a configuration file, so a read failure means the
+        # staged-support contract is broken. Fail closed — never degrade to
+        # the RSS fallback after support was admitted.
+        raise ConfigError(
+            "extraction-failure", "staged helper is unavailable") from error
+    try:
+        config = json.loads(raw)
+    except ValueError:
+        raise ConfigError("invalid-request", "invalid operation configuration") from None
+    if not isinstance(config, dict):
+        raise ConfigError("invalid-request", "invalid operation configuration")
+    kind = config.get("kind")
+    if kind != "apple-podcast-transcript":
+        raise ConfigError("invalid-request", "unsupported operation configuration")
+    helper_path = config.get("helperPath")
+    if not isinstance(helper_path, str) or not helper_path:
+        raise ConfigError("invalid-request", "invalid helper path")
+    if os.path.isabs(helper_path) or ".." in Path(helper_path).parts:
+        raise ConfigError("invalid-request", "invalid helper path")
+    resolved = Path(cwd) / helper_path
+    # No symlink following: a planted link must fail closed.
+    try:
+        status = os.lstat(resolved)
+    except OSError:
+        raise ConfigError(
+            "extraction-failure", "staged helper is unavailable") from None
+    if not stat.S_ISREG(status.st_mode):
+        raise ConfigError("extraction-failure", "staged helper is unavailable")
+    if status.st_mode & stat.S_IXUSR == 0:
+        raise ConfigError("extraction-failure", "staged helper is unavailable")
+    return str(resolved)
+
+
+_request_configuration_path: str | None = None
+
+
+# ── Helper supervision (fork-based supervisor + own-group helper) ──────────
+
+
+def _drain(fd: int, cap: int, deadline: float) -> tuple[bytes, bool, bool]:
+    """Read the pipe to EOF or the cap. Returns (data, overflowed, reachedEOF).
+    `reachedEOF` is False when the deadline expired with a live writer."""
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return b"".join(chunks), False, False
+        ready, _, _ = select.select([fd], [], [], min(remaining, 0.25))
+        if not ready:
+            continue
+        chunk = os.read(fd, 4096)
+        if not chunk:
+            return b"".join(chunks), False, True
+        total += len(chunk)
+        if total > cap:
+            return b"", True, False
+        chunks.append(chunk)
+
+
+def _supervisor_main(
+    control_read_fd: int,
+    output_write_fd: int,
+    helper_path: str,
+    timeout_seconds: float,
+) -> None:
+    """The forked supervisor. Owns the helper's process group: drains its
+    output with strict caps, enforces the local timeout, honors the control
+    pipe (a byte `T` asks for termination; EOF means the package died), and
+    reaps the helper before exiting. A SIGTERM from the package's last-resort
+    escalation ALSO terminates the helper group before the supervisor dies —
+    the helper group never outlives the supervisor."""
+    deadline = time.monotonic() + timeout_seconds
+    out_r, out_w = os.pipe()
+    err_r, err_w = os.pipe()
+    helper_pid = os.fork()
+    if helper_pid == 0:  # helper child: own process group, wired pipes
+        try:
+            os.setpgid(0, 0)
+        except OSError:
+            pass
+        os.dup2(out_w, 1)
+        os.dup2(err_w, 2)
+        for fd in (out_r, out_w, err_r, err_w, control_read_fd, output_write_fd):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        os.execv(helper_path, [helper_path])
+        os._exit(127)
+
+    def _on_sigterm(signum, frame) -> None:
+        _kill_helper_group(helper_pid)
+        os._exit(3)
+
+    try:
+        signal.signal(signal.SIGTERM, _on_sigterm)
+    except (ValueError, OSError):
+        pass
+
+    os.close(out_w)
+    os.close(err_w)
+    # The helper group identity: set by the child's setpgid (its own pgid).
+    try:
+        os.setpgid(helper_pid, helper_pid)
+    except OSError:
+        pass  # already grouped or exited; the kill path still reaps it
+
+    stdout_data: bytes = b""
+    stderr_data: bytes = b""
+    overflow = False
+    finished = False
+    exit_code: int | None = None
+    final_drain_timed_out = False
+    while not finished:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        rlist = [out_r, err_r, control_read_fd]
+        try:
+            ready, _, _ = select.select(rlist, [], [], min(remaining, 0.25))
+        except (OSError, InterruptedError):
+            ready = []
+        if control_read_fd in ready:
+            try:
+                control = os.read(control_read_fd, 1)
+            except OSError:
+                control = b""
+            if not control:
+                # Package died: terminate and reap the helper group.
+                break
+            if control == b"T":
+                break
+        for fd in (out_r, err_r):
+            if fd not in ready:
+                continue
+            try:
+                chunk = os.read(fd, 4096)
+            except OSError:
+                chunk = b""
+            if chunk:
+                if fd == out_r:
+                    stdout_data += chunk
+                    if len(stdout_data) > _HELPER_OUTPUT_CAP_BYTES:
+                        overflow = True
+                        stdout_data = b""
+                else:
+                    stderr_data += chunk
+                    if len(stderr_data) > _HELPER_OUTPUT_CAP_BYTES:
+                        overflow = True
+                        stderr_data = b""
+            else:
+                rlist.remove(fd)
+        # Helper exit?
+        try:
+            waited_pid, status = os.waitpid(helper_pid, os.WNOHANG)
+        except ChildProcessError:
+            waited_pid, status = helper_pid, 0
+        if waited_pid == helper_pid:
+            finished = True
+            exit_code = os.waitstatus_to_exitcode(status)
+            # Final drain (both pipes may hold buffered output). A drain that
+            # exhausts the deadline means a live writer still holds the
+            # pipes — a descendant — and the workflow must fail rather than
+            # publish.
+            more_out, out_overflow, out_done = _drain(out_r, _HELPER_OUTPUT_CAP_BYTES, deadline)
+            more_err, err_overflow, err_done = _drain(err_r, _HELPER_OUTPUT_CAP_BYTES, deadline)
+            overflow = overflow or out_overflow or err_overflow
+            final_drain_timed_out = not (out_done and err_done)
+            stdout_data += more_out
+            stderr_data += more_err
+
+    if not finished:
+        # Timeout, overflow, or a control-pipe termination request: TERM the
+        # helper group, escalate to KILL, and reap.
+        _kill_helper_group(helper_pid)
+        os._exit(3)
+
+    # The direct helper exited, but its process group may still hold forked
+    # descendants. The group never outlives the supervisor: clean it BEFORE
+    # any outcome is published. With no descendants this is a fast no-op
+    # (the group is gone and killpg raises).
+    _kill_helper_group(helper_pid)
+
+    os.close(out_r)
+    os.close(err_r)
+    os.close(control_read_fd)
+    if exit_code != 0 or overflow or final_drain_timed_out:
+        os._exit(1)
+    # The token is the ONLY thing this supervisor ever writes to its output
+    # pipe. Helper stderr is never forwarded anywhere.
+    try:
+        os.write(output_write_fd, stdout_data[: _HELPER_OUTPUT_CAP_BYTES])
+        os.close(output_write_fd)
+    except OSError:
+        os._exit(1)
+    os._exit(0)
+
+
+def _kill_helper_group(helper_pid: int) -> None:
+    """TERM the helper's process group, escalate to KILL after the grace
+    period, and reap the helper. Safe to call twice (double-checks liveness).
+    A reaped direct child must not short-circuit group cleanup: descendants
+    are not our children, so they cannot be waited on — only killpg reaches
+    them."""
+    try:
+        os.killpg(helper_pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        return
+    helper_reaped = False
+    grace_end = time.monotonic() + _HELPER_TERM_GRACE_SECONDS
+    while time.monotonic() < grace_end:
+        if helper_reaped:
+            break
+        try:
+            waited, _ = os.waitpid(helper_pid, os.WNOHANG)
+        except ChildProcessError:
+            helper_reaped = True
+            break
+        if waited == helper_pid:
+            helper_reaped = True
+            break
+        time.sleep(0.05)
+    try:
+        os.killpg(helper_pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        return
+    if helper_reaped:
+        return
+    try:
+        os.waitpid(helper_pid, 0)
+    except ChildProcessError:
+        pass
+
+
+def run_helper(helper_path: str, budget_seconds: float) -> str:
+    """Run the staged helper under the forked supervisor and return the raw
+    token bytes it printed. Raises WorkflowError on any supervision failure."""
+    deadline = time.monotonic() + max(budget_seconds, 1.0)
+    control_r, control_w = os.pipe()
+    output_r, output_w = os.pipe()
+    supervisor_pid = os.fork()
+    if supervisor_pid == 0:  # supervisor child: own process group
+        try:
+            os.setpgid(0, 0)
+        except OSError:
+            pass
+        os.close(control_w)
+        os.close(output_r)
+        try:
+            _supervisor_main(
+                control_read_fd=control_r,
+                output_write_fd=output_w,
+                helper_path=helper_path,
+                # A head start over the package's own budget: the
+                # supervisor's TERM→KILL escalation needs ~grace seconds to
+                # clean the helper group, and the parent's last-resort
+                # escalation must never preempt that cleanup.
+                timeout_seconds=min(
+                    _HELPER_DEFAULT_TIMEOUT_SECONDS, max(budget_seconds, 1.0))
+                + _HELPER_TERM_GRACE_SECONDS + 2.0,
+            )
+        finally:
+            os._exit(3)
+    os.close(control_r)
+    os.close(output_w)
+
+    token_bytes = b""
+    timed_out = False
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            timed_out = True
+            break
+        ready, _, _ = select.select([output_r], [], [], min(remaining, 0.25))
+        if output_r in ready:
+            chunk = os.read(output_r, 4096)
+            if not chunk:
+                break
+            token_bytes += chunk
+            if len(token_bytes) > _HELPER_OUTPUT_CAP_BYTES:
+                timed_out = True
+                break
+    if timed_out:
+        # Ask the supervisor to terminate the helper group, then close the
+        # control pipe (its EOF path terminates regardless).
+        try:
+            os.write(control_w, b"T")
+        except OSError:
+            pass
+        os.close(control_w)
+        _reap_with_escalation(supervisor_pid, deadline)
+        try:
+            os.close(output_r)
+        except OSError:
+            pass
+        raise WorkflowError("timeout", "the token helper did not finish in time")
+    os.close(control_w)
+    try:
+        _, status = os.waitpid(supervisor_pid, 0)
+    except ChildProcessError:
+        status = 0
+    try:
+        os.close(output_r)
+    except OSError:
+        pass
+    exit_code = os.waitstatus_to_exitcode(status)
+    if exit_code != 0:
+        raise WorkflowError("extraction-failure", "the token helper failed")
+    token = token_bytes.decode("utf-8", errors="replace").strip()
+    if not _JWT_RE.match(token):
+        # Never echo helper output.
+        raise WorkflowError("extraction-failure", "the token helper returned no token")
+    return token
+
+
+def _reap_with_escalation(pid: int, deadline: float) -> None:
+    """Last-resort termination of the supervisor. The supervisor's own
+    SIGTERM handler cleans the helper group first, so this waits longer than
+    the helper TERM grace before escalating to KILL."""
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        return
+    grace_end = time.monotonic() + _HELPER_TERM_GRACE_SECONDS + 3.0
+    while time.monotonic() < grace_end:
+        try:
+            waited, _ = os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError:
+            return
+        if waited == pid:
+            return
+        time.sleep(0.05)
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        os.waitpid(pid, 0)
+    except ChildProcessError:
+        pass
+
+
+# ── Token cache (host-owned, revision-scoped, owner-private) ───────────────
+
+
+def load_cached_token() -> str | None:
+    cache_dir = os.environ.get(_TOKEN_CACHE_ENV)
+    if not cache_dir:
+        return None
+    cache_file = Path(cache_dir) / "token.json"
+    try:
+        entry = json.loads(cache_file.read_text(encoding="utf-8"))
+        fetched = float(entry["fetched"])
+        token = entry["token"]
+    except (OSError, ValueError, KeyError, TypeError):
+        # Corrupt entries are cache misses and get replaced.
+        _replace_cached_token(None)
+        return None
+    if not isinstance(token, str) or not _JWT_RE.match(token):
+        _replace_cached_token(None)
+        return None
+    if time.time() - fetched >= _TOKEN_CACHE_MAX_AGE_SECONDS:
+        return None
+    return token
+
+
+def store_token(token: str) -> None:
+    cache_dir = os.environ.get(_TOKEN_CACHE_ENV)
+    if not cache_dir:
+        return
+    path = Path(cache_dir)
+    try:
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(path, 0o700)
+        entry = json.dumps(
+            {"token": token, "fetched": time.time()}, separators=(",", ":"))
+        temporary = path / f"token.json.tmp-{os.getpid()}"
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            os.write(fd, entry.encode("utf-8"))
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        # Atomic publication; readers never see a partial file.
+        os.replace(temporary, path / "token.json")
+    except OSError:
+        # A cache write failure never fails the workflow.
+        pass
+
+
+def _replace_cached_token(replacement: str | None) -> None:
+    cache_dir = os.environ.get(_TOKEN_CACHE_ENV)
+    if not cache_dir or replacement is not None:
+        return
+    try:
+        (Path(cache_dir) / "token.json").unlink()
+    except OSError:
+        pass
+
+
+def bearer_token(helper_path: str, budget_seconds: float, force_refresh: bool) -> str:
+    if not force_refresh:
+        cached = load_cached_token()
+        if cached:
+            return cached
+    token = run_helper(helper_path, budget_seconds)
+    store_token(token)
+    return token
+
+
+# ── Apple AMP + TTML ───────────────────────────────────────────────────────
+
+
+def amp_request(episode_id: str, token: str) -> requests.PreparedRequest:
+    params = {
+        "fields": "ttmlToken,ttmlAssetUrls",
+        "include[podcast-episodes]": "podcast",
+        "l": "en-US",
+        "with": "entitlements",
+    }
+    request = requests.Request(
+        "GET",
+        _AMP_URL_TEMPLATE.format(episode_id=episode_id),
+        params=params,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Origin": _AMPLITUDE_ORIGIN,
+        },
+    ).prepare()
+    return request
+
+
+def ttml_url_from_response(status: int, body: bytes) -> str:
+    """The AMP outcome: the TTML URL, or a typed error. A 400 body containing
+    Apple error 40012 maps to the insufficient-permissions state the caller
+    retries ONCE after a forced token refresh."""
+    if status == 400 and b"40012" in body:
+        raise _InsufficientPermissions()
+    if status != 200:
+        raise WorkflowError("extraction-failure", "the transcript service responded with an error")
+    try:
+        decoded = json.loads(body)
+        ttml = decoded["data"][0]["attributes"]["ttmlAssetUrls"]["ttml"]
+    except (ValueError, KeyError, IndexError, TypeError):
+        raise WorkflowError(
+            "unsupported-input", "no transcript available for this episode") from None
+    if not isinstance(ttml, str) or not ttml:
+        raise WorkflowError(
+            "unsupported-input", "no transcript available for this episode")
+    return ttml
+
+
+class _InsufficientPermissions(Exception):
+    pass
+
+
+def download_ttml(url: str) -> bytes:
+    response = requests.get(url, timeout=_HTTP_TIMEOUT_SECONDS, stream=True)
+    try:
+        response.raise_for_status()
+        chunks: list[bytes] = []
+        total = 0
+        for chunk in response.iter_content(chunk_size=65536):
+            total += len(chunk)
+            if total > _TTML_MAXIMUM_BYTES:
+                raise WorkflowError("extraction-failure", "the transcript exceeded its size limit")
+            chunks.append(chunk)
+    except requests.RequestException:
+        raise WorkflowError("extraction-failure", "the transcript download failed") from None
+    finally:
+        response.close()
+    return b"".join(chunks)
+
+
+# ── TTML parsing (ported from TTMLTranscript.swift) ────────────────────────
+
+
+def _local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _attribute(attributes: dict, name: str) -> str | None:
+    if name in attributes:
+        return attributes[name]
+    for key, value in attributes.items():
+        if key.rsplit("}", 1)[-1] == name:
+            return value
+    return None
+
+
+def parse_clock(raw: str | None) -> float:
+    """A TTML clock value in seconds: `SS.mmm`, `MM:SS.mmm`, `HH:MM:SS.mmm`.
+    Unparseable or absent → 0 (matches the Swift parser)."""
+    if not raw:
+        return 0.0
+    seconds = 0.0
+    for part in raw.split(":"):
+        try:
+            seconds = seconds * 60 + float(part)
+        except ValueError:
+            return 0.0
+    return seconds
+
+
+class _TTMLWalker:
+    """Streaming walk over the TTML tree. Namespace-PREFIX-tolerant: elements
+    match by local name and attributes by local name. Word-unit spans are
+    joined with spaces at paragraph end (real Apple TTML puts NO whitespace
+    between word spans); text outside word spans is the raw-text fallback."""
+
+    def __init__(self) -> None:
+        self.cues: list[tuple[str | None, str]] = []
+        self._in_paragraph = False
+        self._begin = 0.0
+        self._end = 0.0
+        self._speaker: str | None = None
+        self._words: list[str] = []
+        self._raw_text: list[str] = []
+        self._in_word = False
+        self._current_word: list[str] = []
+
+    def start(self, element: ET.Element) -> None:
+        tag = _local_name(element.tag)
+        if tag == "p":
+            self._in_paragraph = True
+            self._begin = parse_clock(_attribute(element.attrib, "begin"))
+            self._end = parse_clock(_attribute(element.attrib, "end"))
+            self._speaker = _attribute(element.attrib, "agent")
+            self._words = []
+            self._raw_text = []
+        elif tag == "span" and self._in_paragraph:
+            if _attribute(element.attrib, "unit") == "word":
+                self._in_word = True
+                self._current_word = []
+
+    def text(self, value: str) -> None:
+        if not self._in_paragraph:
+            return
+        if self._in_word:
+            self._current_word.append(value)
+        else:
+            self._raw_text.append(value)
+
+    def end(self, element: ET.Element) -> None:
+        tag = _local_name(element.tag)
+        if tag == "span" and self._in_word:
+            word = "".join(self._current_word).strip()
+            if word:
+                self._words.append(word)
+            self._in_word = False
+            self._current_word = []
+        elif tag == "p" and self._in_paragraph:
+            if self._words:
+                text = " ".join(self._words)
+            else:
+                text = "".join(self._raw_text).strip()
+            if text:
+                self.cues.append((self._speaker, text))
+            self._in_paragraph = False
+
+
+def parse_ttml(data: bytes) -> str:
+    """Parse TTML bytes into the transcript plain text: one paragraph per
+    cue, prefixed with the speaker when the TTML attributes carry one."""
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError:
+        raise WorkflowError("extraction-failure", "the transcript could not be parsed") from None
+    walker = _TTMLWalker()
+    def visit(element: ET.Element) -> None:
+        walker.start(element)
+        if element.text:
+            walker.text(element.text)
+        for child in element:
+            visit(child)
+            if child.tail:
+                walker.text(child.tail)
+        walker.end(element)
+    visit(root)
+    if not walker.cues:
+        raise WorkflowError("extraction-failure", "the transcript could not be parsed")
+    return "\n\n".join(
+        f"{speaker}: {text}" if speaker else text for speaker, text in walker.cues
+    )
+
+
+# ── RSS fallback (the reviewed podcast-transcript algorithm) ───────────────
+
+
+def _parse_vtt(vtt_text: str) -> str:
+    parsed = webvtt.from_string(vtt_text)
+    lines = [caption.text.strip() for caption in parsed if caption.text.strip()]
+    return "\n\n".join(lines)
+
+
+def _parse_srt(srt_text: str) -> str:
+    subtitles = list(srt.parse(srt_text))
+    lines = [
+        subtitle.content.strip()
+        for subtitle in subtitles
+        if subtitle.content.strip()
+    ]
+    return "\n\n".join(lines)
+
+
+class _HTMLTextExtractor(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.text: list[str] = []
+        self.in_script_or_style = False
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag in ("script", "style"):
+            self.in_script_or_style = True
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in ("script", "style"):
+            self.in_script_or_style = False
+
+    def handle_data(self, data: str) -> None:
+        if not self.in_script_or_style:
+            self.text.append(data)
+
+    def get_text(self) -> str:
+        return re.sub(r"\s+", " ", " ".join(self.text)).strip()
+
+
+def _parse_html(html_text: str) -> str:
+    parser = _HTMLTextExtractor()
+    parser.feed(html_text)
+    text = parser.get_text()
+    paragraphs = re.split(r"\s{2,}|\n+", text)
+    paragraphs = [p.strip() for p in paragraphs if p.strip()]
+    return "\n\n".join(paragraphs)
+
+
+def _parse_plain(text: str) -> str:
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+    return "\n\n".join(lines)
+
+
+def parse_transcript(transcript_text: str, content_type: str | None, url: str) -> str:
+    if content_type:
+        lowered = content_type.lower()
+        if "vtt" in lowered:
+            return _parse_vtt(transcript_text)
+        if "srt" in lowered or "subrip" in lowered:
+            return _parse_srt(transcript_text)
+        if "html" in lowered:
+            return _parse_html(transcript_text)
+        if "plain" in lowered:
+            return _parse_plain(transcript_text)
+    ext = Path(url).suffix.lower()
+    if ext == ".vtt":
+        return _parse_vtt(transcript_text)
+    if ext == ".srt":
+        return _parse_srt(transcript_text)
+    if ext in (".html", ".htm"):
+        return _parse_html(transcript_text)
+    try:
+        return _parse_vtt(transcript_text)
+    except Exception:  # noqa: BLE001 - degrade to plain text
+        return _parse_plain(transcript_text)
+
+
+def rss_transcript(source_url: str) -> str:
+    """The RSS transcript algorithm for an Apple episode URL: iTunes lookup →
+    feed → the episode's <podcast:transcript> attachment."""
+    show_id = parse_show_id(source_url)
+    episode_id = parse_apple_episode(source_url)
+    try:
+        lookup = requests.get(
+            _ITUNES_LOOKUP_URL,
+            params={"id": show_id, "entity": "podcast"},
+            timeout=_HTTP_TIMEOUT_SECONDS,
+        )
+        lookup.raise_for_status()
+        results = lookup.json().get("results") or []
+        feed_url = results[0].get("feedUrl") if results else None
+    except (requests.RequestException, ValueError):
+        raise WorkflowError("extraction-failure", "the feed request failed") from None
+    if not feed_url:
+        raise WorkflowError("unsupported-input", "podcast not found")
+    try:
+        feed = requests.get(feed_url, timeout=_HTTP_TIMEOUT_SECONDS)
+        feed.raise_for_status()
+        if len(feed.content) > _FEED_MAXIMUM_BYTES:
+            raise WorkflowError("extraction-failure", "the feed exceeded its size limit")
+        root = ET.fromstring(feed.text)
+    except requests.RequestException:
+        raise WorkflowError("extraction-failure", "the feed request failed") from None
+    except ET.ParseError:
+        raise WorkflowError("extraction-failure", "the feed could not be parsed") from None
+    items = root.findall(".//item")
+    transcript_url = None
+    transcript_type = None
+    transcript_lang = None
+    for item in items:
+        matched = False
+        guid = item.find("guid")
+        if guid is not None and guid.text and episode_id in guid.text:
+            matched = True
+        if not matched:
+            link = item.find("link")
+            if link is not None and link.text and episode_id in link.text:
+                matched = True
+        if not matched:
+            itunes_ep = item.find(
+                "itunes:episode",
+                {"itunes": "http://www.itunes.com/dtds/podcast-1.0.dtd"},
+            )
+            if itunes_ep is not None and itunes_ep.text == episode_id:
+                matched = True
+        if matched:
+            tags = item.findall("podcast:transcript", _PODCAST_NS)
+            if tags:
+                transcript_url = tags[0].get("url")
+                transcript_type = tags[0].get("type")
+                transcript_lang = tags[0].get("lang")
+            break
+    if not transcript_url:
+        raise WorkflowError(
+            "unsupported-input", "no transcript available for this episode")
+    try:
+        attachment = requests.get(transcript_url, timeout=_HTTP_TIMEOUT_SECONDS)
+        attachment.raise_for_status()
+    except requests.RequestException:
+        raise WorkflowError("extraction-failure", "the transcript download failed") from None
+    markdown = parse_transcript(
+        attachment.text, transcript_type, transcript_url)
+    return markdown
+
+
+# ── The workflow ───────────────────────────────────────────────────────────
+
+
+def run_workflow(source_url: str, deadline_ms: int | None, cwd: str) -> str:
+    """With a staged helper: token → AMP → TTML → parse. Without one: the RSS
+    algorithm. An Apple workflow failure NEVER falls back to RSS."""
+    episode_id = parse_apple_episode(source_url)
+    helper_path = read_helper_path(cwd)
+
+    if helper_path is None:
+        _ = episode_id
+        return rss_transcript(source_url)
+
+    def remaining() -> float:
+        if deadline_ms is None:
+            return float(_HTTP_TIMEOUT_SECONDS)
+        return max((deadline_ms - int(time.time() * 1000)) / 1000.0, 1.0)
+    if deadline_ms is not None and int(time.time() * 1000) >= deadline_ms:
+        raise WorkflowError("timeout", "the request deadline passed")
+
+    token = bearer_token(helper_path, remaining(), force_refresh=False)
+
+    try:
+        response = requests.Session().send(
+            amp_request(episode_id, token), timeout=_HTTP_TIMEOUT_SECONDS)
+        status, body = response.status_code, response.content
+    except requests.RequestException:
+        raise WorkflowError("extraction-failure", "the transcript service request failed") from None
+    try:
+        ttml_url = ttml_url_from_response(status, body)
+    except _InsufficientPermissions:
+        # The cached token lacked transcript permission — re-sign ONCE and
+        # retry before surfacing the failure.
+        token = bearer_token(helper_path, remaining(), force_refresh=True)
+        try:
+            response = requests.Session().send(
+                amp_request(episode_id, token), timeout=_HTTP_TIMEOUT_SECONDS)
+            status, body = response.status_code, response.content
+        except requests.RequestException:
+            raise WorkflowError(
+                "extraction-failure", "the transcript service request failed") from None
+        ttml_url = ttml_url_from_response(status, body)
+
+    ttml = download_ttml(ttml_url)
+    return parse_ttml(ttml)
+
+
+# ── Package protocol (revision 3) ──────────────────────────────────────────
+
+
+def run_extractor_protocol(
+    request_text: str,
+    out_stream=None,
+    log_stream=None,
+) -> int:
+    """Serve one extractor protocol request. Returns the process exit code:
+    a failure frame still exits 0 because the frame is the report."""
+    global _request_configuration_path
+    out_stream = sys.stdout if out_stream is None else out_stream
+    log_stream = sys.stderr if log_stream is None else log_stream
+
+    try:
+        request = json.loads(request_text)
+    except (ValueError, TypeError):
+        print("Error: malformed extractor request", file=log_stream)
+        return 2
+
+    request_id = request.get("requestID")
+    if not isinstance(request_id, str) or not request_id:
+        print("Error: extractor request has no request ID", file=log_stream)
+        return 2
+
+    output_path = request.get("outputPath")
+    source_url = request.get("remoteURL")
+
+    if request.get("protocolRevision") != PROTOCOL_REVISION:
+        return _fail(request_id, "invalid-request", "unsupported protocol revision", out_stream)
+    if request.get("kind") != PROTOCOL_KIND:
+        return _fail(
+            request_id,
+            "unsupported-input",
+            "this package transcribes Apple Podcasts episodes only",
+            out_stream,
+        )
+    if request.get("inputTransport") != PROTOCOL_TRANSPORT:
+        return _fail(
+            request_id, "invalid-request", "this package accepts a remote URL only", out_stream
+        )
+    if not isinstance(source_url, str) or not source_url:
+        return _fail(request_id, "invalid-request", "request has no source URL", out_stream)
+    if not isinstance(output_path, str) or not output_path:
+        return _fail(request_id, "invalid-request", "request has no output path", out_stream)
+
+    deadline_ms = request.get("deadlineMillisecondsSince1970")
+    if isinstance(deadline_ms, int) and int(time.time() * 1000) > deadline_ms:
+        return _fail(
+            request_id,
+            "timeout",
+            "the request deadline passed before the fetch started",
+            out_stream,
+        )
+    if not isinstance(deadline_ms, int):
+        deadline_ms = None
+
+    config_path = request.get("operationConfigurationPath")
+    _request_configuration_path = (
+        config_path if isinstance(config_path, str) and config_path else None
+    )
+
+    cwd = os.getcwd()
+    _emit(_progress(request_id, 0, 4, "resolving source"), out_stream)
+
+    try:
+        markdown = run_workflow(source_url, deadline_ms, cwd)
+    except ConfigError as error:
+        return _fail(request_id, error.cause, error.message, out_stream)
+    except WorkflowError as error:
+        return _fail(request_id, error.cause, error.message, out_stream)
+    except Exception:  # noqa: BLE001 - reported as a typed frame
+        return _fail(
+            request_id, "extraction-failure", "episode processing failed", out_stream
+        )
+
+    if not isinstance(markdown, str) or not markdown.strip():
+        return _fail(
+            request_id, "extraction-failure", "transcript conversion produced no text", out_stream
+        )
+
+    _emit(_progress(request_id, 3, 4, "writing markdown"), out_stream)
+    try:
+        destination = Path(output_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(markdown, encoding="utf-8")
+    except OSError:
+        return _fail(request_id, "extraction-failure", "unable to write markdown", out_stream)
+
+    _emit(_progress(request_id, 4, 4, "done"), out_stream)
+    _emit(
+        build_protocol_frame(
+            "result",
+            {
+                "requestID": request_id,
+                "outputPath": output_path,
+                "markdownByteCount": len(markdown.encode("utf-8")),
+                "metadata": dict(_TOOL_METADATA),
+            },
+        ),
+        out_stream,
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(run_extractor_protocol(sys.stdin.read()))

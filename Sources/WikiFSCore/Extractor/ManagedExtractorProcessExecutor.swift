@@ -50,6 +50,11 @@ public struct ManagedExtractorProcessRequest: Sendable {
     /// for a `runtime` launch: the host launches exactly this executable and
     /// never searches a PATH again.
     public let runtimeResolution: RuntimeCommandResolution?
+    /// The host-owned durable token-cache root for one exact revision. Not
+    /// part of the operation layout (it outlives the operation) and never a
+    /// manifest capability: the executor exposes it to the child only
+    /// through its dedicated environment key.
+    public let durableTokenCacheRoot: URL?
     public let cancellationGracePeriod: Duration
 
     public init(
@@ -58,6 +63,7 @@ public struct ManagedExtractorProcessRequest: Sendable {
         protocolRequest: ExtractorProtocolRequest,
         paths: ManagedExtractorProcessPaths,
         runtimeResolution: RuntimeCommandResolution? = nil,
+        durableTokenCacheRoot: URL? = nil,
         cancellationGracePeriod: Duration = .seconds(1)
     ) {
         self.revision = revision
@@ -65,6 +71,7 @@ public struct ManagedExtractorProcessRequest: Sendable {
         self.protocolRequest = protocolRequest
         self.paths = paths
         self.runtimeResolution = runtimeResolution
+        self.durableTokenCacheRoot = durableTokenCacheRoot?.standardizedFileURL
         self.cancellationGracePeriod = cancellationGracePeriod
     }
 }
@@ -366,6 +373,12 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
         if operation.manifest.capabilities.contains(.modelDownload),
            let shared = operation.paths.sharedModelCacheRoot {
             environment["WIKI_EXTRACTOR_SHARED_MODEL_CACHE"] = shared.path
+        }
+        // Dedicated, revision-gated durable token-cache root. The host
+        // supplies it only for the exact reviewed revision that owns it (see
+        // the engine's token-cache closure); the manifest cannot request it.
+        if let durableTokenCache = operation.durableTokenCacheRoot {
+            environment["WIKI_EXTRACTOR_PACKAGE_TOKEN_CACHE"] = durableTokenCache.path
         }
         return environment
     }

@@ -54,13 +54,6 @@ public struct ExtractionConfig: JSONSidecarConfig {
         return doclingServeTimeoutMilliseconds
     }
 
-    /// The podcast→transcript backend to use when the user explicitly
-    /// transcribes a podcast source (issue #799 PR4 — framework only here;
-    /// the Transcribe trigger and `#if PODCAST_TRANSCRIPTS` gating land in
-    /// PR4). `nil` = no default chosen. Currently only `appleTranscript`, with
-    /// Whisper/Rev.ai backends as future follow-ups.
-    public var podcastBackend: PodcastTranscriptionBackend?
-
     /// Route-indexed selections, one record per typed extraction route
     /// (`ExtractorRouteID` = kind + normalized MIME). A record for a canonical
     /// route is the SOLE persisted extractor selection — the generic reference
@@ -85,7 +78,6 @@ public struct ExtractionConfig: JSONSidecarConfig {
         geminiBaseURLOverride: String? = nil,
         doclingServeEndpoint: String? = nil,
         doclingServeTimeoutMilliseconds: Int? = nil,
-        podcastBackend: PodcastTranscriptionBackend? = nil,
         routeExtractors: [ExtractorRouteSelectionRecord] = []
     ) {
         self.acpProviderId = acpProviderId
@@ -95,7 +87,6 @@ public struct ExtractionConfig: JSONSidecarConfig {
         self.geminiBaseURLOverride = geminiBaseURLOverride
         self.doclingServeEndpoint = doclingServeEndpoint
         self.doclingServeTimeoutMilliseconds = doclingServeTimeoutMilliseconds
-        self.podcastBackend = podcastBackend
         self.routeExtractors = routeExtractors.normalizedForPersistence().records
     }
 
@@ -128,7 +119,7 @@ public struct ExtractionConfig: JSONSidecarConfig {
         case geminiModel, geminiBaseURLOverride
         case doclingServeEndpoint
         case doclingServeTimeoutMilliseconds
-        case htmlBackend, podcastBackend
+        case htmlBackend
         case pdfExtractor, htmlExtractor
         case routeExtractors
     }
@@ -155,15 +146,11 @@ public struct ExtractionConfig: JSONSidecarConfig {
         let legacyBackend = DebugLog.trying("init(from:) decode backend") {
             try c.decode(ExtractionBackend.self, forKey: .backend)
         } ?? .localPdf2md
-        // Forward-compat for issue #799 PR1: a config file written before
-        // this field shipped (no `htmlBackend`/`podcastBackend` key) decodes
-        // to nil — the user picks a backend on first extraction. `try?`
-        // decoding means a typo silently picks "prompt me" instead of a
-        // wrong backend.
+        // A missing or unknown legacy HTML backend decodes to nil. The user
+        // selects a backend on the first extraction.
         let legacyHTMLBackend = DebugLog.trying("init(from:) decode htmlBackend") {
             try c.decode(HtmlExtractionBackend.self, forKey: .htmlBackend)
         }
-        self.podcastBackend = DebugLog.trying("init(from:) decode podcastBackend") { try c.decode(PodcastTranscriptionBackend.self, forKey: .podcastBackend) }
         var routes = Self.decodedRouteRecords(from: c)
         // One-time migration: every retired format-specific selection key is a
         // decode-only input. Each canonical route adopts its legacy value only
@@ -227,7 +214,6 @@ public struct ExtractionConfig: JSONSidecarConfig {
         try c.encodeIfPresent(geminiBaseURLOverride, forKey: .geminiBaseURLOverride)
         try c.encodeIfPresent(doclingServeEndpoint, forKey: .doclingServeEndpoint)
         try c.encodeIfPresent(doclingServeTimeoutMilliseconds, forKey: .doclingServeTimeoutMilliseconds)
-        try c.encodeIfPresent(podcastBackend, forKey: .podcastBackend)
         try c.encode(routeExtractors.sorted(), forKey: .routeExtractors)
     }
 

@@ -38,6 +38,19 @@
           "registrationID": "feed"
         }
       }
+    },
+    {
+      "route": {
+        "kind": "apple-podcast-transcript",
+        "mimeType": "audio/apple-podcast"
+      },
+      "extractor": {
+        "kind": "installed",
+        "installed": {
+          "packageID": "org.selfdrivingwiki.apple-podcast-transcript",
+          "registrationID": "apple-episode"
+        }
+      }
     }
   ]
 }

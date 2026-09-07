@@ -11,8 +11,9 @@ import FoundationXML
 /// YouTube's JSON3 caption format, WebVTT (`.vtt`), and SRT (`.srt`) subtitles
 /// into a shared cue model, then renders clean markdown.
 ///
-/// This generalizes `TTMLTranscript` (Apple Podcasts): Apple TTML, YouTube
-/// XML/JSON3, WebVTT, and SRT all reduce to "timed text cues → markdown."
+/// This generalizes the Apple TTML parser in
+/// `tools/apple-podcast-transcript/apple-podcast-transcript`: Apple TTML,
+/// YouTube XML/JSON3, WebVTT, and SRT all reduce to timed text cues.
 /// The parser is PURE (`XMLParser` / `JSONSerialization` / line splitting over
 /// in-memory bytes — no network), so it is unit-tested against fixtures trimmed
 /// from real caption files. Issue #564.
@@ -29,7 +30,7 @@ import FoundationXML
 public struct TimedTextTranscript: Equatable, Sendable {
 
     /// One timed text cue: start/end time, optional speaker, text.
-    /// Mirrors `TTMLTranscript.Cue` so downstream consumers are shape-compatible.
+    /// Matches the cue shape in the Apple podcast transcript package parser.
     public struct Cue: Equatable, Sendable {
         public let start: TimeInterval
         public let end: TimeInterval
@@ -123,7 +124,7 @@ public struct TimedTextTranscript: Equatable, Sendable {
     }
 
     /// Render a paragraph's cues to text strings, prefixing the speaker when present
-    /// (`SPEAKER: …`), mirroring `TTMLTranscript.plainText`.
+    /// (`SPEAKER: …`), as in the Apple podcast transcript package parser.
     private static func cueTexts(_ cues: [Cue]) -> [String] {
         cues.map { cue in cue.speaker.map { "\($0): \(cue.text)" } ?? cue.text }
     }
