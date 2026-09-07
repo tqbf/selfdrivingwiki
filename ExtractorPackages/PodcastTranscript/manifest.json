@@ -7,7 +7,7 @@
   "entryPoint": "bin/podcast-transcript-extractor",
   "files": [
     {
-      "digest": "5ce43f31ca134c5f6a78ca67fa49846c04d1cad08549e26f229e917a3b322edd",
+      "digest": "4f42ba3d29216543a1b750ac341dad58db6c0672464d7d38c3554ed613707b2e",
       "path": "PROVENANCE.md"
     },
     {
@@ -48,5 +48,5 @@
       ]
     }
   ],
-  "version": "1.0.0"
+  "version": "1.0.1"
 }

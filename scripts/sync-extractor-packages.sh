@@ -474,7 +474,7 @@ PY
 # Reviewed package provenance
 
 - Package: org.selfdrivingwiki.podcast-transcript
-- Version: 1.0.0
+- Version: 1.0.1 (1.0.1: shared-runtime-cache capability for warm uv runs)
 - Source: tools/podcast-transcript/podcast-transcript in this repository
 - Entry point: bin/podcast-transcript-extractor, generated from the same source
 - Dependencies: the PEP 723 block of the entry point is copied from the script
@@ -501,7 +501,7 @@ path, script_digest, entry_digest, provenance_digest = sys.argv[1:5]
 manifest = {
     "manifestRevision": 1,
     "packageID": "org.selfdrivingwiki.podcast-transcript",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "displayName": "Podcast Transcript",
     "protocolRevision": 3,
     "entryPoint": "bin/podcast-transcript-extractor",
@@ -754,7 +754,7 @@ PY
 # Reviewed package provenance
 
 - Package: org.selfdrivingwiki.youtube-transcript
-- Version: 1.0.0
+- Version: 1.0.1 (1.0.1: shared-runtime-cache capability for warm uv runs)
 - Source: tools/youtube-transcript/youtube-transcript in this repository
 - Entry point: bin/youtube-transcript-extractor, generated from the same source
 - Dependencies: the PEP 723 block of the entry point is copied from the script
@@ -785,7 +785,7 @@ path, script_digest, entry_digest, provenance_digest = sys.argv[1:5]
 manifest = {
     "manifestRevision": 1,
     "packageID": "org.selfdrivingwiki.youtube-transcript",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "displayName": "YouTube Transcript",
     "protocolRevision": 3,
     "entryPoint": "bin/youtube-transcript-extractor",

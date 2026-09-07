@@ -1,7 +1,7 @@
 # Reviewed package provenance
 
 - Package: org.selfdrivingwiki.podcast-transcript
-- Version: 1.0.0
+- Version: 1.0.1 (1.0.1: shared-runtime-cache capability for warm uv runs)
 - Source: tools/podcast-transcript/podcast-transcript in this repository
 - Entry point: bin/podcast-transcript-extractor, generated from the same source
 - Dependencies: the PEP 723 block of the entry point is copied from the script
