@@ -104,17 +104,30 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
            let providerKind = origin.provider {
             switch providerKind {
             case .youtube:
-                let videoID = origin.externalIdentity
-                    ?? MediaEmbedURL.youtube(origin.plan ?? "")?.externalIdentity
-                guard let videoID else { return nil }
-                let svc = YouTubeTranscriptService()
+                // YouTube transcripts run through the reviewed/selected
+                // extractor package — the same route shape as the podcast
+                // siblings. The stored plan URL wins when it validates, so
+                // watch, short, Shorts, and embed rows keep their source
+                // contract; a legacy row with only a video ID resolves to
+                // the canonical watch URL. Invalid data never launches a
+                // package.
+                guard let sourceURL = YouTubeSourceURL.resolveOperationURL(
+                    plan: origin.plan,
+                    externalIdentity: origin.externalIdentity) else {
+                    return nil
+                }
+                let adapter = try await extractionServices.prepareYouTubeTranscript()
+                let producer = adapter.packageProvenance
                 return .transcript(TranscriptExtractionResolution(
-                    fetch: { _ in
-                        TranscriptFetchOutcome(
-                            markdown: try await svc.transcript(forVideoID: videoID).markdown)
+                    fetch: { onProgress in
+                        let outcome = try await adapter.transcript(
+                            for: sourceURL, onProgress: onProgress)
+                        return TranscriptFetchOutcome(
+                            markdown: outcome.markdown,
+                            reportedMetadata: outcome.reportedMetadata)
                     },
                     filename: "transcript",
-                    resultMode: .builtInTool(.youtubeCaptions)))
+                    resultMode: .installedPackage(producer)))
 
             case .podcast:
                 // RSS podcast transcripts run through the reviewed/selected

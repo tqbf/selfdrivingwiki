@@ -1,5 +1,6 @@
 #if os(macOS)
 import Foundation
+import Synchronization
 import Testing
 import WikiFSCore
 import WikiFSEngine
@@ -184,6 +185,126 @@ struct ExtractorPackageSettingsTests {
         #expect(config.extractorSelection(for: .canonicalPDF) == .installed(ProcessExtractionServices.reviewedPDFLogical))
         #expect(config.extractorSelection(for: .canonicalHTML) == .installed(ProcessExtractionServices.reviewedHTMLLogical))
         #expect(config.extractorSelection(for: .canonicalDOCX) == .installed(ProcessExtractionServices.reviewedDOCXLogical))
+    }
+
+    /// The transcript routes display their bundled reviewed default on a
+    /// fresh config (the generic "no default" display was misleading —
+    /// execution resolves the reviewed package through the bundled
+    /// default-route policy), and a reviewed transcript pick persists its
+    /// lineage instead of collapsing into a legacy display tag that the
+    /// generic write path dropped.
+    @Test("transcript routes display the reviewed default and persist reviewed picks")
+    func transcriptRoutesDisplayAndPersistReviewedLineages() throws {
+        let lineages: [(route: ExtractorRouteID, logical: LogicalExtractorReference, name: String)] = [
+            (.canonicalPodcastTranscript, ProcessExtractionServices.reviewedPodcastTranscriptLogical, "Podcast Transcript"),
+            (.canonicalApplePodcastTranscript, ProcessExtractionServices.reviewedApplePodcastTranscriptLogical, "Apple Podcast Transcript"),
+            (.canonicalYouTubeTranscript, ProcessExtractionServices.reviewedYouTubeTranscriptLogical, "YouTube Transcript"),
+        ]
+
+        for lineage in lineages {
+            let descriptor = try #require(
+                ExtractorRouteHostCatalog.descriptors.first { $0.route == lineage.route })
+            // The reviewed choice carries the category the extraction context
+            // projects for reviewed packages — `.reviewedPackage`, not
+            // `.installedPackage`. Matching on the category reclassified a
+            // just-picked reviewed lineage as unavailable on the next row
+            // rebuild, which blanked the picker.
+            let row = ExtractorRouteSettingsRow(
+                descriptor: descriptor,
+                savedSelection: nil,
+                resolvedSelection: nil,
+                choices: [
+                    ExtractorRouteChoice(
+                        route: lineage.route,
+                        reference: .none,
+                        displayName: "No default (disable)",
+                        category: .prompt),
+                    ExtractorRouteChoice(
+                        route: lineage.route,
+                        reference: .installed(lineage.logical),
+                        displayName: lineage.name,
+                        category: .reviewedPackage,
+                        exactSummary: "1.0.0 · abcdef123456"),
+                ],
+                status: .ready)
+
+            // Fresh config: the bundled default displays as the reviewed
+            // package, not as "no default".
+            #expect(
+                ExtractorRouteSettingsMapping.selection(
+                    route: lineage.route, config: ExtractionConfig(), row: row)
+                == .installed(lineage.logical))
+
+            // The picker tag for the reviewed choice carries the generic
+            // installed lineage (never a legacy display case), and the pick
+            // persists and reads back without degrading to unavailable.
+            let tag = ExtractionSettingsView.selection(for: row.choices[1])
+            #expect(tag == .installed(lineage.logical))
+
+            var config = ExtractionConfig()
+            ExtractorRouteSettingsMapping.write(tag, route: lineage.route, into: &config)
+            #expect(config.extractorSelection(for: lineage.route) == .installed(lineage.logical))
+            let afterPick = ExtractorRouteSettingsMapping.selection(
+                route: lineage.route, config: config, row: row)
+            #expect(afterPick == .installed(lineage.logical))
+            #expect(afterPick != .unavailableInstalled(lineage.logical))
+
+            // "No default (disable ...)" persists the explicit .none record:
+            // the selection holds across rebuilds, the bundled default does
+            // not refill it, and execution fails closed on it.
+            ExtractorRouteSettingsMapping.write(.prompt, route: lineage.route, into: &config)
+            #expect(
+                config.extractorSelection(for: lineage.route) == ExtractionBackendReference.none)
+            #expect(
+                config.selectionOrDefault(for: lineage.route) == ExtractionBackendReference.none)
+            #expect(
+                ExtractorRouteSettingsMapping.selection(
+                    route: lineage.route, config: config, row: row)
+                == .prompt)
+        }
+
+        // An imported third-party package keeps the same contract: its
+        // `.installedPackage` choice displays, persists, and reads back.
+        let importedLogical = LogicalExtractorReference(
+            packageID: try ExtractorPackageID(validating: "org.example.youtube"),
+            registrationID: try ExtractorRegistrationID(validating: "captions"))
+        let importedRow = ExtractorRouteSettingsRow(
+            descriptor: try #require(
+                ExtractorRouteHostCatalog.descriptors.first { $0.route == .canonicalYouTubeTranscript }),
+            savedSelection: nil,
+            resolvedSelection: nil,
+            choices: [
+                ExtractorRouteChoice(
+                    route: .canonicalYouTubeTranscript,
+                    reference: .none,
+                    displayName: "No default (disable)",
+                    category: .prompt),
+                ExtractorRouteChoice(
+                    route: .canonicalYouTubeTranscript,
+                    reference: .installed(importedLogical),
+                    displayName: "Example YouTube Package",
+                    category: .installedPackage,
+                    exactSummary: "1.0.0 · abcdef123456"),
+            ],
+            status: .ready)
+        #expect(
+            ExtractorRouteSettingsMapping.selection(
+                route: .canonicalYouTubeTranscript, config: ExtractionConfig(), row: importedRow)
+            == .prompt)
+        var importedConfig = ExtractionConfig()
+        ExtractorRouteSettingsMapping.write(
+            .installed(importedLogical), route: .canonicalYouTubeTranscript, into: &importedConfig)
+        #expect(
+            ExtractorRouteSettingsMapping.selection(
+                route: .canonicalYouTubeTranscript, config: importedConfig, row: importedRow)
+            == .installed(importedLogical))
+
+        // The explicit disable choice still maps to the prompt record.
+        #expect(ExtractionSettingsView.selection(for: ExtractorRouteChoice(
+            route: .canonicalYouTubeTranscript,
+            reference: .none,
+            displayName: "No default (disable)",
+            category: .prompt)) == .prompt)
     }
 
     @Test("DOCX prompt writes the explicit reviewed-package default record")
@@ -715,6 +836,42 @@ struct ExtractorPackageSettingsTests {
         let remaining = try #require(model.tableRows.first)
         #expect(model.notice(for: remaining)?.severity == .failure)
         #expect(model.paneNotice == nil)
+    }
+
+    /// Reviewed packages are bundled with the app; the reviewed overlay
+    /// re-admits them on every launch, so removal would be a silent no-op
+    /// against the machine catalog. The model refuses the mutation, and the
+    /// UI gates the destructive button on the same answer.
+    @Test("a reviewed package is recognized and its removal is refused")
+    func reviewedPackageRemovalIsRefused() async throws {
+        let reviewed = ReviewedExtractorPackages.youtubeTranscript
+        let reviewedRow = ExtractorPackageSettingsRow(
+            kind: .youtubeTranscript,
+            packageID: reviewed.packageID.rawValue,
+            version: reviewed.version.rawValue,
+            digestPrefix: String(reviewed.revision.digest.hex.prefix(12)),
+            registrationID: "captions",
+            revision: reviewed.revision)
+        #expect(ExtractorPackageSettingsModel.isReviewed(reviewedRow))
+
+        let importedRow = try settingsRow()
+        #expect(ExtractorPackageSettingsModel.isReviewed(importedRow) == false)
+
+        let removeCalls = Mutex<Int>(0)
+        let model = ExtractorPackageSettingsModel(
+            loadSnapshot: { ExtractorPackageSettingsSnapshot(rows: [reviewedRow, importedRow]) },
+            removePackage: { _ in
+                removeCalls.withLock { $0 += 1 }
+                return .succeeded(nil)
+            })
+
+        await model.refresh()
+        await model.remove(reviewedRow)
+        #expect(removeCalls.withLock { $0 } == 0)
+        #expect(model.tableRows.contains { $0.installedRow == reviewedRow })
+
+        await model.remove(importedRow)
+        #expect(removeCalls.withLock { $0 } == 1)
     }
 
     @Test("one notice at a time: a later outcome replaces the one before it")

@@ -246,7 +246,7 @@ public enum ExtractorRouteHostCatalog {
     }
 
     /// Canonical routes in host display order (PDF first, then HTML, DOCX,
-    /// and the two transcript routes).
+    /// and the transcript routes).
     public static let descriptors: [ExtractorRouteDescriptor] = [
         ExtractorRouteDescriptor(
             route: .canonicalPDF,
@@ -268,6 +268,10 @@ public enum ExtractorRouteHostCatalog {
             route: .canonicalApplePodcastTranscript,
             displayName: "Apple Podcasts transcript",
             systemImage: "apple.logo"),
+        ExtractorRouteDescriptor(
+            route: .canonicalYouTubeTranscript,
+            displayName: "YouTube transcript",
+            systemImage: "play.rectangle"),
     ]
 
     /// The host's fixed choices for one route. Only canonical routes have
@@ -330,6 +334,18 @@ public enum ExtractorRouteHostCatalog {
                     route: route,
                     reference: .none,
                     displayName: "No default (disable Apple Podcasts transcripts)",
+                    category: .prompt),
+            ]
+        }
+        if route == .canonicalYouTubeTranscript {
+            // Package-only like the podcast siblings; an explicit no-default
+            // record disables the YouTube route. Package choices come from
+            // the registration snapshot.
+            return [
+                ExtractorRouteChoice(
+                    route: route,
+                    reference: .none,
+                    displayName: "No default (disable YouTube transcripts)",
                     category: .prompt),
             ]
         }

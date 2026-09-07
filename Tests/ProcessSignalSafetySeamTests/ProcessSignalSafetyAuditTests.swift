@@ -75,10 +75,6 @@ struct ProcessSignalSafetyAuditTests {
                     + "ID, and treat ESRCH as an already-reaped group. One site sends the "
                     + "initial TERM, the other sends KILL to the same re-verified group "
                     + "after the grace period"),
-            .init(path: "Sources/WikiFSCore/Integrations/TranscriptSubprocess.swift",
-                  primitive: .posixSignal):
-                (1, "guarded: injected sendSignal seam, reached only via "
-                    + "ProcessSignalSafety.signal on a re-verified tracked identity"),
             .init(path: "scripts/lib/test-watchdog-process-control.sh",
                   primitive: .shellSignal):
                 (1, "guarded: builtin kill is addressed by jobspec (%N), never by a "

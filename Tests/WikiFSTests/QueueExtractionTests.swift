@@ -197,8 +197,9 @@ struct QueueExtractionTests {
             timeout: .seconds(5))
 
         #expect(lines.count == 2)
-        #expect(lines[0] == "Converting page 1...")
-        #expect(lines[1] == "Converting page 2...")
+        // Lines carry an elapsed-time stamp prefix ([mm:ss]).
+        #expect(lines[0].hasSuffix("Converting page 1..."))
+        #expect(lines[1].hasSuffix("Converting page 2..."))
         store.close()
     }
 

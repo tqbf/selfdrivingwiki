@@ -121,7 +121,7 @@ struct SourceRefreshTests {
 
     /// The Apple TTML packaging: BOTH podcast refresh arms route through the
     /// extraction queue's package routes. `refreshSource(_:)` on an Apple
-    /// episode source throws `.podcastQueueRequired` (the caller enqueues),
+    /// episode source throws `.transcriptQueueRequired` (the caller enqueues),
     /// and the queue's installed-package adapter preserves the v1 lineage via
     /// the initial source-version link (asserted by the app/daemon queue
     /// provider tests). This test pins the model-level contract and the
@@ -141,7 +141,7 @@ struct SourceRefreshTests {
 
         // Refresh MUST direct the caller to the extraction queue — and write
         // nothing itself.
-        await #expect(throws: SourceRefreshService.RefreshError.podcastQueueRequired) {
+        await #expect(throws: SourceRefreshService.RefreshError.transcriptQueueRequired) {
             _ = try await model.refreshSource(
                 source.id, fetcher: SwapFetcher(htmlResponse("", url: "https://x")))
         }

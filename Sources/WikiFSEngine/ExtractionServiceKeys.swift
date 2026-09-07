@@ -31,7 +31,11 @@ public enum ExtractionBackendAdapter: Sendable {
     case pdf(ExtractionPreparation)
     case html(any HtmlMarkdownExtractor)
     case docx(any DocxMarkdownExtractor)
-    case youtubeTranscript(any YouTubeTranscriptFetching)
+    /// The process-backed YouTube transcript adapter. Carries the prepared
+    /// package operation, so results keep exact package provenance — the
+    /// former built-in fetcher case could not, and is removed with the
+    /// YouTube caption packaging.
+    case youtubeTranscript(ProcessPackageYouTubeTranscript)
     /// The process-backed RSS podcast transcript adapter. Carries the
     /// prepared package operation, so results keep exact package provenance
     /// — the former built-in fetcher case could not, and was removed.

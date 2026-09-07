@@ -244,24 +244,26 @@ struct SourceDetailView: View {
     /// "available" once the provider matches (the model throws
     /// `.missingPlan` when the ID is missing, surfaced by `runTranscription`).
     private var isTranscribable: Bool {
-        guard contentKind.capabilities.hasTranscriptBackend else { return false }
-        switch origin?.provider {
+        guard contentKind.capabilities.hasTranscriptBackend, let origin else { return false }
+        switch origin.provider {
         case .applePodcast:
             // The reviewed package route decides: route disabled in
             // settings → not transcribable; a missing signing helper does
             // NOT disable the route (the package falls back to RSS).
             return store.isSourceRefreshable(for: file.id)
         case .podcast:
-            // Generic RSS-feed podcast: always transcribable on every build —
-            // the `podcast-transcript` script needs only `uv` (no signing
-            // helper). Mirrors YouTube's "no runtime guard" shape.
-            return true
+            // Generic RSS-feed podcast: the row must carry the feed URL the
+            // queue job transcribes; `uv` is the only runtime requirement.
+            return origin.plan != nil
         case .youtube:
-            // No signing helper needed — YouTube's pure-Swift scrape is always
-            // available on every build. The model throws `.missingPlan` if
-            // `origin.externalIdentity` is missing (a data-integrity edge case
-            // surfaced by `runTranscription`, not gated here).
-            return true
+            // The reviewed package route decides availability the same way
+            // the podcast routes do: the row must carry a usable operation
+            // URL (the stored plan URL, or a legacy row's validated video
+            // ID). A route disabled in settings is not gated here — the
+            // enqueue path reports the typed failure through Activity.
+            return YouTubeSourceURL.resolveOperationURL(
+                plan: origin.plan,
+                externalIdentity: origin.externalIdentity) != nil
         // Unreachable when `hasTranscriptBackend == true` (the registry
         // resolves `.applePodcast` / `.podcast` / `.youtube` providers to
         // transcript kinds and every other provider to a non-transcript
@@ -816,16 +818,16 @@ struct SourceDetailView: View {
                         // Issue #799 PR4 (podcasts) + PR5 (YouTube): a
                         // transcribable source with no transcript yet. The
                         // Transcribe button is the analog of the Extract
-                        // button for PDF/HTML, but its underlying mechanism is
-                        // a network fetch (signed bearer → AMP → TTML → parse
-                        // for podcasts; watch-page scrape → caption track →
-                        // parse for YouTube), NOT a bytes→markdown transform —
-                        // so it dispatches to the queue engine (`runTranscription`).
-                        // Disabled for podcasts when the signing helper binary
-                        // is unavailable (`isTranscribable` mirrors
-                        // `isSourceRefreshable`'s `.applePodcast` runtime guard);
-                        // YouTube needs no signing helper, so it's always
-                        // enabled when the provider matches.
+                        // button for PDF/HTML, but its underlying mechanism
+                        // is a package extraction (signed bearer → AMP →
+                        // TTML → parse for Apple Podcasts; feed → transcript
+                        // attachment → parse for RSS; captions fetch for
+                        // YouTube), NOT a bytes→markdown transform — so it
+                        // dispatches to the queue engine (`runTranscription`).
+                        // Availability is route-derived (`isTranscribable`),
+                        // never "no signing helper, so always on"; a route
+                        // disabled in settings surfaces as a typed failure
+                        // through Activity, not as a hidden button.
                         //
                         // #842 PR2 C5: when a transcription is already in flight
                         // for this source, the button swaps to "View
@@ -954,8 +956,8 @@ struct SourceDetailView: View {
     /// materialization (network fetch) runs off-main inside the service; the
     /// store write + `reloadSources` happen on-main inside `refreshSource`.
     /// On success, reloads the head markdown so the reader updates.
-    /// RSS podcast sources are queue-routed: the typed
-    /// `.podcastQueueRequired` error from the refresh service triggers the
+    /// Podcast and YouTube sources are queue-routed: the typed
+    /// `.transcriptQueueRequired` error from the refresh service triggers the
     /// same durable extraction enqueue the Transcribe action uses.
     private func runRefresh() async {
         isRefreshing = true
@@ -968,7 +970,7 @@ struct SourceDetailView: View {
             refreshError = "This \(agent) source can't be refreshed."
         } catch SourceRefreshService.RefreshError.snapshotWithImages {
             refreshError = "This snapshot source includes images; re-snapshotting on refresh is coming soon."
-        } catch SourceRefreshService.RefreshError.podcastQueueRequired {
+        } catch SourceRefreshService.RefreshError.transcriptQueueRequired {
             await runTranscription()
             if let head = store.processedMarkdownHead(for: file) {
                 headVersion = head
@@ -1679,8 +1681,10 @@ struct SourceDetailView: View {
     }
 
     /// Enqueues a durable `.extraction` queue job for transcription. The queue
-    /// provider resolves the transcript fetch. For Apple Podcasts, the reviewed
-    /// package selects TTML or RSS from the host-staged operation support.
+    /// provider resolves the transcript fetch through the selected extractor
+    /// package: for Apple Podcasts the reviewed package picks TTML or RSS from
+    /// the host-staged operation support; for RSS feeds and YouTube the
+    /// reviewed podcast/youtube-transcript packages fetch captions directly.
     /// The job
     /// waits for completion, and refreshes the head version on success —
     /// mirroring `runExtraction()`. Errors land on the queue item's `error`

@@ -468,7 +468,7 @@ public enum SourceCommand {
     /// directly after the off-main materialize — the Phase-0 `@MainActor`
     /// invariant applies to the APP process, not wikictl. RSS podcast
     /// (`audio/podcast`) sources are queue-routed: `materialize(origin:)`
-    /// throws `.podcastQueueRequired`, whose message names the app's
+    /// throws `.transcriptQueueRequired`, whose message names the app's
     /// extraction queue (a feed source HAS a URL — the direct re-fetch path
     /// just no longer exists). Only website sources are refreshable from the
     /// CLI. Commits — the caller posts the Darwin notification on

@@ -50,6 +50,26 @@ until you transcribe, exactly like a podcast feed.
 - The choice "No default (disable Apple Podcasts transcripts)" turns Apple
   transcription off; the Transcribe action then reports a typed failure.
 
+### YouTube videos
+
+Paste a YouTube watch, `youtu.be`, Shorts, or embed link and the source
+stays byteless until you transcribe.
+
+- The reviewed `youtube-transcript` package serves the route. It fetches the
+  captions YouTube exposes through the `youtube-transcript-api` library and
+  converts them to Markdown.
+- The package prefers manually created captions over auto-generated ones.
+  If the preferred language has no captions, it uses the first available
+  track.
+- Some videos have no captions, disable them, or block requests. YouTube
+  uses an undocumented interface that can change, and it can block
+  requests. Each of these cases is a short typed failure; nothing is
+  written.
+- The package never downloads video and never runs speech-to-text. A video
+  without captions cannot be transcribed by this route.
+- The choice "No default (disable YouTube transcripts)" turns YouTube
+  transcription off; the Transcribe action then reports a typed failure.
+
 ### Word documents (.docx)
 
 Drop a `.docx` into a wiki and it converts automatically: the reviewed

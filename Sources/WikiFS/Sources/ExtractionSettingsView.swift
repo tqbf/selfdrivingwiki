@@ -860,7 +860,17 @@ struct ExtractionSettingsView: View {
             if choice.reference == .installed(ProcessExtractionServices.reviewedDOCXLogical) {
                 return .reviewedDocx2md
             }
-            return .reviewedDefuddle
+            if choice.reference == .installed(ProcessExtractionServices.reviewedHTMLLogical) {
+                return .reviewedDefuddle
+            }
+            // Transcript and future reviewed lineages: tag the generic
+            // installed lineage, which the generic write path persists. The
+            // former fallback tagged every other reviewed lineage as the
+            // Defuddle case, so a transcript reviewed pick wrote nothing.
+            if case .installed(let logical) = choice.reference {
+                return .installed(logical)
+            }
+            return .prompt
         case .installedPackage:
             if case .installed(let logical) = choice.reference { return .installed(logical) }
             return .prompt
@@ -1420,12 +1430,24 @@ struct ExtractionSettingsView: View {
             }
 
             if packageModel.canRemove {
+                // Reviewed packages are bundled with the app: the reviewed
+                // overlay re-admits them on every launch, so Remove would be
+                // a silent no-op. They stay disabled with the route-disable
+                // alternative named instead.
+                let selectionIsReviewed = selectedPackageRow?.installedRow
+                    .map(ExtractorPackageSettingsModel.isReviewed) ?? false
                 Button("Remove Package…", systemImage: "minus", role: .destructive) {
                     removalCandidate = selectedPackageRow?.installedRow
                 }
-                .disabled(packageModel.isBusy || selectedPackageRow?.installedRow == nil)
+                .disabled(packageModel.isBusy || selectedPackageRow?.installedRow == nil
+                          || selectionIsReviewed)
                 .accessibilityIdentifier(PackageAccessibility.removeButton)
-                .accessibilityLabel("Remove the selected extractor package")
+                .accessibilityLabel(selectionIsReviewed
+                    ? "Reviewed packages ship with the app and cannot be removed"
+                    : "Remove the selected extractor package")
+                .help(selectionIsReviewed
+                    ? "Reviewed packages are bundled with the app and cannot be removed. To turn one off, set its route to no default under Default Extractors."
+                    : "Remove the selected extractor package")
             }
 
             Spacer()
@@ -2121,12 +2143,27 @@ enum ExtractorRouteSettingsMapping {
                 return .prompt
             }
         }
-        // Future registration-derived routes carry package choices only.
+        // Transcript and future registration-derived routes: display the
+        // route's effective default. With no record, the bundled default
+        // policy supplies the reviewed lineage — show it instead of a
+        // misleading "no default" (the explicit disable choice stays in the
+        // picker for opting out).
         switch saved {
         case .installed(let logical):
             return installedSelection(logical, row: row)
-        default:
+        case .some(.host):
+            // No built-in transcript host adapter exists; a host reference on
+            // these routes is a dead selection. Display no-selection.
             return .prompt
+        case .some(ExtractionBackendReference.none):
+            return .prompt
+        case nil:
+            guard case .installed(let logical)? = config.selectionOrDefault(for: route),
+                  row.choices.contains(where: { $0.reference == .installed(logical) })
+            else {
+                return .prompt
+            }
+            return .installed(logical)
         }
     }
 
@@ -2134,7 +2171,13 @@ enum ExtractorRouteSettingsMapping {
         _ logical: LogicalExtractorReference,
         row: ExtractorRouteSettingsRow
     ) -> ExtractorRouteSettingsSelection {
-        row.choices.contains { $0.category == .installedPackage && $0.reference == .installed(logical) }
+        // A choice is identified by its reference; the category is picker
+        // presentation only. Reviewed packages project `.reviewedPackage`
+        // from the catalog while active imports project `.installedPackage`,
+        // so matching on the category would reclassify a just-picked
+        // reviewed lineage as unavailable on the next rebuild — blanking
+        // the picker.
+        row.choices.contains { $0.reference == .installed(logical) }
             ? .installed(logical)
             : .unavailableInstalled(logical)
     }
@@ -2193,6 +2236,12 @@ enum ExtractorRouteSettingsMapping {
             switch selection {
             case .installed(let logical), .unavailableInstalled(let logical):
                 reference = .installed(logical)
+            case .prompt:
+                // "No default (disable ...)": the explicit .none record is
+                // what disables the route — execution fails closed on it,
+                // and the bundled default policy does not refill an
+                // explicit record.
+                reference = .some(.none)
             default:
                 return
             }
@@ -2782,6 +2831,18 @@ final class ExtractorPackageSettingsModel {
     var canImport: Bool { importAction != nil }
     var canRemove: Bool { removeAction != nil }
 
+    /// Reviewed packages are build inputs bundled with the app (see
+    /// `ReviewedExtractorPackages`): the reviewed overlay re-admits them on
+    /// every launch, so removing them from the machine catalog — they were
+    /// never there — is a silent no-op. The UI treats those rows as
+    /// non-removable and points at the route's disable choice instead.
+    /// Exact-revision identity against the compiled reviewed table is the
+    /// same reviewed-identity seam the route presentation uses; no package
+    /// ID literal appears here.
+    static func isReviewed(_ row: ExtractorPackageSettingsRow) -> Bool {
+        ReviewedExtractorPackages.all.contains { $0.revision == row.revision }
+    }
+
     func refresh() async {
         guard let loadSnapshot, !isBusy else { return }
         isBusy = true
@@ -2813,6 +2874,10 @@ final class ExtractorPackageSettingsModel {
     }
 
     func remove(_ row: ExtractorPackageSettingsRow) async {
+        // Defensive backstop for the disabled button: a reviewed package has
+        // no machine-catalog record, so running the removal would silently
+        // do nothing. Refuse instead.
+        guard Self.isReviewed(row) == false else { return }
         guard let removeAction, !isBusy else { return }
         isBusy = true
         busyMessage = Self.removingMessage

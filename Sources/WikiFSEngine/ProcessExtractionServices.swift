@@ -91,6 +91,12 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
     public static let reviewedApplePodcastTranscriptLogical = reviewedLogical(
         package: ReviewedExtractorPackages.applePodcastTranscript, registration: "apple-episode")
 
+    /// The logical reference of the reviewed YouTube transcript package
+    /// registration. The bundled default-route record supplies this lineage
+    /// when the canonical YouTube route has no configured selection.
+    public static let reviewedYouTubeTranscriptLogical = reviewedLogical(
+        package: ReviewedExtractorPackages.youtubeTranscript, registration: "captions")
+
     private static func reviewedLogical(
         package: ReviewedExtractorPackage,
         registration: String
@@ -172,6 +178,20 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
         let key = try await applePodcastTranscriptKey(configuration: configuration)
         let adapter = try await makeAdapter(for: key)
         guard case .applePodcastTranscript(let transcript) = adapter else {
+            throw ExtractionServicesError.unavailable
+        }
+        return transcript
+    }
+
+    /// Resolves the configured YouTube transcript adapter. The selection
+    /// state machine mirrors the podcast routes exactly (see
+    /// `podcastTranscriptKey`): the reviewed lineage is the bundled default,
+    /// an explicit `.none` disables, and everything else fails closed.
+    public func prepareYouTubeTranscript() async throws -> ProcessPackageYouTubeTranscript {
+        let configuration = try input.readConfiguration()
+        let key = try await youtubeTranscriptKey(configuration: configuration)
+        let adapter = try await makeAdapter(for: key)
+        guard case .youtubeTranscript(let transcript) = adapter else {
             throw ExtractionServicesError.unavailable
         }
         return transcript
@@ -292,6 +312,23 @@ public struct ProcessExtractionServices: ExtractionServices, Sendable {
         }
         return try await installedKey(
             reference, kind: .applePodcastTranscript, route: .canonicalApplePodcastTranscript)
+    }
+
+    /// YouTube key resolution. Same shape as the podcast siblings: an
+    /// explicit `.none` stays disabled and fails closed; a host reference is
+    /// equally dead — no built-in YouTube adapter exists anymore — and fails
+    /// closed with the route diagnostic.
+    private func youtubeTranscriptKey(
+        configuration: ExtractionConfig
+    ) async throws -> ExtractionAdapterKey {
+        let record = configuration.selectionOrDefault(for: .canonicalYouTubeTranscript)
+        guard case .installed(let reference)? = record else {
+            throw ExtractionServicesError.selectedExtractorUnavailable(
+                route: .canonicalYouTubeTranscript,
+                reference: Self.reviewedYouTubeTranscriptLogical)
+        }
+        return try await installedKey(
+            reference, kind: .youtubeTranscript, route: .canonicalYouTubeTranscript)
     }
 
     /// Resolves an installed lineage to its exact registry key, failing

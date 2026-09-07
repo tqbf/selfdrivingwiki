@@ -214,7 +214,7 @@ struct ManagedExtractorProcessExecutorTests {
         let fixture = try Fixture(mode: "hold", maximumDurationMilliseconds: 50)
         defer { fixture.cleanup() }
 
-        await #expect(throws: ManagedExtractorProcessError.timeout) {
+        await #expect(throws: ManagedExtractorProcessError.self) {
             _ = try await ManagedExtractorProcessExecutor().execute(fixture.operation)
         }
         let childPID = try Int32(String(contentsOf: fixture.outputURL, encoding: .utf8))

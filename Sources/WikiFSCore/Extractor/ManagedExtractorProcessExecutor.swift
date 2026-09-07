@@ -112,7 +112,10 @@ public enum ManagedExtractorProcessError: Error, Equatable, Sendable {
     case launch(RaceFreeProcessGroupError)
     case malformedProtocol
     case protocolSequence(ExtractorProtocolSequenceError)
-    case timeout
+    /// The extractor exceeded its deadline. `detail` carries the elapsed and
+    /// limit durations plus the last progress line and its age, so a user
+    /// can see which phase hung without attaching a debugger.
+    case timeout(detail: String)
     case cancellation
     case outputLimit
     case processTermination(ProcessTerminationCause)
@@ -140,8 +143,8 @@ extension ManagedExtractorProcessError: LocalizedError {
             "The extractor produced malformed protocol output."
         case .protocolSequence:
             "The extractor produced an invalid protocol sequence."
-        case .timeout:
-            "The extractor did not finish in time."
+        case .timeout(let detail):
+            detail
         case .cancellation:
             "The extraction was cancelled."
         case .outputLimit:
@@ -169,11 +172,23 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
         let input = try encodeRequest(operation.protocolRequest)
         let cancellationSlot = ManagedProcessCancellationSlot(
             gracePeriod: operation.cancellationGracePeriod)
+        // Progress tracking for timeout diagnostics: the last progress line
+        // and when it arrived tell a user which phase hung without a debugger.
+        let progressClock = ContinuousClock()
+        let runStartedAt = progressClock.now
+        let lastProgress = LastProgressBox()
+        let callerOnFrame = onFrame
+        let trackedOnFrame: @Sendable (ExtractorProtocolFrame) -> Void = { frame in
+            if case .progress(let progress) = frame {
+                lastProgress.record(progress.message ?? "", at: progressClock.now, since: runStartedAt)
+            }
+            callerOnFrame(frame)
+        }
         let protocolState = ManagedProtocolState(
             requestID: operation.protocolRequest.requestID,
             outputPath: operation.protocolRequest.outputPath,
             maximumProgressEventCount: operation.manifest.limits.maximumProgressEventCount,
-            onFrame: onFrame,
+            onFrame: trackedOnFrame,
             onFailure: { cancellationSlot.requestTermination() })
         let stdoutLimit = managedStandardOutputLimit(operation.manifest.limits)
         let handle: RaceFreeProcessGroupHandle
@@ -228,7 +243,10 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
         } catch is CancellationError {
             throw ManagedExtractorProcessError.cancellation
         } catch RaceFreeProcessGroupError.timedOut {
-            throw ManagedExtractorProcessError.timeout
+            throw ManagedExtractorProcessError.timeout(detail: ManagedExtractorProcessError.timeoutDetail(
+                limit: timeout,
+                elapsed: progressClock.now - runStartedAt,
+                lastProgress: lastProgress.value))
         } catch RaceFreeProcessGroupError.outputLimitExceeded {
             throw ManagedExtractorProcessError.outputLimit
         } catch let error as RaceFreeProcessGroupError {
@@ -591,5 +609,52 @@ private final class ManagedProtocolState: @unchecked Sendable {
             try decoder.finish()
             return (try sequence.finish(), sequence.progressEventCount)
         }
+    }
+}
+
+/// Thread-safe record of the most recent progress line and when it arrived,
+/// feeding the timeout detail (which phase hung, and for how long).
+/// Sendability invariant: `entry` is only read/written under `lock`, and the
+/// recorded Duration value types are themselves Sendable.
+// swiftlint:disable:next unchecked_sendable
+final class LastProgressBox: @unchecked Sendable {
+    struct Entry: Sendable {
+        let message: String
+        let offset: Duration
+    }
+
+    private let lock = NSLock()
+    private var entry: Entry?
+
+    func record(_ message: String, at instant: ContinuousClock.Instant, since start: ContinuousClock.Instant) {
+        lock.withLock { entry = Entry(message: message, offset: instant - start) }
+    }
+
+    var value: Entry? { lock.withLock { entry } }
+}
+
+extension ManagedExtractorProcessError {
+    /// Human-readable timeout diagnosis: how long the extractor ran against
+    /// its limit, and what it last reported (with the silence length).
+    static func timeoutDetail(
+        limit: Duration,
+        elapsed: Duration,
+        lastProgress: LastProgressBox.Entry?
+    ) -> String {
+        func seconds(_ duration: Duration) -> String {
+            let value = Double(duration.components.seconds)
+                + Double(duration.components.attoseconds) / 1e18
+            return String(format: "%.1f s", value)
+        }
+        var detail = "The extractor did not finish in time. It ran \(seconds(elapsed)) of the "
+            + "\(seconds(limit)) limit."
+        if let lastProgress {
+            let silence = elapsed - lastProgress.offset
+            detail += " Last progress: \"\(lastProgress.message)\" at "
+                + "\(seconds(lastProgress.offset)) (silent for the last \(seconds(silence)))."
+        } else {
+            detail += " No progress was reported — the extractor likely never completed startup."
+        }
+        return detail
     }
 }

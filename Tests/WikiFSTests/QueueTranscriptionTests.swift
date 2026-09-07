@@ -306,7 +306,9 @@ struct QueueTranscriptionTests {
             from: events,
             timeout: .seconds(5))
 
-        #expect(lines == ["Fetching transcript…"])
+        // Lines carry an elapsed-time stamp prefix ([mm:ss]).
+        #expect(lines.count == 1)
+        #expect(lines.first?.hasSuffix("Fetching transcript…") == true)
         store.close()
     }
 

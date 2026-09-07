@@ -213,4 +213,44 @@ struct ExtractorKindNeutralityContractTests {
             }
         }
     }
+
+    /// The YouTube registration is DATA, not host policy: no source branch
+    /// may compare against `.youtubeTranscript` for selection, and the
+    /// reviewed YouTube package ID literal may appear only where reviewed
+    /// identities are declared. The typed prepare seam and exhaustive
+    /// adapter dispatch stay allowed, mirroring the podcast rules above.
+    @Test func youtubeRegistrationIsDataDriven() throws {
+        let root = try Self.locateRepositoryRoot()
+        let files = try Self.sourceFiles(under: root)
+        #expect(files.isEmpty == false, "no host sources found to scan")
+
+        // No kind comparison for the YouTube kind.
+        let comparison = try NSRegularExpression(
+            pattern: #"([=!]=)\s*\.youtubeTranscript\b"#)
+        // No package-ID policy literal outside the reviewed-identity table.
+        let packageIDLiteral = try NSRegularExpression(
+            pattern: #"org\.selfdrivingwiki\.youtube-transcript"#)
+        let allowedPackageIDFiles: Set<String> = ["ReviewedExtractorPackages.swift"]
+
+        for file in files {
+            var contents = try String(contentsOf: file, encoding: .utf8)
+            contents = contents.replacingOccurrences(
+                of: #"//.*"#,
+                with: "",
+                options: .regularExpression)
+            let range = NSRange(contents.startIndex..., in: contents)
+
+            let kindMatches = comparison.matches(in: contents, range: range)
+            #expect(
+                kindMatches.isEmpty,
+                "\(file.lastPathComponent) compares against the .youtubeTranscript extractor kind; policy must come from registration data")
+
+            let idMatches = packageIDLiteral.matches(in: contents, range: range)
+            if allowedPackageIDFiles.contains(file.lastPathComponent) == false {
+                #expect(
+                    idMatches.isEmpty,
+                    "\(file.lastPathComponent) hard-codes the reviewed YouTube package ID; eligibility must come from registration data")
+            }
+        }
+    }
 }

@@ -1,0 +1,11 @@
+{
+  "requestID": "6f1e2b3c-0000-4000-8000-000000000001",
+  "protocolRevision": 3,
+  "kind": "youtube-transcript",
+  "mimeType": "video/youtube",
+  "originalFilename": "youtube-dQw4w9WgXcQ",
+  "inputTransport": "remote-url",
+  "remoteURL": "https://www.youtube.com/watch?v=ExampleVID0",
+  "outputPath": "output/result.md",
+  "deadlineMillisecondsSince1970": 1735689600000
+}

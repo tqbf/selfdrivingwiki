@@ -93,6 +93,15 @@ public extension ExtractorRouteID {
         kind: .applePodcastTranscript,
         mimeTypeString: "audio/apple-podcast")
 
+    /// The YouTube transcript route. The synthetic `video/youtube` source
+    /// MIME is the route dimension for byteless `.youtube` sources; the
+    /// input itself is the video URL (protocol revision 3). Kept separate
+    /// from the podcast routes so each source class resolves its own
+    /// package selection.
+    static let canonicalYouTubeTranscript = ExtractorRouteID.validatedCanonical(
+        kind: .youtubeTranscript,
+        mimeTypeString: "video/youtube")
+
     /// True for the routes host execution supports today. Future package
     /// registrations may declare other MIME types; displaying and resolving them
     /// is the route table's job, while execution adapters for new kinds remain
@@ -101,6 +110,7 @@ public extension ExtractorRouteID {
         self == .canonicalPDF || self == .canonicalHTML || self == .canonicalDOCX
             || self == .canonicalPodcastTranscript
             || self == .canonicalApplePodcastTranscript
+            || self == .canonicalYouTubeTranscript
     }
 
     private static func validatedCanonical(kind: ExtractorKind, mimeTypeString: String) -> ExtractorRouteID {

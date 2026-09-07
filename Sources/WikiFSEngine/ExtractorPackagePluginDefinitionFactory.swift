@@ -307,6 +307,16 @@ public enum ExtractorPackagePluginDefinitionFactory {
                                 return ExtractionBackendAdapter.applePodcastTranscript(adapter)
                             },
                             presentation: presentation))
+                    case .youtubeTranscript:
+                        entries.append(ExtractionBatchEntry(
+                            key: .installed(kind: backendKind, reference: reference),
+                            backend: RegisteredExtractionBackend(key: legacyPlaceholderKey) {
+                                let adapter = try await provider.prepareYouTubeTranscript(
+                                    revision: revision,
+                                    manifest: manifest)
+                                return ExtractionBackendAdapter.youtubeTranscript(adapter)
+                            },
+                            presentation: presentation))
                     }
                 }
             }
@@ -327,6 +337,7 @@ public enum ExtractorPackagePluginDefinitionFactory {
         case .docx: return .docx
         case .podcastTranscript: return .rssPodcastTranscript
         case .applePodcastTranscript: return .applePodcastTranscript
+        case .youtubeTranscript: return .youtubeTranscript
         }
     }
 
@@ -343,10 +354,12 @@ public enum ExtractorPackagePluginDefinitionFactory {
         for registration in manifest.registrations {
             guard registration.kinds.isSubset(of: [
                 .pdf, .html, .docx, .podcastTranscript, .applePodcastTranscript,
+                .youtubeTranscript,
             ]) else {
                 let offending = registration.kinds
                     .subtracting([
                         .pdf, .html, .docx, .podcastTranscript, .applePodcastTranscript,
+                        .youtubeTranscript,
                     ])
                     .first.map(\.rawValue) ?? "?"
                 throw FactoryError.unsupportedRegistrationKind(offending)

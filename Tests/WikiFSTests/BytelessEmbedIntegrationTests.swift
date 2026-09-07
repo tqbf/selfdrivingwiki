@@ -128,20 +128,11 @@ struct BytelessEmbedIntegrationTests {
     @Test func youtubeURLRoutesToBytelessVideoEmbed() async throws {
         let store = try tempStore()
         let model = WikiStoreModel(store: store)
-        // Pass nil as the YouTube transcript fetcher so only the byteless embed
-        // is created (this test verifies the embed routing, not transcript
-        // extraction — that's covered by youtubeURLWithTranscriptCreatesEmbedAndMarkdown).
-        #if PODCAST_TRANSCRIPTS
+        // Ingest creates only the byteless embed source (no transcript — the
+        // package route fetches that on demand through the extraction queue).
         let outcome = try await model.addURL(
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-            fetcher: ExplodingFetcher(),
-            youtubeFetcher: nil)
-        #else
-        let outcome = try await model.addURL(
-            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-            fetcher: ExplodingFetcher(),
-            youtubeFetcher: nil)
-        #endif
+            fetcher: ExplodingFetcher())
         #expect(outcome.kind == .videoEmbed)
         let source = try #require(try store.listSources().first)
         #expect(source.byteSize == 0)  // byteless
@@ -349,8 +340,7 @@ struct BytelessEmbedIntegrationTests {
         #if PODCAST_TRANSCRIPTS
         let outcome = try await model.addURL(
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-            fetcher: YouTubeFixtureFetcher(),
-            youtubeFetcher: nil)  // unused at ingest (PR5: byteless-only)
+            fetcher: YouTubeFixtureFetcher())
         #else
         let outcome = try await model.addURL(
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
@@ -381,23 +371,18 @@ struct BytelessEmbedIntegrationTests {
         // The oEmbed title is still surfaced (this fixture serves it).
         #expect(md.content.contains("Test Talk"))
 
-        // The user clicks Transcribe — `transcribe(sourceID:)` dispatches to
-        // the private `transcribeYouTube` helper, which fetches via
-        // `YouTubeTranscriptFetching.transcript(forVideoID:)`.
-        let head = try #require(try await model.transcribe(
-            sourceID: source.id,
-            youtubeFetcher: CannedYouTubeFetcher()))
-        #expect(head.origin == .transcript)
-        #expect(head.technique == "youtube-captions")
-        #expect(head.content.contains("Hello world"))
-        #expect(head.content.contains("Second cue"))
-        #expect(head.content.contains("[Watch on YouTube]"))
-        // Persisted to the store as the new HEAD (alternative appended —
-        // the synthetic page is still in history, just no longer the head).
+        // The user clicks Transcribe — `transcribe(sourceID:)` requires the
+        // durable extraction queue (`.transcriptQueueRequired`); the queue's
+        // youtube-transcript package route performs the fetch and writes the
+        // transcript with installed-package provenance (covered by the queue
+        // provider tests). The model itself never fetches.
+        await #expect(throws: SourceRefreshService.RefreshError.transcriptQueueRequired) {
+            _ = try await model.transcribe(sourceID: source.id)
+        }
+        // Nothing was written by the failed dispatch: the synthetic page is
+        // still the head.
         let persisted = try #require(try store.processedMarkdownHead(sourceID: source.id))
-        #expect(persisted.content == head.content)
-        #expect(persisted.origin == .transcript)
-        #expect(persisted.technique == "youtube-captions")
+        #expect(persisted.technique == "byteless-oembed-synthetic")
     }
 
     @Test func youtubeURLWithNoCaptionsFallsBackToSyntheticMarkdown() async throws {
@@ -405,16 +390,9 @@ struct BytelessEmbedIntegrationTests {
         store.eventBus = WikiEventBus(wikiID: WikiID(rawValue: "test"))
         let model = WikiStoreModel(store: store)
         let emptyFetcher = YouTubeNoCaptionsFetcher()
-        #if PODCAST_TRANSCRIPTS
-        let outcome = try await model.addURL(
-            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-            fetcher: emptyFetcher,
-            youtubeFetcher: nil)  // unused at ingest (PR5: byteless-only)
-        #else
         let outcome = try await model.addURL(
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
             fetcher: emptyFetcher)
-        #endif
         // Issue #799 PR5: YouTube ingest is byteless-only — the fetcher is
         // NOT consulted at ingest (the param is a back-compat no-op now,
         // mirroring `podcastFetcher`). The outcome is always `.videoEmbed`
@@ -436,13 +414,11 @@ struct BytelessEmbedIntegrationTests {
         #expect(md.content.contains("https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
         // No transcript cues present (captions weren't fetched at ingest).
         #expect(!md.content.contains("Hello world"))
-        // The user clicks Transcribe — `transcribe(sourceID:)` now
-        // attempts the caption fetch on-demand. With the no-captions
-        // fixture, the fetch throws `YouTubeTranscriptError.noCaptions`.
-        await #expect(throws: YouTubeTranscriptError.self) {
-            _ = try await model.transcribe(
-                sourceID: source.id,
-                youtubeFetcher: ThrowingYouTubeFetcher())
+        // The user clicks Transcribe — `transcribe(sourceID:)` requires the
+        // durable extraction queue; the package route reports caption
+        // absence as a bounded typed failure through Activity.
+        await #expect(throws: SourceRefreshService.RefreshError.transcriptQueueRequired) {
+            _ = try await model.transcribe(sourceID: source.id)
         }
     }
 
@@ -491,23 +467,8 @@ struct BytelessEmbedIntegrationTests {
     }
 
     // MARK: - YouTube transcript fakes
-
-    /// Returns a canned transcript for any video ID (for the Transcribe button
-    /// test path — the real `YouTubeTranscriptService` now spawns a subprocess).
-    struct CannedYouTubeFetcher: YouTubeTranscriptFetching {
-        func transcript(forVideoID videoID: String) async throws -> YouTubeTranscript {
-            return YouTubeTranscript(
-                videoID: videoID,
-                title: "Test Talk",
-                markdown: "# Test Talk\n\n[Watch on YouTube](https://www.youtube.com/watch?v=\(videoID))\n\nHello world. Second cue.",
-                filename: "Test-Talk-\(videoID)-transcript.md")
-        }
-    }
-
-    /// Always throws `.noCaptions` (for the no-captions Transcribe test path).
-    struct ThrowingYouTubeFetcher: YouTubeTranscriptFetching {
-        func transcript(forVideoID videoID: String) async throws -> YouTubeTranscript {
-            throw YouTubeTranscriptError.noCaptions
-        }
-    }
+    // (Removed with the direct fetch path: the extraction queue's
+    // youtube-transcript package route performs the fetch, and the model
+    // only throws `.transcriptQueueRequired`. See AppQueueExtractionProvider
+    // tests for the package-backed behavior.)
 }

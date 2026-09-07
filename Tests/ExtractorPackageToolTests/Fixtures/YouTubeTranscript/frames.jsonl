@@ -1,0 +1,5 @@
+{"kind":"progress","payload":{"requestID":"6f1e2b3c-0000-4000-8000-000000000001","completedUnitCount":0,"totalUnitCount":4,"message":"fetching captions"}}
+{"kind":"progress","payload":{"requestID":"6f1e2b3c-0000-4000-8000-000000000001","completedUnitCount":1,"totalUnitCount":4,"message":"processing captions"}}
+{"kind":"progress","payload":{"requestID":"6f1e2b3c-0000-4000-8000-000000000001","completedUnitCount":2,"totalUnitCount":4,"message":"writing markdown"}}
+{"kind":"progress","payload":{"requestID":"6f1e2b3c-0000-4000-8000-000000000001","completedUnitCount":3,"totalUnitCount":4,"message":"done"}}
+{"kind":"result","payload":{"requestID":"6f1e2b3c-0000-4000-8000-000000000001","outputPath":"output/result.md","markdownByteCount":2371,"metadata":{"toolName":"youtube-transcript","toolVersion":"1.0.0","language":"en","transcriptGenerated":false}}}

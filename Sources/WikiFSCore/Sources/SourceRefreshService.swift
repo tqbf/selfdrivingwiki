@@ -9,7 +9,7 @@ import Foundation
 ///
 /// Provider reconstruction keys off `SourceOrigin.agentName`:
 /// - `"website"` → `WebsiteMaterializer` (refresh appends a content version).
-/// - `"apple-podcast"` and `"podcast"` → `.podcastQueueRequired`. Refresh and
+/// - `"apple-podcast"` and `"podcast"` → `.transcriptQueueRequired`. Refresh and
 ///   Transcribe enqueue the same durable package extraction job.
 /// - Everything else (`local-file`, `zotero`, `markdown-folder`,
 ///   `legacy-import`, `unknown`) → `.notRefreshable` (import-only).
@@ -30,10 +30,10 @@ public struct SourceRefreshService: Sendable {
         /// and orphan the images (the resolver joins on the active activity).
         /// Snapshot-aware refresh (re-snapshotting images) is a named follow-on.
         case snapshotWithImages
-        /// RSS podcast transcripts run through the app's extraction queue
-        /// (the extractor-package route). A feed source DOES have a URL —
-        /// the direct re-fetch path just no longer exists here.
-        case podcastQueueRequired
+        /// Transcript sources run through the app's extraction queue (the
+        /// extractor-package routes). A feed source DOES have a URL — the
+        /// direct re-fetch path just no longer exists here.
+        case transcriptQueueRequired
 
         public var errorDescription: String? {
             switch self {
@@ -43,8 +43,8 @@ public struct SourceRefreshService: Sendable {
                 return "This source has no recorded URL to re-fetch."
             case .snapshotWithImages:
                 return "This snapshot source includes images; re-snapshotting on refresh is coming soon."
-            case .podcastQueueRequired:
-                return "RSS podcast transcripts run through the app's extraction queue. Use the app's Transcribe or refresh action to enqueue the job."
+            case .transcriptQueueRequired:
+                return "Transcripts run through the app's extraction queue. Use the app's Transcribe or refresh action to enqueue the job."
             }
         }
     }
@@ -90,7 +90,7 @@ public struct SourceRefreshService: Sendable {
             // Both podcast arms run through the app's extraction queue (the
             // extractor-package routes). The app's Transcribe and refresh
             // actions enqueue that job instead of calling a materializer.
-            throw RefreshError.podcastQueueRequired
+            throw RefreshError.transcriptQueueRequired
         case .localFile, .zotero, .markdownFolder, .youtube, .vimeo, .spotify,
              .soundcloud, .remoteMedia, .legacyImport, nil:
             throw RefreshError.notRefreshable(origin.agentName)

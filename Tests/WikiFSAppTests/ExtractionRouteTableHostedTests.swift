@@ -170,7 +170,7 @@ struct ExtractionRouteTableHostedTests {
         defer { lease.release() }
         let dir = try tempDirectory("route-table-render")
         // A real registration whose MIME is outside the host routes: the table
-        // then holds six rows: five canonical routes and one registration-derived
+        // then holds seven rows: six canonical routes and one registration-derived
         // EPUB route. Row views only exist after the async snapshot load rebuilds
         // routeRows, so the wait below observes the actual load instead of the
         // initial layout.
@@ -191,15 +191,15 @@ struct ExtractionRouteTableHostedTests {
         let window = mount(view)
 
         try await waitUntil {
-            self.tableViewRowCounts(window).contains(6)
+            self.tableViewRowCounts(window).contains(7)
         }
         // The hosted hierarchy contains a native table (row views) inside a
         // clip view — the scrollable, window-bounded layout.
         let content = try #require(window.contentView)
         #expect(containsDescendant(content) { $0 is NSClipView })
-        // Five canonical routes plus the registration-derived EPUB route.
+        // Six canonical routes plus the registration-derived EPUB route.
         // The packages pane is not mounted on the default tab.
-        #expect(tableViewRowCounts(window) == [6])
+        #expect(tableViewRowCounts(window) == [7])
         // Under the metrics ceiling every row has to be visible, not merely
         // present. The transcript row is last, so a table sized one row short
         // hides exactly it.
