@@ -94,7 +94,10 @@ struct ReviewedExtractorPackageTests {
         #expect(registration.kinds == [.podcastTranscript])
         #expect(registration.mimeTypes == [try ExtractorMIMEType(validating: "audio/podcast")])
         #expect(registration.credentialRequirements.isEmpty)
-        #expect(manifest.capabilities == [.network])
+        // Network for the feed/transcript fetches; shared-runtime-cache
+        // keeps uv's CPython install and wheel cache warm across operations
+        // (shared with the other uv-launched packages).
+        #expect(manifest.capabilities == [.network, .sharedRuntimeCache])
         guard case .runtime(let command, let arguments) = manifest.launch else {
             Issue.record("podcast-transcript must launch through a runtime")
             return
@@ -105,23 +108,23 @@ struct ReviewedExtractorPackageTests {
         // The exact reviewed identity is pinned byte-for-byte; a regenerated
         // package whose digest changed fails this gate with the new value.
         #expect(output.packageDigest
-            == "8bfc2f5cab3e8e7a7cba421cf34afc11e1f2e4bd5bb8fcf5aae05fb4c87db54a")
+            == "8b083ec85664e9d0c1a2afe8b96beee100660c1882f6d7c75d627da918f6caa6")
     }
 
     /// The registered source URL never appears in the committed package
     /// bytes, and the reviewed registration never declares the Whisper
-    /// transcription fallback or model capabilities.
-    @Test func podcastTranscriptDeclaresNoModelOrSharedCacheCapabilities() throws {
+    /// transcription fallback or model capabilities. The shared runtime
+    /// cache keeps its uv runtime warm across operations.
+    @Test func podcastTranscriptDeclaresNoModelCapabilities() throws {
         let manifest = try manifest("PodcastTranscript")
         #expect(manifest.capabilities.contains(.modelDownload) == false)
-        #expect(manifest.capabilities.contains(.sharedRuntimeCache) == false)
+        #expect(manifest.capabilities.contains(.sharedRuntimeCache))
 
         let payload = try String(
             contentsOf: Self.packageURL("PodcastTranscript")
                 .appendingPathComponent("PROVENANCE.md"),
             encoding: .utf8)
         #expect(payload.contains("model-download") == false)
-        #expect(payload.contains("shared-runtime-cache") == false)
     }
 
     /// AC.3: recorded success and bounded-failure frame sequences from the
@@ -225,7 +228,10 @@ struct ReviewedExtractorPackageTests {
         #expect(registration.kinds == [.youtubeTranscript])
         #expect(registration.mimeTypes == [try ExtractorMIMEType(validating: "video/youtube")])
         #expect(registration.credentialRequirements.isEmpty)
-        #expect(manifest.capabilities == [.network])
+        // Network for the caption fetch; shared-runtime-cache keeps uv's
+        // CPython install and wheel cache warm across operations.
+        #expect(manifest.capabilities == [.network, .sharedRuntimeCache])
+        #expect(manifest.limits.maximumDurationMilliseconds == 600_000)
         guard case .runtime(let command, let arguments) = manifest.launch else {
             Issue.record("youtube-transcript must launch through a runtime")
             return
@@ -236,15 +242,16 @@ struct ReviewedExtractorPackageTests {
         // The exact reviewed identity is pinned byte-for-byte; a regenerated
         // package whose digest changed fails this gate with the new value.
         #expect(output.packageDigest
-            == "090301ccad8d8b7ac41778e0b6fb61f9d9ac8a568a4d689c5a7f1b9c67b326a7")
+            == "8f87ff4a0c8c5fac1d5ff19c6d1dff6a816a27c081fb106de3bc6c92b8c7e1a1")
     }
 
-    /// The reviewed YouTube package never claims model or shared-cache
-    /// capabilities: it fetches captions YouTube exposes and does nothing else.
-    @Test func youtubeTranscriptDeclaresNoModelOrSharedCacheCapabilities() throws {
+    /// The reviewed YouTube package never claims model download: it fetches
+    /// captions YouTube exposes and does nothing else. The shared runtime
+    /// cache keeps its uv runtime warm across operations.
+    @Test func youtubeTranscriptDeclaresNoModelCapabilities() throws {
         let manifest = try manifest("YouTubeTranscript")
         #expect(manifest.capabilities.contains(.modelDownload) == false)
-        #expect(manifest.capabilities.contains(.sharedRuntimeCache) == false)
+        #expect(manifest.capabilities.contains(.sharedRuntimeCache))
     }
 
     /// Recorded success, no-caption, and blocked-request frame sequences from

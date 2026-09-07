@@ -58,7 +58,7 @@ public enum ReviewedExtractorPackages {
         directoryName: "PodcastTranscript",
         packageID: "org.selfdrivingwiki.podcast-transcript",
         version: "1.0.0",
-        digest: "8bfc2f5cab3e8e7a7cba421cf34afc11e1f2e4bd5bb8fcf5aae05fb4c87db54a")
+        digest: "8b083ec85664e9d0c1a2afe8b96beee100660c1882f6d7c75d627da918f6caa6")
 
     public static let applePodcastTranscript = make(
         directoryName: "ApplePodcastTranscript",
@@ -70,7 +70,7 @@ public enum ReviewedExtractorPackages {
         directoryName: "YouTubeTranscript",
         packageID: "org.selfdrivingwiki.youtube-transcript",
         version: "1.0.0",
-        digest: "090301ccad8d8b7ac41778e0b6fb61f9d9ac8a568a4d689c5a7f1b9c67b326a7")
+        digest: "8f87ff4a0c8c5fac1d5ff19c6d1dff6a816a27c081fb106de3bc6c92b8c7e1a1")
 
     public static let all: [ReviewedExtractorPackage] = [
         defuddle, pdf2md, doclingServe, docx2md, podcastTranscript,

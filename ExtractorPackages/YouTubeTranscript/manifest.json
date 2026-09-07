@@ -1,12 +1,13 @@
 {
   "capabilities": [
-    "network"
+    "network",
+    "shared-runtime-cache"
   ],
   "displayName": "YouTube Transcript",
   "entryPoint": "bin/youtube-transcript-extractor",
   "files": [
     {
-      "digest": "368c3505d9fa1b819f961105f46af7170f875397e81bb35e04eba509122f8e95",
+      "digest": "78d750b0d86a2eec51d378e8045b70dc488c78cf177aaf789b689f9532141c96",
       "path": "PROVENANCE.md"
     },
     {
@@ -27,7 +28,7 @@
     "mode": "runtime"
   },
   "limits": {
-    "maximumDurationMilliseconds": 300000,
+    "maximumDurationMilliseconds": 600000,
     "maximumInputByteCount": 1048576,
     "maximumMarkdownOutputByteCount": 33554432,
     "maximumProgressEventCount": 64

@@ -47,6 +47,32 @@ struct ManagedExtractorProcessExecutorTests {
         #expect(environment.contains("MISE_CONFIG_DIR=<missing>"))
         #expect(environment.contains("WIKI_EXTRACTOR_SHARED_RUNTIME_CACHE=<missing>"))
         #expect(environment.contains("WIKI_EXTRACTOR_SHARED_MODEL_CACHE=<missing>"))
+        // uv runtime cache variables are granted only with the
+        // shared-runtime-cache capability.
+        #expect(environment.contains("UV_CACHE_DIR=<missing>"))
+        #expect(environment.contains("UV_PYTHON_INSTALL_DIR=<missing>"))
+    }
+
+    /// uv-based packages with the shared-runtime-cache capability point uv's
+    /// cache and CPython install dirs at the durable shared root, so the
+    /// runtime is downloaded once and reused across operations.
+    @Test func sharedRuntimeCacheGrantsUVCacheDirectories() async throws {
+        let shared = FileManager.default.temporaryDirectory
+            .appendingPathComponent("managed-extractor-shared-\(UUID().uuidString)", isDirectory: true)
+        let fixture = try Fixture(
+            mode: "environment",
+            capabilities: [.network, .sharedRuntimeCache],
+            sharedRuntimeCacheRoot: shared)
+        defer { fixture.cleanup() }
+
+        _ = try await ManagedExtractorProcessExecutor().execute(fixture.operation)
+        let environment = try String(contentsOf: fixture.outputURL, encoding: .utf8)
+
+        #expect(environment.contains(
+            "WIKI_EXTRACTOR_SHARED_RUNTIME_CACHE=\(shared.path)"))
+        #expect(environment.contains("UV_CACHE_DIR=\(shared.appendingPathComponent("uv-cache").path)"))
+        #expect(environment.contains(
+            "UV_PYTHON_INSTALL_DIR=\(shared.appendingPathComponent("uv-python").path)"))
     }
 
     /// AC.3: runtime launch uses the retained absolute URL directly, with
@@ -292,7 +318,9 @@ private final class Fixture: @unchecked Sendable {
         entryAsSymlink: Bool = false,
         entryHardLinked: Bool = false,
         resolveRuntime: Bool = true,
-        runtimeCommandName: String = "fixture-runtime"
+        runtimeCommandName: String = "fixture-runtime",
+        capabilities: Set<ExtractorCapability> = [],
+        sharedRuntimeCacheRoot: URL? = nil
     ) throws {
         root = FileManager.default.temporaryDirectory
             .appendingPathComponent("managed-extractor-\(UUID().uuidString)", isDirectory: true)
@@ -381,7 +409,7 @@ private final class Fixture: @unchecked Sendable {
                 displayName: "PDF",
                 kinds: [.pdf],
                 mimeTypes: [ExtractorMIMEType(validating: "application/pdf")])],
-            capabilities: [],
+            capabilities: capabilities,
             files: [ExtractorPackageFile(path: entryPath, digest: ExtractorSHA256.digest(bytes))],
             limits: ExtractorOperationLimits(
                 maximumInputByteCount: 1_024,
@@ -410,7 +438,8 @@ private final class Fixture: @unchecked Sendable {
                 packageRoot: packageRoot,
                 homeRoot: homeRoot,
                 temporaryRoot: temporaryRoot,
-                privateCacheRoot: cacheRoot),
+                privateCacheRoot: cacheRoot,
+                sharedRuntimeCacheRoot: sharedRuntimeCacheRoot),
             runtimeResolution: resolution,
             cancellationGracePeriod: .milliseconds(50))
     }
