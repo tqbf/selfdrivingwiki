@@ -189,7 +189,8 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
             outputPath: operation.protocolRequest.outputPath,
             maximumProgressEventCount: operation.manifest.limits.maximumProgressEventCount,
             onFrame: trackedOnFrame,
-            onFailure: { cancellationSlot.requestTermination() })
+            onFailure: { cancellationSlot.requestTermination() },
+            onCompletion: { cancellationSlot.requestTermination() })
         let stdoutLimit = managedStandardOutputLimit(operation.manifest.limits)
         let handle: RaceFreeProcessGroupHandle
         do {
@@ -262,10 +263,18 @@ public struct ManagedExtractorProcessExecutor: ManagedProcessExecuting, Sendable
             diagnostics.send(protocolFailureLine(launch))
             throw ManagedExtractorProcessError.malformedProtocol
         }
+        // The package contract makes a valid terminal frame the operation's
+        // completion. When the wrapper process outlives the package —
+        // observed with `uv run` lingering after the package exits — the
+        // completion hook kills the group, so a signaled (or nonzero)
+        // termination alongside a terminal frame is success, not a crash.
+        // Without a terminal frame the strict termination rules still hold.
+        let protocolCompleted = protocolState.hasTerminalFrame
         switch execution.terminationCause {
         case .exited(code: 0):
             break
         case .exited, .signaled:
+            guard !protocolCompleted else { break }
             diagnostics.send(ManagedExtractorDiagnostics.Event.nonzeroExit(
                 command: launch.commandDescription,
                 termination: String(describing: execution.terminationCause),
@@ -574,15 +583,18 @@ private final class ManagedProtocolState: @unchecked Sendable {
     private var decoder = ExtractorJSONLinesDecoder()
     private var sequence: ExtractorProtocolSequence
     private var failure: Error?
+    private var completionSignaled = false
     private let onFrame: @Sendable (ExtractorProtocolFrame) -> Void
     private let onFailure: @Sendable () -> Void
+    private let onCompletion: @Sendable () -> Void
 
     init(
         requestID: ExtractorRequestID,
         outputPath: ExtractorRelativePath,
         maximumProgressEventCount: Int,
         onFrame: @escaping @Sendable (ExtractorProtocolFrame) -> Void,
-        onFailure: @escaping @Sendable () -> Void
+        onFailure: @escaping @Sendable () -> Void,
+        onCompletion: @escaping @Sendable () -> Void
     ) {
         sequence = ExtractorProtocolSequence(
             requestID: requestID,
@@ -590,24 +602,41 @@ private final class ManagedProtocolState: @unchecked Sendable {
             maximumProgressEventCount: maximumProgressEventCount)
         self.onFrame = onFrame
         self.onFailure = onFailure
+        self.onCompletion = onCompletion
     }
 
     var hasFailure: Bool { lock.withLock { failure != nil } }
 
+    /// True once the package's terminal frame has been decoded. The package
+    /// contract makes that frame the operation's completion, even if the
+    /// wrapper process that spawned the package never exits.
+    var hasTerminalFrame: Bool { lock.withLock { sequence.terminalFrame != nil } }
+
     func consume(_ data: Data) {
-        let outcome: (frames: [ExtractorProtocolFrame], failed: Bool) = lock.withLock {
-            guard failure == nil else { return ([], false) }
+        struct Outcome {
+            let frames: [ExtractorProtocolFrame]
+            let failed: Bool
+            let completed: Bool
+        }
+        let outcome: Outcome = lock.withLock {
+            guard failure == nil else { return Outcome(frames: [], failed: false, completed: false) }
             do {
                 let frames = try decoder.append(data)
                 for frame in frames { try sequence.consume(frame) }
-                return (frames, false)
+                var completed = false
+                if sequence.terminalFrame != nil, !completionSignaled {
+                    completionSignaled = true
+                    completed = true
+                }
+                return Outcome(frames: frames, failed: false, completed: completed)
             } catch {
                 failure = error
-                return ([], true)
+                return Outcome(frames: [], failed: true, completed: false)
             }
         }
         for frame in outcome.frames { onFrame(frame) }
         if outcome.failed { onFailure() }
+        if outcome.completed { onCompletion() }
     }
 
     func finish() throws -> (terminalFrame: ExtractorProtocolFrame, progressEventCount: Int) {
