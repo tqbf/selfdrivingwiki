@@ -159,3 +159,23 @@ the digest regeneration they caused).
 - If YouTube blocks a deployment's IP persistently, the route fails closed
   with a typed failure; a proxy/egress strategy is an operator decision,
   not package behavior.
+
+## Follow-up fixes from operator testing (same day)
+
+- Reviewer findings: facade forwarder for the new metadata fields' host path
+  (see 19944d0b/bd8f98c1/a29f548d/21d42cbd history) — selection display and
+  persistence, reviewed-row Remove gating, and the ASCII-strict video-ID
+  validator.
+- **Shared runtime cache (this addendum):** the first real transcription
+  reproduced a availability failure — every operation runs in a private
+  cache, so each uv-launched transcription re-downloaded a 24 MB CPython and
+  exceeded the 5-minute manifest limit ("The extractor did not finish in
+  time."). Both uv-launched packages (podcast-transcript and
+  youtube-transcript) now declare `shared-runtime-cache`; the executor grants
+  `UV_CACHE_DIR`/`UV_PYTHON_INSTALL_DIR` under the durable shared root, so
+  the CPython and wheels are downloaded once per machine and reused.
+  YouTube's manifest duration is 600 s for first-run headroom. Reproduced
+  end to end in the sandboxed host environment; warm runs complete in well
+  under a minute. New digests: youtube
+  `616528605349683e83ea773d685ceb7bf5dfd9862594e4f66d5662630a4c0787`,
+  podcast `8b083ec85664e9d0c1a2afe8b96beee100660c1882f6d7c75d627da918f6caa6`.

@@ -58,7 +58,7 @@ public enum ReviewedExtractorPackages {
         directoryName: "PodcastTranscript",
         packageID: "org.selfdrivingwiki.podcast-transcript",
         version: "1.0.0",
-        digest: "8bfc2f5cab3e8e7a7cba421cf34afc11e1f2e4bd5bb8fcf5aae05fb4c87db54a")
+        digest: "8b083ec85664e9d0c1a2afe8b96beee100660c1882f6d7c75d627da918f6caa6")
 
     public static let applePodcastTranscript = make(
         directoryName: "ApplePodcastTranscript",

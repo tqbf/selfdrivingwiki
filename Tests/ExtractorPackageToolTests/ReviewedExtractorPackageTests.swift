@@ -94,7 +94,10 @@ struct ReviewedExtractorPackageTests {
         #expect(registration.kinds == [.podcastTranscript])
         #expect(registration.mimeTypes == [try ExtractorMIMEType(validating: "audio/podcast")])
         #expect(registration.credentialRequirements.isEmpty)
-        #expect(manifest.capabilities == [.network])
+        // Network for the feed/transcript fetches; shared-runtime-cache
+        // keeps uv's CPython install and wheel cache warm across operations
+        // (shared with the other uv-launched packages).
+        #expect(manifest.capabilities == [.network, .sharedRuntimeCache])
         guard case .runtime(let command, let arguments) = manifest.launch else {
             Issue.record("podcast-transcript must launch through a runtime")
             return
@@ -105,23 +108,23 @@ struct ReviewedExtractorPackageTests {
         // The exact reviewed identity is pinned byte-for-byte; a regenerated
         // package whose digest changed fails this gate with the new value.
         #expect(output.packageDigest
-            == "8bfc2f5cab3e8e7a7cba421cf34afc11e1f2e4bd5bb8fcf5aae05fb4c87db54a")
+            == "8b083ec85664e9d0c1a2afe8b96beee100660c1882f6d7c75d627da918f6caa6")
     }
 
     /// The registered source URL never appears in the committed package
     /// bytes, and the reviewed registration never declares the Whisper
-    /// transcription fallback or model capabilities.
-    @Test func podcastTranscriptDeclaresNoModelOrSharedCacheCapabilities() throws {
+    /// transcription fallback or model capabilities. The shared runtime
+    /// cache keeps its uv runtime warm across operations.
+    @Test func podcastTranscriptDeclaresNoModelCapabilities() throws {
         let manifest = try manifest("PodcastTranscript")
         #expect(manifest.capabilities.contains(.modelDownload) == false)
-        #expect(manifest.capabilities.contains(.sharedRuntimeCache) == false)
+        #expect(manifest.capabilities.contains(.sharedRuntimeCache))
 
         let payload = try String(
             contentsOf: Self.packageURL("PodcastTranscript")
                 .appendingPathComponent("PROVENANCE.md"),
             encoding: .utf8)
         #expect(payload.contains("model-download") == false)
-        #expect(payload.contains("shared-runtime-cache") == false)
     }
 
     /// AC.3: recorded success and bounded-failure frame sequences from the

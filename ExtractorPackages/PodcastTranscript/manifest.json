@@ -1,12 +1,13 @@
 {
   "capabilities": [
-    "network"
+    "network",
+    "shared-runtime-cache"
   ],
   "displayName": "Podcast Transcript",
   "entryPoint": "bin/podcast-transcript-extractor",
   "files": [
     {
-      "digest": "4eb7eff10fc7fe3a6430067baff4057fd01b5566357e68a1afd4a1e62aaa1fd2",
+      "digest": "5ce43f31ca134c5f6a78ca67fa49846c04d1cad08549e26f229e917a3b322edd",
       "path": "PROVENANCE.md"
     },
     {
