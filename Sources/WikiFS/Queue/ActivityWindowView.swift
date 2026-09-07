@@ -333,6 +333,7 @@ struct ActivityWindowView: View {
         let data = displayData ?? RowDisplayData(
             title: kindLabel(for: item),
             subtitle: String(item.wikiID.rawValue.prefix(8)),
+            wikiName: String(item.wikiID.rawValue.prefix(8)),
             targetNames: [],
             usage: nil,
             liveUsage: nil,
@@ -344,10 +345,24 @@ struct ActivityWindowView: View {
                 Text(data.title)
                     .lineLimit(1)
                     .help(data.targetNames.joined(separator: "\n"))
-                Text(data.subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                // Running rows tick: the wiki name plus a live elapsed time
+                // inside a per-second TimelineView. The precomputed subtitle
+                // is a frozen "N min. ago" string that never updates, and
+                // printing it next to the ticking elapsed time read as two
+                // contradictory clocks.
+                if item.state == .running, item.startedAt != nil {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Text("\(data.wikiName) · running · \(elapsedString(item.startedAt, now: context.date))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                } else {
+                    Text(data.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
                 if let error = item.error, item.state == .failed {
                     Text(error)
                         .font(.caption)
@@ -368,27 +383,16 @@ struct ActivityWindowView: View {
                 // #544 live progress: show running token counts + model during
                 // the run. Cleared on terminal state by the tracker. Elapsed
                 // time ticks here via TimelineView (per-second) so the line
-                // updates even between usage_updates. Not shown for queued
-                // items (no live data yet). Extraction rows have no live
-                // usage — they still get the ticking elapsed time, which is
-                // the only visible sign of life a package run emits.
-                if item.state == .running {
-                    if let usage = data.liveUsage {
-                        TimelineView(.periodic(from: .now, by: 1)) { context in
-                            let elapsed = elapsedString(item.startedAt, now: context.date)
-                            let line = UsageFormatter.liveSummary(usage: usage)
-                            Text(line.isEmpty ? elapsed : "\(line) · \(elapsed)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(2)
-                        }
-                    } else {
-                        TimelineView(.periodic(from: .now, by: 1)) { context in
-                            Text(elapsedString(item.startedAt, now: context.date))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
+                // updates even between usage_updates. Extraction rows show
+                // their ticking elapsed in the subtitle above instead.
+                if item.state == .running, let usage = data.liveUsage {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        let elapsed = elapsedString(item.startedAt, now: context.date)
+                        let line = UsageFormatter.liveSummary(usage: usage)
+                        Text(line.isEmpty ? elapsed : "\(line) · \(elapsed)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
                     }
                 }
                 // #608: surface a pending always-ask permission stall as a
@@ -1121,6 +1125,10 @@ struct ActivityWindowView: View {
     private struct RowDisplayData {
         let title: String
         let subtitle: String
+        /// The wiki display name alone — running rows re-render it inside a
+        /// per-second `TimelineView` with a live elapsed time, which the
+        /// precomputed `subtitle` (a frozen "N min. ago" string) cannot do.
+        let wikiName: String
         let targetNames: [String]
         let usage: SessionUsage?
         let liveUsage: SessionUsage?
@@ -1174,6 +1182,7 @@ struct ActivityWindowView: View {
             result[item.id] = RowDisplayData(
                 title: computeRowTitle(for: item, wikiName: wikiName, names: names),
                 subtitle: computeRowSubtitle(for: item, wikiName: wikiName),
+                wikiName: wikiName,
                 targetNames: targets,
                 usage: itemUsage[item.id],
                 liveUsage: liveUsage[item.id],

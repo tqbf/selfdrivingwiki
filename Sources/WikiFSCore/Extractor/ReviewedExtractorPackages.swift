@@ -70,7 +70,7 @@ public enum ReviewedExtractorPackages {
         directoryName: "YouTubeTranscript",
         packageID: "org.selfdrivingwiki.youtube-transcript",
         version: "1.0.0",
-        digest: "daf2ab7e61164aeb82246e03747df459fdf116c5235c9bf0faee11f57ac7cd54")
+        digest: "090301ccad8d8b7ac41778e0b6fb61f9d9ac8a568a4d689c5a7f1b9c67b326a7")
 
     public static let all: [ReviewedExtractorPackage] = [
         defuddle, pdf2md, doclingServe, docx2md, podcastTranscript,

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -34,4 +35,10 @@ _youtube = importlib.util.module_from_spec(_spec)
 sys.modules["youtube_transcript"] = _youtube
 _spec.loader.exec_module(_youtube)
 
-sys.exit(_youtube.run_extractor_protocol(sys.stdin.read()))
+# Exit hard after the terminal frame is flushed: interpreter shutdown can
+# hang joining keep-alive sockets left by the HTTP library, which the host
+# would read as a timeout even though the work is complete.
+_code = _youtube.run_extractor_protocol(sys.stdin.read())
+sys.stdout.flush()
+sys.stderr.flush()
+os._exit(_code)
