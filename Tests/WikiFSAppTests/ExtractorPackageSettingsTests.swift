@@ -248,6 +248,19 @@ struct ExtractorPackageSettingsTests {
                 route: lineage.route, config: config, row: row)
             #expect(afterPick == .installed(lineage.logical))
             #expect(afterPick != .unavailableInstalled(lineage.logical))
+
+            // "No default (disable ...)" persists the explicit .none record:
+            // the selection holds across rebuilds, the bundled default does
+            // not refill it, and execution fails closed on it.
+            ExtractorRouteSettingsMapping.write(.prompt, route: lineage.route, into: &config)
+            #expect(
+                config.extractorSelection(for: lineage.route) == ExtractionBackendReference.none)
+            #expect(
+                config.selectionOrDefault(for: lineage.route) == ExtractionBackendReference.none)
+            #expect(
+                ExtractorRouteSettingsMapping.selection(
+                    route: lineage.route, config: config, row: row)
+                == .prompt)
         }
 
         // An imported third-party package keeps the same contract: its

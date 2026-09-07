@@ -2236,6 +2236,12 @@ enum ExtractorRouteSettingsMapping {
             switch selection {
             case .installed(let logical), .unavailableInstalled(let logical):
                 reference = .installed(logical)
+            case .prompt:
+                // "No default (disable ...)": the explicit .none record is
+                // what disables the route — execution fails closed on it,
+                // and the bundled default policy does not refill an
+                // explicit record.
+                reference = .some(.none)
             default:
                 return
             }
