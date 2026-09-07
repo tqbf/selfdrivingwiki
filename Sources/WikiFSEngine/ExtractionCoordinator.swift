@@ -192,6 +192,10 @@ public actor MutableExtractionServices: ExtractionServices {
         try await installed.prepareApplePodcastTranscript()
     }
 
+    public func prepareYouTubeTranscript() async throws -> ProcessPackageYouTubeTranscript {
+        try await installed.prepareYouTubeTranscript()
+    }
+
     public func registeredExtractionInputs() async -> RegisteredExtractionInputs {
         await installed.registeredExtractionInputs()
     }
