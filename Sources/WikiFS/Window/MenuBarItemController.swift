@@ -64,6 +64,26 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
     private var hasFailedItems = false
     private var isPaused = false
     private var lastSnapshot: QueueSnapshot = QueueSnapshot()
+    /// Queue item IDs known to be `.queued`, maintained synchronously from
+    /// queue events (#1222). Every `.enqueued` inserts and every terminal
+    /// event removes, so the blinker reacts to the event the controller
+    /// actually received instead of waiting on an async snapshot RPC.
+    private var queuedItemIDs: Set<QueueItem.ID> = []
+    /// Queue item IDs known to be `.running` (`.started` → insert, terminal
+    /// event → remove). Split from ``queuedItemIDs`` so the tooltip's
+    /// "Processing (N active, M queued)" counts are consistent with the icon
+    /// state by construction.
+    private var runningItemIDs: Set<QueueItem.ID> = []
+    /// Bumped on every event-driven membership change. Snapshot refresh tasks
+    /// capture the epoch when the fetch starts and discard the result if the
+    /// epoch moved while the RPC was in flight — a snapshot taken BEFORE an
+    /// enqueue must never land AFTER it and clear the blinker (the #1222
+    /// stale-snapshot race).
+    private var membershipEpoch: UInt64 = 0
+    /// The icon state most recently derived by ``updateIcon()``. Test seam for
+    /// the lint/queue blinker regression tests (#1222) — AppKit offers no way
+    /// to read a status item's animation state back.
+    private(set) var lastDerivedIconState: IconState?
     private var hintPopover: NSPopover?
     private var hintDismissTask: Task<Void, Never>?
     /// Previous daemon connection state, used to detect the
@@ -131,14 +151,13 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         menu.delegate = self
         item.menu = menu
 
-        // Fetch initial snapshot so the icon reflects any items already
-        // in the queue (e.g. rehydrated from a previous session).
-        Task {
-            if let snapshot = await queueSnapshot() {
-                lastSnapshot = snapshot
-                updateIcon()
-            }
-        }
+        // Fetch initial snapshot so the icon reflects any items already in
+        // the queue (e.g. hosted by the daemon before this subscription
+        // existed). The guarded apply seeds the membership sets from that
+        // snapshot — events emitted before we subscribed are not replayed
+        // (#1222) — while still refusing stale data if events have already
+        // changed membership since the fetch started.
+        refreshSnapshotGuarded()
 
         // Observe engine events to update the icon + menu.
         streamTask = Task { @MainActor [weak self] in
@@ -178,6 +197,13 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         streamTask = nil
         stopIconAnimation()
         closeActivityWindow()
+        // #1222: drop the event-maintained membership so a restarted
+        // controller re-seeds from its own initial snapshot instead of
+        // inheriting stale activity.
+        queuedItemIDs.removeAll()
+        runningItemIDs.removeAll()
+        membershipEpoch &+= 1
+        lastDerivedIconState = nil
         if let item = statusItem {
             NSStatusBar.system.removeStatusItem(item)
             statusItem = nil
@@ -551,7 +577,9 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
 
     // MARK: - Icon management
 
-    private enum IconState {
+    /// Internal (not private) so `lastDerivedIconState` is assertable from
+    /// the @testable blinker regression tests (#1222).
+    enum IconState {
         case idle
         case working
         case paused
@@ -597,17 +625,25 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         // #878: daemon-disconnected takes precedence — even if items are
         // running on the local fallback, the user needs to know the daemon is
         // down.
+        // #1222: the working decision reads the event-maintained membership
+        // sets, NOT `lastSnapshot.activeItems`. The snapshot is refreshed by
+        // an async RPC per event, so it can return stale or empty data after
+        // the user already saw the "Lint queued" hint — leaving the icon idle
+        // while a lint sits queued or running. The events themselves are the
+        // timely truth; the snapshot only corrects them when provably fresh
+        // (see `applySnapshot`).
         if daemonHealthMonitor?.state == .disconnected {
             state = .daemonDown
         } else if hasFailedItems {
             state = .attention
         } else if isPaused {
             state = .paused
-        } else if !lastSnapshot.activeItems.isEmpty {
+        } else if !queuedItemIDs.isEmpty || !runningItemIDs.isEmpty {
             state = .working
         } else {
             state = .idle
         }
+        lastDerivedIconState = state
         statusItem?.button?.toolTip = tooltipText(for: state)
 
         // While working, breathe the books glyph between its outline and
@@ -626,8 +662,11 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
         switch state {
         case .idle: return "Self Driving Wiki — Idle"
         case .working:
-            let running = lastSnapshot.activeItems.filter { $0.state == .running }.count
-            let queued = lastSnapshot.activeItems.filter { $0.state == .queued }.count
+            // #1222: counts come from the event-maintained membership sets so
+            // the tooltip always agrees with the blinker — even in the window
+            // before a snapshot RPC returns (or when it returned stale data).
+            let running = runningItemIDs.count
+            let queued = queuedItemIDs.count
             if running > 0 && queued > 0 {
                 return "Self Driving Wiki — Processing (\(running) active, \(queued) queued)"
             } else if running > 0 {
@@ -682,36 +721,38 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
 
     // MARK: - Event handling
 
+    /// Handle one queue event. Membership changes (enqueued / started /
+    /// terminal) are applied SYNCHRONOUSLY to ``queuedItemIDs`` /
+    /// ``runningItemIDs`` — the blinker must react to the event itself, not
+    /// to a snapshot RPC that races it (#1222). Every membership change also
+    /// spawns an epoch-guarded snapshot refresh so `lastSnapshot` (menu,
+    /// failure badge) and the membership sets converge on daemon ground
+    /// truth without ever letting a stale snapshot override event truth.
     private func handleEvent(_ event: QueueEvent) {
         switch event {
         case .runStateChanged(_, let state):
             if state == .paused {
                 isPaused = true
             } else {
-                Task {
-                    guard let snapshot = await queueSnapshot() else { return }
-                    isPaused = snapshot.runStates.values.contains(.paused)
-                    lastSnapshot = snapshot
-                    updateIcon()
-                }
+                refreshSnapshotGuarded(recomputesPaused: true)
                 return
             }
-        case .failed:
+        case .failed(let item, _):
             hasFailedItems = true
-        case .completed, .cancelled:
-            Task {
-                guard let snapshot = await queueSnapshot() else { return }
-                hasFailedItems = snapshot.recentItems.contains {
-                    $0.state == .failed
-                }
-                lastSnapshot = snapshot
-                updateIcon()
-            }
+            // Terminal: drop from the active membership so the icon decision
+            // doesn't retain the failed item (the attention state takes over
+            // the icon here, matching the pre-#1222 behavior).
+            removeMembership(itemID: item.id)
+        case .completed(let item):
+            beginTerminalRefresh(itemID: item.id)
+            return
+        case .cancelled(let item):
+            beginTerminalRefresh(itemID: item.id)
             return
         case .enqueued(let item):
             // Show a transient popover anchored to the status item so the
-            // user gets immediate feedback that their ingest / extraction
-            // was queued — before the icon even updates.
+            // user gets immediate feedback that their ingest / extraction /
+            // lint was queued — before the icon even updates.
             let isLint = item.queue == .ingestion
                 && item.payload.lintPageIDs != nil
             showTransientHint(
@@ -726,42 +767,127 @@ final class MenuBarItemController: NSObject, NSMenuDelegate {
                         ? "books.vertical.fill"
                         : "doc.text.magnifyingglass")
             )
-            // Refresh snapshot + update icon so the menu bar immediately
-            // reflects queued items (not just running ones). Without this,
-            // the icon stays idle when an item is enqueued but hasn't
-            // started yet — giving no feedback that work was queued.
-            Task {
-                guard let snapshot = await queueSnapshot() else { return }
-                lastSnapshot = snapshot
-                updateIcon()
-            }
+            // #1222: record the queued membership synchronously so the icon
+            // enters the working state on THIS event. The old code only
+            // refreshed `lastSnapshot` via an async RPC — a stale or empty
+            // reply (or one racing the daemon's immediate dispatch) left the
+            // icon idle even though the user just saw the "Lint queued"
+            // hint.
+            queuedItemIDs.insert(item.id)
+            runningItemIDs.remove(item.id)
+            noteMembershipChanged()
             return
-        case .started:
-            // Refresh snapshot + update icon so the menu bar reflects
-            // items that have transitioned to running.
-            Task {
-                guard let snapshot = await queueSnapshot() else { return }
-                lastSnapshot = snapshot
-                updateIcon()
-            }
+        case .started(let item):
+            // Move the item queued → running on the event itself, then let
+            // the guarded refresh reconcile `lastSnapshot`.
+            queuedItemIDs.remove(item.id)
+            runningItemIDs.insert(item.id)
+            noteMembershipChanged()
             return
         case .reordered:
             // A queued item was moved; refresh the snapshot for menu
-            // accuracy. No hint popover (this is a reorder, not an enqueue).
-            Task {
-                guard let snapshot = await queueSnapshot() else { return }
-                lastSnapshot = snapshot
-            }
+            // accuracy. No hint popover (this is a reorder, not an enqueue),
+            // and no membership change (state is unchanged).
+            refreshSnapshotGuarded()
             return
         default:
             break
         }
-        Task {
-            guard let snapshot = await queueSnapshot() else { return }
-            lastSnapshot = snapshot
+        // Non-membership events (progress, usage, transcripts, …): the icon
+        // decision can't change from the event alone, but keep refreshing the
+        // snapshot so `lastSnapshot`/`hasFailedItems` track daemon truth.
+        // The synchronous `updateIcon()` reasserts the current state (it is
+        // idempotent while membership is unchanged).
+        refreshSnapshotGuarded()
+        updateIcon()
+    }
+
+    // MARK: - Membership + guarded snapshot refresh (#1222)
+
+    /// Remove an item from the active membership sets. Returns whether the
+    /// membership actually changed, so terminal handlers only spawn a
+    /// refresh (and bump the epoch) when needed.
+    @discardableResult
+    private func removeMembership(itemID: QueueItem.ID) -> Bool {
+        let removedQueued = queuedItemIDs.remove(itemID) != nil
+        let removedRunning = runningItemIDs.remove(itemID) != nil
+        return removedQueued || removedRunning
+    }
+
+    /// Bump the membership epoch, spawn a guarded snapshot refresh, and
+    /// re-derive the icon. Called after every event-driven membership change.
+    private func noteMembershipChanged() {
+        membershipEpoch &+= 1
+        refreshSnapshotGuarded()
+        updateIcon()
+    }
+
+    /// Terminal-event path: drop the item from membership, recompute the
+    /// failure badge from the fresh snapshot (as the pre-#1222 handler did),
+    /// and re-derive the icon.
+    private func beginTerminalRefresh(itemID: QueueItem.ID) {
+        let changed = removeMembership(itemID: itemID)
+        // Bump BEFORE capturing the epoch (and before spawning the fetch) so
+        // this refresh is discarded only by a LATER membership change, never
+        // by its own bump.
+        if changed {
+            membershipEpoch &+= 1
             updateIcon()
         }
-        updateIcon()
+        let epochAtFetch = membershipEpoch
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard let snapshot = await self.queueSnapshot() else { return }
+            // Stale guard: a membership change bumped the epoch while this
+            // fetch was in flight — its own refresh applies fresher data.
+            guard epochAtFetch == self.membershipEpoch else { return }
+            self.lastSnapshot = snapshot
+            self.hasFailedItems = snapshot.recentItems.contains {
+                $0.state == .failed
+            }
+            if changed { self.applySnapshotMembership(from: snapshot) }
+            self.updateIcon()
+        }
+    }
+
+    /// Spawn a snapshot fetch that applies `lastSnapshot` (+ optional
+    /// reconciliation) ONLY if no membership change occurred while the RPC
+    /// was in flight. This is what makes snapshot data safe to apply as a
+    /// full membership replace: it can never resurrect an item a terminal
+    /// event already removed, nor erase one an enqueue event already added.
+    private func refreshSnapshotGuarded(recomputesPaused: Bool = false) {
+        let epochAtFetch = membershipEpoch
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard let snapshot = await self.queueSnapshot() else { return }
+            guard epochAtFetch == self.membershipEpoch else { return }
+            if recomputesPaused {
+                self.isPaused = snapshot.runStates.values.contains(.paused)
+            }
+            self.lastSnapshot = snapshot
+            self.applySnapshotMembership(from: snapshot)
+            self.updateIcon()
+        }
+    }
+
+    /// Replace the membership sets from a provably-fresh snapshot. This is
+    /// the seed path for items the controller never saw events for — e.g.
+    /// daemon-hosted items already queued or running when the app launched —
+    /// and the reconcile path that drops items whose terminal event was
+    /// lost. `activeItems` contains only non-terminal items; anything not
+    /// `.running` counts toward the queued side.
+    private func applySnapshotMembership(from snapshot: QueueSnapshot) {
+        var queued: Set<QueueItem.ID> = []
+        var running: Set<QueueItem.ID> = []
+        for item in snapshot.activeItems {
+            if item.state == .running {
+                running.insert(item.id)
+            } else {
+                queued.insert(item.id)
+            }
+        }
+        queuedItemIDs = queued
+        runningItemIDs = running
     }
 
     // MARK: - Transient hint

@@ -121,7 +121,13 @@ private struct StubExtractionProvider: QueueExtractionProvider {
 }
 
 private func makeTestQueueEngine() throws -> QueueEngine {
-    let store = try QueueStore(databaseURL: URL(fileURLWithPath: ":memory:"))
+    // Unique per-test database FILE — `URL(fileURLWithPath: ":memory:")` does
+    // not yield SQLite's private in-memory DB (the colon is lost in URL path
+    // conversion, so GRDB opens a shared literal `:memory:` file in the CWD).
+    let dir = FileManager.default.temporaryDirectory
+        .appendingPathComponent("menu-item-controller-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let store = try QueueStore(databaseURL: dir.appendingPathComponent("queue.sqlite"))
     let provider = StubExtractionProvider()
     let factory = QueueExtractionWorkerFactory(provider: provider, emitProgress: { _, _ in })
     return QueueEngine(store: store, workerFactory: factory)
