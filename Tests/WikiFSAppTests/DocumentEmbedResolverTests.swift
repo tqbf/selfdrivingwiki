@@ -176,6 +176,163 @@ struct DocumentEmbedResolverTests {
         #expect(!resolver.resolveWikiLink(link).isResolved)
     }
 
+    // MARK: - Pipe inside the NAME (issue #1225 — typed render path)
+    //
+    // The production reader renders through this resolver, not through
+    // `WikiLinkMarkdown.linkified`. A name-authored link to a pipe-containing
+    // title splits at the unquoted `|` (span scan), so the truncated literal
+    // used to miss every existence tier and the link rendered as inert
+    // `wiki://missing` with only the post-pipe alias fragment as its label.
+    // The reconstruction fallback (mirror of #619's seams) heals exactly that
+    // case — and only that case.
+
+    private static let pipeTitle = "What is Malleable Software Now | Bryan Min (02-27-2026)"
+
+    @Test func pipeNameSourceLinkResolvesAndDisplaysFullName() throws {
+        let link = try sourceLink("[[source:\(Self.pipeTitle)]]")
+        let resolver = DocumentEmbedResolver(inputs: .init(
+            sourceLinkNames: [Self.pipeTitle.lowercased()]))
+
+        let resolved = resolver.resolveWikiLink(link)
+        #expect(resolved.isResolved)
+        #expect(resolved.namespace == .source)
+        // AC: the label AND the navigation title are the complete title.
+        #expect(resolved.displayText == Self.pipeTitle)
+        #expect(resolved.title == Self.pipeTitle)
+        #expect(resolved.fragment == nil)
+    }
+
+    @Test func pipeNameSourceLinkWithQuoteFragmentResolves() throws {
+        // The exact stored shape (Malleable Software wiki, source
+        // 01KZ5FS7A76RDDXFQFC5DKJ1SJ): the `#"quote"` anchor rides in the
+        // alias slice; reconstruction peels it back off the full name.
+        let link = try sourceLink(
+            "[[source:\(Self.pipeTitle)#\"a quoted passage\"]]")
+        let resolver = DocumentEmbedResolver(inputs: .init(
+            sourceLinkNames: [Self.pipeTitle.lowercased()]))
+
+        let resolved = resolver.resolveWikiLink(link)
+        #expect(resolved.isResolved)
+        #expect(resolved.displayText == Self.pipeTitle)
+        #expect(resolved.fragment == "\"a quoted passage\"")
+    }
+
+    @Test func unspacedPipeNameSourceLinkResolves() throws {
+        // The unspaced `A|B` spelling is the second reconstruction candidate.
+        let link = try sourceLink("[[source:Flex Tier|Neuralwatt Cloud]]")
+        let resolver = DocumentEmbedResolver(inputs: .init(
+            sourceLinkNames: ["flex tier|neuralwatt cloud"]))
+
+        let resolved = resolver.resolveWikiLink(link)
+        #expect(resolved.isResolved)
+        #expect(resolved.displayText == "Flex Tier|Neuralwatt Cloud")
+    }
+
+    @Test func pipeNameLooseKeySourceLinkResolves() throws {
+        // The lenient (unique loose key) tier also applies to the
+        // reconstructed whole name, mirroring the truncated-literal tiers.
+        let link = try sourceLink("[[source:My-Paper | Extended Edition]]")
+        let resolver = DocumentEmbedResolver(inputs: .init(
+            uniqueSourceLooseKeys: [
+                WikiNameRules.looseMatchKey("My-Paper | Extended Edition (2026)"),
+            ]))
+
+        #expect(resolver.resolveWikiLink(link).isResolved)
+    }
+
+    @Test func pipeNamePageLinkResolves() throws {
+        let link = try wikiLink(
+            "[[But what is cross-entropy? | Compression is Intelligence Part 2]]")
+        let resolver = DocumentEmbedResolver(inputs: .init(
+            pageIDByName: [
+                "but what is cross-entropy? | compression is intelligence part 2": pageID,
+            ]))
+
+        let resolved = resolver.resolveWikiLink(link)
+        #expect(resolved.isResolved)
+        #expect(resolved.namespace == .page)
+        #expect(resolved.displayText
+                == "But what is cross-entropy? | Compression is Intelligence Part 2")
+    }
+
+    @Test func pipeNameChatLinkResolves() throws {
+        let link = try wikiLink("[[chat:Standup - 2026-01-15 | Project Alpha]]")
+        let resolver = DocumentEmbedResolver(inputs: .init(
+            chatIDByName: [
+                "standup - 2026-01-15 | project alpha":
+                    ChatID(rawValue: "01J00000000000000000000009"),
+            ]))
+
+        let resolved = resolver.resolveWikiLink(link)
+        #expect(resolved.isResolved)
+        #expect(resolved.namespace == .chat)
+        #expect(resolved.displayText == "Standup - 2026-01-15 | Project Alpha")
+    }
+
+    @Test func canonicalULIDSourceLinkDisplaysCurrentPipeTitle() throws {
+        // AC (canonical ULID-backed): no alias at all — the live store name
+        // (pipe included) is the label via the id→name map.
+        let link = try sourceLink("[[source:\(sourceID.rawValue)]]")
+        let resolver = DocumentEmbedResolver(inputs: .init(
+            sourceNamesByID: [sourceID: Self.pipeTitle]))
+
+        let resolved = resolver.resolveWikiLink(link)
+        #expect(resolved.isResolved)
+        #expect(resolved.canonicalID == sourceID.rawValue)
+        #expect(resolved.displayText == Self.pipeTitle)
+    }
+
+    @Test func canonicalULIDSourceLinkHealsStalePipeAlias() throws {
+        // AC (canonical ULID-backed): a stale pre-#619 alias that lost the
+        // head of the title self-heals to the current store name at render.
+        let link = try sourceLink(
+            "[[source:\(sourceID.rawValue)|Bryan Min (02-27-2026)]]")
+        let resolver = DocumentEmbedResolver(inputs: .init(
+            sourceNamesByID: [sourceID: Self.pipeTitle]))
+
+        let resolved = resolver.resolveWikiLink(link)
+        #expect(resolved.isResolved)
+        #expect(resolved.displayText == Self.pipeTitle)
+    }
+
+    @Test func canonicalULIDSourceLinkWithPipeInAliasKeepsWholeAlias() throws {
+        // The canonical auto-alias form `[[source:<ULID>|<full title>]]`: the
+        // first pipe (after the ULID) is the separator, and the title's own
+        // pipe stays inside the alias — no reconstruction needed or wanted.
+        let link = try sourceLink("[[source:\(sourceID.rawValue)|\(Self.pipeTitle)]]")
+        let resolver = DocumentEmbedResolver(inputs: .init(
+            sourceNamesByID: [sourceID: Self.pipeTitle]))
+
+        let resolved = resolver.resolveWikiLink(link)
+        #expect(resolved.isResolved)
+        #expect(resolved.displayText == Self.pipeTitle)
+    }
+
+    @Test func explicitAliasWinsWhenLeftHandResolves() throws {
+        // AC: an explicit target|alias keeps the alias when the left-hand
+        // target resolves on its own — reconstruction never runs.
+        let link = try sourceLink("[[source:Known|Bryan Min (02-27-2026)]]")
+        let resolver = DocumentEmbedResolver(inputs: .init(
+            sourceLinkNames: ["known"]))
+
+        let resolved = resolver.resolveWikiLink(link)
+        #expect(resolved.isResolved)
+        #expect(resolved.displayText == "Bryan Min (02-27-2026)")
+    }
+
+    @Test func pipeNameUnresolvableFallsBackToAliasDisplay() throws {
+        // AC: when neither the truncated target nor any reconstruction
+        // resolves, the link stays inert (`wiki://missing` upstream) and
+        // displays the alias — the pre-#619 behavior is the fallback.
+        let link = try sourceLink("[[source:Ghost | Pipeline]]")
+        let resolver = DocumentEmbedResolver(inputs: .init())
+
+        let resolved = resolver.resolveWikiLink(link)
+        #expect(!resolved.isResolved)
+        #expect(resolved.displayText == "Pipeline")
+        #expect(resolved.title == "Ghost")
+    }
+
     @Test func repeatedImageRendererCandidatesUseUniqueActionPlansWithoutDynamicHosts() throws {
         let markdown = "![[source:image.png|First]] and ![[source:image.png|Second]]"
         let prepared = ReaderMarkdown.preparedDocument(markdown)
@@ -309,6 +466,12 @@ struct DocumentEmbedResolverTests {
             throw TestError.expectedLink
         }
         return link
+    }
+
+    /// A link node of any namespace (page/chat links included) — `sourceLink`
+    /// asserts nothing about namespace, but the name reads better for pages.
+    private func wikiLink(_ markdown: String) throws -> WikiMarkdownSyntaxNode.Link {
+        try sourceLink(markdown)
     }
 
     private func sourceResolution(mime: String) -> DocumentSourceResolution {

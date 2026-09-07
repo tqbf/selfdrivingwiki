@@ -253,6 +253,30 @@ struct WikiLinkStoreTests {
         #expect(try store.resolveSourceByName("Paper (2026)") == exact.id)
     }
 
+    // MARK: - Pipe inside the display NAME (issue #1225 — navigation tier)
+
+    @Test func pipeInIngestedTitleIsSanitizedButStillNavigates() throws {
+        // YouTube-style titles carry a literal `|`. At ingest the display name
+        // is sanitized (`|` → `-`, WikiNameRules) so every STORED name stays
+        // linkable — a pipe-named display_name exists only as legacy data
+        // (e.g. the issue's 01KZ5FS7A76RDDXFQFC5DKJ1SJ row, written before
+        // that rule). The navigation tier (`selectSource(byDisplayName:)` →
+        // `resolveSourceByName`) must resolve the stored spelling the render
+        // seam hands it.
+        let store = try tempStore()
+        let src = try store.addSource(
+            filename: "what-is-malleable-software-now.md",
+            data: Data("transcript".utf8),
+            resolvedDisplayName: .some("What is Malleable Software Now | Bryan Min (02-27-2026)"))
+        let storedName = try #require(src.displayName)
+        // Sanitized at the write boundary — the store never holds a pipe.
+        #expect(storedName == "What is Malleable Software Now - Bryan Min (02-27-2026)")
+        #expect(try store.resolveSourceByName(storedName) == src.id)
+        // A differently-spelled title must not resolve: reconstruction in the
+        // render seam only heals links when the whole name actually exists.
+        #expect(try store.resolveSourceByName("What is Malleable Software Now") == nil)
+    }
+
     // MARK: - LinkReconciler (startup self-heal)
 
     @Test func reconcileHealsCitationSavedBeforeSourceExisted() async throws {

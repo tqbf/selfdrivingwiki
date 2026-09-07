@@ -245,18 +245,19 @@ public enum WikiLinkMarkdown {
             var resolvedViaReconstruction = false
             let reconSplit: WikiLinkResolver.Split?
             if split == nil, let alias = fixed.alias {
-                let normalizedAlias = collapseWhitespace(alias)
-                if normalizedAlias.isEmpty {
-                    reconSplit = nil
-                } else {
-                    let reconstructedRaw = fragment.map { "\(bareTarget) | \(normalizedAlias)#\($0)" }
-                        ?? "\(bareTarget) | \(normalizedAlias)"
-                    reconSplit = WikiLinkResolver.resolvedSplit(
-                        of: reconstructedRaw,
-                        isKnown: { isResolved($0, kind) }
-                    )
-                    resolvedViaReconstruction = reconSplit != nil
-                }
+                // Spaced candidate first (the YouTube-title convention), then
+                // the unspaced form — the shared #619/#1225 candidate order.
+                reconSplit = WikiLinkResolver.pipeReconstructionCandidates(
+                    bare: bareTarget,
+                    alias: alias,
+                    fragment: fragment)
+                    .compactMap { candidate in
+                        WikiLinkResolver.resolvedSplit(
+                            of: candidate,
+                            isKnown: { isResolved($0, kind) })
+                    }
+                    .first
+                resolvedViaReconstruction = reconSplit != nil
             } else {
                 reconSplit = nil
             }

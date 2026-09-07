@@ -227,6 +227,43 @@ struct WikiLinkCanonicalizerTests {
         #expect(out == "[[source:\(paperID)#\"first option | second option\"|Some Page]]")
     }
 
+    @Test func promotesAliasCarriedQuoteAnchorToCanonicalTarget() throws {
+        // Issue #1225, the real stored shape: a pipe-containing name whose
+        // quote anchor rides in the ALIAS slice after the span split. The
+        // reconstruction candidates walk candidateSplits, so the anchor peels
+        // off, the base resolves, and the link promotes to the canonical
+        // ordering — anchor in the target, full name as the auto-alias. After
+        // this save-time pass the scanner re-parses the link unambiguously.
+        let name = "What is Malleable Software Now | Bryan Min (02-27-2026)"
+        let (rp, rs) = resolvers(sources: [name: paperID])
+        let out = try WikiLinkRewriter.canonicalize(
+            in: "[[source:\(name)#\"a quoted passage\"]]",
+            resolvePage: rp, resolveSource: rs)
+        #expect(out == "[[source:\(paperID)#\"a quoted passage\"|\(name)]]")
+    }
+
+    @Test func promotedAnchorFormRoundTripsStably() throws {
+        // The promoted form is canonical: the ULID fast path leaves it
+        // byte-identical on the next save (quote run consumed by the scanner,
+        // alias pipes inert inside the alias slice).
+        let name = "What is Malleable Software Now | Bryan Min (02-27-2026)"
+        let (rp, rs) = resolvers(sources: [name: paperID])
+        let promoted = "[[source:\(paperID)#\"a quoted passage\"|\(name)]]"
+        let twice = try WikiLinkRewriter.canonicalize(in: promoted, resolvePage: rp, resolveSource: rs)
+        #expect(twice == nil)
+    }
+
+    @Test func aliasQuoteAnchorPromotionDoesNotHijackGenuineAliasWithHash() throws {
+        // A genuine alias whose display text contains `#` must not be re-read
+        // as an anchor when nothing in the alias reading resolves: the
+        // candidates miss (`Known | C`, `Known|C`), the branch falls through,
+        // and the regular alias-preserving path canonicalizes the target.
+        let (rp, rs) = resolvers(pages: ["Known": homeID])
+        let out = try WikiLinkRewriter.canonicalize(
+            in: "[[Known|C# Notes]]", resolvePage: rp, resolveSource: rs)
+        #expect(out == "[[page:\(homeID)|C# Notes]]")
+    }
+
     // MARK: - AC.4 — idempotency
 
     @Test func canonicalizingAlreadyCanonicalIsNoOp() throws {

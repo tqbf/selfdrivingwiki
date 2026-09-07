@@ -77,7 +77,7 @@ struct DocumentEmbedResolver: Sendable {
     func resolveWikiLink(_ link: WikiMarkdownSyntaxNode.Link) -> ResolvedDocumentLink {
         let canonicalID = link.target.canonicalID
         let currentName: String?
-        let resolved: Bool
+        var resolved: Bool
 
         switch link.target.namespace {
         case .page:
@@ -94,11 +94,7 @@ struct DocumentEmbedResolver: Sendable {
                 resolved = currentName != nil
             } else {
                 currentName = nil
-                let literal = link.target.literal
-                resolved = inputs.sourceLinkNames.contains(literal.lowercased())
-                    || inputs.uniqueSourceLooseKeys.contains(WikiNameRules.looseMatchKey(literal))
-                    || WikiLinkResolver.legacySourceProjectionID(from: literal)
-                        .map { inputs.sourceNamesByID[$0] != nil } == true
+                resolved = isKnownName(link.target.literal, namespace: .source)
             }
         case .chat:
             if let canonicalID {
@@ -108,6 +104,22 @@ struct DocumentEmbedResolver: Sendable {
                 currentName = nil
                 resolved = inputs.chatIDByName[link.target.literal.lowercased()] != nil
             }
+        }
+
+        // Issue #1225 (typed-render mirror of the #619 fallbacks): when the
+        // span scanner split a NAME-authored link at an unquoted `|` that was
+        // really part of the display name, the truncated literal misses every
+        // existence tier and the link would render as inert `wiki://missing`
+        // with the trailing alias fragment as its label. Reconstruct
+        // `bare | alias` and accept the first reading whose base names a real
+        // entity — then the full display name becomes both the label and the
+        // navigation title. Only runs as a FALLBACK: a link whose left-hand
+        // target resolved (a genuine alias) is untouched, and so is any
+        // canonical ULID-backed link (already resolved by id above).
+        var reconstructedSplit: WikiLinkResolver.Split?
+        if !resolved, canonicalID == nil, let alias = link.alias {
+            reconstructedSplit = pipeReconstructedSplit(for: link, alias: alias)
+            resolved = reconstructedSplit != nil
         }
 
         let pinnedSourceVersion: SourceMarkdownVersionID? = {
@@ -122,14 +134,56 @@ struct DocumentEmbedResolver: Sendable {
             return chain[ordinal - 1]
         }()
 
+        // The reconstruction's base (the full pipe-containing name) and its
+        // peeled fragment win over the truncated literal / alias-carried
+        // anchor; `currentName` still wins for canonical id-backed links.
         return ResolvedDocumentLink(
             namespace: link.target.namespace,
-            title: currentName ?? link.target.literal,
+            title: currentName ?? reconstructedSplit?.base ?? link.target.literal,
             canonicalID: canonicalID,
-            fragment: link.target.fragment,
+            fragment: reconstructedSplit?.fragment ?? link.target.fragment,
             pinnedSourceVersion: pinnedSourceVersion,
-            displayText: currentName ?? link.displayText,
+            displayText: currentName ?? reconstructedSplit?.base ?? link.displayText,
             isResolved: inputs.assumeLinksResolved || resolved)
+    }
+
+    /// Issue #1225: the namespace-aware existence probe shared by the direct
+    /// name resolution and the pipe-reconstruction fallback. Same tiers the
+    /// source branch used inline — exact lowercased name, unique loose key,
+    /// legacy File Provider projection id — because the reconstructed whole
+    /// name must clear exactly the bar the truncated literal failed.
+    private func isKnownName(_ name: String, namespace: WikiMarkdownTargetNamespace) -> Bool {
+        switch namespace {
+        case .page: return inputs.pageIDByName[name.lowercased()] != nil
+        case .chat: return inputs.chatIDByName[name.lowercased()] != nil
+        case .source:
+            return inputs.sourceLinkNames.contains(name.lowercased())
+                || inputs.uniqueSourceLooseKeys.contains(WikiNameRules.looseMatchKey(name))
+                || WikiLinkResolver.legacySourceProjectionID(from: name)
+                    .map { inputs.sourceNamesByID[$0] != nil } == true
+        }
+    }
+
+    /// Try each `WikiLinkResolver.pipeReconstructionCandidates` reading
+    /// (spaced, then unspaced) through `resolvedSplit` — whose `#` handling
+    /// peels an alias-carried `#"quote"` anchor off the reconstructed name.
+    /// Returns the first reading whose base names a real entity, or nil when
+    /// none does (the `|` was a genuine alias separator after all).
+    private func pipeReconstructedSplit(
+        for link: WikiMarkdownSyntaxNode.Link,
+        alias: String
+    ) -> WikiLinkResolver.Split? {
+        for candidate in WikiLinkResolver.pipeReconstructionCandidates(
+            bare: link.target.literal,
+            alias: alias,
+            fragment: link.target.fragment) {
+            if let split = WikiLinkResolver.resolvedSplit(
+                of: candidate,
+                isKnown: { self.isKnownName($0, namespace: link.target.namespace) }) {
+                return split
+            }
+        }
+        return nil
     }
 
     func resolveWikiEmbed(

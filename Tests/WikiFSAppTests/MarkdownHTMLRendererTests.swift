@@ -81,6 +81,71 @@ struct MarkdownHTMLRendererTests {
         #expect(html.components(separatedBy: "wiki://source").count - 1 >= 4)
     }
 
+    // MARK: - Pipe inside the NAME (issue #1225 — full render + navigation)
+
+    @Test("#1225 pipe-containing source title renders the full label and a navigable URL")
+    func pipeSourceTitleRendersFullNameAndNavigableURL() throws {
+        // The exact stored shape from the Malleable Software wiki: a
+        // name-authored link to the pipe-titled source, with a quote anchor
+        // riding in the alias slice. Through the production pipeline —
+        // prepare → typed resolve → HTML — the label must be the complete
+        // title and the URL must navigate (wiki://source, not wiki://missing).
+        let pipeTitle = "What is Malleable Software Now | Bryan Min (02-27-2026)"
+        let markdown = "Watch the talk — see [[source:\(pipeTitle)#\"a quoted passage\"]]."
+
+        let prepared = ReaderMarkdown.preparedDocument(markdown)
+        let projection = DocumentEmbedResolver(inputs: .init(
+            sourceLinkNames: [pipeTitle.lowercased()]))
+            .projection(for: prepared, resolveEmbeds: false)
+        let html = MarkdownHTMLRenderer.render(prepared, projection: projection, options: .disabled)
+
+        #expect(html.contains(">\(pipeTitle)</a>"),
+                "Label must be the full title. HTML: \(html)")
+        #expect(!html.contains("wiki://missing"), "HTML: \(html)")
+
+        // Navigation round-trip: the URL the renderer emitted carries the
+        // full display name and the quote anchor, and routes to the source.
+        let url = try #require(rendererActionURL(in: html))
+        #expect(WikiLinkMarkdown.resolvedKind(from: url) == .source)
+        #expect(WikiLinkMarkdown.target(from: url) == pipeTitle)
+        #expect(WikiLinkMarkdown.fragment(from: url) == "\"a quoted passage\"")
+        guard case .source(let title, let id, let fragment, let pin) = WikiReaderView.linkRoute(for: url) else {
+            Issue.record("Expected a source route. URL: \(url)")
+            return
+        }
+        #expect(title == pipeTitle)
+        #expect(id == nil) // name-authored link: no canonical id in the URL
+        #expect(fragment == "\"a quoted passage\"")
+        #expect(pin == nil)
+    }
+
+    @Test("#1225 canonical ULID source link with pipe title renders id-backed URL")
+    func canonicalULIDPipeTitleRendersIDBackedURL() throws {
+        // The canonical auto-alias form: `[[source:<ULID>|<full title>]]`.
+        // Renders via the id→name map (self-healing label) and routes by id.
+        let sourceID = SourceID(rawValue: "01KZ5FS7A76RDDXFQFC5DKJ1SJ")
+        let pipeTitle = "What is Malleable Software Now | Bryan Min (02-27-2026)"
+        let markdown = "See [[source:\(sourceID.rawValue)|\(pipeTitle)]]."
+
+        let prepared = ReaderMarkdown.preparedDocument(markdown)
+        let projection = DocumentEmbedResolver(inputs: .init(
+            sourceNamesByID: [sourceID: pipeTitle]))
+            .projection(for: prepared, resolveEmbeds: false)
+        let html = MarkdownHTMLRenderer.render(prepared, projection: projection, options: .disabled)
+
+        #expect(html.contains(">\(pipeTitle)</a>"),
+                "Label must be the full title. HTML: \(html)")
+
+        let url = try #require(rendererActionURL(in: html))
+        #expect(WikiLinkMarkdown.sourceID(from: url) == sourceID)
+        #expect(WikiLinkMarkdown.target(from: url) == pipeTitle)
+        guard case .source(_, let id, _, _) = WikiReaderView.linkRoute(for: url) else {
+            Issue.record("Expected a source route. URL: \(url)")
+            return
+        }
+        #expect(id == sourceID, "Canonical link routes by id (rename-stable)")
+    }
+
     @Test func sourceFrontmatterIsExcludedBeforeRendering() {
         let markdown = """
         ---
