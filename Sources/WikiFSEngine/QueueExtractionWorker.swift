@@ -116,6 +116,14 @@ struct QueueExtractionWorker: QueueWorker {
     let emitProgress: @Sendable (QueueItem.ID, String) -> Void
 
     func execute(_ item: QueueItem) async throws {
+        let startedAt = ContinuousClock.now
+        // Every progress line carries its elapsed time ([mm:ss]) so a silent
+        // stretch is visible in the Activity trail without a debugger.
+        @Sendable func stamp(_ line: String) -> String {
+            let seconds = Int((ContinuousClock.now - startedAt).components.seconds)
+            return String(format: "[%02d:%02d] %@", (seconds / 60) % 100, seconds % 60, line)
+        }
+
         guard let sourceID = item.payload.sourceIDs.first else {
             throw QueueExtractionError.missingSourceID
         }
@@ -158,7 +166,7 @@ struct QueueExtractionWorker: QueueWorker {
                 pdfData: bytes.sourceBytes,
                 filename: bytes.filename
             ) { [itemID = item.id] line in
-                emitProgress(itemID, line)
+                emitProgress(itemID, stamp(line))
             }
 
             try await provider.persistBytesExtraction(
@@ -168,9 +176,9 @@ struct QueueExtractionWorker: QueueWorker {
                 markdown: markdown)
 
         case .transcript(let transcript):
-            emitProgress(item.id, "Fetching transcript…")
+            emitProgress(item.id, stamp("Fetching transcript…"))
             let outcome = try await transcript.fetch { [itemID = item.id] line in
-                emitProgress(itemID, line)
+                emitProgress(itemID, stamp(line))
             }
 
             try await provider.persistTranscriptExtraction(

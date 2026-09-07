@@ -369,15 +369,26 @@ struct ActivityWindowView: View {
                 // the run. Cleared on terminal state by the tracker. Elapsed
                 // time ticks here via TimelineView (per-second) so the line
                 // updates even between usage_updates. Not shown for queued
-                // items (no live data yet).
-                if item.state == .running, let usage = data.liveUsage {
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        let elapsed = elapsedString(item.startedAt, now: context.date)
-                        let line = UsageFormatter.liveSummary(usage: usage)
-                        Text(line.isEmpty ? elapsed : "\(line) · \(elapsed)")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
+                // items (no live data yet). Extraction rows have no live
+                // usage — they still get the ticking elapsed time, which is
+                // the only visible sign of life a package run emits.
+                if item.state == .running {
+                    if let usage = data.liveUsage {
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            let elapsed = elapsedString(item.startedAt, now: context.date)
+                            let line = UsageFormatter.liveSummary(usage: usage)
+                            Text(line.isEmpty ? elapsed : "\(line) · \(elapsed)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                    } else {
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            Text(elapsedString(item.startedAt, now: context.date))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
                     }
                 }
                 // #608: surface a pending always-ask permission stall as a

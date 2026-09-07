@@ -344,7 +344,7 @@ struct ProcessExtractorCredentialTests {
 
         // Failure: the executor throws AFTER the file was verified to exist.
         let failingExecutor = StubCredentialExecutor()
-        failingExecutor.failWith = ManagedExtractorProcessError.timeout
+        failingExecutor.failWith = ManagedExtractorProcessError.timeout(detail: "timeout")
         let failingOperation = try makeOperation(
             manifest: manifest, resolver: resolver, executor: failingExecutor)
         do {
