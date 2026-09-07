@@ -85,42 +85,40 @@ public enum WikiLinkRewriter {
             // through to today's behavior (`|` was a real alias separator).
             if rawAlias != nil, fragment == nil, pin == nil,
                let rawAliasValue = fixed.alias {
-                let normalizedAlias = WikiText.normalized(rawAliasValue)
-                if !normalizedAlias.isEmpty {
-                    // Try spaced first (the YouTube-title convention), then the
-                    // unspaced form — both hit Pass 1's exact match. The first
-                    // resolver hit determines which reconstruction we serialize
-                    // as the auto-alias, so what the user sees rendered matches
-                    // the store's display_name spelling.
-                    let candidates = [
-                        "\(bareTarget) | \(normalizedAlias)",
-                        "\(bareTarget)|\(normalizedAlias)",
-                    ]
-                    var wholeID: String? = nil
-                    var wholeName: String? = nil
-                    for candidate in candidates {
-                        let id: String?
-                        switch kind {
-                        case .source: id = try resolveSource(candidate)?.rawValue
-                        case .chat:   id = try resolveChat(candidate)?.rawValue
-                        case .page:   id = try resolvePage(candidate)?.rawValue
-                        }
-                        if let id {
-                            wholeID = id
-                            wholeName = candidate
-                            break
-                        }
+                // Try spaced first (the YouTube-title convention), then the
+                // unspaced form — both hit Pass 1's exact match. The first
+                // resolver hit determines which reconstruction we serialize
+                // as the auto-alias, so what the user sees rendered matches
+                // the store's display_name spelling. Shared with the render
+                // seams (WikiLinkMarkdown / DocumentEmbedResolver); the helper
+                // normalizes the alias and yields no candidates for an empty
+                // one (nothing to reconstruct).
+                let candidates = WikiLinkResolver.pipeReconstructionCandidates(
+                    bare: bareTarget, alias: rawAliasValue)
+                var wholeID: String? = nil
+                var wholeName: String? = nil
+                for candidate in candidates {
+                    let id: String?
+                    switch kind {
+                    case .source: id = try resolveSource(candidate)?.rawValue
+                    case .chat:   id = try resolveChat(candidate)?.rawValue
+                    case .page:   id = try resolvePage(candidate)?.rawValue
                     }
-                    if let resolvedID = wholeID, let resolvedName = wholeName {
-                        let prefix = kind.linkPrefix
-                        let canonicalTarget = prefix + resolvedID
-                        let replacement = "[[\(canonicalTarget)|\(resolvedName)]]"
-                        let mutable = NSMutableString(string: result)
-                        mutable.replaceCharacters(in: fullRange, with: replacement)
-                        result = mutable as String
-                        changed = true
-                        continue
+                    if let id {
+                        wholeID = id
+                        wholeName = candidate
+                        break
                     }
+                }
+                if let resolvedID = wholeID, let resolvedName = wholeName {
+                    let prefix = kind.linkPrefix
+                    let canonicalTarget = prefix + resolvedID
+                    let replacement = "[[\(canonicalTarget)|\(resolvedName)]]"
+                    let mutable = NSMutableString(string: result)
+                    mutable.replaceCharacters(in: fullRange, with: replacement)
+                    result = mutable as String
+                    changed = true
+                    continue
                 }
             }
 

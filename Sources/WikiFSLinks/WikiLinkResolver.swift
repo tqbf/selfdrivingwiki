@@ -77,6 +77,37 @@ public enum WikiLinkResolver {
         return nil
     }
 
+    /// Whole-name candidates for a span the scanner split at an unquoted `|`
+    /// (issues #619, #1225). A display name can legitimately contain a literal
+    /// pipe — YouTube titles the app itself ingests, doc-set names — so a
+    /// `target|alias` split may have truncated the real name at the pipe. Each
+    /// consumer that KNOWS the namespace tries these candidates (in order)
+    /// through `resolvedSplit` before accepting the alias reading:
+    ///
+    ///   * `"<bare> | <alias>"` — the spaced convention (YouTube titles);
+    ///   * `"<bare>|<alias>"`  — the unspaced form.
+    ///
+    /// The alias is whitespace-normalized first, so the reconstructed name is
+    /// directly comparable with store `display_name` values. An empty alias
+    /// yields no candidates (nothing to reconstruct). `fragment` (a target-
+    /// carried `#…` anchor, verbatim, no leading `#`) is re-attached to each
+    /// candidate so `resolvedSplit`'s `#` handling can peel it again; an alias-
+    /// carried `#"quote"` anchor needs no help — it survives inside the
+    /// candidate text and `candidateSplits` splits it off.
+    public static func pipeReconstructionCandidates(
+        bare: String,
+        alias: String,
+        fragment: String? = nil
+    ) -> [String] {
+        let normalizedAlias = WikiText.normalized(alias)
+        guard !normalizedAlias.isEmpty else { return [] }
+        let suffix = fragment.map { "#\($0)" } ?? ""
+        return [
+            "\(bare) | \(normalizedAlias)\(suffix)",
+            "\(bare)|\(normalizedAlias)\(suffix)",
+        ]
+    }
+
     private static let legacySourceProjectionSeparator: Character = "–"
     private static let legacySourceMarkdownExtension = ".md"
 }
