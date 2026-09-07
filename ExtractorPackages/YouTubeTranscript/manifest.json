@@ -7,7 +7,7 @@
   "entryPoint": "bin/youtube-transcript-extractor",
   "files": [
     {
-      "digest": "78d750b0d86a2eec51d378e8045b70dc488c78cf177aaf789b689f9532141c96",
+      "digest": "7f57b86e9cf4783d29653493eca48b4cb8d95d3c7bbed49640a55a0cdbfb872e",
       "path": "PROVENANCE.md"
     },
     {
@@ -48,5 +48,5 @@
       ]
     }
   ],
-  "version": "1.0.0"
+  "version": "1.0.1"
 }

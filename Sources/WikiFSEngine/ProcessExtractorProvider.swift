@@ -328,9 +328,14 @@ public struct ProcessExtractorProvider: Sendable {
                 at: sharedRoot,
                 withIntermediateDirectories: true,
                 attributes: [.posixPermissions: 0o700])
-            guard try Self.isOwnerPrivateDirectory(sharedRoot) else {
-                throw ExtractorDirectoryAdmissionError.preparationFailed
-            }
+            // `createDirectory(attributes:)` applies the mode only when it
+            // creates the final component. A pre-existing root — for example
+            // one seeded by a manual `uv` run, which creates world-traversable
+            // directories — keeps its old mode and would fail verification
+            // forever. Ownership is the safety boundary (as in
+            // `removeStoreTree`): tighten any owner-owned root to 0700, then
+            // verify.
+            try Self.normalizeOwnerPrivateDirectory(sharedRoot)
         }
         let materializedRevision = try ExtractorDirectoryValidator.materializeOperationPackage(
             from: snapshot,
@@ -390,11 +395,40 @@ public struct ProcessExtractorProvider: Sendable {
     private static func isOwnerPrivateDirectory(_ url: URL) throws -> Bool {
         var status = stat()
         guard lstat(url.path, &status) == 0 else {
-            throw ExtractorDirectoryAdmissionError.preparationFailed
+            throw ExtractorDirectoryAdmissionError.preparationFailure(errno: errno, stage: "lstat directory")
         }
         return status.st_mode & S_IFMT == S_IFDIR
             && status.st_uid == getuid()
             && status.st_mode & 0o7777 == 0o700
+    }
+
+    /// Tightens an existing shared cache root to owner-private 0700, then
+    /// verifies it through the opened descriptor. Refuses anything that is
+    /// not a directory owned by this UID — ownership is the boundary that
+    /// makes the chmod safe, matching `removeStoreTree`.
+    static func normalizeOwnerPrivateDirectory(_ url: URL) throws {
+        let fd = url.path.withCString { open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW) }
+        guard fd >= 0 else {
+            throw ExtractorDirectoryAdmissionError.preparationFailure(errno: errno, stage: "open shared cache root")
+        }
+        defer { close(fd) }
+        var opened = stat()
+        guard fstat(fd, &opened) == 0 else {
+            throw ExtractorDirectoryAdmissionError.preparationFailure(errno: errno, stage: "fstat shared cache root")
+        }
+        guard opened.st_mode & S_IFMT == S_IFDIR, opened.st_uid == getuid() else {
+            throw ExtractorDirectoryAdmissionError.preparationFailure("shared cache root is not an owner directory")
+        }
+        guard fchmod(fd, 0o700) == 0 else {
+            throw ExtractorDirectoryAdmissionError.preparationFailure(errno: errno, stage: "fchmod shared cache root")
+        }
+        var tightened = stat()
+        guard fstat(fd, &tightened) == 0,
+              tightened.st_mode & S_IFMT == S_IFDIR,
+              tightened.st_uid == getuid(),
+              tightened.st_mode & 0o7777 == 0o700 else {
+            throw ExtractorDirectoryAdmissionError.preparationFailure("shared cache directory verification failed")
+        }
     }
 
     static func registration(
@@ -974,13 +1008,13 @@ public final class PreparedProcessOperation: Sendable {
         // Refuse to overwrite anything that already exists (a planted symlink
         // at the target must never be written through).
         guard FileManager.default.fileExists(atPath: url.path) == false else {
-            throw ExtractorDirectoryAdmissionError.preparationFailed
+            throw ExtractorDirectoryAdmissionError.preparationFailure("request output path already exists")
         }
         let fd = url.path.withCString {
             open($0, O_WRONLY | O_CREAT | O_EXCL, 0o400)
         }
         guard fd >= 0 else {
-            throw ExtractorDirectoryAdmissionError.preparationFailed
+            throw ExtractorDirectoryAdmissionError.preparationFailure(errno: errno, stage: "open request output file")
         }
         defer { close(fd) }
         let result: Int = data.withUnsafeBytes { raw in
@@ -997,7 +1031,7 @@ public final class PreparedProcessOperation: Sendable {
             return total
         }
         guard result == data.count else {
-            throw ExtractorDirectoryAdmissionError.preparationFailed
+            throw ExtractorDirectoryAdmissionError.preparationFailure(errno: errno, stage: "write request output file")
         }
         try verifyOwnerReadOnlyFile(fd: fd, at: url)
     }
@@ -1013,7 +1047,7 @@ public final class PreparedProcessOperation: Sendable {
         var viaPath = stat()
         guard fstat(fd, &viaFD) == 0,
               lstat(url.path, &viaPath) == 0 else {
-            throw ExtractorDirectoryAdmissionError.preparationFailed
+            throw ExtractorDirectoryAdmissionError.preparationFailure(errno: errno, stage: "fstat/lstat request output file")
         }
         guard viaFD.st_dev == viaPath.st_dev,
               viaFD.st_ino == viaPath.st_ino,
@@ -1021,7 +1055,7 @@ public final class PreparedProcessOperation: Sendable {
               viaFD.st_uid == getuid(),
               viaFD.st_nlink == 1,
               viaFD.st_mode & 0o777 == 0o400 else {
-            throw ExtractorDirectoryAdmissionError.preparationFailed
+            throw ExtractorDirectoryAdmissionError.preparationFailure("request output file verification failed")
         }
     }
 }

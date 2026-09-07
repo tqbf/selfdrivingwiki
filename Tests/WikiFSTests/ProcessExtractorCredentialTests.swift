@@ -554,3 +554,35 @@ enum SelfTestSupport {
             [.posixPermissions: Int(mode)], ofItemAtPath: url.path)
     }
 }
+
+@Suite(.serialized)
+struct SharedCacheRootNormalizationTests {
+    @Test func normalizeTightensPreexistingSharedCacheRoot() throws {
+        // A shared cache root seeded by a manual `uv` run is world-traversable
+        // (0755). `createDirectory(attributes:)` does not fix an existing
+        // directory, so preparation must tighten it in place. Ownership is the
+        // boundary; seeded cache content must survive.
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sdw-normalize-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: root.path)
+        let seeded = root.appendingPathComponent("uv-cache", isDirectory: true)
+        try FileManager.default.createDirectory(at: seeded, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try ProcessExtractorProvider.normalizeOwnerPrivateDirectory(root)
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: root.path)
+        #expect((attributes[.posixPermissions] as? NSNumber)?.uint16Value == 0o700)
+        #expect(FileManager.default.fileExists(atPath: seeded.path))
+    }
+
+    @Test func normalizeRejectsForeignOwnedDirectory() throws {
+        // A root this UID does not own must fail closed without a chmod.
+        // /private/tmp is root-owned and world-writable on macOS.
+        #expect(throws: ExtractorDirectoryAdmissionError.self) {
+            try ProcessExtractorProvider.normalizeOwnerPrivateDirectory(
+                URL(fileURLWithPath: "/private/tmp", isDirectory: true))
+        }
+    }
+}

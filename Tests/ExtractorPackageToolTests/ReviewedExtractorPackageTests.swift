@@ -108,7 +108,7 @@ struct ReviewedExtractorPackageTests {
         // The exact reviewed identity is pinned byte-for-byte; a regenerated
         // package whose digest changed fails this gate with the new value.
         #expect(output.packageDigest
-            == "8b083ec85664e9d0c1a2afe8b96beee100660c1882f6d7c75d627da918f6caa6")
+            == "14ea800bd0fd525a925f5bc47ce4b4cf5b3b6d31892edfea20e0cb8d3a5621af")
     }
 
     /// The registered source URL never appears in the committed package
@@ -242,7 +242,7 @@ struct ReviewedExtractorPackageTests {
         // The exact reviewed identity is pinned byte-for-byte; a regenerated
         // package whose digest changed fails this gate with the new value.
         #expect(output.packageDigest
-            == "8f87ff4a0c8c5fac1d5ff19c6d1dff6a816a27c081fb106de3bc6c92b8c7e1a1")
+            == "23e987d6ee3207ff89fb506a23c5ccef8e2693410dd14bc7f8e47e4f8acd7679")
     }
 
     /// The reviewed YouTube package never claims model download: it fetches

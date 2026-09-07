@@ -160,6 +160,28 @@ struct ManagedExtractorProcessExecutorTests {
         #expect(try String(contentsOf: fixture.outputURL, encoding: .utf8) == "# Fixture\n")
     }
 
+    /// The package contract makes the terminal frame the operation's
+    /// completion. A wrapper process that outlives the package — the
+    /// observed `uv run` hang — must be killed by the completion hook, not
+    /// run the operation to its timeout.
+    @Test func terminalFrameCompletesALingeringWrapper() async throws {
+        let fixture = try Fixture(mode: "linger", maximumDurationMilliseconds: 30_000)
+        defer { fixture.cleanup() }
+
+        let clock = ContinuousClock()
+        let start = clock.now
+        let result = try await ManagedExtractorProcessExecutor().execute(fixture.operation)
+        let elapsed = clock.now - start
+
+        #expect(try String(contentsOf: fixture.outputURL, encoding: .utf8) == "# Fixture\n")
+        // The completion kill ends the run in well under the 30 s deadline.
+        #expect(elapsed < .seconds(20))
+        guard case .signaled = result.terminationCause else {
+            Issue.record("expected .signaled, got \(result.terminationCause)")
+            return
+        }
+    }
+
     /// Package payload rejects symlinks in every launch mode.
     @Test func symlinkedPackageEntryIsRejected() async throws {
         let fixture = try Fixture(
@@ -211,13 +233,17 @@ struct ManagedExtractorProcessExecutorTests {
     // MARK: - Process behavior
 
     @Test func malformedProtocolAndNonzeroExitAreTyped() async throws {
-        let malformed = try Fixture(mode: "malformed")
+        // The typed-error assertions are event-driven, not deadline-driven;
+        // the generous limit only keeps process spawn from timing out on a
+        // loaded runner (the default 5 s was exceeded under full-suite
+        // parallel load).
+        let malformed = try Fixture(mode: "malformed", maximumDurationMilliseconds: 30_000)
         defer { malformed.cleanup() }
         await #expect(throws: ManagedExtractorProcessError.malformedProtocol) {
             _ = try await ManagedExtractorProcessExecutor().execute(malformed.operation)
         }
 
-        let nonzero = try Fixture(mode: "nonzero")
+        let nonzero = try Fixture(mode: "nonzero", maximumDurationMilliseconds: 30_000)
         defer { nonzero.cleanup() }
         await #expect(throws: ManagedExtractorProcessError.processTermination(.exited(code: 17))) {
             _ = try await ManagedExtractorProcessExecutor().execute(nonzero.operation)

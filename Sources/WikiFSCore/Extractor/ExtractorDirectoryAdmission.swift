@@ -78,12 +78,30 @@ public enum ExtractorDirectoryAdmissionError: Error, Equatable, Sendable {
     case mutationForbidden
     case nonFileURL, sourceNotDirectory, sourceChanged, symlink(String), hardLink(String), specialFile(String)
     case deviceChanged(String), metadataChanged(String), modeChanged(String), collision(String), containment
-    case copyFailed(String), preparationFailed, validationFailed, expectedRevisionMismatch, invalidStagingID, limitExceeded
+    /// `preparationFailed` carries a bounded, path-free detail string: the
+    /// admission stage that failed and, for a failing syscall, its errno
+    /// number and system name. It never contains paths, URLs, environment
+    /// values, or upstream text, so it is safe for logs and queue-item
+    /// error fields.
+    case copyFailed(String), preparationFailed(String), validationFailed, expectedRevisionMismatch, invalidStagingID, limitExceeded
     case manifest(ExtractorManifestValidationError)
     /// A third-party import tried to claim a reviewed package lineage with
     /// bytes that do not reproduce the pinned reviewed revision (#1159,
     /// security review HIGH-3).
     case reviewedLineageReserved(String)
+
+    /// Builds a `preparationFailed` for an admission stage that failed
+    /// without a syscall (identity or mode verification).
+    public static func preparationFailure(_ stage: String) -> ExtractorDirectoryAdmissionError {
+        .preparationFailed(stage)
+    }
+
+    /// Builds a `preparationFailed` for a failing syscall. Read `errno`
+    /// immediately after the failed call and pass it here. `strerror` only
+    /// renders the bounded system name for the number.
+    public static func preparationFailure(errno code: Int32, stage: String) -> ExtractorDirectoryAdmissionError {
+        .preparationFailed("\(stage): errno \(code) (\(String(cString: strerror(code))))")
+    }
 }
 
 public struct ValidatedExtractorDirectory: Sendable {
@@ -133,8 +151,10 @@ public enum ExtractorDirectoryValidator {
             stagingFD = roots.staging
             close(roots.root); close(roots.packages); close(roots.derived); close(roots.operations)
             destinationFD = try createDirectory(named: stagingID.rawValue, in: stagingFD)
+        } catch let error as ExtractorDirectoryAdmissionError {
+            throw error
         } catch {
-            throw ExtractorDirectoryAdmissionError.preparationFailed
+            throw ExtractorDirectoryAdmissionError.preparationFailure("staging preparation failed: \(String(describing: error))")
         }
         defer { close(destinationFD); close(stagingFD) }
 
@@ -232,7 +252,11 @@ public enum ExtractorDirectoryValidator {
             let processName = "\(getpid())-\(layout.processSessionID.rawValue)"
             processRootFD = try openOrCreateDirectory(named: processName, in: roleFD)
             destinationFD = try createDirectory(named: id.rawValue, in: processRootFD)
-        } catch { throw ExtractorDirectoryAdmissionError.preparationFailed }
+        } catch let error as ExtractorDirectoryAdmissionError {
+            throw error
+        } catch {
+            throw ExtractorDirectoryAdmissionError.preparationFailure("operation session preparation failed: \(String(describing: error))")
+        }
         defer { close(destinationFD); close(processRootFD) }
 
         do {
@@ -303,7 +327,11 @@ public enum ExtractorDirectoryValidator {
             let processName = "\(getpid())-\(layout.processSessionID.rawValue)"
             processRootFD = try openOrCreateDirectory(named: processName, in: roleFD)
             destinationFD = try createDirectory(named: id.rawValue, in: processRootFD)
-        } catch { throw ExtractorDirectoryAdmissionError.preparationFailed }
+        } catch let error as ExtractorDirectoryAdmissionError {
+            throw error
+        } catch {
+            throw ExtractorDirectoryAdmissionError.preparationFailure("snapshot preparation failed: \(String(describing: error))")
+        }
         defer { close(destinationFD); close(processRootFD) }
         do {
             try copyTree(sourceFD: sourceFD, destinationFD: destinationFD, sourceDevice: openedSource.st_dev, manifest: installed.validated.manifest)
@@ -331,7 +359,7 @@ public enum ExtractorDirectoryValidator {
         let parentStatus = try lstat(target.deletingLastPathComponent())
         guard parentStatus.st_mode & S_IFMT == S_IFDIR,
               parentStatus.st_uid == getuid() else {
-            throw ExtractorDirectoryAdmissionError.preparationFailed
+            throw ExtractorDirectoryAdmissionError.preparationFailure("operation parent verification failed")
         }
         let createResult = target.lastPathComponent.withCString { name -> Int32 in
             let parentFD = open(
@@ -342,7 +370,7 @@ public enum ExtractorDirectoryValidator {
             return mkdirat(parentFD, name, 0o700)
         }
         guard createResult == 0 else {
-            throw ExtractorDirectoryAdmissionError.preparationFailed
+            throw ExtractorDirectoryAdmissionError.preparationFailure(errno: errno, stage: "mkdirat operation target")
         }
 
         let sourceURL = validated.root.standardizedFileURL
@@ -363,7 +391,7 @@ public enum ExtractorDirectoryValidator {
             open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
         }
         guard destinationFD >= 0 else {
-            throw ExtractorDirectoryAdmissionError.preparationFailed
+            throw ExtractorDirectoryAdmissionError.preparationFailure(errno: errno, stage: "open operation target")
         }
         defer { close(destinationFD) }
         do {
@@ -416,7 +444,7 @@ public enum ExtractorDirectoryValidator {
         }
         guard root.descriptor >= 0 else {
             if root.error == ENOENT { return nil }
-            throw ExtractorDirectoryAdmissionError.preparationFailed
+            throw ExtractorDirectoryAdmissionError.preparationFailure(errno: root.error, stage: "open store container")
         }
         var current = root.descriptor
         for component in ["extractors", "v1", "operations", layout.processRole.rawValue] {
@@ -428,7 +456,7 @@ public enum ExtractorDirectoryValidator {
             close(current)
             guard next.descriptor >= 0 else {
                 if next.error == ENOENT { return nil }
-                throw ExtractorDirectoryAdmissionError.preparationFailed
+                throw ExtractorDirectoryAdmissionError.preparationFailure(errno: next.error, stage: "open operations component")
             }
             current = next.descriptor
         }
@@ -695,10 +723,10 @@ public enum ExtractorDirectoryValidator {
 
     private static func createDirectory(named name: String, in parentFD: Int32) throws -> Int32 {
         guard name.withCString({ mkdirat(parentFD, $0, 0o700) }) == 0 else {
-            throw ExtractorDirectoryAdmissionError.preparationFailed
+            throw ExtractorDirectoryAdmissionError.preparationFailure(errno: errno, stage: "mkdirat directory")
         }
         let descriptor = name.withCString { openat(parentFD, $0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW) }
-        guard descriptor >= 0 else { throw ExtractorDirectoryAdmissionError.preparationFailed }
+        guard descriptor >= 0 else { throw ExtractorDirectoryAdmissionError.preparationFailure(errno: errno, stage: "open new directory") }
         do {
             try normalizePrivateDirectory(descriptor)
             return descriptor
@@ -713,9 +741,11 @@ public enum ExtractorDirectoryValidator {
             let result = mkdirat(parentFD, pointer, 0o700)
             return (result, errno)
         }
-        if creation.0 != 0, creation.1 != EEXIST { throw ExtractorDirectoryAdmissionError.preparationFailed }
+        if creation.0 != 0, creation.1 != EEXIST {
+            throw ExtractorDirectoryAdmissionError.preparationFailure(errno: creation.1, stage: "mkdirat directory")
+        }
         let descriptor = name.withCString { openat(parentFD, $0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW) }
-        guard descriptor >= 0 else { throw ExtractorDirectoryAdmissionError.preparationFailed }
+        guard descriptor >= 0 else { throw ExtractorDirectoryAdmissionError.preparationFailure(errno: errno, stage: "openat directory") }
         do {
             try normalizePrivateDirectory(descriptor)
             return descriptor
@@ -727,19 +757,19 @@ public enum ExtractorDirectoryValidator {
 
     private static func normalizePrivateDirectory(_ descriptor: Int32) throws {
         guard fchmod(descriptor, 0o700) == 0 else {
-            throw ExtractorDirectoryAdmissionError.preparationFailed
+            throw ExtractorDirectoryAdmissionError.preparationFailure(errno: errno, stage: "fchmod directory")
         }
         let directoryStatus = try status(of: descriptor)
         guard directoryStatus.st_mode & S_IFMT == S_IFDIR,
               directoryStatus.st_uid == getuid(),
               directoryStatus.st_mode & 0o7777 == 0o700 else {
-            throw ExtractorDirectoryAdmissionError.preparationFailed
+            throw ExtractorDirectoryAdmissionError.preparationFailure("directory mode or owner verification failed")
         }
     }
 
     private static func canonicalURL(_ url: URL) throws -> URL {
         let resolved = url.path.withCString { pointer -> UnsafeMutablePointer<CChar>? in realpath(pointer, nil) }
-        guard let resolved else { throw ExtractorDirectoryAdmissionError.preparationFailed }
+        guard let resolved else { throw ExtractorDirectoryAdmissionError.preparationFailure(errno: errno, stage: "realpath") }
         defer { free(resolved) }
         return URL(fileURLWithPath: String(cString: resolved), isDirectory: true)
     }
@@ -753,12 +783,12 @@ public enum ExtractorDirectoryValidator {
         let descriptor = authorityURL.path.withCString {
             open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
         }
-        guard descriptor >= 0 else { throw ExtractorDirectoryAdmissionError.preparationFailed }
+        guard descriptor >= 0 else { throw ExtractorDirectoryAdmissionError.preparationFailure(errno: errno, stage: "open app group container") }
         do {
             let opened = try status(of: descriptor)
             guard sameIdentity(pathStatus, opened),
                   opened.st_mode & S_IFMT == S_IFDIR else {
-                throw ExtractorDirectoryAdmissionError.preparationFailed
+                throw ExtractorDirectoryAdmissionError.preparationFailure("app group container verification failed")
             }
             return descriptor
         } catch {
@@ -778,26 +808,26 @@ public enum ExtractorDirectoryValidator {
         let before = try status(at: parentFD, name: name, noFollow: true)
         guard before.st_mode & S_IFMT == S_IFDIR,
               before.st_uid == getuid() else {
-            throw ExtractorDirectoryAdmissionError.preparationFailed
+            throw ExtractorDirectoryAdmissionError.preparationFailure("empty-directory precheck failed")
         }
         let descriptor = name.withCString {
             openat(parentFD, $0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
         }
-        guard descriptor >= 0 else { throw ExtractorDirectoryAdmissionError.preparationFailed }
+        guard descriptor >= 0 else { throw ExtractorDirectoryAdmissionError.preparationFailure(errno: errno, stage: "openat directory") }
         defer { close(descriptor) }
         let opened = try status(of: descriptor)
         guard sameIdentity(before, opened), opened.st_mode & S_IFMT == S_IFDIR else {
-            throw ExtractorDirectoryAdmissionError.preparationFailed
+            throw ExtractorDirectoryAdmissionError.preparationFailure("directory identity verification failed")
         }
         guard try directoryEntryNames(descriptor).isEmpty else { return false }
         let current = try status(at: parentFD, name: name, noFollow: true)
         guard sameIdentity(opened, current) else {
-            throw ExtractorDirectoryAdmissionError.preparationFailed
+            throw ExtractorDirectoryAdmissionError.preparationFailure("directory changed before removal")
         }
         let result = name.withCString { unlinkat(parentFD, $0, AT_REMOVEDIR) }
         if result == 0 { return true }
         if errno == ENOTEMPTY || errno == EEXIST { return false }
-        throw ExtractorDirectoryAdmissionError.preparationFailed
+        throw ExtractorDirectoryAdmissionError.preparationFailure(errno: errno, stage: "rmdir")
     }
 
     public static func removeStoreTree(
@@ -807,40 +837,52 @@ public enum ExtractorDirectoryValidator {
         let before = try status(at: parentFD, name: name, noFollow: true)
         guard before.st_mode & S_IFMT == S_IFDIR,
               before.st_uid == getuid() else {
-            throw ExtractorDirectoryAdmissionError.preparationFailed
+            throw ExtractorDirectoryAdmissionError.preparationFailure("tree removal precheck failed")
         }
         let descriptor = name.withCString {
             openat(parentFD, $0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
         }
-        guard descriptor >= 0 else { throw ExtractorDirectoryAdmissionError.preparationFailed }
+        guard descriptor >= 0 else { throw ExtractorDirectoryAdmissionError.preparationFailure(errno: errno, stage: "openat directory") }
         defer { close(descriptor) }
         let opened = try status(of: descriptor)
         guard sameIdentity(before, opened), opened.st_mode & S_IFMT == S_IFDIR else {
-            throw ExtractorDirectoryAdmissionError.preparationFailed
+            throw ExtractorDirectoryAdmissionError.preparationFailure("directory identity verification failed")
+        }
+        // Admission normalizes tree contents to owner-read-only (0400 files
+        // inside 0500 directories) for snapshot immutability. Unlinking an
+        // entry needs write permission on the directory holding it, so make
+        // this directory owner-writable before removing children. We already
+        // verified the tree is owned by this process.
+        if fchmod(descriptor, 0o700) != 0 {
+            throw ExtractorDirectoryAdmissionError.preparationFailure(errno: errno, stage: "fchmod directory")
         }
         for child in try directoryEntryNames(descriptor) {
             let childStatus = try status(at: descriptor, name: child, noFollow: true)
             switch childStatus.st_mode & S_IFMT {
             case S_IFDIR:
                 try removeStoreTree(named: child, from: descriptor)
-            case S_IFREG:
-                guard childStatus.st_uid == getuid(), childStatus.st_nlink == 1 else {
-                    throw ExtractorDirectoryAdmissionError.preparationFailed
+            case S_IFREG, S_IFLNK:
+                // Operation sessions legitimately contain uv-managed content:
+                // hardlinked wheels (st_nlink > 1) and venv symlinks. Ownership
+                // is the safety boundary here; deleting one hardlink removes
+                // only this directory entry, never the other link's content.
+                guard childStatus.st_uid == getuid() else {
+                    throw ExtractorDirectoryAdmissionError.preparationFailure("child entry is not owned by this user")
                 }
                 guard child.withCString({ unlinkat(descriptor, $0, 0) }) == 0 else {
-                    throw ExtractorDirectoryAdmissionError.preparationFailed
+                    throw ExtractorDirectoryAdmissionError.preparationFailure(errno: errno, stage: "unlink child entry")
                 }
             default:
-                throw ExtractorDirectoryAdmissionError.preparationFailed
+                throw ExtractorDirectoryAdmissionError.preparationFailure("child entry is a special file")
             }
         }
         let after = try status(of: descriptor)
         let entry = try status(at: parentFD, name: name, noFollow: true)
         guard sameIdentity(opened, after), sameIdentity(opened, entry) else {
-            throw ExtractorDirectoryAdmissionError.preparationFailed
+            throw ExtractorDirectoryAdmissionError.preparationFailure("directory changed during removal")
         }
         guard name.withCString({ unlinkat(parentFD, $0, AT_REMOVEDIR) }) == 0 else {
-            throw ExtractorDirectoryAdmissionError.preparationFailed
+            throw ExtractorDirectoryAdmissionError.preparationFailure(errno: errno, stage: "rmdir")
         }
     }
 
@@ -849,11 +891,11 @@ public enum ExtractorDirectoryValidator {
         let authorityURL = try canonicalURL(layout.appGroupContainerRoot)
         let authorityPathStatus = try lstat(authorityURL)
         let authorityFD = authorityURL.path.withCString { open($0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW) }
-        guard authorityFD >= 0 else { throw ExtractorDirectoryAdmissionError.preparationFailed }
+        guard authorityFD >= 0 else { throw ExtractorDirectoryAdmissionError.preparationFailure(errno: errno, stage: "open authority root") }
         defer { close(authorityFD) }
         let authorityOpenedStatus = try status(of: authorityFD)
         guard sameIdentity(authorityPathStatus, authorityOpenedStatus), authorityOpenedStatus.st_mode & S_IFMT == S_IFDIR else {
-            throw ExtractorDirectoryAdmissionError.preparationFailed
+            throw ExtractorDirectoryAdmissionError.preparationFailure("authority root verification failed")
         }
         let extractors = try openOrCreateDirectory(named: "extractors", in: authorityFD)
         defer { close(extractors) }
@@ -875,7 +917,7 @@ public enum ExtractorDirectoryValidator {
             let retainedRoot = dup(root)
             guard retainedRoot >= 0 else {
                 close(packages); close(staging); close(derived); close(operations)
-                throw ExtractorDirectoryAdmissionError.preparationFailed
+                throw ExtractorDirectoryAdmissionError.preparationFailure(errno: errno, stage: "dup root descriptor")
             }
             return (retainedRoot, packages, staging, derived, operations)
         } catch { close(packages); throw error }

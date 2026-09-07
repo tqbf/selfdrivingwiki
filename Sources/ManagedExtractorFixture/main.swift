@@ -76,7 +76,7 @@ do {
 }
 
 switch mode {
-case "success", "environment":
+case "success", "environment", "linger":
     let markdown: String
     if mode == "environment" {
         let environment = ProcessInfo.processInfo.environment
@@ -113,6 +113,12 @@ case "success", "environment":
                 markdownByteCount: markdown.utf8.count)))
     } catch {
         exit(3)
+    }
+    // Mode "linger": the protocol exchange is complete, but the wrapper
+    // process outlives the package — the observed `uv run` hang. The host
+    // must treat the terminal frame as completion and reap the group.
+    if mode == "linger" {
+        while true { _ = Darwin.pause() }
     }
 case "failure":
     do {
