@@ -79,40 +79,45 @@ public enum WikiLinkRewriter {
             // auto-alias is the whole reconstructed name — mirroring the
             // no-alias branch so the user's intended display text survives.
             //
-            // Scoped to the no-fragment / no-pin case (the issue's repro) to
-            // avoid fragment-in-alias ambiguity; `#`-in-name already resolves
-            // via `candidateSplits` below. If neither candidate resolves, fall
-            // through to today's behavior (`|` was a real alias separator).
+            // Issue #1225: each candidate is walked through `candidateSplits`,
+            // so an alias-carried quote anchor peels off and the link promotes
+            // to `[[source:<ULID>#"quote"|<full name>]]` on its next save —
+            // the same reading the render seams (DocumentEmbedResolver /
+            // WikiLinkMarkdown.linkified) accept, and the canonical form the
+            // scanner parses without ambiguity. A literal `#`-containing name
+            // still wins whole (candidateSplits tries the whole string first).
+            // Still scoped to the no-target-fragment / no-pin case; when no
+            // reading resolves, fall through (`|` was a real alias separator).
             if rawAlias != nil, fragment == nil, pin == nil,
                let rawAliasValue = fixed.alias {
-                // Try spaced first (the YouTube-title convention), then the
-                // unspaced form — both hit Pass 1's exact match. The first
-                // resolver hit determines which reconstruction we serialize
-                // as the auto-alias, so what the user sees rendered matches
-                // the store's display_name spelling. Shared with the render
-                // seams (WikiLinkMarkdown / DocumentEmbedResolver); the helper
+                // Spaced candidate first (the YouTube-title convention), then
+                // the unspaced form — shared with the render seams; the helper
                 // normalizes the alias and yields no candidates for an empty
                 // one (nothing to reconstruct).
                 let candidates = WikiLinkResolver.pipeReconstructionCandidates(
                     bare: bareTarget, alias: rawAliasValue)
-                var wholeID: String? = nil
-                var wholeName: String? = nil
-                for candidate in candidates {
-                    let id: String?
-                    switch kind {
-                    case .source: id = try resolveSource(candidate)?.rawValue
-                    case .chat:   id = try resolveChat(candidate)?.rawValue
-                    case .page:   id = try resolvePage(candidate)?.rawValue
-                    }
-                    if let id {
-                        wholeID = id
-                        wholeName = candidate
-                        break
+                var resolved: (id: String, name: String, fragment: String?)? = nil
+                candidateLoop: for candidate in candidates {
+                    for split in WikiLinkResolver.candidateSplits(of: candidate) {
+                        let id: String?
+                        switch kind {
+                        case .source: id = try resolveSource(split.base)?.rawValue
+                        case .chat:   id = try resolveChat(split.base)?.rawValue
+                        case .page:   id = try resolvePage(split.base)?.rawValue
+                        }
+                        if let id {
+                            resolved = (id, split.base, split.fragment)
+                            break candidateLoop
+                        }
                     }
                 }
-                if let resolvedID = wholeID, let resolvedName = wholeName {
-                    let prefix = kind.linkPrefix
-                    let canonicalTarget = prefix + resolvedID
+                if let (resolvedID, resolvedName, resolvedFragment) = resolved {
+                    // The anchor serializes into the TARGET (`…ULID#"quote"`)
+                    // and the full name becomes the auto-alias — the canonical
+                    // ordering `preserveQuoteFragment` establishes, and the
+                    // ordering the typed scanner re-parses unambiguously.
+                    let canonicalTarget = kind.linkPrefix + resolvedID
+                        + (resolvedFragment.map { "#\($0)" } ?? "")
                     let replacement = "[[\(canonicalTarget)|\(resolvedName)]]"
                     let mutable = NSMutableString(string: result)
                     mutable.replaceCharacters(in: fullRange, with: replacement)
