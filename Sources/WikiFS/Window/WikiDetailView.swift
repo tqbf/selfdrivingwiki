@@ -333,8 +333,9 @@ struct WikiDetailView: View {
     }
 
     /// Start a new chat in the draft state (mirrors the Chats sidebar `+`).
+    /// beginNewChat also surfaces the optimistic sidebar row (#1223).
     private func addChat() {
-        store.openTab(.newChat)
+        store.beginNewChat()
     }
 
     /// Pick a single file via the open panel and ingest it.

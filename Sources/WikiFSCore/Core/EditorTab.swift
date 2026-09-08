@@ -24,6 +24,13 @@ public struct EditorTab: Hashable, Sendable, Identifiable {
     /// a chat tab without sending (issue #430). Non-nil while the composer has
     /// unsent text; restored on tab switch-back so the draft survives.
     public var pendingChatDraft: String? = nil
+    /// The optimistic Chats-sidebar row minted for this draft tab (#1223).
+    /// Non-nil only on `.newChat` tabs created through
+    /// `WikiStoreModel.beginNewChat()`. The matching `ChatSummary` lives only
+    /// in the model's `pendingDraftChats` overlay — never in the store —
+    /// until the daemon commits the chat on the first send and the tab
+    /// morphs to `.chat(id)`.
+    public var optimisticChatID: ChatID? = nil
 
     public init(selection: WikiSelection, title: String) {
         self.id = UUID()
