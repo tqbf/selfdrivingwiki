@@ -129,7 +129,8 @@ actor FakeIngestionProvider: QueueIngestionProvider {
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
         onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
-        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
+        onReport: (@Sendable (QueueReportMutation) -> Void)?
     ) async throws {
         calledWikiID = wikiID.rawValue
         calledSourceIDs = sourceIDs
@@ -146,7 +147,8 @@ actor FakeIngestionProvider: QueueIngestionProvider {
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
         onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
-        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
+        onReport: (@Sendable (QueueReportMutation) -> Void)?
     ) async throws {
         calledLintWikiID = wikiID.rawValue
         calledLintPageIDs = []
@@ -164,7 +166,8 @@ actor FakeIngestionProvider: QueueIngestionProvider {
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
         onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
-        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
+        onReport: (@Sendable (QueueReportMutation) -> Void)?
     ) async throws {
         calledLintWikiID = wikiID.rawValue
         calledLintPageIDs = pageIDs

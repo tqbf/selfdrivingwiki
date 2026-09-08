@@ -324,6 +324,54 @@ public final class QueueStore: @unchecked Sendable {
             try db.execute(sql: "DROP TABLE IF EXISTS queue_item_events;")
         }
 
+        // v7: additive durable attempt reports (integrated-queue-workspace
+        // plan §2). One header row per (item, attempt) with the producing
+        // execution identity + monotonic revision, and one row per target
+        // keyed by item + attempt + namespace + target id so target updates
+        // upsert only affected rows. Both cascade with `queue_items`, so
+        // `pruneHistory` and item deletion clean reports without a separate
+        // sweep. `retryItem` deliberately does NOT touch these tables —
+        // previous attempts' reports are preserved (attempt isolation).
+        m.registerMigration("v7_add_attempt_reports") { db in
+            try db.execute(sql: """
+            CREATE TABLE IF NOT EXISTS queue_attempt_reports (
+                item_id        TEXT NOT NULL REFERENCES queue_items(id) ON DELETE CASCADE,
+                attempt        INTEGER NOT NULL,
+                execution_id   TEXT NOT NULL,
+                operation      TEXT NOT NULL,
+                scope          TEXT NOT NULL,
+                phase          TEXT NOT NULL,
+                provider_id    TEXT,
+                model          TEXT,
+                availability   TEXT NOT NULL,
+                result_summary TEXT,
+                revision       INTEGER NOT NULL,
+                updated_at     INTEGER NOT NULL,
+                PRIMARY KEY (item_id, attempt)
+            ) WITHOUT ROWID;
+            """)
+            try db.execute(sql: """
+            CREATE TABLE IF NOT EXISTS queue_attempt_report_targets (
+                item_id       TEXT NOT NULL REFERENCES queue_items(id) ON DELETE CASCADE,
+                attempt       INTEGER NOT NULL,
+                namespace     TEXT NOT NULL,
+                target_id     TEXT NOT NULL,
+                seq           INTEGER NOT NULL,
+                display_name  TEXT NOT NULL DEFAULT '',
+                state         TEXT NOT NULL,
+                result        TEXT,
+                detail        TEXT,
+                updated_at    INTEGER NOT NULL,
+                PRIMARY KEY (item_id, attempt, namespace, target_id),
+                UNIQUE (item_id, attempt, seq)
+            ) WITHOUT ROWID;
+            """)
+            try db.execute(sql: """
+            CREATE INDEX IF NOT EXISTS idx_queue_attempt_report_targets_order
+                ON queue_attempt_report_targets(item_id, attempt, seq);
+            """)
+        }
+
         return m
     }()
 
@@ -1206,5 +1254,682 @@ public final class QueueStore: @unchecked Sendable {
             arguments: [id.rawValue])
         guard let raw else { throw QueueStoreError.notFound(id) }
         return try decodeQueueKind(raw)
+    }
+}
+
+// MARK: - QueueReportStoreError
+
+/// Errors specific to the attempt-report tables. Stale attempts reuse
+/// `QueueStoreError.staleAttempt`; a report written by an execution that no
+/// longer owns the item is rejected with `.staleExecution` so delayed
+/// prior-dispatch updates can never replace newer data.
+public enum QueueReportStoreError: Error, CustomStringConvertible, LocalizedError {
+    /// The attempt has no report header — the producer never began one.
+    case notInitialized(QueueItem.ID)
+    /// The write came from an execution (lease dispatch) that is no longer
+    /// the current owner of this (item, attempt) report.
+    case staleExecution(
+        attemptID: QueueAttemptID,
+        expected: QueueExecutionID,
+        current: QueueExecutionID)
+
+    public var description: String {
+        switch self {
+        case .notInitialized(let id):
+            return "Queue report not initialized for item \(id.rawValue)"
+        case .staleExecution(let attemptID, let expected, let current):
+            return "Stale queue report execution \(expected.rawValue.uuidString) for \(attemptID.itemID.rawValue) attempt \(attemptID.attempt); current execution is \(current.rawValue.uuidString)"
+        }
+    }
+
+    public var errorDescription: String? { description }
+}
+
+// MARK: - QueueStore: attempt reports
+
+extension QueueStore {
+
+    // MARK: Report row codecs
+
+    private static let reportHeaderColumns = """
+        item_id, attempt, execution_id, operation, scope, phase, provider_id,
+        model, availability, result_summary, revision
+        """
+
+    private static let reportEncoder = JSONEncoder()
+    private static let reportDecoder = JSONDecoder()
+
+    private static func encodeReportValue<T: Encodable>(_ value: T) throws -> String {
+        let data = try reportEncoder.encode(value)
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private static func decodeReportValue<T: Decodable>(_ type: T.Type, from raw: String) throws -> T {
+        guard let data = raw.data(using: .utf8) else {
+            throw QueueStoreError.sqlite(code: -1, message: "report value is not valid UTF-8")
+        }
+        return try reportDecoder.decode(type, from: data)
+    }
+
+    /// Read one attempt's full report (header + rows) inside the caller's
+    /// transaction or read block. Returns `nil` when no header exists.
+    private static func readReport(
+        _ db: Database,
+        itemID: QueueItem.ID,
+        attempt: Int
+    ) throws -> QueueAttemptReport? {
+        guard let row = try Row.fetchOne(
+            db,
+            sql: "SELECT \(reportHeaderColumns) FROM queue_attempt_reports WHERE item_id = ? AND attempt = ?;",
+            arguments: [itemID.rawValue, attempt])
+        else { return nil }
+
+        let executionRaw: String = row["execution_id"]
+        guard let executionUUID = UUID(uuidString: executionRaw) else {
+            throw QueueStoreError.sqlite(code: -1, message: "corrupt report execution id for \(itemID.rawValue)")
+        }
+        let operationRaw: String = row["operation"]
+        guard let operation = QueueReportOperation(rawValue: operationRaw) else {
+            throw QueueStoreError.sqlite(code: -1, message: "Unknown report operation: \(operationRaw)")
+        }
+        let scopeRaw: String = row["scope"]
+        let scope = try decodeReportValue(QueueReportScope.self, from: scopeRaw)
+        let phaseRaw: String = row["phase"]
+        guard let phase = QueueReportPhase(rawValue: phaseRaw) else {
+            throw QueueStoreError.sqlite(code: -1, message: "Unknown report phase: \(phaseRaw)")
+        }
+        let availabilityRaw: String = row["availability"]
+        guard let availability = QueueReportAvailability(rawValue: availabilityRaw) else {
+            throw QueueStoreError.sqlite(code: -1, message: "Unknown report availability: \(availabilityRaw)")
+        }
+        let providerID: ProviderID? = (row["provider_id"] as String?).map { ProviderID(rawValue: $0) }
+        let modelRaw: String? = row["model"]
+        let revisionRaw: Int = row["revision"]
+
+        let targetRows = try Row.fetchAll(
+            db,
+            sql: """
+            SELECT namespace, target_id, display_name, state, result, detail
+            FROM queue_attempt_report_targets
+            WHERE item_id = ? AND attempt = ?
+            ORDER BY seq ASC;
+            """,
+            arguments: [itemID.rawValue, attempt])
+
+        var targets: [QueueReportTargetRecord] = []
+        targets.reserveCapacity(targetRows.count)
+        for targetRow in targetRows {
+            let namespace: String = targetRow["namespace"]
+            let targetID: String = targetRow["target_id"]
+            let target: QueueReportTarget
+            switch namespace {
+            case QueueReportTarget.source(SourceID(rawValue: "")).namespace:
+                target = .source(SourceID(rawValue: targetID))
+            case QueueReportTarget.page(PageID(rawValue: "")).namespace:
+                target = .page(PageID(rawValue: targetID))
+            default:
+                throw QueueStoreError.sqlite(code: -1, message: "Unknown report target namespace: \(namespace)")
+            }
+            let stateRaw: String = targetRow["state"]
+            let state = try decodeReportValue(QueueReportTargetState.self, from: stateRaw)
+            let result = try (targetRow["result"] as String?).map {
+                try decodeReportValue(QueueTargetResult.self, from: $0)
+            }
+            targets.append(QueueReportTargetRecord(
+                target: target,
+                displayName: targetRow["display_name"] ?? "",
+                state: state,
+                result: result,
+                detail: targetRow["detail"]))
+        }
+
+        return QueueAttemptReport(
+            attemptID: QueueAttemptID(itemID: itemID, attempt: attempt),
+            executionID: QueueExecutionID(rawValue: executionUUID),
+            revision: QueueReportRevision(rawValue: revisionRaw),
+            operation: operation,
+            scope: scope,
+            phase: phase,
+            provider: providerID,
+            model: modelRaw.map(QueueReportModelName.init(rawValue:)),
+            availability: availability,
+            resultSummary: row["result_summary"],
+            targets: targets)
+    }
+
+    /// The item's current attempt, validated against `attemptID`. Shared
+    /// guard for every report write so a worker from an earlier retry can
+    /// never touch the current report.
+    @discardableResult
+    private static func validateReportAttempt(
+        _ db: Database,
+        _ attemptID: QueueAttemptID
+    ) throws -> Int {
+        let currentAttempt = try Int.fetchOne(
+            db,
+            sql: "SELECT attempt FROM queue_items WHERE id = ?;",
+            arguments: [attemptID.itemID.rawValue])
+        guard let currentAttempt else {
+            throw QueueStoreError.notFound(attemptID.itemID)
+        }
+        guard currentAttempt == attemptID.attempt else {
+            throw QueueStoreError.staleAttempt(attemptID, currentAttempt: currentAttempt)
+        }
+        return currentAttempt
+    }
+
+    /// Reset an existing header to a fresh state under a new execution.
+    /// Observed outcomes are discarded (they belong to the dead dispatch) but
+    /// the revision keeps moving forward so delayed old-execution data can
+    /// never win.
+    private static func resetHeaderToExecution(
+        _ db: Database,
+        itemID: QueueItem.ID,
+        attempt: Int,
+        executionID: QueueExecutionID
+    ) throws {
+        try db.execute(
+            sql: "DELETE FROM queue_attempt_report_targets WHERE item_id = ? AND attempt = ?;",
+            arguments: [itemID.rawValue, attempt])
+        try db.execute(
+            sql: """
+            UPDATE queue_attempt_reports
+            SET execution_id = ?, phase = ?, availability = ?,
+                result_summary = NULL, provider_id = NULL, model = NULL,
+                revision = revision + 1, updated_at = ?
+            WHERE item_id = ? AND attempt = ?;
+            """,
+            arguments: [
+                executionID.rawValue.uuidString,
+                QueueReportPhase.planned.rawValue,
+                QueueReportAvailability.available.rawValue,
+                nowMillis(),
+                itemID.rawValue,
+                attempt,
+            ])
+    }
+
+    /// Insert the scope's planned target rows at their inventory positions.
+    private static func insertScopeTargets(
+        _ db: Database,
+        attemptID: QueueAttemptID,
+        scope: QueueReportScope,
+        at date: Int64
+    ) throws {
+        guard case .targets(let records) = scope else { return }
+        for (index, record) in records.enumerated() {
+            try db.execute(
+                sql: """
+                INSERT INTO queue_attempt_report_targets (
+                    item_id, attempt, namespace, target_id, seq,
+                    display_name, state, result, detail, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                arguments: [
+                    attemptID.itemID.rawValue,
+                    attemptID.attempt,
+                    record.target.namespace,
+                    record.target.id,
+                    index,
+                    record.displayName,
+                    try encodeReportValue(record.state),
+                    try record.result.map { try encodeReportValue($0) },
+                    record.detail,
+                    date,
+                ])
+        }
+    }
+
+    /// Upsert only the affected target rows. A new row allocates the next
+    /// inventory sequence; an existing row keeps its original position. An
+    /// empty `displayName` never clobbers a recorded name (history
+    /// preservation).
+    private static func upsertTargetRecords(
+        _ db: Database,
+        attemptID: QueueAttemptID,
+        records: [QueueReportTargetRecord],
+        at date: Int64
+    ) throws {
+        for record in records {
+            try db.execute(
+                sql: """
+                INSERT INTO queue_attempt_report_targets (
+                    item_id, attempt, namespace, target_id, seq,
+                    display_name, state, result, detail, updated_at
+                ) VALUES (
+                    ?, ?, ?, ?,
+                    COALESCE(
+                        (SELECT seq FROM queue_attempt_report_targets
+                         WHERE item_id = ? AND attempt = ? AND namespace = ? AND target_id = ?),
+                        (SELECT COALESCE(MAX(seq) + 1, 0) FROM queue_attempt_report_targets
+                         WHERE item_id = ? AND attempt = ?)),
+                    ?, ?, ?, ?, ?
+                )
+                ON CONFLICT(item_id, attempt, namespace, target_id) DO UPDATE SET
+                    display_name = CASE
+                        WHEN excluded.display_name = ''
+                        THEN queue_attempt_report_targets.display_name
+                        ELSE excluded.display_name
+                    END,
+                    state = excluded.state,
+                    result = excluded.result,
+                    detail = excluded.detail,
+                    updated_at = excluded.updated_at;
+                """,
+                arguments: [
+                    attemptID.itemID.rawValue,
+                    attemptID.attempt,
+                    record.target.namespace,
+                    record.target.id,
+                    attemptID.itemID.rawValue,
+                    attemptID.attempt,
+                    record.target.namespace,
+                    record.target.id,
+                    attemptID.itemID.rawValue,
+                    attemptID.attempt,
+                    record.displayName,
+                    try encodeReportValue(record.state),
+                    try record.result.map { try encodeReportValue($0) },
+                    record.detail,
+                    date,
+                ])
+        }
+    }
+
+    // MARK: Public API: Report lifecycle
+
+    /// Initialize (or execution-check) the report for one attempt.
+    ///
+    /// - No header → insert at revision 1 with the scope's planned targets.
+    /// - Header with the same execution → no-op, returns the current report.
+    /// - Header with a different execution (same-attempt restart,
+    ///   halt-resume dispatch) → resets progress and advances the revision;
+    ///   the scope is re-inserted fresh.
+    ///
+    /// This is the only place a report's target inventory is (re)created.
+    /// `requeue(id:)` never calls this — halt/cancellation keeps observed
+    /// outcomes until a new lease actually activates.
+    public func beginReport(
+        attemptID: QueueAttemptID,
+        executionID: QueueExecutionID,
+        operation: QueueReportOperation,
+        scope: QueueReportScope
+    ) throws -> QueueAttemptReport {
+        let now = Self.nowMillis()
+        return try Self.wrap {
+            let queue = try self.queue()
+            return try queue.write { db in
+                try Self.validateReportAttempt(db, attemptID)
+
+                if let existing = try Self.readReport(db, itemID: attemptID.itemID, attempt: attemptID.attempt) {
+                    if existing.executionID == executionID {
+                        // Same execution. Normally a no-op — EXCEPT when the
+                        // inventory is empty (a lease activation reset the
+                        // rows before this begin arrived): recreate the
+                        // planned scope so a halt-resumed dispatch reports
+                        // its targets.
+                        if case .targets(let records) = scope, existing.targets.isEmpty, records.isEmpty == false {
+                            try Self.insertScopeTargets(db, attemptID: attemptID, scope: scope, at: now)
+                            try db.execute(
+                                sql: "UPDATE queue_attempt_reports SET revision = revision + 1, updated_at = ? WHERE item_id = ? AND attempt = ?;",
+                                arguments: [now, attemptID.itemID.rawValue, attemptID.attempt])
+                            guard let reloaded = try Self.readReport(db, itemID: attemptID.itemID, attempt: attemptID.attempt) else {
+                                throw QueueReportStoreError.notInitialized(attemptID.itemID)
+                            }
+                            return reloaded
+                        }
+                        return existing
+                    }
+                    try Self.resetHeaderToExecution(
+                        db,
+                        itemID: attemptID.itemID,
+                        attempt: attemptID.attempt,
+                        executionID: executionID)
+                    try Self.insertScopeTargets(db, attemptID: attemptID, scope: scope, at: now)
+                    guard let reloaded = try Self.readReport(db, itemID: attemptID.itemID, attempt: attemptID.attempt) else {
+                        throw QueueReportStoreError.notInitialized(attemptID.itemID)
+                    }
+                    return reloaded
+                }
+
+                try db.execute(
+                    sql: """
+                    INSERT INTO queue_attempt_reports (
+                        item_id, attempt, execution_id, operation, scope, phase,
+                        provider_id, model, availability, result_summary, revision, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, 1, ?);
+                    """,
+                    arguments: [
+                        attemptID.itemID.rawValue,
+                        attemptID.attempt,
+                        executionID.rawValue.uuidString,
+                        operation.rawValue,
+                        try Self.encodeReportValue(scope),
+                        QueueReportPhase.planned.rawValue,
+                        QueueReportAvailability.available.rawValue,
+                        now,
+                    ])
+                try Self.insertScopeTargets(db, attemptID: attemptID, scope: scope, at: now)
+                guard let report = try Self.readReport(db, itemID: attemptID.itemID, attempt: attemptID.attempt) else {
+                    throw QueueReportStoreError.notInitialized(attemptID.itemID)
+                }
+                return report
+            }
+        }
+    }
+
+    /// Compare the stored execution identity for an attempt and reset the
+    /// report when it changed, WITHOUT initializing a missing report. Called
+    /// at every lease activation (`QueueWorkerOutputChannel.makeScope`) so a
+    /// same-attempt restart cannot let a previous dispatch's stale progress
+    /// survive into the new dispatch — including items whose producers never
+    /// emit reports.
+    public func activateReportExecution(
+        attemptID: QueueAttemptID,
+        executionID: QueueExecutionID
+    ) throws {
+        try Self.wrap {
+            let queue = try self.queue()
+            try queue.write { db in
+                try Self.validateReportAttempt(db, attemptID)
+                guard let existing = try Self.readReport(db, itemID: attemptID.itemID, attempt: attemptID.attempt) else {
+                    return
+                }
+                guard existing.executionID != executionID else { return }
+                try Self.resetHeaderToExecution(
+                    db,
+                    itemID: attemptID.itemID,
+                    attempt: attemptID.attempt,
+                    executionID: executionID)
+            }
+        }
+    }
+
+    /// Validate the attempt and producing execution, apply one mutation,
+    /// advance the revision, and return the committed report — all in the
+    /// same write transaction. Rejections:
+    /// - `.staleAttempt` — the write came from an earlier retry.
+    /// - `.staleExecution` — the write came from a dispatch that no longer
+    ///   owns this attempt (delayed old-lease update).
+    /// - `.notInitialized` — the producer never began a report.
+    public func commitReportMutation(
+        attemptID: QueueAttemptID,
+        executionID: QueueExecutionID,
+        mutation: QueueReportMutation
+    ) throws -> QueueAttemptReport {
+        let now = Self.nowMillis()
+        return try Self.wrap {
+            let queue = try self.queue()
+            return try queue.write { db in
+                try Self.validateReportAttempt(db, attemptID)
+                guard let existing = try Self.readReport(db, itemID: attemptID.itemID, attempt: attemptID.attempt) else {
+                    throw QueueReportStoreError.notInitialized(attemptID.itemID)
+                }
+                guard existing.executionID == executionID else {
+                    throw QueueReportStoreError.staleExecution(
+                        attemptID: attemptID,
+                        expected: executionID,
+                        current: existing.executionID)
+                }
+
+                try db.execute(
+                    sql: """
+                    UPDATE queue_attempt_reports SET
+                        phase = COALESCE(?, phase),
+                        provider_id = COALESCE(?, provider_id),
+                        model = COALESCE(?, model),
+                        availability = COALESCE(?, availability),
+                        result_summary = COALESCE(?, result_summary),
+                        revision = revision + 1,
+                        updated_at = ?
+                    WHERE item_id = ? AND attempt = ?;
+                    """,
+                    arguments: [
+                        mutation.phase?.rawValue,
+                        mutation.provider?.rawValue,
+                        mutation.model?.rawValue,
+                        mutation.availability?.rawValue,
+                        mutation.resultSummary,
+                        now,
+                        attemptID.itemID.rawValue,
+                        attemptID.attempt,
+                    ])
+                try Self.upsertTargetRecords(
+                    db,
+                    attemptID: attemptID,
+                    records: mutation.targetUpserts,
+                    at: now)
+
+                guard let committed = try Self.readReport(db, itemID: attemptID.itemID, attempt: attemptID.attempt) else {
+                    throw QueueReportStoreError.notInitialized(attemptID.itemID)
+                }
+                return committed
+            }
+        }
+    }
+
+    /// Project a report after cancellation/halt/crash-recovery: observed
+    /// outcomes are retained exactly as recorded; every unfinished target
+    /// becomes `.interrupted` (never failed or succeeded); the phase closes
+    /// as `.finished` and the revision advances. Returns `nil` when the
+    /// item's current attempt has no report.
+    @discardableResult
+    public func projectInterruptedReport(itemID: QueueItem.ID) throws -> QueueAttemptReport? {
+        let now = Self.nowMillis()
+        return try Self.wrap {
+            let queue = try self.queue()
+            return try queue.write { db in
+                let currentAttempt = try Int.fetchOne(
+                    db,
+                    sql: "SELECT attempt FROM queue_items WHERE id = ?;",
+                    arguments: [itemID.rawValue])
+                guard let currentAttempt else { return nil }
+                guard let report = try Self.readReport(db, itemID: itemID, attempt: currentAttempt) else {
+                    return nil
+                }
+
+                let unfinished = report.targets.filter { record in
+                    !record.state.isObservedOutcome
+                        && record.state != .interrupted
+                        && record.state != .notReported
+                }
+                let alreadyFinished = report.phase == .finished
+                if unfinished.isEmpty && alreadyFinished {
+                    return report
+                }
+
+                try Self.upsertTargetRecords(
+                    db,
+                    attemptID: QueueAttemptID(itemID: itemID, attempt: currentAttempt),
+                    records: unfinished.map { record in
+                        QueueReportTargetRecord(
+                            target: record.target,
+                            displayName: record.displayName,
+                            state: .interrupted,
+                            result: nil,
+                            detail: record.detail)
+                    },
+                    at: now)
+                try db.execute(
+                    sql: """
+                    UPDATE queue_attempt_reports
+                    SET phase = ?, revision = revision + 1, updated_at = ?
+                    WHERE item_id = ? AND attempt = ?;
+                    """,
+                    arguments: [
+                        QueueReportPhase.finished.rawValue,
+                        now,
+                        itemID.rawValue,
+                        currentAttempt,
+                    ])
+
+                guard let reloaded = try Self.readReport(db, itemID: itemID, attempt: currentAttempt) else {
+                    return nil
+                }
+                return reloaded
+            }
+        }
+    }
+
+    /// Read the current attempt's committed report, or `nil` when the item
+    /// has no report — including a pruned/deleted item, for which "no
+    /// report" is the truthful answer. Header + rows are read in one store
+    /// operation so the revision can never disagree with the rows it
+    /// describes.
+    public func loadReport(itemID: QueueItem.ID) throws -> QueueAttemptReport? {
+        try Self.wrap {
+            let queue = try self.queue()
+            return try queue.read { db in
+                let currentAttempt = try Int.fetchOne(
+                    db,
+                    sql: "SELECT attempt FROM queue_items WHERE id = ?;",
+                    arguments: [itemID.rawValue])
+                guard let currentAttempt else { return nil }
+                return try Self.readReport(db, itemID: itemID, attempt: currentAttempt)
+            }
+        }
+    }
+
+    /// Load bounded summaries for the given item IDs (their CURRENT attempts)
+    /// in one read. Items without a report are absent from the dictionary —
+    /// absent means "no report", never "zero targets".
+    public func loadReportSummaries(
+        itemIDs: [QueueItem.ID]
+    ) throws -> [QueueItem.ID: QueueReportSummary] {
+        guard itemIDs.isEmpty == false else { return [:] }
+        let rawIDs = itemIDs.map(\.rawValue)
+        return try Self.wrap {
+            let queue = try self.queue()
+            return try queue.read { db in
+                let headerRows = try SQLRequest<Row>("""
+                    SELECT r.item_id, r.attempt, r.revision, r.phase, r.availability, r.result_summary
+                    FROM queue_attempt_reports r
+                    JOIN queue_items i ON i.id = r.item_id AND i.attempt = r.attempt
+                    WHERE r.item_id IN \(rawIDs);
+                    """).fetchAll(db)
+
+                var summaries: [QueueItem.ID: QueueReportSummary] = [:]
+                summaries.reserveCapacity(headerRows.count)
+                guard headerRows.isEmpty == false else { return summaries }
+
+                var countsByItem: [String: [QueueReportTargetCountKey: Int]] = [:]
+                let countRows = try SQLRequest<Row>("""
+                    SELECT t.item_id, t.state, COUNT(*) AS n
+                    FROM queue_attempt_report_targets t
+                    JOIN queue_items i ON i.id = t.item_id AND i.attempt = t.attempt
+                    WHERE t.item_id IN \(rawIDs)
+                    GROUP BY t.item_id, t.state;
+                    """).fetchAll(db)
+                for row in countRows {
+                    let itemRaw: String = row["item_id"]
+                    let stateRaw: String = row["state"]
+                    let count: Int = row["n"]
+                    guard let state = try? Self.decodeReportValue(QueueReportTargetState.self, from: stateRaw) else {
+                        DebugLog.store("QueueStore.loadReportSummaries: undecodable target state for \(itemRaw)")
+                        continue
+                    }
+                    var counts = countsByItem[itemRaw] ?? [:]
+                    counts[state.countKey, default: 0] += count
+                    countsByItem[itemRaw] = counts
+                }
+
+                // Per-item bound: each item contributes at most
+                // `maxSearchTargets` rows (window-function row number), so a
+                // single huge early item cannot starve the items after it the
+                // way a shared global LIMIT did.
+                let searchRows = try SQLRequest<Row>("""
+                    SELECT item_id, display_name, state, detail FROM (
+                        SELECT t.item_id AS item_id,
+                               t.display_name AS display_name,
+                               t.state AS state,
+                               t.detail AS detail,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY t.item_id ORDER BY t.seq
+                               ) AS search_rank
+                        FROM queue_attempt_report_targets t
+                        JOIN queue_items i ON i.id = t.item_id AND i.attempt = t.attempt
+                        WHERE t.item_id IN \(rawIDs)
+                    )
+                    WHERE search_rank <= \(QueueReportSummaryLimits.maxSearchTargets)
+                    ORDER BY item_id, search_rank;
+                    """).fetchAll(db)
+
+                var searchFieldsByItem: [String: [String]] = [:]
+                var searchCounts: [String: Int] = [:]
+                for row in searchRows {
+                    let itemRaw: String = row["item_id"]
+                    let used = searchCounts[itemRaw, default: 0]
+                    guard used < QueueReportSummaryLimits.maxSearchTargets else { continue }
+                    searchCounts[itemRaw] = used + 1
+                    var fields = searchFieldsByItem[itemRaw] ?? []
+                    func folded(_ raw: String?) {
+                        guard let raw, raw.isEmpty == false else { return }
+                        fields.append(String(raw.prefix(QueueReportSummaryLimits.maxFieldLength)))
+                    }
+                    folded(row["display_name"] as String?)
+                    if let stateRaw: String = row["state"],
+                       let state = try? Self.decodeReportValue(QueueReportTargetState.self, from: stateRaw) {
+                        switch state {
+                        case .skipped(let reason), .failed(let reason):
+                            folded(reason)
+                        default:
+                            break
+                        }
+                    }
+                    folded(row["detail"] as String?)
+                    searchFieldsByItem[itemRaw] = fields
+                }
+
+                for row in headerRows {
+                    let itemRaw: String = row["item_id"]
+                    let itemID = QueueItemID(rawValue: itemRaw)
+                    let phaseRaw: String = row["phase"]
+                    guard let phase = QueueReportPhase(rawValue: phaseRaw) else {
+                        DebugLog.store("QueueStore.loadReportSummaries: unknown phase \(phaseRaw) for \(itemRaw)")
+                        continue
+                    }
+                    let availabilityRaw: String = row["availability"]
+                    guard let availability = QueueReportAvailability(rawValue: availabilityRaw) else {
+                        DebugLog.store("QueueStore.loadReportSummaries: unknown availability \(availabilityRaw) for \(itemRaw)")
+                        continue
+                    }
+                    var searchFields = searchFieldsByItem[itemRaw] ?? []
+                    if let summary: String = row["result_summary"] {
+                        searchFields.append(String(summary.prefix(QueueReportSummaryLimits.maxFieldLength)))
+                    }
+                    var searchText = searchFields.joined(separator: " ")
+                    if searchText.count > QueueReportSummaryLimits.maxTotalLength {
+                        searchText = String(searchText.prefix(QueueReportSummaryLimits.maxTotalLength))
+                    }
+
+                    summaries[itemID] = QueueReportSummary(
+                        itemID: itemID,
+                        attempt: row["attempt"],
+                        revision: QueueReportRevision(rawValue: row["revision"]),
+                        phase: phase,
+                        availability: availability,
+                        phaseCounts: countsByItem[itemRaw] ?? [:],
+                        resultSummary: row["result_summary"],
+                        searchText: searchText)
+                }
+                return summaries
+            }
+        }
+    }
+
+    /// Delete all report rows for one item (every attempt). Exists for
+    /// explicit cleanup paths; ordinary pruning cascades via foreign keys.
+    public func deleteReports(itemID: QueueItem.ID) throws {
+        try Self.wrap {
+            let queue = try self.queue()
+            try queue.write { db in
+                try db.execute(
+                    sql: "DELETE FROM queue_attempt_report_targets WHERE item_id = ?;",
+                    arguments: [itemID.rawValue])
+                try db.execute(
+                    sql: "DELETE FROM queue_attempt_reports WHERE item_id = ?;",
+                    arguments: [itemID.rawValue])
+            }
+        }
     }
 }

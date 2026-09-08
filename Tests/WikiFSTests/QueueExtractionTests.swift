@@ -511,19 +511,21 @@ private final class FakeExtractionProvider: QueueExtractionProvider, @unchecked 
     func persistBytesExtraction(
         wikiID: WikiID, sourceID: SourceID,
         resolution: BytesExtractionResolution, markdown: String
-    ) async throws {
+    ) async throws -> QueueExtractionOutputReference? {
         lock.withLock { state in
             state.callLog.append("persist(wikiID:\(wikiID.rawValue), sourceID:\(sourceID.rawValue), backend:\(resolution.backend.rawValue))")
         }
+        return nil
     }
 
     func persistTranscriptExtraction(
         wikiID: WikiID, sourceID: SourceID,
         resolution: TranscriptExtractionResolution, outcome: TranscriptFetchOutcome
-    ) async throws {
+    ) async throws -> QueueExtractionOutputReference? {
         lock.withLock { state in
             state.callLog.append("persistTranscript(wikiID:\(wikiID.rawValue), sourceID:\(sourceID.rawValue))")
         }
+        return nil
     }
 }
 

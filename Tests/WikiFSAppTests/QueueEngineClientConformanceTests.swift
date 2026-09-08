@@ -96,6 +96,21 @@ struct QueueEngineClientConformanceTests {
         // loadAllActivitySnapshots
         let snapshots = try await client.loadAllActivitySnapshots()
         #expect(snapshots.isEmpty)
+
+        // loadQueueReport — non-throwing, typed results. A fresh item with no
+        // report loads as .notReported (never an error, never zeros).
+        let reportResult = await client.loadQueueReport(for: itemID)
+        guard case .notReported = reportResult else {
+            Issue.record("Expected .notReported for a fresh item, got \(reportResult)")
+            return
+        }
+
+        // loadQueueReportSummaries — batched, fail-soft.
+        let summariesResult = await client.loadQueueReportSummaries(for: [itemID])
+        guard case .loaded = summariesResult else {
+            Issue.record("Expected loaded summaries on a fresh store, got \(summariesResult)")
+            return
+        }
     }
 
     @Test func loadTypedTranscriptIsCallable() async throws {

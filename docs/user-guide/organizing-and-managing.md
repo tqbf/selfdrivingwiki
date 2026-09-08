@@ -241,24 +241,36 @@ All extraction and ingestion operations flow through a **persistent queue**.
 
 | Control | Where | What it does |
 |---|---|---|
-| **Pause / Resume** | Activity window toolbar | Stops dispatching new items; resume restarts. Persists across relaunch. |
-| **Stop All** | Activity window toolbar | Cancels all in-flight items in that queue (re-queued). |
-| **Cancel** | Per-item button | Cancels a single running or queued item. |
-| **Retry** | Per-item button | Re-enqueues a failed or cancelled item. |
+| **Pause Queue** | Activity window toolbar | Stops new starts. Running jobs finish. Resume starts dispatch again. |
+| **Stop All…** | Activity window toolbar, under Queue Actions | Pauses this queue and cancels its running jobs. Queued jobs stay queued. The confirmation states this before you confirm. |
+| **Cancel** | Per-item button | Cancels one running or queued job. |
+| **Retry Job** | Per-item button | Runs a failed or cancelled job again as a new attempt. The whole job runs again. It does not keep the old attempt's results. |
 
 ### Activity windows
 
 | Window | Shortcut | Contents |
 |---|---|---|
-| **Agent Queue** | ⌘I | Ingestion + lint jobs. Detail pane shows live agent transcript. |
-| **Extraction Queue** | ⌘E | PDF-to-markdown jobs. Detail pane shows progress text. |
+| **Agent Queue** | ⌘I | Ingestion and lint jobs. |
+| **Extraction Queue** | ⌘E | PDF-to-markdown jobs. |
 
-Both show:
-- **Active** section (running + queued, drag-reorderable).
-- **Recent** section (last 30 terminal items).
+Both windows share one job workspace:
+
+- **Left: job navigator.** The **Active** section lists running and queued jobs. The **Recent** section lists up to 200 finished jobs. Drag to reorder queued jobs. Reordering turns off while filters or search are active.
+- **Search field** at the top. Search covers loaded jobs only: kind, wiki name, target names, and recorded outcome text. While summaries load, the footer labels the search incomplete.
+- **Filter menu** covers State, Wiki, and Operation. Active filters show a **Clear Filters** action.
+- If filters hide the selected job, the workspace stays open. It shows the notice "Selected job is outside this filter" with a **Clear Filters** action.
 - Per-item status: spinner (running), clock (queued), ✓ (completed), ⚠️ (failed), ✕ (cancelled).
-- Source filenames + wiki name + relative time.
-- Context menu: Copy Transcript, Cancel, Retry, Copy Error.
+- Context menu: Reveal Source, Reveal Debug Folder, Cancel, Retry, Copy Error.
+
+### The job workspace
+
+Select a job to open its workspace on the right.
+
+- **Header** — job title, operation, wiki, state, and one elapsed clock. Queued and running jobs show **Cancel**. Failed and cancelled jobs show **Retry Job**.
+- **Overview** — the complete list of targets for the job. Each row shows a name and a state or result. Select a row to see the full name, the ID, the reason, and actions such as Open Page or Reveal Source. Batches of 12 or more targets add a local search field. **Run Details** below the list shows recorded times, the attempt, the actual provider and model, and usage. Absent values show **Not Reported**.
+- **Activity** — the typed transcript for the job. Extraction jobs without a transcript show progress text instead.
+
+Not Reported means no evidence reached the report. It is not an empty success. For example, a lint run may finish without page-level results. The workspace then says "Agent run completed; page-level results not reported".
 
 ---
 

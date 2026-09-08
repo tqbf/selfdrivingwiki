@@ -260,11 +260,20 @@ Open from the menu bar or keyboard:
 
 | Window | Shortcut | What it shows |
 |---|---|---|
-| **Agent Queue** | ⌘I | Ingestion and lint jobs. Live agent transcript in the detail pane. |
-| **Extraction Queue** | ⌘E | PDF-to-markdown jobs. Progress text in the detail pane. |
+| **Agent Queue** | ⌘I | Ingestion and lint jobs. |
+| **Extraction Queue** | ⌘E | PDF-to-markdown jobs. |
 
 Both windows show:
-- **Active** section — currently running and queued items (drag to reorder).
-- **Recent** section — last 30 completed/failed/cancelled items.
-- **Per-item controls** — Cancel (running/queued), Retry (failed/cancelled).
-- **Toolbar** — Pause/Resume, Stop All.
+- **Active** section — currently running and queued items (drag to reorder;
+  reordering turns off while filters or search are active).
+- **Recent** section — up to 200 completed/failed/cancelled items.
+- **Per-item controls** — Cancel (running/queued), Retry Job (failed/cancelled).
+- **Toolbar** — Pause Queue, and Stop All… under Queue Actions.
+
+**Stop All** pauses the queue and cancels its running jobs. Queued jobs stay
+queued. The confirmation states this before you confirm.
+
+Select a job to open its workspace. **Overview** shows the job's targets and
+Run Details. **Activity** shows the transcript or progress text. See
+[Organizing and managing](organizing-and-managing.md#the-activity-queue) for
+the full workspace guide.

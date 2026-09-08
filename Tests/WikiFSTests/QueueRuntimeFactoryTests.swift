@@ -182,14 +182,14 @@ private struct QueueRuntimeExtractionProvider: QueueExtractionProvider {
         sourceID: SourceID,
         resolution: BytesExtractionResolution,
         markdown: String
-    ) async throws {}
+    ) async throws -> QueueExtractionOutputReference? { nil }
 
     func persistTranscriptExtraction(
         wikiID: WikiID,
         sourceID: SourceID,
         resolution: TranscriptExtractionResolution,
         outcome: TranscriptFetchOutcome
-    ) async throws {}
+    ) async throws -> QueueExtractionOutputReference? { nil }
 }
 
 private struct QueueRuntimeIngestionProvider: QueueIngestionProvider {
@@ -202,7 +202,8 @@ private struct QueueRuntimeIngestionProvider: QueueIngestionProvider {
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
         onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
-        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
+        onReport: (@Sendable (QueueReportMutation) -> Void)?
     ) async throws {}
 
     func runLint(
@@ -213,7 +214,8 @@ private struct QueueRuntimeIngestionProvider: QueueIngestionProvider {
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
         onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
-        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
+        onReport: (@Sendable (QueueReportMutation) -> Void)?
     ) async throws {}
 
     func runLintPages(
@@ -225,7 +227,8 @@ private struct QueueRuntimeIngestionProvider: QueueIngestionProvider {
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
         onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
-        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
+        onReport: (@Sendable (QueueReportMutation) -> Void)?
     ) async throws {}
 
     func readiness() async -> String? { nil }

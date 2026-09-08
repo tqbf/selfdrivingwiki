@@ -95,6 +95,22 @@ struct ActivityWindowView: View {
     @State private var selectedItemID: QueueItem.ID?
     @State private var loadedTranscriptItems: [ChatTranscriptItem] = []
     @State private var didAutoSelect = false
+    @State private var jobFilter = QueueJobFilter()
+    @State private var isCommandPending = false
+    @State private var commandError: String?
+    @State private var confirmsStopAll = false
+    /// Overview ↔ Activity selector for the selected job's workspace (plan §1).
+    /// Every new selection resets to Overview; both surfaces stay mounted so
+    /// switching never drops streaming data or the transcript scroll position.
+    @State private var workspaceSurface: QueueWorkspaceSurface = .overview
+
+    /// The selected job's two workspace surfaces. Activity is the only
+    /// transcript surface (plan §1); Overview is the complete inventory +
+    /// Run Details.
+    enum QueueWorkspaceSurface: Hashable {
+        case overview
+        case activity
+    }
 
     private var queueTitle: String {
         switch queue {
@@ -130,16 +146,48 @@ struct ActivityWindowView: View {
         viewModel.snapshot.recentItems.filter { $0.queue == queue }
     }
 
+    /// Everything the navigator displays: active jobs plus the bounded recent
+    /// history (the existing 200-item display limit).
+    private var displayedItems: [QueueItem] {
+        Array(activeItems + recentItems.prefix(200))
+    }
+
+    private var displayedItemIDs: [QueueItem.ID] {
+        displayedItems.map(\.id)
+    }
+
+    /// `.task` identity for the batched summary load: the displayed item set.
+    /// New or replaced items trigger a refresh; cached items are skipped by
+    /// the tracker so repeated keys only pay for what changed.
+    private var displayedItemSummariesKey: String {
+        displayedItemIDs.map(\.rawValue).joined(separator: ",")
+    }
+
     var body: some View {
         NavigationSplitView {
             sidebar
-                .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 340)
+                .navigationSplitViewColumnWidth(
+                    min: QueueWorkspaceMetrics.Navigator.minWidth,
+                    ideal: QueueWorkspaceMetrics.Navigator.idealWidth,
+                    max: QueueWorkspaceMetrics.Navigator.maxWidth)
         } detail: {
             detailPane
         }
-        .frame(minWidth: 640, minHeight: 400)
+        .frame(
+            minWidth: QueueWorkspaceMetrics.Window.minWidth,
+            minHeight: QueueWorkspaceMetrics.Window.minHeight)
         .navigationTitle(queueTitle)
         .navigationSubtitle(subtitle)
+        .searchable(text: $jobFilter.search, prompt: "Search loaded jobs")
+        .confirmationDialog(
+            Self.stopAllConfirmationTitle(for: queueTitle),
+            isPresented: $confirmsStopAll) {
+            Button(Self.stopAllButtonLabel, role: .destructive) {
+                runQueueCommand("stop queue") { try await queueEngine.halt(queue) }
+            }
+        } message: {
+            Text(Self.stopAllConfirmationMessage)
+        }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 queueControlMenu
@@ -166,6 +214,11 @@ struct ActivityWindowView: View {
         .onChange(of: activityTracker.pendingSelectionItemID) { _, _ in
             consumePendingSelectionIfNeeded()
         }
+        // Plan §1: "Every new selection opens Overview." A deep link, an
+        // auto-select, or a user click all land here.
+        .onChange(of: selectedItemID) { _, _ in
+            workspaceSurface = .overview
+        }
         // Auto-select the most interesting item once, when the first snapshot
         // lands — a window opened from "1 running" should show that run.
         // Also a safety net for #837: if the pending selection was consumed
@@ -176,6 +229,13 @@ struct ActivityWindowView: View {
         }
         .onChange(of: recentItems.map(\.id)) { _, _ in
             autoSelectIfNeeded()
+        }
+        // Summaries load asynchronously after attach (plan §"How summaries
+        // load"): lifecycle-only rows render immediately, and this batched
+        // load fills row progress + report-backed search when the engine
+        // answers. Re-runs when the displayed set changes.
+        .task(id: displayedItemSummariesKey) {
+            await activityTracker.refreshReportSummaries(itemIDs: displayedItemIDs)
         }
     }
 
@@ -215,6 +275,7 @@ struct ActivityWindowView: View {
         }
         activityTracker.pendingSelectionItemID = nil
         activityTracker.pendingSelectionQueue = nil
+        jobFilter = QueueJobFilter()
         selectedItemID = pending
         didAutoSelect = true
     }
@@ -230,7 +291,8 @@ struct ActivityWindowView: View {
         from sources: IndexSet,
         to destination: Int
     ) {
-        guard let movedIndex = sources.first,
+        guard jobFilter.allowsReordering,
+              let movedIndex = sources.first,
               movedIndex < active.count else { return }
         let movedItem = active[movedIndex]
 
@@ -261,10 +323,15 @@ struct ActivityWindowView: View {
         _ name: String,
         operation: @escaping @MainActor () async throws -> Void
     ) {
+        guard !isCommandPending else { return }
+        isCommandPending = true
+        commandError = nil
         Task { @MainActor in
+            defer { isCommandPending = false }
             do {
                 try await operation()
             } catch {
+                commandError = "Could not \(name): \(error.localizedDescription)"
                 DebugLog.store("ActivityWindow: \(name) failed: \(error)")
             }
         }
@@ -274,8 +341,18 @@ struct ActivityWindowView: View {
 
     @ViewBuilder
     private var sidebar: some View {
-        let active = activeItems
-        let recent = Array(recentItems.prefix(200))
+        let allActive = activeItems
+        let allRecent = Array(recentItems.prefix(200))
+        // One read of the summary-state dictionary per sidebar render — the
+        // footer and the search label read it, the rows read merged summaries.
+        let summaryStates = activityTracker.reportSummaryStates
+        let data = buildRowDisplayData(for: allActive + allRecent)
+        let matches: (QueueItem) -> Bool = { item in
+            jobFilter.includes(
+                item, searchText: navigatorSearchText(item: item, row: data[item.id]))
+        }
+        let active = allActive.filter(matches)
+        let recent = allRecent.filter(matches)
         // Precompute all @Observable-derived display data ONCE, so the
         // ForEach row body reads only plain values. This eliminates the
         // per-row swift_task_isMainExecutorImpl isolation checks that
@@ -283,11 +360,15 @@ struct ActivityWindowView: View {
         // swift_getObjectType during ObservationCenter._withObservation)
         // when observable state changed concurrently with row evaluation —
         // e.g. cancelling a lint job. See swiftlang/swift#89197.
-        let displayData = buildRowDisplayData(for: active + recent)
+        let displayData = data
 
-        if active.isEmpty && recent.isEmpty {
-            emptyState
-        } else {
+        VStack(spacing: 0) {
+            jobFilterMenu
+            if allActive.isEmpty && allRecent.isEmpty {
+                emptyState
+            } else if active.isEmpty && recent.isEmpty {
+                ContentUnavailableView.search(text: jobFilter.search)
+            } else {
             List(selection: $selectedItemID) {
                 if !active.isEmpty {
                     Section("Active") {
@@ -298,6 +379,13 @@ struct ActivityWindowView: View {
                         .onMove { sources, destination in
                             handleMove(in: active, from: sources, to: destination)
                         }
+                        // L1/plan: reordering is DISABLED (not just
+                        // neutralized) while filters or search are active —
+                        // a drop target computed against a filtered list
+                        // would reorder against the wrong neighbors. The
+                        // footer carries the visible explanation
+                        // ("Clear filters to reorder queued jobs.").
+                        .moveDisabled(!jobFilter.allowsReordering)
                     }
                 }
                 if !recent.isEmpty {
@@ -310,7 +398,115 @@ struct ActivityWindowView: View {
                 }
             }
             .listStyle(.sidebar)
+            }
+            Text(navigatorFooter(summaryStates: summaryStates))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(8)
         }
+    }
+
+    /// The navigator footer: scope truth plus the summary-load labels (plan:
+    /// "While loading, result search is labeled incomplete"; on failure
+    /// "report-backed search is labeled unavailable" — never an error banner).
+    private func navigatorFooter(
+        summaryStates: [QueueItem.ID: QueueActivityTracker.ReportSummaryState]
+    ) -> String {
+        let displayed = displayedItemIDs
+        guard !displayed.isEmpty else {
+            return jobFilter.isActive ? "Clear filters to reorder queued jobs." : "Active jobs and up to 200 recent jobs"
+        }
+        let states = displayed.map { summaryStates[$0] ?? .loading }
+        if states.contains(.loading) {
+            return "Loading job summaries — result search is incomplete."
+        }
+        if states.contains(.unavailable) {
+            return "Report-backed search is unavailable for some jobs."
+        }
+        return jobFilter.isActive ? "Clear filters to reorder queued jobs." : "Active jobs and up to 200 recent jobs"
+    }
+
+    /// The navigator's search haystack for one item: its precomputed row
+    /// title, wiki name, and target names, the kind label, the item error,
+    /// and the summary's recorded search text (report-backed search — while
+    /// the batch summary load is in flight that field is empty and the footer
+    /// labels the search incomplete). One implementation shared by the
+    /// sidebar's filter pass and ``isHiddenByFilter(_:)`` so the navigator
+    /// and the workspace's outside-filter notice can never disagree.
+    private func navigatorSearchText(item: QueueItem, row: RowDisplayData?) -> String {
+        [row?.title ?? "", row?.wikiName ?? "", kindLabel(for: item),
+         row?.targetNames.joined(separator: " ") ?? "", item.error ?? "",
+         row?.summarySearchText ?? ""].joined(separator: " ")
+    }
+
+    /// Whether the current filter/search hides `item` from the navigator
+    /// (plan §"Selection, filters, and deep links"). `false` when no filter
+    /// is active. Drives the workspace's "Selected job is outside this
+    /// filter" notice.
+    private func isHiddenByFilter(_ item: QueueItem) -> Bool {
+        guard jobFilter.isActive else { return false }
+        let row = buildRowDisplayData(for: [item])[item.id]
+        return !jobFilter.includes(
+            item, searchText: navigatorSearchText(item: item, row: row))
+    }
+
+    /// Plan §"Selection, filters, and deep links": when filters hide the
+    /// selected job, its workspace stays, topped by a short notice with a
+    /// Clear Filters action. Quiet by design — the workspace below is the
+    /// content; the notice only explains why the navigator looks empty.
+    private var filteredSelectionNotice: some View {
+        HStack(spacing: QueueWorkspaceMetrics.Spacing.xs) {
+            Label("Selected job is outside this filter", systemImage: "line.3.horizontal.decrease")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: QueueWorkspaceMetrics.Spacing.xs)
+            Button("Clear Filters") {
+                jobFilter = QueueJobFilter()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Show this job in the navigator again")
+        }
+        .padding(.horizontal, QueueWorkspaceMetrics.Spacing.md)
+        .padding(.vertical, QueueWorkspaceMetrics.Spacing.xs)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Selected job is outside this filter")
+    }
+
+    private var jobFilterMenu: some View {
+        HStack {
+            Text(jobFilter.isActive ? "Filtered Jobs" : "All Jobs")
+                .font(.headline)
+            Spacer()
+            Menu("Filter", systemImage: "line.3.horizontal.decrease") {
+                Picker("State", selection: $jobFilter.state) {
+                    Text("All States").tag(QueueItemState?.none)
+                    ForEach([QueueItemState.queued, .running, .completed, .failed, .cancelled], id: \.self) { state in
+                        Text(state.rawValue.capitalized).tag(Optional(state))
+                    }
+                }
+                Picker("Wiki", selection: $jobFilter.wikiID) {
+                    Text("All Wikis").tag(WikiID?.none)
+                    ForEach(Array(Set((activeItems + recentItems).map(\.wikiID))).sorted { $0.rawValue < $1.rawValue }, id: \.self) { wikiID in
+                        Text(wikiDisplayName(for: wikiID)).tag(Optional(wikiID))
+                    }
+                }
+                if queue == .ingestion {
+                    Picker("Operation", selection: $jobFilter.operation) {
+                        Text("All Operations").tag(QueueJobFilter.Operation?.none)
+                        Text("Ingestion").tag(Optional(QueueJobFilter.Operation.ingestion))
+                        Text("Lint").tag(Optional(QueueJobFilter.Operation.lint))
+                    }
+                }
+                if jobFilter.isActive {
+                    Divider()
+                    Button("Clear Filters") { jobFilter = QueueJobFilter() }
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        }
+        .padding(12)
     }
 
     private var emptyState: some View {
@@ -337,7 +533,9 @@ struct ActivityWindowView: View {
             targetNames: [],
             usage: nil,
             liveUsage: nil,
-            pendingPermission: nil)
+            pendingPermission: nil,
+            summarySearchText: "",
+            progressLine: nil)
         HStack(spacing: 8) {
             statusView(for: item)
                 .frame(width: 16)
@@ -361,6 +559,18 @@ struct ActivityWindowView: View {
                     Text(data.subtitle)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                // Report-backed phase progress on running rows ("Staging
+                // sources · 8 of 12"), from the item's cached summary —
+                // precomputed above so the row body reads plain values only.
+                // Plan truth rule 5: only a known total with an observed
+                // numerator produces this line; unknown counts stay absent.
+                if let progressLine = data.progressLine {
+                    Text(progressLine)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
                         .lineLimit(1)
                 }
                 if let error = item.error, item.state == .failed {
@@ -438,7 +648,9 @@ struct ActivityWindowView: View {
     }
 
     /// Trailing inline action: Cancel while pending/running, Retry when
-    /// failed. Borderless so rows stay quiet until needed.
+    /// failed. Borderless so rows stay quiet until needed. Icon-only, so
+    /// each carries an explicit accessibility label — the icon alone says
+    /// nothing to VoiceOver.
     @ViewBuilder
     private func rowAction(for item: QueueItem) -> some View {
         switch item.state {
@@ -450,6 +662,7 @@ struct ActivityWindowView: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.borderless)
+            .accessibilityLabel("Cancel job")
             .help("Cancel")
         case .failed:
             Button {
@@ -459,6 +672,7 @@ struct ActivityWindowView: View {
                     .foregroundStyle(.secondary)
             }
             .buttonStyle(.borderless)
+            .accessibilityLabel("Retry job")
             .help("Retry")
         default:
             EmptyView()
@@ -516,51 +730,55 @@ struct ActivityWindowView: View {
     @ViewBuilder
     private var queueControlMenu: some View {
         let state = viewModel.snapshot.runStates[queue] ?? .running
-        let icon = queueControlIcon
-        Menu {
+        HStack {
             if state == .running {
-                Button("Pause \(queueTitle)", systemImage: "pause.fill") {
+                Button("Pause Queue", systemImage: "pause.fill") {
                     runQueueCommand("pause queue") { try await queueEngine.pause(queue) }
                 }
+                .help("Stop new starts. Running jobs continue.")
             } else {
-                Button("Resume \(queueTitle)", systemImage: "play.fill") {
-                    Task {
-                        do {
-                            try await queueEngine.resume(queue)
-                        } catch {
-                            DebugLog.store("ActivityWindow: resume queue failed: \(error)")
-                        }
-                    }
+                Button("Resume Queue", systemImage: "play.fill") {
+                    runQueueCommand("resume queue") { try await queueEngine.resume(queue) }
                 }
             }
-            Divider()
-            Button("Stop All \(queueTitle)", systemImage: "stop.fill", role: .destructive) {
-                runQueueCommand("halt queue") { try await queueEngine.halt(queue) }
+            Menu("Queue Actions", systemImage: "ellipsis.circle") {
+                Button("Stop All…", systemImage: "stop.fill", role: .destructive) {
+                    confirmsStopAll = true
+                }
             }
-        } label: {
-            Label(queueTitle, systemImage: state == .paused ? "pause.circle.fill" : icon)
         }
-        // The unified toolbar shows icon-only labels, and VoiceOver falls
-        // back to the SF Symbol's name ("Inbox Full") without this.
-        .accessibilityLabel("\(queueTitle) Queue")
-        .help(state == .paused
-            ? "\(queueTitle) queue is paused"
-            : "\(queueTitle) queue controls")
+        .labelStyle(.titleAndIcon)
+        .disabled(isCommandPending)
     }
 
     // MARK: - Detail pane
 
+    /// The selected job's workspace (plan §1 "Selected job workspace"): the
+    /// responsive header, the Overview/Activity selector, then the two
+    /// surfaces. Both surfaces stay mounted — the Overview keeps its local
+    /// search/disclosure state and the Activity transcript keeps its scroll
+    /// position and streaming data across selector toggles.
     @ViewBuilder
     private var detailPane: some View {
         if let itemID = selectedItemID, let item = item(for: itemID) {
             VStack(spacing: 0) {
-                detailHeader(for: item)
-                Divider()
-                if item.payload.lintPageIDs != nil {
-                    lintedPagesSection(for: item)
+                // M3/plan: filters that hide the selected job keep the
+                // workspace (never another job's content) and explain
+                // themselves with a Clear Filters action.
+                if isHiddenByFilter(item) {
+                    filteredSelectionNotice
                     Divider()
                 }
-                transcriptContent(for: item)
+                QueueJobHeaderView(
+                    headerPresentation(for: item),
+                    onCancel: { cancel(item: item) },
+                    onRetry: { retry(item: item) },
+                    configure: configureAction,
+                    additionalActions: additionalHeaderActions(for: item))
+                Divider()
+                surfaceSelector
+                Divider()
+                workspaceContent(for: item)
             }
             .task(id: itemID) {
                 // Prevent the previous selection's durable rows from briefly
@@ -573,146 +791,378 @@ struct ActivityWindowView: View {
                     DebugLog.store("ActivityWindow: load transcript failed: \(error)")
                 }
             }
+            .task(id: reportLoadKey(for: item)) {
+                // Load the selected job's durable report for the Overview.
+                // Keyed on attempt + lifecycle state + the item's cached
+                // summary revision, so the Overview tracks committed report
+                // updates (plan: reload on terminal transitions; revisions
+                // arrive as `.reportUpdated` events → summary cache → here).
+                // The view model guards against stale selection writes.
+                await viewModel.loadReport(
+                    for: item.id,
+                    attempt: item.attempt)
+            }
         } else if activeItems.isEmpty && recentItems.isEmpty {
             emptyState
+        } else if selectedItemID != nil {
+            // A selection that left loaded history (pruned): an explicit
+            // unavailable state — never another job's content (plan §
+            // "Selection, filters, and deep links").
+            ContentUnavailableView {
+                Label("Job Unavailable", systemImage: "tray")
+            } description: {
+                Text("This job is no longer in the loaded history.")
+            }
         } else {
             ContentUnavailableView {
                 Label("No Selection", systemImage: "sidebar.left")
             } description: {
-                Text("Select an item to view its transcript.")
+                Text("Select an item to view its workspace.")
             }
         }
     }
 
+    /// Overview ↔ Activity selector (plan §1 layout order: errors, selector,
+    /// then the selected surface).
+    private var surfaceSelector: some View {
+        HStack(spacing: 0) {
+            Picker("Workspace Surface", selection: $workspaceSurface) {
+                Text("Overview").tag(QueueWorkspaceSurface.overview)
+                Text("Activity").tag(QueueWorkspaceSurface.activity)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: 240)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, QueueWorkspaceMetrics.Spacing.md)
+        .padding(.vertical, QueueWorkspaceMetrics.Spacing.xs)
+    }
+
+    /// Both workspace surfaces, kept mounted so toggling the selector never
+    /// drops streaming transcript data or scroll positions (plan §1). The
+    /// hidden surface stops hit-testing; a hosted WKWebView that merely fades
+    /// out keeps its session alive, which is exactly the fidelity the plan
+    /// asks for.
     @ViewBuilder
-    private func detailHeader(for item: QueueItem) -> some View {
-        let targets = targetNames(for: item)
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("\(kindLabel(for: item)) — \(wikiDisplayName(for: item.wikiID))")
-                    .font(.headline)
-                Text(stateDescription(for: item))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                if !targets.isEmpty {
-                    Text(targetSummary(for: item, names: targets))
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(3)
-                        .textSelection(.enabled)
-                        .help(targets.joined(separator: "\n"))
-                }
-                if let error = item.error, item.state == .failed {
-                    Text(error)
-                        .font(.callout)
-                        .foregroundStyle(.red)
-                        .textSelection(.enabled)
-                        .lineLimit(4)
-                    // #440: when the failure is a "not configured" error (the
-                    // provider binary wasn't found, no API key, etc.), show a
-                    // call-to-action button that opens Settings on the relevant
-                    // tab so the user can fix it without guessing.
-                    if isConfigurationError(error), openWindowBridge != nil,
-                       let cta = configureCTA {
-                        Button(action: {
-                            openWindowBridge?.openSettings(tab: cta.tab)
-                        }) {
-                            Label(cta.label, systemImage: "gearshape")
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    }
-                }
-                // #608: surface a pending always-ask permission stall in the
-                // detail header too (mirrors how liveUsage + usage appear on
-                // both the sidebar row and the detail header). Same yellow
-                // `exclamationmark.triangle.fill` pattern as the sidebar row +
-                // the Agents-settings model-warning. Reads `pendingPermission`
-                // directly — the detail pane isn't driven by `RowDisplayData`,
-                // and the `@Observable` read here is safe (we're outside the
-                // sidebar's crash-prone `ForEachChild.updateValue` path that
-                // motivated the precompute in the first place).
-                if let permission = activityTracker.pendingPermission(for: item.id) {
-                    PermissionPendingRow(
-                        permission: permission,
-                        font: .callout,
-                        lineLimit: 3,
-                        textSelection: true)
-                }
-                // #544 live progress: show running token counts + model + elapsed
-                // during the run. Elapsed time ticks via TimelineView per second.
-                // Cleared on completion; the #528 full summary takes over below.
-                if item.state == .running, let usage = activityTracker.liveUsage(for: item.id) {
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        let elapsed = elapsedString(item.startedAt, now: context.date)
-                        let line = UsageFormatter.liveSummary(usage: usage)
-                        Text(line.isEmpty ? elapsed : "\(line) · \(elapsed)")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                // #528 spike: show per-run usage in the detail header too.
-                if let usage = activityTracker.usage(for: item.id) {
-                    Text(UsageFormatter.fullSummary(
-                        usage: usage,
-                        startedAt: item.startedAt,
-                        finishedAt: item.finishedAt))
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-                // #583: per-model breakdown for this run. Today most runs
-                // merge their phases into a single snapshot, so the breakdown
-                // has one entry and reads as a slightly-redundant second line —
-                // but the structure is here for when phases start emitting
-                // individual usage events (planner vs executor vs finalizer
-                // using different models). Only shown when there's a model id
-                // in the breakdown (otherwise the aggregate line above
-                // already covered everything).
-                let byModel = activityTracker.usageBreakdown(for: item.id)
-                if byModel.count > 1 {
-                    VStack(alignment: .leading, spacing: 1) {
-                        ForEach(byModelSorted(byModel), id: \.modelId) { entry in
-                            Text(UsageFormatter.itemModelBreakdownLine(
-                                modelId: entry.modelId,
-                                breakdown: entry.breakdown,
-                                usage: activityTracker.usage(for: item.id)))
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                                .textSelection(.enabled)
-                        }
-                    }
-                    .padding(.leading, 6)
+    private func workspaceContent(for item: QueueItem) -> some View {
+        ZStack {
+            QueueJobOverviewView(overviewPresentation(for: item))
+                .opacity(workspaceSurface == .overview ? 1 : 0)
+                .allowsHitTesting(workspaceSurface == .overview)
+                .accessibilityHidden(workspaceSurface != .overview)
+            transcriptContent(for: item)
+                .opacity(workspaceSurface == .activity ? 1 : 0)
+                .allowsHitTesting(workspaceSurface == .activity)
+                .accessibilityHidden(workspaceSurface != .activity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Task identity for the selected report load: attempt + lifecycle state
+    /// + the summary revision the tracker last saw for this item. A retry
+    /// (attempt bump), a terminal transition, or a committed report update
+    /// re-runs the load; identity changes that don't affect the report don't.
+    private func reportLoadKey(for item: QueueItem) -> String {
+        let revision = activityTracker.reportSummaries[item.id]?.revision.rawValue ?? -1
+        return "\(item.id.rawValue)|\(item.attempt)|\(item.state.rawValue)|\(revision)"
+    }
+
+    /// The header's Configure… action for configuration failures (#440). The
+    /// header view only shows it when `isConfigurationError` is set.
+    private var configureAction: QueueWorkspaceAction? {
+        guard openWindowBridge != nil, let cta = configureCTA else { return nil }
+        return QueueWorkspaceAction(label: cta.label, systemImage: "gearshape") {
+            openWindowBridge?.openSettings(tab: cta.tab)
+        }
+    }
+
+    /// Quiet header icon actions: Reveal Source (extraction jobs, #598) and
+    /// Reveal Debug Folder (runs that produced a debug trace). Per-target
+    /// navigation lives in the Overview rows.
+    private func additionalHeaderActions(for item: QueueItem) -> [QueueWorkspaceAction] {
+        var actions: [QueueWorkspaceAction] = []
+        if item.queue == .extraction, let sourceID = item.payload.sourceIDs.first {
+            actions.append(QueueWorkspaceAction(
+                label: "Reveal Source", systemImage: "arrow.up.forward.app") {
+                revealSource(sourceID, in: item.wikiID)
+            })
+        }
+        if let debugURL = activityTracker.debugURL(for: item.id) {
+            actions.append(QueueWorkspaceAction(
+                label: "Reveal Debug Folder", systemImage: "folder.badge.gearshape") {
+                NSWorkspace.shared.activateFileViewerSelecting([debugURL])
+            })
+        }
+        return actions
+    }
+
+    /// Map the item + report data onto the header presentation. Derived from
+    /// immutable inputs before body evaluation — plain values only.
+    private func headerPresentation(for item: QueueItem) -> QueueJobHeaderPresentation {
+        let startedAt = date(fromMillis: item.startedAt)
+        let finishedAt = date(fromMillis: item.finishedAt)
+        let isTerminal = item.state == .completed || item.state == .failed
+            || item.state == .cancelled
+        let errorText: String? = item.state == .failed ? item.error : nil
+        return QueueJobHeaderPresentation(
+            title: rowTitle(for: item),
+            operationLabel: QueueWorkspaceMapper.operationLabel(for: item),
+            wikiName: wikiDisplayName(for: item.wikiID),
+            lifecycle: QueueWorkspaceMapper.lifecycle(for: item.state),
+            progress: QueueWorkspaceMapper.headerProgress(
+                from: activityTracker.reportSummary(for: item.id),
+                operation: QueueWorkspaceMapper.reportOperation(for: item),
+                payloadTargetCount: item.payload.lintPageIDs?.count
+                    ?? item.payload.sourceIDs.count,
+                jobLifecycle: QueueWorkspaceMapper.lifecycle(for: item.state)),
+            startedAt: startedAt,
+            durationText: isTerminal
+                ? QueueWorkspaceFormat.duration(from: startedAt, to: finishedAt)
+                : nil,
+            errorText: errorText,
+            isConfigurationError: errorText.map(isConfigurationError) ?? false,
+            pendingPermissionText: activityTracker.pendingPermission(for: item.id)
+                .map(Self.permissionPendingLabel(for:)),
+            isCommandPending: isCommandPending)
+    }
+
+    // MARK: - Overview mapping
+
+    /// Map the selected job's durable report — or its payload, when no report
+    /// is recorded (legacy jobs, still loading) — onto the Overview
+    /// presentation. Everything is derived here, before the list iterates the
+    /// rows, so the inventory body reads plain values only.
+    private func overviewPresentation(for item: QueueItem) -> QueueJobOverviewPresentation {
+        let operation = QueueWorkspaceMapper.reportOperation(for: item)
+        // M2: one index for the whole selected-job mapping — the report-backed
+        // rows, the legacy rows, and their navigation actions all resolve
+        // membership + names through it instead of re-scanning the store per
+        // target.
+        let nameIndex = makeNameIndex(wikiID: item.wikiID)
+        if case .loaded(let report) = viewModel.selectedReport,
+           Self.loadedReportMatches(report: report, item: item) {
+            return overview(from: report, item: item, operation: operation, nameIndex: nameIndex)
+        }
+        return legacyOverview(for: item, operation: operation, nameIndex: nameIndex)
+    }
+
+    /// True when the view model's loaded report describes THIS selection:
+    /// same item AND same attempt. A retry bumps the item's attempt while the
+    /// cached report still describes the previous attempt (the reload is
+    /// async, keyed on `reportLoadKey`); rendering it would show the old
+    /// attempt's inventory until the reload lands, so the attempt must match
+    /// before the report-backed presentation is used.
+    static func loadedReportMatches(report: QueueAttemptReport, item: QueueItem) -> Bool {
+        report.attemptID.itemID == item.id && report.attemptID.attempt == item.attempt
+    }
+
+    /// Report-backed Overview: the recorded inventory in payload order, the
+    /// availability-aware result statement, and Run Details from the report
+    /// header + item timestamps.
+    private func overview(
+        from report: QueueAttemptReport,
+        item: QueueItem,
+        operation: QueueReportOperation,
+        nameIndex: QueueTargetNameIndex
+    ) -> QueueJobOverviewPresentation {
+        let isWholeWiki: Bool = {
+            if case .wholeWiki = report.scope { return true }
+            return false
+        }()
+        let rows: [QueueTargetRowValue]
+        switch report.scope {
+        case .wholeWiki:
+            rows = [wholeWikiScopeRow(for: item)]
+        case .targets(let records):
+            rows = records.map { targetRow(record: $0, item: item, nameIndex: nameIndex) }
+        }
+        return QueueJobOverviewPresentation(
+            sectionTitle: QueueWorkspaceMapper.sectionTitle(
+                for: operation, isWholeWiki: isWholeWiki),
+            // Known counts only: an empty recorded inventory shows the empty
+            // state, never a fabricated "0".
+            countText: report.targets.isEmpty ? nil : String(report.targets.count),
+            rows: rows,
+            resultStatement: resultStatement(for: report),
+            runDetails: runDetailsFacts(for: item, report: report),
+            emptyStateText: emptyStateText(for: operation, isWholeWiki: isWholeWiki))
+    }
+
+    /// One recorded target → one inventory row. The recorded display name is
+    /// preserved for history even when the target no longer resolves; live
+    /// navigation actions appear only while the target stays resolvable.
+    private func targetRow(
+        record: QueueReportTargetRecord,
+        item: QueueItem,
+        nameIndex: QueueTargetNameIndex
+    ) -> QueueTargetRowValue {
+        let identity: QueueWorkspaceTargetIdentity
+        let fallbackTitle: String
+        switch record.target {
+        case .source(let id):
+            identity = .source(id)
+            fallbackTitle = "Source unavailable"
+        case .page(let id):
+            identity = .page(id)
+            fallbackTitle = "Page unavailable"
+        }
+        return QueueTargetRowValue(
+            identity: identity,
+            title: record.displayName.isEmpty ? fallbackTitle : record.displayName,
+            status: QueueWorkspaceMapper.targetStatus(
+                for: record.state, result: record.result),
+            reason: QueueWorkspaceMapper.targetReason(for: record),
+            actions: rowActions(for: identity, wikiID: item.wikiID, nameIndex: nameIndex))
+    }
+
+    /// Legacy / loading Overview: rows derived from the item's payload. Jobs
+    /// recorded before reports exist show truthful unavailable states and
+    /// keep their payload-derived navigation (Open Page / Reveal Source /
+    /// whole-wiki Browse Pages).
+    private func legacyOverview(
+        for item: QueueItem,
+        operation: QueueReportOperation,
+        nameIndex: QueueTargetNameIndex
+    ) -> QueueJobOverviewPresentation {
+        let isWholeWiki = item.payload.lintPageIDs?.isEmpty == true
+        let rows: [QueueTargetRowValue]
+        if let pageIDs = item.payload.lintPageIDs {
+            if pageIDs.isEmpty {
+                rows = [wholeWikiScopeRow(for: item)]
+            } else {
+                rows = pageIDs.map { pageID in
+                    QueueTargetRowValue(
+                        identity: .page(pageID),
+                        title: nameIndex.pageTitle(pageID) ?? "Deleted page",
+                        status: .notReported(),
+                        actions: rowActions(for: .page(pageID), wikiID: item.wikiID, nameIndex: nameIndex))
                 }
             }
-            Spacer()
-            // #598: extraction jobs — "Reveal Source" action in the detail
-            // header, navigating to the source in the Sources outline.
-            // Mirrors #583's lint "Open" button; uses the same
-            // `requestSidebarReveal(.source)` + `openWiki` mechanism.
-            if item.queue == .extraction, let sourceID = item.payload.sourceIDs.first {
-                Button("Reveal Source", systemImage: "arrow.up.forward.app") {
-                    revealSource(sourceID, in: item.wikiID)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .help("Reveal this source in the wiki's Sources outline")
-            }
-            revealMenu(for: item)
-            switch item.state {
-            case .running, .queued:
-                Button("Cancel") {
-                    runQueueCommand("cancel item") { try await queueEngine.cancelItem(item.id) }
-                }
-            case .failed, .cancelled:
-                Button("Retry") {
-                    retry(item: item)
-                }
-            case .completed:
-                EmptyView()
+        } else {
+            rows = item.payload.sourceIDs.map { sourceID in
+                QueueTargetRowValue(
+                    identity: .source(sourceID),
+                    title: nameIndex.sourceName(sourceID) ?? "Source unavailable",
+                    status: .notReported(),
+                    actions: rowActions(for: .source(sourceID), wikiID: item.wikiID, nameIndex: nameIndex))
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        let count = item.payload.lintPageIDs?.count ?? item.payload.sourceIDs.count
+        return QueueJobOverviewPresentation(
+            sectionTitle: QueueWorkspaceMapper.sectionTitle(
+                for: operation, isWholeWiki: isWholeWiki),
+            countText: count > 0 ? String(count) : nil,
+            rows: rows,
+            resultStatement: nil,
+            runDetails: runDetailsFacts(for: item, report: nil),
+            emptyStateText: emptyStateText(for: operation, isWholeWiki: isWholeWiki))
+    }
+
+    /// Whole-wiki scope marker — exactly one row, never a wiki enumeration,
+    /// before/during/after execution (plan §1). "Browse Pages" preserves the
+    /// pre-workspace navigation into the wiki's Pages sidebar.
+    private func wholeWikiScopeRow(for item: QueueItem) -> QueueTargetRowValue {
+        QueueTargetRowValue(
+            id: "scope:whole-wiki",
+            identity: nil,
+            title: "Whole wiki",
+            status: QueueWorkspaceMapper.lifecycle(for: item.state).status,
+            actions: [QueueWorkspaceAction(
+                label: "Browse Pages", systemImage: "sidebar.left") {
+                self.browsePages(in: item.wikiID)
+            }])
+    }
+
+    /// Navigation actions for one target row. "Extraction output actions
+    /// appear only when a recorded output reference stays resolvable" — the
+    /// persisted markdown belongs to its source, so the action is Reveal
+    /// Source, offered only while the source still resolves in the live
+    /// store. Deleted targets keep their recorded name but no dead action.
+    /// Membership is resolved through the precomputed name index (M2): an ID
+    /// the index knows is an ID the store still lists — same answer the old
+    /// `contains(where:)` scans gave, without re-scanning per row.
+    private func rowActions(
+        for identity: QueueWorkspaceTargetIdentity,
+        wikiID: WikiID,
+        nameIndex: QueueTargetNameIndex
+    ) -> [QueueWorkspaceAction] {
+        switch identity {
+        case .page(let pageID):
+            guard nameIndex.pageTitle(pageID) != nil else { return [] }
+            return [QueueWorkspaceAction(
+                label: "Open Page", systemImage: "arrow.up.forward.app") {
+                self.openPage(pageID, in: wikiID)
+            }]
+        case .source(let sourceID):
+            guard nameIndex.sourceName(sourceID) != nil else { return [] }
+            return [QueueWorkspaceAction(
+                label: "Reveal Source", systemImage: "arrow.up.forward.app") {
+                self.revealSource(sourceID, in: wikiID)
+            }]
+        }
+    }
+
+    /// Availability-aware result statement (plan report truth rules 8–9):
+    /// reported summaries pass through; agent lint's not-reported contract
+    /// keeps its canonical sentence; a persistence failure says so instead of
+    /// presenting uncommitted outcomes as durable.
+    private func resultStatement(for report: QueueAttemptReport) -> String? {
+        switch report.availability {
+        case .available:
+            return report.resultSummary
+        case .notReported:
+            // Producer-set wording; the fallback is the backend contract's
+            // canonical sentence for agent lint runs.
+            return report.resultSummary ?? "Agent run completed; page-level results not reported"
+        case .reportingUnavailable:
+            return "Reporting unavailable for this run — recorded outcomes may be incomplete."
+        }
+    }
+
+    /// Run Details facts: item timestamps + the report header's provider/
+    /// model. Usage comes from the tracker's recorded (or, while running,
+    /// live) usage snapshot; absence omits the row rather than showing zero.
+    private func runDetailsFacts(
+        for item: QueueItem,
+        report: QueueAttemptReport?
+    ) -> QueueRunDetailsFacts {
+        let startedAt = date(fromMillis: item.startedAt)
+        let finishedAt = date(fromMillis: item.finishedAt)
+        var usageLines: [String] = []
+        if let usage = activityTracker.usage(for: item.id),
+           usage.totalTokens > 0 || (usage.cost ?? 0) > 0 {
+            usageLines.append(UsageFormatter.summary(usage: usage))
+        }
+        return QueueRunDetailsFacts(
+            enqueuedAt: date(fromMillis: item.createdAt),
+            startedAt: startedAt,
+            finishedAt: finishedAt,
+            durationText: QueueWorkspaceFormat.duration(from: startedAt, to: finishedAt),
+            attempt: report?.attemptID.attempt ?? item.attempt,
+            providerText: report?.provider.map { $0.rawValue },
+            modelText: report?.model.map { $0.rawValue },
+            usageLines: usageLines)
+    }
+
+    private func emptyStateText(
+        for operation: QueueReportOperation,
+        isWholeWiki: Bool
+    ) -> String {
+        switch operation {
+        case .ingest, .extract:
+            return "No sources recorded for this job."
+        case .lint:
+            return isWholeWiki ? "No scope recorded for this job." : "No pages recorded for this job."
+        }
+    }
+
+    /// Resolve a source ID to its display filename via the wiki's store, or
+    /// `nil` when the source no longer exists / the session isn't live.
+    /// Single-lookup convenience for call sites without a precomputed index;
+    /// batch call sites use ``makeNameIndex(wikiID:)``.
+    private func sourceTitle(_ sourceID: SourceID, wikiID: WikiID) -> String? {
+        makeNameIndex(wikiID: wikiID).sourceName(sourceID)
     }
 
     @ViewBuilder
@@ -722,7 +1172,7 @@ struct ActivityWindowView: View {
         if !presentation.items.isEmpty {
             presentation.transcriptView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                // Match `detailHeader`'s 16pt inset. ChatWebView's CSS sets
+                // Match the workspace header's 16pt inset. ChatWebView's CSS sets
                 // body left-padding to 0 by design (PR #457) — the left margin
                 // is the host's responsibility, so provide it here.
                 .padding(.horizontal, 16)
@@ -764,76 +1214,19 @@ struct ActivityWindowView: View {
         }
     }
 
-    // MARK: - Lint page navigation
+    // MARK: - Target navigation
 
-    /// Lint jobs carry `lintPageIDs` in their payload. For a page-level lint we
-    /// list every linted page with an "Open" action that opens it in the wiki's
-    /// main window (the shared `WikiStoreModel`); for a whole-wiki lint
-    /// (`lintPageIDs == []`) we show "All pages linted" with a "Browse Pages"
-    /// button that focuses the wiki window on its Pages sidebar.
-    @ViewBuilder
-    private func lintedPagesSection(for item: QueueItem) -> some View {
-        let pageIDs = item.payload.lintPageIDs ?? []
-        VStack(alignment: .leading, spacing: 8) {
-            Text(pageIDs.isEmpty ? "Lint Scope" : "Linted Pages")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            if pageIDs.isEmpty {
-                HStack(spacing: 6) {
-                    Image(systemName: "books.vertical")
-                        .foregroundStyle(.secondary)
-                    Text("All pages linted")
-                        .font(.callout)
-                    Spacer(minLength: 4)
-                    Button("Browse Pages", systemImage: "sidebar.left") {
-                        browsePages(in: item.wikiID)
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .help("Switch to the Pages list in the wiki window")
-                }
-            } else {
-                VStack(spacing: 6) {
-                    ForEach(pageIDs, id: \.self) { pageID in
-                        lintPageRow(pageID: pageID, wikiID: item.wikiID)
-                    }
-                }
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-    }
-
-    /// A single linted page: title (resolved from the wiki's store) with an
-    /// "Open" button. Pages deleted since the lint ran resolve to a placeholder
-    /// and show no "Open" button (there is nothing to navigate to).
-    @ViewBuilder
-    private func lintPageRow(pageID: PageID, wikiID: WikiID) -> some View {
-        let title = pageTitle(pageID, wikiID: wikiID)
-        HStack(spacing: 6) {
-            Image(systemName: "doc.text")
-                .foregroundStyle(.secondary)
-            Text(title ?? "Deleted page")
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .help(title ?? "Deleted page")
-            Spacer(minLength: 4)
-            if title != nil {
-                Button("Open", systemImage: "arrow.up.forward.app") {
-                    openPage(pageID, in: wikiID)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .help("Open this page in the wiki window")
-            }
-        }
-    }
+    // (Open Page / Reveal Source / Browse Pages live here — used by the
+    // Overview rows and the header actions. The former linted-pages section
+    // was folded into the Overview inventory: report-backed rows when a
+    // report exists, payload rows otherwise.)
 
     /// Resolve a page ID to its current title via the wiki's store, or `nil`
     /// if the page no longer exists / the session isn't live.
+    /// Single-lookup convenience for call sites without a precomputed index;
+    /// batch call sites use ``makeNameIndex(wikiID:)``.
     private func pageTitle(_ pageID: PageID, wikiID: WikiID) -> String? {
-        sessionManager?.sessions[wikiID]?.store
-            .summaries.first { $0.id == pageID }?.title
+        makeNameIndex(wikiID: wikiID).pageTitle(pageID)
     }
 
     /// Open a linted page in its wiki's main window. The `WikiStoreModel` is
@@ -887,27 +1280,6 @@ struct ActivityWindowView: View {
         openWindowBridge?.openWiki?(wikiID)
     }
 
-    // MARK: - Reveal debug folder
-
-    /// A compact button revealing the run's debug folder in Finder. Only
-    /// shown when a debug folder is available — items that never spawned an
-    /// agent (preflight failure, cancelled before run) won't have one. The
-    /// debug folder contains the complete trace (ACP messages, permissions,
-    /// usage, stderr.log), which supersedes the per-run `run.jsonl` log that
-    /// used to be exposed separately. Mirrors the ChatDetailView's debug button.
-    @ViewBuilder
-    private func revealMenu(for item: QueueItem) -> some View {
-        if let debugURL = activityTracker.debugURL(for: item.id) {
-            Button {
-                NSWorkspace.shared.activateFileViewerSelecting([debugURL])
-            } label: {
-                Label("Reveal Debug Folder", systemImage: "folder.badge.gearshape")
-            }
-            .labelStyle(.iconOnly)
-            .help("Open the complete debug trace folder (ACP messages, permissions, usage)")
-        }
-    }
-
     // MARK: - Copy
 
     /// The copy path uses the same canonical typed rows as the renderer.
@@ -947,13 +1319,13 @@ struct ActivityWindowView: View {
     /// snapshot loop renders with the actionable error + CTA via
     /// ``isConfigurationError``.
     private func retry(item: QueueItem) {
-        Task {
-            do {
-                try await queueEngine.retryItem(item.id)
-            } catch {
-                DebugLog.ingest("ActivityWindow: retry failed for item \(item.id.rawValue.prefix(8)) (state=\(item.state.rawValue)) — \(error.localizedDescription)")
-            }
-        }
+        runQueueCommand("retry job") { try await queueEngine.retryItem(item.id) }
+    }
+
+    /// Cancel a queued/running job — one implementation shared by the header
+    /// button, the row inline action, and the context menu.
+    private func cancel(item: QueueItem) {
+        runQueueCommand("cancel item") { try await queueEngine.cancelItem(item.id) }
     }
 
     // MARK: - Helpers
@@ -1084,24 +1456,6 @@ struct ActivityWindowView: View {
         sessionManager?.sessions[id]?.descriptor.displayName ?? String(id.rawValue.prefix(8))
     }
 
-    /// #583: Sort a per-item per-model breakdown for display — largest total
-    /// tokens first, unknown-model bucket last. Mirrors
-    /// `DailyUsageByModel.sortedForDisplay` so the menu bar and the Activity
-    /// window render in the same order.
-    private func byModelSorted(
-        _ byModel: [String: ModelUsageBreakdown]
-    ) -> [(modelId: String, breakdown: ModelUsageBreakdown)] {
-        byModel
-            .filter { $0.value.hasData }
-            .sorted { lhs, rhs in
-                let lhsUnknown = lhs.key == ModelUsageBreakdown.unknownModelKey
-                let rhsUnknown = rhs.key == ModelUsageBreakdown.unknownModelKey
-                if lhsUnknown != rhsUnknown { return rhsUnknown }
-                return lhs.value.totalTokens > rhs.value.totalTokens
-            }
-            .map { (modelId: $0.key, breakdown: $0.value) }
-    }
-
     private func kindLabel(for item: QueueItem) -> String {
         if item.payload.lintPageIDs != nil { return "Lint" }
         switch item.queue {
@@ -1138,6 +1492,12 @@ struct ActivityWindowView: View {
         /// the Agents-settings model-warning (`exclamationmark.triangle.fill`
         /// + `.orange`).
         let pendingPermission: PendingPermission?
+        /// Report-backed search text from the item's cached summary (plan:
+        /// "outcome search use batched job summaries"). Empty while loading.
+        let summarySearchText: String
+        /// Phase progress line from the cached summary ("Staging sources ·
+        /// 8 of 12"), or `nil` when nothing countable is recorded.
+        let progressLine: String?
     }
 
     /// Snapshot all `@Observable`-derived display data for the given items into
@@ -1152,43 +1512,91 @@ struct ActivityWindowView: View {
         let itemUsage = activityTracker.itemUsage
         let liveUsage = activityTracker.liveUsage
         let pendingPermissions = activityTracker.pendingPermissions
+        let reportSummaries = activityTracker.reportSummaries
+
+        // M2: one name index per live wiki session, built once per render.
+        // Replaces the per-item linear scans over `sources`/`summaries`
+        // (O(items × targets × pages) per queue event) with one
+        // O(sources + pages) pass per wiki plus O(1) lookups per target.
+        // Built HERE, at the sidebar level, so the observable reads stay
+        // tracked outside row bodies — the observation-crash workaround holds.
+        var nameIndexes: [WikiID: QueueTargetNameIndex] = [:]
+        func nameIndex(for wikiID: WikiID) -> QueueTargetNameIndex {
+            if let cached = nameIndexes[wikiID] { return cached }
+            let built = Self.makeNameIndex(
+                sessions: sessions, wikiID: wikiID)
+            nameIndexes[wikiID] = built
+            return built
+        }
 
         var result: [QueueItem.ID: RowDisplayData] = [:]
         result.reserveCapacity(items.count)
         for item in items {
             let session = sessions[item.wikiID]
             let wikiName = session?.descriptor.displayName ?? String(item.wikiID.rawValue.prefix(8))
-            let store = session?.store
 
-            // Resolve source/page names (observable reads on WikiStoreModel).
-            // Same lookups as `sourceNames(for:)` and `lintPageTitles(for:)`,
-            // just batched into one pass per item rather than per row render.
-            let names: [String]
-            let targets: [String]
-            if let pageIDs = item.payload.lintPageIDs {
-                let titles = pageIDs.compactMap { id in
-                    store?.summaries.first { $0.id == id }?.title
-                }
-                names = titles
-                targets = pageIDs.isEmpty ? ["Entire wiki"] : titles
-            } else {
-                let resolved = item.payload.sourceIDs.compactMap { id in
-                    store?.sources.first { $0.id == id }?.effectiveName
-                }
-                names = resolved
-                targets = resolved
-            }
+            // Resolve source/page names through the index (observable reads
+            // happen once, above, inside makeNameIndex — not per target).
+            // Same names as the old per-item `sourceNames(for:)` /
+            // `lintPageTitles(for:)` scans, in payload order.
+            let resolved = nameIndex(for: item.wikiID).displayNames(for: item)
 
             result[item.id] = RowDisplayData(
-                title: computeRowTitle(for: item, wikiName: wikiName, names: names),
+                title: computeRowTitle(for: item, wikiName: wikiName, names: resolved.names),
                 subtitle: computeRowSubtitle(for: item, wikiName: wikiName),
                 wikiName: wikiName,
-                targetNames: targets,
+                targetNames: resolved.targets,
                 usage: itemUsage[item.id],
                 liveUsage: liveUsage[item.id],
-                pendingPermission: pendingPermissions[item.id])
+                pendingPermission: pendingPermissions[item.id],
+                summarySearchText: reportSummaries[item.id]?.searchText ?? "",
+                progressLine: Self.progressLine(
+                    summary: reportSummaries[item.id],
+                    item: item))
         }
         return result
+    }
+
+    /// Build the name index for one wiki from a snapshot of the live sessions
+    /// (`buildRowDisplayData`) or the session manager itself (single-item
+    /// callers). Static so both entry points share one implementation; pure
+    /// relative to the passed snapshot.
+    private static func makeNameIndex(
+        sessions: [WikiID: any WikiSessionProtocol],
+        wikiID: WikiID
+    ) -> QueueTargetNameIndex {
+        guard let store = sessions[wikiID]?.store else { return QueueTargetNameIndex() }
+        var index = QueueTargetNameIndex()
+        for source in store.sources {
+            index.recordSource(source.id, name: source.effectiveName)
+        }
+        for summary in store.summaries {
+            index.recordPage(summary.id, title: summary.title)
+        }
+        return index
+    }
+
+    /// Single-item variant of the name index (selected-job detail pane).
+    private func makeNameIndex(wikiID: WikiID) -> QueueTargetNameIndex {
+        Self.makeNameIndex(sessions: sessionManager?.sessions ?? [:], wikiID: wikiID)
+    }
+
+    /// Plain progress line ("Staging sources · 8 of 12") from a cached
+    /// summary. Static so it can be precomputed per sidebar render — the
+    /// observation workaround means row bodies never read the tracker.
+    nonisolated static func progressLine(
+        summary: QueueReportSummary?,
+        item: QueueItem
+    ) -> String? {
+        let progress = QueueWorkspaceMapper.headerProgress(
+            from: summary,
+            operation: QueueWorkspaceMapper.reportOperation(for: item),
+            payloadTargetCount: item.payload.lintPageIDs?.count ?? item.payload.sourceIDs.count,
+            jobLifecycle: QueueWorkspaceMapper.lifecycle(for: item.state))
+        guard let progress else { return nil }
+        return [progress.phaseText, progress.countsText]
+            .compactMap { $0 }
+            .joined(separator: " · ")
     }
 
     /// Pure computation of the row title from pre-resolved data (no
@@ -1217,15 +1625,12 @@ struct ActivityWindowView: View {
 
     /// Row title for the detail pane (the sidebar precomputes via
     /// `buildRowDisplayData`). Reads `@Observable` properties — only safe
-    /// outside `ForEachChild.updateValue`.
+    /// outside `ForEachChild.updateValue`. Resolves names through the M2
+    /// index (one pass over the wiki's sources/pages) instead of the old
+    /// per-target linear scans.
     private func rowTitle(for item: QueueItem) -> String {
         let wikiName = wikiDisplayName(for: item.wikiID)
-        let names: [String]
-        if item.payload.lintPageIDs != nil {
-            names = lintPageTitles(for: item)
-        } else {
-            names = sourceNames(for: item)
-        }
+        let names = makeNameIndex(wikiID: item.wikiID).displayNames(for: item).names
         return computeRowTitle(for: item, wikiName: wikiName, names: names)
     }
 
@@ -1233,72 +1638,6 @@ struct ActivityWindowView: View {
     /// ``rowTitle(for:)``.
     private func rowSubtitle(for item: QueueItem) -> String {
         computeRowSubtitle(for: item, wikiName: wikiDisplayName(for: item.wikiID))
-    }
-
-    /// Resolve the item's source IDs to display filenames via the wiki's
-    /// store. Sources deleted since enqueue (or wikis without a live session)
-    /// resolve to nothing and are dropped.
-    private func sourceNames(for item: QueueItem) -> [String] {
-        guard let store = sessionManager?.sessions[item.wikiID]?.store else { return [] }
-        return item.payload.sourceIDs.compactMap { id in
-            store.sources.first { $0.id == id }?.effectiveName
-        }
-    }
-
-    /// Resolve a lint item's page IDs to page titles via the wiki's store.
-    private func lintPageTitles(for item: QueueItem) -> [String] {
-        guard let pageIDs = item.payload.lintPageIDs,
-              let store = sessionManager?.sessions[item.wikiID]?.store else { return [] }
-        return pageIDs.compactMap { id in
-            store.summaries.first { $0.id == id }?.title
-        }
-    }
-
-    /// What this item operates on, for the detail header: lint targets
-    /// ("Entire wiki" / page titles) or source filenames.
-    private func targetNames(for item: QueueItem) -> [String] {
-        if let pageIDs = item.payload.lintPageIDs {
-            return pageIDs.isEmpty ? ["Entire wiki"] : lintPageTitles(for: item)
-        }
-        return sourceNames(for: item)
-    }
-
-    /// "3 sources: a.pdf, b.md, c.txt" / "2 pages: A, B" — capped so a
-    /// 50-item batch doesn't flood the header (full list in the tooltip).
-    private func targetSummary(for item: QueueItem, names: [String]) -> String {
-        let shown = names.prefix(5).joined(separator: ", ")
-        let suffix = names.count > 5 ? ", …" : ""
-        if names.count == 1 { return shown }
-        let noun = item.payload.lintPageIDs != nil ? "pages" : "sources"
-        return "\(names.count) \(noun): \(shown)\(suffix)"
-    }
-
-    private func stateDescription(for item: QueueItem) -> String {
-        switch item.state {
-        case .running:
-            if let started = date(fromMillis: item.startedAt) {
-                return "Running — started \(started.formatted(date: .omitted, time: .shortened))"
-            }
-            return "Running"
-        case .queued:
-            let added = Date(timeIntervalSince1970: Double(item.createdAt) / 1000)
-            return "Queued — added \(added.formatted(date: .omitted, time: .shortened))"
-        case .completed:
-            if let finished = date(fromMillis: item.finishedAt) {
-                return "Completed \(finished.formatted(.relative(presentation: .named)))"
-            }
-            return "Completed"
-        case .failed:
-            if let finished = date(fromMillis: item.finishedAt) {
-                return "Failed \(finished.formatted(.relative(presentation: .named)))"
-            }
-            return "Failed"
-        case .cancelled:
-            if let finished = date(fromMillis: item.finishedAt) {
-                return "Cancelled \(finished.formatted(.relative(presentation: .named)))"
-            }
-            return "Cancelled"
-        }
     }
 
     /// Short relative time for sidebar rows ("2 min. ago"), from the most
@@ -1390,6 +1729,24 @@ private extension View {
 }
 
 extension ActivityWindowView {
+    /// Stop All confirmation copy (plan §"Stop All"), as named constants so
+    /// the hosted scenarios and the user-guide parity test pin the exact
+    /// semantics: the confirmation states that Stop All pauses this queue and
+    /// cancels its running work. It does not delete queued work, and the
+    /// confirmation does not imply that it does.
+    static func stopAllConfirmationTitle(for queueTitle: String) -> String {
+        "Stop all running work in \(queueTitle)?"
+    }
+
+    static let stopAllButtonLabel = "Stop All"
+    static let stopAllConfirmationMessage =
+        "This pauses the queue and cancels its running jobs. Queued jobs remain queued."
+
+    /// The selected-job workspace's outside-filter notice (plan §"Selection,
+    /// filters, and deep links") — named for the hosted scenarios.
+    static let filteredSelectionNoticeText = "Selected job is outside this filter"
+    static let clearFiltersButtonLabel = "Clear Filters"
+
     /// #608: the caption shown on the yellow "Permission pending" row. Prefers
     /// the tool name (e.g. "Edit file"); falls back to the input summary (the
     /// path being edited) when the tool name is unavailable; final fallback is

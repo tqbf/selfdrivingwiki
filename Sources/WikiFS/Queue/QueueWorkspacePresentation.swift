@@ -1,0 +1,468 @@
+import Foundation
+import WikiFSCore
+
+// MARK: - Status
+
+/// One status as it renders everywhere in the queue workspace: a text label, an
+/// SF Symbol paired with it (plan: "Pair every color-coded status with text and
+/// a symbol"), and a *semantic* style the views map to `foregroundStyle` so
+/// light/dark and Increase Contrast adapt without per-view colors.
+///
+/// Pure value — no SwiftUI imports, no backend reporting types. Callers map
+/// `QueueItem.State` and §2 report target states onto the factories below; the
+/// workspace never inspects backend enums.
+struct QueueWorkspaceStatus: Equatable, Sendable {
+    /// Semantic color role. Views resolve it once; tests assert the role, not
+    /// a resolved `Color`.
+    enum Style: String, Sendable {
+        /// Accent/normal emphasis — active work.
+        case primary
+        /// Quiet states that must not compete with content.
+        case secondary
+        /// Confirmed good outcome (green).
+        case success
+        /// Notable-but-not-fatal (orange) — skipped, permission stalls.
+        case warning
+        /// Failure (red).
+        case failure
+        /// Ongoing activity — renders with the running spinner affordance.
+        case running
+    }
+
+    let text: String
+    let symbol: String
+    let style: Style
+
+    init(text: String, symbol: String, style: Style) {
+        self.text = text
+        self.symbol = symbol
+        self.style = style
+    }
+}
+
+// Job lifecycle vocabulary — the `QueueItemState` projection.
+extension QueueWorkspaceStatus {
+    /// Waiting to be claimed.
+    static func queued() -> QueueWorkspaceStatus {
+        QueueWorkspaceStatus(text: "Queued", symbol: "clock", style: .secondary)
+    }
+
+    /// A worker is actively processing.
+    static func running() -> QueueWorkspaceStatus {
+        QueueWorkspaceStatus(text: "Running", symbol: "ellipsis.circle", style: .running)
+    }
+
+    /// Processing finished successfully.
+    static func completed() -> QueueWorkspaceStatus {
+        QueueWorkspaceStatus(text: "Completed", symbol: "checkmark.circle.fill", style: .success)
+    }
+
+    /// Processing failed with a recorded error.
+    static func failed() -> QueueWorkspaceStatus {
+        QueueWorkspaceStatus(text: "Failed", symbol: "exclamationmark.triangle.fill", style: .failure)
+    }
+
+    /// Cancelled by the user or the engine.
+    static func cancelled() -> QueueWorkspaceStatus {
+        QueueWorkspaceStatus(text: "Cancelled", symbol: "xmark.circle", style: .secondary)
+    }
+}
+
+// Target-outcome vocabulary — the §2 report target-state projection.
+extension QueueWorkspaceStatus {
+    /// In the recorded inventory but execution has not reached it.
+    static func planned() -> QueueWorkspaceStatus {
+        QueueWorkspaceStatus(text: "Planned", symbol: "circle.dashed", style: .secondary)
+    }
+
+    /// Worker is staging/preparing this target.
+    static func preparing() -> QueueWorkspaceStatus {
+        QueueWorkspaceStatus(text: "Preparing", symbol: "gearshape", style: .running)
+    }
+
+    /// Worker handed the target off (ingestion "submitted" ≠ "ingested").
+    static func submitted() -> QueueWorkspaceStatus {
+        QueueWorkspaceStatus(text: "Submitted", symbol: "paperplane", style: .primary)
+    }
+
+    /// Worker is actively processing the target.
+    static func processing() -> QueueWorkspaceStatus {
+        QueueWorkspaceStatus(text: "Processing", symbol: "ellipsis.circle", style: .running)
+    }
+
+    /// Target finished successfully (distinct from a persisted extraction
+    /// output, which callers surface via a "Show Output" action).
+    static func succeeded() -> QueueWorkspaceStatus {
+        QueueWorkspaceStatus(text: "Succeeded", symbol: "checkmark.circle.fill", style: .success)
+    }
+
+    /// Deliberately not processed, with a recorded reason.
+    static func skipped() -> QueueWorkspaceStatus {
+        QueueWorkspaceStatus(text: "Skipped", symbol: "minus.circle", style: .warning)
+    }
+
+    /// The runner supplies no evidence for this target. Never rendered as a
+    /// zero count or an empty success.
+    static func notReported() -> QueueWorkspaceStatus {
+        QueueWorkspaceStatus(text: "Not Reported", symbol: "dash.circle", style: .secondary)
+    }
+}
+
+// MARK: - Job lifecycle
+
+/// The job-level lifecycle the header and workspace act on. The caller maps
+/// `QueueItem.state` 1:1 (`.transcription` queue kinds canonicalize before
+/// mapping — this type is presentation-only and queue-kind-blind).
+///
+/// Centralizing cancel/retry visibility here keeps the header, and any future
+/// context menu, from disagreeing about which states offer which action.
+enum QueueWorkspaceJobLifecycle: String, Sendable {
+    case queued
+    case running
+    case completed
+    case failed
+    case cancelled
+
+    /// Status line for the header (text + symbol + style decided once).
+    var status: QueueWorkspaceStatus {
+        switch self {
+        case .queued: return .queued()
+        case .running: return .running()
+        case .completed: return .completed()
+        case .failed: return .failed()
+        case .cancelled: return .cancelled()
+        }
+    }
+
+    /// Plan: "Show Cancel for queued/running jobs."
+    var showsCancelAction: Bool {
+        self == .queued || self == .running
+    }
+
+    /// Plan: "…and Retry Job for failed/cancelled jobs." Retry keeps existing
+    /// whole-job semantics; this type only decides visibility.
+    var showsRetryAction: Bool {
+        self == .failed || self == .cancelled
+    }
+}
+
+// MARK: - Progress
+
+/// Phase progress for the header. Determinate bars are permitted *only* for a
+/// known total with an observed numerator (plan: "Do not represent unknown
+/// counts as zero"); anything else renders indeterminate with a meaningful
+/// phase label.
+enum QueueWorkspaceProgress: Equatable, Sendable {
+    /// Activity without countable units — "Merging pages".
+    case indeterminate(phase: String)
+    /// A known total and an observed phase-specific numerator — "Staging
+    /// sources: 8 of 12".
+    case determinate(phase: String, completed: Int, total: Int)
+
+    var phaseText: String {
+        switch self {
+        case .indeterminate(let phase): return phase
+        case .determinate(let phase, _, _): return phase
+        }
+    }
+
+    /// "8 of 12" — only ever produced by the determinate case, so an unknown
+    /// count can never render as "0 of N".
+    var countsText: String? {
+        switch self {
+        case .indeterminate: return nil
+        case .determinate(_, let completed, let total): return "\(completed) of \(total)"
+        }
+    }
+
+    /// Guards the determinate case against caller misuse (unknown totals
+    /// passed as 0, negative or out-of-range numerators): when false the views
+    /// fall back to the indeterminate presentation.
+    var isRenderableDeterminate: Bool {
+        switch self {
+        case .indeterminate: return false
+        case .determinate(_, let completed, let total):
+            return total > 0 && completed >= 0 && completed <= total
+        }
+    }
+}
+
+// MARK: - Actions
+
+/// One labeled affordance the workspace renders (row action, header action).
+/// The closure is the whole action contract — this layer performs no commands,
+/// logs nothing, and tracks no pending state; the caller's closure owns all of
+/// that so header/context-menu/keyboard paths share one implementation.
+struct QueueWorkspaceAction {
+    let label: String
+    let systemImage: String
+    let perform: () -> Void
+
+    init(label: String, systemImage: String, perform: @escaping () -> Void) {
+        self.label = label
+        self.systemImage = systemImage
+        self.perform = perform
+    }
+}
+
+// MARK: - Target identity
+
+/// Namespaced identity for one inventory entry (plan §2 vocabulary, mirrored in
+/// presentation): the case tag makes a page ULID unable to compare equal to a
+/// source ULID, per the repository's ID-separation rule. `nil`-identity rows
+/// are scope markers ("Whole wiki"), not targets.
+enum QueueWorkspaceTargetIdentity: Hashable, Sendable {
+    case source(SourceID)
+    case page(PageID)
+
+    /// Stable list/disclosure identity. The case prefix keeps the raw ULID
+    /// strings from colliding across namespaces in `ForEach`/`Set<String>` use.
+    var rowID: String {
+        switch self {
+        case .source(let id): return "source:\(id.rawValue)"
+        case .page(let id): return "page:\(id.rawValue)"
+        }
+    }
+}
+
+// MARK: - Target row value
+
+/// Everything one inventory row renders, derived by the caller *before* list
+/// iteration (plan §4: "Derive presentation values from immutable inputs before
+/// list iteration"). Plain values only — no `@Observable` reads inside row
+/// bodies, preserving the existing observation-crash workaround.
+///
+/// A row whose `identity` is `nil` is a scope marker ("Whole wiki"): it has no
+/// target to open and its actions list is expected to be empty.
+struct QueueTargetRowValue: Identifiable {
+    /// Stable across reordering and disclosure state. Use
+    /// `QueueWorkspaceTargetIdentity.rowID` for real targets; any stable string
+    /// for scope rows.
+    let id: String
+    let identity: QueueWorkspaceTargetIdentity?
+    /// Recognizable display name. For history rows this is the *recorded* name,
+    /// preserved even when the target no longer resolves.
+    let title: String
+    /// Full selectable name when it differs from the truncated `title`; `nil`
+    /// means the title is already the full name.
+    let fullName: String?
+    /// State/result text + symbol + style.
+    let status: QueueWorkspaceStatus
+    /// Skip/failure reason or an availability explanation ("Source bytes
+    /// unavailable"). Shown under the status in the disclosed block.
+    let reason: String?
+    /// Available navigation actions ("Open Page", "Reveal Source", "Show
+    /// Output"). Empty when none are available — extraction output actions
+    /// appear only while a recorded output reference stays resolvable.
+    let actions: [QueueWorkspaceAction]
+
+    init(
+        id: String,
+        identity: QueueWorkspaceTargetIdentity?,
+        title: String,
+        fullName: String? = nil,
+        status: QueueWorkspaceStatus,
+        reason: String? = nil,
+        actions: [QueueWorkspaceAction] = []
+    ) {
+        self.id = id
+        self.identity = identity
+        self.title = title
+        self.fullName = fullName
+        self.status = status
+        self.reason = reason
+        self.actions = actions
+    }
+
+    /// Convenience for real targets: derives `id` from the identity's
+    /// namespaced `rowID`.
+    init(
+        identity: QueueWorkspaceTargetIdentity,
+        title: String,
+        fullName: String? = nil,
+        status: QueueWorkspaceStatus,
+        reason: String? = nil,
+        actions: [QueueWorkspaceAction] = []
+    ) {
+        self.init(
+            id: identity.rowID,
+            identity: identity,
+            title: title,
+            fullName: fullName,
+            status: status,
+            reason: reason,
+            actions: actions)
+    }
+
+    /// The full name to reveal on disclosure — never a tooltip-only surface.
+    var displayName: String { fullName ?? title }
+
+    /// Whether the disclosure adds information beyond the collapsed row.
+    var hasDisclosableDetail: Bool {
+        fullName != nil || reason != nil || !actions.isEmpty || identity != nil
+    }
+
+    /// Local inventory search (plan: local search for large batches). Case- and
+    /// diacritic-insensitive via `localizedStandardContains`, matching the
+    /// job-navigator search behavior. Scope rows match on title/status too, so
+    /// "Whole wiki" stays findable.
+    func matches(query: String) -> Bool {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return true }
+        let haystacks = [title, fullName, reason, status.text].compactMap { $0 }
+        return haystacks.contains { $0.localizedStandardContains(trimmed) }
+    }
+}
+
+// MARK: - Run details facts
+
+/// One labeled value in the Run Details disclosure.
+struct QueueRunDetailEntry: Equatable, Sendable {
+    let label: String
+    let value: String
+    /// True for explicit placeholders ("Not Reported") — rendered in tertiary
+    /// style so reported facts and absent facts never read the same.
+    let isPlaceholder: Bool
+
+    init(label: String, value: String, isPlaceholder: Bool = false) {
+        self.label = label
+        self.value = value
+        self.isPlaceholder = isPlaceholder
+    }
+
+    static func notReported(_ label: String) -> QueueRunDetailEntry {
+        QueueRunDetailEntry(label: label, value: "Not Reported", isPlaceholder: true)
+    }
+}
+
+/// Run facts for the Run Details disclosure, mapped by the caller from
+/// `QueueItem` timestamps plus the §2 report header. Pure data — formatting and
+/// the omit-vs-placeholder rules live in `entries` so tests cover them without
+/// rendering.
+///
+/// Plan rules encoded here:
+/// - Unavailable optional metadata is *omitted*…
+/// - …except provider/model, whose absence matters: they render a "Not
+///   Reported" placeholder. Never pass a capacity bucket (`default-ingest`) as
+///   the provider.
+/// - An attempt of `0`/`nil` (first run) is omitted; retried attempts show.
+struct QueueRunDetailsFacts: Sendable {
+    var enqueuedAt: Date?
+    var startedAt: Date?
+    var finishedAt: Date?
+    /// Caller-preferred static duration text (terminal states). When `nil`, the
+    /// view omits the duration row; running jobs show the live clock in the
+    /// header instead of here.
+    var durationText: String?
+    var attempt: Int?
+    /// Actual provider when reported. `nil` → "Not Reported" placeholder.
+    var providerText: String?
+    /// Actual model when reported (usage). `nil` → "Not Reported" placeholder.
+    var modelText: String?
+    /// Preformatted usage/cost lines (e.g. `UsageFormatter` output); each its
+    /// own selectable monospaced-digit row, omitted entirely when empty.
+    var usageLines: [String]
+
+    init(
+        enqueuedAt: Date? = nil,
+        startedAt: Date? = nil,
+        finishedAt: Date? = nil,
+        durationText: String? = nil,
+        attempt: Int? = nil,
+        providerText: String? = nil,
+        modelText: String? = nil,
+        usageLines: [String] = []
+    ) {
+        self.enqueuedAt = enqueuedAt
+        self.startedAt = startedAt
+        self.finishedAt = finishedAt
+        self.durationText = durationText
+        self.attempt = attempt
+        self.providerText = providerText
+        self.modelText = modelText
+        self.usageLines = usageLines
+    }
+
+    /// The disclosure's entries, applying the omission rules above. Blank
+    /// (whitespace-only) text counts as absent.
+    var entries: [QueueRunDetailEntry] {
+        var result: [QueueRunDetailEntry] = []
+        if let enqueuedAt {
+            result.append(QueueRunDetailEntry(label: "Enqueued", value: QueueWorkspaceFormat.timestamp(enqueuedAt)))
+        }
+        if let startedAt {
+            result.append(QueueRunDetailEntry(label: "Started", value: QueueWorkspaceFormat.timestamp(startedAt)))
+        }
+        if let finishedAt {
+            result.append(QueueRunDetailEntry(label: "Finished", value: QueueWorkspaceFormat.timestamp(finishedAt)))
+        }
+        let duration = durationText?.trimmingCharacters(in: .whitespaces)
+        if let duration, !duration.isEmpty {
+            result.append(QueueRunDetailEntry(label: "Duration", value: duration))
+        }
+        if let attempt, attempt > 0 {
+            result.append(QueueRunDetailEntry(label: "Attempt", value: String(attempt)))
+        }
+        // Provider/model absence matters (plan): explicit placeholder, never a
+        // capacity bucket masquerading as a provider.
+        let provider = providerText?.trimmingCharacters(in: .whitespaces)
+        if let provider, !provider.isEmpty {
+            result.append(QueueRunDetailEntry(label: "Provider", value: provider))
+        } else {
+            result.append(.notReported("Provider"))
+        }
+        let model = modelText?.trimmingCharacters(in: .whitespaces)
+        if let model, !model.isEmpty {
+            result.append(QueueRunDetailEntry(label: "Model", value: model))
+        } else {
+            result.append(.notReported("Model"))
+        }
+        for (index, line) in usageLines.enumerated() where !line.isEmpty {
+            // Label only the first usage line; continuation lines keep the
+            // grid aligned under it.
+            result.append(QueueRunDetailEntry(label: index == 0 ? "Usage" : "", value: line))
+        }
+        return result
+    }
+}
+
+// MARK: - Formatting
+
+/// Pure, locale-aware formatting shared by the header clock and run details.
+/// Mirrors `AgentRunStatusView`'s compact duration vocabulary ("42s",
+/// "3m 12s", "1h 5m") so the queue workspace and the run status pill agree.
+enum QueueWorkspaceFormat {
+    /// Elapsed wall time from `start` to `now`; "—" when `start` is nil (a
+    /// queued job has no clock yet). Truncates sub-second noise downward.
+    static func elapsed(from start: Date?, to now: Date) -> String {
+        guard let start else { return "—" }
+        let seconds = max(0, Int(now.timeIntervalSince(start).rounded(.down)))
+        return compactDuration(seconds: seconds)
+    }
+
+    /// Static duration for terminal states; `nil` when either bound is missing
+    /// (run details omit the row rather than show "—").
+    static func duration(from start: Date?, to end: Date?) -> String? {
+        guard let start, let end else { return nil }
+        let seconds = max(0, Int(end.timeIntervalSince(start).rounded(.down)))
+        return compactDuration(seconds: seconds)
+    }
+
+    /// Run-details timestamp: abbreviated date + standard time — enough to
+    /// correlate with logs without flooding the grid.
+    static func timestamp(_ date: Date) -> String {
+        date.formatted(date: .abbreviated, time: .standard)
+    }
+
+    private static func compactDuration(seconds: Int) -> String {
+        if seconds < 60 { return "\(seconds)s" }
+        let minutes = seconds / 60
+        let remainingSeconds = seconds % 60
+        if minutes < 60 {
+            return remainingSeconds == 0 ? "\(minutes)m" : "\(minutes)m \(remainingSeconds)s"
+        }
+        let hours = minutes / 60
+        let remainingMinutes = minutes % 60
+        return remainingMinutes == 0 ? "\(hours)h" : "\(hours)h \(remainingMinutes)m"
+    }
+}

@@ -107,6 +107,18 @@ import Foundation
     /// Load all activity snapshots through the versioned queue envelope.
     func loadAllActivitySnapshots(reply: @escaping (Data) -> Void)
 
+    /// Load the durable attempt report for one queue item. Reply uses the
+    /// versioned queue envelope wrapping `QueueDataPayload`, whose data is
+    /// JSON-encoded `QueueReportLoadResult` (loaded report / notReported /
+    /// unavailable).
+    func loadQueueReport(itemID: String, reply: @escaping (Data) -> Void)
+
+    /// Load bounded report summaries for the displayed queue items.
+    /// `itemIDs` is JSON-encoded `[String]`; reply uses the versioned queue
+    /// envelope wrapping `QueueDataPayload`, whose data is JSON-encoded
+    /// `QueueReportSummariesResult`.
+    func loadQueueReportSummaries(itemIDs: Data, reply: @escaping (Data) -> Void)
+
     /// Return the daemon queue ownership epoch and host state.
     /// Reply uses the versioned queue envelope.
     func queueOwnershipStatus(reply: @escaping (Data) -> Void)

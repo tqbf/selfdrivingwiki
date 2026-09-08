@@ -57,6 +57,10 @@ public protocol QueueIngestionProvider: Sendable {
     ///     at a time; a `nil` argument clears the prior request (resolved /
     ///     rejected / auto-rejected). May never fire if the agent isn't
     ///     configured for `always-ask`.
+    ///   - onReport: Called with observed structured report facts (staging
+    ///     outcomes, actual provider, phases, completion availability).
+    ///     `nil` for callers that don't need durable reporting. Facts only —
+    ///     the provider never infers per-source completion from agent exit.
     func runIngestion(
         wikiID: WikiID,
         sourceIDs: [SourceID],
@@ -66,7 +70,8 @@ public protocol QueueIngestionProvider: Sendable {
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
         onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
-        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
+        onReport: (@Sendable (QueueReportMutation) -> Void)?
     ) async throws
 
     /// Run a whole-wiki lint health-check. Returns when the agent finishes.
@@ -80,6 +85,9 @@ public protocol QueueIngestionProvider: Sendable {
     ///   - onUsage: Called after the run with cumulative usage, if captured.
     ///   - onLiveUsage: Called on each `usage_update` during the run (#544).
     ///   - onPendingPermission: See ``runIngestion``'s parameter (#608).
+    ///   - onReport: See ``runIngestion``'s parameter. Whole-wiki lint reports
+    ///     phases only — it never enumerates pages, and agent completion is
+    ///     reported with availability `.notReported` (no typed findings).
     func runLint(
         wikiID: WikiID,
         queueItemID: QueueItem.ID,
@@ -88,7 +96,8 @@ public protocol QueueIngestionProvider: Sendable {
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
         onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
-        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
+        onReport: (@Sendable (QueueReportMutation) -> Void)?
     ) async throws
 
     /// Run a page-level lint health-check for the given pages. Returns when
@@ -104,6 +113,10 @@ public protocol QueueIngestionProvider: Sendable {
     ///   - onUsage: Called after the run with cumulative usage, if captured.
     ///   - onLiveUsage: Called on each `usage_update` during the run (#544).
     ///   - onPendingPermission: See ``runIngestion``'s parameter (#608).
+    ///   - onReport: See ``runIngestion``'s parameter. Requested page IDs
+    ///     that could not be resolved are reported `.skipped`; the agent
+    ///     supplies no typed page findings, so completion reports
+    ///     availability `.notReported`.
     func runLintPages(
         wikiID: WikiID,
         pageIDs: [PageID],
@@ -113,7 +126,8 @@ public protocol QueueIngestionProvider: Sendable {
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
         onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
-        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
+        onReport: (@Sendable (QueueReportMutation) -> Void)?
     ) async throws
 
     /// Quick readiness probe: checks whether the selected agent provider's
@@ -210,7 +224,9 @@ public struct QueueIngestionWorkerFactory: QueueWorkerFactory {
             emitUsage: { id, usage in output.emitUsage(itemID: id, usage: usage) },
             emitLiveUsage: { id, usage in output.emitLiveUsage(itemID: id, usage: usage) },
             emitLogPaths: { id, logURL, debugURL in output.emitRunPaths(itemID: id, logURL: logURL, debugURL: debugURL) },
-            emitPendingPermission: { id, permission in output.emitPendingPermission(itemID: id, permission: permission) })
+            emitPendingPermission: { id, permission in output.emitPendingPermission(itemID: id, permission: permission) },
+            emitReportBegin: { operation, scope in output.emitReportBegin(operation: operation, scope: scope) },
+            emitReport: { mutation in output.emitReport(mutation) })
     }
 }
 
@@ -233,6 +249,32 @@ struct QueueIngestionWorker: QueueWorker {
     let emitLiveUsage: @Sendable (QueueItem.ID, SessionUsage) -> Void
     let emitLogPaths: @Sendable (QueueItem.ID, URL?, URL?) -> Void
     let emitPendingPermission: @Sendable (QueueItem.ID, PendingPermission?) -> Void
+    /// Durable report emission through the attempt-scoped output boundary.
+    /// `nil` for legacy unscoped dispatches (tests); production always
+    /// provides both via the scoped factory path.
+    var emitReportBegin: (@Sendable (QueueReportOperation, QueueReportScope) -> Void)? = nil
+    var emitReport: (@Sendable (QueueReportMutation) -> Void)? = nil
+
+    /// The planned report scope for this item, derived from the payload:
+    /// lint page IDs → page targets; whole-wiki lint → the whole-wiki marker
+    /// (never enumerated); otherwise the requested sources.
+    static func reportScope(for item: QueueItem) -> QueueReportScope {
+        if let pageIDs = item.payload.lintPageIDs, !pageIDs.isEmpty {
+            return .targets(pageIDs.map { pageID in
+                QueueReportTargetRecord(target: .page(pageID), state: .planned)
+            })
+        }
+        if item.payload.lintPageIDs != nil {
+            return .wholeWiki
+        }
+        return .targets(item.payload.sourceIDs.map { sourceID in
+            QueueReportTargetRecord(target: .source(sourceID), state: .planned)
+        })
+    }
+
+    static func reportOperation(for item: QueueItem) -> QueueReportOperation {
+        item.payload.lintPageIDs != nil ? .lint : .ingest
+    }
 
     func execute(_ item: QueueItem) async throws {
         // Pre-dispatch readiness gate (#440): check the agent provider's binary
@@ -243,6 +285,10 @@ struct QueueIngestionWorker: QueueWorker {
         if let message = await provider.readiness() {
             throw QueueIngestionError.notReady(message)
         }
+
+        // Begin the durable report with the planned scope BEFORE handing off
+        // to the provider, so the inventory exists even if staging fails.
+        emitReportBegin?(Self.reportOperation(for: item), Self.reportScope(for: item))
 
         let onTranscript: (@Sendable (AgentEvent) -> Void)? = { [attemptID] event in
             emitTranscript(attemptID, event)
@@ -267,6 +313,11 @@ struct QueueIngestionWorker: QueueWorker {
         let onPendingPermission: (@Sendable (PendingPermission?) -> Void)? = { [itemID = item.id] permission in
             emitPendingPermission(itemID, permission)
         }
+        // Structured report facts flow through the attempt-scoped boundary;
+        // the lease gate makes stale dispatches no-ops.
+        let onReport: (@Sendable (QueueReportMutation) -> Void)? = { mutation in
+            emitReport?(mutation)
+        }
 
         if let pageIDs = item.payload.lintPageIDs, !pageIDs.isEmpty {
             // Page-level lint.
@@ -279,7 +330,8 @@ struct QueueIngestionWorker: QueueWorker {
                 onUsage: onUsage,
                 onLiveUsage: onLiveUsage,
                 onLogPaths: onLogPaths,
-                onPendingPermission: onPendingPermission
+                onPendingPermission: onPendingPermission,
+                onReport: onReport
             )
         } else if item.payload.lintPageIDs != nil {
             // lintPageIDs is non-nil but empty → whole-wiki lint.
@@ -291,7 +343,8 @@ struct QueueIngestionWorker: QueueWorker {
                 onUsage: onUsage,
                 onLiveUsage: onLiveUsage,
                 onLogPaths: onLogPaths,
-                onPendingPermission: onPendingPermission
+                onPendingPermission: onPendingPermission,
+                onReport: onReport
             )
         } else {
             // Normal ingestion.
@@ -308,7 +361,8 @@ struct QueueIngestionWorker: QueueWorker {
                 onUsage: onUsage,
                 onLiveUsage: onLiveUsage,
                 onLogPaths: onLogPaths,
-                onPendingPermission: onPendingPermission
+                onPendingPermission: onPendingPermission,
+                onReport: onReport
             )
         }
     }

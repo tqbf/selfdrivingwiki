@@ -50,6 +50,10 @@ public actor QueueEngine {
 
     private struct RunningDispatch {
         let leaseID: WorkerLeaseID
+        /// The dispatch's output capability. Retained so the cancel/halt paths
+        /// can invalidate the lease and drain in-flight worker output (report
+        /// commits in particular) before projecting the interrupted report.
+        let outputScope: QueueWorkerOutputScope
         let task: Task<Void, Never>
     }
 
@@ -131,10 +135,23 @@ public actor QueueEngine {
         lifecycle = .starting
 
         // Crash recovery: any items left `.running` from a previous session
-        // are reset to `.queued` (attempt preserved).
+        // are reset to `.queued` (attempt preserved). The dead execution's
+        // report is projected as interrupted first, so its unobserved targets
+        // are never resurrected as live work and never shown as failed or
+        // succeeded; a later redispatch's new lease resets the report.
         var resetCount = 0
         do {
+            let previouslyRunning = try store.loadActive().filter { $0.state == .running }
             resetCount = try store.resetRunningToQueued()
+            for item in previouslyRunning {
+                do {
+                    if let report = try store.projectInterruptedReport(itemID: item.id) {
+                        emit(.reportUpdated(item.id, report))
+                    }
+                } catch {
+                    DebugLog.store("QueueEngine.start: interrupted-report projection failed for \(item.id.rawValue): \(error)")
+                }
+            }
         } catch {
             DebugLog.store("QueueEngine: failed to reset running items at launch: \(error)")
         }
@@ -367,8 +384,14 @@ public actor QueueEngine {
             activeItems = []
         }
         for item in activeItems where item.state == .running {
-            if let dispatch = runningTasks.removeValue(forKey: item.id) {
-                dispatch.task.cancel()
+            let dispatch = runningTasks.removeValue(forKey: item.id)
+            dispatch?.task.cancel()
+            // Same ordering as `cancelItem`: drain this dispatch's in-flight
+            // output (report commits included) before the requeue's interrupted
+            // projection, so a commit racing the halt cannot regress
+            // interrupted targets to live state.
+            if let dispatch {
+                await drainOutput(for: dispatch.outputScope)
             }
             // Requeue: running → queued, preserves orderingKey.
             // This may fail if the item is mid-transition; best-effort.
@@ -376,6 +399,16 @@ public actor QueueEngine {
                 try store.requeue(id: item.id)
                 if let updated = try store.getItem(item.id) {
                     emit(.cancelled(updated))
+                }
+                // Halt keeps observed outcomes and projects unfinished targets
+                // as interrupted. The report only resets when the redispatch's
+                // new lease activates — never in requeue itself.
+                do {
+                    if let report = try store.projectInterruptedReport(itemID: item.id) {
+                        emit(.reportUpdated(item.id, report))
+                    }
+                } catch {
+                    DebugLog.store("QueueEngine.halt: report projection failed for \(item.id.rawValue): \(error)")
                 }
             } catch {
                 DebugLog.store("QueueEngine.halt: failed to requeue \(item.id.rawValue): \(error)")
@@ -425,8 +458,16 @@ public actor QueueEngine {
     /// `orderingKey`).
     public func cancelItem(_ id: QueueItem.ID) async {
         // Cancel the worker task if running.
-        if let dispatch = runningTasks.removeValue(forKey: id) {
-            dispatch.task.cancel()
+        let dispatch = runningTasks.removeValue(forKey: id)
+        dispatch?.task.cancel()
+
+        // Invalidate the lease and drain in-flight worker output BEFORE the
+        // store transition and report projection: a report commit that was
+        // already admitted when the cancel arrived must land (or be rejected)
+        // first, or it would overwrite interrupted targets with live state
+        // after the projection below.
+        if let dispatch {
+            await drainOutput(for: dispatch.outputScope)
         }
 
         // Transition to cancelled (valid from queued or running).
@@ -436,6 +477,15 @@ public actor QueueEngine {
                 emit(.cancelled(updated))
                 decrementProviderCount(for: updated)
                 activeIngestionWikis.remove(updated.wikiID)
+            }
+            // Retain observed outcomes and project unfinished targets as
+            // interrupted (never failed/succeeded) in the durable report.
+            do {
+                if let report = try store.projectInterruptedReport(itemID: id) {
+                    emit(.reportUpdated(id, report))
+                }
+            } catch {
+                DebugLog.store("QueueEngine.cancelItem: report projection failed for \(id.rawValue): \(error)")
             }
         } catch {
             // The item may be in a terminal state already, or the
@@ -626,6 +676,37 @@ public actor QueueEngine {
         return items
     }
 
+    /// Load the current attempt's durable report for a queue item. Non-throwing:
+    /// store failures surface as `.unavailable`, missing reports as
+    /// `.notReported` — consumers never have to distinguish a generic error
+    /// from "this job has no overview report".
+    public func loadQueueReport(for itemID: QueueItem.ID) async -> QueueReportLoadResult {
+        do {
+            guard let report = try store.loadReport(itemID: itemID) else {
+                return .notReported
+            }
+            return .loaded(report)
+        } catch {
+            DebugLog.store("QueueEngine.loadQueueReport: failed for \(itemID.rawValue): \(error)")
+            return .unavailable(reason: String(describing: error))
+        }
+    }
+
+    /// Load bounded report summaries for the displayed item IDs in one store
+    /// read. Fails softly: a store problem returns `.unavailable` so callers
+    /// can retain lifecycle-only rows and label report-backed search
+    /// unavailable.
+    public func loadQueueReportSummaries(
+        for itemIDs: [QueueItem.ID]
+    ) async -> QueueReportSummariesResult {
+        do {
+            return .loaded(try store.loadReportSummaries(itemIDs: itemIDs))
+        } catch {
+            DebugLog.store("QueueEngine.loadQueueReportSummaries: failed for \(itemIDs.count) item(s): \(error)")
+            return .unavailable(reason: String(describing: error))
+        }
+    }
+
     /// Delete persisted typed items for an item.
     public func clearTranscript(for itemID: QueueItem.ID) async {
         do {
@@ -809,6 +890,7 @@ public actor QueueEngine {
                 }
                 runningTasks[item.id] = RunningDispatch(
                     leaseID: outputScope.leaseID,
+                    outputScope: outputScope,
                     task: task)
             }
         }
@@ -830,8 +912,7 @@ public actor QueueEngine {
             worker = try await workerFactory.worker(for: item, output: outputScope)
         } catch {
             // Factory failed to produce a worker — revoke output, then fail.
-            let outputDrain = outputChannel.invalidate(outputScope)
-            for await _ in outputDrain {}
+            await drainOutput(for: outputScope)
             await handleWorkerFinished(
                 item,
                 leaseID: outputScope.leaseID,
@@ -852,13 +933,58 @@ public actor QueueEngine {
             result = .failure(error)
         }
 
-        let outputDrain = outputChannel.invalidate(outputScope)
-        for await _ in outputDrain {}
+        // Every further output from this dispatch is now rejected or has
+        // finished draining.
+        await drainOutput(for: outputScope)
+
+        // Cancellation safety net: the cancel/halt paths project the
+        // interrupted report before the dispatch's output was guaranteed
+        // finished. Now that the drain completed, re-project so a commit that
+        // raced the cancel can never leave unfinished targets in live state
+        // on a cancelled/halted job. Idempotent — no-op when the stored
+        // projection already stands.
+        if case .failure(let error) = result, error is CancellationError {
+            reprojectInterruptedReportAfterDrain(for: item)
+        }
+
         await handleWorkerFinished(
             item,
             leaseID: outputScope.leaseID,
             result: result)
         outputChannel.finish(outputScope)
+    }
+
+    /// Invalidate a dispatch's output lease and wait for its in-flight
+    /// emissions to finish. When this returns, the dispatch can produce no
+    /// further output: the lease no longer admits new emissions, and every
+    /// emission admitted before invalidation has completed (publishing its
+    /// event) or been rejected.
+    private func drainOutput(for scope: QueueWorkerOutputScope) async {
+        let drain = outputChannel.invalidate(scope)
+        for await _ in drain {}
+    }
+
+    /// Re-project the interrupted report after a cancelled dispatch's output
+    /// has drained, making the projection the LAST write to the report.
+    /// Publishes `.reportUpdated` only when the projection actually changed
+    /// the stored report (otherwise the cancel/halt path's projection already
+    /// stands and the event stream is left undisturbed).
+    private func reprojectInterruptedReportAfterDrain(for item: QueueItem) {
+        // Only project when no new dispatch owns the item: a halt-resume
+        // redispatch resets the report when its lease activates, and a stale
+        // projection here would regress the new dispatch's live targets. The
+        // check and the store write are synchronous on the engine actor, so
+        // `dispatchScan` cannot interleave between them.
+        guard runningTasks[item.id] == nil else { return }
+        do {
+            let before = try store.loadReport(itemID: item.id)
+            guard let report = try store.projectInterruptedReport(itemID: item.id) else { return }
+            if report.revision != before?.revision {
+                emit(.reportUpdated(item.id, report))
+            }
+        } catch {
+            DebugLog.store("QueueEngine: post-drain interrupted projection failed for \(item.id.rawValue): \(error)")
+        }
     }
 
     /// Handle the completion of a worker. Transitions the item to a terminal
@@ -919,6 +1045,18 @@ public actor QueueEngine {
                         if let requeued = try store.getItem(item.id) {
                             emit(.cancelled(requeued))
                         }
+                        // L5: this orphan took the requeue path without the
+                        // cancel/halt projection (it never went through
+                        // `cancelItem`/`halt`), so its report may still show
+                        // unfinished targets in live states. Project them as
+                        // interrupted now — same truth rule 10 the cancel/halt
+                        // paths enforce, applied to the defensive branch. The
+                        // task entry was removed above and this block is
+                        // synchronous on the engine actor, so the helper's
+                        // "no new dispatch owns the item" guard holds; a later
+                        // re-dispatch resets the report under a new execution
+                        // identity anyway.
+                        reprojectInterruptedReportAfterDrain(for: item)
                     }
                 } catch {
                     DebugLog.store("QueueEngine.handleWorkerFinished: failed to handle cancellation for \(item.id.rawValue): \(error)")

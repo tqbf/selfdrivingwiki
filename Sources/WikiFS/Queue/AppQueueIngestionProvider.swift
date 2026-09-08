@@ -118,7 +118,8 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
         onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
-        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
+        onReport: (@Sendable (QueueReportMutation) -> Void)?
     ) async throws {
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
             throw QueueIngestionError.spawnFailed("No session for wikiID=\(wikiID)")
@@ -153,12 +154,15 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         // or the user ran "Extract Markdown" manually).
         let stateMarkdown = store.currentStateSnapshot().renderStateFile()
         var sources: [OperationRequest.StagedSource] = []
+        var stagingOutcomes: [(id: SourceID, outcome: QueueIngestionReporting.StagingOutcome)] = []
+        stagingOutcomes.reserveCapacity(sourceIDs.count)
 
         for sourceID in sourceIDs {
             guard let source = store.sources.first(where: { $0.id == sourceID }),
                   let bytes = store.sourceBytes(id: sourceID)
             else {
                 DebugLog.ingest("AppQueueIngestionProvider: skipping \(sourceID.rawValue) — source or bytes missing")
+                stagingOutcomes.append((id: sourceID, outcome: .bytesUnavailable))
                 continue
             }
 
@@ -195,7 +199,12 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
                 name: source.effectiveName,
                 sourceID: source.id
             ))
+            stagingOutcomes.append((id: sourceID, outcome: .staged(name: source.effectiveName)))
         }
+
+        // Report the ACTUAL staging facts from this collection — never
+        // inferred from the request or the agent result.
+        onReport?(QueueIngestionReporting.stagingMutation(requested: stagingOutcomes))
 
         guard !sources.isEmpty else {
             store.endIngest()
@@ -203,6 +212,12 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         }
 
         DebugLog.ingest("AppQueueIngestionProvider: handing off \(sources.count) source(s)")
+
+        // The ACTUAL selected provider at launch — never the scheduler's
+        // capacity bucket (`default-ingest`).
+        let selectedProvider = resolveSelectedProvider()
+        onReport?(QueueIngestionReporting.launchMutation(providerID: selectedProvider.id))
+        onReport?(QueueIngestionReporting.runningMutation())
 
         // Workspace-isolated ingestion (Phase 7 of multi-writer hardening).
         // When the capability flag is on, create a workspace, pass the ID
@@ -282,10 +297,17 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             store.endIngest()
         }
 
+        // Validate FIRST: an unsuccessful agent end leaves the report at its
+        // running phase and the job lifecycle carries the failure.
         try Self.validateLauncherOutcome(
             exitStatus: launcher.exitStatus,
             preflightError: launcher.preflightError,
             runHadTurnFailure: launcher.runHadTurnFailure)
+        // Staged sources stay `.submitted` — per-source ingestion completion
+        // is never inferred from agent exit or workspace merge success.
+        onReport?(QueueIngestionReporting.agentCompletionMutation(
+            operation: .ingest,
+            usage: launcher.runTotalUsage))
     }
 
     // MARK: - Lint (payload variant of .ingestion)
@@ -298,7 +320,8 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
         onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
-        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
+        onReport: (@Sendable (QueueReportMutation) -> Void)?
     ) async throws {
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
             throw QueueIngestionError.spawnFailed("No session for wikiID=\(wikiID)")
@@ -314,6 +337,12 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         changeSignaler = fp
 
         DebugLog.ingest("AppQueueIngestionProvider.runLint: begin wikiID=\(wikiID)")
+
+        // The ACTUAL selected provider at launch — never the scheduler's
+        // capacity bucket (`default-ingest`).
+        let selectedProvider = resolveSelectedProvider()
+        onReport?(QueueIngestionReporting.launchMutation(providerID: selectedProvider.id))
+        onReport?(QueueIngestionReporting.runningMutation())
 
         await runLintAgent(
             request: .lint(stateMarkdown: store.currentStateSnapshot().renderStateFile()),
@@ -333,6 +362,11 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             exitStatus: launcher.exitStatus,
             preflightError: launcher.preflightError,
             runHadTurnFailure: launcher.runHadTurnFailure)
+        // Whole-wiki scope stays a marker; agent completion carries NO typed
+        // page findings — availability is notReported, never zero.
+        onReport?(QueueIngestionReporting.agentCompletionMutation(
+            operation: .lint,
+            usage: launcher.runTotalUsage))
     }
 
     func runLintPages(
@@ -344,7 +378,8 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
         onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
-        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
+        onReport: (@Sendable (QueueReportMutation) -> Void)?
     ) async throws {
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
             throw QueueIngestionError.spawnFailed("No session for wikiID=\(wikiID)")
@@ -367,6 +402,17 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             guard let s = store.summaries.first(where: { $0.id == id }) else { return nil }
             return (id: id, title: s.title)
         }
+        // The requested IDs stay the report scope even though the agent
+        // request joins titles; unresolvable pages are recorded skipped.
+        onReport?(QueueIngestionReporting.lintPagesStagingMutation(
+            resolved: pages,
+            requested: pageIDs))
+
+        // The ACTUAL selected provider at launch — never the scheduler's
+        // capacity bucket (`default-ingest`).
+        let selectedProvider = resolveSelectedProvider()
+        onReport?(QueueIngestionReporting.launchMutation(providerID: selectedProvider.id))
+        onReport?(QueueIngestionReporting.runningMutation())
 
         // Run the pre-flight + combined lint, mirroring
         // AgentOperationRunner.runLintPages but with progress + transcript.
@@ -401,6 +447,11 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             exitStatus: launcher.exitStatus,
             preflightError: launcher.preflightError,
             runHadTurnFailure: launcher.runHadTurnFailure)
+        // No typed page findings/checked-page callback exists — completion
+        // availability stays notReported (never zero findings).
+        onReport?(QueueIngestionReporting.agentCompletionMutation(
+            operation: .lint,
+            usage: launcher.runTotalUsage))
     }
 
     static func validateLauncherOutcome(

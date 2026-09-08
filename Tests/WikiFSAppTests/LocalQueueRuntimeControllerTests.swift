@@ -426,6 +426,10 @@ private final class ControllerClient: QueueEngineClient, Sendable {
     func waitForCompletion(of id: QueueItem.ID) async throws -> Result<Void, Error> { .success(()) }
     func loadTranscript(for itemID: QueueItem.ID) async throws -> [ChatTranscriptItem] { [] }
     func loadAllActivitySnapshots() async throws -> [QueueItem.ID: QueueEngine.ActivitySnapshot] { [:] }
+
+    func loadQueueReport(for itemID: QueueItem.ID) async -> QueueReportLoadResult { .notReported }
+
+    func loadQueueReportSummaries(for itemIDs: [QueueItem.ID]) async -> QueueReportSummariesResult { .loaded([:]) }
 }
 
 private final class ControllerRuntimeHandle: LocalQueueRuntimeHandle, Sendable {

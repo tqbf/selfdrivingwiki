@@ -198,5 +198,9 @@ private final class StaticQueueEngineClient: QueueEngineClient, @unchecked Senda
     func waitForCompletion(of id: QueueItem.ID) async -> Result<Void, Error> { .success(()) }
     func loadTranscript(for itemID: QueueItem.ID) async -> [ChatTranscriptItem] { transcript }
     func loadAllActivitySnapshots() async -> [QueueItem.ID: QueueEngine.ActivitySnapshot] { [:] }
+
+    func loadQueueReport(for itemID: QueueItem.ID) async -> QueueReportLoadResult { .notReported }
+
+    func loadQueueReportSummaries(for itemIDs: [QueueItem.ID]) async -> QueueReportSummariesResult { .loaded([:]) }
 }
 #endif

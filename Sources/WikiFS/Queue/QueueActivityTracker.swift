@@ -217,6 +217,43 @@ final class QueueActivityTracker {
     /// `.started`, appended on `.progress`. Drives the sidebar log text.
     private(set) var extractionLog: String = ""
 
+    // MARK: Report summary cache (integrated-queue-workspace plan §2)
+
+    /// How the per-item report summary cache currently stands.
+    enum ReportSummaryState: Equatable {
+        /// A batch load is in flight; result search is labeled incomplete and
+        /// rows stay lifecycle-only.
+        case loading
+        /// Either a store summary or a synthesized `.reportUpdated` summary is
+        /// cached in ``reportSummaries``.
+        case loaded
+        /// The load failed (store/transport/older daemon). Lifecycle-only rows
+        /// stay; report-backed search is labeled unavailable. Retried on
+        /// reconnect (watchdog reconcile) or explicit refresh.
+        case unavailable
+    }
+
+    /// Bounded per-item report summaries backing navigator-row progress and
+    /// outcome search. Populated by batched `loadQueueReportSummaries` loads
+    /// after attach and merged from `.reportUpdated` events — full target
+    /// detail never enters this cache (it stays selected-item-only).
+    private(set) var reportSummaries: [QueueItem.ID: QueueReportSummary] = [:]
+
+    /// Per-item cache state so the window can label search incomplete while
+    /// loading and unavailable after a failure (plan §"How summaries load").
+    private(set) var reportSummaryStates: [QueueItem.ID: ReportSummaryState] = [:]
+
+    /// In-flight batch load guard: a repeated request for the same not-yet-
+    /// loaded set must not stack duplicate engine calls.
+    private var inFlightSummaryLoad = false
+    /// Items waiting for the in-flight batch to finish (terminal refreshes
+    /// that arrived mid-load).
+    private var pendingSummaryRefreshIDs: Set<QueueItem.ID> = []
+    /// Last time the reconnect path retried unavailable summaries. Rate-limits
+    /// the watchdog-driven retries so a permanently unavailable store logs at
+    /// worst once per interval instead of every 5-second reconcile tick.
+    private var lastUnavailableSummaryRetryAt: Date?
+
     /// PID of the extraction subprocess (parsed from progress lines if the
     /// local pdf2md backend reports it). `nil` for remote backends.
     private(set) var extractionPID: Int32? = nil
@@ -335,6 +372,134 @@ final class QueueActivityTracker {
                 forgetRunningItem(id)
             }
         }
+        retryUnavailableReportSummaries()
+    }
+
+    /// Reconnect/explicit-refresh path for the summary cache (plan: "Loading
+    /// retries on reconnect or explicit refresh"). The watchdog reconcile is
+    /// the reconnect signal: any item still marked `.unavailable` gets one
+    /// forced batch retry so a transient store/transport failure can't pin
+    /// report-backed search as unavailable forever. Retries are rate-limited
+    /// (30s backoff) so a permanently unavailable store doesn't churn the
+    /// engine or spam the log on every reconcile tick.
+    func retryUnavailableReportSummaries() {
+        let unavailable = reportSummaryStates.filter { $0.value == .unavailable }.map(\.key)
+        guard !unavailable.isEmpty else { return }
+        if let last = lastUnavailableSummaryRetryAt,
+           Date().timeIntervalSince(last) < 30 {
+            return
+        }
+        lastUnavailableSummaryRetryAt = Date()
+        Task { @MainActor [weak self] in
+            await self?.refreshReportSummaries(itemIDs: unavailable, force: true)
+        }
+    }
+
+    /// Batch-load report summaries for the displayed item IDs. Called by the
+    /// Activity windows after attach (lifecycle-only rows render immediately,
+    /// plan §"How summaries load") and whenever the displayed set changes.
+    ///
+    /// - `force` re-fetches even cached items (terminal transitions, explicit
+    ///   refresh). Unforced loads skip already-loaded/loaded-state items so a
+    ///   churning `onChange` cannot re-read the whole window every snapshot.
+    /// - A `.loaded` result merges per item by attempt, then revision: a
+    ///   summary from an earlier attempt — or an older revision of the same
+    ///   attempt — never replaces a newer `.reportUpdated`-synthesized one
+    ///   (report merge rules).
+    /// - `.unavailable` keeps any cached summaries and marks the *missing*
+    ///   items unavailable — no error banner, logged via DebugLog. The
+    ///   watchdog's reconcile retries unavailable items on reconnect.
+    func refreshReportSummaries(itemIDs: [QueueItem.ID], force: Bool = false) async {
+        guard let engine = queueEngine else { return }
+        var wanted: [QueueItem.ID] = []
+        for id in itemIDs {
+            let state = reportSummaryStates[id]
+            if !force, state == .loaded { continue }
+            if force, state == .loading, inFlightSummaryLoad {
+                pendingSummaryRefreshIDs.insert(id)
+                continue
+            }
+            wanted.append(id)
+        }
+        guard !wanted.isEmpty else { return }
+        for id in wanted { reportSummaryStates[id] = .loading }
+
+        // Serialize concurrent batches: a caller arriving mid-load defers its
+        // IDs to the in-flight loop instead of issuing overlapping reads.
+        if inFlightSummaryLoad {
+            pendingSummaryRefreshIDs.formUnion(wanted)
+            return
+        }
+        inFlightSummaryLoad = true
+        defer { inFlightSummaryLoad = false }
+
+        var batch = wanted
+        while !batch.isEmpty {
+            let result = await engine.loadQueueReportSummaries(for: batch)
+            guard queueEngine === engine else { return }  // detached mid-load
+            switch result {
+            case .loaded(let summaries):
+                merge(summaries: summaries, for: batch)
+            case .unavailable(let reason):
+                DebugLog.store(
+                    "QueueActivityTracker: report summaries unavailable (\(reason)) — \(batch.count) item(s) stay lifecycle-only")
+                for id in batch where reportSummaries[id] == nil {
+                    reportSummaryStates[id] = .unavailable
+                }
+            }
+            // Terminal transitions that landed mid-load get a follow-up pass
+            // inside this loop rather than a stacked engine call.
+            batch = Array(pendingSummaryRefreshIDs)
+            pendingSummaryRefreshIDs.removeAll()
+        }
+    }
+
+    /// Merge loaded summaries into the cache. Items with no summary in the
+    /// response (legacy jobs) settle at `.loaded` with no entry — a truthful
+    /// "no report recorded" rather than a perpetual loading state.
+    private func merge(summaries: [QueueItem.ID: QueueReportSummary], for requested: [QueueItem.ID]) {
+        for id in requested {
+            if let summary = summaries[id] {
+                merge(summary: summary)
+            } else {
+                reportSummaryStates[id] = .loaded
+            }
+        }
+    }
+
+    /// Merge one summary by attempt first, then monotonic revision. A retry
+    /// creates a new attempt whose revisions restart at 1, so comparing
+    /// revision alone would let the previous attempt's summary pin the cache
+    /// and hide the retry's report. Within one attempt, older data never
+    /// replaces newer (report merge rules — a delayed batch load loses to a
+    /// live `.reportUpdated` event).
+    func merge(summary: QueueReportSummary) {
+        if let existing = reportSummaries[summary.itemID] {
+            if existing.attempt > summary.attempt {
+                // A summary from an earlier attempt arrived after the retry
+                // already cached its own — reject it outright.
+                reportSummaryStates[summary.itemID] = .loaded
+                return
+            }
+            if existing.attempt == summary.attempt,
+               existing.revision >= summary.revision {
+                reportSummaryStates[summary.itemID] = .loaded
+                return
+            }
+        }
+        reportSummaries[summary.itemID] = summary
+        reportSummaryStates[summary.itemID] = .loaded
+    }
+
+    /// The cached summary for an item, if one is loaded.
+    func reportSummary(for itemID: QueueItem.ID) -> QueueReportSummary? {
+        reportSummaries[itemID]
+    }
+
+    /// The cache state for an item (`.loading` is the default so rows start
+    /// lifecycle-only and search starts labeled incomplete).
+    func reportSummaryState(for itemID: QueueItem.ID) -> ReportSummaryState {
+        reportSummaryStates[itemID] ?? .loading
     }
 
     /// Start a low-frequency watchdog that polls the daemon's snapshot and
@@ -404,6 +569,10 @@ final class QueueActivityTracker {
         pendingPermissions.removeAll()
         transcriptAttempts.removeAll()
         lastTranscriptBatch.removeAll()
+        reportSummaries.removeAll()
+        reportSummaryStates.removeAll()
+        pendingSummaryRefreshIDs.removeAll()
+        lastUnavailableSummaryRetryAt = nil
     }
 
     // MARK: - Public API
@@ -478,6 +647,9 @@ final class QueueActivityTracker {
         itemDebugURLs.removeValue(forKey: itemID)
         pendingPermissions.removeValue(forKey: itemID)
         itemToQueue.removeValue(forKey: itemID)
+        reportSummaries.removeValue(forKey: itemID)
+        reportSummaryStates.removeValue(forKey: itemID)
+        pendingSummaryRefreshIDs.remove(itemID)
         if let attempt = transcriptAttempts.removeValue(forKey: itemID) {
             lastTranscriptBatch.removeValue(forKey: attempt)
         }
@@ -667,15 +839,18 @@ final class QueueActivityTracker {
 
         case .completed(let item):
             removeItem(item)
+            refreshSummaryAfterTerminal(itemID: item.id)
 
         case .failed(let item, let error):
             removeItem(item)
             if item.queue == .extraction, extractionLog.isEmpty {
                 extractionLog = "Extraction failed: \(error)"
             }
+            refreshSummaryAfterTerminal(itemID: item.id)
 
         case .cancelled(let item):
             removeItem(item)
+            refreshSummaryAfterTerminal(itemID: item.id)
 
         case .runStateChanged:
             // Not relevant to activity tracking.
@@ -684,6 +859,34 @@ final class QueueActivityTracker {
             // Ordering changed but state is unchanged; the next snapshot
             // refresh will pick up the new order. No tracker update needed.
             break
+
+        // Integrated-queue-workspace plan §2: the report events feed the
+        // summary cache. Everything else above is unchanged activity behavior.
+        case .reportUpdated(_, let report):
+            // Persistence committed BEFORE this event published, so the report
+            // is durable. Synthesize the bounded summary and merge by revision
+            // (an older event never rolls the cache back).
+            merge(summary: QueueWorkspaceMapper.summary(from: report))
+
+        case .reportUnavailable(let id, let reason):
+            // Report persistence failed: keep the last committed summary (if
+            // any), label reporting unavailable, log — never invent outcomes
+            // and never change the job's own lifecycle presentation.
+            DebugLog.store("QueueActivityTracker: report unavailable for \(id.rawValue.prefix(8)): \(reason)")
+            if reportSummaries[id] == nil {
+                reportSummaryStates[id] = .unavailable
+            }
+        }
+    }
+
+    /// Re-fetch one item's summary after a terminal lifecycle transition —
+    /// report commits can land just before the terminal event publishes, so
+    /// the cached mid-run summary (or a legacy no-report state) may be stale.
+    /// Contract: "Reload on … terminal lifecycle transitions."
+    private func refreshSummaryAfterTerminal(itemID: QueueItem.ID) {
+        guard queueEngine != nil else { return }
+        Task { @MainActor [weak self] in
+            await self?.refreshReportSummaries(itemIDs: [itemID], force: true)
         }
     }
 

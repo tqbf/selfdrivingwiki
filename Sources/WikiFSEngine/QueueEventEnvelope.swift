@@ -15,6 +15,8 @@ public struct QueueEventEnvelope: Codable, Sendable {
         case enqueued, started, completed, failed, cancelled, reordered
         case progress, transcript, usage, liveUsage
         case runPaths, runStateChanged, pendingPermission
+        // Durable attempt-report kinds
+        case reportUpdated, reportUnavailable
         // Chat sync kinds (Phase 4)
         case chatSyncUpdate
         // Legacy chat kinds (rejected at the app transport boundary)
@@ -36,6 +38,10 @@ public struct QueueEventEnvelope: Codable, Sendable {
     public let queue: QueueKind?
     public let runState: QueueRunState?
     public let pendingPermissionJSON: String?
+    /// Durable report payload. For `.reportUpdated` this is JSON-encoded
+    /// `QueueAttemptReport`; for `.reportUnavailable` it is `nil` and `error`
+    /// carries the diagnostic reason.
+    public let reportData: Data?
 
     // Chat-specific fields. `chatStateData` now carries the versioned chat-sync
     // payload for `chatSyncUpdate`, preserving the existing Data transport.
@@ -50,6 +56,7 @@ public struct QueueEventEnvelope: Codable, Sendable {
                 logURL: URL? = nil, debugURL: URL? = nil,
                 queue: QueueKind? = nil, runState: QueueRunState? = nil,
                 pendingPermissionJSON: String? = nil,
+                reportData: Data? = nil,
                 chatID: ChatID? = nil, acpSessionId: AcpSessionID? = nil,
                 chatStateData: Data? = nil) {
         self.kind = kind
@@ -65,6 +72,7 @@ public struct QueueEventEnvelope: Codable, Sendable {
         self.queue = queue
         self.runState = runState
         self.pendingPermissionJSON = pendingPermissionJSON
+        self.reportData = reportData
         self.chatID = chatID
         self.acpSessionId = acpSessionId
         self.chatStateData = chatStateData
@@ -113,6 +121,12 @@ public struct QueueEventEnvelope: Codable, Sendable {
                 } ?? "{}"
             }
             self.init(kind: .pendingPermission, itemID: id, pendingPermissionJSON: json)
+        case .reportUpdated(let id, let report):
+            let data = DebugLog.trying("encode queue attempt report", operation: { try JSONEncoder().encode(report) })
+            guard let data else { return nil }
+            self.init(kind: .reportUpdated, itemID: id, reportData: data)
+        case .reportUnavailable(let id, let reason):
+            self.init(kind: .reportUnavailable, itemID: id, error: reason)
         }
     }
 
@@ -163,6 +177,15 @@ public struct QueueEventEnvelope: Codable, Sendable {
         case .pendingPermission:
             guard let itemID else { return nil }
             return .pendingPermission(itemID, nil)
+        case .reportUpdated:
+            guard let itemID, let reportData,
+                  let report = DebugLog.trying("decode QueueAttemptReport", operation: { try JSONDecoder().decode(QueueAttemptReport.self, from: reportData) }),
+                  report.attemptID.itemID == itemID
+            else { return nil }
+            return .reportUpdated(itemID, report)
+        case .reportUnavailable:
+            guard let itemID else { return nil }
+            return .reportUnavailable(itemID, reason: error ?? "Queue report unavailable")
         case .chatSyncUpdate, .chatEvent, .chatState, .chatAcpSessionId, .chatPendingPermission:
             return nil
         }

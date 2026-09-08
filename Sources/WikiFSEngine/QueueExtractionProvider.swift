@@ -138,23 +138,28 @@ public protocol QueueExtractionProvider: Sendable {
 
     /// Persist a bytes-based extraction result: the legacy seeded-PDF path
     /// for built-in backends, the exact-package path when the resolution
-    /// carries a package producer.
+    /// carries a package producer. Returns the output reference ONLY where
+    /// the persistence layer knows the created version (`nil` otherwise) —
+    /// the worker emits the target's output result only on that evidence.
+    @discardableResult
     func persistBytesExtraction(
         wikiID: WikiID,
         sourceID: SourceID,
         resolution: BytesExtractionResolution,
         markdown: String
-    ) async throws
+    ) async throws -> QueueExtractionOutputReference?
 
     /// Persist a transcript result with its typed mode: a built-in tool row
     /// for `.builtInTool`, or a `.transcript`-origin package row with exact
     /// provenance and the initial source-version link for `.installedPackage`.
+    /// Returns the created version's output reference when known.
+    @discardableResult
     func persistTranscriptExtraction(
         wikiID: WikiID,
         sourceID: SourceID,
         resolution: TranscriptExtractionResolution,
         outcome: TranscriptFetchOutcome
-    ) async throws
+    ) async throws -> QueueExtractionOutputReference?
 }
 
 // MARK: - QueueIngestSignaling

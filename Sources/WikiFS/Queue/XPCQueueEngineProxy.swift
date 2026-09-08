@@ -4,7 +4,7 @@ import WikiFSCore
 import WikiCtlCore
 import WikiFSEngine
 
-/// A `QueueEngineClient` that proxies ALL 13 methods to the daemon's
+/// A `QueueEngineClient` that proxies ALL 15 methods to the daemon's
 /// `QueueEngine` via XPC. This is the Phase A+B pure pass-through — the app
 /// no longer constructs its own `QueueEngine`. One DB, one engine, one owner
 /// (the daemon).
@@ -161,6 +161,31 @@ final class XPCQueueEngineProxy: QueueEngineClient {
                 progressLog: snapshot.progressLog)
         }
         return result
+    }
+
+    // MARK: - Durable attempt reports
+
+    /// Report loading fails SOFTLY at the process boundary: a transport
+    /// failure (including an older daemon without the reporting selectors,
+    /// which surfaces as the 30s XPC timeout) becomes an explicit
+    /// `.unavailable` result — never a thrown error — so consumers keep
+    /// lifecycle rows and label report-backed search unavailable.
+    func loadQueueReport(for itemID: QueueItem.ID) async -> QueueReportLoadResult {
+        do {
+            return try await workloadClient.loadQueueReport(for: itemID)
+        } catch {
+            DebugLog.ingest("XPCQueueEngineProxy.loadQueueReport unavailable for \(itemID.rawValue): \(error.localizedDescription)")
+            return .unavailable(reason: error.localizedDescription)
+        }
+    }
+
+    func loadQueueReportSummaries(for itemIDs: [QueueItem.ID]) async -> QueueReportSummariesResult {
+        do {
+            return try await workloadClient.loadQueueReportSummaries(for: itemIDs)
+        } catch {
+            DebugLog.ingest("XPCQueueEngineProxy.loadQueueReportSummaries unavailable for \(itemIDs.count) item(s): \(error.localizedDescription)")
+            return .unavailable(reason: error.localizedDescription)
+        }
     }
 }
 #endif

@@ -789,7 +789,7 @@ struct WikiFSApp: App {
                 healthMonitor: healthMonitor)
             .preferredColorScheme(appearanceColorScheme)
         }
-        .defaultSize(width: 760, height: 500)
+        .defaultSize(width: 1040, height: 720)
         .windowResizability(.contentMinSize)
 
         Settings {
