@@ -791,6 +791,13 @@ struct WikiFSApp: App {
         }
         .defaultSize(width: 1040, height: 720)
         .windowResizability(.contentMinSize)
+        // A unified window toolbar makes the toolbar region structurally
+        // reserved, so the sidebar column's List always gets its top
+        // safe-area inset — sidebar rows can never scroll up under the
+        // traffic lights, even when the detail column's layout changes
+        // (belt-and-braces with the #835 `toolbarBackground` pin in
+        // `ActivityWindowView`).
+        .windowToolbarStyle(.unified)
 
         Settings {
             TabView(selection: settingsSelectedTab) {

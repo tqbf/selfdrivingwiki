@@ -75,8 +75,6 @@ struct QueueJobOverviewView: View {
             sectionHeader
             resultStatementRegion
             inventoryRegion
-            Divider()
-            runDetailsRegion
         }
     }
 
@@ -168,14 +166,14 @@ struct QueueJobOverviewView: View {
     @ViewBuilder
     private var inventoryRegion: some View {
         if presentation.rows.isEmpty {
-            emptyState(
+            inventoryEdgeCase(
                 title: presentation.emptyStateText,
                 hint: nil,
                 icon: "tray",
                 showsClearAction: false)
         } else if filteredRows.isEmpty {
             let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-            emptyState(
+            inventoryEdgeCase(
                 title: "No Matches",
                 hint: "No targets in this job match “\(query)”.",
                 icon: "magnifyingglass",
@@ -185,9 +183,34 @@ struct QueueJobOverviewView: View {
         }
     }
 
+    /// Empty / no-match inventories keep the Run Details disclosure below the
+    /// summary/content boundary — the same surface the scrolling inventory
+    /// carries as its trailing rows.
+    private func inventoryEdgeCase(
+        title: String,
+        hint: String?,
+        icon: String,
+        showsClearAction: Bool
+    ) -> some View {
+        VStack(spacing: 0) {
+            emptyState(
+                title: title,
+                hint: hint,
+                icon: icon,
+                showsClearAction: showsClearAction)
+            Divider()
+            runDetailsRegion
+        }
+    }
+
     /// The complete inventory: native scrolling List, lazy rows, stable
     /// identities. Each row owns the shared `QueueTargetRow` component; the
-    /// scroll region is this list's alone.
+    /// scroll region is this list's alone. The Run Details disclosure rides
+    /// as the list's trailing rows, below the summary/content boundary — so
+    /// expanding it grows scrollable content instead of contesting a
+    /// non-scrolling sibling for height (the contest starved the List to
+    /// zero height and blanked the workspace pane). The height floor keeps
+    /// the list a finite, visible scroll region even in a short window.
     private var inventoryList: some View {
         List {
             ForEach(filteredRows) { row in
@@ -198,8 +221,13 @@ struct QueueJobOverviewView: View {
                     toggleExpanded(rowID: row.id)
                 }
             }
+            Divider()
+                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+            runDetailsRegion
+                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
         }
         .listStyle(.plain)
+        .frame(minHeight: QueueWorkspaceMetrics.Inventory.minVisibleHeight)
         .accessibilityLabel("\(presentation.sectionTitle) inventory")
     }
 

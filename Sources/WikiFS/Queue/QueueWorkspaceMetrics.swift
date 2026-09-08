@@ -45,6 +45,13 @@ enum QueueWorkspaceMetrics {
         /// Rows at or above this count surface the local inventory search field.
         /// Below it every target is visible at once and search is noise.
         static let localSearchThreshold = 12
+        /// The inventory's visible height floor. The Overview's scrolling List
+        /// is the only flexible child of a non-scrolling VStack that also
+        /// carries the pinned Run Details disclosure; without a floor, an
+        /// expanded disclosure starves the List to zero height and the
+        /// workspace reads as a blank pane. The List always keeps at least
+        /// this much scrollable region, whatever the disclosure demands.
+        static let minVisibleHeight: CGFloat = 96
         /// Vertical padding inside a target row (list rows own their height —
         /// no fixed-height text rows per plan).
         static let rowVerticalPadding: CGFloat = 5
@@ -67,5 +74,18 @@ enum QueueWorkspaceMetrics {
         /// Vertical inset of the header's content, matching the transcript's
         /// 16pt horizontal inset.
         static let verticalPadding: CGFloat = 10
+    }
+
+    /// Run Details disclosure bounds. The disclosure is pinned BELOW the
+    /// inventory List inside the Overview's non-scrolling VStack (plan §1),
+    /// so its expanded content must never demand unbounded height: an
+    /// uncapped Grid starves the flexible List to zero height (the blank
+    /// workspace pane) and pushes the workspace's ideal height past the
+    /// window, which also collapses the sidebar's window-toolbar inset
+    /// (#835) — sidebar rows then scroll under the traffic lights.
+    enum RunDetails {
+        /// Ceiling for the disclosure's expanded region. Taller grids scroll
+        /// inside it instead of growing the demand.
+        static let maxExpandedHeight: CGFloat = 320
     }
 }

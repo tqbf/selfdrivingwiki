@@ -90,6 +90,10 @@ struct ActivityWindowView: View {
     /// "Configure…" CTA buttons can open Settings on the relevant tab
     /// (#440). Set by `MenuBarItemController` when creating the window.
     var openWindowBridge: OpenWindowBridge?
+    /// Hosted layout tests pin the Run Details disclosure expanded through
+    /// this flag (it forwards `queueRunDetailsPinnedExpanded` down the tree —
+    /// see `QueueRunDetailsView`). Production keeps `false`.
+    var runDetailsPinnedExpanded: Bool = false
 
     @State private var viewModel = QueueViewModel()
     @State private var selectedItemID: QueueItem.ID?
@@ -202,6 +206,7 @@ struct ActivityWindowView: View {
         // visibly established for the inset to apply (the main wiki window gets
         // this implicitly via its `.navigation` + `.principal` toolbar items).
         .toolbarBackground(.visible, for: .windowToolbar)
+        .environment(\.queueRunDetailsPinnedExpanded, runDetailsPinnedExpanded)
         .onAppear {
             viewModel.attach(engine: queueEngine)
             consumePendingSelectionIfNeeded()
@@ -857,6 +862,13 @@ struct ActivityWindowView: View {
                 .accessibilityHidden(workspaceSurface != .activity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Per-job identity: a new selection resets the workspace surfaces'
+        // local state (the Overview's inventory search, expanded rows, and
+        // Run Details disclosure) instead of leaking the previous job's.
+        // Toggling the Overview/Activity selector never changes this
+        // identity, so both surfaces stay mounted and switching never drops
+        // streaming data or the transcript scroll position.
+        .id(item.id)
     }
 
     /// Task identity for the selected report load: attempt + lifecycle state
