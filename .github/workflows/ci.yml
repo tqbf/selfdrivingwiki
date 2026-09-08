@@ -45,6 +45,9 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.0'
       - name: Select Xcode (mlx-swift needs Swift 6.3)
         run: |
           # macos-latest may default the `swift` command to the CLT toolchain
