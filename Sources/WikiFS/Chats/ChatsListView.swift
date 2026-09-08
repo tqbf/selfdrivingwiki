@@ -43,7 +43,9 @@ struct ChatsListView: NSViewControllerRepresentable {
             // the live badge on visible rows without a full reload.
             vc.reconfigureLiveState()
         }
-        vc.reconcileHighlight(activeSelection: store.activeTab?.selection)
+        vc.reconcileHighlight(
+            activeSelection: store.activeTab?.selection,
+            draftChatID: store.activeTab?.optimisticChatID)
         if let pending = store.pendingSidebarReveal, case .chat(let id) = pending {
             _ = vc.revealAndSelect(id: id)
             store.consumePendingSidebarReveal()
@@ -195,11 +197,24 @@ final class ChatsListViewController: NSViewController {
     /// Reflect the active tab's selection into the table highlight. Called every
     /// `updateNSViewController`. Only acts when the table is in single-selection
     /// state so user multi-selects (Cmd/Shift) aren't clobbered.
-    func reconcileHighlight(activeSelection: WikiSelection?) {
+    ///
+    /// #1223: a `.newChat` draft has no persisted `ChatSummary` yet — the
+    /// active draft tab's optimistic row (`draftChatID`) is highlighted
+    /// instead, so the new-chat row stays selected while the draft editor is
+    /// open.
+    func reconcileHighlight(activeSelection: WikiSelection?, draftChatID: ChatID? = nil) {
         guard !isReconcilingHighlight, tableView.selectedRowIndexes.count <= 1 else { return }
         switch activeSelection {
         case .chat(let id):
             guard let row = items.firstIndex(where: { $0.id == id }) else { return }
+            if tableView.selectedRow != row {
+                isReconcilingHighlight = true
+                tableView.selectRowIndexes(IndexSet([row]), byExtendingSelection: false)
+                isReconcilingHighlight = false
+            }
+        case .newChat:
+            guard let draftChatID,
+                  let row = items.firstIndex(where: { $0.id == draftChatID }) else { fallthrough }
             if tableView.selectedRow != row {
                 isReconcilingHighlight = true
                 tableView.selectRowIndexes(IndexSet([row]), byExtendingSelection: false)

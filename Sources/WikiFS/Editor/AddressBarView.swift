@@ -251,8 +251,9 @@ struct AddressBarView: View {
         switch result {
         case .ask(let question):
             // Open a new chat tab with the question pre-filled (#288).
+            // beginNewChat also surfaces the optimistic sidebar row (#1223).
             store.pendingChatQuestion = question
-            store.openTab(.newChat)
+            store.beginNewChat()
         default:
             store.select(result.selection)
         }

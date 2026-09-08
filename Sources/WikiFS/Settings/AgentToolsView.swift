@@ -81,7 +81,9 @@ struct AgentToolsView: View {
                 .foregroundStyle(.primary)
             Spacer()
             Button {
-                store.openTab(.newChat)
+                // #1223: beginNewChat also inserts the optimistic sidebar row,
+                // so the new chat appears in this list during the same click.
+                store.beginNewChat()
             } label: {
                 Image(systemName: "plus")
                     .font(.body)
