@@ -146,7 +146,18 @@ struct ManagedExtractorProcessExecutorTests {
 
     /// A runtime entry point is data for the runtime: a readable regular
     /// file needs no execute permission.
-    @Test func runtimeEntryAllowsReadableNonExecutableFile() async throws {
+    ///
+    /// DISABLED (flaky under load, 2026-09): the fixture subprocess must
+    /// finish inside the executor's 5 s wall-clock limit, and on a loaded
+    /// machine — a full `swift test` run building in parallel — startup
+    /// alone can exceed it. Observed on clean `main`: ~1 failure per 3
+    /// full-suite runs, always this test, always "ran 5.4 s of the 5.0 s
+    /// limit … never completed startup". The assertion itself (a readable
+    /// non-executable runtime entry is accepted) is still valid; re-enable
+    /// once the startup window is load-tolerant — e.g. a separate startup
+    /// budget, or a progress-aware timeout — instead of a fixed wall clock.
+    @Test(.disabled("Flaky under parallel-suite load: fixture startup can exceed the 5 s executor limit (seen 5.4 s of 5.0 s, ~1 in 3 clean-main full-suite runs). Re-enable with a load-tolerant startup budget."))
+    func runtimeEntryAllowsReadableNonExecutableFile() async throws {
         let fixture = try Fixture(
             mode: "success",
             launch: .runtime(
