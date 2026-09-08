@@ -182,6 +182,45 @@ struct ManagedExtractorProcessExecutorTests {
         }
     }
 
+    /// Issue #1217: the production login-shell resolution and real bun runtime
+    /// preserve terminal-frame completion and process-group cleanup.
+    @Test func bunRuntimeCompletesTerminalFrameAndReapsChild() async throws {
+        let bun = try ExtractorRuntimeName(validating: "bun")
+        guard case .resolved(let resolution) = await RuntimeCommandLocator().locate(bun) else {
+            // Bun is optional for local development. CI installs it so this
+            // availability-gated verification runs there.
+            return
+        }
+        let fixture = try BunFixture(runtimeResolution: resolution)
+        defer { fixture.cleanup() }
+        let frames = FrameCollector()
+        let before = try fixture.runtimeDirectorySnapshots()
+        let clock = ContinuousClock()
+        let start = clock.now
+
+        let result = try await ManagedExtractorProcessExecutor().execute(
+            fixture.operation,
+            onFrame: { frames.append($0) })
+
+        #expect(start.duration(to: clock.now) < .seconds(30))
+        #expect(result.executableURL == resolution.executableURL)
+        #expect(result.progressEventCount == 1)
+        #expect(frames.values.count == 2)
+        #expect(result.terminalFrame.isTerminal)
+        #expect(try String(contentsOf: fixture.outputURL, encoding: .utf8) == "# Bun fixture\n")
+        guard case .signaled = result.terminationCause else {
+            Issue.record("expected bun to be signaled after its terminal frame, got \(result.terminationCause)")
+            return
+        }
+
+        let childPID = try #require(fixture.childPID(from: result.standardError))
+        #expect(await processIsGone(childPID, timeout: .seconds(30)))
+        #expect(try fixture.runtimeDirectorySnapshots() == before)
+        for directory in fixture.runtimeDirectories {
+            #expect(try fixture.permissions(of: directory) == 0o700)
+        }
+    }
+
     /// Package payload rejects symlinks in every launch mode.
     @Test func symlinkedPackageEntryIsRejected() async throws {
         let fixture = try Fixture(
@@ -298,11 +337,14 @@ struct ManagedExtractorProcessExecutorTests {
         }
     }
 
-    private func processIsGone(_ rawPID: Int32?) async -> Bool {
+    private func processIsGone(
+        _ rawPID: Int32?,
+        timeout: Duration = .seconds(2)
+    ) async -> Bool {
         guard let rawPID,
               let pid = ProcessSignalSafety.PositivePID(rawValue: rawPID) else { return true }
         let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(2))
+        let deadline = clock.now.advanced(by: timeout)
         while clock.now < deadline {
             if ProcessIdentityObservation.observe(processID: pid) == nil { return true }
             do { try await Task.sleep(for: .milliseconds(20)) }
@@ -310,6 +352,161 @@ struct ManagedExtractorProcessExecutorTests {
         }
         return ProcessIdentityObservation.observe(processID: pid) == nil
     }
+}
+
+private final class BunFixture: @unchecked Sendable {
+    let root: URL
+    let operationRoot: URL
+    let packageRoot: URL
+    let homeRoot: URL
+    let temporaryRoot: URL
+    let cacheRoot: URL
+    let outputURL: URL
+    let operation: ManagedExtractorProcessRequest
+
+    var runtimeDirectories: [URL] { [homeRoot, temporaryRoot, cacheRoot] }
+
+    init(runtimeResolution: RuntimeCommandResolution) throws {
+        root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("managed-extractor-bun-\(UUID().uuidString)", isDirectory: true)
+        operationRoot = root.appendingPathComponent("operation", isDirectory: true)
+        packageRoot = operationRoot.appendingPathComponent("package", isDirectory: true)
+        homeRoot = operationRoot.appendingPathComponent("home", isDirectory: true)
+        temporaryRoot = operationRoot.appendingPathComponent("tmp", isDirectory: true)
+        cacheRoot = operationRoot.appendingPathComponent("cache", isDirectory: true)
+        let inputURL = operationRoot.appendingPathComponent("input/source.bin")
+        outputURL = operationRoot.appendingPathComponent("output/result.md")
+        for directory in [
+            packageRoot,
+            homeRoot,
+            temporaryRoot,
+            cacheRoot,
+            inputURL.deletingLastPathComponent(),
+            outputURL.deletingLastPathComponent(),
+        ] {
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700])
+            guard chmod(directory.path, 0o700) == 0 else { throw POSIXError(.EIO) }
+        }
+        try Data("fixture".utf8).write(to: inputURL)
+
+        let entryPath = try ExtractorRelativePath(validating: "bin/fixture.js")
+        let entryURL = packageRoot.appendingPathComponent(entryPath.rawValue)
+        try FileManager.default.createDirectory(
+            at: entryURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700])
+        let scriptBytes = Data(Self.script.utf8)
+        try scriptBytes.write(to: entryURL)
+        guard chmod(entryURL.path, 0o400) == 0 else { throw POSIXError(.EIO) }
+
+        let manifest = try ExtractorManifest(
+            manifestRevision: .v1,
+            packageID: ExtractorPackageID(validating: "org.example.bun-fixture"),
+            version: ExtractorPackageVersion(validating: "1.0.0"),
+            displayName: "Bun Fixture",
+            protocolRevision: .v1,
+            entryPoint: entryPath,
+            launch: .runtime(command: runtimeResolution.command, arguments: []),
+            registrations: [ExtractorRegistration(
+                id: ExtractorRegistrationID(validating: "docx"),
+                displayName: "DOCX",
+                kinds: [.docx],
+                mimeTypes: [ExtractorMIMEType(validating:
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document")])],
+            capabilities: [],
+            files: [ExtractorPackageFile(path: entryPath, digest: ExtractorSHA256.digest(scriptBytes))],
+            limits: ExtractorOperationLimits(
+                maximumInputByteCount: 1_024,
+                maximumMarkdownOutputByteCount: 16 * 1_024,
+                maximumDurationMilliseconds: 60_000,
+                maximumProgressEventCount: 8))
+        let revision = ExtractorPackageRevisionID(
+            packageID: manifest.packageID,
+            version: manifest.version,
+            digest: try manifest.packageDigest())
+        let request = try ExtractorProtocolRequest(
+            requestID: ExtractorRequestID(),
+            protocolRevision: .v1,
+            kind: .docx,
+            mimeType: ExtractorMIMEType(validating:
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+            originalFilename: "source.docx",
+            inputPath: ExtractorRelativePath(validating: "input/source.bin"),
+            outputPath: ExtractorRelativePath(validating: "output/result.md"),
+            deadlineMillisecondsSince1970: 1_900_000_000_000)
+        operation = ManagedExtractorProcessRequest(
+            revision: revision,
+            manifest: manifest,
+            protocolRequest: request,
+            paths: ManagedExtractorProcessPaths(
+                operationRoot: operationRoot,
+                packageRoot: packageRoot,
+                homeRoot: homeRoot,
+                temporaryRoot: temporaryRoot,
+                privateCacheRoot: cacheRoot),
+            runtimeResolution: runtimeResolution,
+            cancellationGracePeriod: .milliseconds(50))
+    }
+
+    func runtimeDirectorySnapshots() throws -> [String: [String]] {
+        try Dictionary(uniqueKeysWithValues: runtimeDirectories.map { directory in
+            let contents = try FileManager.default.subpathsOfDirectory(atPath: directory.path).sorted()
+            return (directory.lastPathComponent, contents)
+        })
+    }
+
+    func permissions(of directory: URL) throws -> Int {
+        let attributes = try FileManager.default.attributesOfItem(atPath: directory.path)
+        return try #require(attributes[.posixPermissions] as? Int) & 0o777
+    }
+
+    func childPID(from standardError: Data) -> Int32? {
+        guard let text = String(data: standardError, encoding: .utf8) else { return nil }
+        return text.split(separator: "\n").lazy.compactMap { line -> Int32? in
+            guard line.hasPrefix("CHILD_PID=") else { return nil }
+            return Int32(line.dropFirst("CHILD_PID=".count))
+        }.first
+    }
+
+    func cleanup() {
+        guard FileManager.default.fileExists(atPath: root.path) else { return }
+        do { try FileManager.default.removeItem(at: root) }
+        catch { Issue.record("Bun extractor fixture cleanup failed: \(error)") }
+    }
+
+    private static let script = #"""
+    const { mkdirSync, writeFileSync } = require("node:fs");
+    const { spawn } = require("node:child_process");
+
+    const chunks = [];
+    process.stdin.setEncoding("utf-8");
+    process.stdin.on("data", (chunk) => chunks.push(chunk));
+    process.stdin.on("end", () => {
+      const request = JSON.parse(chunks.join(""));
+      const markdown = "# Bun fixture\n";
+      mkdirSync("output", { recursive: true });
+      writeFileSync(request.outputPath, markdown);
+      const child = spawn("/bin/sleep", ["3600"], { stdio: "ignore" });
+      process.stderr.write("CHILD_PID=" + child.pid + "\n");
+      const frame = (kind, payload) =>
+        process.stdout.write(JSON.stringify({ kind, payload }) + "\n");
+      frame("progress", {
+        requestID: request.requestID,
+        completedUnitCount: 1,
+        totalUnitCount: 1,
+        message: "complete",
+      });
+      frame("result", {
+        requestID: request.requestID,
+        outputPath: request.outputPath,
+        markdownByteCount: Buffer.byteLength(markdown),
+      });
+      setInterval(() => {}, 60_000);
+    });
+    """#
 }
 
 private final class FrameCollector: @unchecked Sendable {
