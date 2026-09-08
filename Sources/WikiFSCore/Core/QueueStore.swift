@@ -1824,8 +1824,12 @@ extension QueueStore {
                     let itemRaw: String = row["item_id"]
                     let stateRaw: String = row["state"]
                     let count: Int = row["n"]
-                    guard let state = try? Self.decodeReportValue(QueueReportTargetState.self, from: stateRaw) else {
-                        DebugLog.store("QueueStore.loadReportSummaries: undecodable target state for \(itemRaw)")
+                    let state: QueueReportTargetState
+                    do {
+                        state = try Self.decodeReportValue(QueueReportTargetState.self, from: stateRaw)
+                    } catch {
+                        DebugLog.store(
+                            "QueueStore.loadReportSummaries: undecodable target state for \(itemRaw): \(error)")
                         continue
                     }
                     var counts = countsByItem[itemRaw] ?? [:]
@@ -1867,13 +1871,18 @@ extension QueueStore {
                         fields.append(String(raw.prefix(QueueReportSummaryLimits.maxFieldLength)))
                     }
                     folded(row["display_name"] as String?)
-                    if let stateRaw: String = row["state"],
-                       let state = try? Self.decodeReportValue(QueueReportTargetState.self, from: stateRaw) {
-                        switch state {
-                        case .skipped(let reason), .failed(let reason):
-                            folded(reason)
-                        default:
-                            break
+                    if let stateRaw: String = row["state"] {
+                        do {
+                            let state = try Self.decodeReportValue(QueueReportTargetState.self, from: stateRaw)
+                            switch state {
+                            case .skipped(let reason), .failed(let reason):
+                                folded(reason)
+                            default:
+                                break
+                            }
+                        } catch {
+                            DebugLog.store(
+                                "QueueStore.loadReportSummaries: undecodable target state for \(itemRaw): \(error)")
                         }
                     }
                     folded(row["detail"] as String?)
