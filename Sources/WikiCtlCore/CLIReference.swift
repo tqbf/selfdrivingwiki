@@ -256,6 +256,7 @@ public enum CLIReference {
                     ],
                     details: [
                         "CAS discipline: read head_version_id first (`page get --json`, or the stderr line in text mode), pass it as --expect-head; on exit 3 re-read, reapply, and retry once.",
+                        "On success the write echoes the new head_version_id on stderr, so the next CAS write needs no extra read.",
                         "--author accepts `chat:<id>`, `agent:<kind>`, or a plain name; the WIKI_AUTHOR env fills it when omitted.",
                     ],
                     examples: [

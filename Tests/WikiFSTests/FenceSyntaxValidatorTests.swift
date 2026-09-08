@@ -327,7 +327,9 @@ struct FenceSyntaxValidatorTests {
         let result = try PageCommand.run(.add(id: nil, title: "Diagrams", body: .inline(good)),
                                          in: store, validator: v)
         #expect(result.didCommit)
-        #expect(result.stderrOutput == nil)
+        // #1228: stderr now also carries the head_version_id echo; the fence
+        // contract here is that a fully-covered save emits no validation notice.
+        #expect(result.stderrOutput?.contains("validation skipped") != true)
         #expect(try store.listPages(sortBy: .lastUpdated).count == 1)
     }
 

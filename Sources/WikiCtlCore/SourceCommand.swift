@@ -373,7 +373,10 @@ public enum SourceCommand {
             throw Failure.message("no processed markdown for this source")
         }
         try store.appendProcessedMarkdown(sourceID: id, content: content, origin: .user, note: nil, technique: nil)
-        return Result(payload: .text(""), didCommit: true)
+        // #1228: report the new head (the same `head_version_id: ` stderr
+        // convention as `page get`/`page add`) so the next edit needs no read.
+        let head = try store.processedMarkdownHead(sourceID: id)
+        return Result(payload: .text(""), didCommit: true, stderrOutput: markdownHeadDiagnostic(head))
     }
 
     // MARK: - rename
@@ -420,9 +423,21 @@ public enum SourceCommand {
             throw Failure.message("no processed markdown for this source")
         }
         try store.setActiveMarkdown(sourceID: id, to: versionID)
+        // #1228: report the nominated head (the actual active version after
+        // the ref upsert), not just the requested id.
+        let head = try store.processedMarkdownHead(sourceID: id)
         return Result(
             payload: .text("Set active markdown to \(versionID.rawValue)."),
-            didCommit: true)
+            didCommit: true,
+            stderrOutput: markdownHeadDiagnostic(head))
+    }
+
+    /// #1228: the `head_version_id: <id>` stderr line, mirroring `page get`'s
+    /// convention so agents thread follow-up writes the same way in both
+    /// families. nil when no head exists (the caller already guarded).
+    private static func markdownHeadDiagnostic(_ version: SourceMarkdownVersion?) -> String? {
+        guard let version else { return nil }
+        return "head_version_id: \(version.id.rawValue)\n"
     }
 
     // MARK: - info
