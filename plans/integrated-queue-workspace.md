@@ -1,8 +1,8 @@
 # Integrated Queue Workspace
 
 Status: **design approved and implemented** on
-`feature/integrated-queue-workspace`. The design changes of 2026-09-08
-(below) supersede the affected sentences in the sections that follow.
+`feature/integrated-queue-workspace`. The design changes below supersede
+the affected sentences in the sections that follow.
 
 This document records the approved design for the redesigned Agent Queue and
 Extraction Queue windows. It covers the layout contract, the state vocabulary,
@@ -13,9 +13,9 @@ in the operator session copy at
 
 Covers issues #1219, #1220, and #1221.
 
-## Design changes (2026-09-08)
+## Design changes
 
-The review rounds and later operator decisions changed four presentation
+The review rounds and later operator decisions changed seven presentation
 decisions. The sections below
 keep their original structure. Where a sentence contradicts this section,
 this section is current.
@@ -63,6 +63,40 @@ this section is current.
    each have their own truthful text. Lint and extraction keep their
    existing single section. Affected sections: "Target inventory
    (Overview)", "Report truth rules".
+6. **Toolbar search sits left of Queue Actions and collapses narrow
+   (2026-09-09).** The job search is an explicit toolbar control instead of
+   the SwiftUI `.searchable` field, declared so it renders LEFT of the
+   Queue Actions menu. At split-view widths of 800 points or more it hosts
+   an expanded native `NSSearchField` (in-field magnifying glass, clear
+   button, Escape-to-clear); narrower windows collapse it to a
+   magnifying-glass button that expands and focuses the field on click, and
+   the control collapses again when the query empties or editing ends with
+   the field empty while the window is narrow — `NSSearchToolbarItem`
+   behavior. Focus is taken only by the click that requested expansion,
+   never by a resize across the threshold. The query binding, its scope
+   (loaded jobs only), the "Search loaded jobs" prompt and accessibility
+   label, and the outside-filter and reorder-guard semantics are unchanged.
+   Affected sections: "Layout contract", "Selection, filters, and deep
+   links".
+7. **Icon-only toolbar controls pin right (2026-09-09).** The window toolbar
+   borrows the main window's geometry (ContentView): the search control
+   leads, a `ToolbarSpacer(.flexible)` eats the middle, and an icon-only
+   control group pins to the trailing edge — the Queue Actions menu and the
+   Run Details inspector toggle always show on the right. Both controls
+   render icon-only (ellipsis-circle and sidebar.right, borderless). The
+   visible titles are gone but the identities stay: each control keeps its
+   accessibility label ("Queue Actions" / "Run Details"), the menu button
+   shows a "Queue Actions" tooltip, the toggle's tooltip states
+   "Show Run Details" / "Hide Run Details", and the toggle's toolbar item
+   label ("Run Details") remains for the customization palette. The icons
+   keep the group compact enough to stay out of the overflow at the 640×400
+   minimum; this window keeps its navigationTitle/subtitle (they identify
+   Agent Queue vs Extraction Queue), so unlike the main window it cannot
+   also reclaim the title slot — small controls are the whole budget.
+   The layout art still shows the old labeled "Pause Queue" and
+   "Search Jobs" toolbar row; the icon-only group replaces it.
+   Affected sections: "Layout contract", "Queue controls: Pause and Stop
+   All".
 
 ## Goal
 
@@ -113,9 +147,12 @@ repeated badges, custom traffic lights, and permanently visible raw metadata.
 - Each row shows a type or source title, the wiki and operation, and one state
   or progress line with a status symbol. Rows drop duplicated elapsed and token
   lines and always-visible cancel glyphs.
-- The search field and one filter menu sit above the sections. The filter menu
-  covers State, Wiki, and Operation. Operation appears in Agent Queue only.
-  Defaults are All. Active filters show with a clear action.
+- The job search lives in the window toolbar, LEFT of the Queue Actions menu
+  (design change 6): an expanded native search field at split-view widths of
+  800 points or more, a magnifying-glass button in narrower windows. The one
+  filter menu sits above the sections and covers State, Wiki, and Operation.
+  Operation appears in Agent Queue only. Defaults are All. Active filters
+  show with a clear action.
 - Width: minimum 220, ideal 280, maximum 360 points. These values live in
   `QueueWorkspaceMetrics`.
 
@@ -135,7 +172,7 @@ The workspace stacks in this order:
 
 Run Details is not part of this stack. The window toolbar's "Run Details"
 toggle opens it as an optional trailing inspector beside the workspace (see
-the design changes of 2026-09-08 and the "Run details" section).
+the design changes above and the "Run details" section).
 
 Every new selection opens Overview. Switching between Overview and Activity
 must not drop streaming data or scroll position. Activity is the only

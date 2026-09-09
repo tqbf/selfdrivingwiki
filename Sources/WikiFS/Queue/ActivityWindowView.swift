@@ -81,11 +81,12 @@ struct ActivityTranscriptPresentation {
 /// column), opened by the toolbar's "Run Details" toggle — it is not part of
 /// the Overview.
 ///
-/// **Toolbar:** This queue's labeled "Queue Actions" menu (pause/resume with
-/// inline guidance + Stop All… with its explicit confirmation) and the Run
-/// Details inspector toggle (global actions live in the top bar, per the
-/// macOS layout formula). Since lint runs on `.ingestion`, the Ingestion
-/// window covers lint too.
+/// **Toolbar:** a leading job-search control, then — right-aligned after a
+/// flexible spacer, icon-only per design change 7 — this queue's "Queue
+/// Actions" menu (pause/resume with inline guidance + Stop All… with its
+/// explicit confirmation) and the Run Details inspector toggle (global
+/// actions live in the top bar, per the macOS layout formula). Since lint
+/// runs on `.ingestion`, the Ingestion window covers lint too.
 struct ActivityWindowView: View {
     /// Which queue this window shows. Items from the other queue are
     /// filtered out of every snapshot read.
@@ -111,8 +112,9 @@ struct ActivityWindowView: View {
     /// switching never drops streaming data or the transcript scroll position.
     @State private var workspaceSurface: QueueWorkspaceSurface = .overview
     /// Whether the optional Run Details inspector panel is open. Toggled by
-    /// the window toolbar's labeled "Run Details" control; closing it never
-    /// touches selection or queue state — the panel is presentation-only.
+    /// the window toolbar's icon-only "Run Details" control; closing it
+    /// never touches selection or queue state — the panel is
+    /// presentation-only.
     @State private var showsRunDetailsInspector = false
     /// The selected ingestion job's recorded outputs (Outputs section):
     /// loaded in a `.task` keyed by item id + attempt, never in body. The
@@ -120,6 +122,16 @@ struct ActivityWindowView: View {
     /// task can discard a result that no longer matches the selection.
     @State private var selectedOutputs: QueueOutputsLoadState = .loading
     @State private var selectedOutputsKey = ""
+    /// The split view's measured content width (design change 6): drives the
+    /// toolbar search's expand/collapse decision
+    /// (``QueueSearchToolbarForm/decision``). `nil` until the first layout
+    /// measurement; `nil` assumes enough space (expanded).
+    @State private var splitViewWidth: CGFloat?
+    /// Whether the user explicitly expanded the collapsed search button while
+    /// the window is narrower than the expansion threshold. Reset when the
+    /// query empties or editing ends empty, so a narrow window collapses the
+    /// control back to the button (NSSearchToolbarItem behavior).
+    @State private var searchExpandedByUser = false
 
     /// The selected job's two workspace surfaces. Activity is the only
     /// transcript surface (plan §1); Overview is the complete inventory +
@@ -201,12 +213,18 @@ struct ActivityWindowView: View {
         } detail: {
             detailPane
         }
+        // Measure the split view's width for the toolbar search's
+        // expand/collapse decision (design change 6). Same pattern as the
+        // main window's detail-width measurement: measuring at the split-view
+        // root is reliable in every state the toolbar item's own frame is
+        // not, and the write lands through the layout-driven @State update,
+        // not a view-update-pass write.
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { splitViewWidth = $0 }
         .frame(
             minWidth: QueueWorkspaceMetrics.Window.minWidth,
             minHeight: QueueWorkspaceMetrics.Window.minHeight)
         .navigationTitle(queueTitle)
         .navigationSubtitle(subtitle)
-        .searchable(text: $jobFilter.search, prompt: "Search loaded jobs")
         .confirmationDialog(
             Self.stopAllConfirmationTitle(for: queueTitle),
             isPresented: $confirmsStopAll) {
@@ -217,10 +235,29 @@ struct ActivityWindowView: View {
             Text(Self.stopAllConfirmationMessage)
         }
         .toolbar {
+            // Design change 6 (2026-09-09): the job search is an explicit
+            // toolbar item declared FIRST. `.searchable` rendered the field
+            // on the Queue Actions menu's right, with no width
+            // responsiveness; this control collapses to a magnifying-glass
+            // button in narrow windows instead.
+            //
+            // Design change 7 (2026-09-09): the main window's toolbar
+            // geometry (ContentView) — a leading search control, a flexible
+            // spacer that eats the middle, and an icon-only control group
+            // pinned to the trailing edge. Everything after
+            // `ToolbarSpacer(.flexible)` forms the right-aligned section, so
+            // Queue Actions and Run Details always show on the right. The
+            // icons keep the group compact enough to stay out of the »
+            // overflow at the 640×400 minimum — this window keeps its
+            // navigationTitle/subtitle (they identify Agent Queue vs
+            // Extraction Queue), so unlike the main window it cannot also
+            // reclaim the title slot; small controls are the whole budget.
             ToolbarItem(placement: .primaryAction) {
-                queueControlMenu
+                queueSearchControl
             }
-            ToolbarItem(placement: .primaryAction) {
+            ToolbarSpacer(.flexible)
+            ToolbarItemGroup(placement: .automatic) {
+                queueControlMenu
                 runDetailsInspectorToggle
             }
         }
@@ -238,6 +275,18 @@ struct ActivityWindowView: View {
             consumePendingSelectionIfNeeded()
         }
         .onDisappear { viewModel.detach() }
+        // Design change 6: once the query empties — by Escape, the field's
+        // native clear button, Clear Filters, or any other reset — the
+        // explicit expansion request is spent, so a narrow window collapses
+        // the control back to the magnifying-glass button. A wide window
+        // stays expanded via the width branch regardless. (Editing that
+        // ends on an ALREADY-empty field — expanded, then abandoned without
+        // typing, so the query never changes — is the delegate's
+        // `controlTextDidEndEditing` seam inside the search control; this
+        // observer covers every path that changes the query.)
+        .onChange(of: jobFilter.search) { _, newSearch in
+            if newSearch.isEmpty { searchExpandedByUser = false }
+        }
         // #837: when a specific item selection is requested from outside the
         // Activity window (e.g. PageDetailView's "View Lint" button), consume
         // it immediately so an already-open window switches selection without
@@ -809,7 +858,38 @@ struct ActivityWindowView: View {
 
     // MARK: - Toolbar
 
-    /// This queue's controls as one labeled toolbar menu — global queue
+    /// The toolbar job-search control (design change 6, 2026-09-09), declared
+    /// LEFT of the Queue Actions menu in the toolbar. Wide windows (or an
+    /// active query, or an explicit expansion request) show the expanded
+    /// `NSSearchField`; narrow empty windows show the magnifying-glass
+    /// button. One persistent AppKit control hosts both forms (see
+    /// ``QueueSearchToolbarControl``) — only visibility and width flip. The
+    /// query binding is the same `jobFilter` the navigator filter, the
+    /// outside-filter notice, and the reorder guards read — the control is
+    /// presentation only. Expansion ends two ways: the query empties (the
+    /// `.onChange` reset below) or editing ends on an already-empty field
+    /// (the control's `onEditEndedEmpty`), either of which collapses a
+    /// narrow window back to the button.
+    private var queueSearchControl: some View {
+        let expanded = QueueSearchToolbarForm.decision(
+            splitViewWidth: splitViewWidth,
+            queryIsEmpty: jobFilter.search.isEmpty,
+            userRequestedExpansion: searchExpandedByUser) == .expandedField
+        return QueueSearchToolbarControl(
+            text: $jobFilter.search,
+            isExpanded: expanded,
+            onExpandRequested: { searchExpandedByUser = true },
+            // Only the click-requested expansion may take keyboard focus;
+            // a width-driven flip (window resize) never does.
+            focusOnExpand: searchExpandedByUser,
+            onEditEndedEmpty: { searchExpandedByUser = false },
+            prompt: Self.searchPrompt)
+            .frame(width: expanded
+                ? QueueWorkspaceMetrics.Search.expandedFieldWidth
+                : QueueWorkspaceMetrics.Search.collapsedButtonSide)
+    }
+
+    /// This queue's controls as one toolbar menu — global queue
     /// controls belong in the top bar, not buried in list section headers
     /// (and Pause Queue is not a separate top-level button). Pause/Resume
     /// and Stop All… live inside "Queue Actions", each section headed by
@@ -817,6 +897,12 @@ struct ActivityWindowView: View {
     /// Pause stops new starts and lets running jobs finish; Stop All also
     /// cancels running jobs (queued jobs remain, restated by the explicit
     /// destructive confirmation).
+    ///
+    /// Design change 7 (2026-09-09): the button renders icon-only — the
+    /// main window's toolbar idiom. The visible title is gone, but the
+    /// identity stays: the title still names the toolbar item for the
+    /// customization palette, `.help` shows "Queue Actions" on hover, and
+    /// the accessibility label remains "Queue Actions" for VoiceOver.
     @ViewBuilder
     private var queueControlMenu: some View {
         let state = viewModel.snapshot.runStates[queue] ?? .running
@@ -845,14 +931,16 @@ struct ActivityWindowView: View {
                 Text("Stop All — pause queue and cancel running jobs, queued jobs remain")
             }
         }
-        .labelStyle(.titleAndIcon)
+        .labelStyle(.iconOnly)
+        .help("Queue Actions")
+        .accessibilityLabel("Queue Actions")
         .disabled(isCommandPending)
     }
 
     /// The toolbar control that opens/closes the optional Run Details
-    /// inspector — a real, titled NSButton (see ``RunDetailsToolbarToggle``).
-    /// Toggling it touches only panel presentation: selection, filters, and
-    /// queue state are untouched.
+    /// inspector — a real, icon-only NSButton (see
+    /// ``RunDetailsToolbarToggle``). Toggling it touches only panel
+    /// presentation: selection, filters, and queue state are untouched.
     private var runDetailsInspectorToggle: some View {
         RunDetailsToolbarToggle(isOn: $showsRunDetailsInspector)
     }
@@ -1915,7 +2003,7 @@ struct ActivityWindowView: View {
 
 // MARK: - Run Details toolbar toggle
 
-/// The Run Details inspector's toolbar control: a REAL, labeled NSButton.
+/// The Run Details inspector's toolbar control: a REAL, icon-only NSButton.
 ///
 /// Why AppKit owns this one control: SwiftUI's toolbar `Button` styles
 /// render layer-backed content whose action wiring does not survive the
@@ -1926,6 +2014,15 @@ struct ActivityWindowView: View {
 /// target/action writes the toggle state through a `Binding`, and the write
 /// lands in the framework's state storage, so it stays live no matter how
 /// many times SwiftUI re-hosts the toolbar content.
+///
+/// Design change 7 (2026-09-09): the button is icon-only — the bare
+/// "sidebar.right" image, borderless, matching the main window's right
+/// inspector toggle (ContentView). The visible title is gone but the
+/// identity survives: `setAccessibilityLabel("Run Details")` names it for
+/// VoiceOver, the accessibility value ("Panel shown"/"Panel hidden") and the
+/// tooltip ("Show Run Details"/"Hide Run Details") carry the state, and the
+/// coordinator still re-asserts the `NSToolbarItem` label ("Run Details") so
+/// the customization palette keeps a readable name.
 ///
 /// SwiftUI has no SwiftUI-side title to lift for a representable, so it
 /// derives an empty toolbar item label; the coordinator re-asserts the
@@ -1944,15 +2041,15 @@ struct RunDetailsToolbarToggle: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSButton {
         let button = NSButton(
-            title: "Run Details",
-            image: NSImage(systemSymbolName: "sidebar.trailing",
-                           accessibilityDescription: nil) ?? NSImage(),
+            title: "",
+            image: NSImage(systemSymbolName: "sidebar.right",
+                           accessibilityDescription: "Run Details") ?? NSImage(),
             target: context.coordinator,
             action: #selector(Coordinator.toggle))
-        button.bezelStyle = .recessed
-        button.imagePosition = .imageLeading
+        button.isBordered = false
+        button.imagePosition = .imageOnly
         button.setAccessibilityLabel("Run Details")
-        button.setAccessibilityValue(context.coordinator.stateTextFor(false))
+        button.setAccessibilityValue(context.coordinator.stateTextFor(isOn))
         button.toolTip = context.coordinator.helpText(for: false)
         context.coordinator.reassertToolbarItemLabel(for: button)
         return button
@@ -2001,11 +2098,314 @@ struct RunDetailsToolbarToggle: NSViewRepresentable {
         }
 
         func helpText(for isOn: Bool) -> String {
-            isOn ? "Hide the Run Details panel" : "Show the Run Details panel"
+            isOn ? "Hide Run Details" : "Show Run Details"
         }
 
         @objc func toggle() {
             binding.wrappedValue.toggle()
+        }
+    }
+}
+
+/// The toolbar job-search control (design change 6, 2026-09-09): one
+/// persistent `NSStackView` hosting BOTH forms — the expanded `NSSearchField`
+/// and the collapsed magnifying-glass button — with visibility toggled by the
+/// expand/collapse decision. The field never leaves the hierarchy across
+/// state changes, so expansion can re-focus it without remounting. It lives
+/// in the toolbar LEFT of the Queue Actions menu, replacing the former
+/// `.searchable` field, and binds the same `jobFilter.search` query. Using a
+/// real `NSSearchField` gives the window AppKit's native search affordances
+/// for free — the in-field magnifying glass, the clear button, and
+/// Escape-to-clear.
+///
+/// State discipline (mirrors ``RunDetailsToolbarToggle``): `makeNSView` /
+/// `updateNSView` never write SwiftUI state. The query write happens in the
+/// delegate callbacks (user edits only). The expansion write happens in the
+/// button's action (a user event), and the empty-editing-end write happens in
+/// `controlTextDidEndEditing` — also a delegate callback, so also a user-event
+/// context. The re-focus — an AppKit first-responder change, not a SwiftUI
+/// state write — runs ONLY for a click-requested expansion: the view passes
+/// ``focusOnExpand``, which `updateNSView` checks once the expanded layout
+/// has landed. A resize-driven collapsed→expanded flip (the window crossing
+/// the expansion threshold) never takes keyboard focus. The inverse —
+/// collapsing while the field editor is live — resigns first responder on
+/// the same deferred pattern, so keystrokes cannot continue into an
+/// invisible field.
+struct QueueSearchToolbarControl: NSViewRepresentable {
+    @Binding var text: String
+    /// The expand/collapse decision
+    /// (``QueueSearchToolbarForm/decision``) already applied by the view.
+    let isExpanded: Bool
+    /// Called from the collapsed button's action (a user event): asks the
+    /// view to expand (``ActivityWindowView/searchExpandedByUser``).
+    let onExpandRequested: () -> Void
+    /// Whether the current expansion was requested by the magnifying-glass
+    /// click (``ActivityWindowView/searchExpandedByUser``) rather than by
+    /// the width decision. Only a click-requested expansion focuses the
+    /// field; a resize-driven flip never takes keyboard focus.
+    let focusOnExpand: Bool
+    /// Called from the delegate's editing-end (also a user-event context)
+    /// when the field is empty at that moment: asks the view to spend the
+    /// explicit expansion request (``ActivityWindowView/searchExpandedByUser``)
+    /// so a narrow window collapses the control.
+    let onEditEndedEmpty: () -> Void
+    /// Placeholder + accessibility label (``ActivityWindowView/searchPrompt``).
+    let prompt: String
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text)
+    }
+
+    func makeNSView(context: Context) -> NSStackView {
+        let coordinator = context.coordinator
+        let field = NSSearchField(frame: .zero)
+        field.placeholderString = prompt
+        field.sendsWholeSearchString = false
+        field.target = coordinator
+        field.action = #selector(Coordinator.searchAction(_:))
+        field.delegate = coordinator
+        field.setAccessibilityLabel(prompt)
+
+        let button = NSButton(
+            title: "",
+            image: NSImage(systemSymbolName: "magnifyingglass",
+                           accessibilityDescription: prompt) ?? NSImage(),
+            target: coordinator,
+            action: #selector(Coordinator.expandClicked))
+        button.isBordered = false
+        button.imagePosition = .imageOnly
+        button.setAccessibilityLabel(prompt)
+        button.toolTip = prompt
+
+        let stack = NSStackView(views: [field, button])
+        stack.orientation = .horizontal
+        stack.spacing = 0
+        stack.alignment = .centerY
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        coordinator.field = field
+        coordinator.expandButton = button
+        apply(isExpanded: isExpanded, text: text, to: stack, coordinator: coordinator)
+        coordinator.reassertToolbarItemLabel(for: stack)
+        return stack
+    }
+
+    func updateNSView(_ stack: NSStackView, context: Context) {
+        let coordinator = context.coordinator
+        let wasCollapsed = coordinator.isShowingCollapsed
+        coordinator.onExpandRequested = onExpandRequested
+        coordinator.onEditEndedEmpty = onEditEndedEmpty
+        apply(isExpanded: isExpanded, text: text, to: stack, coordinator: coordinator)
+        coordinator.reassertToolbarItemLabel(for: stack)
+        // Focus ONLY a click-requested expansion (``focusOnExpand``): a
+        // resize-driven collapsed→expanded flip (the window crossing the
+        // expansion threshold) leaves it unset, so resizing never steals
+        // keyboard focus. The focus itself is deferred — a first-responder
+        // change must not run inside SwiftUI's update pass (re-entrant
+        // updates) — and the field is persistent across forms, so the
+        // deferred focus targets the same view the user just revealed.
+        if wasCollapsed && isExpanded && focusOnExpand {
+            Task { @MainActor [coordinator] in
+                guard coordinator.isShowingCollapsed == false else { return }
+                coordinator.focusField()
+            }
+        }
+    }
+
+    /// The single place the two forms are made visible/hidden and the
+    /// binding is pushed into the field — called from `makeNSView` and every
+    /// `updateNSView`, so no caller duplicates the sync.
+    private func apply(
+        isExpanded: Bool,
+        text: String,
+        to stack: NSStackView,
+        coordinator: Coordinator
+    ) {
+        // Both controls are mounted before this runs: `apply` is called only
+        // from `makeNSView` and `updateNSView`, which assign them first
+        // (makeNSView) or run after it (updateNSView), so the unwraps are an
+        // invariant rather than an error path.
+        guard let field = coordinator.field,
+              let expandButton = coordinator.expandButton else { return }
+        let wasExpanded = !coordinator.isShowingCollapsed
+        // Read the live-editor state BEFORE hiding the field: hiding ends
+        // editing as a side effect, so a post-hide check would never see the
+        // editor even when it was live one statement earlier.
+        var resignWhenCollapsed = false
+        if wasExpanded && !isExpanded {
+            resignWhenCollapsed = field.currentEditor() != nil
+                || field.window?.firstResponder === field
+        }
+        field.isHidden = !isExpanded
+        expandButton.isHidden = isExpanded
+        coordinator.isShowingCollapsed = !isExpanded
+        coordinator.sync(text: text, into: field)
+        // Collapsing while the field editor is live would leave the
+        // keystrokes' target invisible. Resign first responder — on the same
+        // deferred pattern as the focus write, never inside the update pass,
+        // and re-checked in the task so a fast re-expansion cancels the
+        // resign.
+        if resignWhenCollapsed {
+            Task { @MainActor [coordinator] in
+                guard coordinator.isShowingCollapsed,
+                      let field = coordinator.field,
+                      let window = field.window,
+                      window.firstResponder === field
+                        || window.firstResponder === field.currentEditor() else { return }
+                window.makeFirstResponder(nil)
+            }
+        }
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, NSSearchFieldDelegate {
+        /// The `NSToolbarItem` label for this control — what the
+        /// customization palette shows. SwiftUI derives "" for representable
+        /// items, so the coordinator asserts this (same pattern as
+        /// ``RunDetailsToolbarToggle``).
+        static let itemLabel = "Search"
+
+        private let text: Binding<String>
+        /// The mounted controls. Nil only before `makeNSView`: every read
+        /// site (`apply`, the deferred focus/resign tasks) runs after mount,
+        /// so each unwrap below documents an invariant rather than an error
+        /// path.
+        var field: NSSearchField?
+        var expandButton: NSButton?
+        var onExpandRequested: (() -> Void)?
+        var onEditEndedEmpty: (() -> Void)?
+        /// The form the stack last displayed. Drives the collapse-side
+        /// resign (``QueueSearchToolbarControl/apply``) and guards the
+        /// deferred focus; the re-focus itself keys off the view's
+        /// ``QueueSearchToolbarControl/focusOnExpand``, not this flip.
+        var isShowingCollapsed = true
+        /// Set while the Escape handler clears the field editor: the
+        /// synchronous editor clear fires `controlTextDidChange` (via the
+        /// editor's own did-change chain), and letting that write the
+        /// binding would drive a SwiftUI update re-entrantly inside the
+        /// text view's command dispatch. The binding write is deferred to
+        /// the next tick instead.
+        var isClearingQueryFromEscape = false
+
+        init(text: Binding<String>) {
+            self.text = text
+        }
+
+        /// Find the toolbar item hosting this control and keep its label for
+        /// the customization palette. Runs on the NEXT runloop tick: SwiftUI
+        /// re-derives toolbar item labels during its own update (and a
+        /// representable has no SwiftUI title to lift, so it derives ""),
+        /// then we assert ours — so ours is the last write before the
+        /// toolbar is observed.
+        func reassertToolbarItemLabel(for control: NSView) {
+            guard control.window?.toolbar != nil else { return }
+            DispatchQueue.main.async { [weak control] in
+                guard let control, let toolbar = control.window?.toolbar else { return }
+                for item in toolbar.items {
+                    guard let view = item.view, control.isDescendant(of: view) else { continue }
+                    if item.label != Self.itemLabel {
+                        item.label = Self.itemLabel
+                    }
+                    return
+                }
+            }
+        }
+
+        /// Push the binding into the field. Self-originated edits already
+        /// made the two equal (the delegate wrote the binding from this
+        /// field), so this is a no-op during typing and never moves the
+        /// insertion point; only external writes (Clear Filters, a deep
+        /// link's filter reset) differ and land.
+        func sync(text: String, into field: NSSearchField) {
+            guard field.stringValue != text else { return }
+            field.stringValue = text
+        }
+
+        /// Only reachable via the deferred task in `updateNSView`, i.e. after
+        /// `makeNSView` has mounted the field, so the unwrap is an invariant.
+        func focusField() {
+            guard let field else { return }
+            if let window = field.window, window.firstResponder !== field {
+                window.makeFirstResponder(field)
+            }
+        }
+
+        // MARK: User-edit paths (the only places SwiftUI state is written)
+
+        /// The collapsed button's click — a user event: request expansion.
+        /// The view records the request (``ActivityWindowView/searchExpandedByUser``)
+        /// and passes it back as ``QueueSearchToolbarControl/focusOnExpand``;
+        /// the focus itself lands on the next `updateNSView`.
+        @objc func expandClicked() {
+            onExpandRequested?()
+        }
+
+        /// Live-as-you-type query updates, plus the clear button's edit.
+        /// The binding write is DEFERRED by one runloop tick: writing it
+        /// synchronously inside the field editor's did-change callback makes
+        /// SwiftUI re-render the navigator (an NSTableView) re-entrantly in
+        /// the middle of AppKit's text machinery — fatal to the test-runner
+        /// session and hostile to real event processing alike. One tick is
+        /// imperceptible and keeps the update on the outside of the text
+        /// stack. Suppressed while the Escape handler clears the editor
+        /// (``isClearingQueryFromEscape``); that path defers its own write.
+        func controlTextDidChange(_ notification: Notification) {
+            guard !isClearingQueryFromEscape else { return }
+            guard let field = notification.object as? NSSearchField else { return }
+            let value = field.stringValue
+            Task { @MainActor [weak self] in
+                self?.text.wrappedValue = value
+            }
+        }
+
+        /// NSSearchField's native Escape: the first press clears a non-empty
+        /// query (the view's `onChange(of:)` then collapses a narrow window's
+        /// control); an already-empty field lets the cancel propagate so
+        /// editing ends normally (second press dismisses focus). The visible
+        /// text lives in the LIVE field editor this callback receives — clear
+        /// `textView` itself, not `field.stringValue`, whose write the open
+        /// editor would overwrite on the next edit sync. The editor clear is
+        /// synchronous, but the binding write must NOT run inside the text
+        /// view's command dispatch: it would drive a SwiftUI re-render
+        /// re-entrantly through the editor's text-change callback (Observed
+        /// as a runner-fatal reentrant NSTableView operation in the hosted
+        /// tests). So the change callback is gated while the editor is
+        /// cleared, and the binding write lands on the next runloop tick.
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            guard commandSelector == #selector(NSResponder.cancelOperation(_:)) else {
+                return false
+            }
+            guard let field = control as? NSSearchField,
+                  field.stringValue.isEmpty == false else { return false }
+            isClearingQueryFromEscape = true
+            defer { isClearingQueryFromEscape = false }
+            textView.string = ""
+            Task { @MainActor [weak self] in
+                self?.text.wrappedValue = ""
+            }
+            return true
+        }
+
+        /// Editing ended (Enter, focus moving away, or the second Escape on
+        /// an already-empty field): when the field is EMPTY at that moment,
+        /// spend the explicit expansion request so a narrow window collapses
+        /// the control back to the button — an abandoned empty search should
+        /// not hold the field open (`NSSearchToolbarItem` behavior). The
+        /// delegate callback is a user-event context, so this SwiftUI state
+        /// write is legal here. A non-empty field keeps the expansion; the
+        /// query itself holds the field open via the decision's non-empty
+        /// branch.
+        func controlTextDidEndEditing(_ notification: Notification) {
+            guard let field = notification.object as? NSSearchField,
+                  field.stringValue.isEmpty else { return }
+            onEditEndedEmpty?()
+        }
+
+        /// Enter / the search button: AppKit's target/action passes the
+        /// field as sender. Typing already kept the binding in sync; this
+        /// write is idempotent and covers the paths the field editor's
+        /// change notifications don't reach.
+        @objc func searchAction(_ sender: NSSearchField) {
+            text.wrappedValue = sender.stringValue
         }
     }
 }
@@ -2074,6 +2474,14 @@ extension ActivityWindowView {
     static let stopAllButtonLabel = "Stop All"
     static let stopAllConfirmationMessage =
         "This pauses the queue and cancels its running jobs. Queued jobs remain queued."
+
+    /// The toolbar job-search prompt + accessibility label, carried over from
+    /// the former `.searchable` field unchanged (design change 6): the
+    /// expanded field's placeholder and the collapsed button's accessibility
+    /// label are the same string so the control announces itself identically
+    /// in both forms. The value-level suite pins it. `nonisolated` so the
+    /// nonisolated test suites can read it without a main-actor hop.
+    nonisolated static let searchPrompt = "Search loaded jobs"
 
     /// The selected-job workspace's outside-filter notice (plan §"Selection,
     /// filters, and deep links"). The notice renders these constants; the

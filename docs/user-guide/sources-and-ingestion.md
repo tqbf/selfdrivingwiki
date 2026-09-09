@@ -268,7 +268,10 @@ Both windows show:
   reordering turns off while filters or search are active).
 - **Recent** section — up to 200 completed/failed/cancelled items.
 - **Per-item controls** — Cancel (running/queued), Retry Job (failed/cancelled).
-- **Toolbar** — one **Queue Actions** menu and a **Run Details** toggle.
+- **Toolbar** — a **Search** control at the left end, and two icon-only
+  controls pinned to the right edge: the **Queue Actions** menu
+  (ellipsis.circle icon) and the **Run Details** toggle (sidebar.right icon).
+  Point at an icon to see its name.
 
 The Queue Actions menu holds Pause Queue (or Resume Queue) and Stop All.
 Each menu item carries its own guidance. Pause stops new starts and lets

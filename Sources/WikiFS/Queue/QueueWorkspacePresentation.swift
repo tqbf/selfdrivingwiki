@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import WikiFSCore
 
@@ -499,5 +500,45 @@ enum QueueWorkspaceFormat {
         let hours = minutes / 60
         let remainingMinutes = minutes % 60
         return remainingMinutes == 0 ? "\(hours)h" : "\(hours)h \(remainingMinutes)m"
+    }
+}
+
+// MARK: - Toolbar search form (plan design change 6, 2026-09-09)
+
+/// Which form the queue window's toolbar job search takes: an expanded
+/// `NSSearchField`, or a collapsed magnifying-glass button that expands on
+/// click (the behavior of AppKit's `NSSearchToolbarItem`).
+///
+/// Pure value — the expand/collapse rule lives here so the value-level suite
+/// pins it and the view's `updateNSView` never invents its own.
+enum QueueSearchToolbarForm: Equatable, Sendable {
+    /// The expanded search field, hosting the query binding.
+    case expandedField
+    /// The collapsed magnifying-glass button.
+    case collapsedButton
+
+    /// The expand/collapse decision over the window's measured split-view
+    /// width, the current query, and the user's explicit expansion request:
+    ///
+    /// - A non-empty query keeps the field expanded — collapsing would hide
+    ///   the text being edited and the filter it drives.
+    /// - An explicit user request (the magnifying-glass click) wins over a
+    ///   sub-threshold width until the query is cleared again (the view
+    ///   resets the request when the field empties or editing ends empty).
+    /// - Otherwise width rules: at or above the threshold the field stays
+    ///   expanded; below it, collapsed.
+    /// - An unmeasured width (`nil`, first layout) assumes enough space so
+    ///   the control reads like the previous always-present search field
+    ///   until the first real measurement lands.
+    static func decision(
+        splitViewWidth: CGFloat?,
+        queryIsEmpty: Bool,
+        userRequestedExpansion: Bool,
+        threshold: CGFloat = QueueWorkspaceMetrics.Search.expandedThreshold
+    ) -> Self {
+        if userRequestedExpansion { return .expandedField }
+        if !queryIsEmpty { return .expandedField }
+        guard let splitViewWidth else { return .expandedField }
+        return splitViewWidth >= threshold ? .expandedField : .collapsedButton
     }
 }

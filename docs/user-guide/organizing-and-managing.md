@@ -256,7 +256,8 @@ All extraction and ingestion operations flow through a **persistent queue**.
 Both windows share one job workspace:
 
 - **Left: job navigator.** The **Active** section lists running and queued jobs. The **Recent** section lists up to 200 finished jobs. Drag to reorder queued jobs. Reordering turns off while filters or search are active.
-- **Search field** at the top. Search covers loaded jobs only: kind, wiki name, target names, and recorded outcome text. While summaries load, the footer labels the search incomplete.
+- **Search** at the left end of the window toolbar. Search covers loaded jobs only: kind, wiki name, target names, and recorded outcome text. While summaries load, the footer labels the search incomplete. Wide windows show the search field; narrow windows show a magnifying-glass button that expands the field when you click it. Press Escape to clear the query.
+- **Toolbar icons at the right end.** Two icon-only controls stay pinned to the right edge: the **Queue Actions** menu (ellipsis.circle icon) and the **Run Details** toggle (sidebar.right icon). Point at an icon to see its name.
 - **Filter menu** covers State, Wiki, and Operation. Active filters show a **Clear Filters** action.
 - If filters hide the selected job, the workspace stays open. It shows the notice "Selected job is outside this filter" with a **Clear Filters** action.
 - Per-item status: spinner (running), clock (queued), ✓ (completed), ⚠️ (failed), ✕ (cancelled).
@@ -271,7 +272,7 @@ Select a job to open its workspace on the right.
 - **Outputs** (ingestion jobs) — pages whose recorded provenance cites the job's input sources. Each row is a clickable page name that opens the page. Outputs come from recorded evidence only. They are never inferred from job completion. While no pages exist yet, the section shows "No pages recorded yet." If the recorded pages can't be loaded, the section says so instead of showing an empty success.
 - **Activity** — the typed transcript for the job. Extraction jobs without a transcript show progress text instead.
 
-The toolbar's **Run Details** toggle opens the Run Details inspector beside the workspace. The inspector shows the recorded enqueue, start, and finish times, the duration, the attempt, the actual provider and model, and usage. Absent values show **Not Reported**. The inspector is optional. Opening or closing it changes nothing else: your selection, filters, and queue state stay as they are.
+The toolbar's **Run Details** icon (the sidebar.right icon at the right end of the toolbar) opens the Run Details inspector beside the workspace. The inspector shows the recorded enqueue, start, and finish times, the duration, the attempt, the actual provider and model, and usage. Absent values show **Not Reported**. The inspector is optional. Opening or closing it changes nothing else: your selection, filters, and queue state stay as they are.
 
 Overview rows show **Planned** until a target has recorded evidence. Planned is not a result. It never reads as success or as a count of zero. The section result line still states absence where it matters, for example "Agent run completed; page-level results not reported" for a lint run without page results. The Run Details inspector keeps **Not Reported** for absent provider or model facts.
 
