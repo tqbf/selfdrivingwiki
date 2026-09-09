@@ -100,12 +100,6 @@ extension QueueWorkspaceStatus {
     static func skipped() -> QueueWorkspaceStatus {
         QueueWorkspaceStatus(text: "Skipped", symbol: "minus.circle", style: .warning)
     }
-
-    /// The runner supplies no evidence for this target. Never rendered as a
-    /// zero count or an empty success.
-    static func notReported() -> QueueWorkspaceStatus {
-        QueueWorkspaceStatus(text: "Not Reported", symbol: "dash.circle", style: .secondary)
-    }
 }
 
 // MARK: - Job lifecycle
@@ -215,7 +209,7 @@ enum QueueWorkspaceTargetIdentity: Hashable, Sendable {
     case source(SourceID)
     case page(PageID)
 
-    /// Stable list/disclosure identity. The case prefix keeps the raw ULID
+    /// Stable list identity. The case prefix keeps the raw ULID
     /// strings from colliding across namespaces in `ForEach`/`Set<String>` use.
     var rowID: String {
         switch self {
@@ -232,10 +226,11 @@ enum QueueWorkspaceTargetIdentity: Hashable, Sendable {
 /// list iteration"). Plain values only — no `@Observable` reads inside row
 /// bodies, preserving the existing observation-crash workaround.
 ///
-/// A row whose `identity` is `nil` is a scope marker ("Whole wiki"): it has no
-/// target to open and its actions list is expected to be empty.
+/// A row whose `identity` is `nil` is a scope marker ("Whole wiki"): it has
+/// no target to open, but may still carry a wiki-level action ("Browse
+/// Pages") that its name link performs.
 struct QueueTargetRowValue: Identifiable {
-    /// Stable across reordering and disclosure state. Use
+    /// Stable across reordering. Use
     /// `QueueWorkspaceTargetIdentity.rowID` for real targets; any stable string
     /// for scope rows.
     let id: String
@@ -243,17 +238,20 @@ struct QueueTargetRowValue: Identifiable {
     /// Recognizable display name. For history rows this is the *recorded* name,
     /// preserved even when the target no longer resolves.
     let title: String
-    /// Full selectable name when it differs from the truncated `title`; `nil`
-    /// means the title is already the full name.
+    /// Full name when it differs from the truncated `title`; `nil` means the
+    /// title is already the full name. Search-only today (the row itself is
+    /// not collapsible): it feeds local inventory matching and the name
+    /// link's tooltip.
     let fullName: String?
     /// State/result text + symbol + style.
     let status: QueueWorkspaceStatus
     /// Skip/failure reason or an availability explanation ("Source bytes
-    /// unavailable"). Shown under the status in the disclosed block.
+    /// unavailable"). Search-only today (the row itself is not collapsible).
     let reason: String?
-    /// Available navigation actions ("Open Page", "Reveal Source", "Show
-    /// Output"). Empty when none are available — extraction output actions
-    /// appear only while a recorded output reference stays resolvable.
+    /// Available navigation actions ("Open Page", "Reveal Source", "Browse
+    /// Pages") — the row's name link performs the first. Empty when none are
+    /// available — extraction output actions appear only while a recorded
+    /// output reference stays resolvable.
     let actions: [QueueWorkspaceAction]
 
     init(
@@ -294,13 +292,9 @@ struct QueueTargetRowValue: Identifiable {
             actions: actions)
     }
 
-    /// The full name to reveal on disclosure — never a tooltip-only surface.
+    /// The full recorded name — the name link's tooltip surface and a local
+    /// search haystack. The row itself is not collapsible.
     var displayName: String { fullName ?? title }
-
-    /// Whether the disclosure adds information beyond the collapsed row.
-    var hasDisclosableDetail: Bool {
-        fullName != nil || reason != nil || !actions.isEmpty || identity != nil
-    }
 
     /// Local inventory search (plan: local search for large batches). Case- and
     /// diacritic-insensitive via `localizedStandardContains`, matching the
@@ -316,7 +310,7 @@ struct QueueTargetRowValue: Identifiable {
 
 // MARK: - Run details facts
 
-/// One labeled value in the Run Details disclosure.
+/// One labeled value in the Run Details inspector panel.
 struct QueueRunDetailEntry: Equatable, Sendable {
     let label: String
     let value: String
@@ -335,7 +329,7 @@ struct QueueRunDetailEntry: Equatable, Sendable {
     }
 }
 
-/// Run facts for the Run Details disclosure, mapped by the caller from
+/// Run facts for the Run Details inspector panel, mapped by the caller from
 /// `QueueItem` timestamps plus the §2 report header. Pure data — formatting and
 /// the omit-vs-placeholder rules live in `entries` so tests cover them without
 /// rendering.
@@ -383,7 +377,7 @@ struct QueueRunDetailsFacts: Sendable {
         self.usageLines = usageLines
     }
 
-    /// The disclosure's entries, applying the omission rules above. Blank
+    /// The inspector's entries, applying the omission rules above. Blank
     /// (whitespace-only) text counts as absent.
     var entries: [QueueRunDetailEntry] {
         var result: [QueueRunDetailEntry] = []

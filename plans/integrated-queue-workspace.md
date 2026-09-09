@@ -1,6 +1,8 @@
 # Integrated Queue Workspace
 
-Status: **design approved. Implementation is underway. Tests have not run.**
+Status: **design approved and implemented** on
+`feature/integrated-queue-workspace`. The design changes of 2026-09-08
+(below) supersede the affected sentences in the sections that follow.
 
 This document records the approved design for the redesigned Agent Queue and
 Extraction Queue windows. It covers the layout contract, the state vocabulary,
@@ -10,6 +12,45 @@ in the operator session copy at
 `/Users/wsargent/.local/share/polytoken/sessions/0ahsf1-stunt/plan-001.md`.
 
 Covers issues #1219, #1220, and #1221.
+
+## Design changes (2026-09-08)
+
+The review rounds and later operator decisions changed four presentation
+decisions. The sections below
+keep their original structure. Where a sentence contradicts this section,
+this section is current.
+
+1. **Run Details is an optional right inspector.** Run Details is no longer
+   a disclosure below the inventory. The window toolbar's labeled
+   "Run Details" toggle opens it as a trailing panel inside the detail
+   column. The panel is never a permanently visible third column, and
+   toggling it touches no selection, filter, or queue state. The layout art
+   above still shows the old "Run Details ▸" footer row; the inspector
+   replaces it. Affected sections: "Selected job workspace", "Run details",
+   "Non-goals".
+2. **Queue Actions menu.** Pause Queue, Resume Queue, and Stop All… live in
+   one labeled "Queue Actions" toolbar menu. Pause Queue is not a separate
+   top-level toolbar button. Each menu section carries visible guidance:
+   Pause stops new starts and lets running jobs finish; Stop All pauses the
+   queue and cancels its running jobs, and queued jobs remain. The Stop All
+   confirmation restates this. Affected section: "Queue controls: Pause and
+   Stop All".
+3. **Target rows are non-collapsible name links without IDs.** A row shows
+   the target name and one state or result. Rows do not disclose or expand,
+   and rows never render typed identity (a SourceID or a PageID). The name
+   itself is the link that performs the row's live action — "Open Page",
+   "Reveal Source", or "Browse Pages" for a whole-wiki scope. The full
+   recorded name stays available as the row tooltip and in the local
+   inventory search. Affected section: "Target inventory (Overview)".
+4. **Unobserved targets render as "Planned" (2026-09-08).** Target rows no
+   longer show a "Not Reported" status. A row without recorded evidence
+   shows "Planned", the same vocabulary as a not-yet-run job. Planned is
+   not a result and never reads as a zero or an empty success. Absence
+   stays explicit where it matters: the Run Details inspector keeps its
+   "Not Reported" placeholders for provider and model, and the section
+   result line keeps sentences such as "Agent run completed; page-level
+   results not reported". Affected sections: "Target inventory
+   (Overview)", "Report truth rules".
 
 ## Goal
 
@@ -76,10 +117,13 @@ The workspace stacks in this order:
 
 1. Job errors and pending permission requests.
 2. The Overview and Activity selector.
-3. Overview: the complete target inventory, with Run Details as a disclosure
-   below it.
+3. Overview: the complete target inventory.
 4. Activity: the typed transcript or the raw progress fallback, Copy Activity,
    and the existing log and debug reveal controls.
+
+Run Details is not part of this stack. The window toolbar's "Run Details"
+toggle opens it as an optional trailing inspector beside the workspace (see
+the design changes of 2026-09-08 and the "Run details" section).
 
 Every new selection opens Overview. Switching between Overview and Activity
 must not drop streaming data or scroll position. Activity is the only
@@ -92,9 +136,11 @@ transcript surface.
 - One shared row component serves ingestion, extraction, and lint.
 - The Name and State / Result columns align when space permits and stack when
   the window is narrow.
-- Long names wrap to two lines. Selecting or disclosing a row reveals the full
-  selectable name, the identity, the reason, and the available actions inline.
-  A tooltip is never the only full-name surface.
+- Long names wrap to two lines. Rows do not disclose or expand, and rows
+  never render typed identity (a SourceID or a PageID). The name itself is
+  the link that performs the row's live action — "Open Page", "Reveal
+  Source", or "Browse Pages" for a whole-wiki scope. The full recorded name
+  stays available as the row tooltip and in the local search.
 - A local search field covers large batches. Rows are lazy and keyed by
   `SourceID` or `PageID`.
 - A confirmed deleted target reads differently from an unavailable wiki
@@ -105,7 +151,10 @@ transcript surface.
 
 ### Run details
 
-Run Details is a disclosure below the inventory. It uses labeled values:
+Run Details is an optional trailing inspector panel inside the detail
+column, opened and closed by the window toolbar's labeled "Run Details"
+toggle. It is never a permanently visible third column, and toggling it
+touches no selection, filter, or queue state. It uses labeled values:
 
 | Value | Note |
 | --- | --- |
@@ -209,14 +258,15 @@ These rules bound what the workspace may claim.
 
 ### Pause Queue
 
-Pause Queue is a named toolbar button. Pausing stops new starts. Running work
-finishes. Resume allows dispatch again. The button's help text states exactly
-this.
+Pause Queue lives inside the labeled "Queue Actions" toolbar menu; it is not
+a separate top-level button. Pausing stops new starts. Running work
+finishes. Resume allows dispatch again. The menu carries this guidance as
+visible text.
 
 ### Stop All
 
-Stop All lives in the toolbar overflow menu. Its confirmation states that Stop
-All pauses this queue and cancels its running work. It does not delete queued
+Stop All lives in the same "Queue Actions" menu. Its confirmation states that
+Stop All pauses this queue and cancels its running work. It does not delete queued
 work, and the confirmation does not imply that it does.
 
 ## Whole-job retry
@@ -292,7 +342,9 @@ daemon, and XPC transports through `loadQueueReport(for:)` and
 - `AgentQueueView.swift` is a separate live chat transcript component. This
   design does not touch it.
 - No new attempt-history browser.
-- No third inspector column and no new UI dependency.
+- No permanently visible third column and no new UI dependency. The Run
+  Details inspector is conditional, toolbar-toggled presentation, not a
+  fixed split-view column.
 - Full semantic agent-result protocols stay out of scope. Lint page findings
   and per-source ingestion completion remain Not Reported until an
   authoritative producer exists.

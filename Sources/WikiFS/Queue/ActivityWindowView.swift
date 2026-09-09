@@ -62,7 +62,8 @@ struct ActivityTranscriptPresentation {
 /// A per-queue activity window — one instance shows the Ingestion queue, the
 /// other the Extraction queue, so the two pipelines read as the separate
 /// systems they are. A real `NSWindow` (not transient) listing this queue's
-/// items across all wikis, with expandable agent transcripts.
+/// items across all wikis, with the selected job's Overview inventory and
+/// Activity transcript.
 ///
 /// **Sidebar (left):** A native `List` (keyboard navigation, real selection)
 /// with Active + Recent sections. Rows lead with the source filenames being
@@ -71,14 +72,20 @@ struct ActivityTranscriptPresentation {
 /// Retry, and every row a context menu.
 ///
 /// **Detail (right):** A header (sources, wiki, state, error, primary action)
-/// over the selected item's transcript — rendered via `ChatWebView` fed from
-/// `activityTracker.transcripts[itemID]`. For extraction items (which produce
-/// progress strings, not transcript rows), falls back to the accumulated
-/// progress text.
+/// over the selected job's workspace — the Overview inventory or the Activity
+/// transcript, chosen by the Overview/Activity selector. Activity renders via
+/// `ChatWebView` fed from `activityTracker.transcripts[itemID]`. For
+/// extraction items (which produce progress strings, not transcript rows), it
+/// falls back to the accumulated progress text. Run Details lives in an
+/// OPTIONAL trailing inspector panel (never a permanently visible third
+/// column), opened by the toolbar's "Run Details" toggle — it is not part of
+/// the Overview.
 ///
-/// **Toolbar:** This queue's pause/resume/halt menu (global actions live in
-/// the top bar, per the macOS layout formula). Since lint runs on
-/// `.ingestion`, the Ingestion window covers lint too.
+/// **Toolbar:** This queue's labeled "Queue Actions" menu (pause/resume with
+/// inline guidance + Stop All… with its explicit confirmation) and the Run
+/// Details inspector toggle (global actions live in the top bar, per the
+/// macOS layout formula). Since lint runs on `.ingestion`, the Ingestion
+/// window covers lint too.
 struct ActivityWindowView: View {
     /// Which queue this window shows. Items from the other queue are
     /// filtered out of every snapshot read.
@@ -90,10 +97,6 @@ struct ActivityWindowView: View {
     /// "Configure…" CTA buttons can open Settings on the relevant tab
     /// (#440). Set by `MenuBarItemController` when creating the window.
     var openWindowBridge: OpenWindowBridge?
-    /// Hosted layout tests pin the Run Details disclosure expanded through
-    /// this flag (it forwards `queueRunDetailsPinnedExpanded` down the tree —
-    /// see `QueueRunDetailsView`). Production keeps `false`.
-    var runDetailsPinnedExpanded: Bool = false
 
     @State private var viewModel = QueueViewModel()
     @State private var selectedItemID: QueueItem.ID?
@@ -107,6 +110,10 @@ struct ActivityWindowView: View {
     /// Every new selection resets to Overview; both surfaces stay mounted so
     /// switching never drops streaming data or the transcript scroll position.
     @State private var workspaceSurface: QueueWorkspaceSurface = .overview
+    /// Whether the optional Run Details inspector panel is open. Toggled by
+    /// the window toolbar's labeled "Run Details" control; closing it never
+    /// touches selection or queue state — the panel is presentation-only.
+    @State private var showsRunDetailsInspector = false
 
     /// The selected job's two workspace surfaces. Activity is the only
     /// transcript surface (plan §1); Overview is the complete inventory +
@@ -142,12 +149,23 @@ struct ActivityWindowView: View {
         }
     }
 
+    /// Strict window-scope filter: the Agent Queue (`.ingestion`) lists only
+    /// ingestion and lint jobs; the Extraction Queue lists only extraction
+    /// jobs. The item's own `queue` is the single authority — an extraction
+    /// job never leaks into the Agent list (or vice versa) even though one
+    /// snapshot serves both windows. PURE + `nonisolated` (same reason as
+    /// ``isConfigurationErrorMarker``): the integration tests assert it from
+    /// nonisolated `#expect` contexts without a main-actor hop.
+    nonisolated static func windowContains(_ item: QueueItem, queue: QueueKind) -> Bool {
+        item.queue == queue
+    }
+
     private var activeItems: [QueueItem] {
-        viewModel.snapshot.activeItems.filter { $0.queue == queue }
+        viewModel.snapshot.activeItems.filter { Self.windowContains($0, queue: queue) }
     }
 
     private var recentItems: [QueueItem] {
-        viewModel.snapshot.recentItems.filter { $0.queue == queue }
+        viewModel.snapshot.recentItems.filter { Self.windowContains($0, queue: queue) }
     }
 
     /// Everything the navigator displays: active jobs plus the bounded recent
@@ -196,6 +214,9 @@ struct ActivityWindowView: View {
             ToolbarItem(placement: .primaryAction) {
                 queueControlMenu
             }
+            ToolbarItem(placement: .primaryAction) {
+                runDetailsInspectorToggle
+            }
         }
         // #835: pin the unified window-toolbar background so SwiftUI reserves
         // the toolbar region (non-floating) and insets the sidebar content below
@@ -206,7 +227,6 @@ struct ActivityWindowView: View {
         // visibly established for the inset to apply (the main wiki window gets
         // this implicitly via its `.navigation` + `.principal` toolbar items).
         .toolbarBackground(.visible, for: .windowToolbar)
-        .environment(\.queueRunDetailsPinnedExpanded, runDetailsPinnedExpanded)
         .onAppear {
             viewModel.attach(engine: queueEngine)
             consumePendingSelectionIfNeeded()
@@ -436,36 +456,89 @@ struct ActivityWindowView: View {
     /// and the summary's recorded search text (report-backed search — while
     /// the batch summary load is in flight that field is empty and the footer
     /// labels the search incomplete). One implementation shared by the
-    /// sidebar's filter pass and ``isHiddenByFilter(_:)`` so the navigator
-    /// and the workspace's outside-filter notice can never disagree.
-    private func navigatorSearchText(item: QueueItem, row: RowDisplayData?) -> String {
-        [row?.title ?? "", row?.wikiName ?? "", kindLabel(for: item),
-         row?.targetNames.joined(separator: " ") ?? "", item.error ?? "",
-         row?.summarySearchText ?? ""].joined(separator: " ")
+    /// sidebar's filter pass and the outside-filter notice decision so the
+    /// navigator and the notice can never disagree. PURE + `nonisolated`
+    /// (same reason as ``isConfigurationErrorMarker``): the value-level
+    /// suite pins the exact composition without a main-actor hop.
+    nonisolated static func navigatorSearchText(
+        item: QueueItem,
+        kindLabel: String,
+        rowTitle: String?,
+        wikiName: String?,
+        targetNames: [String],
+        summarySearchText: String?
+    ) -> String {
+        [rowTitle ?? "", wikiName ?? "", kindLabel,
+         targetNames.joined(separator: " "), item.error ?? "",
+         summarySearchText ?? ""].joined(separator: " ")
     }
 
-    /// Whether the current filter/search hides `item` from the navigator
-    /// (plan §"Selection, filters, and deep links"). `false` when no filter
-    /// is active. Drives the workspace's "Selected job is outside this
-    /// filter" notice.
+    /// Instance convenience over the pure haystack: feeds it the item's
+    /// kind label and its precomputed row display data.
+    private func navigatorSearchText(item: QueueItem, row: RowDisplayData?) -> String {
+        Self.navigatorSearchText(
+            item: item,
+            kindLabel: Self.kindLabel(for: item),
+            rowTitle: row?.title,
+            wikiName: row?.wikiName,
+            targetNames: row?.targetNames ?? [],
+            summarySearchText: row?.summarySearchText)
+    }
+
+    /// Whether `filter`/search hides `item` from the navigator (plan
+    /// §"Selection, filters, and deep links"). `false` when no filter is
+    /// active. This decision is the outside-filter notice's show condition,
+    /// computed over the same haystack the navigator rows match against.
+    /// PURE + `nonisolated` so the value-level suite asserts it directly.
+    nonisolated static func isHiddenByFilter(
+        _ item: QueueItem,
+        filter: QueueJobFilter,
+        rowTitle: String?,
+        wikiName: String?,
+        targetNames: [String],
+        summarySearchText: String?
+    ) -> Bool {
+        guard filter.isActive else { return false }
+        return !filter.includes(
+            item,
+            searchText: navigatorSearchText(
+                item: item,
+                kindLabel: kindLabel(for: item),
+                rowTitle: rowTitle,
+                wikiName: wikiName,
+                targetNames: targetNames,
+                summarySearchText: summarySearchText))
+    }
+
+    /// Whether the current filter/search hides `item` from the navigator.
+    /// Delegates to the pure decision with this window's filter and the
+    /// item's precomputed row data (plan §"Selection, filters, and deep
+    /// links"). Drives the workspace's outside-filter notice.
     private func isHiddenByFilter(_ item: QueueItem) -> Bool {
         guard jobFilter.isActive else { return false }
         let row = buildRowDisplayData(for: [item])[item.id]
-        return !jobFilter.includes(
-            item, searchText: navigatorSearchText(item: item, row: row))
+        return Self.isHiddenByFilter(
+            item,
+            filter: jobFilter,
+            rowTitle: row?.title,
+            wikiName: row?.wikiName,
+            targetNames: row?.targetNames ?? [],
+            summarySearchText: row?.summarySearchText)
     }
 
     /// Plan §"Selection, filters, and deep links": when filters hide the
     /// selected job, its workspace stays, topped by a short notice with a
     /// Clear Filters action. Quiet by design — the workspace below is the
     /// content; the notice only explains why the navigator looks empty.
+    /// Copy lives in these named constants (in this extension) so the
+    /// value-level suite pins the exact strings.
     private var filteredSelectionNotice: some View {
         HStack(spacing: QueueWorkspaceMetrics.Spacing.xs) {
-            Label("Selected job is outside this filter", systemImage: "line.3.horizontal.decrease")
+            Label(Self.filteredSelectionNoticeText, systemImage: "line.3.horizontal.decrease")
                 .font(.callout)
                 .foregroundStyle(.secondary)
             Spacer(minLength: QueueWorkspaceMetrics.Spacing.xs)
-            Button("Clear Filters") {
+            Button(Self.clearFiltersButtonLabel) {
                 jobFilter = QueueJobFilter()
             }
             .buttonStyle(.bordered)
@@ -475,7 +548,7 @@ struct ActivityWindowView: View {
         .padding(.horizontal, QueueWorkspaceMetrics.Spacing.md)
         .padding(.vertical, QueueWorkspaceMetrics.Spacing.xs)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Selected job is outside this filter")
+        .accessibilityLabel(Self.filteredSelectionNoticeText)
     }
 
     private var jobFilterMenu: some View {
@@ -532,7 +605,7 @@ struct ActivityWindowView: View {
     @ViewBuilder
     private func itemRow(_ item: QueueItem, displayData: RowDisplayData?) -> some View {
         let data = displayData ?? RowDisplayData(
-            title: kindLabel(for: item),
+            title: Self.kindLabel(for: item),
             subtitle: String(item.wikiID.rawValue.prefix(8)),
             wikiName: String(item.wikiID.rawValue.prefix(8)),
             targetNames: [],
@@ -730,41 +803,95 @@ struct ActivityWindowView: View {
 
     // MARK: - Toolbar
 
-    /// This queue's pause/resume/halt as a toolbar menu — global queue
-    /// controls belong in the top bar, not buried in list section headers.
+    /// This queue's controls as one labeled toolbar menu — global queue
+    /// controls belong in the top bar, not buried in list section headers
+    /// (and Pause Queue is not a separate top-level button). Pause/Resume
+    /// and Stop All… live inside "Queue Actions", each section headed by
+    /// concise native menu guidance so the two pausing verbs stay distinct:
+    /// Pause stops new starts and lets running jobs finish; Stop All also
+    /// cancels running jobs (queued jobs remain, restated by the explicit
+    /// destructive confirmation).
     @ViewBuilder
     private var queueControlMenu: some View {
         let state = viewModel.snapshot.runStates[queue] ?? .running
-        HStack {
-            if state == .running {
-                Button("Pause Queue", systemImage: "pause.fill") {
-                    runQueueCommand("pause queue") { try await queueEngine.pause(queue) }
+        Menu("Queue Actions", systemImage: "ellipsis.circle") {
+            Section {
+                if state == .running {
+                    Button("Pause Queue", systemImage: "pause.fill") {
+                        runQueueCommand("pause queue") { try await queueEngine.pause(queue) }
+                    }
+                    .help("Stop new starts. Running jobs continue.")
+                } else {
+                    Button("Resume Queue", systemImage: "play.fill") {
+                        runQueueCommand("resume queue") { try await queueEngine.resume(queue) }
+                    }
                 }
-                .help("Stop new starts. Running jobs continue.")
-            } else {
-                Button("Resume Queue", systemImage: "play.fill") {
-                    runQueueCommand("resume queue") { try await queueEngine.resume(queue) }
-                }
+            } header: {
+                Text(state == .running
+                     ? "Pause Queue — do not start new jobs, let running jobs finish"
+                     : "Resume Queue — allow queued jobs to start")
             }
-            Menu("Queue Actions", systemImage: "ellipsis.circle") {
+            Section {
                 Button("Stop All…", systemImage: "stop.fill", role: .destructive) {
                     confirmsStopAll = true
                 }
+            } header: {
+                Text("Stop All — pause queue and cancel running jobs, queued jobs remain")
             }
         }
         .labelStyle(.titleAndIcon)
         .disabled(isCommandPending)
     }
 
+    /// The toolbar control that opens/closes the optional Run Details
+    /// inspector — a real, titled NSButton (see ``RunDetailsToolbarToggle``).
+    /// Toggling it touches only panel presentation: selection, filters, and
+    /// queue state are untouched.
+    private var runDetailsInspectorToggle: some View {
+        RunDetailsToolbarToggle(isOn: $showsRunDetailsInspector)
+    }
+
     // MARK: - Detail pane
+
+    /// The detail column: the selected job's workspace plus the OPTIONAL Run
+    /// Details inspector as a conditional trailing region — never a
+    /// permanently visible third split-view column. The inspector exists in
+    /// the tree only while open; closing it removes the region and changes
+    /// nothing else (selection, filters, and queue state are untouched).
+    private var detailPane: some View {
+        HStack(spacing: 0) {
+            workspaceDetailPane
+            if showsRunDetailsInspector {
+                Divider()
+                QueueRunDetailsView(selectedRunDetailsFacts)
+                    .frame(width: QueueWorkspaceMetrics.Inspector.width)
+            }
+        }
+    }
+
+    /// The selected job's Run Details facts for the inspector panel —
+    /// item timestamps + the report header's provider/model + recorded
+    /// usage, fed from the loaded durable report when it matches this
+    /// selection and attempt.
+    private var selectedRunDetailsFacts: QueueRunDetailsFacts? {
+        guard let itemID = selectedItemID, let item = item(for: itemID) else {
+            return nil
+        }
+        var report: QueueAttemptReport?
+        if case .loaded(let loaded) = viewModel.selectedReport,
+           Self.loadedReportMatches(report: loaded, item: item) {
+            report = loaded
+        }
+        return runDetailsFacts(for: item, report: report)
+    }
 
     /// The selected job's workspace (plan §1 "Selected job workspace"): the
     /// responsive header, the Overview/Activity selector, then the two
     /// surfaces. Both surfaces stay mounted — the Overview keeps its local
-    /// search/disclosure state and the Activity transcript keeps its scroll
+    /// search state and the Activity transcript keeps its scroll
     /// position and streaming data across selector toggles.
     @ViewBuilder
-    private var detailPane: some View {
+    private var workspaceDetailPane: some View {
         if let itemID = selectedItemID, let item = item(for: itemID) {
             VStack(spacing: 0) {
                 // M3/plan: filters that hide the selected job keep the
@@ -863,11 +990,10 @@ struct ActivityWindowView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // Per-job identity: a new selection resets the workspace surfaces'
-        // local state (the Overview's inventory search, expanded rows, and
-        // Run Details disclosure) instead of leaking the previous job's.
-        // Toggling the Overview/Activity selector never changes this
-        // identity, so both surfaces stay mounted and switching never drops
-        // streaming data or the transcript scroll position.
+        // local state (the Overview's inventory search) instead of leaking
+        // the previous job's. Toggling the Overview/Activity selector never
+        // changes this identity, so both surfaces stay mounted and switching
+        // never drops streaming data or the transcript scroll position.
         .id(item.id)
     }
 
@@ -918,7 +1044,9 @@ struct ActivityWindowView: View {
             || item.state == .cancelled
         let errorText: String? = item.state == .failed ? item.error : nil
         return QueueJobHeaderPresentation(
-            title: rowTitle(for: item),
+            title: QueueWorkspaceMapper.headerTitle(
+                operation: QueueWorkspaceMapper.reportOperation(for: item),
+                jobTitle: rowTitle(for: item)),
             operationLabel: QueueWorkspaceMapper.operationLabel(for: item),
             wikiName: wikiDisplayName(for: item.wikiID),
             lifecycle: QueueWorkspaceMapper.lifecycle(for: item.state),
@@ -997,7 +1125,6 @@ struct ActivityWindowView: View {
             countText: report.targets.isEmpty ? nil : String(report.targets.count),
             rows: rows,
             resultStatement: resultStatement(for: report),
-            runDetails: runDetailsFacts(for: item, report: report),
             emptyStateText: emptyStateText(for: operation, isWholeWiki: isWholeWiki))
     }
 
@@ -1047,7 +1174,7 @@ struct ActivityWindowView: View {
                     QueueTargetRowValue(
                         identity: .page(pageID),
                         title: nameIndex.pageTitle(pageID) ?? "Deleted page",
-                        status: .notReported(),
+                        status: .planned(),
                         actions: rowActions(for: .page(pageID), wikiID: item.wikiID, nameIndex: nameIndex))
                 }
             }
@@ -1056,7 +1183,7 @@ struct ActivityWindowView: View {
                 QueueTargetRowValue(
                     identity: .source(sourceID),
                     title: nameIndex.sourceName(sourceID) ?? "Source unavailable",
-                    status: .notReported(),
+                    status: .planned(),
                     actions: rowActions(for: .source(sourceID), wikiID: item.wikiID, nameIndex: nameIndex))
             }
         }
@@ -1067,7 +1194,6 @@ struct ActivityWindowView: View {
             countText: count > 0 ? String(count) : nil,
             rows: rows,
             resultStatement: nil,
-            runDetails: runDetailsFacts(for: item, report: nil),
             emptyStateText: emptyStateText(for: operation, isWholeWiki: isWholeWiki))
     }
 
@@ -1468,7 +1594,10 @@ struct ActivityWindowView: View {
         sessionManager?.sessions[id]?.descriptor.displayName ?? String(id.rawValue.prefix(8))
     }
 
-    private func kindLabel(for item: QueueItem) -> String {
+    /// The kind word the navigator search matches for `item` ("Lint",
+    /// "Extraction", "Ingestion"). PURE + `nonisolated`: an input to the
+    /// pure navigator haystack.
+    nonisolated static func kindLabel(for item: QueueItem) -> String {
         if item.payload.lintPageIDs != nil { return "Lint" }
         switch item.queue {
         case .extraction, .transcription: return "Extraction"
@@ -1622,7 +1751,7 @@ struct ActivityWindowView: View {
         }
         guard let first = names.first else {
             let count = item.payload.sourceIDs.count
-            return count > 1 ? "\(count) sources" : kindLabel(for: item)
+            return count > 1 ? "\(count) sources" : Self.kindLabel(for: item)
         }
         return names.count > 1 ? "\(first) +\(names.count - 1)" : first
     }
@@ -1686,6 +1815,103 @@ struct ActivityWindowView: View {
         let hours = minutes / 60
         let remainingMinutes = minutes % 60
         return remainingMinutes == 0 ? "\(hours)h elapsed" : "\(hours)h \(remainingMinutes)m elapsed"
+    }
+}
+
+// MARK: - Run Details toolbar toggle
+
+/// The Run Details inspector's toolbar control: a REAL, labeled NSButton.
+///
+/// Why AppKit owns this one control: SwiftUI's toolbar `Button` styles
+/// render layer-backed content whose action wiring does not survive the
+/// hosting window's toolbar re-host cycles — when the toolbar overflows
+/// (narrow window) and restores, the control keeps rendering but clicks do
+/// nothing. A `Toggle` in button style additionally never bridges its title
+/// to the `NSToolbarItem` label. Owning the NSButton fixes the action: its
+/// target/action writes the toggle state through a `Binding`, and the write
+/// lands in the framework's state storage, so it stays live no matter how
+/// many times SwiftUI re-hosts the toolbar content.
+///
+/// SwiftUI has no SwiftUI-side title to lift for a representable, so it
+/// derives an empty toolbar item label; the coordinator re-asserts the
+/// label (on the next runloop tick, after SwiftUI's own toolbar sync) from
+/// both `makeNSView` and every `updateNSView`.
+///
+/// The click path never writes SwiftUI state *during* a view update: the
+/// write happens in the button's action (a user event), so the
+/// NSViewRepresentable state-write rule holds (`updateNSView` only reads).
+struct RunDetailsToolbarToggle: NSViewRepresentable {
+    @Binding var isOn: Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(binding: $isOn)
+    }
+
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton(
+            title: "Run Details",
+            image: NSImage(systemSymbolName: "sidebar.trailing",
+                           accessibilityDescription: nil) ?? NSImage(),
+            target: context.coordinator,
+            action: #selector(Coordinator.toggle))
+        button.bezelStyle = .recessed
+        button.imagePosition = .imageLeading
+        button.setAccessibilityLabel("Run Details")
+        button.setAccessibilityValue(context.coordinator.stateTextFor(false))
+        button.toolTip = context.coordinator.helpText(for: false)
+        context.coordinator.reassertToolbarItemLabel(for: button)
+        return button
+    }
+
+    func updateNSView(_ button: NSButton, context: Context) {
+        // Reads only: the state write happens in the button's action, never
+        // inside the SwiftUI update pass.
+        button.setAccessibilityValue(context.coordinator.stateTextFor(isOn))
+        button.toolTip = context.coordinator.helpText(for: isOn)
+        context.coordinator.reassertToolbarItemLabel(for: button)
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        /// The `NSToolbarItem` label for this control.
+        static let itemLabel = "Run Details"
+
+        private let binding: Binding<Bool>
+
+        init(binding: Binding<Bool>) {
+            self.binding = binding
+        }
+
+        /// Find the toolbar item hosting this button and keep its label.
+        /// Runs on the NEXT runloop tick: SwiftUI re-derives toolbar item
+        /// labels during its own update (and a representable has no SwiftUI
+        /// title to lift, so it derives ""), then we assert ours — so ours
+        /// is the last write before the toolbar is observed.
+        func reassertToolbarItemLabel(for button: NSButton) {
+            guard button.window?.toolbar != nil else { return }
+            DispatchQueue.main.async { [weak button] in
+                guard let button, let toolbar = button.window?.toolbar else { return }
+                for item in toolbar.items {
+                    guard let view = item.view, button.isDescendant(of: view) else { continue }
+                    if item.label != Self.itemLabel {
+                        item.label = Self.itemLabel
+                    }
+                    return
+                }
+            }
+        }
+
+        func stateTextFor(_ isOn: Bool) -> String {
+            isOn ? "Panel shown" : "Panel hidden"
+        }
+
+        func helpText(for isOn: Bool) -> String {
+            isOn ? "Hide the Run Details panel" : "Show the Run Details panel"
+        }
+
+        @objc func toggle() {
+            binding.wrappedValue.toggle()
+        }
     }
 }
 
@@ -1755,7 +1981,10 @@ extension ActivityWindowView {
         "This pauses the queue and cancels its running jobs. Queued jobs remain queued."
 
     /// The selected-job workspace's outside-filter notice (plan §"Selection,
-    /// filters, and deep links") — named for the hosted scenarios.
+    /// filters, and deep links"). The notice renders these constants; the
+    /// value-level suite (`QueueWorkspaceIntegrationTests`) pins the exact
+    /// strings and the shared show condition
+    /// (``isHiddenByFilter(_:filter:rowTitle:wikiName:targetNames:summarySearchText:)``).
     static let filteredSelectionNoticeText = "Selected job is outside this filter"
     static let clearFiltersButtonLabel = "Clear Filters"
 

@@ -266,11 +266,13 @@ Both windows share one job workspace:
 
 Select a job to open its workspace on the right.
 
-- **Header** — job title, operation, wiki, state, and one elapsed clock. Queued and running jobs show **Cancel**. Failed and cancelled jobs show **Retry Job**.
-- **Overview** — the complete list of targets for the job. Each row shows a name and a state or result. Select a row to see the full name, the ID, the reason, and actions such as Open Page or Reveal Source. Batches of 12 or more targets add a local search field. **Run Details** below the list shows recorded times, the attempt, the actual provider and model, and usage. Absent values show **Not Reported**.
+- **Header** — the job title prefixed with its operation ("Ingestion: Research papers", "Lint: Check selected pages"), the wiki, the state, and one elapsed clock. Queued and running jobs show **Cancel**. Failed and cancelled jobs show **Retry Job**.
+- **Overview** — the complete list of targets for the job. Each row shows the target's name and one state or result. Rows do not expand. The name itself is the link: selecting it performs the row's action — **Open Page** for pages, **Reveal Source** for sources, **Browse Pages** for a whole-wiki scope. Rows never show IDs. Long names wrap to two lines, and the full recorded name stays available as the row's tooltip. Batches of 12 or more targets add a local search field.
 - **Activity** — the typed transcript for the job. Extraction jobs without a transcript show progress text instead.
 
-Not Reported means no evidence reached the report. It is not an empty success. For example, a lint run may finish without page-level results. The workspace then says "Agent run completed; page-level results not reported".
+The toolbar's **Run Details** toggle opens the Run Details inspector beside the workspace. The inspector shows the recorded enqueue, start, and finish times, the duration, the attempt, the actual provider and model, and usage. Absent values show **Not Reported**. The inspector is optional. Opening or closing it changes nothing else: your selection, filters, and queue state stay as they are.
+
+Overview rows show **Planned** until a target has recorded evidence. Planned is not a result. It never reads as success or as a count of zero. The section result line still states absence where it matters, for example "Agent run completed; page-level results not reported" for a lint run without page results. The Run Details inspector keeps **Not Reported** for absent provider or model facts.
 
 ---
 

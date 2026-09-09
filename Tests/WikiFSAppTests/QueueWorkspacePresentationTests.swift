@@ -30,22 +30,19 @@ import WikiFSCore
     }
 
     @Test func targetStatusVocabulary() {
-        // §2 target-outcome vocabulary. "Not Reported" must exist as its own
-        // status so unknown outcomes never render as zero or empty success.
+        // §2 target-outcome vocabulary. Unknown outcomes render as "Planned"
+        // (operator decision, 2026-09-08) — never zero, never empty success.
         #expect(QueueWorkspaceStatus.planned().text == "Planned")
         #expect(QueueWorkspaceStatus.preparing().text == "Preparing")
         #expect(QueueWorkspaceStatus.submitted().text == "Submitted")
         #expect(QueueWorkspaceStatus.processing().text == "Processing")
         #expect(QueueWorkspaceStatus.succeeded().text == "Succeeded")
         #expect(QueueWorkspaceStatus.skipped().text == "Skipped")
-        let notReported = QueueWorkspaceStatus.notReported()
-        #expect(notReported.text == "Not Reported")
-        #expect(notReported.style == .secondary)
         // Every status carries a symbol: color is never the only signal.
         for status in [
             QueueWorkspaceStatus.queued(), .running(), .completed(), .failed(),
             .cancelled(), .planned(), .preparing(), .submitted(), .processing(),
-            .succeeded(), .skipped(), .notReported(),
+            .succeeded(), .skipped(),
         ] {
             #expect(!status.symbol.isEmpty)
             #expect(!status.text.isEmpty)
@@ -124,29 +121,13 @@ import WikiFSCore
             fullName: "Research Paper — very long original filename.pdf",
             status: .planned())
         #expect(row.id == identity.rowID)
-        // Disclosure reveals the full name; the collapsed row stays truncated.
+        // The full recorded name stays reachable (tooltip/search) even though
+        // the collapsed row renders the truncated title.
         #expect(row.displayName == "Research Paper — very long original filename.pdf")
 
         let noFullName = QueueTargetRowValue(
             identity: identity, title: "Short.pdf", status: .planned())
         #expect(noFullName.displayName == "Short.pdf")
-    }
-
-    @Test func targetRowDisclosableDetailRules() {
-        let identity = QueueWorkspaceTargetIdentity.page(PageID(rawValue: "page-1"))
-        // A bare recorded-name row with an identity still discloses (identity).
-        #expect(QueueTargetRowValue(
-            identity: identity, title: "Deleted Page", status: .notReported()
-        ).hasDisclosableDetail)
-        // A whole-wiki scope row with nothing to reveal has no disclosure.
-        let scope = QueueTargetRowValue(
-            id: "scope:whole-wiki", identity: nil, title: "Whole wiki", status: .running())
-        #expect(!scope.hasDisclosableDetail)
-        // Reason alone justifies disclosure.
-        #expect(QueueTargetRowValue(
-            id: "scope:whole-wiki", identity: nil, title: "Whole wiki",
-            status: .running(), reason: "Agent run completed"
-        ).hasDisclosableDetail)
     }
 
     @Test func targetRowSearchMatching() {

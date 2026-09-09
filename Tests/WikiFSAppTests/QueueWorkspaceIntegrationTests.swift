@@ -117,6 +117,31 @@ struct QueueWorkspaceIntegrationTests {
         #expect(QueueWorkspaceMapper.reportOperation(for: makeItem(id: "e2", queue: .extraction)) == .extract)
     }
 
+    @Test func headerTitleCarriesFullOperationLabel() {
+        // Exact standard wording: the full operation label prefixes the job
+        // details so the job type reads in the title, not only in secondary
+        // metadata. Ingestion/Lint appear in the Agent Queue; Extraction
+        // appears only in the Extraction Queue.
+        #expect(QueueWorkspaceMapper.headerTitle(operation: .ingest, jobTitle: "Notes.pdf") == "Ingestion: Notes.pdf")
+        #expect(QueueWorkspaceMapper.headerTitle(operation: .lint, jobTitle: "3 pages") == "Lint: 3 pages")
+        #expect(QueueWorkspaceMapper.headerTitle(operation: .extract, jobTitle: "Paper.pdf") == "Extraction: Paper.pdf")
+    }
+
+    @Test func windowScopeFilteringIsStrict() {
+        // Extraction has its own window: an extraction job must never appear
+        // in the Agent Queue list, and ingestion/lint never in the Extraction
+        // Queue. The item's own queue kind is the single authority.
+        let ingest = makeItem(id: "i", queue: .ingestion)
+        let lint = makeItem(id: "l", queue: .ingestion, lintPageIDs: [])
+        let extract = makeItem(id: "x", queue: .extraction)
+        #expect(ActivityWindowView.windowContains(ingest, queue: .ingestion))
+        #expect(ActivityWindowView.windowContains(lint, queue: .ingestion))
+        #expect(!ActivityWindowView.windowContains(extract, queue: .ingestion))
+        #expect(ActivityWindowView.windowContains(extract, queue: .extraction))
+        #expect(!ActivityWindowView.windowContains(ingest, queue: .extraction))
+        #expect(!ActivityWindowView.windowContains(lint, queue: .extraction))
+    }
+
     // MARK: - Mapper: header progress truth rules
 
     @Test func headerProgressRequiresAvailableSummaryAndKnownTotal() {
@@ -250,8 +275,10 @@ struct QueueWorkspaceIntegrationTests {
         let succeeded = QueueWorkspaceMapper.targetStatus(for: .succeeded, result: nil)
         #expect(succeeded.text == "Succeeded")
 
+        // Operator decision (2026-09-08): unobserved targets render as
+        // "Planned", never as a zero or an empty success.
         let notReported = QueueWorkspaceMapper.targetStatus(for: .notReported, result: nil)
-        #expect(notReported.text == "Not Reported")
+        #expect(notReported.text == "Planned")
     }
 
     @Test func targetReasonPrefersRecordedReasonOverDetail() {
@@ -674,6 +701,82 @@ struct QueueWorkspaceIntegrationTests {
         #expect(ActivityWindowView.loadedReportMatches(
             report: attemptOneReport,
             item: makeItem(id: "ov", queue: .ingestion, attempt: 1)))
+    }
+
+    // MARK: - Outside-filter notice (value level)
+
+    /// The workspace's outside-filter notice (plan §"Selection, filters, and
+    /// deep links") shows exactly when an ACTIVE filter hides the selected
+    /// job from the navigator — the decision runs over the same haystack the
+    /// navigator rows match, so the notice and the navigator can never
+    /// disagree. Asserted here at value level because the notice's SwiftUI
+    /// text never bridges into the hosted test's AppKit tree. The copy is
+    /// pinned as constants so wording cannot drift from the docs.
+    @MainActor
+    @Test func outsideFilterNoticeSharesNavigatorMatchAndPinsCopy() {
+        // A running ingestion job whose row resolves to a known title,
+        // wiki name, target names, and a recorded summary search text.
+        let item = makeItem(id: "outside", queue: .ingestion, sourceIDs: ["s1"])
+        let rowTitle = "Research Long Source.pdf"
+        let wikiName = "Research"
+        let targetNames = ["Research Long Source.pdf"]
+        let summarySearchText = "3 submitted"
+        func hidden(_ filter: QueueJobFilter) -> Bool {
+            ActivityWindowView.isHiddenByFilter(
+                item,
+                filter: filter,
+                rowTitle: rowTitle,
+                wikiName: wikiName,
+                targetNames: targetNames,
+                summarySearchText: summarySearchText)
+        }
+
+        // No filter → the notice never shows.
+        #expect(!hidden(QueueJobFilter()))
+
+        // A search the navigator accepts (row title, case-insensitively)
+        // keeps the job visible.
+        var matchingSearch = QueueJobFilter()
+        matchingSearch.search = "research long"
+        #expect(!hidden(matchingSearch))
+
+        // The same search through the target names also matches.
+        var targetSearch = QueueJobFilter()
+        targetSearch.search = "research long source.pdf"
+        #expect(!hidden(targetSearch))
+
+        // A search the haystack rejects hides the job: the notice's show
+        // condition fires.
+        var foreignSearch = QueueJobFilter()
+        foreignSearch.search = "unrelated query"
+        #expect(hidden(foreignSearch))
+
+        // Report-backed search text participates: a query only the summary
+        // carries still matches.
+        var summarySearch = QueueJobFilter()
+        summarySearch.search = "3 submitted"
+        #expect(!hidden(summarySearch))
+
+        // A state filter the job fails hides it regardless of text.
+        var stateFilter = QueueJobFilter()
+        stateFilter.state = .failed
+        #expect(hidden(stateFilter))
+
+        // An operation filter that excludes ingestion jobs hides it.
+        var operationFilter = QueueJobFilter()
+        operationFilter.operation = .lint
+        #expect(hidden(operationFilter))
+
+        // Whitespace-only search is not an active filter.
+        var blankSearch = QueueJobFilter()
+        blankSearch.search = "   "
+        #expect(!hidden(blankSearch))
+
+        // The notice's copy, pinned. These are the strings the workspace
+        // renders (Label + accessibility label + Clear Filters button).
+        #expect(ActivityWindowView.filteredSelectionNoticeText
+                == "Selected job is outside this filter")
+        #expect(ActivityWindowView.clearFiltersButtonLabel == "Clear Filters")
     }
 
     @MainActor

@@ -46,6 +46,21 @@ enum QueueWorkspaceMapper {
         }
     }
 
+    /// The selected-job header title: the full operation label made explicit
+    /// as a prefix over the job details — "Ingestion: <Job Details>",
+    /// "Extraction: <Job Details>", "Lint: <Job Details>" — so the job type
+    /// reads in the title itself, not only in secondary metadata. Keyed on
+    /// the recorded operation (lint-vs-ingest from the payload, same
+    /// derivation as ``reportOperation(for:)``) so title and report never
+    /// disagree.
+    static func headerTitle(operation: QueueReportOperation, jobTitle: String) -> String {
+        switch operation {
+        case .ingest: return "Ingestion: \(jobTitle)"
+        case .extract: return "Extraction: \(jobTitle)"
+        case .lint: return "Lint: \(jobTitle)"
+        }
+    }
+
     /// The recorded operation for an item — the header/overview language
     /// selector. Lint-vs-ingest comes from the payload, exactly like the
     /// producers' report-begin decision, so UI and report never disagree.
@@ -181,7 +196,11 @@ enum QueueWorkspaceMapper {
         case .skipped: return .skipped()
         case .failed: return .failedTarget()
         case .interrupted: return .interrupted()
-        case .notReported: return .notReported()
+        // Operator decision (2026-09-08): unobserved targets render as
+        // "Planned" — the same vocabulary as not-yet-run rows. Absence of
+        // evidence stays truthful in the Run Details inspector ("Not
+        // Reported") and never reads as a zero or an empty success.
+        case .notReported: return .planned()
         }
     }
 
