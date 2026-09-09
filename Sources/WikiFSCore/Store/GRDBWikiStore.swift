@@ -6414,6 +6414,48 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
         }
     }
 
+    /// The distinct pages whose recorded page-version provenance cites any of
+    /// `sourceIDs` (protocol docs above). The inverse walk of the same edges
+    /// `provenanceDeletionBlockers` uses, projected onto pages: distinct
+    /// `page_id`s joined to their live `pages` title (LEFT JOIN — a citation
+    /// edge that outlived its page row degrades to `title: nil` instead of
+    /// dropping the evidence). Ordering per protocol: live pages first
+    /// (case-insensitive title, then page id), `nil`-title rows last — the
+    /// honest degradation never outranks real pages. `tableExists` guard
+    /// keeps pre-v48 stores (and in-memory fixtures created before the
+    /// provenance tables) returning `[]` rather than throwing. Read-only →
+    /// emits no `ResourceChangeEvent`.
+    public func pagesCitingSources(sourceIDs: [SourceID], limit: Int) throws -> [CitedPage] {
+        guard limit > 0 else { return [] }
+        // Dedupe: payload inventories can carry duplicate IDs; the citation
+        // edges are a set, and a duplicated argument must not distort LIMIT.
+        let ids = Set(sourceIDs.map(\.rawValue)).sorted()
+        guard !ids.isEmpty else { return [] }
+        return try dbWriter.read { db in
+            guard try Self.tableExists("page_version_sources", in: db) else { return [] }
+            let placeholders = ids.map { _ in "?" }.joined(separator: ", ")
+            var arguments = StatementArguments(ids)
+            arguments += [limit]
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT DISTINCT pv.page_id AS page_id, p.title AS title
+                FROM page_version_sources pvs
+                JOIN page_versions pv ON pv.id = pvs.page_version_id
+                LEFT JOIN pages p ON p.id = pv.page_id
+                WHERE pvs.source_id IN (\(placeholders))
+                ORDER BY (p.title IS NULL), p.title COLLATE NOCASE, pv.page_id ASC
+                LIMIT ?;
+                """,
+                arguments: arguments)
+            return rows.map { row in
+                CitedPage(
+                    pageID: PageID(rawValue: row["page_id"]),
+                    title: row["title"] as String?)
+            }
+        }
+    }
+
     public func pageVersionHistory(pageID: PageID) throws -> [PageVersionSummary] {
         try dbWriter.read { db in
             let rows = try Row.fetchAll(db, sql: """

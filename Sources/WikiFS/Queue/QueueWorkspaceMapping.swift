@@ -169,13 +169,103 @@ enum QueueWorkspaceMapper {
     }
 
     /// The Overview section noun (plan: kind-specific language is the
-    /// caller's): "Sources" for ingest/extract, "Pages" for a page-level lint,
-    /// "Scope" for whole-wiki.
+    /// caller's): "Inputs" for ingest (whose Overview gains the provenance-
+    /// resolved "Outputs" section), "Sources" for extract, "Pages" for a
+    /// page-level lint, "Scope" for whole-wiki.
     static func sectionTitle(for operation: QueueReportOperation, isWholeWiki: Bool) -> String {
         switch operation {
-        case .ingest, .extract: return "Sources"
+        case .ingest: return "Inputs"
+        case .extract: return "Sources"
         case .lint: return isWholeWiki ? "Scope" : "Pages"
         }
+    }
+
+    // MARK: - Recorded outputs (ingestion)
+
+    /// The fixed section noun for the ingestion-only outputs region.
+    static let outputsSectionTitle = "Outputs"
+
+    /// Suffix marking a cap-filling outputs count ("200+"): at
+    /// `QueueWorkspaceMetrics.Outputs.maxRows` the number is a truncation
+    /// floor, not a total.
+    static let truncatedCountSuffix = "+"
+
+    /// Count text for a completed recorded-outputs load: the loaded row
+    /// count — or that count plus ``truncatedCountSuffix`` when it fills the
+    /// store-query row cap (`QueueWorkspaceMetrics.Outputs.maxRows`). A
+    /// full-page result means the store result was TRUNCATED at the cap, so
+    /// a bare "200" would read as a verified total; "200+" reads as the
+    /// bounded floor it is.
+    static func outputsCountText(rowCount: Int) -> String {
+        rowCount >= QueueWorkspaceMetrics.Outputs.maxRows
+            ? "\(rowCount)\(truncatedCountSuffix)"
+            : String(rowCount)
+    }
+
+    /// Map the selected job's recorded-outputs load onto section values.
+    ///
+    /// Count text: known only after a completed load — including a resolved
+    /// zero ("Outputs (0)" is store evidence, not a fabricated number).
+    /// While loading and on failure the count is unknown → `nil`, which the
+    /// view renders as nothing (never "0").
+    ///
+    /// Empty-state text distinguishes the three honest states: a load in
+    /// flight, a load that completed with no citation evidence, and a store
+    /// read failure — "no pages recorded" is never claimed when the read
+    /// simply failed.
+    static func outputsSection(
+        state: QueueOutputsLoadState,
+        nameIndex: QueueTargetNameIndex,
+        openPage: @escaping (PageID) -> Void
+    ) -> QueueOutputsSectionValue {
+        switch state {
+        case .loading:
+            return QueueOutputsSectionValue(
+                countText: nil,
+                rows: [],
+                emptyStateText: "Loading recorded pages…")
+        case .failed:
+            return QueueOutputsSectionValue(
+                countText: nil,
+                rows: [],
+                emptyStateText: "Recorded pages couldn’t be loaded.")
+        case .loaded(let pages):
+            let rows = pages.map {
+                outputRow(cited: $0, nameIndex: nameIndex, openPage: openPage)
+            }
+            return QueueOutputsSectionValue(
+                countText: outputsCountText(rowCount: rows.count),
+                rows: rows,
+                emptyStateText: "No pages recorded yet.")
+        }
+    }
+
+    /// One recorded-output row. Title resolution — the queue's live-title
+    /// seam first (`nameIndex`, the same one that drives every other row),
+    /// then the recorded store title, then the honest "Deleted page"
+    /// degradation. The Open Page name link appears only while the page
+    /// resolves through the live seam (same membership rule as the
+    /// inventory's `rowActions`): a page that no longer resolves keeps its
+    /// name as plain text and never renders a dead link.
+    static func outputRow(
+        cited: CitedPage,
+        nameIndex: QueueTargetNameIndex,
+        openPage: @escaping (PageID) -> Void
+    ) -> QueueTargetRowValue {
+        let identity = QueueWorkspaceTargetIdentity.page(cited.pageID)
+        let liveTitle = nameIndex.pageTitle(cited.pageID)
+        let title = liveTitle ?? cited.title ?? "Deleted page"
+        let actions: [QueueWorkspaceAction] = liveTitle == nil ? [] : [
+            QueueWorkspaceAction(
+                label: "Open Page", systemImage: "arrow.up.forward.app") {
+                openPage(cited.pageID)
+            }
+        ]
+        return QueueTargetRowValue(
+            identity: identity,
+            title: title,
+            status: .recorded(),
+            actions: actions)
     }
 
     // MARK: - Target states → status / reason

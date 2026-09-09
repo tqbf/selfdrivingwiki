@@ -102,6 +102,47 @@ extension QueueWorkspaceStatus {
     }
 }
 
+// Recorded-output vocabulary — citation evidence, not an outcome claim.
+extension QueueWorkspaceStatus {
+    /// The page is recorded as an output: its page-version provenance cites
+    /// one of the job's input sources. Deliberately quiet and deliberately
+    /// NOT "Succeeded" — citation evidence says nothing about the job's
+    /// outcome, and inferring it is forbidden.
+    static func recorded() -> QueueWorkspaceStatus {
+        QueueWorkspaceStatus(text: "Recorded", symbol: "doc.text", style: .secondary)
+    }
+}
+
+// MARK: - Recorded outputs (ingestion)
+
+/// Load state of the selected ingestion job's recorded outputs: the pages
+/// whose page-version provenance cites the job's input sources. Resolved
+/// ONLY from store citation evidence — never from job success, agent exit,
+/// or merge completion — and loaded in a `.task` keyed by item id + attempt,
+/// like the selected report.
+enum QueueOutputsLoadState: Equatable, Sendable {
+    case loading
+    case loaded([CitedPage])
+    /// The store read failed. Logged at the load seam; the section degrades
+    /// to an honest "couldn't be loaded" state — never a fabricated zero.
+    case failed
+}
+
+/// Everything the Overview's Outputs section renders — plain values only,
+/// derived before list iteration (same contract as
+/// `QueueJobOverviewPresentation`). Rows use the shared
+/// `QueueTargetRowValue`; a resolvable page's name link performs Open Page.
+struct QueueOutputsSectionValue {
+    /// Known count after a completed load — including a resolved zero
+    /// ("Outputs (0)" is store evidence). `nil` while loading or on failure:
+    /// an unknown count renders as nothing, never as a fake "0".
+    let countText: String?
+    let rows: [QueueTargetRowValue]
+    /// Quiet empty-region text (loading / "No pages recorded yet." /
+    /// failure), rendered as one honest line under the section header.
+    let emptyStateText: String
+}
+
 // MARK: - Job lifecycle
 
 /// The job-level lifecycle the header and workspace act on. The caller maps

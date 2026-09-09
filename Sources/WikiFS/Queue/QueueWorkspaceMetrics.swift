@@ -85,4 +85,13 @@ enum QueueWorkspaceMetrics {
         /// to the 220pt navigator minimum (640 − 220 − 280 = 140pt).
         static let width: CGFloat = 280
     }
+
+    /// Recorded-outputs section bounds (ingestion Overview). The Outputs
+    /// list is a bounded inventory, not a wiki enumeration: the store query
+    /// stops at this row count (title order), so a wiki whose inputs are
+    /// cited by huge numbers of pages still renders a finite section.
+    enum Outputs {
+        /// Row cap passed to `WikiStore.pagesCitingSources(limit:)`.
+        static let maxRows = 200
+    }
 }

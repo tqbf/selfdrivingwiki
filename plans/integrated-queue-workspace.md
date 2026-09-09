@@ -51,6 +51,18 @@ this section is current.
    result line keeps sentences such as "Agent run completed; page-level
    results not reported". Affected sections: "Target inventory
    (Overview)", "Report truth rules".
+5. **Overview shows Inputs and Outputs (2026-09-09).** An ingestion job's
+   Overview renders two sections: "Inputs" (the payload sources — the
+   former single inventory) and "Outputs" (pages whose recorded
+   `page_version_sources` citations reference the input sources). Outputs
+   resolve only from recorded store evidence through the read-only
+   `pagesCitingSources` accessor; they are never inferred from job
+   completion. Output rows are clickable page names (Open Page) that stay
+   resolvable through the live store, degrade recorded names for deleted
+   pages, and never render a fake zero: loading, empty, and failed states
+   each have their own truthful text. Lint and extraction keep their
+   existing single section. Affected sections: "Target inventory
+   (Overview)", "Report truth rules".
 
 ## Goal
 

@@ -31,19 +31,25 @@ struct QueueJobOverviewPresentation {
     let resultStatement: String?
     /// Empty-inventory message ("No sources recorded for this job.").
     let emptyStateText: String
+    /// Ingestion-only recorded-outputs section, appended under the input
+    /// inventory in the SAME list (one scroll region). `nil` for every other
+    /// operation — lint and extraction keep their single unchanged section.
+    let outputs: QueueOutputsSectionValue?
 
     init(
         sectionTitle: String,
         countText: String? = nil,
         rows: [QueueTargetRowValue],
         resultStatement: String? = nil,
-        emptyStateText: String
+        emptyStateText: String,
+        outputs: QueueOutputsSectionValue? = nil
     ) {
         self.sectionTitle = sectionTitle
         self.countText = countText
         self.rows = rows
         self.resultStatement = resultStatement
         self.emptyStateText = emptyStateText
+        self.outputs = outputs
     }
 }
 
@@ -163,7 +169,14 @@ struct QueueJobOverviewView: View {
 
     @ViewBuilder
     private var inventoryRegion: some View {
-        if presentation.rows.isEmpty {
+        if presentation.outputs != nil {
+            // The recorded-outputs section rides in the SAME list, so the
+            // list must keep rendering whenever outputs exist — an empty or
+            // fully-filtered inputs inventory renders its honest edge case
+            // INSIDE the list (`inputsRows`) instead of replacing the whole
+            // region, which would suppress the Outputs section with it.
+            inventoryList
+        } else if presentation.rows.isEmpty {
             inventoryEdgeCase(
                 title: presentation.emptyStateText,
                 hint: nil,
@@ -182,7 +195,9 @@ struct QueueJobOverviewView: View {
     }
 
     /// Empty / no-match inventories keep the section header and result
-    /// statement; the inventory region itself is the whole content.
+    /// statement; the inventory region itself is the whole content. Only
+    /// reached when there is no Outputs section — with outputs present the
+    /// same edge cases stay inside the list instead (`inputsRows`).
     private func inventoryEdgeCase(
         title: String,
         hint: String?,
@@ -201,15 +216,101 @@ struct QueueJobOverviewView: View {
     /// scroll region is this list's alone. The height floor keeps the list a
     /// finite, visible scroll region even in a short window or beside the
     /// open Run Details inspector.
+    ///
+    /// Ingestion additionally appends the recorded-outputs SECTION in the
+    /// same list (one scroll region for both sections; the input rows above
+    /// keep their exact behavior, including the local search above, which
+    /// filters inputs only).
     private var inventoryList: some View {
         List {
-            ForEach(filteredRows) { row in
-                QueueTargetRow(value: row)
+            inputsRows
+            if let outputs = presentation.outputs {
+                outputsSection(outputs)
             }
         }
         .listStyle(.plain)
         .frame(minHeight: QueueWorkspaceMetrics.Inventory.minVisibleHeight)
-        .accessibilityLabel("\(presentation.sectionTitle) inventory")
+        .accessibilityLabel(Self.inventoryAccessibilityLabel(
+            sectionTitle: presentation.sectionTitle,
+            hasOutputs: presentation.outputs != nil))
+    }
+
+    /// The container accessibility label for the inventory List: with a
+    /// recorded-outputs section present the region is the combined
+    /// inputs-and-outputs inventory; otherwise the section noun alone
+    /// ("Sources inventory"). `nonisolated` — a pure function over its
+    /// inputs, callable from any isolation context (value-level tests).
+    nonisolated static func inventoryAccessibilityLabel(sectionTitle: String, hasOutputs: Bool) -> String {
+        hasOutputs ? "Inputs and Outputs inventory" : "\(sectionTitle) inventory"
+    }
+
+    /// The inputs side of the shared list. When outputs exist, the empty /
+    /// no-match edge cases render HERE — inside the list, as the inputs
+    /// area's own honest content — instead of replacing the whole inventory
+    /// region, so the inputs message and the Outputs section both survive.
+    @ViewBuilder
+    private var inputsRows: some View {
+        if presentation.rows.isEmpty {
+            emptyState(
+                title: presentation.emptyStateText,
+                hint: nil,
+                icon: "tray",
+                showsClearAction: false)
+        } else if filteredRows.isEmpty {
+            let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+            emptyState(
+                title: "No Matches",
+                hint: "No targets in this job match “\(query)”.",
+                icon: "magnifyingglass",
+                showsClearAction: true)
+        } else {
+            ForEach(filteredRows) { row in
+                QueueTargetRow(value: row)
+            }
+        }
+    }
+
+    /// The recorded-outputs section: the header styled exactly like the
+    /// Overview's outer section header (headline noun + secondary
+    /// monospaced-digit count), rows through the shared `QueueTargetRow`,
+    /// and a quiet honest line while loading / empty / failed — the region
+    /// never fabricates an outcome it doesn't have.
+    @ViewBuilder
+    private func outputsSection(_ outputs: QueueOutputsSectionValue) -> some View {
+        Section {
+            ForEach(outputs.rows) { row in
+                QueueTargetRow(value: row)
+            }
+            if outputs.rows.isEmpty {
+                Text(outputs.emptyStateText)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, QueueWorkspaceMetrics.Spacing.xs)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityLabel(outputs.emptyStateText)
+            }
+        } header: {
+            HStack(spacing: QueueWorkspaceMetrics.Spacing.sm) {
+                Text(QueueWorkspaceMapper.outputsSectionTitle)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                if let count = outputs.countText {
+                    Text(count)
+                        .font(.headline)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("\(QueueWorkspaceMapper.outputsSectionTitle): \(count)")
+                }
+                Spacer(minLength: QueueWorkspaceMetrics.Spacing.sm)
+            }
+            // Same geometry as the outer section header; zero row insets so
+            // the header's own padding is the only inset.
+            .listRowInsets(EdgeInsets())
+            .padding(.horizontal, QueueWorkspaceMetrics.Spacing.md)
+            .padding(.top, QueueWorkspaceMetrics.Spacing.sm)
+            .padding(.bottom, QueueWorkspaceMetrics.Spacing.xs)
+            .textCase(nil)
+        }
     }
 
     /// Genuinely empty inventory or an over-filtered one. Distinct, honest,
