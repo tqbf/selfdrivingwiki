@@ -18,11 +18,17 @@ What changed:
 
 - **H1 hosted scenarios.** New suite
   `Tests/WikiFSAppTests/ActivityWindowWorkspaceHostedTests.swift`. One real
-  hosted `NSWindow` mounts the production `ActivityWindowView`. Nine named
+  hosted `NSWindow` mounts the production `ActivityWindowView`. Twelve named
   scenarios drive it: harness label+action, failed/queued action states,
   ingest/lint/whole-wiki shared workspace, Stop All semantics, preferred and
-  minimum layout sizes with accessibility names, and a 300-target lazy
-  inventory with last-row reachability. The suite is serialized and
+  minimum layout sizes with accessibility names, a 300-target lazy
+  inventory with last-row reachability, the Run Details inspector toggle
+  end to end (literal six-row facts table, center-inventory preservation,
+  and inspector-open coverage at the 640×400 minimum), non-collapsible
+  name-link inventory rows, and strict queue scope (extraction jobs never
+  list in the Agent Queue). The count is corrected to the current suite;
+  the last three scenarios landed in the design-change round that moved Run
+  Details to the inspector. The suite is serialized and
   time-limited, and it uses bounded cooperative waits only. See the suite
   header for the bridged-surface discovery model and the environment limits.
 - **M1 live progress gate.** `QueueWorkspaceMapper.headerProgress` now takes
@@ -60,8 +66,8 @@ What changed:
 
 Tests added or extended:
 
-- `ActivityWindowWorkspaceHostedTests`: 9 tests, gated by
-  `WIKIFS_APP_TESTS=1`.
+- `ActivityWindowWorkspaceHostedTests`: 12 tests, gated by
+  `WIKIFS_APP_TESTS=1` (count corrected to the current suite).
 - `QueueWorkspaceIntegrationTests`: `headerProgressRendersNothingForDeadJobsEvenWithOpenPhase`,
   `progressLineGatesDeadJobsAtTheRowSeam`,
   `summarySynthesisMatchesStoreFieldBounds`,
@@ -75,7 +81,9 @@ Tests added or extended:
 - `make build`: passed (signed app bundle).
 - `make test`: passed. 4276 tests, 464 suites.
 - `WIKIFS_APP_TESTS=1 swift test --filter ActivityWindowWorkspaceHostedTests`:
-  9/9 passed.
+  12/12 passed (count corrected to the current suite; the original entry
+  recorded 9/9 before the inspector, name-link, and queue-scope scenarios
+  landed).
 - `swift test --filter QueueReportEngineTests`: 17/17 passed. This count
   includes the new orphaned-cancel test.
 - `QueueWorkspaceIntegrationTests` passed inside the gated lane. The run

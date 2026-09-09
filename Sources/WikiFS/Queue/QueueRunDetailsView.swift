@@ -1,99 +1,93 @@
 import SwiftUI
 
-// MARK: - Hosted-test expansion pin
-
-/// Pins the Run Details disclosure laid out as expanded when set. Hosted
-/// layout tests inject it at the window root (`ActivityWindowView` forwards
-/// a corresponding flag into the environment) so the expanded state can be
-/// driven through the real tree — the same layout the disclosure's own
-/// toggle produces. Production never sets it, so the disclosure's toggle
-/// stays the only writer of its state; the pin only reads.
-private struct QueueRunDetailsPinnedExpandedKey: EnvironmentKey {
-    static let defaultValue = false
-}
-
-extension EnvironmentValues {
-    /// `true` keeps the Run Details disclosure laid out as expanded. See
-    /// ``QueueRunDetailsPinnedExpandedKey`` — hosted layout tests only.
-    var queueRunDetailsPinnedExpanded: Bool {
-        get { self[QueueRunDetailsPinnedExpandedKey.self] }
-        set { self[QueueRunDetailsPinnedExpandedKey.self] = newValue }
-    }
-}
-
-/// The selected job's Run Details disclosure — labeled run facts below the
-/// summary/content boundary (plan §1: "Run Details is a disclosure below the
-/// summary/content boundary. Use labeled values for enqueue/start/finish time,
-/// duration, attempt, actual provider/model, usage and cost").
+/// The Run Details inspector panel — the selected job's labeled run facts in
+/// an optional trailing panel inside the detail column (plan §1's fact list:
+/// "enqueue/start/finish time, duration, attempt, actual provider/model,
+/// usage and cost"). The panel's open/close lives in the window toolbar's
+/// labeled toggle; this view is only the panel's content, so facts render
+/// expanded — there is no secondary disclosure inside the panel.
 ///
-/// Values come pre-mapped in `QueueRunDetailsFacts`; the omit-vs-"Not Reported"
-/// rules live in `QueueRunDetailsFacts.entries` and are covered by pure tests.
-/// The capacity bucket must never arrive as `providerText` — that is the
-/// caller's mapping responsibility, documented on the field.
+/// Values come pre-mapped in `QueueRunDetailsFacts`; the omit-vs-"Not
+/// Reported" rules live in `QueueRunDetailsFacts.entries` and are covered by
+/// pure tests. The capacity bucket must never arrive as `providerText` — that
+/// is the caller's mapping responsibility, documented on the field.
+///
+/// Facts render as a native List of labeled rows (not a bare Grid) so the
+/// panel scrolls, rows stay a stable height, and hosted layout tests can
+/// assert through the bridged `NSTableView` row count.
 struct QueueRunDetailsView: View {
-    private let facts: QueueRunDetailsFacts
-    @State private var isExpanded = false
-    @Environment(\.queueRunDetailsPinnedExpanded) private var pinnedExpanded
+    /// The selected job's run facts; `nil` renders the panel's empty state
+    /// (legacy jobs with nothing recorded).
+    private let facts: QueueRunDetailsFacts?
 
-    init(_ facts: QueueRunDetailsFacts) {
+    init(_ facts: QueueRunDetailsFacts?) {
         self.facts = facts
     }
 
     var body: some View {
-        DisclosureGroup(isExpanded: expandedBinding) {
-            // The disclosure is pinned below the inventory List inside the
-            // Overview's non-scrolling VStack, so its expanded demand must be
-            // bounded: `entriesGrid` alone reports a fixed ideal height, which
-            // starves the flexible List to zero height (the blank workspace
-            // pane) and can push the workspace's ideal height past the window
-            // — which also collapses the sidebar's window-toolbar inset (#835).
-            // The ScrollView makes the region content-sized; the ceiling caps
-            // the demand, and taller grids scroll inside it instead of growing it.
-            ScrollView {
-                entriesGrid
-                    .padding(.top, QueueWorkspaceMetrics.Spacing.xs)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxHeight: QueueWorkspaceMetrics.RunDetails.maxExpandedHeight)
-        } label: {
+        VStack(spacing: 0) {
+            panelHeader
+            Divider()
+            factsRegion
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Run Details")
+    }
+
+    /// The panel's quiet header — names the surface for VoiceOver and for
+    /// the window's visual hierarchy (the toolbar toggle controls it).
+    private var panelHeader: some View {
+        HStack(spacing: QueueWorkspaceMetrics.Spacing.sm) {
             Text("Run Details")
                 .font(.headline)
+            Spacer(minLength: QueueWorkspaceMetrics.Spacing.sm)
         }
         .padding(.horizontal, QueueWorkspaceMetrics.Spacing.md)
         .padding(.vertical, QueueWorkspaceMetrics.Spacing.xs)
     }
 
-    /// The disclosure's expansion binding: its own toggle state, OR the
-    /// hosted-test pin. The pin never writes state during view updates — it
-    /// only forces the expanded layout while set.
-    private var expandedBinding: Binding<Bool> {
-        Binding(
-            get: { isExpanded || pinnedExpanded },
-            set: { isExpanded = $0 })
+    @ViewBuilder
+    private var factsRegion: some View {
+        if let facts {
+            entriesList(facts)
+        } else {
+            ContentUnavailableView {
+                Label("No Run Details", systemImage: "info.circle")
+            } description: {
+                Text("Nothing recorded for this job.")
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 
-    /// Labeled values in a native grid: secondary labels, selectable values,
-    /// placeholders ("Not Reported") in tertiary so absent facts never read as
-    /// reported ones.
-    private var entriesGrid: some View {
-        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: QueueWorkspaceMetrics.Spacing.sm, verticalSpacing: 4) {
+    /// Labeled values in a native List: secondary labels, selectable values,
+    /// placeholders ("Not Reported") in tertiary so absent facts never read
+    /// as reported ones. Continuation usage lines keep their empty label so
+    /// they align under the value column.
+    private func entriesList(_ facts: QueueRunDetailsFacts) -> some View {
+        List {
             ForEach(Array(facts.entries.enumerated()), id: \.offset) { _, entry in
-                GridRow(alignment: .firstTextBaseline) {
+                LabeledContent {
+                    Text(entry.value)
+                        .font(.callout)
+                        .monospacedDigit()
+                        .textSelection(.enabled)
+                        .multilineTextAlignment(.trailing)
+                        .foregroundStyle(
+                            entry.isPlaceholder
+                                ? Color(nsColor: .tertiaryLabelColor)
+                                : Color.primary)
+                } label: {
                     Text(verbatim: entry.label)
                         .font(.callout)
                         .foregroundStyle(.secondary)
-                        .gridColumnAlignment(.leading)
-                    Text(entry.value)
-                        .font(.callout)
-                        .foregroundStyle(entry.isPlaceholder ? Color(nsColor: .tertiaryLabelColor) : Color.primary)
-                        .monospacedDigit()
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(entry.label.isEmpty ? "Usage" : entry.label)
             }
         }
+        .listStyle(.plain)
+        .accessibilityLabel("Run Details facts")
     }
 }

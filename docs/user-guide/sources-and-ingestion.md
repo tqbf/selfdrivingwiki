@@ -268,12 +268,15 @@ Both windows show:
   reordering turns off while filters or search are active).
 - **Recent** section — up to 200 completed/failed/cancelled items.
 - **Per-item controls** — Cancel (running/queued), Retry Job (failed/cancelled).
-- **Toolbar** — Pause Queue, and Stop All… under Queue Actions.
+- **Toolbar** — one **Queue Actions** menu and a **Run Details** toggle.
 
-**Stop All** pauses the queue and cancels its running jobs. Queued jobs stay
-queued. The confirmation states this before you confirm.
+The Queue Actions menu holds Pause Queue (or Resume Queue) and Stop All.
+Each menu item carries its own guidance. Pause stops new starts and lets
+running jobs finish. Stop All pauses the queue and cancels its running jobs.
+Queued jobs stay queued. The confirmation states this before you confirm.
 
-Select a job to open its workspace. **Overview** shows the job's targets and
-Run Details. **Activity** shows the transcript or progress text. See
+Select a job to open its workspace. **Overview** shows the job's targets.
+The Run Details toggle opens the optional Run Details inspector. **Activity**
+shows the transcript or progress text. See
 [Organizing and managing](organizing-and-managing.md#the-activity-queue) for
 the full workspace guide.

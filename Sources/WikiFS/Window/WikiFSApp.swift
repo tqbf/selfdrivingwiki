@@ -771,8 +771,12 @@ struct WikiFSApp: App {
         // opened via `openWindow(value:)` / `openWindowBridge.openQueueWindow`.
         // `WindowGroup(for:)` deduplicates by `==`, so re-opening a queue's
         // window focuses the existing one (#835). System-managed scene replaces
-        // the hand-built `NSWindow` — correct title-bar inset, frame persistence,
-        // and state restoration come for free.
+        // the hand-built `NSWindow` — correct title-bar inset and frame
+        // persistence come for free. Scene restoration is DISABLED by design:
+        // the queue windows must always start closed on launch and require an
+        // explicit open (menu item, CTA, or deep link) each session — they are
+        // transient monitors, not documents. Durable queue data and reports
+        // live in the store, unaffected.
         WindowGroup("Agent Queue", for: QueueKind.self) { $queue in
             ActivityWindowView(
                 queue: queue ?? .ingestion,
@@ -791,6 +795,10 @@ struct WikiFSApp: App {
         }
         .defaultSize(width: 1040, height: 720)
         .windowResizability(.contentMinSize)
+        // Always start closed across app restarts (see above). Explicit
+        // opens during a session are unaffected — this only opts the scene
+        // out of launch-time state restoration.
+        .restorationBehavior(.disabled)
         // A unified window toolbar makes the toolbar region structurally
         // reserved, so the sidebar column's List always gets its top
         // safe-area inset — sidebar rows can never scroll up under the

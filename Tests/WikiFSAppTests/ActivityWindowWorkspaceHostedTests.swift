@@ -31,8 +31,9 @@ import WikiFSEngine
 /// and forcing manual accessibility changes nothing). The harness therefore
 /// finds the parts of the production window that DO bridge to real AppKit
 /// objects, and asserts through those:
-/// - the toolbar (`NSToolbarItem.label`, e.g. "Pause Queue") and the
-///   `NSPopUpButton` the Queue Actions menu mounts as,
+/// - the toolbar (`NSToolbarItem.label`, e.g. "Queue Actions" and the Run
+///   Details inspector toggle) and the `NSPopUpButton` the Queue Actions
+///   menu mounts as,
 /// - the segmented Overview/Activity selector (`NSSegmentedControl` labels),
 /// - the navigator's Filter popup button (real title),
 /// - editable `NSTextField`s — the Overview's local search placeholder
@@ -108,6 +109,22 @@ struct ActivityWindowWorkspaceHostedTests {
         createdAt: 0,
         startedAt: Int64(Date().timeIntervalSince1970 * 1000) - 40_000)
 
+    /// An extraction job sharing the served snapshot. Extraction has its own
+    /// window: this job must NEVER surface in the Agent Queue's navigator —
+    /// the strict window-scope filter (`ActivityWindowView.windowContains`)
+    /// is asserted by the `agentQueueNeverListsExtractionJobs` scenario.
+    private static let extractionJob = QueueItem(
+        id: QueueItemID(rawValue: "shared-extraction"),
+        queue: .extraction,
+        wikiID: WikiID(rawValue: "workspace-wiki"),
+        payload: QueueItemPayload(
+            sourceIDs: (0..<5).map { SourceID(rawValue: "xs\($0)") }),
+        state: .running,
+        orderingKey: 500,
+        attempt: 0,
+        createdAt: 0,
+        startedAt: Int64(Date().timeIntervalSince1970 * 1000) - 30_000)
+
     /// A completed job with a 300-target report (large-inventory scenario).
     private static let large = QueueItem(
         id: QueueItemID(rawValue: "large"),
@@ -123,12 +140,13 @@ struct ActivityWindowWorkspaceHostedTests {
         finishedAt: Int64(Date().timeIntervalSince1970 * 1000) - 10_000)
 
     /// The full fixture snapshot, with `running` optionally replaced by a
-    /// state-transitioned variant of itself (the action scenarios).
+    /// state-transitioned variant of itself (the action scenarios). Always
+    /// carries the extraction job alongside the ingestion jobs.
     private static func fixtures(
         runningVariant: QueueItem? = nil
     ) -> QueueSnapshot {
         QueueSnapshot(
-            activeItems: [runningVariant ?? running, lintPages, wholeWiki],
+            activeItems: [runningVariant ?? running, lintPages, wholeWiki, extractionJob],
             recentItems: [large],
             runStates: [.ingestion: .running])
     }
@@ -264,9 +282,8 @@ struct ActivityWindowWorkspaceHostedTests {
     /// The navigator rows' trailing action buttons — real `NSButton`s the
     /// List row cells host (icon-only Cancel / Retry). Bounded by the
     /// navigator table's actual trailing edge: the detail column's inventory
-    /// List also hosts cell-backed buttons (target-row chevrons and the Run
-    /// Details disclosure toggle), and at the sidebar's ideal width those sit
-    /// under any constant bound.
+    /// List also hosts cell-backed buttons (the target-row name links), and
+    /// at the sidebar's ideal width those sit under any constant bound.
     private func rowActionButtons(in root: NSView) -> [NSButton] {
         let columnMaxX = sidebarTable(in: root)
             .map { $0.convert($0.bounds, to: nil).maxX }
@@ -376,14 +393,27 @@ struct ActivityWindowWorkspaceHostedTests {
         let mounted = try await workspace()
 
         // The harness finds visible labels: the window title, the shared
-        // Overview/Activity selector, and the real Pause Queue toolbar item.
+        // Overview/Activity selector, and the real toolbar items — the
+        // labeled Queue Actions menu (Pause Queue lives INSIDE it, not as a
+        // separate top-level button) and the Run Details inspector toggle.
         let selectorFound = await waitUntil {
             surfaceSelector(in: mounted.rootView) != nil
         }
         #expect(selectorFound, "The Overview/Activity selector must be visible")
         #expect(mounted.window.title == "Agent Queue")
-        #expect(toolbarLabels(of: mounted.window).contains("Pause Queue"),
-                "The Pause Queue toolbar item must be visible")
+        let toolbarLabels = toolbarLabels(of: mounted.window)
+        #expect(toolbarLabels.contains("Queue Actions"),
+                "The Queue Actions menu must be a visible toolbar item")
+        // The Run Details toggle is a titled toolbar control (its NSButton
+        // title is the visible label — the text users see and VoiceOver
+        // reads; SwiftUI derives "" for representable item labels).
+        let runDetailsPresent = await waitUntil {
+            !toolbarControls(titled: "Run Details", in: mounted.window).isEmpty
+        }
+        #expect(runDetailsPresent,
+                "The Run Details inspector toggle must be a visible, titled toolbar control")
+        #expect(toolbarLabels.contains("Pause Queue") == false,
+                "Pause Queue must live inside the Queue Actions menu, not as a separate top-level button")
 
         // …and invokes a real action: pressing the navigator row's Cancel
         // button (a real NSButton in the row cell) reaches the engine.
@@ -456,8 +486,8 @@ struct ActivityWindowWorkspaceHostedTests {
         #expect(cancelled, "The queued row's action must be cancelItem")
         #expect(surfaceSelector(in: mounted.rootView) != nil,
                 "The shared Overview/Activity selector is present for queued jobs")
-        #expect(toolbarLabels(of: mounted.window).contains("Pause Queue"),
-                "The Pause Queue control is present")
+        #expect(toolbarLabels(of: mounted.window).contains("Queue Actions"),
+                "The Queue Actions menu is present")
     }
 
     // MARK: - Scenario: one shared workspace across operations
@@ -497,11 +527,9 @@ struct ActivityWindowWorkspaceHostedTests {
         // to propagate and the one-row overview table to mount.
         select(QueueItemID(rawValue: "shared-whole"), on: mounted)
         // Whole-wiki lint: exactly ONE inventory target row — the scope
-        // marker. The workspace never enumerates the wiki's pages. The
-        // Overview's List carries two trailing rows below the boundary
-        // (divider + Run Details disclosure), so one target row = 3 rows.
+        // marker. The workspace never enumerates the wiki's pages.
         let oneRowTable = await waitUntil(
-            { tables(in: mounted.rootView).contains { $0.numberOfRows == 1 + 2 } },
+            { tables(in: mounted.rootView).contains { $0.numberOfRows == 1 } },
             attempts: 60)
         #expect(oneRowTable,
                 "Whole-wiki lint shows exactly one scope row, never an enumeration")
@@ -514,24 +542,40 @@ struct ActivityWindowWorkspaceHostedTests {
     @Test func queueStopConfirmationSemantics() async throws {
         let mounted = try await workspace()
 
-        // The destructive control is reachable in the REAL toolbar: the
-        // Pause Queue item exists and the Queue Actions menu mounts as an
-        // NSPopUpButton inside it.
+        // The queue's controls live in the REAL toolbar under one labeled
+        // "Queue Actions" menu: the item exists and the menu mounts as an
+        // NSPopUpButton inside it. Pause Queue is a menu ITEM, never a
+        // separate top-level toolbar button.
         let toolbarFound = await waitUntil {
-            toolbarLabels(of: mounted.window).contains("Pause Queue")
+            toolbarLabels(of: mounted.window).contains("Queue Actions")
         }
-        #expect(toolbarFound, "The queue's pause control must be in the toolbar")
+        #expect(toolbarFound, "The Queue Actions menu must be in the toolbar")
+        #expect(
+            toolbarLabels(of: mounted.window).contains("Pause Queue") == false,
+            "Pause Queue must not be a separate top-level toolbar button")
 
         // The Queue Actions menu bridges as a pop-up button in the toolbar
         // item's hosted view. SwiftUI builds its NSMenu items lazily at open
         // time (opening it programmatically would block the main actor), so
         // the item list is verified only when the menu already carries items.
-        let pauseItemView = mounted.window.toolbar?.items
-            .first { $0.label == "Pause Queue" }?.view
-        let popup = pauseItemView.flatMap { popupButtons(in: $0).first }
+        let queueActionsView = mounted.window.toolbar?.items
+            .first { $0.label == "Queue Actions" }?.view
+        let popup = queueActionsView.flatMap { popupButtons(in: $0).first }
         if let menu = popup?.menu, !menu.items.isEmpty {
+            // The queue is running in this scenario: Pause (not Resume)
+            // heads the menu.
+            #expect(menu.items.contains { $0.title == "Pause Queue" },
+                    "The Queue Actions menu must offer Pause Queue while running")
             #expect(menu.items.contains { $0.title == "Stop All…" },
                     "The Queue Actions menu must offer Stop All…")
+            // Visible guidance keeps the two pausing verbs distinct: the
+            // section headers bridge as menu rows.
+            #expect(menu.items.contains { $0.title.contains("do not start new jobs") },
+                    "Pause Queue carries its visible guidance")
+            #expect(menu.items.contains { $0.title.contains("allow queued jobs to start") || $0.title.contains("let running jobs finish") },
+                    "The pause/resume section carries its guidance")
+            #expect(menu.items.contains { $0.title.contains("cancel running jobs, queued jobs remain") },
+                    "Stop All carries its visible guidance")
         }
 
         // The confirmation's exact semantics (plan §"Stop All"): it states
@@ -577,8 +621,8 @@ struct ActivityWindowWorkspaceHostedTests {
             surfaceSelector(in: mounted.rootView) != nil
         }
         #expect(minimumSelector, "Workspace selector reachable at the minimum size")
-        #expect(toolbarLabels(of: mounted.window).contains("Pause Queue"),
-                "The pause control stays in the toolbar at the minimum size")
+        #expect(toolbarLabels(of: mounted.window).contains("Queue Actions"),
+                "The Queue Actions menu stays in the toolbar at the minimum size")
         let minimumFits = mounted.rootView.fittingSize.width
             <= QueueWorkspaceMetrics.Window.minWidth + 1
         #expect(minimumFits,
@@ -622,9 +666,9 @@ struct ActivityWindowWorkspaceHostedTests {
         #expect(tableFound, "The 300-target inventory must mount")
         let inventory = try #require(
             tables(in: mounted.rootView).first { $0.numberOfRows >= 300 })
-        // 300 target rows + the two trailing boundary rows (divider + Run
-        // Details disclosure).
-        #expect(inventory.numberOfRows == 300 + 2,
+        // The inventory list carries exactly its 300 target rows — Run
+        // Details lives in the inspector panel now, not as trailing rows.
+        #expect(inventory.numberOfRows == 300,
                 "The full inventory is present in the list's model")
 
         // Local search appears at ≥ 12 rows.
@@ -646,16 +690,29 @@ struct ActivityWindowWorkspaceHostedTests {
         #expect(lastRowVisible, "The last target row must be reachable by scrolling")
     }
 
-    // MARK: - Scenario: Run Details disclosure keeps the workspace stable
+    // MARK: - Scenario: Run Details inspector (optional, toolbar-toggled)
 
-    /// Regression for the live bug: expanding Run Details blanked the center
-    /// pane (the inventory List starved to zero height below the expanded
-    /// disclosure) and the sidebar scrolled under the traffic lights (the
-    /// workspace's unbounded height demand collapsed the window-toolbar inset
-    /// from #835). Pins the disclosure expanded through the real tree (the
-    /// same expanded layout the disclosure click produces) and asserts both
-    /// columns' geometry stays inside the window.
-    @Test func runDetailsDisclosureKeepsWorkspaceLayoutStable() async throws {
+    /// The Run Details inspector is an optional trailing panel opened/closed
+    /// by the REAL toolbar toggle. Drives the bridged control end to end:
+    /// - clicking "Run Details" mounts the inspector, whose facts list
+    ///   bridges as a table with EXACTLY the job's `QueueRunDetailsFacts`
+    ///   entry rows (same public omission rules the window applies);
+    /// - the CENTER inventory stays mounted, full-row, and above its visible
+    ///   height floor while the inspector is open (the blank-pane regression
+    ///   the disclosure-era test pinned);
+    /// - closing the inspector changes NOTHING else: the same job stays
+    ///   selected (its inventory and local search remain) and the engine
+    ///   receives no commands (queue state untouched);
+    /// - at the usability minimum (640×400) WITH THE INSPECTOR OPEN, the
+    ///   facts table stays mounted, the inventory keeps its visible height
+    ///   floor, and the workspace stays inside the window.
+    ///
+    /// The unmount is observed through the CENTER COLUMN's live geometry:
+    /// when the 280pt inspector panel unmounts, the workspace's inventory
+    /// reclaims that width. (Table *existence* is not a reliable unmount
+    /// signal — AppKit-backed SwiftUI retains retired List tables in the
+    /// view tree with stale frames.)
+    @Test func runDetailsInspectorToggleKeepsCenterInventoryVisible() async throws {
         let mounted = try await workspace()
         // The completed 300-target job: a real inventory plus recorded run
         // facts, selected through the real deep-link seam.
@@ -663,62 +720,89 @@ struct ActivityWindowWorkspaceHostedTests {
         let tableFound = await waitUntil(
             { largestTable(in: mounted.rootView)?.numberOfRows ?? 0 >= 300 },
             attempts: 40)
-        #expect(tableFound, "The 300-target inventory must mount for the disclosure scenario")
+        #expect(tableFound, "The 300-target inventory must mount for the inspector scenario")
 
-        let contentTop = mounted.window.contentLayoutRect.minY
+        let commandsBefore = mounted.client.recordedCommands.count
 
-        // Baseline (collapsed): sidebar rows start below the window's content
-        // layout rect — never under the traffic lights.
-        if let sidebar = sidebarTable(in: mounted.rootView) {
-            let frame = sidebar.convert(sidebar.bounds, to: nil)
-            #expect(frame.minY >= contentTop - 1,
-                    "Sidebar rows stay below the toolbar collapsed (minY \(frame.minY), content top \(contentTop))")
-        }
-
-        // Pin the disclosure expanded through the real tree. Swapping the
-        // hosting controller's root value keeps the window and view identity
-        // (all @State — selection, filters, transcripts — persists).
-        mounted.host.rootView = ActivityWindowView(
-            queue: .ingestion,
-            queueEngine: mounted.client,
-            activityTracker: mounted.tracker,
-            sessionManager: nil,
-            runDetailsPinnedExpanded: true)
+        // Open: click the REAL toolbar toggle (a bridged NSButton).
+        let openToggle = try #require(
+            await waitForToolbarControl(titled: "Run Details", in: mounted.window),
+            "The Run Details toolbar toggle must bridge to a clickable control")
+        openToggle.performClick(nil)
         await settle(8)
 
-        // Expanded: the inventory keeps its rows AND a finite, visible scroll
-        // region — the blank-pane regression.
+        // The inspector's facts list mounts as a bridged table with a
+        // LITERAL row count (test integrity: a count recomputed from
+        // `QueueRunDetailsFacts.entries` would pass even if `entries`
+        // dropped a row). For the `large` fixture the window's mapping
+        // yields exactly six rows: Enqueued, Started, Finished (the epoch-ms
+        // 0 timestamps still count as present), Duration; attempt 0 is
+        // omitted; absent provider and model render the two "Not Reported"
+        // placeholders; no usage was recorded. The omission rules
+        // themselves are covered at value level in
+        // `QueueWorkspacePresentationTests`.
+        let expectedFactRows = 6
+        let inspectorMounted = await waitUntil(
+            { tables(in: mounted.rootView).contains { $0.numberOfRows == expectedFactRows } },
+            label: "inspector facts table")
+        #expect(inspectorMounted,
+                "The inspector must mount the job's run facts (\(expectedFactRows) rows)")
+
+        // The CENTER inventory remains visible while the inspector is open.
         let inventory = try #require(
             largestTable(in: mounted.rootView),
-            "The inventory table must stay mounted with Run Details expanded")
+            "The inventory table must stay mounted with the inspector open")
         #expect(inventory.numberOfRows >= 300,
-                "The inventory keeps its rows with Run Details expanded")
+                "The inventory keeps its rows with the inspector open")
         #expect(
             inventory.bounds.height
                 >= QueueWorkspaceMetrics.Inventory.minVisibleHeight - 1,
-            "Expanded Run Details must not starve the inventory (height \(inventory.bounds.height))")
+            "The open inspector must not starve the inventory (height \(inventory.bounds.height))")
 
-        // …and the sidebar still starts below the toolbar.
-        if let sidebar = sidebarTable(in: mounted.rootView) {
-            let frame = sidebar.convert(sidebar.bounds, to: nil)
-            #expect(frame.minY >= contentTop - 1,
-                    "Sidebar rows stay below the toolbar with Run Details expanded (minY \(frame.minY), content top \(contentTop))")
-        }
+        // Close: the inspector unmounts and NOTHING else changes — same job
+        // selected (inventory + local search remain), no engine commands.
+        let closeToggle = try #require(
+            await waitForToolbarControl(titled: "Run Details", in: mounted.window),
+            "The Run Details toolbar toggle must stay reachable after re-render")
+        let widthWithInspectorOpen = inventory
+            .convert(inventory.bounds, to: nil).width
+        closeToggle.performClick(nil)
+        let inspectorGone = await waitUntil({
+            let current = largestTable(in: mounted.rootView)
+            guard let current else { return false }
+            let width = current.convert(current.bounds, to: nil).width
+            return width
+                >= widthWithInspectorOpen + QueueWorkspaceMetrics.Inspector.width - 20
+        }, label: "inspector unmount (center widens)")
+        #expect(inspectorGone, "Closing the toggle must remove the inspector")
+        let inventoryAfterClose = try #require(
+            largestTable(in: mounted.rootView),
+            "The inventory must stay mounted after closing the inspector")
+        #expect(inventoryAfterClose.numberOfRows >= 300,
+                "Closing the inspector must not change the selection — the same job's inventory stays")
+        #expect(placeholders(in: mounted.rootView).contains("Find in Sources"),
+                "The same job's Overview (its local search) stays after closing")
+        #expect(mounted.client.recordedCommands.count == commandsBefore,
+                "Toggling the inspector must not run queue commands")
 
-        // The hosted workspace itself stays inside the window vertically —
-        // no unbounded demand escaping the detail column.
-        let contentHeight = mounted.window.contentView?.bounds.height ?? 0
-        let rootFrame = mounted.host.view.frame
-        #expect(rootFrame.minY >= -1 && rootFrame.maxY <= contentHeight + 1,
-                "The workspace stays inside the window (root \(rootFrame), content height \(contentHeight))")
-
-        // Expanded details at the usability minimum (640×400): the inventory
-        // keeps its floor and its rows — never a blank pane — and the sidebar
-        // still starts below the titlebar.
+        // Minimum size (640×400) WITH THE INSPECTOR OPEN: re-open the
+        // inspector first, then resize. The facts table stays mounted, the
+        // inventory keeps its rows and its visible height floor, and the
+        // workspace stays inside the window.
+        let reopenToggle = try #require(
+            await waitForToolbarControl(titled: "Run Details", in: mounted.window),
+            "The Run Details toolbar toggle must be reachable for the minimum-size pass")
+        reopenToggle.performClick(nil)
+        await settle(4)
         mounted.window.setContentSize(NSSize(
             width: QueueWorkspaceMetrics.Window.minWidth,
             height: QueueWorkspaceMetrics.Window.minHeight))
         await settle(6)
+        let minimumFactsMounted = await waitUntil(
+            { tables(in: mounted.rootView).contains { $0.numberOfRows == expectedFactRows } },
+            label: "inspector facts table at minimum size")
+        #expect(minimumFactsMounted,
+                "The facts table stays mounted at 640×400 with the inspector open")
         let minimumInventory = try #require(
             largestTable(in: mounted.rootView),
             "The inventory table stays mounted at the minimum size")
@@ -727,111 +811,149 @@ struct ActivityWindowWorkspaceHostedTests {
         #expect(
             minimumInventory.bounds.height
                 >= QueueWorkspaceMetrics.Inventory.minVisibleHeight - 1,
-            "Expanded Run Details keeps the inventory visible at 640×400 (height \(minimumInventory.bounds.height))")
-        if let sidebar = sidebarTable(in: mounted.rootView) {
-            let frame = sidebar.convert(sidebar.bounds, to: nil)
-            #expect(frame.minY >= contentTop - 1,
-                    "Sidebar rows stay below the titlebar at the minimum size (minY \(frame.minY), content top \(contentTop))")
-        }
+            "The inventory stays visible at 640×400 (height \(minimumInventory.bounds.height))")
+        let contentHeight = mounted.window.contentView?.bounds.height ?? 0
+        let rootFrame = mounted.host.view.frame
+        #expect(rootFrame.minY >= -1 && rootFrame.maxY <= contentHeight + 1,
+                "The workspace stays inside the window (root \(rootFrame), content height \(contentHeight))")
 
-        // Restore the preferred size, then lift the pin so later scenarios
-        // see the production default.
+        // Restore the preferred size and close the inspector so the later
+        // scenarios start from the suite's default presentation.
         mounted.window.setContentSize(NSSize(
             width: QueueWorkspaceMetrics.Window.preferredWidth,
             height: QueueWorkspaceMetrics.Window.preferredHeight))
         await settle(4)
-        mounted.host.rootView = ActivityWindowView(
-            queue: .ingestion,
-            queueEngine: mounted.client,
-            activityTracker: mounted.tracker,
-            sessionManager: nil)
-        await settle(2)
-    }
-
-    // MARK: - Scenario: per-job overview state isolation
-
-    /// A selection change resets the workspace's per-job Overview state
-    /// (the `.id(itemID)` identity on `workspaceContent`): expanded
-    /// inventory rows from one job never leak into another job's workspace,
-    /// while the Overview/Activity switch itself keeps both surfaces mounted.
-    /// Drives the REAL cell-hosted chevron buttons (same mechanism as the
-    /// navigator row actions) and the real deep-link selection seam.
-    @Test func selectionChangeResetsOverviewRowDisclosureState() async throws {
-        let mounted = try await workspace()
-        select(QueueItemID(rawValue: "large"), on: mounted)
-        let tableFound = await waitUntil(
-            { largestTable(in: mounted.rootView)?.numberOfRows ?? 0 >= 300 },
-            attempts: 40)
-        #expect(tableFound, "The 300-target inventory must mount for the isolation scenario")
-
-        /// The tallest materialized target row — the observable signal that
-        /// a row's disclosed detail block is showing. Re-finds the bridged
-        /// table on every call: a selection change remounts the Overview
-        /// (`.id(itemID)`), replacing the NSTableView.
-        func tallestTargetRowHeight() -> CGFloat {
-            guard let table = largestTable(in: mounted.rootView),
-                  table.numberOfRows > 2 else { return 0 }
-            return (0..<table.numberOfRows)
-                .compactMap { table.rowView(atRow: $0, makeIfNecessary: false)?.frame.height }
-                .max() ?? 0
-        }
-
-        // Expand a target row through its real cell-hosted chevron button.
-        let chevron = try #require(
-            await waitForInventoryChevron(in: mounted.rootView),
-            "The inventory rows must host their disclosure chevron buttons")
-        let collapsedHeight = tallestTargetRowHeight()
-        chevron.performClick(nil)
+        let finalToggle = try #require(
+            await waitForToolbarControl(titled: "Run Details", in: mounted.window),
+            "The Run Details toolbar toggle must stay reachable after the minimum-size pass")
+        finalToggle.performClick(nil)
         await settle(4)
-        let expandedHeight = tallestTargetRowHeight()
-        #expect(expandedHeight > collapsedHeight + 8,
-                "The chevron click expands the target row (collapsed \(collapsedHeight), expanded \(expandedHeight))")
-
-        // Switch to another job and back through the real selection seam:
-        // the Overview's per-job state reset, so the row is collapsed again.
-        select(Self.running.id, on: mounted)
-        let switched = await waitUntil(
-            { largestTable(in: mounted.rootView)?.numberOfRows == 15 + 2 },
-            attempts: 40,
-            label: "switched job inventory")
-        #expect(switched, "Selecting the other job remounts its inventory")
-        select(QueueItemID(rawValue: "large"), on: mounted)
-        let back = await waitUntil(
-            { largestTable(in: mounted.rootView)?.numberOfRows ?? 0 >= 300 },
-            attempts: 40,
-            label: "re-selected job inventory")
-        #expect(back, "Selecting the first job back remounts its inventory")
-        let afterResetHeight = tallestTargetRowHeight()
-        #expect(afterResetHeight <= collapsedHeight + 2,
-                "Per-job state resets on selection change — the expanded row must not leak across jobs (got \(afterResetHeight), collapsed baseline \(collapsedHeight))")
     }
 
-    /// Bounded wait for an inventory row's chevron button: a real NSButton
-    /// in a List row cell (detail column), labeled "Show details for …".
-    private func waitForInventoryChevron(in root: NSView) async -> NSButton? {
+    /// The toolbar-hosted control with the given title (e.g. the Run
+    /// Details toggle's NSButton). SwiftUI derives an EMPTY label for
+    /// representable toolbar items (it only lifts titles from SwiftUI-side
+    /// control text), so the harness locates the control by its own visible
+    /// title — the same text users see and VoiceOver reads.
+    private func toolbarControls(titled title: String, in window: NSWindow) -> [NSControl] {
+        let itemViews = window.toolbar?.items.compactMap(\.view) ?? []
+        return itemViews.flatMap { allSubviews(of: $0) }
+            .compactMap { $0 as? NSButton }
+            .filter { $0.title == title }
+    }
+
+    /// Bounded wait because SwiftUI materializes the item's hosted view
+    /// asynchronously after mount.
+    private func waitForToolbarControl(
+        titled title: String,
+        in window: NSWindow
+    ) async -> NSControl? {
         for _ in 0..<30 {
-            if let button = inventoryChevronButtons(in: root).first {
+            if let control = toolbarControls(titled: title, in: window).first {
+                return control
+            }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return toolbarControls(titled: title, in: window).first
+    }
+
+    // MARK: - Scenario: inventory rows are non-collapsible name links
+
+    /// The inventory rows carry no disclosure control: the target NAME is
+    /// the clickable link (native `.link` style) performing the row's
+    /// navigation action. Selects the whole-wiki lint job — its one scope
+    /// row's "Browse Pages" action is the one action the hosted tree can
+    /// resolve without a live session (name-resolution-dependent page/source
+    /// actions stay covered by the row-level hosted suite) — and drives the
+    /// REAL cell-hosted button. With no session the click logs and no-ops
+    /// (safe by design); the assertions pin that the link EXISTS in the row
+    /// cell and the click neither wedges the window nor disturbs state.
+    @Test func inventoryNameIsTheClickableLink() async throws {
+        let mounted = try await workspace()
+        select(QueueItemID(rawValue: "shared-whole"), on: mounted)
+        let oneRow = await waitUntil(
+            { tables(in: mounted.rootView).contains { $0.numberOfRows == 1 } },
+            attempts: 60)
+        #expect(oneRow, "The whole-wiki job's scope row must mount")
+
+        let link = try #require(
+            await waitForInventoryLinkButton(in: mounted.rootView),
+            "The target row's name must host a clickable link button")
+        let commandsBefore = mounted.client.recordedCommands.count
+        link.performClick(nil)
+        await settle(4)
+        // The link routes navigation only: no engine command, selection
+        // unchanged (the same one-row scope inventory stays).
+        #expect(mounted.client.recordedCommands.count == commandsBefore,
+                "The name link must not run queue commands")
+        #expect(
+            tables(in: mounted.rootView).contains { $0.numberOfRows == 1 },
+            "The same job's inventory stays after the link click")
+    }
+
+    /// Bounded wait for an inventory row's name-link button: a real NSButton
+    /// in a List row cell (detail column), at or right of the navigator
+    /// table's trailing edge.
+    private func waitForInventoryLinkButton(in root: NSView) async -> NSButton? {
+        for _ in 0..<30 {
+            if let button = inventoryLinkButtons(in: root).first {
                 return button
             }
             try? await Task.sleep(for: .milliseconds(50))
         }
-        return inventoryChevronButtons(in: root).first
+        return inventoryLinkButtons(in: root).first
     }
 
-    private func inventoryChevronButtons(in root: NSView) -> [NSButton] {
-        // The inventory rows' chevron buttons: cell-hosted buttons in the
-        // DETAIL column — at or right of the navigator table's trailing
-        // edge. SwiftUI's accessibility labels do not bridge onto these
-        // NSButtons, so position (not label) is the reliable disambiguator.
-        // The Run Details disclosure's own toggle is the List's trailing
-        // row, below the lazy fold at these fixture sizes, so the visible
-        // detail-column cell buttons are the target rows' chevrons.
+    /// The inventory rows' name-link buttons: cell-hosted buttons in the
+    /// DETAIL column — at or right of the navigator table's trailing edge.
+    /// SwiftUI's accessibility labels do not bridge onto these NSButtons, so
+    /// position (not label) is the reliable disambiguator.
+    private func inventoryLinkButtons(in root: NSView) -> [NSButton] {
         guard let sidebar = sidebarTable(in: root) else { return [] }
         let columnMaxX = sidebar.convert(sidebar.bounds, to: nil).maxX
         return allSubviews(of: root).compactMap { $0 as? NSButton }.filter { button in
             guard isInListRowCell(button) else { return false }
             return button.convert(button.bounds, to: nil).minX >= columnMaxX
         }
+    }
+
+    // MARK: - Scenario: strict queue scope (extraction never in Agent Queue)
+
+    /// Extraction has its own window: an extraction job in the shared
+    /// snapshot must never surface in the Agent Queue's navigator. The
+    /// fixture snapshot already carries one extraction job; this adds a
+    /// SECOND one through the real event path and pins that the navigator's
+    /// bridged row count does not change (differential, so section-header
+    /// bridging details cannot skew the count).
+    @Test func agentQueueNeverListsExtractionJobs() async throws {
+        let mounted = try await workspace()
+        let sidebarBefore = try #require(
+            sidebarTable(in: mounted.rootView),
+            "The navigator table must be mounted")
+        let rowsBefore = sidebarBefore.numberOfRows
+
+        let extraExtraction = QueueItem(
+            id: QueueItemID(rawValue: "extra-extraction"),
+            queue: .extraction,
+            wikiID: WikiID(rawValue: "workspace-wiki"),
+            payload: QueueItemPayload(
+                sourceIDs: (0..<3).map { SourceID(rawValue: "ys\($0)") }),
+            state: .running,
+            orderingKey: 100,
+            attempt: 0,
+            createdAt: 0,
+            startedAt: Int64(Date().timeIntervalSince1970 * 1000) - 5_000)
+        mounted.client.update(snapshot: QueueSnapshot(
+            activeItems: [Self.running, Self.lintPages, Self.wholeWiki, Self.extractionJob, extraExtraction],
+            recentItems: [Self.large],
+            runStates: [.ingestion: .running]))
+        await settle(6)
+
+        let sidebarAfter = try #require(
+            sidebarTable(in: mounted.rootView),
+            "The navigator table must stay mounted")
+        #expect(sidebarAfter.numberOfRows == rowsBefore,
+                "Extraction jobs must never appear in the Agent Queue navigator (rows \(rowsBefore) → \(sidebarAfter.numberOfRows))")
     }
 }
 

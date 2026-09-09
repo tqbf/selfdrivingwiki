@@ -11,8 +11,11 @@ import SwiftUI
 /// state-driven actions (plan §1 "Selected job workspace"). Job errors and
 /// pending permissions render here, above the parent's content selector.
 struct QueueJobHeaderPresentation {
-    /// Recognizable job title — first target name, "Lint 3 pages", or "Whole
-    /// wiki" (caller composes; this layer only renders).
+    /// Recognizable job title with the operation made explicit as a prefix —
+    /// "Ingestion: <Job Details>", "Extraction: <Job Details>", "Lint: <Job
+    /// Details>" (composed via `QueueWorkspaceMapper.headerTitle` over the
+    /// first target name, "Lint 3 pages", or "Whole wiki"; this layer only
+    /// renders).
     let title: String
     /// Operation word: "Ingest" / "Extract" / "Lint".
     let operationLabel: String

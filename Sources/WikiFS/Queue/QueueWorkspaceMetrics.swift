@@ -46,18 +46,16 @@ enum QueueWorkspaceMetrics {
         /// Below it every target is visible at once and search is noise.
         static let localSearchThreshold = 12
         /// The inventory's visible height floor. The Overview's scrolling List
-        /// is the only flexible child of a non-scrolling VStack that also
-        /// carries the pinned Run Details disclosure; without a floor, an
-        /// expanded disclosure starves the List to zero height and the
-        /// workspace reads as a blank pane. The List always keeps at least
-        /// this much scrollable region, whatever the disclosure demands.
+        /// is the only flexible child of the workspace's non-scrolling VStack
+        /// (header + selector + content); without a floor, sibling demands
+        /// (the optional Run Details inspector squeezing the center column at
+        /// narrow widths) can starve the List to zero height and the workspace
+        /// reads as a blank pane. The List always keeps at least this much
+        /// scrollable region, whatever its siblings demand.
         static let minVisibleHeight: CGFloat = 96
         /// Vertical padding inside a target row (list rows own their height —
         /// no fixed-height text rows per plan).
         static let rowVerticalPadding: CGFloat = 5
-        /// Left indent of a row's expanded full-name/reason/actions block so it
-        /// reads as belonging to the row's text column, not the status symbol.
-        static let disclosedIndent: CGFloat = 28
         /// Line count a row title wraps to before truncating (plan: long names
         /// wrap to two lines).
         static let titleLineLimit = 2
@@ -76,16 +74,15 @@ enum QueueWorkspaceMetrics {
         static let verticalPadding: CGFloat = 10
     }
 
-    /// Run Details disclosure bounds. The disclosure is pinned BELOW the
-    /// inventory List inside the Overview's non-scrolling VStack (plan §1),
-    /// so its expanded content must never demand unbounded height: an
-    /// uncapped Grid starves the flexible List to zero height (the blank
-    /// workspace pane) and pushes the workspace's ideal height past the
-    /// window, which also collapses the sidebar's window-toolbar inset
-    /// (#835) — sidebar rows then scroll under the traffic lights.
-    enum RunDetails {
-        /// Ceiling for the disclosure's expanded region. Taller grids scroll
-        /// inside it instead of growing the demand.
-        static let maxExpandedHeight: CGFloat = 320
+    /// Run Details inspector panel geometry. The panel is an OPTIONAL
+    /// trailing region inside the detail column — conditionally present, not
+    /// a permanently visible third split-view column — opened and closed by
+    /// the window toolbar's labeled toggle.
+    enum Inspector {
+        /// Fixed panel width. Wide enough for the longest fact pair
+        /// (timestamp label + value) at callout size; narrow enough that the
+        /// 640pt window minimum still leaves a visible center workspace next
+        /// to the 220pt navigator minimum (640 − 220 − 280 = 140pt).
+        static let width: CGFloat = 280
     }
 }

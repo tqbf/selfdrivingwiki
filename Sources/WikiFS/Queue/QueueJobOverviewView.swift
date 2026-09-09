@@ -4,14 +4,18 @@ import SwiftUI
 
 /// Everything `QueueJobOverviewView` renders for the selected job's summary
 /// surface: the complete target inventory, the section's kind-specific
-/// language, an optional result statement, and the run facts for the details
-/// disclosure. Derived by the caller before list iteration — plain values only.
+/// language, and an optional result statement. Derived by the caller before
+/// list iteration — plain values only.
 ///
 /// Kind-specific scope/result language is the caller's mapping job (plan:
 /// "operation-specific scope and result language"): `sectionTitle` is
 /// "Sources" for ingestion/extraction and "Scope" or "Pages" for lint;
 /// `resultStatement` carries wording like "Agent run completed; page-level
 /// results not reported".
+///
+/// Run Details no longer lives here: the facts moved to the window's optional
+/// Run Details inspector panel (`QueueRunDetailsView`), opened from the
+/// toolbar.
 struct QueueJobOverviewPresentation {
     /// Section noun: "Sources", "Pages", "Scope".
     let sectionTitle: String
@@ -25,9 +29,6 @@ struct QueueJobOverviewPresentation {
     /// Job-level result statement, e.g. "Agent run completed; page-level
     /// results not reported". Rendered under the section header; `nil` hides it.
     let resultStatement: String?
-    /// Run facts for the Run Details disclosure; `nil` hides the disclosure
-    /// entirely (legacy jobs with nothing recorded).
-    let runDetails: QueueRunDetailsFacts?
     /// Empty-inventory message ("No sources recorded for this job.").
     let emptyStateText: String
 
@@ -36,14 +37,12 @@ struct QueueJobOverviewPresentation {
         countText: String? = nil,
         rows: [QueueTargetRowValue],
         resultStatement: String? = nil,
-        runDetails: QueueRunDetailsFacts? = nil,
         emptyStateText: String
     ) {
         self.sectionTitle = sectionTitle
         self.countText = countText
         self.rows = rows
         self.resultStatement = resultStatement
-        self.runDetails = runDetails
         self.emptyStateText = emptyStateText
     }
 }
@@ -51,19 +50,18 @@ struct QueueJobOverviewPresentation {
 // MARK: - Overview view
 
 /// The Overview tab of the selected job workspace: section header with count
-/// and local search, the complete target inventory in a native scrolling List
-/// with shared rows, an optional result statement, and the Run Details
-/// disclosure below the inventory (plan §1 layout).
+/// and local search, an optional result statement, and the complete target
+/// inventory in a native scrolling List with shared rows (plan §1 layout).
+/// Run Details lives in the window's optional inspector panel, not here.
 ///
-/// Owns only local UI state (search text, disclosed rows). The parent keeps
-/// this view mounted while the user toggles Overview/Activity; remounting
-/// resets the local state, which is acceptable — streaming data and scroll
-/// identity concerns belong to the Activity surface.
+/// Owns only local UI state (search text); rows are not collapsible. The
+/// parent keeps this view mounted while the user toggles Overview/Activity;
+/// remounting resets the local state, which is acceptable — streaming data
+/// and scroll identity concerns belong to the Activity surface.
 struct QueueJobOverviewView: View {
     private let presentation: QueueJobOverviewPresentation
 
     @State private var searchText = ""
-    @State private var expandedRowIDs: Set<String> = []
     @FocusState private var isSearchFieldFocused: Bool
 
     init(_ presentation: QueueJobOverviewPresentation) {
@@ -183,48 +181,31 @@ struct QueueJobOverviewView: View {
         }
     }
 
-    /// Empty / no-match inventories keep the Run Details disclosure below the
-    /// summary/content boundary — the same surface the scrolling inventory
-    /// carries as its trailing rows.
+    /// Empty / no-match inventories keep the section header and result
+    /// statement; the inventory region itself is the whole content.
     private func inventoryEdgeCase(
         title: String,
         hint: String?,
         icon: String,
         showsClearAction: Bool
     ) -> some View {
-        VStack(spacing: 0) {
-            emptyState(
-                title: title,
-                hint: hint,
-                icon: icon,
-                showsClearAction: showsClearAction)
-            Divider()
-            runDetailsRegion
-        }
+        emptyState(
+            title: title,
+            hint: hint,
+            icon: icon,
+            showsClearAction: showsClearAction)
     }
 
     /// The complete inventory: native scrolling List, lazy rows, stable
     /// identities. Each row owns the shared `QueueTargetRow` component; the
-    /// scroll region is this list's alone. The Run Details disclosure rides
-    /// as the list's trailing rows, below the summary/content boundary — so
-    /// expanding it grows scrollable content instead of contesting a
-    /// non-scrolling sibling for height (the contest starved the List to
-    /// zero height and blanked the workspace pane). The height floor keeps
-    /// the list a finite, visible scroll region even in a short window.
+    /// scroll region is this list's alone. The height floor keeps the list a
+    /// finite, visible scroll region even in a short window or beside the
+    /// open Run Details inspector.
     private var inventoryList: some View {
         List {
             ForEach(filteredRows) { row in
-                QueueTargetRow(
-                    value: row,
-                    isExpanded: expandedRowIDs.contains(row.id)
-                ) {
-                    toggleExpanded(rowID: row.id)
-                }
+                QueueTargetRow(value: row)
             }
-            Divider()
-                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-            runDetailsRegion
-                .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
         }
         .listStyle(.plain)
         .frame(minHeight: QueueWorkspaceMetrics.Inventory.minVisibleHeight)
@@ -255,22 +236,5 @@ struct QueueJobOverviewView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private func toggleExpanded(rowID: String) {
-        if expandedRowIDs.contains(rowID) {
-            expandedRowIDs.remove(rowID)
-        } else {
-            expandedRowIDs.insert(rowID)
-        }
-    }
-
-    // MARK: Run details
-
-    @ViewBuilder
-    private var runDetailsRegion: some View {
-        if let facts = presentation.runDetails {
-            QueueRunDetailsView(facts)
-        }
     }
 }

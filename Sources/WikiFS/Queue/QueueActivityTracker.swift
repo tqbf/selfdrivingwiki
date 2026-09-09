@@ -812,7 +812,7 @@ final class QueueActivityTracker {
             // the emit closure. `nil` clears the row (resolved / rejected /
             // auto-rejected by the S1 companion timer). Updates replace the
             // prior entry — ACP agents gate one write at a time, so the
-            // array never carries more than one entry at a time.
+            // dictionary never carries more than one entry per item.
             if let permission {
                 pendingPermissions[id] = permission
             } else {

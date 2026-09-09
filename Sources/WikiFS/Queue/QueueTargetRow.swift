@@ -5,80 +5,89 @@ import SwiftUI
 /// so both queue windows present targets identically (plan §1 "Overview
 /// inventory").
 ///
-/// Wide windows align a Name column against a State/Result column; narrow
-/// windows stack them instead of competing for width. Disclosing a row reveals
-/// the full selectable name, typed identity, reason, and available actions
-/// inline — a tooltip is never the only full-name surface.
+/// The row is NOT collapsible: it shows the target name and its state/result,
+/// nothing else. Typed identity (SourceID/PageID) is never rendered — the
+/// name is the surface. When the target carries a live navigation action, the
+/// The NAME ITSELF is the link (native `.link` button style) performing it —
+/// "Open Page" for pages, "Reveal Source" for sources, "Browse Pages" for
+/// whole-wiki scope rows. Dead targets keep their recorded name as plain
+/// text: the caller omits actions when a recorded output reference no longer
+/// resolves, so a dead link never renders. Routing stays the caller's
+/// `QueueWorkspaceAction` closures (`openPage` / `revealSource` /
+/// `browsePages`).
 ///
-/// The row reads only the immutable `QueueTargetRowValue` plus its own
-/// expansion flag; the enclosing list precomputes values before iteration, so
-/// no `@Observable` reads happen inside row bodies (observation-crash
-/// workaround stays valid).
+/// Wide windows align the Name column against a State/Result column; narrow
+/// windows stack them instead of competing for width.
+///
+/// The row reads only the immutable `QueueTargetRowValue`; the enclosing list
+/// precomputes values before iteration, so no `@Observable` reads happen
+/// inside row bodies (observation-crash workaround stays valid).
 struct QueueTargetRow: View {
     private let value: QueueTargetRowValue
-    private let isExpanded: Bool
-    private let onToggleExpanded: () -> Void
 
-    /// - Parameters:
-    ///   - value: Precomputed row display value.
-    ///   - isExpanded: Whether the full-name/reason/actions block shows.
-    ///   - onToggleExpanded: Invoked by the chevron or a tap on the collapsed
-    ///     row background; the owner keeps the expansion set.
-    init(
-        value: QueueTargetRowValue,
-        isExpanded: Bool,
-        onToggleExpanded: @escaping () -> Void
-    ) {
+    /// - Parameter value: Precomputed row display value. Its `actions` (at
+    ///   most one in practice) carry the target's live navigation; the first
+    ///   becomes the name link.
+    init(value: QueueTargetRowValue) {
         self.value = value
-        self.isExpanded = isExpanded
-        self.onToggleExpanded = onToggleExpanded
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: QueueWorkspaceMetrics.Spacing.xs) {
-            ViewThatFits(in: .horizontal) {
-                alignedLayout
-                stackedLayout
-            }
-            if isExpanded, value.hasDisclosableDetail {
-                disclosedContent
-            }
+        ViewThatFits(in: .horizontal) {
+            alignedLayout
+            stackedLayout
         }
         .padding(.vertical, QueueWorkspaceMetrics.Inventory.rowVerticalPadding)
     }
 
-    // MARK: Collapsed layouts
+    // MARK: Layouts
 
     /// Wide: name left, status right — an aligned State/Result column.
     private var alignedLayout: some View {
         HStack(alignment: .center, spacing: QueueWorkspaceMetrics.Spacing.sm) {
-            titleColumn
+            nameColumn
             Spacer(minLength: QueueWorkspaceMetrics.Spacing.sm)
             statusColumn
-            disclosureControl
         }
-        .contentShape(Rectangle())
-        .onTapGesture(perform: toggle)
     }
 
-    /// Narrow: status above name, disclosure at the trailing edge.
+    /// Narrow: status above name — the pair stacks instead of competing for
+    /// width.
     private var stackedLayout: some View {
         HStack(alignment: .top, spacing: QueueWorkspaceMetrics.Spacing.sm) {
             VStack(alignment: .leading, spacing: QueueWorkspaceMetrics.Spacing.xs) {
                 statusColumn
-                titleColumn
+                nameColumn
             }
             Spacer(minLength: 0)
-            disclosureControl
         }
-        .contentShape(Rectangle())
-        .onTapGesture(perform: toggle)
     }
 
-    /// The target's name, wrapping to two lines before truncating (plan: long
-    /// names wrap to two lines). Scope rows ("Whole wiki") render the same way
-    /// as real targets.
-    private var titleColumn: some View {
+    // MARK: Columns
+
+    /// The target's name. With a live action it is a native link performing
+    /// that action; without one (dead/unresolvable target, no navigation) it
+    /// is plain text. Names wrap to two lines before truncating (plan: long
+    /// names wrap to two lines); the full recorded name stays one tooltip
+    /// away. Scope rows ("Whole wiki") render the same way as real targets.
+    @ViewBuilder
+    private var nameColumn: some View {
+        if let action = value.actions.first {
+            Button {
+                action.perform()
+            } label: {
+                titleText
+            }
+            .buttonStyle(.link)
+            .help("\(action.label): \(value.displayName)")
+            .accessibilityHint(action.label)
+        } else {
+            titleText
+                .help(value.displayName)
+        }
+    }
+
+    private var titleText: some View {
         Text(value.title)
             .font(.body)
             .lineLimit(QueueWorkspaceMetrics.Inventory.titleLineLimit)
@@ -93,81 +102,6 @@ struct QueueTargetRow: View {
             .font(.callout)
             .foregroundStyle(color(for: value.status.style))
             .accessibilityLabel("\(value.title): \(value.status.text)")
-    }
-
-    /// Chevron disclosure. Hidden entirely for rows with nothing to reveal
-    /// (no full name, reason, identity, or actions).
-    @ViewBuilder
-    private var disclosureControl: some View {
-        if value.hasDisclosableDetail {
-            Button(action: toggle) {
-                Image(systemName: "chevron.right")
-                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
-                    .font(.callout.weight(.medium))
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.borderless)
-            .controlSize(.small)
-            .accessibilityLabel(isExpanded ? "Hide details for \(value.title)" : "Show details for \(value.title)")
-            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
-            .help(isExpanded ? "Hide details" : "Show full name and details")
-        }
-    }
-
-    // MARK: Disclosed content
-
-    /// Full selectable name, typed identity, reason, and available actions —
-    /// everything the collapsed row truncates or hides.
-    private var disclosedContent: some View {
-        VStack(alignment: .leading, spacing: QueueWorkspaceMetrics.Spacing.xs) {
-            if let fullName = value.fullName {
-                Text(fullName)
-                    .font(.body)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if let identity = value.identity {
-                Text(verbatim: identity.rowID)
-                    .font(.caption)
-                    .monospaced()
-                    .foregroundStyle(.tertiary)
-                    .textSelection(.enabled)
-                    .accessibilityLabel("\(identityLabel(identity)) identifier")
-            }
-            if let reason = value.reason {
-                Text(reason)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if !value.actions.isEmpty {
-                HStack(spacing: QueueWorkspaceMetrics.Spacing.xs) {
-                    ForEach(Array(value.actions.enumerated()), id: \.offset) { _, action in
-                        Button {
-                            action.perform()
-                        } label: {
-                            Label(action.label, systemImage: action.systemImage)
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .help(action.label)
-                    }
-                }
-            }
-        }
-        .padding(.leading, QueueWorkspaceMetrics.Inventory.disclosedIndent)
-    }
-
-    private func toggle() {
-        onToggleExpanded()
-    }
-
-    private func identityLabel(_ identity: QueueWorkspaceTargetIdentity) -> String {
-        switch identity {
-        case .source: return "Source"
-        case .page: return "Page"
-        }
     }
 
     /// Semantic style → foreground style, resolved in exactly one place.
