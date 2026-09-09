@@ -110,6 +110,22 @@ public struct QueueItemPayload: Codable, Sendable {
     /// `nil` means normal ingestion. Ignored for extraction items.
     public var lintPageIDs: [PageID]?
 
+    /// Display names captured at enqueue time for the payload's targets,
+    /// keyed by the target ID's raw string. Lint payloads record page titles
+    /// (parallel to `lintPageIDs`); ingestion payloads record source
+    /// effective names (parallel to `sourceIDs`). The names let the queue
+    /// workspace keep human-readable target rows after the job's wiki window
+    /// closes (closed-wiki name resolution): the live session index is the
+    /// first choice, this record the fallback, and the deletion fallback
+    /// text only when neither resolves.
+    ///
+    /// Purely additive + optional: payloads persisted before this field
+    /// decode unchanged (`nil`), and decoders without the field ignore it.
+    /// Keys are raw ID strings because the field crosses the persistence
+    /// boundary, where raw strings are the compatibility contract; use the
+    /// `recorded*Name` accessors to restore the typed namespace.
+    public var recordedNames: [String: String]?
+
     /// ACP session ID for crash-resume. Set after session start, cleared on completion.
     public var acpSessionId: AcpSessionID?
 
@@ -118,13 +134,33 @@ public struct QueueItemPayload: Codable, Sendable {
         stageRouting: [String: String]? = nil,
         chainedItemID: QueueItemID? = nil,
         lintPageIDs: [PageID]? = nil,
-        acpSessionId: AcpSessionID? = nil
+        acpSessionId: AcpSessionID? = nil,
+        recordedNames: [String: String]? = nil
     ) {
         self.sourceIDs = sourceIDs
         self.stageRouting = stageRouting
         self.chainedItemID = chainedItemID
         self.lintPageIDs = lintPageIDs
         self.acpSessionId = acpSessionId
+        self.recordedNames = recordedNames
+    }
+
+    /// The enqueue-time recorded title for `pageID` (lint payloads), or
+    /// `nil`. An empty recorded string counts as unrecorded — it can never
+    /// resolve to a display name.
+    public func recordedPageTitle(for pageID: PageID) -> String? {
+        recordedName(forRawID: pageID.rawValue)
+    }
+
+    /// The enqueue-time recorded name for `sourceID` (ingestion payloads),
+    /// or `nil`. An empty recorded string counts as unrecorded.
+    public func recordedSourceName(for sourceID: SourceID) -> String? {
+        recordedName(forRawID: sourceID.rawValue)
+    }
+
+    private func recordedName(forRawID rawID: String) -> String? {
+        guard let name = recordedNames?[rawID], !name.isEmpty else { return nil }
+        return name
     }
 }
 

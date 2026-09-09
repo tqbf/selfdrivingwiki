@@ -98,6 +98,11 @@ struct ActivityWindowView: View {
     /// "Configure…" CTA buttons can open Settings on the relevant tab
     /// (#440). Set by `MenuBarItemController` when creating the window.
     var openWindowBridge: OpenWindowBridge?
+    /// Where a closed wiki's database lives, for the read-only name
+    /// fallback (closed-wiki name resolution). Production resolves the App
+    /// Group container location; hosted tests inject a nil provider (or a
+    /// fixture path) to stay hermetic.
+    var closedWikiDatabaseURLProvider: @Sendable (WikiID) -> URL? = ActivityWindowView.productionClosedWikiDatabaseURL
 
     @State private var viewModel = QueueViewModel()
     @State private var selectedItemID: QueueItem.ID?
@@ -317,6 +322,51 @@ struct ActivityWindowView: View {
         .task(id: displayedItemSummariesKey) {
             await activityTracker.refreshReportSummaries(itemIDs: displayedItemIDs)
         }
+        // Closed-wiki name resolution: for the displayed jobs whose wiki is
+        // closed, resolve the target IDs that neither the live index (no
+        // session) nor the payload's recorded names (legacy jobs) can
+        // answer through a bounded read-only read of that wiki's database,
+        // cached per wiki in the tracker. Re-runs when the displayed set's
+        // (wiki, targets) composition changes AND when the open-wiki set
+        // changes (review F2): closing a wiki's window moves its targets
+        // from "the live session answers" to "the read-only load must run",
+        // so the key must change even when the displayed set does not.
+        .task(id: closedWikiNamesKey) {
+            await activityTracker.refreshClosedWikiNames(
+                for: displayedItems,
+                sessions: sessionManager?.sessions ?? [:],
+                databaseURL: closedWikiDatabaseURLProvider)
+        }
+    }
+
+    /// `.task` identity for the closed-wiki name loads: the displayed
+    /// items' wiki + target-ID composition AND the open-wiki set. New or
+    /// replaced jobs re-trigger; unrelated queue churn does not — and a
+    /// wiki window closing (or opening) changes the key even when the
+    /// displayed set is unchanged, because it flips which layer answers
+    /// the rows. Without the session set in the identity, a window closing
+    /// never re-ran this task and its rows stayed "Resolving…" forever.
+    private var closedWikiNamesKey: String {
+        Self.closedWikiNamesKey(
+            for: displayedItems,
+            openWikiIDs: Set((sessionManager?.sessions ?? [:]).keys))
+    }
+
+    /// Pure `.task`-identity computation (value-level suite seam): the
+    /// displayed items' `(wiki, targets)` composition prefixed by the
+    /// sorted open-wiki ID set.
+    nonisolated static func closedWikiNamesKey(
+        for items: [QueueItem],
+        openWikiIDs: Set<WikiID>
+    ) -> String {
+        let openWikiPart = openWikiIDs.map(\.rawValue).sorted().joined(separator: ",")
+        let targetsPart = items.map { item -> String in
+            let targets = item.payload.lintPageIDs?.map(\.rawValue)
+                ?? item.payload.sourceIDs.map(\.rawValue)
+            return "\(item.wikiID.rawValue)=\(targets.joined(separator: "+"))"
+        }
+        .joined(separator: "|")
+        return "\(openWikiPart)#\(targetsPart)"
     }
 
     private var subtitle: String {
@@ -821,7 +871,10 @@ struct ActivityWindowView: View {
         if item.queue == .extraction, let sourceID = item.payload.sourceIDs.first {
             Divider()
             Button("Reveal Source", systemImage: "arrow.up.forward.app") {
-                revealSource(sourceID, in: item.wikiID)
+                revealSource(
+                    sourceID,
+                    title: makeNameIndex(for: item).sourceName(sourceID),
+                    in: item.wikiID)
             }
             .help("Reveal this source in the wiki's Sources outline")
         }
@@ -943,6 +996,8 @@ struct ActivityWindowView: View {
     /// presentation: selection, filters, and queue state are untouched.
     private var runDetailsInspectorToggle: some View {
         RunDetailsToolbarToggle(isOn: $showsRunDetailsInspector)
+            .frame(width: QueueWorkspaceMetrics.Toolbar.iconButtonSide,
+                   height: QueueWorkspaceMetrics.Toolbar.iconButtonSide)
     }
 
     // MARK: - Detail pane
@@ -1186,7 +1241,10 @@ struct ActivityWindowView: View {
         if item.queue == .extraction, let sourceID = item.payload.sourceIDs.first {
             actions.append(QueueWorkspaceAction(
                 label: "Reveal Source", systemImage: "arrow.up.forward.app") {
-                revealSource(sourceID, in: item.wikiID)
+                revealSource(
+                    sourceID,
+                    title: makeNameIndex(for: item).sourceName(sourceID),
+                    in: item.wikiID)
             })
         }
         if let debugURL = activityTracker.debugURL(for: item.id) {
@@ -1241,13 +1299,24 @@ struct ActivityWindowView: View {
         // M2: one index for the whole selected-job mapping — the report-backed
         // rows, the legacy rows, and their navigation actions all resolve
         // membership + names through it instead of re-scanning the store per
-        // target.
-        let nameIndex = makeNameIndex(wikiID: item.wikiID)
+        // target. The index is the closed-wiki-aware effective index (live →
+        // recorded → read-only), so closed-wiki jobs keep names AND actions.
+        let nameIndex = makeNameIndex(for: item)
+        // The action gate needs the LIVE index too (review F1): the effective
+        // index's recorded/read-only entries can outlive their store rows, so
+        // on an open wiki actions additionally require live-store membership.
+        // Built once per selected-job mapping — same M2 one-pass discipline.
+        let liveIndex = makeNameIndex(wikiID: item.wikiID)
+        let isSessionOpen = (sessionManager?.sessions ?? [:])[item.wikiID] != nil
         if case .loaded(let report) = viewModel.selectedReport,
            Self.loadedReportMatches(report: report, item: item) {
-            return overview(from: report, item: item, operation: operation, nameIndex: nameIndex)
+            return overview(
+                from: report, item: item, operation: operation, nameIndex: nameIndex,
+                liveIndex: liveIndex, isSessionOpen: isSessionOpen)
         }
-        return legacyOverview(for: item, operation: operation, nameIndex: nameIndex)
+        return legacyOverview(
+            for: item, operation: operation, nameIndex: nameIndex,
+            liveIndex: liveIndex, isSessionOpen: isSessionOpen)
     }
 
     /// True when the view model's loaded report describes THIS selection:
@@ -1267,7 +1336,9 @@ struct ActivityWindowView: View {
         from report: QueueAttemptReport,
         item: QueueItem,
         operation: QueueReportOperation,
-        nameIndex: QueueTargetNameIndex
+        nameIndex: QueueTargetNameIndex,
+        liveIndex: QueueTargetNameIndex,
+        isSessionOpen: Bool
     ) -> QueueJobOverviewPresentation {
         let isWholeWiki: Bool = {
             if case .wholeWiki = report.scope { return true }
@@ -1278,7 +1349,11 @@ struct ActivityWindowView: View {
         case .wholeWiki:
             rows = [wholeWikiScopeRow(for: item)]
         case .targets(let records):
-            rows = records.map { targetRow(record: $0, item: item, nameIndex: nameIndex) }
+            rows = records.map {
+                targetRow(
+                    record: $0, item: item, nameIndex: nameIndex,
+                    liveIndex: liveIndex, isSessionOpen: isSessionOpen)
+            }
         }
         return QueueJobOverviewPresentation(
             sectionTitle: QueueWorkspaceMapper.sectionTitle(
@@ -1298,7 +1373,9 @@ struct ActivityWindowView: View {
     private func targetRow(
         record: QueueReportTargetRecord,
         item: QueueItem,
-        nameIndex: QueueTargetNameIndex
+        nameIndex: QueueTargetNameIndex,
+        liveIndex: QueueTargetNameIndex,
+        isSessionOpen: Bool
     ) -> QueueTargetRowValue {
         let identity: QueueWorkspaceTargetIdentity
         let fallbackTitle: String
@@ -1316,17 +1393,24 @@ struct ActivityWindowView: View {
             status: QueueWorkspaceMapper.targetStatus(
                 for: record.state, result: record.result),
             reason: QueueWorkspaceMapper.targetReason(for: record),
-            actions: rowActions(for: identity, wikiID: item.wikiID, nameIndex: nameIndex))
+            actions: rowActions(
+                for: identity, wikiID: item.wikiID, nameIndex: nameIndex,
+                liveIndex: liveIndex, isSessionOpen: isSessionOpen))
     }
 
     /// Legacy / loading Overview: rows derived from the item's payload. Jobs
     /// recorded before reports exist show truthful unavailable states and
     /// keep their payload-derived navigation (Open Page / Reveal Source /
-    /// whole-wiki Browse Pages).
+    /// whole-wiki Browse Pages). Titles resolve through the effective index
+    /// (live → recorded → read-only); an ID nothing resolves shows the
+    /// neutral resolving placeholder while the wiki's closed-wiki read is
+    /// pending, and the honest fallback text only after the read answered.
     private func legacyOverview(
         for item: QueueItem,
         operation: QueueReportOperation,
-        nameIndex: QueueTargetNameIndex
+        nameIndex: QueueTargetNameIndex,
+        liveIndex: QueueTargetNameIndex,
+        isSessionOpen: Bool
     ) -> QueueJobOverviewPresentation {
         let isWholeWiki = item.payload.lintPageIDs?.isEmpty == true
         let rows: [QueueTargetRowValue]
@@ -1337,18 +1421,24 @@ struct ActivityWindowView: View {
                 rows = pageIDs.map { pageID in
                     QueueTargetRowValue(
                         identity: .page(pageID),
-                        title: nameIndex.pageTitle(pageID) ?? "Deleted page",
+                        title: nameIndex.pageTitle(pageID)
+                            ?? unresolvedTargetTitle(.page(pageID), in: item.wikiID, loadedFallback: "Deleted page"),
                         status: .planned(),
-                        actions: rowActions(for: .page(pageID), wikiID: item.wikiID, nameIndex: nameIndex))
+                        actions: rowActions(
+                            for: .page(pageID), wikiID: item.wikiID, nameIndex: nameIndex,
+                            liveIndex: liveIndex, isSessionOpen: isSessionOpen))
                 }
             }
         } else {
             rows = item.payload.sourceIDs.map { sourceID in
                 QueueTargetRowValue(
                     identity: .source(sourceID),
-                    title: nameIndex.sourceName(sourceID) ?? "Source unavailable",
+                    title: nameIndex.sourceName(sourceID)
+                        ?? unresolvedTargetTitle(.source(sourceID), in: item.wikiID, loadedFallback: "Source unavailable"),
                     status: .planned(),
-                    actions: rowActions(for: .source(sourceID), wikiID: item.wikiID, nameIndex: nameIndex))
+                    actions: rowActions(
+                        for: .source(sourceID), wikiID: item.wikiID, nameIndex: nameIndex,
+                        liveIndex: liveIndex, isSessionOpen: isSessionOpen))
             }
         }
         let count = item.payload.lintPageIDs?.count ?? item.payload.sourceIDs.count
@@ -1376,7 +1466,10 @@ struct ActivityWindowView: View {
             state: selectedOutputs,
             nameIndex: nameIndex,
             openPage: { pageID in
-                self.openPage(pageID, in: item.wikiID)
+                self.openPage(
+                    pageID,
+                    title: nameIndex.pageTitle(pageID),
+                    in: item.wikiID)
             })
     }
 
@@ -1399,29 +1492,111 @@ struct ActivityWindowView: View {
     /// appear only when a recorded output reference stays resolvable" — the
     /// persisted markdown belongs to its source, so the action is Reveal
     /// Source, offered only while the source still resolves in the live
-    /// store. Deleted targets keep their recorded name but no dead action.
-    /// Membership is resolved through the precomputed name index (M2): an ID
-    /// the index knows is an ID the store still lists — same answer the old
-    /// `contains(where:)` scans gave, without re-scanning per row.
+    /// store.
+    ///
+    /// **The action gate:** the effective index answers "what is this target
+    /// called", never "does the target still exist" — its recorded and
+    /// read-only entries can outlive the store rows they were captured from
+    /// (a target can be deleted after enqueue, and a read-only snapshot can
+    /// age), so effective-index membership does NOT guarantee a store row.
+    /// The gate is on the LIVE index exactly when a live session exists: on
+    /// an OPEN wiki, a target the live store no longer lists keeps its
+    /// recorded title but gets NO action — clicking would navigate a store
+    /// that cannot answer (dead-end navigation). On a CLOSED wiki, a known
+    /// target (recorded name or read-only cache) keeps its click-through
+    /// action — the stash+open route resolves at click time, when the deep
+    /// link navigates the freshly opened session (and degrades honestly if
+    /// the target is truly gone). Titles always come from the effective
+    /// index regardless of the gate.
+    ///
+    /// Both memberships resolve through precomputed name indexes (M2): the
+    /// live index answers "still in the store", the effective index answers
+    /// "what is it called" — O(1) lookups, no re-scanning per row. The
+    /// action routes through ``routeTarget(_:title:in:)``, which opens the
+    /// window first.
     private func rowActions(
         for identity: QueueWorkspaceTargetIdentity,
         wikiID: WikiID,
-        nameIndex: QueueTargetNameIndex
+        nameIndex: QueueTargetNameIndex,
+        liveIndex: QueueTargetNameIndex,
+        isSessionOpen: Bool
     ) -> [QueueWorkspaceAction] {
+        Self.targetRowActions(
+            for: identity,
+            wikiID: wikiID,
+            nameIndex: nameIndex,
+            liveIndex: liveIndex,
+            isSessionOpen: isSessionOpen) { target, title in
+            self.routeTarget(target, title: title, in: wikiID)
+        }
+    }
+
+    /// Pure computation of one target row's navigation actions (value-level
+    /// suite seam, same pattern as ``computeRowTitle``). `nameIndex` is the
+    /// closed-wiki-aware effective index (titles); `liveIndex` is the live
+    /// session's store index (the membership gate — see ``rowActions`` for
+    /// the open/closed contract). `route` receives the target identity and
+    /// the title the click-through hands to the router.
+    nonisolated static func targetRowActions(
+        for identity: QueueWorkspaceTargetIdentity,
+        wikiID: WikiID,
+        nameIndex: QueueTargetNameIndex,
+        liveIndex: QueueTargetNameIndex,
+        isSessionOpen: Bool,
+        route: @escaping (QueueWorkspaceTargetIdentity, String) -> Void
+    ) -> [QueueWorkspaceAction] {
+        // An open session demands live-store membership; a closed one keeps
+        // the click-through (resolved at click time).
+        func liveStoreConfirms(_ liveResolves: Bool) -> Bool {
+            !isSessionOpen || liveResolves
+        }
         switch identity {
         case .page(let pageID):
-            guard nameIndex.pageTitle(pageID) != nil else { return [] }
+            guard let title = nameIndex.pageTitle(pageID),
+                  liveStoreConfirms(liveIndex.pageTitle(pageID) != nil)
+            else { return [] }
             return [QueueWorkspaceAction(
                 label: "Open Page", systemImage: "arrow.up.forward.app") {
-                self.openPage(pageID, in: wikiID)
+                route(.page(pageID), title)
             }]
         case .source(let sourceID):
-            guard nameIndex.sourceName(sourceID) != nil else { return [] }
+            guard let name = nameIndex.sourceName(sourceID),
+                  liveStoreConfirms(liveIndex.sourceName(sourceID) != nil)
+            else { return [] }
             return [QueueWorkspaceAction(
                 label: "Reveal Source", systemImage: "arrow.up.forward.app") {
-                self.revealSource(sourceID, in: wikiID)
+                route(.source(sourceID), name)
             }]
         }
+    }
+
+    /// The neutral placeholder for a target row whose ID nothing resolves
+    /// YET — its wiki is closed and the read-only name read is still
+    /// pending. Deliberately transient-sounding: "Deleted page" would
+    /// misrepresent a page that exists but simply hasn't been looked up.
+    static let resolvingTargetPlaceholder = "Resolving…"
+
+    /// The inventory row title for a payload-derived target the effective
+    /// index cannot resolve. While the target's wiki is closed and its
+    /// read-only name load is pending (never attempted, or in flight), the
+    /// neutral placeholder; once the load answered — or failed, degrading
+    /// per plan — the honest fallback text stands. An OPEN wiki needs no
+    /// placeholder: the live index already answered, so the fallback is
+    /// truthful.
+    private func unresolvedTargetTitle(
+        _ identity: QueueWorkspaceTargetIdentity,
+        in wikiID: WikiID,
+        loadedFallback: String
+    ) -> String {
+        if sessionManager?.sessions[wikiID] == nil {
+            switch activityTracker.closedWikiNameLoadStates[wikiID] {
+            case .loading, nil:
+                return Self.resolvingTargetPlaceholder
+            case .loaded, .unavailable:
+                break
+            }
+        }
+        return loadedFallback
     }
 
     /// Availability-aware result statement (plan report truth rules 8–9):
@@ -1441,9 +1616,11 @@ struct ActivityWindowView: View {
         }
     }
 
-    /// Run Details facts: item timestamps + the report header's provider/
-    /// model. Usage comes from the tracker's recorded (or, while running,
-    /// live) usage snapshot; absence omits the row rather than showing zero.
+    /// Run Details facts: the job's queue item id, item timestamps + the
+    /// report header's provider/model. Usage comes from the tracker's
+    /// recorded (or, while running, live) usage snapshot as the
+    /// input/output breakdown line; a snapshot with nothing reportable omits
+    /// the row rather than showing zeros.
     private func runDetailsFacts(
         for item: QueueItem,
         report: QueueAttemptReport?
@@ -1451,11 +1628,16 @@ struct ActivityWindowView: View {
         let startedAt = date(fromMillis: item.startedAt)
         let finishedAt = date(fromMillis: item.finishedAt)
         var usageLines: [String] = []
-        if let usage = activityTracker.usage(for: item.id),
-           usage.totalTokens > 0 || (usage.cost ?? 0) > 0 {
-            usageLines.append(UsageFormatter.summary(usage: usage))
+        if let usage = activityTracker.usage(for: item.id) {
+            // The breakdown omits zero/absent clauses itself; an empty
+            // result (nothing reportable) omits the row.
+            let breakdown = UsageFormatter.runDetailsSummary(usage: usage)
+            if !breakdown.isEmpty {
+                usageLines.append(breakdown)
+            }
         }
         return QueueRunDetailsFacts(
+            jobID: item.id.rawValue,
             enqueuedAt: date(fromMillis: item.createdAt),
             startedAt: startedAt,
             finishedAt: finishedAt,
@@ -1550,34 +1732,54 @@ struct ActivityWindowView: View {
         makeNameIndex(wikiID: wikiID).pageTitle(pageID)
     }
 
-    /// Open a linted page in its wiki's main window. The `WikiStoreModel` is
-    /// shared across windows (one session per wiki), so `openTab` mutates the
-    /// same model the main window observes; `openWiki` then focuses that window
-    /// — mirroring the bookmark "Go to Original" navigation (#570).
-    private func openPage(_ pageID: PageID, in wikiID: WikiID) {
-        guard let store = sessionManager?.sessions[wikiID]?.store else {
-            DebugLog.tabs("Lint Open Page: no live session for wiki \(wikiID.rawValue.prefix(8)); cannot open page")
-            return
-        }
-        store.openTab(.page(pageID))
-        openWindowBridge?.openWiki?(wikiID)
-        DebugLog.tabs("Lint Open Page: opened page \(pageID) in wiki \(wikiID.rawValue.prefix(8))")
+    /// Open a linted page in its wiki's main window — the closed-wiki
+    /// click-through seam. Routes through ``QueueTargetRouter``: an open
+    /// session navigates the shared model directly (`openTab` mutates the
+    /// same model the main window observes — #583); a closed window stashes
+    /// the `wiki://page` deep link (#635 seam) and opens the window, where
+    /// `RootView` delivers it once the session exists.
+    private func openPage(_ pageID: PageID, title: String?, in wikiID: WikiID) {
+        routeTarget(.page(pageID), title: title, in: wikiID)
     }
 
-    /// Reveal an extraction job's source in the wiki's Sources outline (#598).
-    /// Uses the same `requestSidebarReveal` + `openWiki` mechanism as the
-    /// bookmark "Go to Original" (#570) and SourceDetailView's "Show in List"
-    /// — revealing the source in the sidebar (not opening it as a tab, since
-    /// sources are file-backed toms, not tabable documents). Mirrors how #583
-    /// `openPage` lets lint jobs navigate back to a page.
-    private func revealSource(_ sourceID: SourceID, in wikiID: WikiID) {
-        guard let store = sessionManager?.sessions[wikiID]?.store else {
-            DebugLog.tabs("Extraction Reveal Source: no live session for wiki \(wikiID.rawValue.prefix(8)); cannot reveal source")
-            return
-        }
-        store.requestSidebarReveal(.source(sourceID))
-        openWindowBridge?.openWiki?(wikiID)
-        DebugLog.tabs("Extraction Reveal Source: revealed source \(sourceID) in wiki \(wikiID.rawValue.prefix(8))")
+    /// Reveal an extraction job's source in the wiki's Sources outline
+    /// (#598) — the closed-wiki click-through seam. Same
+    /// ``QueueTargetRouter`` split as ``openPage(_:title:in:)``: sidebar
+    /// reveal when the session is live (sources are file-backed toms, not
+    /// tabable documents), stashed `wiki://source` deep link + window open
+    /// when not.
+    private func revealSource(_ sourceID: SourceID, title: String?, in wikiID: WikiID) {
+        routeTarget(.source(sourceID), title: title, in: wikiID)
+    }
+
+    /// Route a known target's click into its wiki window through the
+    /// ``QueueTargetRouter`` built from this window's session manager and
+    /// window-opening bridge.
+    private func routeTarget(
+        _ target: QueueWorkspaceTargetIdentity,
+        title: String?,
+        in wikiID: WikiID
+    ) {
+        let sessions = sessionManager
+        let bridge = openWindowBridge
+        let router = QueueTargetRouter(
+            liveStore: { wikiID in sessions?.sessions[wikiID]?.store },
+            navigateInSession: { store, target in
+                switch target {
+                case .page(let pageID):
+                    store.openTab(.page(pageID))
+                    DebugLog.tabs("Queue Open Page: opened page \(pageID.rawValue) in wiki \(wikiID.rawValue.prefix(8))")
+                case .source(let sourceID):
+                    store.requestSidebarReveal(.source(sourceID))
+                    DebugLog.tabs("Queue Reveal Source: revealed source \(sourceID.rawValue) in wiki \(wikiID.rawValue.prefix(8))")
+                }
+            },
+            stashDeepLink: { wikiID, url in
+                sessions?.stashPendingWikiLink(wikiID, url: url, openInNewTab: false)
+                DebugLog.tabs("Queue click-through: stashed \(url.absoluteString) for wiki \(wikiID.rawValue.prefix(8))")
+            },
+            openWiki: { wikiID in bridge?.openWiki?(wikiID) })
+        router.route(target, title: title, in: wikiID)
     }
 
     /// Whole-wiki lint "Browse Pages": reveal the wiki's home page (switches the
@@ -1859,11 +2061,19 @@ struct ActivityWindowView: View {
             let session = sessions[item.wikiID]
             let wikiName = session?.descriptor.displayName ?? String(item.wikiID.rawValue.prefix(8))
 
-            // Resolve source/page names through the index (observable reads
+            // Resolve source/page names through the closed-wiki-aware
+            // effective index (live → recorded → read-only; observable reads
             // happen once, above, inside makeNameIndex — not per target).
             // Same names as the old per-item `sourceNames(for:)` /
-            // `lintPageTitles(for:)` scans, in payload order.
-            let resolved = nameIndex(for: item.wikiID).displayNames(for: item)
+            // `lintPageTitles(for:)` scans, in payload order — plus the
+            // closed-wiki fallbacks, so a closed-wiki job's navigator row
+            // keeps its recorded/resolved names instead of collapsing to
+            // "Lint N pages".
+            let effectiveIndex = QueueTargetNameIndex.effective(
+                live: nameIndex(for: item.wikiID),
+                readOnlyCache: activityTracker.closedWikiNameIndexes[item.wikiID],
+                payload: item.payload)
+            let resolved = effectiveIndex.displayNames(for: item)
 
             result[item.id] = RowDisplayData(
                 title: computeRowTitle(for: item, wikiName: wikiName, names: resolved.names),
@@ -1905,6 +2115,32 @@ struct ActivityWindowView: View {
         Self.makeNameIndex(sessions: sessionManager?.sessions ?? [:], wikiID: wikiID)
     }
 
+    /// The production closed-wiki database URL provider: the wiki's App
+    /// Group container database, read-only. `nil` (logged) when the
+    /// location cannot be resolved.
+    nonisolated private static func productionClosedWikiDatabaseURL(
+        for wikiID: WikiID
+    ) -> URL? {
+        do {
+            return try DatabaseLocation.appGroupContainerURL(forWikiID: wikiID.rawValue)
+        } catch {
+            DebugLog.store(
+                "Closed-wiki name resolution: cannot resolve database URL for wiki \(wikiID.rawValue.prefix(8)): \(error)")
+            return nil
+        }
+    }
+
+    /// The effective name index for ONE item (closed-wiki name resolution):
+    /// the live session index overlaid with the payload's recorded names,
+    /// then the read-only cache for the item's closed wiki. The overlay's
+    /// layering IS the rendering precedence — live → recorded → read-only.
+    private func makeNameIndex(for item: QueueItem) -> QueueTargetNameIndex {
+        QueueTargetNameIndex.effective(
+            live: makeNameIndex(wikiID: item.wikiID),
+            readOnlyCache: activityTracker.closedWikiNameIndexes[item.wikiID],
+            payload: item.payload)
+    }
+
     /// Plain progress line ("Staging sources · 8 of 12") from a cached
     /// summary. Static so it can be precomputed per sidebar render — the
     /// observation workaround means row bodies never read the tracker.
@@ -1925,8 +2161,15 @@ struct ActivityWindowView: View {
 
     /// Pure computation of the row title from pre-resolved data (no
     /// `@Observable` reads). Shared between `buildRowDisplayData` (precompute
-    /// path) and `rowTitle(for:)` (detail pane).
-    private func computeRowTitle(for item: QueueItem, wikiName: String, names: [String]) -> String {
+    /// path) and `rowTitle(for:)` (detail pane). PURE + `nonisolated` (same
+    /// reason as ``navigatorSearchText``): the value-level suite pins the
+    /// closed-wiki title behavior — recorded/resolved names feed `names`, so
+    /// a closed-wiki job stops collapsing to "Lint N pages".
+    nonisolated static func computeRowTitle(
+        for item: QueueItem,
+        wikiName: String,
+        names: [String]
+    ) -> String {
         if let pageIDs = item.payload.lintPageIDs {
             if pageIDs.isEmpty { return "Lint \(wikiName)" }
             guard let first = names.first else { return "Lint \(pageIDs.count) pages" }
@@ -1937,6 +2180,11 @@ struct ActivityWindowView: View {
             return count > 1 ? "\(count) sources" : Self.kindLabel(for: item)
         }
         return names.count > 1 ? "\(first) +\(names.count - 1)" : first
+    }
+
+    /// Instance convenience over the pure row title.
+    private func computeRowTitle(for item: QueueItem, wikiName: String, names: [String]) -> String {
+        Self.computeRowTitle(for: item, wikiName: wikiName, names: names)
     }
 
     /// Pure computation of the row subtitle from pre-resolved data.
@@ -1954,7 +2202,7 @@ struct ActivityWindowView: View {
     /// per-target linear scans.
     private func rowTitle(for item: QueueItem) -> String {
         let wikiName = wikiDisplayName(for: item.wikiID)
-        let names = makeNameIndex(wikiID: item.wikiID).displayNames(for: item).names
+        let names = makeNameIndex(for: item).displayNames(for: item).names
         return computeRowTitle(for: item, wikiName: wikiName, names: names)
     }
 
@@ -2029,6 +2277,21 @@ struct ActivityWindowView: View {
 /// label (on the next runloop tick, after SwiftUI's own toolbar sync) from
 /// both `makeNSView` and every `updateNSView`.
 ///
+/// Sizing (Run Details toggle squish fix): a borderless `.imageOnly`
+/// NSButton with no frame reports its intrinsic size as the bare glyph
+/// footprint (measured 18×14), visibly smaller than the main window's
+/// standard SwiftUI toolbar `Button` (~28×28 with proper insets). The
+/// control is sized at ``QueueWorkspaceMetrics/Toolbar/iconButtonSide``
+/// from both sides so every sizing path agrees on the standard square:
+/// the SwiftUI `.frame` on the representable (in
+/// ``ActivityWindowView/runDetailsInspectorToggle``) constrains the hosted
+/// view, and the button subclass (``ToolbarIconButton``) reports the same
+/// square as its intrinsic content size for the toolbar item's own
+/// min/max measurement. The glyph centers inside the button's bounds like
+/// a standard toolbar button's; the toolbar row may stretch the hosted
+/// height above the square (measured 33pt = row height) without moving
+/// the centered glyph, so the visible rendering matches.
+///
 /// The click path never writes SwiftUI state *during* a view update: the
 /// write happens in the button's action (a user event), so the
 /// NSViewRepresentable state-write rule holds (`updateNSView` only reads).
@@ -2040,7 +2303,7 @@ struct RunDetailsToolbarToggle: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSButton {
-        let button = NSButton(
+        let button = ToolbarIconButton(
             title: "",
             image: NSImage(systemSymbolName: "sidebar.right",
                            accessibilityDescription: "Run Details") ?? NSImage(),
@@ -2104,6 +2367,23 @@ struct RunDetailsToolbarToggle: NSViewRepresentable {
         @objc func toggle() {
             binding.wrappedValue.toggle()
         }
+    }
+}
+
+/// The Run Details toggle's button: a borderless NSButton whose intrinsic
+/// content size is pinned to the standard toolbar icon-button square
+/// (``QueueWorkspaceMetrics/Toolbar/iconButtonSide``). A plain borderless
+/// image-only button collapses to the bare glyph footprint, so the toolbar
+/// item hosting it measured the glyph, not the standard button metrics.
+/// Reporting the square keeps the SwiftUI `.frame`, the representable's
+/// size proposal, and the toolbar item's own min/max measurement in
+/// agreement; a borderless button centers its image inside its bounds, so
+/// the glyph lands with the same insets as a standard toolbar button.
+@MainActor
+private final class ToolbarIconButton: NSButton {
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: QueueWorkspaceMetrics.Toolbar.iconButtonSide,
+               height: QueueWorkspaceMetrics.Toolbar.iconButtonSide)
     }
 }
 

@@ -254,6 +254,211 @@ final class QueueActivityTracker {
     /// worst once per interval instead of every 5-second reconcile tick.
     private var lastUnavailableSummaryRetryAt: Date?
 
+    // MARK: - Closed-wiki read-only name cache
+
+    /// Per-item load state mirroring ``ReportSummaryState``'s vocabulary,
+    /// for the closed-wiki read-only name loads.
+    enum ClosedWikiNameLoadState: Equatable, Sendable {
+        case loading
+        case loaded
+        /// The read failed (missing/corrupt database, unresolvable URL).
+        /// Names degrade to the live/recorded fallback text; a later
+        /// displayed-set change re-attempts the load.
+        case unavailable
+    }
+
+    /// Display names read-only-resolved from a CLOSED wiki's database,
+    /// per wiki (closed-wiki name resolution). Legacy jobs — enqueued before
+    /// `QueueItemPayload.recordedNames` existed — have no recorded names, so
+    /// when their wiki's window is closed this cache is the only human-
+    /// readable source for their target rows. Populated by the batched
+    /// `refreshClosedWikiNames` loads; the Activity window overlays it below
+    /// the live index and the recorded names.
+    private(set) var closedWikiNameIndexes: [WikiID: QueueTargetNameIndex] = [:]
+
+    /// Per-wiki load state so the window can show a neutral resolving
+    /// placeholder while a read is pending (never the deletion text) and the
+    /// honest fallback after a completed read or a failure.
+    private(set) var closedWikiNameLoadStates: [WikiID: ClosedWikiNameLoadState] = [:]
+
+    /// In-flight per-wiki load guard: a repeated refresh must not stack
+    /// duplicate read-only connections for one wiki.
+    private var closedWikiNameLoadsInFlight: Set<WikiID> = []
+
+    /// Items whose planning landed while their wiki's load was in flight
+    /// (review F3). The owner of each in-flight load drains this set once
+    /// after its load loop, so a job displayed mid-load is re-planned and
+    /// answered without waiting for the next displayed-set key change.
+    /// Mirrors ``pendingSummaryRefreshIDs``.
+    private var pendingClosedWikiNameRefreshItems: [QueueItem] = []
+
+    /// Target IDs a completed read-only load confirmed ABSENT from the
+    /// wiki's database, per wiki (review F4 negative cache). Without it,
+    /// every displayed-set key change re-planned these IDs and reopened
+    /// the read-only database for rows that can never resolve. Keeping
+    /// the set for the session is sound: target IDs are ULIDs (never
+    /// reused), and while the wiki is open the live index answers without
+    /// consulting this cache at all.
+    private var closedWikiKnownMissingIDs: [WikiID: (pages: Set<PageID>, sources: Set<SourceID>)] = [:]
+
+    /// Resolve display names for the given items' CLOSED wikis (open wikis
+    /// are skipped — the live session index already answers), bounded to
+    /// the target IDs that neither the payload's recorded names, the
+    /// existing cache, nor the known-missing negative cache can resolve.
+    /// Merges results into ``closedWikiNameIndexes`` and records per-wiki
+    /// load state; failures log via `DebugLog.store` and mark the wiki
+    /// unavailable instead of surfacing an error row. A load that is
+    /// CANCELLED restores `.loading` — cancellation says nothing about the
+    /// wiki, and the next `.task(id:)` run retries it (review F5).
+    ///
+    /// Concurrent refreshes serialize through the pending-set drain loop
+    /// (mirrors ``refreshReportSummaries``): items planned while their
+    /// wiki's load is in flight are parked in
+    /// ``pendingClosedWikiNameRefreshItems`` and re-planned exactly once
+    /// after that load finishes (review F3).
+    ///
+    /// - Parameters:
+    ///   - databaseURL: the wiki database URL provider (production passes
+    ///     the App Group container location). Returning `nil` marks the load
+    ///     unavailable.
+    ///   - loader: the read seam, injectable for tests.
+    func refreshClosedWikiNames(
+        for items: [QueueItem],
+        sessions: [WikiID: any WikiSessionProtocol],
+        databaseURL: @escaping @Sendable (WikiID) -> URL?,
+        loader: @escaping QueueClosedWikiNameLoader.Load = QueueClosedWikiNameLoader.load
+    ) async {
+        var batch = items
+        while batch.isEmpty == false {
+            // Plan the per-wiki work: closed wikis only, and only the target
+            // IDs nothing above the read-only layer can resolve.
+            var planned: [WikiID: (pages: Set<PageID>, sources: Set<SourceID>)] = [:]
+            for item in batch {
+                let wikiID = item.wikiID
+                guard sessions[wikiID] == nil else { continue }
+                guard closedWikiNameLoadsInFlight.contains(wikiID) == false else {
+                    pendingClosedWikiNameRefreshItems.append(item)
+                    continue
+                }
+                let payload = item.payload
+                if let pageIDs = payload.lintPageIDs {
+                    let wanted = pageIDs.filter { payload.recordedPageTitle(for: $0) == nil }
+                    guard !wanted.isEmpty else { continue }
+                    planned[wikiID, default: ([], [])].pages.formUnion(wanted)
+                } else {
+                    let wanted = payload.sourceIDs.filter { payload.recordedSourceName(for: $0) == nil }
+                    guard !wanted.isEmpty else { continue }
+                    planned[wikiID, default: ([], [])].sources.formUnion(wanted)
+                }
+            }
+            // IDs the cache already holds — or a prior load proved missing
+            // (review F4) — need no re-read.
+            for wikiID in Array(planned.keys) {
+                guard var targets = planned[wikiID] else { continue }
+                if let cached = closedWikiNameIndexes[wikiID] {
+                    targets.pages.subtract(cached.pageEntries.map(\.id))
+                    targets.sources.subtract(cached.sourceEntries.map(\.id))
+                }
+                if let missing = closedWikiKnownMissingIDs[wikiID] {
+                    targets.pages.subtract(missing.pages)
+                    targets.sources.subtract(missing.sources)
+                }
+                if targets.pages.isEmpty && targets.sources.isEmpty {
+                    planned.removeValue(forKey: wikiID)
+                } else {
+                    planned[wikiID] = targets
+                }
+            }
+            // Nothing this call can load: fully covered by the caches, or
+            // every candidate wiki's load is in flight under another call —
+            // that owner drains ``pendingClosedWikiNameRefreshItems`` after
+            // its own loads (the summary path's "second caller returns"
+            // branch). Items this call parked stay parked for it.
+            guard planned.isEmpty == false else { return }
+
+            for (wikiID, _) in planned {
+                closedWikiNameLoadsInFlight.insert(wikiID)
+                closedWikiNameLoadStates[wikiID] = .loading
+            }
+            // Loads run sequentially on the main actor; each read itself hops
+            // off-main through `WikiReadService.asyncRead`, so this only
+            // suspends. Loads are bounded (one per closed wiki with unresolved
+            // IDs) and rare, so parallelism buys nothing.
+            for (wikiID, targets) in planned {
+                let url = databaseURL(wikiID)
+                guard let url else {
+                    DebugLog.store(
+                        "Closed-wiki name load: no database URL for wiki \(wikiID.rawValue.prefix(8))")
+                    closedWikiNameLoadStates[wikiID] = .unavailable
+                    continue
+                }
+                do {
+                    let index = try await loader(
+                        wikiID,
+                        targets.pages.sorted { $0.rawValue < $1.rawValue },
+                        targets.sources.sorted { $0.rawValue < $1.rawValue },
+                        url)
+                    mergeClosedWikiNames(index, for: wikiID)
+                    recordKnownMissing(
+                        for: wikiID, planned: targets, loaded: index)
+                } catch is CancellationError {
+                    // Review F5: a cancelled load is not evidence about the
+                    // wiki's database — restore `.loading` so the next
+                    // `.task(id:)` run re-plans and retries it. (`.unavailable`
+                    // here would pin the deletion fallback text on rows whose
+                    // read never answered.)
+                    closedWikiNameLoadStates[wikiID] = .loading
+                } catch {
+                    DebugLog.store(
+                        "Closed-wiki name load failed for wiki \(wikiID.rawValue.prefix(8)): \(error)")
+                    closedWikiNameLoadStates[wikiID] = .unavailable
+                }
+            }
+            for wikiID in planned.keys {
+                closedWikiNameLoadsInFlight.remove(wikiID)
+            }
+            // Review F3: items that landed mid-load for the wikis THIS call
+            // just loaded are re-planned exactly once, inside this loop
+            // rather than as a stacked refresh. (Items parked on ANOTHER
+            // call's in-flight wiki are drained by that call.)
+            batch = pendingClosedWikiNameRefreshItems
+            pendingClosedWikiNameRefreshItems.removeAll()
+        }
+    }
+
+    /// Negative-cache (review F4) the planned IDs a successful load did not
+    /// return. The loader skips `notFound` IDs and throws on any other
+    /// error, so `planned − loaded` is exactly the confirmed-missing set —
+    /// re-planning them would only reopen the read-only database to hear
+    /// "gone" again.
+    private func recordKnownMissing(
+        for wikiID: WikiID,
+        planned: (pages: Set<PageID>, sources: Set<SourceID>),
+        loaded: QueueTargetNameIndex
+    ) {
+        let loadedPages = Set(loaded.pageEntries.map(\.id))
+        let loadedSources = Set(loaded.sourceEntries.map(\.id))
+        var missing = closedWikiKnownMissingIDs[wikiID] ?? ([], [])
+        missing.pages.formUnion(planned.pages.subtracting(loadedPages))
+        missing.sources.formUnion(planned.sources.subtracting(loadedSources))
+        closedWikiKnownMissingIDs[wikiID] = missing
+    }
+
+    /// Merge one successful read into the cache. First-match `record*`
+    /// semantics keep earlier entries (including a live session's answer
+    /// recorded by the view's overlay) authoritative over later merges.
+    private func mergeClosedWikiNames(_ index: QueueTargetNameIndex, for wikiID: WikiID) {
+        var cache = closedWikiNameIndexes[wikiID] ?? QueueTargetNameIndex()
+        for entry in index.pageEntries {
+            cache.recordPage(entry.id, title: entry.title)
+        }
+        for entry in index.sourceEntries {
+            cache.recordSource(entry.id, name: entry.name)
+        }
+        closedWikiNameIndexes[wikiID] = cache
+        closedWikiNameLoadStates[wikiID] = .loaded
+    }
+
     /// PID of the extraction subprocess (parsed from progress lines if the
     /// local pdf2md backend reports it). `nil` for remote backends.
     private(set) var extractionPID: Int32? = nil
@@ -1230,11 +1435,17 @@ enum UsageFormatter {
         return "\(count)"
     }
 
-    /// Format a cost as "$0.34" or "$1,234.56". Returns nil if cost is 0 or nil.
+    /// Format a cost as "$0.34" or "$1234.56" (locale-independent: `%.2f`
+    /// emits no grouping separator). Returns nil if cost is 0 or nil.
     static func cost(_ amount: Double?, currency: String?) -> String? {
         guard let amount, amount > 0 else { return nil }
         let symbol = currency == "USD" || currency == nil ? "$" : ""
-        let suffix = (currency != nil && currency != "USD") ? " \(currency!)" : ""
+        let suffix: String
+        if let currency, currency != "USD" {
+            suffix = " \(currency)"
+        } else {
+            suffix = ""
+        }
         return String(format: "%@%.2f%@", symbol, amount, suffix)
     }
 
@@ -1284,6 +1495,67 @@ enum UsageFormatter {
     static func summary(usage: SessionUsage) -> String {
         var parts = [tokenSummary(usage: usage)]
         if let cost = cost(usage.cost, currency: usage.currency) {
+            parts.append(cost)
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// A grouped, locale-aware integer ("8,120"). The Run Details breakdown
+    /// shows exact counts — never the compact "8.1K" vocabulary — so the
+    /// operator can reconcile the panel against provider usage dashboards.
+    static func groupedCount(_ count: Int) -> String {
+        count.formatted()
+    }
+
+    /// Cost with sub-cent precision for the Run Details breakdown: "$0.0421".
+    /// Four decimals, trailing zeros trimmed but never below two ("$0.34",
+    /// "$0.10") so the line matches the two-decimal `cost` shape whenever the
+    /// extra precision is not needed. Same omission rule as `cost` (nil/zero
+    /// → nil).
+    static func preciseCost(_ amount: Double?, currency: String?) -> String? {
+        guard let amount, amount > 0 else { return nil }
+        let symbol = currency == "USD" || currency == nil ? "$" : ""
+        let suffix: String
+        if let currency, currency != "USD" {
+            suffix = " \(currency)"
+        } else {
+            suffix = ""
+        }
+        let pieces = String(format: "%.4f", amount).split(separator: ".", maxSplits: 1)
+        var decimals = pieces.count > 1 ? String(pieces[1]) : ""
+        while decimals.count > 2 && decimals.hasSuffix("0") {
+            decimals.removeLast()
+        }
+        return symbol + pieces[0] + (decimals.isEmpty ? "" : "." + decimals) + suffix
+    }
+
+    /// The Run Details usage line with the input/output split the operator
+    /// asked for:
+    ///
+    ///     "In 8,120 · Out 4,225 tokens · $0.0421"
+    ///
+    /// Cached-read and thought clauses append (in that order, before the
+    /// cost) only when the snapshot carries them. Zero or absent input/output
+    /// omit their clause — never a fake zero. A snapshot with only cost keeps
+    /// the single-clause shape; a snapshot with nothing reportable returns ""
+    /// so the caller omits the row entirely. The Activity window keeps
+    /// `fullSummary`; both draw from this shared formatter so the two
+    /// surfaces stay consistent.
+    static func runDetailsSummary(usage: SessionUsage) -> String {
+        var parts: [String] = []
+        if usage.inputTokens > 0 {
+            parts.append("In \(groupedCount(usage.inputTokens))")
+        }
+        if usage.outputTokens > 0 {
+            parts.append("Out \(groupedCount(usage.outputTokens)) tokens")
+        }
+        if let cached = usage.cachedReadTokens, cached > 0 {
+            parts.append("\(groupedCount(cached)) cached")
+        }
+        if let thought = usage.thoughtTokens, thought > 0 {
+            parts.append("\(groupedCount(thought)) thought")
+        }
+        if let cost = preciseCost(usage.cost, currency: usage.currency) {
             parts.append(cost)
         }
         return parts.joined(separator: " · ")

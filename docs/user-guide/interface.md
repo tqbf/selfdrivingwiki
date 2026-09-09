@@ -150,3 +150,7 @@ even when no window is open. This lets you monitor agent work in the background.
 - **About** / **Quit** (⌘Q).
 
 When you queue an operation, a brief hint popover appears: *"Ingest queued."*
+
+Queue windows keep showing page and source names even when the wiki's window
+is closed. Links in those rows work too: clicking a name opens the wiki and
+goes to that page or source.

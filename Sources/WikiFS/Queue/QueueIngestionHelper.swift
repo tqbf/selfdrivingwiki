@@ -68,6 +68,10 @@ func enqueueIngestion(
     }
 
     var ingestionSourceIDs: [SourceID] = []
+    // Closed-wiki name resolution: record each source's effective name (in
+    // hand in this loop) so the Activity window keeps readable input rows
+    // after the wiki's window closes.
+    var ingestionSourceNames: [String: String] = [:]
 
     for sourceID in newSourceIDs {
         guard let source = store.sources.first(where: { $0.id == sourceID }) else {
@@ -136,6 +140,9 @@ func enqueueIngestion(
             continue
         }
         ingestionSourceIDs.append(sourceID)
+        if !source.effectiveName.isEmpty {
+            ingestionSourceNames[sourceID.rawValue] = source.effectiveName
+        }
     }
 
     guard !ingestionSourceIDs.isEmpty else { return }
@@ -144,7 +151,9 @@ func enqueueIngestion(
         let request = QueueItemRequest(
             queue: .ingestion,
             wikiID: wikiID,
-            payload: QueueItemPayload(sourceIDs: ingestionSourceIDs))
+            payload: QueueItemPayload(
+                sourceIDs: ingestionSourceIDs,
+                recordedNames: ingestionSourceNames.isEmpty ? nil : ingestionSourceNames))
         _ = try await queueEngine.enqueue(request)
     } catch {
         DebugLog.ingest("enqueueIngestion: enqueue failed — \(error.localizedDescription)")

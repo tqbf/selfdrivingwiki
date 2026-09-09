@@ -176,7 +176,10 @@ import WikiFSCore
 
     @Test func runDetailsOmitUnavailableOptionals() {
         // Nothing recorded: only the facts whose absence matters render, as
-        // explicit placeholders — never "—" rows for everything.
+        // explicit placeholders — never "—" rows for everything. (The blank
+        // default job id omits its row too; the real mapping always supplies
+        // `item.id.rawValue`, so the panel's Job ID row never disappears in
+        // practice — see runDetailsJobIDRowPresence.)
         let empty = QueueRunDetailsFacts()
         let entries = empty.entries
         #expect(entries.map(\.label) == ["Provider", "Model"])
@@ -184,9 +187,24 @@ import WikiFSCore
         #expect(entries.allSatisfy { $0.value == "Not Reported" })
     }
 
+    @Test func runDetailsJobIDRowPresence() {
+        // Item 1 contract: the job's raw ULID leads the entries — never
+        // omitted, never a "Not Reported" placeholder, and flagged monospaced
+        // so the inspector renders the copyable id in a fixed-width font.
+        let facts = QueueRunDetailsFacts(jobID: "01J8ZQ4T7KWM3N5P6A9B2C4D5E")
+        let entries = facts.entries
+        // Job ID leads; the provider/model placeholders follow (their absence
+        // matters, so they always render).
+        #expect(entries.map(\.label) == ["Job ID", "Provider", "Model"])
+        #expect(entries.first?.value == "01J8ZQ4T7KWM3N5P6A9B2C4D5E")
+        #expect(entries.first?.isPlaceholder == false)
+        #expect(entries.first?.isMonospaced == true)
+    }
+
     @Test func runDetailsFullFactsOrderAndValues() {
         let start = Date(timeIntervalSince1970: 1_000_000)
         let facts = QueueRunDetailsFacts(
+            jobID: "01J8ZQ4T7KWM3N5P6A9B2C4D5E",
             enqueuedAt: start,
             startedAt: start,
             finishedAt: start.addingTimeInterval(90),
@@ -194,13 +212,16 @@ import WikiFSCore
             attempt: 2,
             providerText: "claude-code",
             modelText: "claude-sonnet-4",
-            usageLines: ["1,204 tokens · $0.012", "continuation"])
+            usageLines: ["In 1,204 · Out 896 tokens · $0.0120", "continuation"])
         let entries = facts.entries
+        // The job id leads; every other fact follows in plan order.
         #expect(entries.map(\.label) == [
-            "Enqueued", "Started", "Finished", "Duration", "Attempt",
+            "Job ID", "Enqueued", "Started", "Finished", "Duration", "Attempt",
             "Provider", "Model", "Usage", "",
         ])
         #expect(entries.containsNoPlaceholders())
+        #expect(entries.first?.isMonospaced == true)
+        #expect(entries.dropFirst().allSatisfy { $0.isMonospaced == false })
         #expect(entries.first { $0.label == "Attempt" }?.value == "2")
         #expect(entries.first { $0.label == "Duration" }?.value == "1m 30s")
         // Usage continuation lines keep the grid aligned under "Usage".
@@ -275,7 +296,12 @@ import WikiFSCore
         // collapsed button at toolbar scale.
         #expect(QueueWorkspaceMetrics.Search.expandedThreshold == 800)
         #expect(QueueWorkspaceMetrics.Search.expandedFieldWidth == 220)
-        #expect(QueueWorkspaceMetrics.Search.collapsedButtonSide == 28)
+        // The standard toolbar icon-button square, shared by the collapsed
+        // search button and the Run Details toggle (both render at the main
+        // window's standard toolbar Button metrics).
+        #expect(QueueWorkspaceMetrics.Toolbar.iconButtonSide == 28)
+        #expect(QueueWorkspaceMetrics.Search.collapsedButtonSide
+                == QueueWorkspaceMetrics.Toolbar.iconButtonSide)
     }
 
     // MARK: - Toolbar search form (design change 6, 2026-09-09)

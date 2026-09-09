@@ -28,9 +28,29 @@ import WikiFSCore
 @Suite(.serialized, .timeLimit(.minutes(2)))
 @MainActor
 struct QueueOverviewLayoutHostedTests {
+    /// The userInitiated activity assertion's token. Held for the suite's
+    /// whole lifetime: dropping the returned object ENDS the assertion (its
+    /// dealloc ends the activity), which would re-arm AppKit's automatic
+    /// termination mid-suite. Initialized by ``app``.
+    private nonisolated(unsafe) static var userActivityToken: NSObjectProtocol?
+
     private static let app: NSApplication = {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
+        // Same guard as ActivityWindowWorkspaceHostedTests: as an accessory-
+        // policy app, AppKit's automatic termination can decide the idle
+        // helper process should exit mid-suite — silently killing the runner
+        // (exit 0, all results lost). disableAutomaticTermination alone is
+        // not enough (AppKit's enable/disable calls are refcounted and re-
+        // enable termination mid-run — and this suite orders its windows OUT
+        // between scenarios, repeatedly going idle-with-no-windows); a
+        // userInitiated activity assertion holds for the suite's whole
+        // lifetime.
+        ProcessInfo.processInfo.disableAutomaticTermination(
+            "hosted Overview layout scenarios")
+        userActivityToken = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated],
+            reason: "hosted Overview layout scenarios")
         return app
     }()
 

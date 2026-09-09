@@ -357,10 +357,18 @@ struct PageDetailView: View {
                     }
                 } else {
                     Task {
+                        // Closed-wiki name resolution: record the page title
+                        // already in hand so the Activity window keeps a
+                        // readable input row after this wiki's window closes.
+                        let title = store.summaries.first { $0.id == id }?.title
+                        let payload = QueueItemPayload(
+                            sourceIDs: [],
+                            lintPageIDs: [id],
+                            recordedNames: title.map { [id.rawValue: $0] })
                         await DebugLog.trying("enqueue lint request", operation: { try await session.queueEngine.enqueue(QueueItemRequest(
                             queue: .ingestion,
                             wikiID: session.wikiID,
-                            payload: QueueItemPayload(sourceIDs: [], lintPageIDs: [id])
+                            payload: payload
                         )) })
                     }
                 }

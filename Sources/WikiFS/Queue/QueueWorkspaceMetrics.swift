@@ -95,6 +95,19 @@ enum QueueWorkspaceMetrics {
         static let maxRows = 200
     }
 
+    /// Window-toolbar icon-button geometry shared by the workspace's icon
+    /// controls (the search control's collapsed magnifying-glass button and
+    /// the Run Details inspector toggle).
+    enum Toolbar {
+        /// Side of the standard macOS toolbar icon button (~28pt: the glyph
+        /// centered with the standard insets a plain SwiftUI toolbar `Button`
+        /// gets). Custom icon-only toolbar controls must be sized to this
+        /// square, or a borderless NSButton's intrinsic size collapses to the
+        /// bare glyph footprint (visibly smaller than the main window's
+        /// standard toolbar buttons).
+        static let iconButtonSide: CGFloat = 28
+    }
+
     /// The window-toolbar job search control (plan design change 6,
     /// 2026-09-09). The control sits LEFT of the Queue Actions menu; wide
     /// windows host an expanded `NSSearchField`, narrow windows collapse it
@@ -117,7 +130,8 @@ enum QueueWorkspaceMetrics {
         /// field scale (the `NSSearchToolbarItem` default preferred width).
         static let expandedFieldWidth: CGFloat = 220
         /// Side of the collapsed magnifying-glass button: the standard
-        /// toolbar image-button footprint.
-        static let collapsedButtonSide: CGFloat = 28
+        /// toolbar image-button footprint (``Toolbar/iconButtonSide``),
+        /// shared with the Run Details toggle.
+        static let collapsedButtonSide: CGFloat = Toolbar.iconButtonSide
     }
 }

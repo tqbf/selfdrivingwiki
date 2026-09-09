@@ -10,6 +10,7 @@ import Foundation
 /// logic is fully testable in isolation.
 ///
 /// Covers: `tokenSummary`, `summary` (backward-compat), `fullSummary`,
+/// `runDetailsSummary` (+ its `groupedCount` / `preciseCost` pieces),
 /// `duration`, `startTime`, `cost`, `tokens`.
 @Suite struct UsageFormatterTests {
 
@@ -159,6 +160,88 @@ import Foundation
             cost: 0.34, currency: "USD", contextUsed: 0, contextSize: 0)
         let result = UsageFormatter.summary(usage: usage)
         #expect(result == "797 tokens in · 203 tokens out · $0.34")
+    }
+
+    // MARK: - groupedCount(_:) + preciseCost(_:currency:) — Run Details pieces
+
+    @Test func groupedCountFollowsLocaleGroupingNotCompactVocabulary() {
+        // The Run Details breakdown shows exact counts, grouped per the
+        // current locale ("8,120" in en-US) — never the compact "8.1K"
+        // vocabulary `tokens` uses. Pin against Foundation's own formatting
+        // so the contract holds on any CI locale.
+        #expect(UsageFormatter.groupedCount(8_120) == 8_120.formatted())
+        #expect(UsageFormatter.groupedCount(4_225) == 4_225.formatted())
+        #expect(UsageFormatter.groupedCount(999) == "999")
+        #expect(UsageFormatter.groupedCount(8_120) != UsageFormatter.tokens(8_120))
+    }
+
+    @Test func preciseCostKeepsSubCentPrecision() {
+        // String(format:) is locale-independent, so these pins are exact.
+        #expect(UsageFormatter.preciseCost(0.0421, currency: "USD") == "$0.0421")
+        #expect(UsageFormatter.preciseCost(0.001, currency: "USD") == "$0.001")
+    }
+
+    @Test func preciseCostTrimsTrailingZerosButNeverBelowTwoDecimals() {
+        #expect(UsageFormatter.preciseCost(0.34, currency: "USD") == "$0.34")
+        #expect(UsageFormatter.preciseCost(0.10, currency: "USD") == "$0.10")
+        #expect(UsageFormatter.preciseCost(1234.56, currency: "USD") == "$1234.56")
+    }
+
+    @Test func preciseCostOmitsNilAndZero() {
+        #expect(UsageFormatter.preciseCost(nil, currency: nil) == nil)
+        #expect(UsageFormatter.preciseCost(0, currency: "USD") == nil)
+    }
+
+    @Test func preciseCostKeepsNonUSDSuffix() {
+        #expect(UsageFormatter.preciseCost(2.00, currency: "EUR") == "2.00 EUR")
+    }
+
+    // MARK: - runDetailsSummary(usage:) — Run Details breakdown
+
+    @Test func runDetailsSummaryMatchesApprovedExampleShape() {
+        // The approved line: "In 8,120 · Out 4,225 tokens · $0.0421".
+        // Grouping interpolates through `groupedCount` so the pin is exact
+        // yet locale-safe.
+        let usage = SessionUsage(
+            inputTokens: 8_120, outputTokens: 4_225, totalTokens: 12_345,
+            cachedReadTokens: nil, thoughtTokens: nil,
+            cost: 0.0421, currency: "USD", contextUsed: 0, contextSize: 0)
+        let result = UsageFormatter.runDetailsSummary(usage: usage)
+        #expect(result == "In \(UsageFormatter.groupedCount(8_120)) · Out \(UsageFormatter.groupedCount(4_225)) tokens · $0.0421")
+    }
+
+    @Test func runDetailsSummaryAppendsCachedAndThoughtWhenPresent() {
+        let usage = SessionUsage(
+            inputTokens: 8_120, outputTokens: 4_225, totalTokens: 12_345,
+            cachedReadTokens: 1_024, thoughtTokens: 412,
+            cost: 0.0421, currency: "USD", contextUsed: 0, contextSize: 0)
+        let result = UsageFormatter.runDetailsSummary(usage: usage)
+        #expect(result == "In \(UsageFormatter.groupedCount(8_120)) · Out \(UsageFormatter.groupedCount(4_225)) tokens · \(UsageFormatter.groupedCount(1_024)) cached · \(UsageFormatter.groupedCount(412)) thought · $0.0421")
+    }
+
+    @Test func runDetailsSummaryOmitsZeroAndAbsentClauses() {
+        // Zero/absent input and output omit their clause — never a fake zero.
+        let costOnly = SessionUsage(
+            inputTokens: 0, outputTokens: 0, totalTokens: 0,
+            cachedReadTokens: nil, thoughtTokens: 0,
+            cost: 0.0421, currency: "USD", contextUsed: 0, contextSize: 0)
+        #expect(UsageFormatter.runDetailsSummary(usage: costOnly) == "$0.0421")
+
+        let inputOnly = SessionUsage(
+            inputTokens: 8_120, outputTokens: 0, totalTokens: 8_120,
+            cachedReadTokens: nil, thoughtTokens: nil,
+            cost: nil, currency: nil, contextUsed: 0, contextSize: 0)
+        #expect(UsageFormatter.runDetailsSummary(usage: inputOnly)
+            == "In \(UsageFormatter.groupedCount(8_120))")
+    }
+
+    @Test func runDetailsSummaryEmptyWhenNothingReportable() {
+        // Nothing reportable → "" so the caller omits the usage row entirely.
+        let empty = SessionUsage(
+            inputTokens: 0, outputTokens: 0, totalTokens: 0,
+            cachedReadTokens: nil, thoughtTokens: nil,
+            cost: nil, currency: nil, contextUsed: 0, contextSize: 0)
+        #expect(UsageFormatter.runDetailsSummary(usage: empty) == "")
     }
 
     // MARK: - fullSummary(usage:startedAt:finishedAt:)

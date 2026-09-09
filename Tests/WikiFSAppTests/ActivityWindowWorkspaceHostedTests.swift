@@ -194,7 +194,11 @@ struct ActivityWindowWorkspaceHostedTests {
             queue: .ingestion,
             queueEngine: client,
             activityTracker: tracker,
-            sessionManager: nil)
+            sessionManager: nil,
+            // Closed-wiki name resolution stays hermetic here: the fixtures
+            // have no real wiki database, so the read-only fallback load
+            // must not touch the production App Group container.
+            closedWikiDatabaseURLProvider: { _ in nil })
         let host = NSHostingController(rootView: root)
         let window = NSWindow(contentViewController: host)
         window.setContentSize(NSSize(
@@ -726,6 +730,11 @@ struct ActivityWindowWorkspaceHostedTests {
     ///   item label ("Queue Actions") — the in-window tooltip and the
     ///   SwiftUI accessibility label are set in the view code but don't
     ///   bridge to NSView-level probes in this host;
+    /// - the Run Details NSButton's real frame carries the shared toolbar
+    ///   icon-button width (`Toolbar.iconButtonSide`, 28pt — the main
+    ///   window's standard toolbar Button metrics) instead of the bare
+    ///   glyph footprint an unsized borderless button collapses to, with
+    ///   the toolbar row imposing its hosted height above the square;
     /// - the Run Details toggle still opens and closes the inspector at
     ///   640×400.
     ///
@@ -773,6 +782,20 @@ struct ActivityWindowWorkspaceHostedTests {
                     "Run Details renders with a real frame at \(sizeNote) (got \(detailsFrame))")
             #expect(detailsFrame.maxX >= contentWidth - 80,
                     "Run Details pins to the trailing edge at \(sizeNote) (maxX \(detailsFrame.maxX) of \(contentWidth))")
+
+            // Sized to the shared toolbar icon-button square: the NSButton's
+            // real frame is the square wide (measured exactly 28.0) — the
+            // main window's standard toolbar Button metrics — not the bare
+            // glyph footprint an unsized borderless image button collapses
+            // to (measured 18×14 before the fix). Width is fully
+            // SwiftUI-controlled, so its tolerance is tight; the toolbar
+            // row imposes its own hosted-control height on the stretch
+            // (measured 33.0 = row height), so the height contract is "at
+            // least the square, bounded below the row-height runaway".
+            let side = QueueWorkspaceMetrics.Toolbar.iconButtonSide
+            #expect(abs(detailsFrame.width - side) <= 2
+                    && (side...side + 8).contains(detailsFrame.height),
+                    "Run Details renders at the toolbar icon-button square \(side)×\(side) at \(sizeNote) (got \(detailsFrame))")
 
             // Queue Actions: the toolbar's only hosted pop-up button (the
             // navigator's Filter menu lives in the content view, not the
@@ -830,7 +853,7 @@ struct ActivityWindowWorkspaceHostedTests {
         }
 
         // The window is at 640×400 here. The toggle still works: clicking it
-        // mounts the inspector's facts table (6 rows for the `large`
+        // mounts the inspector's facts table (7 rows for the `large`
         // fixture) and flips the button's AppKit-level accessibility value;
         // clicking again closes the panel. (The center inventory's width is
         // NOT the close signal at this size: with the inspector closed the
@@ -842,7 +865,7 @@ struct ActivityWindowWorkspaceHostedTests {
             "Run Details reachable for the toggle check")
         toggle.performClick(nil)
         let factsMounted = await waitUntil(
-            { tables(in: mounted.rootView).contains { $0.numberOfRows == 6 } },
+            { tables(in: mounted.rootView).contains { $0.numberOfRows == 7 } },
             label: "inspector facts table at minimum size")
         #expect(factsMounted,
                 "The toggle still opens the Run Details inspector at 640×400")
@@ -1211,13 +1234,14 @@ struct ActivityWindowWorkspaceHostedTests {
         // LITERAL row count (test integrity: a count recomputed from
         // `QueueRunDetailsFacts.entries` would pass even if `entries`
         // dropped a row). For the `large` fixture the window's mapping
-        // yields exactly six rows: Enqueued, Started, Finished (the epoch-ms
+        // yields exactly seven rows: Job ID (the item's raw ULID — present
+        // for every job), Enqueued, Started, Finished (the epoch-ms
         // 0 timestamps still count as present), Duration; attempt 0 is
         // omitted; absent provider and model render the two "Not Reported"
         // placeholders; no usage was recorded. The omission rules
         // themselves are covered at value level in
         // `QueueWorkspacePresentationTests`.
-        let expectedFactRows = 6
+        let expectedFactRows = 7
         let inspectorMounted = await waitUntil(
             { tables(in: mounted.rootView).contains { $0.numberOfRows == expectedFactRows } },
             label: "inspector facts table")

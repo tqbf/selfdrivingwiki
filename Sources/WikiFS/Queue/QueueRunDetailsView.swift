@@ -63,15 +63,18 @@ struct QueueRunDetailsView: View {
 
     /// Labeled values in a native List: secondary labels, selectable values,
     /// placeholders ("Not Reported") in tertiary so absent facts never read
-    /// as reported ones. Continuation usage lines keep their empty label so
-    /// they align under the value column.
+    /// as reported ones. The job id row renders fully monospaced (a copyable
+    /// identifier); every other value stays monospaced-digit so timestamps
+    /// and costs align without letter-spacing the text. Continuation usage
+    /// lines keep their empty label so they align under the value column.
     private func entriesList(_ facts: QueueRunDetailsFacts) -> some View {
         List {
             ForEach(Array(facts.entries.enumerated()), id: \.offset) { _, entry in
                 LabeledContent {
                     Text(entry.value)
-                        .font(.callout)
-                        .monospacedDigit()
+                        .font(entry.isMonospaced
+                            ? Font.callout.monospaced()
+                            : Font.callout.monospacedDigit())
                         .textSelection(.enabled)
                         .multilineTextAlignment(.trailing)
                         .foregroundStyle(

@@ -60,6 +60,17 @@ struct QueueTargetNameIndex: Equatable, Sendable {
     func pageTitle(_ pageID: PageID) -> String? {
         pageTitles[pageID]
     }
+
+    /// Every recorded page entry, in unspecified order. Overlay merging and
+    /// tests enumerate these; lookups go through ``pageTitle(_:)``.
+    var pageEntries: [(id: PageID, title: String)] {
+        pageTitles.map { (id: $0.key, title: $0.value) }
+    }
+
+    /// Every recorded source entry, in unspecified order.
+    var sourceEntries: [(id: SourceID, name: String)] {
+        sourceNames.map { (id: $0.key, name: $0.value) }
+    }
 }
 
 // MARK: - Per-item resolution
@@ -92,5 +103,49 @@ extension QueueTargetNameIndex {
         }
         let resolved = item.payload.sourceIDs.compactMap { sourceName($0) }
         return QueueItemDisplayNames(names: resolved, targets: resolved)
+    }
+}
+
+// MARK: - Closed-wiki resolution (live → recorded → read-only)
+
+extension QueueTargetNameIndex {
+    /// The effective name index for ONE queue item, layering the closed-wiki
+    /// fallbacks over the live session's index. The layering is the
+    /// rendering precedence (closed-wiki name resolution):
+    ///
+    /// 1. `live` — the open wiki's session index (the store's current
+    ///    answer);
+    /// 2. the payload's enqueue-time `recordedNames`;
+    /// 3. `readOnlyCache` — names read-only-resolved from the closed wiki's
+    ///    database (the store's current answer when no session is live).
+    ///
+    /// `record*`'s first-match semantics do the precedence work: entries are
+    /// recorded highest-precedence first and a later duplicate never
+    /// overwrites an earlier one, so a name that resolves in a higher layer
+    /// cannot be displaced by a lower one.
+    ///
+    /// A recorded name is recorded into BOTH maps: the payload's targets are
+    /// typed per operation (lint → pages, ingestion → sources), and the
+    /// dictionaries are keyed by typed IDs, so cross-recording cannot
+    /// contaminate either namespace even if a raw ID string appeared in both.
+    static func effective(
+        live: QueueTargetNameIndex,
+        readOnlyCache: QueueTargetNameIndex?,
+        payload: QueueItemPayload
+    ) -> QueueTargetNameIndex {
+        var index = live
+        for (rawID, name) in payload.recordedNames ?? [:] where !name.isEmpty {
+            index.recordPage(PageID(rawValue: rawID), title: name)
+            index.recordSource(SourceID(rawValue: rawID), name: name)
+        }
+        if let cache = readOnlyCache {
+            for entry in cache.pageEntries {
+                index.recordPage(entry.id, title: entry.title)
+            }
+            for entry in cache.sourceEntries {
+                index.recordSource(entry.id, name: entry.name)
+            }
+        }
+        return index
     }
 }

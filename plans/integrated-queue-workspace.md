@@ -15,7 +15,7 @@ Covers issues #1219, #1220, and #1221.
 
 ## Design changes
 
-The review rounds and later operator decisions changed seven presentation
+The review rounds and later operator decisions changed eight presentation
 decisions. The sections below
 keep their original structure. Where a sentence contradicts this section,
 this section is current.
@@ -97,6 +97,32 @@ this section is current.
    "Search Jobs" toolbar row; the icon-only group replaces it.
    Affected sections: "Layout contract", "Queue controls: Pause and Stop
    All".
+8. **Closed-wiki jobs keep names and click-through (2026-09-09).** A job
+   whose wiki window is closed keeps readable target rows and its
+   navigation. Three layers answer "what is this target called", in
+   precedence order: the open wiki's live session index; the payload's
+   enqueue-time recorded names (`QueueItemPayload.recordedNames`,
+   captured at the lint and ingestion enqueue sites); and a read-only
+   name load against the closed wiki's database
+   (`QueueClosedWikiNameLoader` through `WikiReadService`, bounded to the
+   payload's IDs), cached per wiki in `QueueActivityTracker`. While that
+   read is pending, unresolved rows show the neutral "Resolving…"
+   placeholder, never the deletion text. A known target on a closed wiki
+   keeps its click-through: the click stashes a `wiki://` deep link and
+   opens the wiki window, and the navigation lands once the session
+   exists (`QueueTargetRouter`). The action gate is open/closed aware: on
+   an OPEN wiki, an action additionally requires LIVE store membership —
+   a target deleted after enqueue keeps its recorded title but gets no
+   dead-end action; on a CLOSED wiki the click-through stays, because the
+   stash+open route resolves at click time. Titles always come from the
+   effective index in both cases. The load refresh keys on the displayed
+   jobs' target composition AND the open-wiki set (a window closing
+   re-triggers it); items arriving mid-load are parked on the in-flight
+   wiki and re-planned once after the load; IDs a completed load proved
+   missing are negative-cached so they never reopen the read-only
+   database; and a cancelled load is retryable, never an "unavailable"
+   wiki. Affected sections: "Target inventory (Overview)", "History and
+   search scope".
 
 ## Goal
 
