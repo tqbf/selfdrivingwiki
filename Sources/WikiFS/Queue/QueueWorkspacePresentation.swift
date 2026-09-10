@@ -107,17 +107,6 @@ extension QueueWorkspaceStatus {
     }
 }
 
-// Recorded-output vocabulary — citation evidence, not an outcome claim.
-extension QueueWorkspaceStatus {
-    /// The page is recorded as an output: its page-version provenance cites
-    /// one of the job's input sources. Deliberately quiet and deliberately
-    /// NOT "Succeeded" — citation evidence says nothing about the job's
-    /// outcome, and inferring it is forbidden.
-    static func recorded() -> QueueWorkspaceStatus {
-        QueueWorkspaceStatus(text: "Recorded", symbol: "doc.text", style: .secondary)
-    }
-}
-
 // MARK: - Recorded outputs (ingestion)
 
 /// Durable output-snapshot state for an ingestion attempt. `notRecorded`

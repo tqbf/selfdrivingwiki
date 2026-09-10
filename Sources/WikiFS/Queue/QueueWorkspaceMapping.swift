@@ -247,7 +247,7 @@ enum QueueWorkspaceMapper {
         return QueueTargetRowValue(
             identity: identity,
             title: title,
-            status: .recorded(),
+            status: nil,
             actions: actions)
     }
 

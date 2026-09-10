@@ -52,7 +52,7 @@ struct QueueOutputsMappingTests {
         #expect(section.emptyStateText == "No pages recorded yet.")
     }
 
-    @Test("Loaded with pages: live titles, Recorded status, Open Page links")
+    @Test("Loaded with pages: live titles, no status, Open Page links")
     func loadedPages() {
         let index = nameIndex([("p1", "Alpha Page"), ("p2", "Beta Page")])
         var opened: [PageID] = []
@@ -70,7 +70,7 @@ struct QueueOutputsMappingTests {
             .page(PageID(rawValue: "p1")),
             .page(PageID(rawValue: "p2")),
         ])
-        #expect(section.rows.allSatisfy { $0.status == QueueWorkspaceStatus.recorded() })
+        #expect(section.rows.allSatisfy { $0.status == nil })
         // Every resolvable output's name is an Open Page link.
         #expect(section.rows.allSatisfy { $0.actions.map(\.label) == ["Open Page"] })
 
