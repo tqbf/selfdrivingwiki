@@ -72,7 +72,7 @@ this section is current.
    existing single section. Affected sections: "Target inventory
    (Overview)", "Report truth rules".
 6. **Toolbar search sits left of Queue Actions and collapses narrow
-   (2026-09-09).** The job search is an explicit toolbar control instead of
+   (2026-09-09, superseded by design change 18).** The job search is an explicit toolbar control instead of
    the SwiftUI `.searchable` field, declared so it renders LEFT of the
    Queue Actions menu. At split-view widths of 800 points or more it hosts
    an expanded native `NSSearchField` (in-field magnifying glass, clear
@@ -215,6 +215,13 @@ this section is current.
     target. If its name is unavailable, the title uses count wording instead of
     a later target or raw ID. This supersedes design change 9. Affected sections:
     "Job navigator (left)", "Selected job workspace (right)".
+18. **Search moves into the navigator (2026-09-10, operator request).** The job
+    search is an always-visible field at the top of the left sidebar, above the
+    filter row and job sections. It no longer appears in the window toolbar and
+    does not collapse at narrow widths. Its query, loaded-job scope, report-load
+    footer, outside-filter notice, and reorder guard stay unchanged. This
+    supersedes design change 6. Affected sections: "Layout contract", "Job
+    navigator (left)", "Selection, filters, and deep links".
 
 ## Goal
 
@@ -234,11 +241,11 @@ This is a layout contract, not pixel-perfect artwork.
 
 ```text
 ┌───────────────────────────────────────────────────────────────────────────┐
-│ Native title bar   Agent Queue       Search Jobs       Pause Queue   …    │
+│ Native title bar   Agent Queue                 Queue Actions   Details   │
 │                    1 running · 4 queued                                  │
 ├─────────────────────────┬─────────────────────────────────────────────────┤
-│ All Jobs  [Filter ▾]    │ Research papers and 11 others [Ingest] Cancel │
-│                         │ Research Wiki · 01M… · Running · 2m 14s        │
+│ Search loaded jobs      │ Research papers and 11 others [Ingest] Cancel │
+│ All Jobs  [Filter ▾]    │ Research Wiki · 01M… · Running · 2m 14s        │
 │ ACTIVE                  │ Staging sources: 8 of 12                       │
 │ ◉ Research papers…      │ ━━━━━━━━━━━━━────────                          │
 │   [Ingest] 01M… · 2m    │ [Overview | Activity]                          │
@@ -267,10 +274,9 @@ repeated badges, custom traffic lights, and permanently visible raw metadata.
   An operation chip identifies ingestion, extraction, or lint. The metadata
   shows the job ID and one state, progress, or elapsed value. An unresolved
   first name uses count wording. No row title shows a raw target ID.
-- The job search lives in the window toolbar, LEFT of the Queue Actions menu
-  (design change 6): an expanded native search field at split-view widths of
-  800 points or more, a magnifying-glass button in narrower windows. The one
-  filter menu sits above the sections and covers State, Wiki, and Operation.
+- The job search stays visible at the top of the navigator, above the filter
+  row and job sections. It uses the full sidebar width at all window sizes. The
+  one filter menu covers State, Wiki, and Operation.
   Operation appears in Agent Queue only. Defaults are All. Active filters
   show with a clear action.
 - Width: minimum 220, ideal 280, maximum 360 points. These values live in

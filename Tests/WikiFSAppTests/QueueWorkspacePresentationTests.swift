@@ -631,92 +631,14 @@ import WikiFSEngine
         #expect(QueueWorkspaceMetrics.Spacing.lg == 24)
         // Local inventory search appears for large batches only.
         #expect(QueueWorkspaceMetrics.Inventory.localSearchThreshold == 12)
-        // Toolbar job-search geometry (design change 6): threshold between
-        // the window minimum and preferred widths; expanded field and
-        // collapsed button at toolbar scale.
-        #expect(QueueWorkspaceMetrics.Search.expandedThreshold == 800)
-        #expect(QueueWorkspaceMetrics.Search.expandedFieldWidth == 220)
-        // The standard toolbar icon-button square, shared by the collapsed
-        // search button and the Run Details toggle (both render at the main
-        // window's standard toolbar Button metrics).
+        // The standard toolbar icon-button square for Run Details.
         #expect(QueueWorkspaceMetrics.Toolbar.iconButtonSide == 28)
-        #expect(QueueWorkspaceMetrics.Search.collapsedButtonSide
-                == QueueWorkspaceMetrics.Toolbar.iconButtonSide)
     }
 
-    // MARK: - Toolbar search form (design change 6, 2026-09-09)
+    // MARK: - Sidebar search
 
-    /// The search prompt + accessibility label carried over from the former
-    /// `.searchable` field unchanged — both forms of the control announce
-    /// themselves identically.
-    @Test func toolbarSearchPromptIsPinned() {
+    @Test func sidebarSearchPromptIsPinned() {
         #expect(ActivityWindowView.searchPrompt == "Search loaded jobs")
-    }
-
-    @Test func toolbarSearchExpandsAtOrAboveThresholdWidth() {
-        // Wide empty window: expanded field.
-        #expect(
-            QueueSearchToolbarForm.decision(
-                splitViewWidth: QueueWorkspaceMetrics.Window.preferredWidth,
-                queryIsEmpty: true,
-                userRequestedExpansion: false) == .expandedField)
-        // Exactly at the threshold: expanded (>= is the expanded side).
-        #expect(
-            QueueSearchToolbarForm.decision(
-                splitViewWidth: QueueWorkspaceMetrics.Search.expandedThreshold,
-                queryIsEmpty: true,
-                userRequestedExpansion: false) == .expandedField)
-    }
-
-    @Test func toolbarSearchCollapsesBelowThresholdWidth() {
-        // Narrow empty window: collapsed button.
-        #expect(
-            QueueSearchToolbarForm.decision(
-                splitViewWidth: QueueWorkspaceMetrics.Window.minWidth,
-                queryIsEmpty: true,
-                userRequestedExpansion: false) == .collapsedButton)
-        // Just under the threshold: still collapsed.
-        #expect(
-            QueueSearchToolbarForm.decision(
-                splitViewWidth: QueueWorkspaceMetrics.Search.expandedThreshold - 1,
-                queryIsEmpty: true,
-                userRequestedExpansion: false) == .collapsedButton)
-    }
-
-    @Test func toolbarSearchStaysExpandedWhileQueryIsActive() {
-        // A non-empty query keeps the field visible at any width — collapsing
-        // would hide the text being edited and the filter it drives.
-        #expect(
-            QueueSearchToolbarForm.decision(
-                splitViewWidth: QueueWorkspaceMetrics.Window.minWidth,
-                queryIsEmpty: false,
-                userRequestedExpansion: false) == .expandedField)
-    }
-
-    @Test func toolbarSearchClickRequestExpandsUntilQueryClears() {
-        // The magnifying-glass click wins over a sub-threshold width...
-        #expect(
-            QueueSearchToolbarForm.decision(
-                splitViewWidth: QueueWorkspaceMetrics.Window.minWidth,
-                queryIsEmpty: true,
-                userRequestedExpansion: true) == .expandedField)
-        // ...and the request is spent once the query empties again, so a
-        // narrow window collapses back to the button.
-        #expect(
-            QueueSearchToolbarForm.decision(
-                splitViewWidth: QueueWorkspaceMetrics.Window.minWidth,
-                queryIsEmpty: true,
-                userRequestedExpansion: false) == .collapsedButton)
-    }
-
-    @Test func toolbarSearchUnmeasuredWidthAssumesExpanded() {
-        // Before the first layout measurement the control reads like the
-        // previous always-present search field.
-        #expect(
-            QueueSearchToolbarForm.decision(
-                splitViewWidth: nil,
-                queryIsEmpty: true,
-                userRequestedExpansion: false) == .expandedField)
     }
 }
 

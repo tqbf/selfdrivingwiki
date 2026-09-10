@@ -51,15 +51,6 @@ import WikiFSEngine
 /// Suite discipline: serialized + time-limited, every wait is a bounded
 /// condition loop with cooperative `Task.sleep` (never parks the cooperative
 /// pool), and the shared window stays mounted for the whole suite.
-///
-/// **Sandbox runner-session hazard.** The two toolbar-search scenarios are
-/// env-gated (`WIKIFS_ENABLE_SEARCH_HOSTED_TESTS=1`). Once the search control
-/// stopped re-focusing on resize-driven expansions (M-2), the
-/// clear-collapse sequence inside those scenarios terminated the
-/// swift-testing runner's session under this sandbox — the helper process
-/// exits 0 mid-test with all results lost (traced: `swift_task_asyncMainDrainQueue`
-/// → `_swift_exit`). The scenarios are correct; run them in a full session
-/// with the variable set.
 @Suite(.serialized, .timeLimit(.minutes(3)))
 @MainActor
 struct ActivityWindowWorkspaceHostedTests {
@@ -359,31 +350,6 @@ struct ActivityWindowWorkspaceHostedTests {
         allSubviews(of: root).compactMap {
             ($0 as? NSTextField)?.placeholderString
         }
-    }
-
-    /// The toolbar job search's expanded field (design change 6). The control
-    /// is one persistent stack hosting BOTH forms, so the field always exists;
-    /// "expanded" means visible. Toolbar content hosts in `NSToolbarItem`
-    /// views — outside the content host's tree — so discovery starts from the
-    /// window's toolbar items (same surface the Run Details / Queue Actions
-    /// checks use).
-    private func toolbarItemViews(of window: NSWindow) -> [NSView] {
-        window.toolbar?.items.compactMap(\.view) ?? []
-    }
-
-    private func searchFields(in window: NSWindow) -> [NSSearchField] {
-        toolbarItemViews(of: window).flatMap { allSubviews(of: $0) }
-            .compactMap { $0 as? NSSearchField }
-    }
-
-    /// The toolbar job search's collapsed magnifying-glass button — the
-    /// NSButton carrying the search prompt as its accessibility label (the
-    /// row buttons are labeled Cancel/Retry, Run Details says "Run
-    /// Details").
-    private func searchCollapseButtons(in window: NSWindow) -> [NSButton] {
-        toolbarItemViews(of: window).flatMap { allSubviews(of: $0) }
-            .compactMap { $0 as? NSButton }
-            .filter { $0.accessibilityLabel() == ActivityWindowView.searchPrompt }
     }
 
     /// Toolbar item labels (the Pause Queue control is a real NSToolbarItem).
@@ -836,19 +802,17 @@ struct ActivityWindowWorkspaceHostedTests {
                         "Run Details renders icon-only at \(sizeNote)")
             }
 
-            // Ordering in the real toolbar item list: search → Queue Actions
-            // → Run Details (the toggle is the trailing toolbar item).
+            // Search belongs to the navigator. The toolbar contains only the
+            // global Queue Actions and Run Details controls.
             let items = mounted.window.toolbar?.items ?? []
-            let searchIndex = items.firstIndex { item in
+            let toolbarHasSearch = items.contains { item in
                 guard let view = item.view else { return false }
-                return searchFields(in: mounted.window).contains { $0.isDescendant(of: view) }
+                return allSubviews(of: view).contains { $0 is NSSearchField }
             }
             let actionsIndex = items.firstIndex { $0 === actionsItem }
             let detailsIndex = items.lastIndex { $0.view != nil }
-            #expect(searchIndex != nil,
-                    "The search control lives in a toolbar item at \(sizeNote)")
-            #expect(searchIndex.flatMap { s in actionsIndex.map { s < $0 } } == true,
-                    "Search sits left of Queue Actions at \(sizeNote) (search \(String(describing: searchIndex)), actions \(String(describing: actionsIndex)))")
+            #expect(!toolbarHasSearch,
+                    "Search stays out of the toolbar at \(sizeNote)")
             #expect(actionsIndex.flatMap { a in detailsIndex.map { a < $0 } } == true,
                     "Run Details is the last control at \(sizeNote) (actions \(String(describing: actionsIndex)), details \(String(describing: detailsIndex)))")
         }
@@ -887,253 +851,39 @@ struct ActivityWindowWorkspaceHostedTests {
         await settle(4)
     }
 
-    // MARK: - Scenario: toolbar job search (design change 6, 2026-09-09)
+    // MARK: - Scenario: sidebar job search
 
-    /// The toolbar job search replaces the former `.searchable` field: at
-    /// the preferred width it hosts a real, visible `NSSearchField` LEFT of
-    /// the Queue Actions menu; at the minimum width the same control hides
-    /// the field and shows the magnifying-glass button, whose click
-    /// re-expands and focuses the field; and typing through the field editor
-    /// filters the navigator through the same `jobFilter` the rows read.
-    /// Runs against the single shared window (resize + restore, like the
-    /// responsive scenario).
-    ///
-    /// - Env-gated (`WIKIFS_ENABLE_SEARCH_HOSTED_TESTS=1`): same sandbox
-    ///   runner-session hazard as the Escape scenario above.
-    @Test(
-        .disabled(if: ProcessInfo.processInfo.environment["WIKIFS_ENABLE_SEARCH_HOSTED_TESTS"] == nil,
-                  "Sandbox runner-session hazard; set WIKIFS_ENABLE_SEARCH_HOSTED_TESTS=1 in a full session"),
-        .timeLimit(.minutes(1)))
-    func toolbarSearchPlacementExpandCollapseAndFiltering() async throws {
+    /// Search stays out of the toolbar after it moves into the navigator.
+    /// The navigator controls and job rows remain usable at minimum width.
+    @Test(.timeLimit(.minutes(1)))
+    func sidebarSearchPlacementAndMinimumWidth() async throws {
         let mounted = try await workspace()
 
-        // Preferred width: the field is visible at the named metric width,
-        // carrying the former searchable prompt, and its toolbar item sits
-        // LEFT of the Queue Actions item.
-        let fieldAppeared = await waitUntil {
-            guard let field = searchFields(in: mounted.window).first else {
-                return false
-            }
-            return field.isHidden == false
+        let toolbarHasSearch = (mounted.window.toolbar?.items ?? []).contains { item in
+            guard let view = item.view else { return false }
+            return allSubviews(of: view).contains { $0 is NSSearchField }
         }
-        #expect(fieldAppeared,
-                "The expanded search field must be in the toolbar at the preferred size")
-        let field = try #require(
-            searchFields(in: mounted.window).first,
-            "Search field present for placement checks")
-        #expect(field.placeholderString == ActivityWindowView.searchPrompt,
-                "The field keeps the former .searchable prompt")
-        #expect(abs(field.frame.width - QueueWorkspaceMetrics.Search.expandedFieldWidth) < 2,
-                "Field renders at the expanded metric width (got \(field.frame.width))")
-        let searchItemIndex = mounted.window.toolbar?.items.firstIndex { item in
-            item.view.map { field.isDescendant(of: $0) } ?? false
-        }
-        let queueActionsIndex = mounted.window.toolbar?.items.firstIndex {
-            $0.label == "Queue Actions"
-        }
-        #expect(searchItemIndex != nil, "The search field lives in a toolbar item")
-        #expect(queueActionsIndex != nil, "Queue Actions keeps its toolbar label")
-        #expect(searchItemIndex.flatMap { s in queueActionsIndex.map { s < $0 } } == true,
-                "Search must render LEFT of Queue Actions (search \(String(describing: searchItemIndex)), actions \(String(describing: queueActionsIndex)))")
+        #expect(!toolbarHasSearch, "The window toolbar does not host job search")
 
-        // Minimum width: the same control hides the field and shows the
-        // magnifying-glass button (NSSearchToolbarItem behavior).
         mounted.window.setContentSize(NSSize(
             width: QueueWorkspaceMetrics.Window.minWidth,
             height: QueueWorkspaceMetrics.Window.minHeight))
-        await settle(6)
-        let collapsed = await waitUntil {
-            guard let field = searchFields(in: mounted.window).first else {
-                return false
-            }
-            return field.isHidden
-                && searchCollapseButtons(in: mounted.window).contains { !$0.isHidden }
-        }
-        #expect(collapsed,
-                "A narrow empty window collapses the search to the magnifying-glass button")
-        let button = try #require(
-            searchCollapseButtons(in: mounted.window).first { !$0.isHidden })
-        #expect(button.accessibilityLabel() == ActivityWindowView.searchPrompt,
-                "The collapsed button keeps the search accessibility label")
+        await settle(4)
 
-        // Click it: the field becomes visible again and takes keyboard focus
-        // (the field editor exists — the same surface keystrokes land in).
-        button.performClick(nil)
-        var reexpandedField: NSSearchField?
-        let fieldBack = await waitUntil {
-            guard let candidate = searchFields(in: mounted.window).first,
-                  candidate.isHidden == false else { return false }
-            reexpandedField = candidate
-            return true
+        let filterReachable = await waitUntil {
+            popupButtons(in: mounted.rootView).contains { $0.title == "Filter" }
         }
-        #expect(fieldBack, "Clicking the collapsed button re-expands the search field")
-        let focused = await waitUntil {
-            reexpandedField?.currentEditor() != nil
-        }
-        #expect(focused,
-                "The re-expanded search field takes keyboard focus")
-        let focusedField = try #require(
-            reexpandedField ?? searchFields(in: mounted.window).first,
-            "Re-expanded field present for the filtering check")
+        #expect(filterReachable, "The navigator filter remains reachable below search")
 
-        // Type through the field editor: "Lint" matches the two lint jobs'
-        // kind label and hides the two ingestion rows (the fixtures carry
-        // running/lint/whole-wiki active + one completed ingestion job).
-        var unfilteredRows = 0
-        let rowsReady = await waitUntil {
-            guard let table = sidebarTable(in: mounted.rootView) else { return false }
-            unfilteredRows = table.numberOfRows
-            return unfilteredRows >= 6 // 4 fixture jobs + 2 section headers
+        let rowsReachable = await waitUntil {
+            (sidebarTable(in: mounted.rootView)?.numberOfRows ?? 0) >= 6
         }
-        #expect(rowsReady, "Navigator rows reachable before filtering (got \(unfilteredRows))")
-        focusedField.currentEditor()?.insertText("Lint")
-        var filteredRows = -1
-        // Filtering out `large` also removes the Recent section's header row:
-        // 2 lint items + the Active header = unfiltered − 3.
-        let filtered = await waitUntil {
-            guard let table = sidebarTable(in: mounted.rootView) else { return false }
-            filteredRows = table.numberOfRows
-            return table.numberOfRows == unfilteredRows - 3
-        }
-        #expect(filtered,
-                "Typing 'Lint' filters the navigator to the two lint rows (got \(filteredRows) from \(unfilteredRows))")
+        #expect(rowsReachable, "Navigator rows remain reachable at minimum width")
 
-        // Clearing the query spends the expansion request: with the window
-        // still narrow, the control collapses back to the button
-        // (NSSearchToolbarItem behavior) and the rows return.
-        if let editor = focusedField.currentEditor() as? NSTextView {
-            editor.selectedRange = NSRange(
-                location: 0,
-                length: (editor.string as NSString).length)
-            editor.deleteBackward(nil)
-        }
-        let collapsedAgain = await waitUntil {
-            guard let field = searchFields(in: mounted.window).first else {
-                return false
-            }
-            return field.isHidden
-                && sidebarTable(in: mounted.rootView)?.numberOfRows == unfilteredRows
-        }
-        #expect(collapsedAgain,
-                "Clearing the query collapses the narrow-window control and restores the rows")
-
-        // Restore the preferred size for the remaining scenarios.
         mounted.window.setContentSize(NSSize(
             width: QueueWorkspaceMetrics.Window.preferredWidth,
             height: QueueWorkspaceMetrics.Window.preferredHeight))
         await settle(4)
-    }
-
-    /// The Escape path (design change 6): Escape with a non-empty query
-    /// clears the LIVE field editor — `control(_:textView:doCommandBy:)`
-    /// receives the editor's text view, and a `field.stringValue` write alone
-    /// would be overwritten by the open editor — plus the query binding, and
-    /// (the window being narrow) collapses the control back to the
-    /// magnifying-glass button. Driven through the real editor:
-    /// `insertText`, then `doCommandBy(cancelOperation:)` — the dispatch a
-    /// physical Escape takes into the delegate.
-    ///
-    /// - Env-gated (`WIKIFS_ENABLE_SEARCH_HOSTED_TESTS=1`): once the search
-    ///   control stopped re-focusing on resize-driven expansions (M-2), the
-    ///   clear-collapse sequence ended the swift-testing runner's session in
-    ///   this sandbox — the helper exits 0 mid-run with results lost (see
-    ///   the suite header). Run these scenarios in a full session with the
-    ///   variable set.
-    @Test(
-        .disabled(if: ProcessInfo.processInfo.environment["WIKIFS_ENABLE_SEARCH_HOSTED_TESTS"] == nil,
-                  "Sandbox runner-session hazard; set WIKIFS_ENABLE_SEARCH_HOSTED_TESTS=1 in a full session"),
-        .timeLimit(.minutes(1)))
-    func toolbarSearchEscapeClearsFieldEditorBindingAndCollapses() async throws {
-        let mounted = try await workspace()
-
-        // Preamble: narrow the window so the empty control collapses, then
-        // click-expand (the click-requested path focuses the field, giving
-        // us the live field editor Escape is delivered to).
-        mounted.window.setContentSize(NSSize(
-            width: QueueWorkspaceMetrics.Window.minWidth,
-            height: QueueWorkspaceMetrics.Window.minHeight))
-        await settle(6)
-        let collapsedPreamble = await waitUntil {
-            guard let field = searchFields(in: mounted.window).first else {
-                return false
-            }
-            return field.isHidden
-                && searchCollapseButtons(in: mounted.window).contains { !$0.isHidden }
-        }
-        #expect(collapsedPreamble,
-                "Preamble: a narrow empty window shows the magnifying-glass button")
-        let button = try #require(
-            searchCollapseButtons(in: mounted.window).first { !$0.isHidden })
-        button.performClick(nil)
-        let editorReady = await waitUntil {
-            guard let field = searchFields(in: mounted.window).first,
-                  field.isHidden == false else { return false }
-            return field.currentEditor() != nil
-        }
-        #expect(editorReady,
-                "Click-expansion focuses the field: a live field editor exists")
-        let field = try #require(
-            searchFields(in: mounted.window).first,
-            "Expanded field present for the Escape path")
-        // Held as `NSText` (like the scenario above): `NSTextView.insertText`
-        // is deprecated; `NSText.insertText` is the supported surface, and
-        // `doCommand(by:)` / `string` come from NSResponder/NSText — the
-        // object itself is still the field editor's NSTextView, so dispatch
-        // is unchanged.
-        let editor = try #require(
-            field.currentEditor(),
-            "The focused field hosts its real field editor")
-
-        // Baseline rows (the fixture jobs + their section headers), then
-        // type through the REAL editor — the binding updates and the
-        // navigator filters down to the two lint rows.
-        let unfilteredRows = sidebarTable(in: mounted.rootView)?.numberOfRows ?? 0
-        editor.insertText("Lint")
-        let filtered = await waitUntil {
-            sidebarTable(in: mounted.rootView)?.numberOfRows == unfilteredRows - 3
-        }
-        #expect(filtered,
-                "Typing through the field editor drives the query binding (from \(unfilteredRows))")
-
-        // Escape, through the editor's own command dispatch.
-        editor.doCommand(by: #selector(NSResponder.cancelOperation(_:)))
-        #expect(editor.string.isEmpty,
-                "Escape clears the LIVE field editor's visible text")
-        FileHandle.standardError.write(Data("QSEARCH-STDERR 3a escape-returned\n".utf8))
-        #expect(field.stringValue.isEmpty,
-                "Escape leaves the field's value empty")
-        FileHandle.standardError.write(Data("QSEARCH-STDERR 3b asserts-done\n".utf8))
-        let rowsRestored = await waitUntil {
-            sidebarTable(in: mounted.rootView)?.numberOfRows == unfilteredRows
-        }
-        #expect(rowsRestored,
-                "Escape cleared the query binding — the unfiltered rows return")
-
-        // The narrow window spends the expansion: the control collapses back
-        // to the button.
-        let collapsedAgain = await waitUntil {
-            guard let field = searchFields(in: mounted.window).first else {
-                return false
-            }
-            return field.isHidden
-                && searchCollapseButtons(in: mounted.window).contains { !$0.isHidden }
-        }
-        #expect(collapsedAgain,
-                "Escape in a narrow window collapses the control to the button")
-
-        // Restore the preferred size for the remaining scenarios.
-        mounted.window.setContentSize(NSSize(
-            width: QueueWorkspaceMetrics.Window.preferredWidth,
-            height: QueueWorkspaceMetrics.Window.preferredHeight))
-        await settle(4)
-        // Harness probe: end the scenario with the field editor active, as
-        // the pre-review refocus-on-resize behavior effectively did.
-        if let field = searchFields(in: mounted.window).first {
-            field.window?.makeFirstResponder(field)
-        }
-        await settle(2)
-        FileHandle.standardError.write(Data("QSEARCH-STDERR before-long-tail\n".utf8))
-        await settle(60)
     }
 
     // MARK: - Scenario: large inventory reachability

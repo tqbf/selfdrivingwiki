@@ -95,9 +95,8 @@ enum QueueWorkspaceMetrics {
         static let maxRows = QueueRecordedOutputLimits.maxRows
     }
 
-    /// Window-toolbar icon-button geometry shared by the workspace's icon
-    /// controls (the search control's collapsed magnifying-glass button and
-    /// the Run Details inspector toggle).
+    /// Window-toolbar icon-button geometry for the Run Details inspector
+    /// toggle.
     enum Toolbar {
         /// Side of the standard macOS toolbar icon button (~28pt: the glyph
         /// centered with the standard insets a plain SwiftUI toolbar `Button`
@@ -106,32 +105,5 @@ enum QueueWorkspaceMetrics {
         /// bare glyph footprint (visibly smaller than the main window's
         /// standard toolbar buttons).
         static let iconButtonSide: CGFloat = 28
-    }
-
-    /// The window-toolbar job search control (plan design change 6,
-    /// 2026-09-09). The control sits LEFT of the Queue Actions menu; wide
-    /// windows host an expanded `NSSearchField`, narrow windows collapse it
-    /// to a magnifying-glass button that expands on click — the behavior of
-    /// AppKit's `NSSearchToolbarItem`.
-    enum Search {
-        /// Split-view width at or above which the search field renders
-        /// expanded instead of collapsing to the magnifying-glass button.
-        /// Rationale: chosen between the window bounds (`Window.minWidth`
-        /// 640 / `Window.preferredWidth` 1040). At 640 the window toolbar
-        /// also carries the title + subtitle, the Queue Actions menu, and
-        /// the Run Details toggle, so an always-expanded field would crowd
-        /// them; at the preferred 1040 an expanded field at
-        /// ``expandedFieldWidth`` still leaves the fixed controls room.
-        /// 800 sits comfortably inside both: minimum-size windows collapse,
-        /// preferred-size windows expand, and the flip happens in between
-        /// rather than at a boundary a user drags across constantly.
-        static let expandedThreshold: CGFloat = 800
-        /// The expanded `NSSearchField`'s width — AppKit's toolbar search
-        /// field scale (the `NSSearchToolbarItem` default preferred width).
-        static let expandedFieldWidth: CGFloat = 220
-        /// Side of the collapsed magnifying-glass button: the standard
-        /// toolbar image-button footprint (``Toolbar/iconButtonSide``),
-        /// shared with the Run Details toggle.
-        static let collapsedButtonSide: CGFloat = Toolbar.iconButtonSide
     }
 }
