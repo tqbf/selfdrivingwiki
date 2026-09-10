@@ -550,6 +550,11 @@ import WikiFSEngine
             jobID: jobID,
             lifecycle: .completed)
 
+        // The title and operation remain separate presentation values. The
+        // view renders the operation as a chip without changing the title.
+        #expect(header.title == "1 source")
+        #expect(header.operationLabel == "Ingest")
+
         // The presentation preserves the queue-item namespace. Raw text is
         // produced only at the rendering or pasteboard boundary.
         #expect(header.jobID == jobID)

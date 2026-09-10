@@ -705,6 +705,7 @@ struct ActivityWindowView: View {
     private func itemRow(_ item: QueueItem, displayData: RowDisplayData?) -> some View {
         let data = displayData ?? RowDisplayData(
             title: Self.kindLabel(for: item),
+            operationLabel: QueueWorkspaceMapper.operationLabel(for: item),
             jobID: item.id,
             relativeTime: nil,
             wikiName: String(item.wikiID.rawValue.prefix(8)),
@@ -721,17 +722,20 @@ struct ActivityWindowView: View {
                 Text(data.title)
                     .lineLimit(1)
                     .help(data.targetNames.joined(separator: "\n"))
-                // Lead with the strongly typed queue-item ID. Running rows
-                // update their elapsed suffix inside a per-second TimelineView;
-                // terminal and queued rows use the precomputed relative time.
-                if item.state == .running, item.startedAt != nil {
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        rowMetadata(
-                            jobID: data.jobID,
-                            suffix: "running · \(elapsedString(item.startedAt, now: context.date))")
+                HStack(spacing: QueueWorkspaceMetrics.Spacing.xs) {
+                    QueueOperationChip(label: data.operationLabel)
+                    // Lead with the strongly typed queue-item ID. Running rows
+                    // update their elapsed suffix inside a per-second TimelineView;
+                    // terminal and queued rows use the precomputed relative time.
+                    if item.state == .running, item.startedAt != nil {
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            rowMetadata(
+                                jobID: data.jobID,
+                                suffix: "running · \(elapsedString(item.startedAt, now: context.date))")
+                        }
+                    } else {
+                        rowMetadata(jobID: data.jobID, suffix: data.relativeTime)
                     }
-                } else {
-                    rowMetadata(jobID: data.jobID, suffix: data.relativeTime)
                 }
                 // Report-backed phase progress on running rows ("Staging
                 // sources · 8 of 12"), from the item's cached summary —
@@ -2086,6 +2090,8 @@ struct ActivityWindowView: View {
     /// 0C5B28C2 and swiftlang/swift#89197.
     private struct RowDisplayData {
         let title: String
+        /// Operation classification rendered as a chip below the title.
+        let operationLabel: String
         /// Strongly typed queue identity rendered as the row's leading
         /// metadata. Raw text is produced only by `rowMetadata(jobID:suffix:)`.
         let jobID: QueueItem.ID
@@ -2161,6 +2167,7 @@ struct ActivityWindowView: View {
 
             result[item.id] = RowDisplayData(
                 title: Self.computeRowTitle(for: item, wikiName: wikiName),
+                operationLabel: QueueWorkspaceMapper.operationLabel(for: item),
                 jobID: item.id,
                 relativeTime: relativeTime(for: item),
                 wikiName: wikiName,

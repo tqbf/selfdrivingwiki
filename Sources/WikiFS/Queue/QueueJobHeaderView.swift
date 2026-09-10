@@ -7,10 +7,10 @@ import WikiFSCore
 /// caller from `QueueItem` + report data *before* view evaluation (plain values
 /// only — no `@Observable` reads in the header body).
 ///
-/// The header shows one recognizable title, the job-ID/state line, the current
-/// recorded phase with progress, exactly one elapsed clock, and the
-/// state-driven actions (plan §1 "Selected job workspace"). Job errors and
-/// pending permissions render here, above the parent's content selector.
+/// The header shows one recognizable title with a separate operation chip, the
+/// job-ID/state line, the current recorded phase with progress, exactly one
+/// elapsed clock, and the state-driven actions (plan §1 "Selected job workspace").
+/// Job errors and pending permissions render above the content selector.
 struct QueueJobHeaderPresentation {
     /// The same recognizable title as the navigator row. One shared formatter
     /// prevents the selected-job header from adding a divergent prefix. The
@@ -142,14 +142,27 @@ struct QueueJobHeaderView: View {
     /// in both layouts so only the action placement changes.
     private var contentBlock: some View {
         VStack(alignment: .leading, spacing: QueueWorkspaceMetrics.Spacing.xs) {
-            Text(header.title)
-                .font(.title2)
-                .lineLimit(QueueWorkspaceMetrics.Header.titleLineLimit)
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: QueueWorkspaceMetrics.Spacing.xs) {
+                    titleText
+                    QueueOperationChip(label: header.operationLabel)
+                }
+                VStack(alignment: .leading, spacing: QueueWorkspaceMetrics.Spacing.xs) {
+                    titleText
+                    QueueOperationChip(label: header.operationLabel)
+                }
+            }
             metaLine
             progressRegion
             errorRegion
             permissionRegion
         }
+    }
+
+    private var titleText: some View {
+        Text(header.title)
+            .font(.title2)
+            .lineLimit(QueueWorkspaceMetrics.Header.titleLineLimit)
     }
 
     /// "01M24… · Running · 2m 14s" — job ID, state (symbol + text), and the
