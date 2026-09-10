@@ -296,7 +296,7 @@ struct QueueTargetRowValue: Identifiable {
     /// Skip/failure reason or an availability explanation ("Source bytes
     /// unavailable"). Search-only today (the row itself is not collapsible).
     let reason: String?
-    /// Available navigation actions ("Open Page", "Reveal Source", "Browse
+    /// Available navigation actions ("Open Page", "Open Source", "Browse
     /// Pages") — the row's name link performs the first. Empty when none are
     /// available — extraction output actions appear only while a recorded
     /// output reference stays resolvable.

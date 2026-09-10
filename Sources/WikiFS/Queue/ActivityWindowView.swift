@@ -879,19 +879,18 @@ struct ActivityWindowView: View {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(item.id.rawValue, forType: .string)
         }
-        // #598: extraction jobs carry sourceIDs — offer a "Reveal Source"
-        // action that navigates to the source in the wiki's Sources outline,
-        // mirroring #583's "Open Page" for lint jobs. Only shown for
-        // extraction jobs with at least one source ID in the payload.
+        // Extraction jobs carry source IDs, so offer an "Open Source" action
+        // that opens the exact source tab. Only show it when the payload has a
+        // source ID.
         if item.queue == .extraction, let sourceID = item.payload.sourceIDs.first {
             Divider()
-            Button("Reveal Source", systemImage: "arrow.up.forward.app") {
-                revealSource(
+            Button("Open Source", systemImage: "arrow.up.forward.app") {
+                openSource(
                     sourceID,
                     title: makeNameIndex(for: item).sourceName(sourceID),
                     in: item.wikiID)
             }
-            .help("Reveal this source in the wiki's Sources outline")
+            .help("Open this source in the wiki")
         }
         let debugURL = activityTracker.debugURL(for: item.id)
         if let debugURL {
@@ -1208,15 +1207,15 @@ struct ActivityWindowView: View {
         }
     }
 
-    /// Quiet header icon actions: Reveal Source (extraction jobs, #598) and
-    /// Reveal Debug Folder (runs that produced a debug trace). Per-target
+    /// Quiet header icon actions: Open Source (extraction jobs) and Reveal
+    /// Debug Folder (runs that produced a debug trace). Per-target
     /// navigation lives in the Overview rows.
     private func additionalHeaderActions(for item: QueueItem) -> [QueueWorkspaceAction] {
         var actions: [QueueWorkspaceAction] = []
         if item.queue == .extraction, let sourceID = item.payload.sourceIDs.first {
             actions.append(QueueWorkspaceAction(
-                label: "Reveal Source", systemImage: "arrow.up.forward.app") {
-                revealSource(
+                label: "Open Source", systemImage: "arrow.up.forward.app") {
+                openSource(
                     sourceID,
                     title: makeNameIndex(for: item).sourceName(sourceID),
                     in: item.wikiID)
@@ -1411,7 +1410,7 @@ struct ActivityWindowView: View {
 
     /// Legacy / loading Overview: rows derived from the item's payload. Jobs
     /// recorded before reports exist show truthful unavailable states and
-    /// keep their payload-derived navigation (Open Page / Reveal Source /
+    /// keep their payload-derived navigation (Open Page / Open Source /
     /// whole-wiki Browse Pages). Titles resolve through the effective index
     /// (live → recorded → read-only); an ID nothing resolves shows the
     /// neutral resolving placeholder while the wiki's closed-wiki read is
@@ -1583,7 +1582,7 @@ struct ActivityWindowView: View {
                   liveStoreConfirms(liveIndex.sourceName(sourceID) != nil)
             else { return [] }
             return [QueueWorkspaceAction(
-                label: "Reveal Source", systemImage: "arrow.up.forward.app") {
+                label: "Open Source", systemImage: "arrow.up.forward.app") {
                 route(.source(sourceID), name)
             }]
         }
@@ -1805,7 +1804,7 @@ struct ActivityWindowView: View {
 
     // MARK: - Target navigation
 
-    // (Open Page / Reveal Source / Browse Pages live here — used by the
+    // (Open Page / Open Source / Browse Pages live here — used by the
     // Overview rows and the header actions. The former linted-pages section
     // was folded into the Overview inventory: report-backed rows when a
     // report exists, payload rows otherwise.)
@@ -1828,13 +1827,10 @@ struct ActivityWindowView: View {
         routeTarget(.page(pageID), title: title, in: wikiID)
     }
 
-    /// Reveal an extraction job's source in the wiki's Sources outline
-    /// (#598) — the closed-wiki click-through seam. Same
-    /// ``QueueTargetRouter`` split as ``openPage(_:title:in:)``: sidebar
-    /// reveal when the session is live (sources are file-backed toms, not
-    /// tabable documents), stashed `wiki://source` deep link + window open
-    /// when not.
-    private func revealSource(_ sourceID: SourceID, title: String?, in wikiID: WikiID) {
+    /// Open a job's source in the wiki. The live-session path opens the typed
+    /// source tab. The closed-session path stashes a `wiki://source` deep link
+    /// and opens the wiki window.
+    private func openSource(_ sourceID: SourceID, title: String?, in wikiID: WikiID) {
         routeTarget(.source(sourceID), title: title, in: wikiID)
     }
 
@@ -1851,13 +1847,12 @@ struct ActivityWindowView: View {
         let router = QueueTargetRouter(
             liveStore: { wikiID in sessions?.sessions[wikiID]?.store },
             navigateInSession: { store, target in
+                Self.navigateTarget(target, title: title, in: store)
                 switch target {
                 case .page(let pageID):
-                    store.openTab(.page(pageID))
                     DebugLog.tabs("Queue Open Page: opened page \(pageID.rawValue) in wiki \(wikiID.rawValue.prefix(8))")
                 case .source(let sourceID):
-                    store.requestSidebarReveal(.source(sourceID))
-                    DebugLog.tabs("Queue Reveal Source: revealed source \(sourceID.rawValue) in wiki \(wikiID.rawValue.prefix(8))")
+                    DebugLog.tabs("Queue Open Source: opened source \(sourceID.rawValue) in wiki \(wikiID.rawValue.prefix(8))")
                 }
             },
             stashDeepLink: { wikiID, url in
@@ -1866,6 +1861,22 @@ struct ActivityWindowView: View {
             },
             openWiki: { wikiID in bridge?.openWiki?(wikiID) })
         router.route(target, title: title, in: wikiID)
+    }
+
+    /// Open the exact typed target in a live wiki session. Source targets open
+    /// an in-app source tab instead of only highlighting the sidebar row.
+    @MainActor
+    static func navigateTarget(
+        _ target: QueueWorkspaceTargetIdentity,
+        title: String?,
+        in store: WikiStoreModel
+    ) {
+        switch target {
+        case .page(let pageID):
+            store.openTab(.page(pageID), title: title)
+        case .source(let sourceID):
+            store.openTab(.source(sourceID), title: title)
+        }
     }
 
     /// Whole-wiki lint "Browse Pages": reveal the wiki's home page (switches the

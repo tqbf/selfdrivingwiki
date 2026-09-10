@@ -13,7 +13,7 @@ import SwiftUI
 /// (SourceID/PageID) is never rendered — the
 /// name is the surface. When the target carries a live navigation action, the
 /// The NAME ITSELF is the link (native `.link` button style) performing it —
-/// "Open Page" for pages, "Reveal Source" for sources, "Browse Pages" for
+/// "Open Page" for pages, "Open Source" for sources, "Browse Pages" for
 /// whole-wiki scope rows. Dead targets keep their recorded name as plain
 /// text: the caller omits actions when a recorded output reference no longer
 /// resolves, so a dead link never renders. Routing stays the caller's

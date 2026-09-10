@@ -195,6 +195,23 @@ struct QueueClosedWikiNameResolutionTests {
         #expect(actions.map(\.label) == ["Open Page"])
     }
 
+    @Test func sourceActionPreservesTypedIdentityAndUsesOpenLabel() {
+        let sourceID = SourceID(rawValue: "01KZ5FTEN827EQD2KTE14FVX3D")
+        var live = QueueTargetNameIndex()
+        live.recordSource(sourceID, name: "Malleable Software in the Age of LLMs")
+        var routed: QueueWorkspaceTargetIdentity?
+        let actions = ActivityWindowView.targetRowActions(
+            for: .source(sourceID),
+            wikiID: WikiID(rawValue: "wiki"),
+            nameIndex: live,
+            liveIndex: live,
+            isSessionOpen: true) { target, _ in routed = target }
+
+        #expect(actions.map(\.label) == ["Open Source"])
+        actions.first?.perform()
+        #expect(routed == .source(sourceID))
+    }
+
     // MARK: - Report-backed row titles: full name precedence
 
     /// A RUNNING ingestion job whose report rows carry an EMPTY displayName
@@ -761,8 +778,25 @@ struct QueueClosedWikiNameResolutionTests {
         #expect(spy.stashedLinks.isEmpty)
     }
 
-    /// An empty/missing recorded title degrades to the raw ID as the link's
-    /// title query item — the `id` query still drives the canonical route.
+    /// A live source link opens the exact typed source tab. It must not
+    /// reinterpret the raw ULID in the page namespace.
+    @Test func liveSourceLinkOpensExactTypedSource() throws {
+        let dir = try tempDirectory()
+        let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("WikiFS.sqlite"))
+        let model = WikiStoreModel(store: store)
+        let sourceID = SourceID(rawValue: "01KZ5FTEN827EQD2KTE14FVX3D")
+
+        ActivityWindowView.navigateTarget(
+            .source(sourceID),
+            title: "Malleable Software in the Age of LLMs",
+            in: model)
+
+        #expect(model.activeTab?.selection == .source(sourceID))
+        #expect(model.activeTab?.selection != .page(PageID(rawValue: sourceID.rawValue)))
+    }
+
+    /// An empty or missing recorded title uses the raw ID for the link title.
+    /// The canonical `id` query item still controls the route.
     @Test func deepLinkTitleFallsBackToRawID() throws {
         let pageID = PageID(rawValue: "pg-77")
         let url = QueueTargetRouter.deepLinkURL(for: .page(pageID), title: nil)

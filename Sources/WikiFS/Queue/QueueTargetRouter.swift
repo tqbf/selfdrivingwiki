@@ -10,9 +10,8 @@ import WikiFSLinks
 /// target's wiki window is closed. Both paths reuse the app's existing
 /// navigation seams; nothing new is invented here:
 ///
-/// - **Live session** — navigate the shared `WikiStoreModel` directly
-///   (`openTab` for pages, `requestSidebarReveal` for sources), then focus
-///   the window. The pre-existing #583 / #598 path, unchanged.
+/// - **Live session** — open the typed page or source tab in the shared
+///   `WikiStoreModel`, then focus the window.
 /// - **Closed wiki** — stash a `wiki://page|source?title=…&id=…` deep link
 ///   on the session manager (the #635 cross-window transcript stash) and
 ///   open the window. `RootScene.resolveSession` transfers the stash onto
@@ -26,10 +25,9 @@ import WikiFSLinks
 struct QueueTargetRouter {
     /// The wiki's live store, or `nil` when that wiki's window is closed.
     var liveStore: (WikiID) -> WikiStoreModel?
-    /// The open-session navigation: page → `openTab`, source → sidebar
-    /// reveal. Called before the window focus, matching the historical
-    /// order (the navigation must be on the shared model before the window
-    /// it drives comes forward).
+    /// The open-session navigation opens the typed page or source tab. It runs
+    /// before window focus, so the shared model contains the destination when
+    /// the window comes forward.
     var navigateInSession: (WikiStoreModel, QueueWorkspaceTargetIdentity) -> Void
     /// The closed-wiki stash: record the deep link the wiki window will
     /// consume when its session resolves.
