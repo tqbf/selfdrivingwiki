@@ -258,6 +258,27 @@ public struct QueueReportUsage: Hashable, Codable, Sendable {
     }
 }
 
+// MARK: - Recorded outputs
+
+/// One page captured in an ingestion attempt's immutable output snapshot.
+/// The page ID remains strongly typed; `title` is the display name recorded at
+/// completion so historical jobs do not depend on a live wiki session.
+public enum QueueRecordedOutputLimits {
+    public static let maxRows = 200
+}
+
+public struct QueueRecordedOutputPage: Hashable, Codable, Sendable, Identifiable {
+    public let pageID: PageID
+    public let title: String?
+
+    public init(pageID: PageID, title: String?) {
+        self.pageID = pageID
+        self.title = title
+    }
+
+    public var id: PageID { pageID }
+}
+
 // MARK: - Mutations
 
 /// One producer-originated report change. The store validates the attempt and
@@ -275,6 +296,9 @@ public struct QueueReportMutation: Sendable, Hashable {
     /// launcher's run-total usage is available. Absent in every other
     /// mutation — those never clobber committed usage.
     public var usage: QueueReportUsage?
+    /// `nil` leaves the current output snapshot unchanged. A non-nil value
+    /// replaces it atomically; an empty array records a known-empty snapshot.
+    public var outputs: [QueueRecordedOutputPage]?
     /// Affected target rows only — never a whole-batch document.
     public var targetUpserts: [QueueReportTargetRecord]
 
@@ -285,6 +309,7 @@ public struct QueueReportMutation: Sendable, Hashable {
         availability: QueueReportAvailability? = nil,
         resultSummary: String? = nil,
         usage: QueueReportUsage? = nil,
+        outputs: [QueueRecordedOutputPage]? = nil,
         targetUpserts: [QueueReportTargetRecord] = []
     ) {
         self.phase = phase
@@ -293,6 +318,7 @@ public struct QueueReportMutation: Sendable, Hashable {
         self.availability = availability
         self.resultSummary = resultSummary
         self.usage = usage
+        self.outputs = outputs
         self.targetUpserts = targetUpserts
     }
 }
@@ -317,6 +343,9 @@ public struct QueueAttemptReport: Hashable, Codable, Sendable {
     /// written before usage was durable (NULL columns — never zeros) and for
     /// attempts that never reached the completion mutation.
     public let usage: QueueReportUsage?
+    /// The post-run provenance snapshot. `nil` means the attempt did not
+    /// record outputs (legacy report or snapshot failure); `[]` is known empty.
+    public let outputs: [QueueRecordedOutputPage]?
     /// Ordered by stable inventory sequence.
     public let targets: [QueueReportTargetRecord]
 
@@ -332,6 +361,7 @@ public struct QueueAttemptReport: Hashable, Codable, Sendable {
         availability: QueueReportAvailability,
         resultSummary: String?,
         usage: QueueReportUsage? = nil,
+        outputs: [QueueRecordedOutputPage]? = nil,
         targets: [QueueReportTargetRecord]
     ) {
         self.attemptID = attemptID
@@ -345,6 +375,7 @@ public struct QueueAttemptReport: Hashable, Codable, Sendable {
         self.availability = availability
         self.resultSummary = resultSummary
         self.usage = usage
+        self.outputs = outputs
         self.targets = targets
     }
 

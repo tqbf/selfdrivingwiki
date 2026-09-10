@@ -170,11 +170,25 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         // running phase with the job lifecycle carrying the failure — the
         // report never claims a completion that validate rejected.
         try validateLauncherResults(results)
+        // Snapshot the actual post-run citation evidence into the durable job.
+        // A snapshot read failure is logged but does not rewrite the successful
+        // agent outcome; nil remains distinguishable from a recorded empty set.
+        let outputs: [QueueRecordedOutputPage]?
+        do {
+            outputs = try store.pagesCitingSources(
+                sourceIDs: sourceIDs,
+                limit: QueueRecordedOutputLimits.maxRows
+            ).map { QueueRecordedOutputPage(pageID: $0.pageID, title: $0.title) }
+        } catch {
+            DebugLog.store("DaemonQueueIngestionProvider: output snapshot failed: \(error)")
+            outputs = nil
+        }
         // Per-source ingestion completion is NOT inferred from agent exit or
         // merge success: targets stay `.submitted`; only the run phase closes.
         onReport?(QueueIngestionReporting.agentCompletionMutation(
             operation: .ingest,
-            usage: results.usage))
+            usage: results.usage,
+            outputs: outputs))
     }
 
     // MARK: - Lint

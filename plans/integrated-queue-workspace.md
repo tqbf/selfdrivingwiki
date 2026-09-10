@@ -481,14 +481,26 @@ diagnostics. Full target detail stays on the selected item.
 
 ## Reporting transport summary
 
-Reports persist in an additive QueueStore migration: one attempt report
-header plus per-target rows keyed by item, attempt, target namespace, and ID.
+Reports persist in additive QueueStore migrations. Each attempt has one
+header and per-target rows keyed by item, attempt, target namespace, and ID.
+Ingestion attempts also store a bounded page-output snapshot after the run.
+The snapshot stores typed page IDs, recorded titles, and stable row order.
+A header flag distinguishes an unrecorded legacy snapshot from a recorded empty
+snapshot. A new execution of the same attempt resets the snapshot.
+
+The app and daemon query page provenance after successful agent validation.
+The app performs this query after its workspace merge callback returns. A
+snapshot read failure does not change a successful job result. The report keeps
+the snapshot absent, and the Overview says that outputs were not recorded.
+The Overview reads this snapshot from the job report and does not need an open
+wiki session.
+
 Target updates upsert only affected rows. Loads read one consistent report and
 revision in a single store operation. Report updates flow through the existing
-output scope and channel, validate the attempt and lease, commit before
-publishing, and reach clients as `.reportUpdated` events across the local,
-daemon, and XPC transports through `loadQueueReport(for:)` and
-`loadQueueReportSummaries(for:)`. The approved plan holds the full contract.
+output scope and channel. The channel validates the attempt and lease, commits
+before publishing, and sends `.reportUpdated` events across local, daemon, and
+XPC transports. Clients load reports through `loadQueueReport(for:)` and
+`loadQueueReportSummaries(for:)`.
 
 ## Non-goals
 

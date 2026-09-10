@@ -196,7 +196,7 @@ enum QueueWorkspaceMapper {
     /// floor, not a total.
     static let truncatedCountSuffix = "+"
 
-    /// Count text for a completed recorded-outputs load: the loaded row
+    /// Count text for a durable recorded-output snapshot: the row
     /// count — or that count plus ``truncatedCountSuffix`` when it fills the
     /// store-query row cap (`QueueWorkspaceMetrics.Outputs.maxRows`). A
     /// full-page result means the store result was TRUNCATED at the cap, so
@@ -208,17 +208,10 @@ enum QueueWorkspaceMapper {
             : String(rowCount)
     }
 
-    /// Map the selected job's recorded-outputs load onto section values.
+    /// Map the selected job's durable output snapshot onto section values.
     ///
-    /// Count text: known only after a completed load — including a resolved
-    /// zero ("Outputs (0)" is store evidence, not a fabricated number).
-    /// While loading and on failure the count is unknown → `nil`, which the
-    /// view renders as nothing (never "0").
-    ///
-    /// Empty-state text distinguishes the three honest states: a load in
-    /// flight, a load that completed with no citation evidence, and a store
-    /// read failure — "no pages recorded" is never claimed when the read
-    /// simply failed.
+    /// Count text is known only for a recorded snapshot, including a resolved
+    /// zero. Legacy/unrecorded reports have no count and never fabricate zero.
     static func outputsSection(
         state: QueueOutputsLoadState,
         nameIndex: QueueTargetNameIndex,
@@ -229,15 +222,20 @@ enum QueueWorkspaceMapper {
             return QueueOutputsSectionValue(
                 countText: nil,
                 rows: [],
-                emptyStateText: "Loading recorded pages…")
-        case .failed:
+                emptyStateText: "Loading recorded outputs…")
+        case .notRecorded:
             return QueueOutputsSectionValue(
                 countText: nil,
                 rows: [],
-                emptyStateText: "Recorded pages couldn’t be loaded.")
+                emptyStateText: "Outputs were not recorded for this job.")
+        case .unavailable:
+            return QueueOutputsSectionValue(
+                countText: nil,
+                rows: [],
+                emptyStateText: "Recorded outputs are unavailable.")
         case .loaded(let pages):
             let rows = pages.map {
-                outputRow(cited: $0, nameIndex: nameIndex, openPage: openPage)
+                outputRow(recorded: $0, nameIndex: nameIndex, openPage: openPage)
             }
             return QueueOutputsSectionValue(
                 countText: outputsCountText(rowCount: rows.count),
@@ -254,17 +252,17 @@ enum QueueWorkspaceMapper {
     /// inventory's `rowActions`): a page that no longer resolves keeps its
     /// name as plain text and never renders a dead link.
     static func outputRow(
-        cited: CitedPage,
+        recorded: QueueRecordedOutputPage,
         nameIndex: QueueTargetNameIndex,
         openPage: @escaping (PageID) -> Void
     ) -> QueueTargetRowValue {
-        let identity = QueueWorkspaceTargetIdentity.page(cited.pageID)
-        let liveTitle = nameIndex.pageTitle(cited.pageID)
-        let title = liveTitle ?? cited.title ?? "Deleted page"
+        let identity = QueueWorkspaceTargetIdentity.page(recorded.pageID)
+        let liveTitle = nameIndex.pageTitle(recorded.pageID)
+        let title = liveTitle ?? recorded.title ?? "Deleted page"
         let actions: [QueueWorkspaceAction] = liveTitle == nil ? [] : [
             QueueWorkspaceAction(
                 label: "Open Page", systemImage: "arrow.up.forward.app") {
-                openPage(cited.pageID)
+                openPage(recorded.pageID)
             }
         ]
         return QueueTargetRowValue(

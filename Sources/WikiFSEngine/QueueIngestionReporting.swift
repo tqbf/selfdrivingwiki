@@ -67,7 +67,8 @@ public enum QueueIngestionReporting {
     /// so Run Details keeps final totals after completion/reload.
     public static func agentCompletionMutation(
         operation: QueueReportOperation,
-        usage: SessionUsage?
+        usage: SessionUsage?,
+        outputs: [QueueRecordedOutputPage]? = nil
     ) -> QueueReportMutation {
         let summary: String
         switch operation {
@@ -83,7 +84,8 @@ public enum QueueIngestionReporting {
             model: usage?.modelId.map { QueueReportModelName(rawValue: $0) },
             availability: .notReported,
             resultSummary: summary,
-            usage: usage.map(QueueReportUsage.init(sessionUsage:)))
+            usage: usage.map(QueueReportUsage.init(sessionUsage:)),
+            outputs: outputs)
     }
 
     /// The lint-page staging mutation: resolved pages are recorded by their

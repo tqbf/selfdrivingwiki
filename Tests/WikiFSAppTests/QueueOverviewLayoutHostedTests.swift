@@ -249,8 +249,10 @@ struct QueueOverviewLayoutHostedTests {
         // `PagesCitingSourcesTests.deletedPageDropsOutOfOutputs`). It
         // simulates the defensive LEFT-JOIN case `pagesCitingSources`
         // guards for: a citation edge that outlived its page row.
-        let loadedOutputs = cited
-            + [CitedPage(pageID: PageID(rawValue: "vanished-page"), title: nil)]
+        let loadedOutputs = cited.map {
+            QueueRecordedOutputPage(pageID: $0.pageID, title: $0.title)
+        } + [QueueRecordedOutputPage(
+            pageID: PageID(rawValue: "vanished-page"), title: nil)]
 
         // The queue's live-title seam, built the way the window builds it.
         var nameIndex = QueueTargetNameIndex()
@@ -329,7 +331,8 @@ struct QueueOverviewLayoutHostedTests {
         // recorded title as plain text (no Open Page link) — same shape the
         // real store path produces for a resolvable-but-not-live page.
         let outputs = QueueWorkspaceMapper.outputsSection(
-            state: .loaded([CitedPage(pageID: PageID(rawValue: "recorded-1"), title: "Recorded Output")]),
+            state: .loaded([QueueRecordedOutputPage(
+                pageID: PageID(rawValue: "recorded-1"), title: "Recorded Output")]),
             nameIndex: QueueTargetNameIndex(),
             openPage: { _ in Issue.record("an unresolved output must not navigate") })
         let presentation = QueueJobOverviewPresentation(

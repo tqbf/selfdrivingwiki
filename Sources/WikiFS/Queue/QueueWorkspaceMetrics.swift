@@ -1,4 +1,5 @@
 import CoreGraphics
+import WikiFSCore
 
 /// Centralized geometry for the queue workspace components (plan §1 "Centralize
 /// spacing and width metrics"). Values only — no view logic — so both windows
@@ -86,13 +87,12 @@ enum QueueWorkspaceMetrics {
         static let width: CGFloat = 280
     }
 
-    /// Recorded-outputs section bounds (ingestion Overview). The Outputs
-    /// list is a bounded inventory, not a wiki enumeration: the store query
-    /// stops at this row count (title order), so a wiki whose inputs are
-    /// cited by huge numbers of pages still renders a finite section.
+    /// Recorded-output bounds for ingestion reports and the Overview. The
+    /// snapshot is bounded, so a heavily cited input still produces a finite
+    /// job record and section.
     enum Outputs {
-        /// Row cap passed to `WikiStore.pagesCitingSources(limit:)`.
-        static let maxRows = 200
+        /// Shared row cap used by snapshot capture and presentation.
+        static let maxRows = QueueRecordedOutputLimits.maxRows
     }
 
     /// Window-toolbar icon-button geometry shared by the workspace's icon

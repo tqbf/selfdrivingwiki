@@ -120,17 +120,14 @@ extension QueueWorkspaceStatus {
 
 // MARK: - Recorded outputs (ingestion)
 
-/// Load state of the selected ingestion job's recorded outputs: the pages
-/// whose page-version provenance cites the job's input sources. Resolved
-/// ONLY from store citation evidence — never from job success, agent exit,
-/// or merge completion — and loaded in a `.task` keyed by item id + attempt,
-/// like the selected report.
+/// Durable output-snapshot state for an ingestion attempt. `notRecorded`
+/// covers legacy reports and attempts whose post-run snapshot read failed;
+/// `.loaded([])` is a distinct, known-empty result.
 enum QueueOutputsLoadState: Equatable, Sendable {
     case loading
-    case loaded([CitedPage])
-    /// The store read failed. Logged at the load seam; the section degrades
-    /// to an honest "couldn't be loaded" state — never a fabricated zero.
-    case failed
+    case notRecorded
+    case unavailable
+    case loaded([QueueRecordedOutputPage])
 }
 
 /// Everything the Overview's Outputs section renders — plain values only,
@@ -138,13 +135,12 @@ enum QueueOutputsLoadState: Equatable, Sendable {
 /// `QueueJobOverviewPresentation`). Rows use the shared
 /// `QueueTargetRowValue`; a resolvable page's name link performs Open Page.
 struct QueueOutputsSectionValue {
-    /// Known count after a completed load — including a resolved zero
-    /// ("Outputs (0)" is store evidence). `nil` while loading or on failure:
-    /// an unknown count renders as nothing, never as a fake "0".
+    /// Known count for a recorded snapshot, including a resolved zero.
+    /// `nil` for legacy/unrecorded reports; unknown never renders as zero.
     let countText: String?
     let rows: [QueueTargetRowValue]
-    /// Quiet empty-region text (loading / "No pages recorded yet." /
-    /// failure), rendered as one honest line under the section header.
+    /// Quiet state text for loading, unavailable, unrecorded, or empty
+    /// snapshots. The view renders it under the section header.
     let emptyStateText: String
 }
 

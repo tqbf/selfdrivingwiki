@@ -126,10 +126,11 @@ struct QueueReportStoreTests {
             return item
         }()
 
-        // Rewind the report header to its PRE-USAGE (v7) shape: rebuild the
-        // table without the six usage columns and un-track the v8 migration,
-        // so the reopen below replays the genuine pre-usage upgrade path.
+        // Rewind the report header to its PRE-USAGE (v7) shape: remove the v9
+        // child table, rebuild the header without v8/v9 columns, and un-track
+        // both migrations so reopen replays the genuine upgrade path.
         try executeRaw("""
+        DROP TABLE queue_attempt_report_outputs;
         ALTER TABLE queue_attempt_reports RENAME TO queue_attempt_reports_pre_v8;
         CREATE TABLE queue_attempt_reports (
             item_id        TEXT NOT NULL REFERENCES queue_items(id) ON DELETE CASCADE,
@@ -154,7 +155,8 @@ struct QueueReportStoreTests {
                    provider_id, model, availability, result_summary, revision, updated_at
             FROM queue_attempt_reports_pre_v8;
         DROP TABLE queue_attempt_reports_pre_v8;
-        DELETE FROM grdb_migrations WHERE identifier = 'v8_add_attempt_report_usage';
+        DELETE FROM grdb_migrations
+        WHERE identifier IN ('v8_add_attempt_report_usage', 'v9_add_attempt_report_outputs');
         """, at: url)
         for column in Self.usageColumnNames {
             #expect(scalar(
@@ -171,6 +173,7 @@ struct QueueReportStoreTests {
         let reopened = try QueueStore(databaseURL: url)
         let legacy = try reopened.loadReport(itemID: item.id)
         #expect(legacy?.usage == nil)
+        #expect(legacy?.outputs == nil)
         #expect(legacy?.targets.isEmpty == false)
 
         // The completion mutation commits the launcher's run-total usage.
@@ -242,6 +245,82 @@ struct QueueReportStoreTests {
             operation: .ingest,
             scope: scope(item.payload.sourceIDs))
         #expect(try store.loadReport(itemID: item.id)?.usage == nil)
+    }
+
+    // MARK: Durable output snapshots (v9)
+
+    @Test("Output snapshot preserves absent, empty, ordered values, replacement, and reset")
+    func outputSnapshotCommitSemantics() throws {
+        let store = try makeStore()
+        defer { store.close() }
+        let item = try makeItem(store)
+        let attemptID = QueueAttemptID(itemID: item.id, attempt: 0)
+        let execution = QueueExecutionID(rawValue: UUID())
+        _ = try store.beginReport(
+            attemptID: attemptID,
+            executionID: execution,
+            operation: .ingest,
+            scope: scope(item.payload.sourceIDs))
+
+        #expect(try store.loadReport(itemID: item.id)?.outputs == nil)
+        _ = try store.commitReportMutation(
+            attemptID: attemptID,
+            executionID: execution,
+            mutation: QueueReportMutation(outputs: []))
+        #expect(try store.loadReport(itemID: item.id)?.outputs == [])
+
+        let recorded = [
+            QueueRecordedOutputPage(pageID: PageID(rawValue: "p2"), title: "Beta"),
+            QueueRecordedOutputPage(pageID: PageID(rawValue: "p1"), title: nil),
+        ]
+        _ = try store.commitReportMutation(
+            attemptID: attemptID,
+            executionID: execution,
+            mutation: QueueReportMutation(outputs: recorded))
+        #expect(try store.loadReport(itemID: item.id)?.outputs == recorded)
+
+        // An unrelated mutation preserves the committed snapshot.
+        _ = try store.commitReportMutation(
+            attemptID: attemptID,
+            executionID: execution,
+            mutation: QueueReportMutation(phase: .finished))
+        #expect(try store.loadReport(itemID: item.id)?.outputs == recorded)
+
+        // A new execution of this attempt owns fresh progress and no snapshot.
+        _ = try store.beginReport(
+            attemptID: attemptID,
+            executionID: QueueExecutionID(rawValue: UUID()),
+            operation: .ingest,
+            scope: scope(item.payload.sourceIDs))
+        #expect(try store.loadReport(itemID: item.id)?.outputs == nil)
+    }
+
+    @Test("Output snapshot survives store reopen")
+    func outputSnapshotSurvivesReopen() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("queue-report-outputs-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("queue.sqlite")
+        let expected = [QueueRecordedOutputPage(
+            pageID: PageID(rawValue: "page-a"), title: "Recorded Title")]
+        let item = try {
+            let store = try QueueStore(databaseURL: url)
+            defer { store.close() }
+            let item = try makeItem(store)
+            let attemptID = QueueAttemptID(itemID: item.id, attempt: 0)
+            let execution = QueueExecutionID(rawValue: UUID())
+            _ = try store.beginReport(
+                attemptID: attemptID, executionID: execution,
+                operation: .ingest, scope: scope(item.payload.sourceIDs))
+            _ = try store.commitReportMutation(
+                attemptID: attemptID, executionID: execution,
+                mutation: QueueReportMutation(outputs: expected))
+            return item
+        }()
+
+        let reopened = try QueueStore(databaseURL: url)
+        defer { reopened.close() }
+        #expect(try reopened.loadReport(itemID: item.id)?.outputs == expected)
     }
 
     // MARK: Attempt isolation

@@ -189,6 +189,9 @@ public final class QueueStore: @unchecked Sendable {
     ///   storage.
     /// - v6: final typed transcript cutover. Drops only the approved legacy
     ///   `queue_item_events` table.
+    /// - v7: durable attempt report headers and target rows.
+    /// - v8: nullable durable usage columns on attempt report headers.
+    /// - v9: durable ingestion output snapshots with explicit presence.
     private static let migrator: DatabaseMigrator = {
         var m = DatabaseMigrator()
 
@@ -400,6 +403,35 @@ public final class QueueStore: @unchecked Sendable {
                 ALTER TABLE queue_attempt_reports ADD COLUMN \(name) \(type);
                 """)
             }
+        }
+
+        // v9: immutable-at-completion page output snapshots for ingestion
+        // attempts. The header bit distinguishes an unrecorded legacy snapshot
+        // from a recorded empty snapshot; rows preserve typed page identity,
+        // recorded title, and deterministic query order.
+        m.registerMigration("v9_add_attempt_report_outputs") { db in
+            let existing = Set(try db.columns(in: "queue_attempt_reports").map(\.name))
+            if !existing.contains("outputs_recorded") {
+                try db.execute(sql: """
+                ALTER TABLE queue_attempt_reports
+                ADD COLUMN outputs_recorded INTEGER NOT NULL DEFAULT 0;
+                """)
+            }
+            try db.execute(sql: """
+            CREATE TABLE IF NOT EXISTS queue_attempt_report_outputs (
+                item_id       TEXT NOT NULL REFERENCES queue_items(id) ON DELETE CASCADE,
+                attempt       INTEGER NOT NULL,
+                page_id       TEXT NOT NULL,
+                seq           INTEGER NOT NULL,
+                title         TEXT,
+                PRIMARY KEY (item_id, attempt, page_id),
+                UNIQUE (item_id, attempt, seq)
+            ) WITHOUT ROWID;
+            """)
+            try db.execute(sql: """
+            CREATE INDEX IF NOT EXISTS idx_queue_attempt_report_outputs_order
+                ON queue_attempt_report_outputs(item_id, attempt, seq);
+            """)
         }
 
         return m
@@ -1325,7 +1357,7 @@ extension QueueStore {
         item_id, attempt, execution_id, operation, scope, phase, provider_id,
         model, availability, result_summary, revision,
         input_tokens, output_tokens, cached_read_tokens, thought_tokens,
-        cost, currency
+        cost, currency, outputs_recorded
         """
 
     private static let reportEncoder = JSONEncoder()
@@ -1415,6 +1447,27 @@ extension QueueStore {
                 detail: targetRow["detail"]))
         }
 
+        let outputs: [QueueRecordedOutputPage]?
+        let outputsRecorded: Int = row["outputs_recorded"]
+        if outputsRecorded != 0 {
+            let outputRows = try Row.fetchAll(
+                db,
+                sql: """
+                SELECT page_id, title
+                FROM queue_attempt_report_outputs
+                WHERE item_id = ? AND attempt = ?
+                ORDER BY seq ASC;
+                """,
+                arguments: [itemID.rawValue, attempt])
+            outputs = outputRows.map { outputRow in
+                QueueRecordedOutputPage(
+                    pageID: PageID(rawValue: outputRow["page_id"]),
+                    title: outputRow["title"] as String?)
+            }
+        } else {
+            outputs = nil
+        }
+
         return QueueAttemptReport(
             attemptID: QueueAttemptID(itemID: itemID, attempt: attempt),
             executionID: QueueExecutionID(rawValue: executionUUID),
@@ -1427,6 +1480,7 @@ extension QueueStore {
             availability: availability,
             resultSummary: row["result_summary"],
             usage: Self.readReportUsage(row),
+            outputs: outputs,
             targets: targets)
     }
 
@@ -1483,13 +1537,16 @@ extension QueueStore {
             sql: "DELETE FROM queue_attempt_report_targets WHERE item_id = ? AND attempt = ?;",
             arguments: [itemID.rawValue, attempt])
         try db.execute(
+            sql: "DELETE FROM queue_attempt_report_outputs WHERE item_id = ? AND attempt = ?;",
+            arguments: [itemID.rawValue, attempt])
+        try db.execute(
             sql: """
             UPDATE queue_attempt_reports
             SET execution_id = ?, phase = ?, availability = ?,
                 result_summary = NULL, provider_id = NULL, model = NULL,
                 input_tokens = NULL, output_tokens = NULL,
                 cached_read_tokens = NULL, thought_tokens = NULL,
-                cost = NULL, currency = NULL,
+                cost = NULL, currency = NULL, outputs_recorded = 0,
                 revision = revision + 1, updated_at = ?
             WHERE item_id = ? AND attempt = ?;
             """,
@@ -1597,8 +1654,8 @@ extension QueueStore {
     /// - No header → insert at revision 1 with the scope's planned targets.
     /// - Header with the same execution → no-op, returns the current report.
     /// - Header with a different execution (same-attempt restart,
-    ///   halt-resume dispatch) → resets progress and advances the revision;
-    ///   the scope is re-inserted fresh.
+    ///   halt-resume dispatch) → resets progress, usage, and outputs and
+    ///   advances the revision; the scope is re-inserted fresh.
     ///
     /// This is the only place a report's target inventory is (re)created.
     /// `requeue(id:)` never calls this — halt/cancellation keeps observed
@@ -1765,6 +1822,26 @@ extension QueueStore {
                     attemptID: attemptID,
                     records: mutation.targetUpserts,
                     at: now)
+                if let outputs = mutation.outputs {
+                    try db.execute(
+                        sql: "DELETE FROM queue_attempt_report_outputs WHERE item_id = ? AND attempt = ?;",
+                        arguments: [attemptID.itemID.rawValue, attemptID.attempt])
+                    for (index, output) in outputs.enumerated() {
+                        try db.execute(
+                            sql: """
+                            INSERT INTO queue_attempt_report_outputs
+                                (item_id, attempt, page_id, seq, title)
+                            VALUES (?, ?, ?, ?, ?);
+                            """,
+                            arguments: [
+                                attemptID.itemID.rawValue, attemptID.attempt,
+                                output.pageID.rawValue, index, output.title,
+                            ])
+                    }
+                    try db.execute(
+                        sql: "UPDATE queue_attempt_reports SET outputs_recorded = 1 WHERE item_id = ? AND attempt = ?;",
+                        arguments: [attemptID.itemID.rawValue, attemptID.attempt])
+                }
 
                 guard let committed = try Self.readReport(db, itemID: attemptID.itemID, attempt: attemptID.attempt) else {
                     throw QueueReportStoreError.notInitialized(attemptID.itemID)
@@ -2000,6 +2077,9 @@ extension QueueStore {
             try queue.write { db in
                 try db.execute(
                     sql: "DELETE FROM queue_attempt_report_targets WHERE item_id = ?;",
+                    arguments: [itemID.rawValue])
+                try db.execute(
+                    sql: "DELETE FROM queue_attempt_report_outputs WHERE item_id = ?;",
                     arguments: [itemID.rawValue])
                 try db.execute(
                     sql: "DELETE FROM queue_attempt_reports WHERE item_id = ?;",

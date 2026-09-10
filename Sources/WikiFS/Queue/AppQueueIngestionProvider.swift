@@ -303,11 +303,25 @@ final class AppQueueIngestionProvider: QueueIngestionProvider {
             exitStatus: launcher.exitStatus,
             preflightError: launcher.preflightError,
             runHadTurnFailure: launcher.runHadTurnFailure)
+        // Snapshot the actual post-run citation evidence. Workspace merging
+        // has already completed (or logged its best-effort failure) before
+        // `runAgent` returns, so this records only pages visible afterward.
+        let outputs: [QueueRecordedOutputPage]?
+        do {
+            outputs = try store.pagesCitingSources(
+                sourceIDs: sourceIDs,
+                limit: QueueRecordedOutputLimits.maxRows
+            ).map { QueueRecordedOutputPage(pageID: $0.pageID, title: $0.title) }
+        } catch {
+            DebugLog.store("AppQueueIngestionProvider: output snapshot failed: \(error)")
+            outputs = nil
+        }
         // Staged sources stay `.submitted` — per-source ingestion completion
         // is never inferred from agent exit or workspace merge success.
         onReport?(QueueIngestionReporting.agentCompletionMutation(
             operation: .ingest,
-            usage: launcher.runTotalUsage))
+            usage: launcher.runTotalUsage,
+            outputs: outputs))
     }
 
     // MARK: - Lint (payload variant of .ingestion)

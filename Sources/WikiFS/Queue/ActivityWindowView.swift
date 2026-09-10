@@ -121,12 +121,6 @@ struct ActivityWindowView: View {
     /// never touches selection or queue state — the panel is
     /// presentation-only.
     @State private var showsRunDetailsInspector = false
-    /// The selected ingestion job's recorded outputs (Outputs section):
-    /// loaded in a `.task` keyed by item id + attempt, never in body. The
-    /// companion key records which load the state describes so a re-keyed
-    /// task can discard a result that no longer matches the selection.
-    @State private var selectedOutputs: QueueOutputsLoadState = .loading
-    @State private var selectedOutputsKey = ""
     /// The split view's measured content width (design change 6): drives the
     /// toolbar search's expand/collapse decision
     /// (``QueueSearchToolbarForm/decision``). `nil` until the first layout
@@ -1129,15 +1123,6 @@ struct ActivityWindowView: View {
                     for: item.id,
                     attempt: item.attempt)
             }
-            .task(id: outputsLoadKey(for: item)) {
-                // Load the selected ingestion job's recorded outputs (the
-                // Overview's Outputs section) — the same async posture as the
-                // report load above, keyed on item id + attempt so a retry
-                // re-runs it but unrelated snapshot refreshes don't. Non-
-                // ingest items return immediately: their Overview keeps the
-                // single unchanged section.
-                await loadRecordedOutputs(for: item)
-            }
         } else if activeItems.isEmpty && recentItems.isEmpty {
             emptyState
         } else if selectedItemID != nil {
@@ -1208,66 +1193,6 @@ struct ActivityWindowView: View {
     private func reportLoadKey(for item: QueueItem) -> String {
         let revision = activityTracker.reportSummaries[item.id]?.revision.rawValue ?? -1
         return "\(item.id.rawValue)|\(item.attempt)|\(item.state.rawValue)|\(revision)"
-    }
-
-    /// Task identity for the recorded-outputs load: item id + attempt. A
-    /// retry re-runs the store read (the new attempt can cite new pages);
-    /// summary revisions and lifecycle transitions don't change citation
-    /// evidence, so they don't re-run it.
-    private func outputsLoadKey(for item: QueueItem) -> String {
-        "\(item.id.rawValue)|\(item.attempt)"
-    }
-
-    /// The recorded-outputs load decision at the view seam, extracted for
-    /// coverage: a completed store read maps to `.loaded(pages)`; a thrown
-    /// store error maps to `.failed` (logged) — never a fabricated empty or
-    /// zero result. Static, store-in/state-out, `@MainActor` like
-    /// `WikiStoreModel`, so `QueueOutputsMappingTests` can pin the throw
-    /// path against a real GRDB store read without hosting the full window.
-    static func recordedOutputsLoadState(
-        store: WikiStoreModel,
-        sourceIDs: [SourceID],
-        limit: Int
-    ) -> QueueOutputsLoadState {
-        do {
-            return .loaded(try store.pagesCitingSources(sourceIDs: sourceIDs, limit: limit))
-        } catch {
-            DebugLog.store("ActivityWindow: load recorded outputs failed: \(error)")
-            return .failed
-        }
-    }
-
-    /// Load the selected ingestion job's recorded outputs — the pages whose
-    /// page-version provenance cites the job's input sources, resolved ONLY
-    /// from recorded store citation evidence (never from job success, agent
-    /// exit, or merge completion). Bounded by
-    /// `QueueWorkspaceMetrics.Outputs.maxRows`.
-    ///
-    /// Failure path: DebugLog + the honest `.failed` empty state — never a
-    /// fabricated zero (the loading/failed counts are unknown → `nil`).
-    ///
-    /// Stale-write discipline: the read itself is a bounded, synchronous,
-    /// indexed store query on the main actor (the `PageDetailView`
-    /// provenance-load posture — no suspension point inside), so there is no
-    /// interleaving to race today; the key check still guards the writes in
-    /// case the seam ever gains an `await`.
-    private func loadRecordedOutputs(for item: QueueItem) async {
-        guard QueueWorkspaceMapper.reportOperation(for: item) == .ingest else { return }
-        let key = outputsLoadKey(for: item)
-        selectedOutputsKey = key
-        selectedOutputs = .loading
-        guard let store = sessionManager?.sessions[item.wikiID]?.store else {
-            DebugLog.store(
-                "ActivityWindow: no store for recorded-outputs load (wiki \(item.wikiID.rawValue))")
-            selectedOutputs = .failed
-            return
-        }
-        let state = Self.recordedOutputsLoadState(
-            store: store,
-            sourceIDs: item.payload.sourceIDs,
-            limit: QueueWorkspaceMetrics.Outputs.maxRows)
-        guard selectedOutputsKey == key else { return }
-        selectedOutputs = state
     }
 
     /// The header's Configure… action for configuration failures (#440). The
@@ -1362,9 +1287,18 @@ struct ActivityWindowView: View {
                 from: report, item: item, operation: operation, nameIndex: nameIndex,
                 liveIndex: liveIndex, isSessionOpen: isSessionOpen)
         }
+        let outputState: QueueOutputsLoadState
+        switch viewModel.selectedReport {
+        case .idle, .loading:
+            outputState = .loading
+        case .unavailable:
+            outputState = .unavailable
+        case .notReported, .loaded:
+            outputState = .notRecorded
+        }
         return legacyOverview(
-            for: item, operation: operation, nameIndex: nameIndex,
-            liveIndex: liveIndex, isSessionOpen: isSessionOpen)
+            for: item, operation: operation, outputState: outputState,
+            nameIndex: nameIndex, liveIndex: liveIndex, isSessionOpen: isSessionOpen)
     }
 
     /// True when the view model's loaded report describes THIS selection:
@@ -1412,7 +1346,11 @@ struct ActivityWindowView: View {
             rows: rows,
             resultStatement: Self.resultStatement(for: report),
             emptyStateText: emptyStateText(for: operation, isWholeWiki: isWholeWiki),
-            outputs: outputsSectionValue(for: item, operation: operation, nameIndex: nameIndex))
+            outputs: outputsSectionValue(
+                for: item,
+                operation: operation,
+                state: report.outputs.map(QueueOutputsLoadState.loaded) ?? .notRecorded,
+                nameIndex: nameIndex))
     }
 
     /// One recorded target → one inventory row. Titles use the FULL name
@@ -1479,6 +1417,7 @@ struct ActivityWindowView: View {
     private func legacyOverview(
         for item: QueueItem,
         operation: QueueReportOperation,
+        outputState: QueueOutputsLoadState,
         nameIndex: QueueTargetNameIndex,
         liveIndex: QueueTargetNameIndex,
         isSessionOpen: Bool
@@ -1524,21 +1463,24 @@ struct ActivityWindowView: View {
             rows: rows,
             resultStatement: nil,
             emptyStateText: emptyStateText(for: operation, isWholeWiki: isWholeWiki),
-            outputs: outputsSectionValue(for: item, operation: operation, nameIndex: nameIndex))
+            outputs: outputsSectionValue(
+                for: item,
+                operation: operation,
+                state: outputState,
+                nameIndex: nameIndex))
     }
 
-    /// The ingestion-only Outputs section values: the recorded-outputs load
-    /// (asynchronous, keyed by item id + attempt) mapped onto presentation.
-    /// `nil` for every other operation — lint and extraction keep their
-    /// existing single section unchanged.
+    /// The ingestion-only Outputs section, read directly from the durable
+    /// attempt report. A nil snapshot is legacy/unrecorded, never zero.
     private func outputsSectionValue(
         for item: QueueItem,
         operation: QueueReportOperation,
+        state: QueueOutputsLoadState,
         nameIndex: QueueTargetNameIndex
     ) -> QueueOutputsSectionValue? {
         guard operation == .ingest else { return nil }
         return QueueWorkspaceMapper.outputsSection(
-            state: selectedOutputs,
+            state: state,
             nameIndex: nameIndex,
             openPage: { pageID in
                 self.openPage(

@@ -251,6 +251,8 @@ struct QueueReportEngineTests {
             model: QueueReportModelName(rawValue: "pdf2md-1"),
             availability: .available,
             resultSummary: "Extraction persisted",
+            outputs: [QueueRecordedOutputPage(
+                pageID: PageID(rawValue: "output-page"), title: "Output Page")],
             targets: [QueueReportTargetRecord(
                 target: .source(SourceID(rawValue: "s9")),
                 displayName: "Paper",
@@ -360,16 +362,20 @@ struct QueueReportEngineTests {
         #expect(lintCompletion.resultSummary?.contains("page-level results not reported") == true)
         #expect(lintCompletion.usage == nil)  // no usage reported → none committed
 
+        let expectedOutputs = [QueueRecordedOutputPage(
+            pageID: PageID(rawValue: "output-page"), title: "Recorded Output")]
         let ingestCompletion = QueueIngestionReporting.agentCompletionMutation(
             operation: .ingest,
             usage: SessionUsage(
                 inputTokens: 1, outputTokens: 2, totalTokens: 3,
                 cachedReadTokens: nil, cachedWriteTokens: nil,
                 thoughtTokens: nil, cost: nil, currency: nil, contextUsed: 0, contextSize: 0,
-                providerLabel: nil, modelId: "claude-sonnet-4-5"))
+                providerLabel: nil, modelId: "claude-sonnet-4-5"),
+            outputs: expectedOutputs)
         #expect(ingestCompletion.availability == .notReported)
         #expect(ingestCompletion.model == QueueReportModelName(rawValue: "claude-sonnet-4-5"))
         #expect(ingestCompletion.resultSummary?.contains("not reported") == true)
+        #expect(ingestCompletion.outputs == expectedOutputs)
         // The launcher's run-total usage rides along as the durable
         // report-header usage (design change 11) — the same values the
         // navigator showed live.
