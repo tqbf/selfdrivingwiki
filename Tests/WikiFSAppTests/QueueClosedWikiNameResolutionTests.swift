@@ -59,6 +59,32 @@ struct QueueClosedWikiNameResolutionTests {
         #expect(decoded.recordedSourceName(for: SourceID(rawValue: "pg1")) == "Design Notes")
     }
 
+    // MARK: - Wiki labels: live → registry → ID prefix
+
+    @Test func closedWikiFilterUsesRegistryDisplayName() {
+        let wikiID = WikiID(rawValue: "01M24JCFZF2G8JM12QHTZAX0PQ")
+        #expect(ActivityWindowView.wikiDisplayName(
+            for: wikiID,
+            liveName: nil,
+            registryName: "Research Wiki") == "Research Wiki")
+    }
+
+    @Test func liveWikiNameWinsAndBlankNamesFallBack() {
+        let wikiID = WikiID(rawValue: "01M24JCFZF2G8JM12QHTZAX0PQ")
+        #expect(ActivityWindowView.wikiDisplayName(
+            for: wikiID,
+            liveName: "Renamed Live Wiki",
+            registryName: "Registry Wiki") == "Renamed Live Wiki")
+        #expect(ActivityWindowView.wikiDisplayName(
+            for: wikiID,
+            liveName: "  ",
+            registryName: "Registry Wiki") == "Registry Wiki")
+        #expect(ActivityWindowView.wikiDisplayName(
+            for: wikiID,
+            liveName: nil,
+            registryName: "\n") == "01M24JCF")
+    }
+
     // MARK: - Precedence: live → recorded → read-only
 
     private func effectiveIndex(

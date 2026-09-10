@@ -783,6 +783,7 @@ struct WikiFSApp: App {
                 queueEngine: queueEngine,
                 activityTracker: activityTracker,
                 sessionManager: sessionManager,
+                wikiDescriptors: registry.wikis,
                 openWindowBridge: openWindowBridge
             )
             .appEnvironment(

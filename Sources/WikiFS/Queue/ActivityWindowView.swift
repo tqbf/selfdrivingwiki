@@ -81,8 +81,7 @@ struct ActivityTranscriptPresentation {
 /// column), opened by the toolbar's "Run Details" toggle — it is not part of
 /// the Overview.
 ///
-/// **Toolbar:** a leading job-search control, then — right-aligned after a
-/// flexible spacer, icon-only per design change 7 — this queue's "Queue
+/// **Toolbar:** right-aligned, icon-only controls for this queue's "Queue
 /// Actions" menu (pause/resume with inline guidance + Stop All… with its
 /// explicit confirmation) and the Run Details inspector toggle (global
 /// actions live in the top bar, per the macOS layout formula). Since lint
@@ -94,6 +93,9 @@ struct ActivityWindowView: View {
     let queueEngine: any QueueEngineClient
     @Bindable var activityTracker: QueueActivityTracker
     weak var sessionManager: SessionManager?
+    /// Complete app registry snapshot. Unlike `SessionManager.sessions`, this
+    /// includes closed wikis, so filters and rows can show their display names.
+    var wikiDescriptors: [WikiDescriptor] = []
     /// Bridges the SwiftUI environment's `openSettings` action so the
     /// "Configure…" CTA buttons can open Settings on the relevant tab
     /// (#440). Set by `MenuBarItemController` when creating the window.
@@ -2010,8 +2012,28 @@ struct ActivityWindowView: View {
         return markers.contains(where: { lower.contains($0) })
     }
 
+    /// Resolve a wiki label without requiring its session to be open. The live
+    /// descriptor wins so an open window's latest rename appears immediately;
+    /// the app registry names closed wikis; the ID prefix is the honest fallback
+    /// for deleted or otherwise unknown registry entries.
+    nonisolated static func wikiDisplayName(
+        for id: WikiID,
+        liveName: String?,
+        registryName: String?
+    ) -> String {
+        for name in [liveName, registryName] {
+            if let name, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return name
+            }
+        }
+        return String(id.rawValue.prefix(8))
+    }
+
     private func wikiDisplayName(for id: WikiID) -> String {
-        sessionManager?.sessions[id]?.descriptor.displayName ?? String(id.rawValue.prefix(8))
+        Self.wikiDisplayName(
+            for: id,
+            liveName: sessionManager?.sessions[id]?.descriptor.displayName,
+            registryName: wikiDescriptors.first(where: { $0.id == id })?.displayName)
     }
 
     /// The kind word the navigator search matches for `item` ("Lint",
@@ -2075,6 +2097,10 @@ struct ActivityWindowView: View {
     private func buildRowDisplayData(for items: [QueueItem]) -> [QueueItem.ID: RowDisplayData] {
         // Snapshot the observable dictionaries once.
         let sessions = sessionManager?.sessions ?? [:]
+        var registryNames: [WikiID: String] = [:]
+        for descriptor in wikiDescriptors where registryNames[descriptor.id] == nil {
+            registryNames[descriptor.id] = descriptor.displayName
+        }
         let itemUsage = activityTracker.itemUsage
         let liveUsage = activityTracker.liveUsage
         let pendingPermissions = activityTracker.pendingPermissions
@@ -2099,7 +2125,10 @@ struct ActivityWindowView: View {
         result.reserveCapacity(items.count)
         for item in items {
             let session = sessions[item.wikiID]
-            let wikiName = session?.descriptor.displayName ?? String(item.wikiID.rawValue.prefix(8))
+            let wikiName = Self.wikiDisplayName(
+                for: item.wikiID,
+                liveName: session?.descriptor.displayName,
+                registryName: registryNames[item.wikiID])
 
             // Resolve source/page names through the closed-wiki-aware
             // effective index (live → recorded → read-only; observable reads
