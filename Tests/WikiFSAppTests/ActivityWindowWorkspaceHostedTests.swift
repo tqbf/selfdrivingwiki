@@ -31,9 +31,7 @@ import WikiFSEngine
 /// and forcing manual accessibility changes nothing). The harness therefore
 /// finds the parts of the production window that DO bridge to real AppKit
 /// objects, and asserts through those:
-/// - the toolbar (`NSToolbarItem.label`, e.g. "Queue Actions", and
-///   accessibility labels for the icon-only controls — design change 7 —
-///   including the `NSPopUpButton` the Queue Actions menu mounts as),
+/// - the toolbar's remaining Run Details control,
 /// - the segmented Overview/Activity selector (`NSSegmentedControl` labels),
 /// - the navigator's Filter popup button (real title),
 /// - editable `NSTextField`s — the Overview's local search placeholder
@@ -352,7 +350,7 @@ struct ActivityWindowWorkspaceHostedTests {
         }
     }
 
-    /// Toolbar item labels (the Pause Queue control is a real NSToolbarItem).
+    /// Toolbar item labels used to verify removed controls stay absent.
     private func toolbarLabels(of window: NSWindow) -> [String] {
         window.toolbar?.items.map(\.label) ?? []
     }
@@ -417,17 +415,17 @@ struct ActivityWindowWorkspaceHostedTests {
         let mounted = try await workspace()
 
         // The harness finds visible labels: the window title, the shared
-        // Overview/Activity selector, and the real toolbar items — the
-        // labeled Queue Actions menu (Pause Queue lives INSIDE it, not as a
-        // separate top-level button) and the Run Details inspector toggle.
+        // Overview/Activity selector, and the Run Details toolbar toggle.
+        // Queue controls live in the navigator header; value tests pin their
+        // labels because SwiftUI buttons do not bridge reliably in this host.
         let selectorFound = await waitUntil {
             surfaceSelector(in: mounted.rootView) != nil
         }
         #expect(selectorFound, "The Overview/Activity selector must be visible")
         #expect(mounted.window.title == "Agent Queue")
         let toolbarLabels = toolbarLabels(of: mounted.window)
-        #expect(toolbarLabels.contains("Queue Actions"),
-                "The Queue Actions menu must be a visible toolbar item")
+        #expect(!toolbarLabels.contains("Queue Actions"),
+                "Queue Actions must not remain in the toolbar")
         // The Run Details toggle is an ICON-ONLY toolbar control (design
         // change 7, now a plain SwiftUI Button — design change 12): its
         // accessibility label is the name VoiceOver reads. SwiftUI re-derives
@@ -442,9 +440,6 @@ struct ActivityWindowWorkspaceHostedTests {
         // name the coordinator re-asserts — is written on a later runloop
         // tick and SwiftUI re-derives item labels asynchronously, so it is
         // not mount-time observable and not asserted here.)
-        #expect(toolbarLabels.contains("Pause Queue") == false,
-                "Pause Queue must live inside the Queue Actions menu, not as a separate top-level button")
-
         // …and invokes a real action: pressing the navigator row's Cancel
         // button (a real NSButton in the row cell) reaches the engine.
         let cancelButton = try #require(
@@ -516,8 +511,8 @@ struct ActivityWindowWorkspaceHostedTests {
         #expect(cancelled, "The queued row's action must be cancelItem")
         #expect(surfaceSelector(in: mounted.rootView) != nil,
                 "The shared Overview/Activity selector is present for queued jobs")
-        #expect(toolbarLabels(of: mounted.window).contains("Queue Actions"),
-                "The Queue Actions menu is present")
+        #expect(!toolbarLabels(of: mounted.window).contains("Queue Actions"),
+                "Queue actions stay out of the toolbar")
     }
 
     // MARK: - Scenario: one shared workspace across operations
@@ -572,41 +567,8 @@ struct ActivityWindowWorkspaceHostedTests {
     @Test func queueStopConfirmationSemantics() async throws {
         let mounted = try await workspace()
 
-        // The queue's controls live in the REAL toolbar under one labeled
-        // "Queue Actions" menu: the item exists and the menu mounts as an
-        // NSPopUpButton inside it. Pause Queue is a menu ITEM, never a
-        // separate top-level toolbar button.
-        let toolbarFound = await waitUntil {
-            toolbarLabels(of: mounted.window).contains("Queue Actions")
-        }
-        #expect(toolbarFound, "The Queue Actions menu must be in the toolbar")
-        #expect(
-            toolbarLabels(of: mounted.window).contains("Pause Queue") == false,
-            "Pause Queue must not be a separate top-level toolbar button")
-
-        // The Queue Actions menu bridges as a pop-up button in the toolbar
-        // item's hosted view. SwiftUI builds its NSMenu items lazily at open
-        // time (opening it programmatically would block the main actor), so
-        // the item list is verified only when the menu already carries items.
-        let queueActionsView = mounted.window.toolbar?.items
-            .first { $0.label == "Queue Actions" }?.view
-        let popup = queueActionsView.flatMap { popupButtons(in: $0).first }
-        if let menu = popup?.menu, !menu.items.isEmpty {
-            // The queue is running in this scenario: Pause (not Resume)
-            // heads the menu.
-            #expect(menu.items.contains { $0.title == "Pause Queue" },
-                    "The Queue Actions menu must offer Pause Queue while running")
-            #expect(menu.items.contains { $0.title == "Stop All…" },
-                    "The Queue Actions menu must offer Stop All…")
-            // Visible guidance keeps the two pausing verbs distinct: the
-            // section headers bridge as menu rows.
-            #expect(menu.items.contains { $0.title.contains("do not start new jobs") },
-                    "Pause Queue carries its visible guidance")
-            #expect(menu.items.contains { $0.title.contains("allow queued jobs to start") || $0.title.contains("let running jobs finish") },
-                    "The pause/resume section carries its guidance")
-            #expect(menu.items.contains { $0.title.contains("cancel running jobs, queued jobs remain") },
-                    "Stop All carries its visible guidance")
-        }
+        #expect(!toolbarLabels(of: mounted.window).contains("Queue Actions"),
+                "Separate queue controls replace the toolbar menu")
 
         // The confirmation's exact semantics (plan §"Stop All"): it states
         // that Stop All pauses this queue and cancels its running work. It
@@ -651,8 +613,8 @@ struct ActivityWindowWorkspaceHostedTests {
             surfaceSelector(in: mounted.rootView) != nil
         }
         #expect(minimumSelector, "Workspace selector reachable at the minimum size")
-        #expect(toolbarLabels(of: mounted.window).contains("Queue Actions"),
-                "The Queue Actions menu stays in the toolbar at the minimum size")
+        #expect(!toolbarLabels(of: mounted.window).contains("Queue Actions"),
+                "Queue actions stay in the sidebar at the minimum size")
         let minimumFits = mounted.rootView.fittingSize.width
             <= QueueWorkspaceMetrics.Window.minWidth + 1
         #expect(minimumFits,
@@ -680,23 +642,13 @@ struct ActivityWindowWorkspaceHostedTests {
         await settle(4)
     }
 
-    // MARK: - Scenario: icon-only trailing toolbar group (design change 7)
+    // MARK: - Scenario: trailing Run Details toolbar control
 
-    /// Design change 7 (2026-09-09): the toolbar borrows the main window's
-    /// geometry (ContentView) — the search control leads, a flexible spacer
-    /// eats the middle, and the icon-only Queue Actions menu + Run Details
-    /// toggle pin to the trailing edge. Asserts, at the preferred size AND
-    /// at the 640×400 usability minimum:
-    /// - both icon controls live in `window.toolbar.items` with hosted,
-    ///   visible views carrying real frames (never pushed into the »
-    ///   overflow), and Run Details sits at the window's trailing edge;
-    /// - the order is search → Queue Actions → Run Details (Run Details
-    ///   last);
-    /// - both controls render icon-only (no "Run Details"/"Queue Actions"
-    ///   visible text in the buttons) while Queue Actions keeps its AppKit
-    ///   item label ("Queue Actions") — the in-window tooltip and the
-    ///   SwiftUI accessibility label are set in the view code but don't
-    ///   bridge to NSView-level probes in this host;
+    /// The Run Details toggle stays at the trailing toolbar edge after the
+    /// queue controls move into the navigator. At the preferred size and the
+    /// 640×400 usability minimum:
+    /// - the icon control remains hosted with a visible frame;
+    /// - Queue Actions is absent from the toolbar;
     /// - the Run Details NSButton's real frame carries the shared toolbar
     ///   icon-button width (`Toolbar.iconButtonSide`, 28pt — the main
     ///   window's standard toolbar Button metrics) instead of the bare
@@ -709,7 +661,7 @@ struct ActivityWindowWorkspaceHostedTests {
     /// editor — the sandbox runner-session hazard is specific to live
     /// search-editing churn (see the suite header).
     @Test(.timeLimit(.minutes(1)))
-    func toolbarIconControlsPinnedRightVisibleAndToggling() async throws {
+    func runDetailsToolbarControlPinnedRightVisibleAndToggling() async throws {
         let mounted = try await workspace()
 
         // A completed job selected through the deep-link seam so the Run
@@ -732,11 +684,8 @@ struct ActivityWindowWorkspaceHostedTests {
             await settle(6)
             let sizeNote = "\(width)×\(height)"
 
-            let actionsFound = await waitUntil {
-                mounted.window.toolbar?.items.contains { $0.label == "Queue Actions" } ?? false
-            }
-            #expect(actionsFound,
-                    "Queue Actions stays a toolbar item at \(sizeNote)")
+            #expect(!toolbarLabels(of: mounted.window).contains("Queue Actions"),
+                    "Queue Actions stays out of the toolbar at \(sizeNote)")
             let runDetails = try #require(
                 await waitForRunDetailsToggle(in: mounted.window),
                 "Run Details stays a hosted toolbar control at \(sizeNote)")
@@ -762,36 +711,6 @@ struct ActivityWindowWorkspaceHostedTests {
                     && ((side - 2)...(side + 8)).contains(detailsFrame.height),
                     "Run Details renders at the toolbar icon-button square \(side)×\(side) at \(sizeNote) (got \(detailsFrame))")
 
-            // Queue Actions: the toolbar's only hosted pop-up button (the
-            // navigator's Filter menu lives in the content view, not the
-            // toolbar). Found by content — not by label — so the item-label
-            // identity assertion below is honest.
-            let popupPair = (mounted.window.toolbar?.items ?? [])
-                .compactMap { item -> (NSToolbarItem, NSPopUpButton)? in
-                    guard let view = item.view,
-                          let popup = popupButtons(in: view).first else { return nil }
-                    return (item, popup)
-                }
-                .first
-            let actionsItem = try #require(popupPair?.0,
-                                           "The Queue Actions pop-up stays hosted in a toolbar item at \(sizeNote)")
-            let popup = try #require(popupPair?.1,
-                                     "Queue Actions bridges as a pop-up button at \(sizeNote)")
-            let actionsFrame = popup.convert(popup.bounds, to: nil)
-            #expect(!popup.isHidden && actionsFrame.width > 0,
-                    "Queue Actions renders with a real frame at \(sizeNote)")
-            #expect(actionsFrame.maxX < detailsFrame.minX + 1,
-                    "Queue Actions sits left of Run Details at \(sizeNote)")
-            #expect(!popup.title.contains("Queue Actions"),
-                    "Queue Actions renders icon-only at \(sizeNote) (title '\(popup.title)')")
-            // The AppKit-visible name for a toolbar control is its item
-            // label (customization palette + overflow list). The in-window
-            // tooltip and the SwiftUI accessibility label ("Queue Actions")
-            // are set in the view code but do not bridge to NSView-level
-            // probes in this host (see the suite header).
-            #expect(actionsItem.label == "Queue Actions",
-                    "The Queue Actions item keeps its AppKit label at \(sizeNote) (got '\(actionsItem.label)')")
-
             // Icon-only Run Details with its identity intact (design
             // change 12): the trailing item hosts no text — the
             // "sidebar.right" glyph carries the rendering, and the
@@ -802,19 +721,16 @@ struct ActivityWindowWorkspaceHostedTests {
                         "Run Details renders icon-only at \(sizeNote)")
             }
 
-            // Search belongs to the navigator. The toolbar contains only the
-            // global Queue Actions and Run Details controls.
-            let items = mounted.window.toolbar?.items ?? []
-            let toolbarHasSearch = items.contains { item in
+            // Search and queue actions belong to the navigator. Run Details is
+            // the only custom control that remains in the toolbar.
+            let toolbarHasSearch = (mounted.window.toolbar?.items ?? []).contains { item in
                 guard let view = item.view else { return false }
                 return allSubviews(of: view).contains { $0 is NSSearchField }
             }
-            let actionsIndex = items.firstIndex { $0 === actionsItem }
-            let detailsIndex = items.lastIndex { $0.view != nil }
             #expect(!toolbarHasSearch,
                     "Search stays out of the toolbar at \(sizeNote)")
-            #expect(actionsIndex.flatMap { a in detailsIndex.map { a < $0 } } == true,
-                    "Run Details is the last control at \(sizeNote) (actions \(String(describing: actionsIndex)), details \(String(describing: detailsIndex)))")
+            #expect(!toolbarLabels(of: mounted.window).contains("Queue Actions"),
+                    "Queue Actions stays out of the toolbar at \(sizeNote)")
         }
 
         // The window is at 640×400 here. The toggle still works: pressing it

@@ -268,15 +268,15 @@ Both windows show:
   reordering turns off while filters or search are active).
 - **Recent** section — up to 200 completed/failed/cancelled items.
 - **Per-item controls** — Cancel (running/queued), Retry Job (failed/cancelled).
-- **Toolbar** — a **Search** control at the left end, and two icon-only
-  controls pinned to the right edge: the **Queue Actions** menu
-  (ellipsis.circle icon) and the **Run Details** toggle (sidebar.right icon).
-  Point at an icon to see its name.
+- **Sidebar header** — the search field appears above the job list. Separate
+  icon buttons for **Pause Queue** or **Resume Queue**, **Stop All…**, and
+  **Filter** sit beside All Jobs. Point at an icon to see its name.
+- **Toolbar** — the **Run Details** toggle (sidebar.right icon) stays at the
+  right edge.
 
-The Queue Actions menu holds Pause Queue (or Resume Queue) and Stop All.
-Each menu item carries its own guidance. Pause stops new starts and lets
-running jobs finish. Stop All pauses the queue and cancels its running jobs.
-Queued jobs stay queued. The confirmation states this before you confirm.
+Pause stops new starts and lets running jobs finish. Resume starts dispatch
+again. Stop All pauses the queue and cancels its running jobs. Queued jobs stay
+queued. The confirmation states this before you confirm.
 
 Select a job to open its workspace. **Overview** shows the job's targets.
 The Run Details toggle opens the optional Run Details inspector. **Activity**

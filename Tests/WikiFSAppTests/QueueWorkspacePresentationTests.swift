@@ -635,6 +635,21 @@ import WikiFSEngine
         #expect(QueueWorkspaceMetrics.Toolbar.iconButtonSide == 28)
     }
 
+    // MARK: - Sidebar queue controls
+
+    @Test func pauseResumePresentationFollowsQueueState() {
+        #expect(QueuePauseResumePresentation.make(for: .running)
+            == QueuePauseResumePresentation(
+                label: "Pause Queue",
+                symbol: "pause.fill",
+                help: "Pause Queue — stop new starts. Running jobs continue."))
+        #expect(QueuePauseResumePresentation.make(for: .paused)
+            == QueuePauseResumePresentation(
+                label: "Resume Queue",
+                symbol: "play.fill",
+                help: "Resume Queue — allow queued jobs to start"))
+    }
+
     // MARK: - Sidebar search
 
     @Test func sidebarSearchPromptIsPinned() {

@@ -222,6 +222,15 @@ this section is current.
     footer, outside-filter notice, and reorder guard stay unchanged. This
     supersedes design change 6. Affected sections: "Layout contract", "Job
     navigator (left)", "Selection, filters, and deep links".
+19. **Separate queue controls move into the sidebar (2026-09-10, operator
+    request).** The All Jobs or Filtered Jobs header has separate icon-only
+    Pause/Resume and Stop buttons before Filter. Pause and Resume share one
+    position and change with the queue state. Stop keeps its destructive
+    confirmation. Both controls use tooltips and accessibility labels, and both
+    disable while a queue command is pending. The combined Queue Actions menu
+    is removed. Run Details remains the only queue-specific toolbar control.
+    This supersedes design changes 2 and 7. Affected sections: "Layout
+    contract", "Job navigator (left)", and "Queue controls: Pause and Stop All".
 
 ## Goal
 
@@ -241,11 +250,11 @@ This is a layout contract, not pixel-perfect artwork.
 
 ```text
 ┌───────────────────────────────────────────────────────────────────────────┐
-│ Native title bar   Agent Queue                 Queue Actions   Details   │
+│ Native title bar   Agent Queue                                 Details   │
 │                    1 running · 4 queued                                  │
 ├─────────────────────────┬─────────────────────────────────────────────────┤
 │ Search loaded jobs      │ Research papers and 11 others [Ingest] Cancel │
-│ All Jobs  [Filter ▾]    │ Research Wiki · 01M… · Running · 2m 14s        │
+│ All Jobs  [⏸] [■] [Filter ▾] │ Research Wiki · 01M… · Running · 2m 14s  │
 │ ACTIVE                  │ Staging sources: 8 of 12                       │
 │ ◉ Research papers…      │ ━━━━━━━━━━━━━────────                          │
 │   [Ingest] 01M… · 2m    │ [Overview | Activity]                          │
@@ -274,11 +283,13 @@ repeated badges, custom traffic lights, and permanently visible raw metadata.
   An operation chip identifies ingestion, extraction, or lint. The metadata
   shows the job ID and one state, progress, or elapsed value. An unresolved
   first name uses count wording. No row title shows a raw target ID.
-- The job search stays visible at the top of the navigator, above the filter
-  row and job sections. It uses the full sidebar width at all window sizes. The
-  one filter menu covers State, Wiki, and Operation.
-  Operation appears in Agent Queue only. Defaults are All. Active filters
-  show with a clear action.
+- The job search stays visible at the top of the navigator, above the header
+  row and job sections. It uses the full sidebar width at all window sizes.
+- The All Jobs or Filtered Jobs header has separate Pause/Resume and Stop icon
+  buttons before Filter. Tooltips and accessibility labels identify each
+  control. The one filter menu covers State, Wiki, and Operation. Operation
+  appears in Agent Queue only. Defaults are All. Active filters show with a
+  clear action.
 - Width: minimum 220, ideal 280, maximum 360 points. These values live in
   `QueueWorkspaceMetrics`.
 
@@ -444,16 +455,17 @@ These rules bound what the workspace may claim.
 
 ### Pause Queue
 
-Pause Queue lives inside the labeled "Queue Actions" toolbar menu; it is not
-a separate top-level button. Pausing stops new starts. Running work
-finishes. Resume allows dispatch again. The menu carries this guidance as
-visible text.
+A separate icon button appears in the sidebar header beside All Jobs or
+Filtered Jobs. It changes between Pause Queue and Resume Queue with the queue
+state. Pause stops new starts. Running work finishes. Resume allows dispatch
+again. The button has a tooltip and an accessibility label.
 
 ### Stop All
 
-Stop All lives in the same "Queue Actions" menu. Its confirmation states that
-Stop All pauses this queue and cancels its running work. It does not delete queued
-work, and the confirmation does not imply that it does.
+A separate Stop All icon button appears beside Pause or Resume. Its confirmation
+states that Stop All pauses this queue and cancels its running work. It does not
+delete queued work, and the confirmation does not imply that it does. Both
+queue controls disable while a queue command is pending.
 
 ## Whole-job retry
 

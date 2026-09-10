@@ -26,9 +26,10 @@ the same job title, wiki name, operation, target names, error, and report
 summary text. An active query still disables reordering and uses the existing
 outside-filter notice.
 
-The toolbar now contains only global queue actions and the Run Details control.
-The change removes the custom `NSSearchField` bridge, expansion state, split
-width tracking, search-only metrics, and responsive toolbar tests.
+At this point, the toolbar contained global queue actions and Run Details.
+Design change 19 later moved the queue actions into the sidebar header. The
+change removed the custom `NSSearchField` bridge, expansion state, split width
+tracking, search-only metrics, and responsive toolbar tests.
 
 ## Test verdict
 

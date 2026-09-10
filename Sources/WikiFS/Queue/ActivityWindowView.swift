@@ -81,11 +81,10 @@ struct ActivityTranscriptPresentation {
 /// column), opened by the toolbar's "Run Details" toggle — it is not part of
 /// the Overview.
 ///
-/// **Toolbar:** right-aligned, icon-only controls for this queue's "Queue
-/// Actions" menu (pause/resume with inline guidance + Stop All… with its
-/// explicit confirmation) and the Run Details inspector toggle (global
-/// actions live in the top bar, per the macOS layout formula). Since lint
-/// runs on `.ingestion`, the Ingestion window covers lint too.
+/// **Controls:** separate icon-only Pause/Resume and Stop buttons sit in the
+/// sidebar header beside All Jobs. Stop keeps its explicit confirmation. The
+/// toolbar retains only the right-aligned Run Details inspector toggle. Since
+/// lint runs on `.ingestion`, the Ingestion window covers lint too.
 struct ActivityWindowView: View {
     /// Which queue this window shows. Items from the other queue are
     /// filtered out of every snapshot read.
@@ -136,14 +135,6 @@ struct ActivityWindowView: View {
         switch queue {
         case .extraction, .transcription: return "Extraction Queue"
         case .ingestion: return "Agent Queue"
-        }
-    }
-
-    /// The toolbar/menu icon for this queue's window.
-    private var queueControlIcon: String {
-        switch queue {
-        case .extraction, .transcription: return "doc.text.magnifyingglass"
-        case .ingestion: return "tray.full"
         }
     }
 
@@ -219,11 +210,11 @@ struct ActivityWindowView: View {
             Text(Self.stopAllConfirmationMessage)
         }
         .toolbar {
-            // Queue Actions and Run Details are global window controls. Search
-            // belongs to the navigator and renders above its filters and jobs.
+            // Run Details applies to the selected job and remains a window-level
+            // inspector control. Queue-wide Pause and Stop live with the job
+            // navigator beside its All Jobs / Filtered Jobs heading.
             ToolbarSpacer(.flexible)
-            ToolbarItemGroup(placement: .automatic) {
-                queueControlMenu
+            ToolbarItem(placement: .automatic) {
                 runDetailsInspectorToggle
             }
         }
@@ -621,7 +612,8 @@ struct ActivityWindowView: View {
         HStack {
             Text(jobFilter.isActive ? "Filtered Jobs" : "All Jobs")
                 .font(.headline)
-            Spacer()
+            Spacer(minLength: QueueWorkspaceMetrics.Spacing.xs)
+            sidebarQueueControls
             Menu("Filter", systemImage: "line.3.horizontal.decrease") {
                 Picker("State", selection: $jobFilter.state) {
                     Text("All States").tag(QueueItemState?.none)
@@ -892,51 +884,37 @@ struct ActivityWindowView: View {
 
     // MARK: - Toolbar
 
-    /// This queue's controls as one toolbar menu — global queue
-    /// controls belong in the top bar, not buried in list section headers
-    /// (and Pause Queue is not a separate top-level button). Pause/Resume
-    /// and Stop All… live inside "Queue Actions", each section headed by
-    /// concise native menu guidance so the two pausing verbs stay distinct:
-    /// Pause stops new starts and lets running jobs finish; Stop All also
-    /// cancels running jobs (queued jobs remain, restated by the explicit
-    /// destructive confirmation).
-    ///
-    /// Design change 7 (2026-09-09): the button renders icon-only — the
-    /// main window's toolbar idiom. The visible title is gone, but the
-    /// identity stays: the title still names the toolbar item for the
-    /// customization palette, `.help` shows "Queue Actions" on hover, and
-    /// the accessibility label remains "Queue Actions" for VoiceOver.
+    /// Queue-wide controls live beside the navigator heading. They are
+    /// separate buttons so Pause and Stop remain visible without opening a
+    /// menu. Tooltips state the semantic difference: Pause lets running jobs
+    /// finish, while Stop opens the existing destructive confirmation.
     @ViewBuilder
-    private var queueControlMenu: some View {
+    private var sidebarQueueControls: some View {
         let state = viewModel.snapshot.runStates[queue] ?? .running
-        Menu("Queue Actions", systemImage: "ellipsis.circle") {
-            Section {
+        let pauseResume = QueuePauseResumePresentation.make(for: state)
+        HStack(spacing: QueueWorkspaceMetrics.Spacing.xs) {
+            Button {
                 if state == .running {
-                    Button("Pause Queue", systemImage: "pause.fill") {
-                        runQueueCommand("pause queue") { try await queueEngine.pause(queue) }
-                    }
-                    .help("Stop new starts. Running jobs continue.")
+                    runQueueCommand("pause queue") { try await queueEngine.pause(queue) }
                 } else {
-                    Button("Resume Queue", systemImage: "play.fill") {
-                        runQueueCommand("resume queue") { try await queueEngine.resume(queue) }
-                    }
+                    runQueueCommand("resume queue") { try await queueEngine.resume(queue) }
                 }
-            } header: {
-                Text(state == .running
-                     ? "Pause Queue — do not start new jobs, let running jobs finish"
-                     : "Resume Queue — allow queued jobs to start")
+            } label: {
+                Image(systemName: pauseResume.symbol)
             }
-            Section {
-                Button("Stop All…", systemImage: "stop.fill", role: .destructive) {
-                    confirmsStopAll = true
-                }
-            } header: {
-                Text("Stop All — pause queue and cancel running jobs, queued jobs remain")
+            .help(pauseResume.help)
+            .accessibilityLabel(pauseResume.label)
+
+            Button(role: .destructive) {
+                confirmsStopAll = true
+            } label: {
+                Image(systemName: "stop.fill")
             }
+            .help("Stop All — pause the queue and cancel running jobs")
+            .accessibilityLabel("Stop All")
         }
-        .labelStyle(.iconOnly)
-        .help("Queue Actions")
-        .accessibilityLabel("Queue Actions")
+        .buttonStyle(.borderless)
+        .controlSize(.small)
         .disabled(isCommandPending)
     }
 

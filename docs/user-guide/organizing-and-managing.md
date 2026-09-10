@@ -241,8 +241,8 @@ All extraction and ingestion operations flow through a **persistent queue**.
 
 | Control | Where | What it does |
 |---|---|---|
-| **Pause Queue** | Activity window toolbar | Stops new starts. Running jobs finish. Resume starts dispatch again. |
-| **Stop All…** | Activity window toolbar, under Queue Actions | Pauses this queue and cancels its running jobs. Queued jobs stay queued. The confirmation states this before you confirm. |
+| **Pause Queue** / **Resume Queue** | Left sidebar header, beside All Jobs | Pause stops new starts. Running jobs finish. Resume starts dispatch again. |
+| **Stop All…** | Left sidebar header, beside Pause or Resume | Pauses this queue and cancels its running jobs. Queued jobs stay queued. The confirmation states this before you confirm. |
 | **Cancel** | Per-item button | Cancels one running or queued job. |
 | **Retry Job** | Per-item button | Runs a failed or cancelled job again as a new attempt. The whole job runs again. It does not keep the old attempt's results. |
 
@@ -257,7 +257,8 @@ Both windows share one job workspace:
 
 - **Left: job navigator.** The **Active** section lists running and queued jobs. The **Recent** section lists up to 200 finished jobs. Drag to reorder queued jobs. Reordering turns off while filters or search are active. A title uses the first page or source name, followed by "and 1 other" or "and N others" for a batch. Whole-wiki jobs use the wiki name. A chip identifies the operation. The metadata shows the job ID and current timing or state. Point at the ID to see its full value, or use **Copy Job ID** from the context menu.
 - **Search** at the top of the left job navigator, above the filters and job sections. Search covers loaded jobs only: kind, wiki name, target names, and recorded outcome text. While summaries load, the footer labels the search incomplete. The field stays visible at all window widths.
-- **Toolbar icons at the right end.** Two icon-only controls stay pinned to the right edge: the **Queue Actions** menu (ellipsis.circle icon) and the **Run Details** toggle (sidebar.right icon). Point at an icon to see its name.
+- **Sidebar header controls.** Separate icon buttons for **Pause Queue** or **Resume Queue**, **Stop All…**, and **Filter** sit beside All Jobs. Point at an icon to see its name.
+- **Toolbar icon.** The **Run Details** toggle (sidebar.right icon) stays at the right edge. Point at the icon to see its name.
 - **Filter menu** covers State, Wiki, and Operation. Active filters show a **Clear Filters** action.
 - If filters hide the selected job, the workspace stays open. It shows the notice "Selected job is outside this filter" with a **Clear Filters** action.
 - Per-item status: spinner (running), clock (queued), ✓ (completed), ⚠️ (failed), ✕ (cancelled).

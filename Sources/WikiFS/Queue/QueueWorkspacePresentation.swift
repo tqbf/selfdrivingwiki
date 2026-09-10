@@ -128,6 +128,31 @@ struct QueueOutputsSectionValue {
     let emptyStateText: String
 }
 
+// MARK: - Queue controls
+
+/// The state-driven Pause or Resume control shown in the navigator header.
+/// The value keeps its visible name, symbol, and semantic help text together.
+struct QueuePauseResumePresentation: Equatable, Sendable {
+    let label: String
+    let symbol: String
+    let help: String
+
+    static func make(for state: QueueRunState) -> QueuePauseResumePresentation {
+        switch state {
+        case .running:
+            return QueuePauseResumePresentation(
+                label: "Pause Queue",
+                symbol: "pause.fill",
+                help: "Pause Queue — stop new starts. Running jobs continue.")
+        case .paused:
+            return QueuePauseResumePresentation(
+                label: "Resume Queue",
+                symbol: "play.fill",
+                help: "Resume Queue — allow queued jobs to start")
+        }
+    }
+}
+
 // MARK: - Job lifecycle
 
 /// The job-level lifecycle the header and workspace act on. The caller maps
