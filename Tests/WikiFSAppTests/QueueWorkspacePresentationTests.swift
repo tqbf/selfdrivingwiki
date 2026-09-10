@@ -540,28 +540,20 @@ import WikiFSEngine
             .contains("Reporting unavailable") == true)
     }
 
-    // MARK: - Navigator job-ID chip (design change 13)
+    // MARK: - Header job identity
 
-    @Test func jobIDChipIsTheFullQueueItemIDAndLeaksNoTargetID() {
-        let item = QueueItem(
-            id: QueueItemID(rawValue: "01M24JCFZF2G8JM12QHTZAX0PQ"),
-            queue: .ingestion,
-            wikiID: WikiID(rawValue: "wiki"),
-            payload: QueueItemPayload(
-                sourceIDs: [SourceID(rawValue: "rs-target-1")],
-                lintPageIDs: [PageID(rawValue: "lp-target-2")]),
-            state: .completed,
-            orderingKey: 1,
-            attempt: 2,
-            createdAt: 0)
-        // The chip IS the item's own job ID — the full raw ULID, unchanged
-        // by attempts/state.
-        #expect(ActivityWindowView.jobIDChipText(for: item)
-                == "01M24JCFZF2G8JM12QHTZAX0PQ")
-        // No target ID leaks: SourceID/PageID raw values never appear in
-        // the chip (target NAMES render in the tooltip and search only).
-        #expect(!ActivityWindowView.jobIDChipText(for: item).contains("rs-target-1"))
-        #expect(!ActivityWindowView.jobIDChipText(for: item).contains("lp-target-2"))
+    @Test func headerCarriesStronglyTypedQueueItemID() {
+        let jobID = QueueItemID(rawValue: "01M24JCFZF2G8JM12QHTZAX0PQ")
+        let header = QueueJobHeaderPresentation(
+            title: "Ingestion: 1 source",
+            operationLabel: "Ingest",
+            jobID: jobID,
+            lifecycle: .completed)
+
+        // The presentation preserves the queue-item namespace. Raw text is
+        // produced only at the rendering or pasteboard boundary.
+        #expect(header.jobID == jobID)
+        #expect(header.jobID.rawValue == "01M24JCFZF2G8JM12QHTZAX0PQ")
     }
 
     @Test func runDetailsFirstAttemptAndBlankTextOmitted() {

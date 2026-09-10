@@ -718,8 +718,7 @@ struct ActivityWindowView: View {
             liveUsage: nil,
             pendingPermission: nil,
             summarySearchText: "",
-            progressLine: nil,
-            jobID: Self.jobIDChipText(for: item))
+            progressLine: nil)
         HStack(spacing: 8) {
             statusView(for: item)
                 .frame(width: 16)
@@ -745,18 +744,6 @@ struct ActivityWindowView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
-                // Design change 13 (2026-09-10): the row's own job ID chip —
-                // the FULL raw ULID in footnote monospaced secondary, its own
-                // small line, text-selectable where supported. This is the
-                // QUEUE ITEM id only; target SourceID/PageID values never
-                // render anywhere in the navigator (rows show operation +
-                // count titles and target NAMES only).
-                Text(data.jobID)
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .textSelection(.enabled)
-                    .help(data.jobID)
                 // Report-backed phase progress on running rows ("Staging
                 // sources · 8 of 12"), from the item's cached summary —
                 // precomputed above so the row body reads plain values only.
@@ -877,12 +864,10 @@ struct ActivityWindowView: View {
 
     @ViewBuilder
     private func contextMenu(for item: QueueItem) -> some View {
-        // Design change 13 (2026-09-10): the row's job ID is always
-        // copyable — the full raw ULID, the same value the row chip shows.
+        // The job ID stays strongly typed until this pasteboard boundary.
         Button("Copy Job ID", systemImage: "doc.on.doc") {
             NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(
-                Self.jobIDChipText(for: item), forType: .string)
+            NSPasteboard.general.setString(item.id.rawValue, forType: .string)
         }
         // #598: extraction jobs carry sourceIDs — offer a "Reveal Source"
         // action that navigates to the source in the wiki's Sources outline,
@@ -1320,7 +1305,7 @@ struct ActivityWindowView: View {
                     for: item,
                     wikiName: wikiDisplayName(for: item.wikiID))),
             operationLabel: QueueWorkspaceMapper.operationLabel(for: item),
-            wikiName: wikiDisplayName(for: item.wikiID),
+            jobID: item.id,
             lifecycle: QueueWorkspaceMapper.lifecycle(for: item.state),
             progress: QueueWorkspaceMapper.headerProgress(
                 from: activityTracker.reportSummary(for: item.id),
@@ -2169,18 +2154,6 @@ struct ActivityWindowView: View {
         /// Phase progress line from the cached summary ("Staging sources ·
         /// 8 of 12"), or `nil` when nothing countable is recorded.
         let progressLine: String?
-        /// The row's job-ID chip (design change 13, 2026-09-10): the item's
-        /// FULL raw ULID — the queue item id, never a target SourceID/PageID.
-        let jobID: String
-    }
-
-    /// The navigator row's job-ID chip text (design change 13, 2026-09-10):
-    /// the item's OWN queue item id — the FULL raw ULID. Target identities
-    /// (SourceID/PageID) never render in the navigator, so the chip can
-    /// never leak one. Pure + `nonisolated` static so the value suite pins
-    /// the mapping without hosting the window.
-    nonisolated static func jobIDChipText(for item: QueueItem) -> String {
-        item.id.rawValue
     }
 
     /// Snapshot all `@Observable`-derived display data for the given items into
@@ -2242,8 +2215,7 @@ struct ActivityWindowView: View {
                 summarySearchText: reportSummaries[item.id]?.searchText ?? "",
                 progressLine: Self.progressLine(
                     summary: reportSummaries[item.id],
-                    item: item),
-                jobID: Self.jobIDChipText(for: item))
+                    item: item))
         }
         return result
     }

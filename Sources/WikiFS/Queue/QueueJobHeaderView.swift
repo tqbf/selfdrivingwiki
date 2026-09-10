@@ -1,4 +1,5 @@
 import SwiftUI
+import WikiFSCore
 
 // MARK: - Header presentation
 
@@ -6,8 +7,8 @@ import SwiftUI
 /// caller from `QueueItem` + report data *before* view evaluation (plain values
 /// only — no `@Observable` reads in the header body).
 ///
-/// The header shows one recognizable title, the operation/wiki/state line, the
-/// current recorded phase with progress, exactly one elapsed clock, and the
+/// The header shows one recognizable title, the job-ID/state line, the current
+/// recorded phase with progress, exactly one elapsed clock, and the
 /// state-driven actions (plan §1 "Selected job workspace"). Job errors and
 /// pending permissions render here, above the parent's content selector.
 struct QueueJobHeaderPresentation {
@@ -19,8 +20,9 @@ struct QueueJobHeaderPresentation {
     let title: String
     /// Operation word: "Ingest" / "Extract" / "Lint".
     let operationLabel: String
-    /// Wiki display name.
-    let wikiName: String
+    /// Strongly typed queue job ID. This cannot be confused with a wiki,
+    /// source, or page ID; conversion to raw text happens only while rendering.
+    let jobID: QueueItem.ID
     /// Job lifecycle — drives the status line and Cancel/Retry visibility.
     let lifecycle: QueueWorkspaceJobLifecycle
     /// Current recorded phase with optional observed counts. `nil` renders no
@@ -49,7 +51,7 @@ struct QueueJobHeaderPresentation {
     init(
         title: String,
         operationLabel: String,
-        wikiName: String,
+        jobID: QueueItem.ID,
         lifecycle: QueueWorkspaceJobLifecycle,
         progress: QueueWorkspaceProgress? = nil,
         startedAt: Date? = nil,
@@ -61,7 +63,7 @@ struct QueueJobHeaderPresentation {
     ) {
         self.title = title
         self.operationLabel = operationLabel
-        self.wikiName = wikiName
+        self.jobID = jobID
         self.lifecycle = lifecycle
         self.progress = progress
         self.startedAt = startedAt
@@ -138,8 +140,8 @@ struct QueueJobHeaderView: View {
         }
     }
 
-    /// Title, operation/wiki/state line, phase/progress, error, permission —
-    /// identical in both layouts so only the action placement changes.
+    /// Title, job-ID/state line, phase/progress, error, permission — identical
+    /// in both layouts so only the action placement changes.
     private var contentBlock: some View {
         VStack(alignment: .leading, spacing: QueueWorkspaceMetrics.Spacing.xs) {
             Text(header.title)
@@ -152,13 +154,15 @@ struct QueueJobHeaderView: View {
         }
     }
 
-    /// "Research Wiki · Running · 2m 14s" — wiki, state (symbol + text), and
-    /// the job's single elapsed clock.
+    /// "01M24… · Running · 2m 14s" — job ID, state (symbol + text), and the
+    /// job's single elapsed clock.
     private var metaLine: some View {
         HStack(spacing: QueueWorkspaceMetrics.Spacing.xs) {
-            Text(header.wikiName)
-                .font(.callout)
+            Text(header.jobID.rawValue)
+                .font(.callout.monospaced())
                 .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .help(header.jobID.rawValue)
             Text(verbatim: "·")
                 .font(.callout)
                 .foregroundStyle(.tertiary)
