@@ -711,7 +711,8 @@ struct ActivityWindowView: View {
     private func itemRow(_ item: QueueItem, displayData: RowDisplayData?) -> some View {
         let data = displayData ?? RowDisplayData(
             title: Self.kindLabel(for: item),
-            subtitle: String(item.wikiID.rawValue.prefix(8)),
+            jobID: item.id,
+            relativeTime: nil,
             wikiName: String(item.wikiID.rawValue.prefix(8)),
             targetNames: [],
             usage: nil,
@@ -726,23 +727,17 @@ struct ActivityWindowView: View {
                 Text(data.title)
                     .lineLimit(1)
                     .help(data.targetNames.joined(separator: "\n"))
-                // Running rows tick: the wiki name plus a live elapsed time
-                // inside a per-second TimelineView. The precomputed subtitle
-                // is a frozen "N min. ago" string that never updates, and
-                // printing it next to the ticking elapsed time read as two
-                // contradictory clocks.
+                // Lead with the strongly typed queue-item ID. Running rows
+                // update their elapsed suffix inside a per-second TimelineView;
+                // terminal and queued rows use the precomputed relative time.
                 if item.state == .running, item.startedAt != nil {
                     TimelineView(.periodic(from: .now, by: 1)) { context in
-                        Text("\(data.wikiName) · running · \(elapsedString(item.startedAt, now: context.date))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
+                        rowMetadata(
+                            jobID: data.jobID,
+                            suffix: "running · \(elapsedString(item.startedAt, now: context.date))")
                     }
                 } else {
-                    Text(data.subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                    rowMetadata(jobID: data.jobID, suffix: data.relativeTime)
                 }
                 // Report-backed phase progress on running rows ("Staging
                 // sources · 8 of 12"), from the item's cached summary —
@@ -807,6 +802,23 @@ struct ActivityWindowView: View {
         }
         .padding(.vertical, 1)
         .contextMenu { contextMenu(for: item) }
+    }
+
+    /// The sidebar metadata line. Keep the queue ID typed until this rendering
+    /// boundary, where its raw ULID is displayed beside optional timing text.
+    private func rowMetadata(jobID: QueueItem.ID, suffix: String?) -> some View {
+        Text(Self.rowMetadataText(jobID: jobID, suffix: suffix))
+            .font(.caption.monospaced())
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .help(jobID.rawValue)
+    }
+
+    /// Pure formatting seam for sidebar metadata. The typed parameter prevents
+    /// a WikiID, PageID, or SourceID from being substituted for the job ID.
+    nonisolated static func rowMetadataText(jobID: QueueItem.ID, suffix: String?) -> String {
+        guard let suffix else { return jobID.rawValue }
+        return "\(jobID.rawValue) · \(suffix)"
     }
 
     @ViewBuilder
@@ -2134,10 +2146,13 @@ struct ActivityWindowView: View {
     /// 0C5B28C2 and swiftlang/swift#89197.
     private struct RowDisplayData {
         let title: String
-        let subtitle: String
-        /// The wiki display name alone — running rows re-render it inside a
-        /// per-second `TimelineView` with a live elapsed time, which the
-        /// precomputed `subtitle` (a frozen "N min. ago" string) cannot do.
+        /// Strongly typed queue identity rendered as the row's leading
+        /// metadata. Raw text is produced only by `rowMetadata(jobID:suffix:)`.
+        let jobID: QueueItem.ID
+        /// Frozen relative time for non-running rows. Running rows derive a
+        /// live elapsed suffix in their `TimelineView` instead.
+        let relativeTime: String?
+        /// Wiki display name retained for filtering; it is not row metadata.
         let wikiName: String
         let targetNames: [String]
         let usage: SessionUsage?
@@ -2206,7 +2221,8 @@ struct ActivityWindowView: View {
 
             result[item.id] = RowDisplayData(
                 title: Self.computeRowTitle(for: item, wikiName: wikiName),
-                subtitle: computeRowSubtitle(for: item, wikiName: wikiName),
+                jobID: item.id,
+                relativeTime: relativeTime(for: item),
                 wikiName: wikiName,
                 targetNames: resolved.targets,
                 usage: itemUsage[item.id],
@@ -2337,20 +2353,6 @@ struct ActivityWindowView: View {
         let count = item.payload.sourceIDs.count
         guard count > 0 else { return Self.kindLabel(for: item) }
         return count > 1 ? "\(count) sources" : "1 source"
-    }
-
-    /// Pure computation of the row subtitle from pre-resolved data.
-    private func computeRowSubtitle(for item: QueueItem, wikiName: String) -> String {
-        if let time = relativeTime(for: item) {
-            return "\(wikiName) · \(time)"
-        }
-        return wikiName
-    }
-
-    /// Row subtitle for the detail pane. Reads `@Observable` — same caveat as
-    /// ``buildRowDisplayData(for:)``.
-    private func rowSubtitle(for item: QueueItem) -> String {
-        computeRowSubtitle(for: item, wikiName: wikiDisplayName(for: item.wikiID))
     }
 
     /// Short relative time for sidebar rows ("2 min. ago"), from the most

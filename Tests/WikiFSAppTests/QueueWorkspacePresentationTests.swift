@@ -554,6 +554,14 @@ import WikiFSEngine
         // produced only at the rendering or pasteboard boundary.
         #expect(header.jobID == jobID)
         #expect(header.jobID.rawValue == "01M24JCFZF2G8JM12QHTZAX0PQ")
+
+        // Sidebar metadata uses the same typed queue identity, followed by its
+        // timing suffix. It must not substitute the containing wiki ID.
+        #expect(ActivityWindowView.rowMetadataText(
+            jobID: jobID,
+            suffix: "3 hours ago") == "01M24JCFZF2G8JM12QHTZAX0PQ · 3 hours ago")
+        #expect(ActivityWindowView.rowMetadataText(jobID: jobID, suffix: nil)
+                == "01M24JCFZF2G8JM12QHTZAX0PQ")
     }
 
     @Test func runDetailsFirstAttemptAndBlankTextOmitted() {
