@@ -31,13 +31,8 @@ import WikiFSEngine
     }
 
     @Test func targetStatusVocabulary() {
-        // §2 target-outcome vocabulary. The `planned()` vocabulary entry
-        // still exists (2026-09-08 decision: unknown outcomes never read as
-        // zero or empty success), but inventory rows no longer RENDER it —
-        // operator decision 2026-09-09: evidence-less rows are name-only,
-        // so the mapper maps planned/notReported to `nil` (see
-        // plannedRowsCarryNoStatusRealStatesKeepChip).
-        #expect(QueueWorkspaceStatus.planned().text == "Planned")
+        // Evidence-less rows are name-only. The mapper represents planned and
+        // not-reported rows with a nil status rather than a presentation chip.
         #expect(QueueWorkspaceStatus.preparing().text == "Preparing")
         #expect(QueueWorkspaceStatus.submitted().text == "Submitted")
         #expect(QueueWorkspaceStatus.processing().text == "Processing")
@@ -46,7 +41,7 @@ import WikiFSEngine
         // Every status carries a symbol: color is never the only signal.
         for status in [
             QueueWorkspaceStatus.queued(), .running(), .completed(), .failed(),
-            .cancelled(), .planned(), .preparing(), .submitted(), .processing(),
+            .cancelled(), .preparing(), .submitted(), .processing(),
             .succeeded(), .skipped(),
         ] {
             #expect(!status.symbol.isEmpty)
@@ -247,7 +242,8 @@ import WikiFSEngine
         // Item 1 contract: the job's raw ULID leads the entries — never
         // omitted, never a "Not Reported" placeholder, and flagged monospaced
         // so the inspector renders the copyable id in a fixed-width font.
-        let facts = QueueRunDetailsFacts(jobID: "01J8ZQ4T7KWM3N5P6A9B2C4D5E")
+        let facts = QueueRunDetailsFacts(
+            jobID: QueueItem.ID(rawValue: "01J8ZQ4T7KWM3N5P6A9B2C4D5E"))
         let entries = facts.entries
         // Job ID leads; the provider/model placeholders follow (their absence
         // matters, so they always render).
@@ -260,7 +256,7 @@ import WikiFSEngine
     @Test func runDetailsFullFactsOrderAndValues() {
         let start = Date(timeIntervalSince1970: 1_000_000)
         let facts = QueueRunDetailsFacts(
-            jobID: "01J8ZQ4T7KWM3N5P6A9B2C4D5E",
+            jobID: QueueItem.ID(rawValue: "01J8ZQ4T7KWM3N5P6A9B2C4D5E"),
             enqueuedAt: start,
             startedAt: start,
             finishedAt: start.addingTimeInterval(90),
@@ -317,7 +313,8 @@ import WikiFSEngine
     @Test func runDetailsNoUsageProducesNoUsageRows() {
         // No usage snapshot at all → no usage rows (not zeros, not a
         // placeholder row).
-        let facts = QueueRunDetailsFacts(jobID: "01J8ZQ4T7KWM3N5P6A9B2C4D5E")
+        let facts = QueueRunDetailsFacts(
+            jobID: QueueItem.ID(rawValue: "01J8ZQ4T7KWM3N5P6A9B2C4D5E"))
         #expect(facts.entries.map(\.label) == ["Job ID", "Provider", "Model"])
         // A snapshot with nothing reportable is the same as no snapshot.
         let empty = QueueRunDetailsFacts(usage: SessionUsage(
@@ -430,7 +427,7 @@ import WikiFSEngine
 
         // The panel built from that resolution reflects the live numbers.
         let panel = QueueRunDetailsFacts(
-            jobID: "01J8ZQ4T7KWM3N5P6A9B2C4D5E", usage: resolved)
+            jobID: QueueItem.ID(rawValue: "01J8ZQ4T7KWM3N5P6A9B2C4D5E"), usage: resolved)
         #expect(panel.entries.first { $0.label == "Input" }?.value
                 == UsageFormatter.groupedCount(210))
         #expect(panel.entries.first { $0.label == "Output" }?.value
@@ -485,7 +482,8 @@ import WikiFSEngine
         }
         // A legacy report with NULL usage columns renders NO usage rows when
         // the tracker has nothing either — never zeros.
-        let legacyPanel = QueueRunDetailsFacts(jobID: "01J8ZQ4T7KWM3N5P6A9B2C4D5E")
+        let legacyPanel = QueueRunDetailsFacts(
+            jobID: QueueItem.ID(rawValue: "01J8ZQ4T7KWM3N5P6A9B2C4D5E"))
         #expect(legacyPanel.entries.allSatisfy {
             !["Input", "Output", "Cached", "Thought", "Cost"].contains($0.label)
         })
@@ -545,15 +543,17 @@ import WikiFSEngine
     @Test func headerCarriesStronglyTypedQueueItemID() {
         let jobID = QueueItemID(rawValue: "01M24JCFZF2G8JM12QHTZAX0PQ")
         let header = QueueJobHeaderPresentation(
-            title: "1 source",
+            title: "Research Paper",
             operationLabel: "Ingest",
+            wikiName: "Research Wiki",
             jobID: jobID,
             lifecycle: .completed)
 
         // The title and operation remain separate presentation values. The
         // view renders the operation as a chip without changing the title.
-        #expect(header.title == "1 source")
+        #expect(header.title == "Research Paper")
         #expect(header.operationLabel == "Ingest")
+        #expect(header.wikiName == "Research Wiki")
 
         // The presentation preserves the queue-item namespace. Raw text is
         // produced only at the rendering or pasteboard boundary.

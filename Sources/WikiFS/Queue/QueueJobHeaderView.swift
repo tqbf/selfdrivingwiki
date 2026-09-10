@@ -12,12 +12,14 @@ import WikiFSCore
 /// elapsed clock, and the state-driven actions (plan §1 "Selected job workspace").
 /// Job errors and pending permissions render above the content selector.
 struct QueueJobHeaderPresentation {
-    /// The same recognizable title as the navigator row. One shared formatter
-    /// prevents the selected-job header from adding a divergent prefix. The
-    /// title contains no target names or raw target IDs.
+    /// The same recognizable target-based title as the navigator row. One
+    /// shared formatter prevents header and navigator drift. The title never
+    /// contains a raw target ID.
     let title: String
     /// Operation word: "Ingest" / "Extract" / "Lint".
     let operationLabel: String
+    /// Display name of the wiki that owns the job.
+    let wikiName: String
     /// Strongly typed queue job ID. This cannot be confused with a wiki,
     /// source, or page ID; conversion to raw text happens only while rendering.
     let jobID: QueueItem.ID
@@ -49,6 +51,7 @@ struct QueueJobHeaderPresentation {
     init(
         title: String,
         operationLabel: String,
+        wikiName: String,
         jobID: QueueItem.ID,
         lifecycle: QueueWorkspaceJobLifecycle,
         progress: QueueWorkspaceProgress? = nil,
@@ -61,6 +64,7 @@ struct QueueJobHeaderPresentation {
     ) {
         self.title = title
         self.operationLabel = operationLabel
+        self.wikiName = wikiName
         self.jobID = jobID
         self.lifecycle = lifecycle
         self.progress = progress
@@ -165,10 +169,18 @@ struct QueueJobHeaderView: View {
             .lineLimit(QueueWorkspaceMetrics.Header.titleLineLimit)
     }
 
-    /// "01M24… · Running · 2m 14s" — job ID, state (symbol + text), and the
-    /// job's single elapsed clock.
+    /// "Research Wiki · 01M24… · Running · 2m 14s" — wiki, job ID, state,
+    /// and the job's single elapsed clock.
     private var metaLine: some View {
         HStack(spacing: QueueWorkspaceMetrics.Spacing.xs) {
+            Text(header.wikiName)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .help(header.wikiName)
+            Text(verbatim: "·")
+                .font(.callout)
+                .foregroundStyle(.tertiary)
             Text(header.jobID.rawValue)
                 .font(.callout.monospaced())
                 .foregroundStyle(.secondary)

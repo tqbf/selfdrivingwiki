@@ -75,11 +75,6 @@ extension QueueWorkspaceStatus {
 
 // Target-outcome vocabulary — the §2 report target-state projection.
 extension QueueWorkspaceStatus {
-    /// In the recorded inventory but execution has not reached it.
-    static func planned() -> QueueWorkspaceStatus {
-        QueueWorkspaceStatus(text: "Planned", symbol: "circle.dashed", style: .secondary)
-    }
-
     /// Worker is staging/preparing this target.
     static func preparing() -> QueueWorkspaceStatus {
         QueueWorkspaceStatus(text: "Preparing", symbol: "gearshape", style: .running)
@@ -376,20 +371,18 @@ struct QueueRunDetailEntry: Equatable, Sendable {
 /// rendering.
 ///
 /// Plan rules encoded here:
-/// - The job's queue item id (raw ULID) leads the rows as "Job ID" — the
-///   operator correlates logs and CLI output with the panel. It is always
-///   mapped by the caller from `item.id.rawValue`, never a "Not Reported"
-///   placeholder; only a blank string (synthetic facts) omits the row.
+/// - The job's typed queue item ID leads the rows as "Job ID". The operator
+///   uses it to correlate logs and CLI output with the panel. Synthetic facts
+///   can omit the ID. It never uses a "Not Reported" placeholder.
 /// - Unavailable optional metadata is *omitted*…
 /// - …except provider/model, whose absence matters: they render a "Not
 ///   Reported" placeholder. Never pass a capacity bucket (`default-ingest`) as
 ///   the provider.
 /// - An attempt of `0`/`nil` (first run) is omitted; retried attempts show.
 struct QueueRunDetailsFacts: Sendable {
-    /// The job's queue item id (raw ULID) — the inspector's FIRST row,
-    /// rendered monospaced and text-selectable so it can be copied. The
-    /// caller always maps it from `item.id.rawValue`.
-    var jobID: String
+    /// The job's queue item ID. The inspector renders its raw value as the
+    /// first row in monospaced, selectable text.
+    var jobID: QueueItem.ID?
     var enqueuedAt: Date?
     var startedAt: Date?
     var finishedAt: Date?
@@ -410,7 +403,7 @@ struct QueueRunDetailsFacts: Sendable {
     var usage: SessionUsage?
 
     init(
-        jobID: String = "",
+        jobID: QueueItem.ID? = nil,
         enqueuedAt: Date? = nil,
         startedAt: Date? = nil,
         finishedAt: Date? = nil,
@@ -431,15 +424,12 @@ struct QueueRunDetailsFacts: Sendable {
         self.usage = usage
     }
 
-    /// The inspector's entries, applying the omission rules above. Blank
-    /// (whitespace-only) text counts as absent — including the job id, though
-    /// the real mapping always supplies `item.id.rawValue`.
+    /// The inspector's entries, applying the omission rules above.
     var entries: [QueueRunDetailEntry] {
         var result: [QueueRunDetailEntry] = []
-        let job = jobID.trimmingCharacters(in: .whitespaces)
-        if !job.isEmpty {
-            result.append(
-                QueueRunDetailEntry(label: "Job ID", value: job, isMonospaced: true))
+        if let jobID {
+            result.append(QueueRunDetailEntry(
+                label: "Job ID", value: jobID.rawValue, isMonospaced: true))
         }
         if let enqueuedAt {
             result.append(QueueRunDetailEntry(label: "Enqueued", value: QueueWorkspaceFormat.timestamp(enqueuedAt)))

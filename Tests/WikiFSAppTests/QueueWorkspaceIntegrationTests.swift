@@ -117,34 +117,40 @@ struct QueueWorkspaceIntegrationTests {
         #expect(QueueWorkspaceMapper.reportOperation(for: makeItem(id: "e2", queue: .extraction)) == .extract)
     }
 
-    @Test func navigatorAndHeaderShareJobTitles() {
-        // Navigator rows and selected-job headers use one formatter. Titles
-        // contain operation/count context where needed, but never a resolved
-        // target name or raw target ID. Whole-wiki lint keeps the wiki name.
-        let rawPageID = PageID(rawValue: "01J9ZQPAGE4T8AWJ3XG8YQ0MEB")
-        let lint = makeItem(id: "l", queue: .ingestion, lintPageIDs: [rawPageID])
+    @Test func navigatorAndHeaderShareNamedJobTitles() {
+        let pageID = PageID(rawValue: "p1")
+        let lint = makeItem(id: "l", queue: .ingestion, lintPageIDs: [pageID])
         let lintMany = makeItem(id: "l3", queue: .ingestion, lintPageIDs: [
-            PageID(rawValue: "p1"), PageID(rawValue: "p2"), PageID(rawValue: "p3")])
+            pageID, PageID(rawValue: "p2"), PageID(rawValue: "p3")])
         let wholeWiki = makeItem(id: "lw", queue: .ingestion, lintPageIDs: [])
         let ingest = makeItem(id: "i", queue: .ingestion, sourceIDs: ["a", "b", "c"])
         let ingestOne = makeItem(id: "i1", queue: .ingestion, sourceIDs: ["a"])
         let extract = makeItem(id: "x", queue: .extraction, sourceIDs: ["a", "b"])
+        var names = QueueTargetNameIndex()
+        names.recordPage(pageID, title: "Design Notes")
+        names.recordSource(SourceID(rawValue: "a"), name: "Research Paper")
 
-        #expect(ActivityWindowView.computeRowTitle(for: lint, wikiName: "Wiki") == "Lint 1 page")
-        #expect(ActivityWindowView.computeRowTitle(for: lintMany, wikiName: "Wiki") == "Lint 3 pages")
-        #expect(ActivityWindowView.computeRowTitle(for: wholeWiki, wikiName: "Wiki") == "Lint Wiki")
-        #expect(ActivityWindowView.computeRowTitle(for: ingest, wikiName: "Wiki") == "Ingest 3 sources")
-        #expect(ActivityWindowView.computeRowTitle(for: ingestOne, wikiName: "Wiki") == "1 source")
-        #expect(ActivityWindowView.computeRowTitle(for: extract, wikiName: "Wiki") == "2 sources")
+        #expect(ActivityWindowView.computeRowTitle(
+            for: lint, wikiName: "Wiki", nameIndex: names) == "Design Notes")
+        #expect(ActivityWindowView.computeRowTitle(
+            for: lintMany, wikiName: "Wiki", nameIndex: names) == "Design Notes and 2 others")
+        #expect(ActivityWindowView.computeRowTitle(
+            for: wholeWiki, wikiName: "Wiki", nameIndex: names) == "Wiki")
+        #expect(ActivityWindowView.computeRowTitle(
+            for: ingest, wikiName: "Wiki", nameIndex: names) == "Research Paper and 2 others")
+        #expect(ActivityWindowView.computeRowTitle(
+            for: ingestOne, wikiName: "Wiki", nameIndex: names) == "Research Paper")
+        #expect(ActivityWindowView.computeRowTitle(
+            for: extract, wikiName: "Wiki", nameIndex: names) == "Research Paper and 1 other")
+    }
 
-        // The selected-job header uses this exact same value. There is no
-        // second formatter that can add a divergent operation prefix.
-        for item in [lint, lintMany, wholeWiki, ingest, ingestOne, extract] {
-            let sharedTitle = ActivityWindowView.computeRowTitle(for: item, wikiName: "Wiki")
-            #expect(!sharedTitle.contains(rawPageID.rawValue),
-                    "job title must not contain a raw target ID: '\(sharedTitle)'")
-        }
-        #expect(ActivityWindowView.computeRowTitle(for: ingestOne, wikiName: "Wiki") == "1 source")
+    @Test func unresolvedFirstTargetUsesCountFallbackWithoutSkippingAhead() {
+        let item = makeItem(id: "i", queue: .ingestion, sourceIDs: ["missing", "known"])
+        var names = QueueTargetNameIndex()
+        names.recordSource(SourceID(rawValue: "known"), name: "Second Source")
+
+        #expect(ActivityWindowView.computeRowTitle(
+            for: item, wikiName: "Wiki", nameIndex: names) == "2 sources")
     }
 
     @Test func windowScopeFilteringIsStrict() {

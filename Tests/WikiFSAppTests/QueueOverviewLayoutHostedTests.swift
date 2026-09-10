@@ -207,7 +207,7 @@ struct QueueOverviewLayoutHostedTests {
     // MARK: - Ingestion recorded outputs (Inputs / Outputs sections)
 
     /// An ingestion Overview with recorded provenance: the Inputs section
-    /// keeps its name-link (Reveal Source) rows and count, the Outputs
+    /// keeps its name-link (Open Source) rows and count, the Outputs
     /// section appears under it, and the provenance-resolved page renders as
     /// a CLICKABLE name link performing Open Page. A cited page that no
     /// longer resolves stays honest plain text — no dead link. The citation
@@ -268,7 +268,7 @@ struct QueueOverviewLayoutHostedTests {
                 title: source.filename,
                 status: .succeeded(),
                 actions: [QueueWorkspaceAction(
-                    label: "Reveal Source", systemImage: "arrow.up.forward.app") {
+                    label: "Open Source", systemImage: "arrow.up.forward.app") {
                     revealSpy.withLock { $0 += 1 }
                 }])
         }
@@ -304,8 +304,8 @@ struct QueueOverviewLayoutHostedTests {
 
         // The bridged SwiftUI buttons carry no NSButton.title, so identify
         // them by what they ROUTE: clicking every name link must run exactly
-        // one Open Page (the output) and two Reveal Source (the unchanged
-        // inputs). A dead output would show up as a missing Open Page click.
+        // one Open Page action for the output and two Open Source actions for
+        // the unchanged inputs. A dead output would omit its Open Page action.
         for button in buttons {
             button.performClick(nil)
         }
@@ -313,7 +313,7 @@ struct QueueOverviewLayoutHostedTests {
         #expect(openSpy.withLock { $0 } == 1,
                 "exactly the output's page-name link performs Open Page (got \(openSpy.withLock { $0 }))")
         #expect(revealSpy.withLock { $0 } == 2,
-                "both input links still perform Reveal Source (got \(revealSpy.withLock { $0 }))")
+                "both input links still perform Open Source (got \(revealSpy.withLock { $0 }))")
     }
 
     /// The empty-inputs edge: an ingestion Overview whose inputs inventory

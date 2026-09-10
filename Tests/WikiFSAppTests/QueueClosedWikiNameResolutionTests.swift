@@ -348,12 +348,9 @@ struct QueueClosedWikiNameResolutionTests {
 
     // MARK: - Navigator titles (displayNames + computeRowTitle)
 
-    /// A closed-wiki lint job with recorded names: the recorded titles still
-    /// resolve through `displayNames` — they feed the row tooltip and the
-    /// navigator search haystack — but titles are OPERATION + COUNT ONLY now
-    /// (operator request: no target names, no raw IDs), so the title carries
-    /// the count wording even when names resolve.
-    @Test func closedWikiRecordedNamesStayOutOfRowTitles() {
+    /// A closed-wiki job uses enqueue-time recorded names for its shared title.
+    /// The first payload target stays first and the remaining count stays exact.
+    @Test func closedWikiRecordedNamesDriveJobTitles() {
         let ids = [PageID(rawValue: "lp1"), PageID(rawValue: "lp2")]
         let item = QueueItem(
             id: QueueItemID(rawValue: "lint-job"),
@@ -375,13 +372,14 @@ struct QueueClosedWikiNameResolutionTests {
         let names = effective.displayNames(for: item)
         #expect(names.names == ["Design Notes", "Meeting Minutes"])
         #expect(names.targets == ["Design Notes", "Meeting Minutes"])
-        // The title is operation + count only: no name, no raw ID.
         #expect(
-            ActivityWindowView.computeRowTitle(for: item, wikiName: "Wiki")
-            == "Lint 2 pages")
+            ActivityWindowView.computeRowTitle(
+                for: item, wikiName: "Wiki", nameIndex: effective)
+            == "Design Notes and 1 other")
     }
 
-    /// The legacy no-recorded-names path: titles absent → count fallback.
+    /// The legacy no-recorded-names path uses a count fallback. The operation
+    /// chip supplies "Lint", so the shared title does not repeat it.
     @Test func legacyClosedWikiLintRowTitleFallsBackToCount() {
         let item = QueueItem(
             id: QueueItemID(rawValue: "legacy-lint"),
@@ -399,14 +397,13 @@ struct QueueClosedWikiNameResolutionTests {
         #expect(effective.displayNames(for: item).names.isEmpty)
         #expect(
             ActivityWindowView.computeRowTitle(for: item, wikiName: "Wiki")
-            == "Lint 2 pages")
+            == "2 pages")
     }
 
-    // MARK: - Titles never surface raw target IDs (operator request)
+    // MARK: - Unresolved titles never surface raw target IDs
 
-    /// Regression for the count-only title change: a closed wiki with legacy
-    /// payloads (no recorded names, nothing resolved) must never leak raw
-    /// target IDs into a navigator row title or the header title. The raw
+    /// A closed wiki with legacy payloads and no resolved names must not leak
+    /// raw target IDs into a navigator row title or header title. The raw
     /// wiki-ID prefix stands in for the closed-wiki display name — the same
     /// string `wikiDisplayName` falls back to — so the only IDs that could
     /// possibly appear are the targets', and they must not.
@@ -438,9 +435,9 @@ struct QueueClosedWikiNameResolutionTests {
             #expect(!sharedTitle.contains(rawTargetID),
                     "job title must not contain a raw target ID: '\(sharedTitle)'")
         }
-        // Exact shared wordings for navigator rows and selected-job headers.
+        // Exact count fallbacks for unresolved legacy targets.
         #expect(ActivityWindowView.computeRowTitle(for: lintItem, wikiName: rawWikiName)
-                == "Lint 1 page")
+                == "1 page")
         #expect(ActivityWindowView.computeRowTitle(for: ingestItem, wikiName: rawWikiName)
                 == "1 source")
     }

@@ -39,7 +39,7 @@ this section is current.
    the target name and one state or result. Rows do not disclose or expand,
    and rows never render typed identity (a SourceID or a PageID). The name
    itself is the link that performs the row's live action — "Open Page",
-   "Reveal Source", or "Browse Pages" for a whole-wiki scope. The full
+   "Open Source", or "Browse Pages" for a whole-wiki scope. The full
    recorded name stays available as the row tooltip and in the local
    inventory search. Affected section: "Target inventory (Overview)".
 4. **Unobserved targets render as "Planned" (2026-09-08; rendering superseded
@@ -122,9 +122,10 @@ this section is current.
    an OPEN wiki, an action additionally requires LIVE store membership —
    a target deleted after enqueue keeps its recorded title but gets no
    dead-end action; on a CLOSED wiki the click-through stays, because the
-   stash+open route resolves at click time. Target NAMES still come from
-   the effective index in both cases — they feed the inventory rows, the
-   navigator tooltip, and search (titles are count-only, design change 9). The load refresh keys on the displayed
+   stash+open route resolves at click time. Target names still come from
+   the effective index in both cases. They feed inventory rows, job titles,
+   navigator tooltips, and search. Design change 17 supersedes the count-only
+   title rule. The load refresh keys on the displayed
    jobs' target composition AND the open-wiki set (a window closing
    re-triggers it); items arriving mid-load are parked on the in-flight
    wiki and re-planned once after the load; IDs a completed load proved
@@ -132,7 +133,7 @@ this section is current.
    database; and a cancelled load is retryable, never an "unavailable"
    wiki. Affected sections: "Target inventory (Overview)", "History and
    search scope".
-9. **Count-only titles (2026-09-09, operator request).** Target names left
+9. **Count-only titles (2026-09-09, superseded by design change 17).** Target names left
     the job header title and the navigator row titles entirely: both now
     carry the operation and the target count only — "Ingest 12 sources" /
     "1 source", "Lint 3 pages", whole-wiki "Lint <wiki>" — because a closed
@@ -186,9 +187,34 @@ this section is current.
     the subtitle, text-selectable where supported, with a "Copy Job ID"
     context-menu action that writes the ULID to the pasteboard. The chip is
     the QUEUE ITEM id only — target SourceID/PageID values stay hidden
-    everywhere (rows carry operation + count titles and target NAMES only,
-    per design changes 3 and 9). Both queue windows share the navigator, so
+    everywhere. Rows use target-name titles and never expose target IDs, per
+    design changes 3 and 17. Both queue windows share the navigator, so
     the chip appears in both. Affected section: "Job navigator (left)".
+14. **Durable ingestion output snapshots (2026-09-10).** The report owns a
+    bounded snapshot of output `PageID` values and completion-time titles.
+    Migration v9 stores these rows and an `outputs_recorded` presence bit.
+    The Overview reads this snapshot without an open wiki. A live wiki can
+    improve a title and supply an Open Page action, but it cannot change output
+    identity. This supersedes design change 5's live-query rule. Affected
+    sections: "Target inventory (Overview)", "Report truth rules".
+15. **Shared titles and operation chips (2026-09-10).** The navigator and
+    selected-job header use one title value. A neutral operation chip identifies
+    ingestion, extraction, or lint without changing that title. This supersedes
+    design change 9's operation-prefixed header and design change 13's separate
+    job-ID line. Affected sections: "Job navigator (left)", "Selected job
+    workspace (right)".
+16. **Job and wiki identity metadata (2026-09-10).** Navigator metadata shows
+    the queue item ID with state, progress, or elapsed time. Its tooltip and
+    context menu expose the full ID. The selected-job header shows the wiki name
+    before the selectable full job ID, lifecycle state, and elapsed time.
+    Target IDs remain hidden. Affected sections: "Job navigator (left)",
+    "Selected job workspace (right)", "Run details".
+17. **Target-name job titles (2026-09-10, operator request).** A job title uses
+    the first payload target name. A batch adds "and 1 other" or "and N others."
+    A whole-wiki job uses the wiki name. Payload order determines the first
+    target. If its name is unavailable, the title uses count wording instead of
+    a later target or raw ID. This supersedes design change 9. Affected sections:
+    "Job navigator (left)", "Selected job workspace (right)".
 
 ## Goal
 
@@ -211,20 +237,20 @@ This is a layout contract, not pixel-perfect artwork.
 │ Native title bar   Agent Queue       Search Jobs       Pause Queue   …    │
 │                    1 running · 4 queued                                  │
 ├─────────────────────────┬─────────────────────────────────────────────────┤
-│ All Jobs  [Filter ▾]    │ Ingestion: 12 sources                 Cancel   │
-│                         │ Research Wiki · Running · 2m 14s               │
+│ All Jobs  [Filter ▾]    │ Research papers and 11 others [Ingest] Cancel │
+│                         │ Research Wiki · 01M… · Running · 2m 14s        │
 │ ACTIVE                  │ Staging sources: 8 of 12                       │
-│ ◉ Research papers       │ ━━━━━━━━━━━━━────────                          │
-│   Ingest 12 sources     │ [Overview | Activity]                          │
-│   Staging · 8 of 12     ├─────────────────────────────────────────────────┤
-│ ◷ Check selected pages  │ Sources (12)                Find in Sources    │
-│   Lint 3 pages          │ Name                         State / Result     │
+│ ◉ Research papers…      │ ━━━━━━━━━━━━━────────                          │
+│   [Ingest] 01M… · 2m    │ [Overview | Activity]                          │
+│                         ├─────────────────────────────────────────────────┤
+│ ◷ Check selected…       │ Sources (12)                Find in Sources    │
+│   [Lint] 01M… · Queued  │ Name                         State / Result     │
 │   Queued                │ Long source title…           Submitted         │
 │                         │ Another source               Skipped           │
 │ RECENT                  │   Source bytes unavailable                      │
 │ ⚠ Research papers       │ … independently scrollable inventory …         │
-│   Ingest 1 source       ├─────────────────────────────────────────────────┤
-│   Failed                │ Run Details ▸   Actual provider when reported  │
+│   [Ingest] 01M… · Failed ├────────────────────────────────────────────────┤
+│                         │ Run Details ▸   Actual provider when reported  │
 └─────────────────────────┴─────────────────────────────────────────────────┘
 ```
 
@@ -236,11 +262,11 @@ repeated badges, custom traffic lights, and permanently visible raw metadata.
 
 - The navigator keeps the Active and Recent sections and the current engine
   order.
-- Each row shows the operation and target count only — "Ingest 12 sources",
-  "1 source", "Lint 3 pages", whole-wiki "Lint <wiki>" — never a target name
-  or raw ID (design change 9), plus the wiki and one state or progress line
-  with a status symbol. Rows drop duplicated elapsed and token
-  lines and always-visible cancel glyphs.
+- Each row uses the first payload target name as its title. A batch adds
+  "and 1 other" or "and N others." A whole-wiki job uses the wiki name.
+  An operation chip identifies ingestion, extraction, or lint. The metadata
+  shows the job ID and one state, progress, or elapsed value. An unresolved
+  first name uses count wording. No row title shows a raw target ID.
 - The job search lives in the window toolbar, LEFT of the Queue Actions menu
   (design change 6): an expanded native search field at split-view widths of
   800 points or more, a magnifying-glass button in narrower windows. The one
@@ -252,12 +278,11 @@ repeated badges, custom traffic lights, and permanently visible raw metadata.
 
 ### Selected job workspace (right)
 
-The header shows the job title — the operation word prefixed over the
-count-only job phrase, e.g. "Ingestion: 12 sources", "Extraction: 1 source",
-"Lint: 3 pages", whole-wiki "Lint: <wiki>" (design change 9; never a target
-name or raw ID) — the wiki, the lifecycle state,
-the current recorded phase, and one elapsed clock. The header carries Cancel
-for queued or running jobs and Retry Job for failed or cancelled jobs.
+The header uses the same target-name title as the navigator and shows the same
+operation chip. Its metadata shows the wiki name, job ID, lifecycle state, and
+one elapsed clock. The current recorded phase appears below that metadata. The
+header carries Cancel for queued or running jobs. It carries Retry Job for
+failed or cancelled jobs.
 
 The workspace stacks in this order:
 
@@ -284,15 +309,15 @@ transcript surface.
   the window is narrow.
 - Long names wrap to two lines. Rows do not disclose or expand, and rows
   never render typed identity (a SourceID or a PageID). The name itself is
-  the link that performs the row's live action — "Open Page", "Reveal
-  Source", or "Browse Pages" for a whole-wiki scope. The full recorded name
+  the link that performs the row's live action — "Open Page", "Open Source",
+  or "Browse Pages" for a whole-wiki scope. The full recorded name
   stays available as the row tooltip and in the local search.
 - A local search field covers large batches. Rows are lazy and keyed by
   `SourceID` or `PageID`.
 - A confirmed deleted target reads differently from an unavailable wiki
   session. History rows keep their recorded names.
-- Source rows use the existing Reveal Source navigation for the selected
-  source. Page rows use Open Page. Extraction output actions appear only when
+- Source rows use Open Source navigation for the selected source. Page rows
+  use Open Page. Extraction output actions appear only when
   a recorded output reference stays resolvable.
 
 ### Run details

@@ -151,8 +151,10 @@ even when no window is open. This lets you monitor agent work in the background.
 
 When you queue an operation, a brief hint popover appears: *"Ingest queued."*
 
-Job titles and navigator rows show only the operation and the target count —
-"Ingest 12 sources" or "Lint 3 pages" — never a target name or a raw page ID.
-The Overview's target rows still show page and source names, even when the
-wiki's window is closed. Links in those rows work too: clicking a name opens
-the wiki and goes to that page or source.
+A job title starts with its first page or source name. For a batch, the title
+adds "and 1 other" or "and N others." Whole-wiki jobs use the wiki name. An
+operation chip identifies ingestion, extraction, or lint. If the first name is
+not available, the title uses a target count and never shows a raw ID.
+
+The Overview also shows page and source names when the wiki window is closed.
+Select a name to open that page or source in its wiki.

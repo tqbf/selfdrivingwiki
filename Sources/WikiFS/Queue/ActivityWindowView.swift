@@ -1235,14 +1235,18 @@ struct ActivityWindowView: View {
     private func headerPresentation(for item: QueueItem) -> QueueJobHeaderPresentation {
         let startedAt = date(fromMillis: item.startedAt)
         let finishedAt = date(fromMillis: item.finishedAt)
+        let wikiName = wikiDisplayName(for: item.wikiID)
+        let nameIndex = makeNameIndex(for: item)
         let isTerminal = item.state == .completed || item.state == .failed
             || item.state == .cancelled
         let errorText: String? = item.state == .failed ? item.error : nil
         return QueueJobHeaderPresentation(
             title: Self.computeRowTitle(
                 for: item,
-                wikiName: wikiDisplayName(for: item.wikiID)),
+                wikiName: wikiName,
+                nameIndex: nameIndex),
             operationLabel: QueueWorkspaceMapper.operationLabel(for: item),
+            wikiName: wikiName,
             jobID: item.id,
             lifecycle: QueueWorkspaceMapper.lifecycle(for: item.state),
             progress: QueueWorkspaceMapper.headerProgress(
@@ -1666,7 +1670,7 @@ struct ActivityWindowView: View {
             reportModel: report?.model.map { $0.rawValue },
             usage: usage)
         return QueueRunDetailsFacts(
-            jobID: item.id.rawValue,
+            jobID: item.id,
             enqueuedAt: date(fromMillis: item.createdAt),
             startedAt: startedAt,
             finishedAt: finishedAt,
@@ -2166,10 +2170,10 @@ struct ActivityWindowView: View {
             // Resolve source/page names through the closed-wiki-aware
             // effective index (live → recorded → read-only; observable reads
             // happen once, above, inside makeNameIndex — not per target).
-            // Names feed the row TOOLTIP and the navigator search haystack
-            // only — row titles are operation + count only (operator
-            // request), so a closed-wiki job whose names are still resolving
-            // or missing degrades to the count wording, never a raw ID.
+            // Names feed the job title, row tooltip, and navigator search
+            // haystack. The title uses the first payload target in its original
+            // order. If that name is unavailable, it degrades to count wording
+            // instead of exposing a raw ID.
             let effectiveIndex = QueueTargetNameIndex.effective(
                 live: nameIndex(for: item.wikiID),
                 readOnlyCache: activityTracker.closedWikiNameIndexes[item.wikiID],
@@ -2177,7 +2181,10 @@ struct ActivityWindowView: View {
             let resolved = effectiveIndex.displayNames(for: item)
 
             result[item.id] = RowDisplayData(
-                title: Self.computeRowTitle(for: item, wikiName: wikiName),
+                title: Self.computeRowTitle(
+                    for: item,
+                    wikiName: wikiName,
+                    nameIndex: effectiveIndex),
                 operationLabel: QueueWorkspaceMapper.operationLabel(for: item),
                 jobID: item.id,
                 relativeTime: relativeTime(for: item),
@@ -2262,37 +2269,39 @@ struct ActivityWindowView: View {
             .joined(separator: " · ")
     }
 
-    /// Pure computation of the navigator row title from the payload and the
-    /// wiki display name (no `@Observable` reads). PURE + `nonisolated` (same
-    /// reason as ``navigatorSearchText``): the value-level suite pins the
-    /// exact wordings without a main-actor hop.
-    ///
-    /// Titles are OPERATION + COUNT ONLY (operator request, 2026-09-09: the
-    /// first target's name left every row title and the header title, because
-    /// a closed wiki could surface a raw ID where a name was expected):
-    /// "Ingest 12 sources" / "1 source", "Lint 3 pages", and the unchanged
-    /// whole-wiki "Lint <wiki>". Extraction keeps its existing count wording
-    /// ("12 sources" / the kind label). No target name and no raw target ID
-    /// can reach a row title; resolved names still feed the row tooltip and
-    /// the navigator search haystack (``navigatorSearchText``).
+    /// Pure computation of the shared navigator and header title. The first
+    /// payload target keeps payload order and resolves through the effective
+    /// name index. Multiple targets append "and N others". Whole-wiki jobs use
+    /// the wiki name. An unresolved first target uses an honest count fallback
+    /// and never exposes a raw target ID.
     nonisolated static func computeRowTitle(
         for item: QueueItem,
-        wikiName: String
+        wikiName: String,
+        nameIndex: QueueTargetNameIndex = QueueTargetNameIndex()
     ) -> String {
         if let pageIDs = item.payload.lintPageIDs {
-            if pageIDs.isEmpty { return "Lint \(wikiName)" }
-            return pageIDs.count == 1 ? "Lint 1 page" : "Lint \(pageIDs.count) pages"
+            guard let firstPageID = pageIDs.first else { return wikiName }
+            if let firstTitle = nameIndex.pageTitle(firstPageID) {
+                return title(firstName: firstTitle, targetCount: pageIDs.count)
+            }
+            return pageIDs.count == 1 ? "1 page" : "\(pageIDs.count) pages"
         }
-        let count = item.payload.sourceIDs.count
-        switch item.queue {
-        case .ingestion:
-            // Zero targets cannot be spoken as a count — the kind label is
-            // the same fallback the old count path used.
-            guard count > 0 else { return Self.kindLabel(for: item) }
-            return count > 1 ? "Ingest \(count) sources" : "1 source"
-        case .extraction, .transcription:
-            return count > 1 ? "\(count) sources" : Self.kindLabel(for: item)
+
+        let sourceIDs = item.payload.sourceIDs
+        guard let firstSourceID = sourceIDs.first else { return Self.kindLabel(for: item) }
+        if let firstName = nameIndex.sourceName(firstSourceID) {
+            return title(firstName: firstName, targetCount: sourceIDs.count)
         }
+        return sourceIDs.count == 1 ? "1 source" : "\(sourceIDs.count) sources"
+    }
+
+    /// Add the remaining-target count without changing the first target name.
+    nonisolated static func title(firstName: String, targetCount: Int) -> String {
+        guard targetCount > 1 else { return firstName }
+        let remaining = targetCount - 1
+        return remaining == 1
+            ? "\(firstName) and 1 other"
+            : "\(firstName) and \(remaining) others"
     }
 
     /// Short relative time for sidebar rows ("2 min. ago"), from the most

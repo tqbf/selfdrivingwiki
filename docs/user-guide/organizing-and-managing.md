@@ -255,26 +255,26 @@ All extraction and ingestion operations flow through a **persistent queue**.
 
 Both windows share one job workspace:
 
-- **Left: job navigator.** The **Active** section lists running and queued jobs. The **Recent** section lists up to 200 finished jobs. Drag to reorder queued jobs. Reordering turns off while filters or search are active. Each row shows the job's own ID as a small monospaced line: the text is selectable, a tooltip shows the full value, and the context menu has a **Copy Job ID** action.
+- **Left: job navigator.** The **Active** section lists running and queued jobs. The **Recent** section lists up to 200 finished jobs. Drag to reorder queued jobs. Reordering turns off while filters or search are active. A title uses the first page or source name, followed by "and 1 other" or "and N others" for a batch. Whole-wiki jobs use the wiki name. A chip identifies the operation. The metadata shows the job ID and current timing or state. Point at the ID to see its full value, or use **Copy Job ID** from the context menu.
 - **Search** at the left end of the window toolbar. Search covers loaded jobs only: kind, wiki name, target names, and recorded outcome text. While summaries load, the footer labels the search incomplete. Wide windows show the search field; narrow windows show a magnifying-glass button that expands the field when you click it. Press Escape to clear the query.
 - **Toolbar icons at the right end.** Two icon-only controls stay pinned to the right edge: the **Queue Actions** menu (ellipsis.circle icon) and the **Run Details** toggle (sidebar.right icon). Point at an icon to see its name.
 - **Filter menu** covers State, Wiki, and Operation. Active filters show a **Clear Filters** action.
 - If filters hide the selected job, the workspace stays open. It shows the notice "Selected job is outside this filter" with a **Clear Filters** action.
 - Per-item status: spinner (running), clock (queued), ✓ (completed), ⚠️ (failed), ✕ (cancelled).
-- Context menu: Reveal Source, Reveal Debug Folder, Cancel, Retry, Copy Job ID, Copy Error.
+- Context menu: Open Source, Reveal Debug Folder, Cancel, Retry, Copy Job ID, Copy Error.
 
 ### The job workspace
 
 Select a job to open its workspace on the right.
 
-- **Header** — the job title prefixed with its operation ("Ingestion: Research papers", "Lint: Check selected pages"), the wiki, the state, and one elapsed clock. Queued and running jobs show **Cancel**. Failed and cancelled jobs show **Retry Job**.
-- **Overview** — the complete list of targets for the job, shown as **Inputs**. Each row shows the target's name and one state or result. Rows do not expand. The name itself is the link: selecting it performs the row's action — **Open Page** for pages, **Reveal Source** for sources, **Browse Pages** for a whole-wiki scope. Rows never show IDs. Long names wrap to two lines, and the full recorded name stays available as the row's tooltip. Batches of 12 or more targets add a local search field.
-- **Outputs** (ingestion jobs) — pages whose recorded provenance cites the job's input sources. Each row is a clickable page name that opens the page. Outputs come from recorded evidence only. They are never inferred from job completion. While no pages exist yet, the section shows "No pages recorded yet." If the recorded pages can't be loaded, the section says so instead of showing an empty success.
+- **Header** — the same target-name title and operation chip as the navigator. Its metadata shows the wiki name, job ID, lifecycle state, and one elapsed clock. Queued and running jobs show **Cancel**. Failed and cancelled jobs show **Retry Job**.
+- **Overview** — the complete list of targets for the job, shown as **Inputs**. Each row shows the target name and one recorded state or result. A target without recorded evidence shows its name without a status. Rows do not expand. Select the name to use **Open Page**, **Open Source**, or **Browse Pages** for a whole-wiki scope. Rows never show target IDs. Long names wrap to two lines, and the full recorded name stays available as the row tooltip. Batches of 12 or more targets add a local search field.
+- **Outputs** (ingestion jobs) — pages in the job's durable output snapshot. Each available page name opens that page. The job records the snapshot after a successful run, so the list does not require an open wiki. It never infers outputs from job completion. "Outputs were not recorded for this job" identifies older jobs and snapshot failures. "No pages recorded yet" means that a recorded snapshot was empty.
 - **Activity** — the typed transcript for the job. Extraction jobs without a transcript show progress text instead.
 
 The toolbar's **Run Details** icon (the sidebar.right icon at the right end of the toolbar) opens the Run Details inspector beside the workspace. The inspector shows the recorded enqueue, start, and finish times, the duration, the attempt, the actual provider and model, and usage. Absent values show **Not Reported**. The inspector is optional. Opening or closing it changes nothing else: your selection, filters, and queue state stay as they are.
 
-Overview rows show **Planned** until a target has recorded evidence. Planned is not a result. It never reads as success or as a count of zero. A run whose outcomes were not reported shows no result line: each inventory row already carries its own state, so an absence-only sentence would read as a result. The Run Details inspector keeps **Not Reported** for absent provider or model facts.
+A target without recorded evidence shows its name without a status. This absence is not success and does not mean zero. A run with no reported outcomes shows no result line. The Run Details inspector keeps **Not Reported** for absent provider or model facts.
 
 ---
 

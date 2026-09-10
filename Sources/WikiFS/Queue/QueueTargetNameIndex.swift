@@ -78,11 +78,9 @@ struct QueueTargetNameIndex: Equatable, Sendable {
 /// One item's resolved target display names, in payload order.
 struct QueueItemDisplayNames: Equatable, Sendable {
     /// Resolvable names in payload order; IDs that no longer resolve are
-    /// dropped — identical to the linear-scan lookups this replaces. Row and
-    /// header titles are operation + count only (operator request: no names,
-    /// no raw IDs), so rendering surfaces use ``targets`` (row tooltip +
-    /// search haystack). `names` is the same resolution without the
-    /// whole-wiki marker — the reference result the value suites pin.
+    /// dropped, which matches the linear-scan lookups this replaces. Job titles
+    /// resolve the first payload target directly through the index. These arrays
+    /// supply row tooltips, search, and value-level resolution tests.
     let names: [String]
     /// The navigator's target list (title tooltip). Whole-wiki lint collapses
     /// to the "Entire wiki" marker; otherwise it equals `names`.
