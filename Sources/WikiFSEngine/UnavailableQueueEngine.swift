@@ -110,4 +110,17 @@ public final class UnavailableQueueEngine: QueueEngineClient, @unchecked Sendabl
     public func loadAllActivitySnapshots() async throws -> [QueueItem.ID: QueueEngine.ActivitySnapshot] {
         throw Error.unavailable(reason: reason)
     }
+
+    // MARK: - QueueEngineClient report loading (explicit unavailable results)
+
+    /// Reporting is unavailable when the backing store could not open —
+    /// surfaced as an explicit result (never a generic thrown error) so the
+    /// UI can present a clear unavailable state.
+    public func loadQueueReport(for itemID: QueueItem.ID) async -> QueueReportLoadResult {
+        .unavailable(reason: reason)
+    }
+
+    public func loadQueueReportSummaries(for itemIDs: [QueueItem.ID]) async -> QueueReportSummariesResult {
+        .unavailable(reason: reason)
+    }
 }

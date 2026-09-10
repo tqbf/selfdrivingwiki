@@ -321,6 +321,8 @@ private extension QueueEvent {
         case .reordered: "reordered"
         case .runPaths: "runPaths"
         case .pendingPermission: "pendingPermission"
+        case .reportUpdated: "reportUpdated"
+        case .reportUnavailable: "reportUnavailable"
         }
     }
 }

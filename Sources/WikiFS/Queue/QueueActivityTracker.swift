@@ -217,6 +217,248 @@ final class QueueActivityTracker {
     /// `.started`, appended on `.progress`. Drives the sidebar log text.
     private(set) var extractionLog: String = ""
 
+    // MARK: Report summary cache (integrated-queue-workspace plan §2)
+
+    /// How the per-item report summary cache currently stands.
+    enum ReportSummaryState: Equatable {
+        /// A batch load is in flight; result search is labeled incomplete and
+        /// rows stay lifecycle-only.
+        case loading
+        /// Either a store summary or a synthesized `.reportUpdated` summary is
+        /// cached in ``reportSummaries``.
+        case loaded
+        /// The load failed (store/transport/older daemon). Lifecycle-only rows
+        /// stay; report-backed search is labeled unavailable. Retried on
+        /// reconnect (watchdog reconcile) or explicit refresh.
+        case unavailable
+    }
+
+    /// Bounded per-item report summaries backing navigator-row progress and
+    /// outcome search. Populated by batched `loadQueueReportSummaries` loads
+    /// after attach and merged from `.reportUpdated` events — full target
+    /// detail never enters this cache (it stays selected-item-only).
+    private(set) var reportSummaries: [QueueItem.ID: QueueReportSummary] = [:]
+
+    /// Per-item cache state so the window can label search incomplete while
+    /// loading and unavailable after a failure (plan §"How summaries load").
+    private(set) var reportSummaryStates: [QueueItem.ID: ReportSummaryState] = [:]
+
+    /// In-flight batch load guard: a repeated request for the same not-yet-
+    /// loaded set must not stack duplicate engine calls.
+    private var inFlightSummaryLoad = false
+    /// Items waiting for the in-flight batch to finish (terminal refreshes
+    /// that arrived mid-load).
+    private var pendingSummaryRefreshIDs: Set<QueueItem.ID> = []
+    /// Last time the reconnect path retried unavailable summaries. Rate-limits
+    /// the watchdog-driven retries so a permanently unavailable store logs at
+    /// worst once per interval instead of every 5-second reconcile tick.
+    private var lastUnavailableSummaryRetryAt: Date?
+
+    // MARK: - Closed-wiki read-only name cache
+
+    /// Per-item load state mirroring ``ReportSummaryState``'s vocabulary,
+    /// for the closed-wiki read-only name loads.
+    enum ClosedWikiNameLoadState: Equatable, Sendable {
+        case loading
+        case loaded
+        /// The read failed (missing/corrupt database, unresolvable URL).
+        /// Names degrade to the live/recorded fallback text; a later
+        /// displayed-set change re-attempts the load.
+        case unavailable
+    }
+
+    /// Display names read-only-resolved from a CLOSED wiki's database,
+    /// per wiki (closed-wiki name resolution). Legacy jobs — enqueued before
+    /// `QueueItemPayload.recordedNames` existed — have no recorded names, so
+    /// when their wiki's window is closed this cache is the only human-
+    /// readable source for their target rows. Populated by the batched
+    /// `refreshClosedWikiNames` loads; the Activity window overlays it below
+    /// the live index and the recorded names.
+    private(set) var closedWikiNameIndexes: [WikiID: QueueTargetNameIndex] = [:]
+
+    /// Per-wiki load state so the window can show a neutral resolving
+    /// placeholder while a read is pending (never the deletion text) and the
+    /// honest fallback after a completed read or a failure.
+    private(set) var closedWikiNameLoadStates: [WikiID: ClosedWikiNameLoadState] = [:]
+
+    /// In-flight per-wiki load guard: a repeated refresh must not stack
+    /// duplicate read-only connections for one wiki.
+    private var closedWikiNameLoadsInFlight: Set<WikiID> = []
+
+    /// Items whose planning landed while their wiki's load was in flight
+    /// (review F3). The owner of each in-flight load drains this set once
+    /// after its load loop, so a job displayed mid-load is re-planned and
+    /// answered without waiting for the next displayed-set key change.
+    /// Mirrors ``pendingSummaryRefreshIDs``.
+    private var pendingClosedWikiNameRefreshItems: [QueueItem] = []
+
+    /// Target IDs a completed read-only load confirmed ABSENT from the
+    /// wiki's database, per wiki (review F4 negative cache). Without it,
+    /// every displayed-set key change re-planned these IDs and reopened
+    /// the read-only database for rows that can never resolve. Keeping
+    /// the set for the session is sound: target IDs are ULIDs (never
+    /// reused), and while the wiki is open the live index answers without
+    /// consulting this cache at all.
+    private var closedWikiKnownMissingIDs: [WikiID: (pages: Set<PageID>, sources: Set<SourceID>)] = [:]
+
+    /// Resolve display names for the given items' CLOSED wikis (open wikis
+    /// are skipped — the live session index already answers), bounded to
+    /// the target IDs that neither the payload's recorded names, the
+    /// existing cache, nor the known-missing negative cache can resolve.
+    /// Merges results into ``closedWikiNameIndexes`` and records per-wiki
+    /// load state; failures log via `DebugLog.store` and mark the wiki
+    /// unavailable instead of surfacing an error row. A load that is
+    /// CANCELLED restores `.loading` — cancellation says nothing about the
+    /// wiki, and the next `.task(id:)` run retries it (review F5).
+    ///
+    /// Concurrent refreshes serialize through the pending-set drain loop
+    /// (mirrors ``refreshReportSummaries``): items planned while their
+    /// wiki's load is in flight are parked in
+    /// ``pendingClosedWikiNameRefreshItems`` and re-planned exactly once
+    /// after that load finishes (review F3).
+    ///
+    /// - Parameters:
+    ///   - databaseURL: the wiki database URL provider (production passes
+    ///     the App Group container location). Returning `nil` marks the load
+    ///     unavailable.
+    ///   - loader: the read seam, injectable for tests.
+    func refreshClosedWikiNames(
+        for items: [QueueItem],
+        sessions: [WikiID: any WikiSessionProtocol],
+        databaseURL: @escaping @Sendable (WikiID) -> URL?,
+        loader: @escaping QueueClosedWikiNameLoader.Load = QueueClosedWikiNameLoader.load
+    ) async {
+        var batch = items
+        while batch.isEmpty == false {
+            // Plan the per-wiki work: closed wikis only, and only the target
+            // IDs nothing above the read-only layer can resolve.
+            var planned: [WikiID: (pages: Set<PageID>, sources: Set<SourceID>)] = [:]
+            for item in batch {
+                let wikiID = item.wikiID
+                guard sessions[wikiID] == nil else { continue }
+                guard closedWikiNameLoadsInFlight.contains(wikiID) == false else {
+                    pendingClosedWikiNameRefreshItems.append(item)
+                    continue
+                }
+                let payload = item.payload
+                if let pageIDs = payload.lintPageIDs {
+                    let wanted = pageIDs.filter { payload.recordedPageTitle(for: $0) == nil }
+                    guard !wanted.isEmpty else { continue }
+                    planned[wikiID, default: ([], [])].pages.formUnion(wanted)
+                } else {
+                    let wanted = payload.sourceIDs.filter { payload.recordedSourceName(for: $0) == nil }
+                    guard !wanted.isEmpty else { continue }
+                    planned[wikiID, default: ([], [])].sources.formUnion(wanted)
+                }
+            }
+            // IDs the cache already holds — or a prior load proved missing
+            // (review F4) — need no re-read.
+            for wikiID in Array(planned.keys) {
+                guard var targets = planned[wikiID] else { continue }
+                if let cached = closedWikiNameIndexes[wikiID] {
+                    targets.pages.subtract(cached.pageEntries.map(\.id))
+                    targets.sources.subtract(cached.sourceEntries.map(\.id))
+                }
+                if let missing = closedWikiKnownMissingIDs[wikiID] {
+                    targets.pages.subtract(missing.pages)
+                    targets.sources.subtract(missing.sources)
+                }
+                if targets.pages.isEmpty && targets.sources.isEmpty {
+                    planned.removeValue(forKey: wikiID)
+                } else {
+                    planned[wikiID] = targets
+                }
+            }
+            // Nothing this call can load: fully covered by the caches, or
+            // every candidate wiki's load is in flight under another call —
+            // that owner drains ``pendingClosedWikiNameRefreshItems`` after
+            // its own loads (the summary path's "second caller returns"
+            // branch). Items this call parked stay parked for it.
+            guard planned.isEmpty == false else { return }
+
+            for (wikiID, _) in planned {
+                closedWikiNameLoadsInFlight.insert(wikiID)
+                closedWikiNameLoadStates[wikiID] = .loading
+            }
+            // Loads run sequentially on the main actor; each read itself hops
+            // off-main through `WikiReadService.asyncRead`, so this only
+            // suspends. Loads are bounded (one per closed wiki with unresolved
+            // IDs) and rare, so parallelism buys nothing.
+            for (wikiID, targets) in planned {
+                let url = databaseURL(wikiID)
+                guard let url else {
+                    DebugLog.store(
+                        "Closed-wiki name load: no database URL for wiki \(wikiID.rawValue.prefix(8))")
+                    closedWikiNameLoadStates[wikiID] = .unavailable
+                    continue
+                }
+                do {
+                    let index = try await loader(
+                        wikiID,
+                        targets.pages.sorted { $0.rawValue < $1.rawValue },
+                        targets.sources.sorted { $0.rawValue < $1.rawValue },
+                        url)
+                    mergeClosedWikiNames(index, for: wikiID)
+                    recordKnownMissing(
+                        for: wikiID, planned: targets, loaded: index)
+                } catch is CancellationError {
+                    // Review F5: a cancelled load is not evidence about the
+                    // wiki's database — restore `.loading` so the next
+                    // `.task(id:)` run re-plans and retries it. (`.unavailable`
+                    // here would pin the deletion fallback text on rows whose
+                    // read never answered.)
+                    closedWikiNameLoadStates[wikiID] = .loading
+                } catch {
+                    DebugLog.store(
+                        "Closed-wiki name load failed for wiki \(wikiID.rawValue.prefix(8)): \(error)")
+                    closedWikiNameLoadStates[wikiID] = .unavailable
+                }
+            }
+            for wikiID in planned.keys {
+                closedWikiNameLoadsInFlight.remove(wikiID)
+            }
+            // Review F3: items that landed mid-load for the wikis THIS call
+            // just loaded are re-planned exactly once, inside this loop
+            // rather than as a stacked refresh. (Items parked on ANOTHER
+            // call's in-flight wiki are drained by that call.)
+            batch = pendingClosedWikiNameRefreshItems
+            pendingClosedWikiNameRefreshItems.removeAll()
+        }
+    }
+
+    /// Negative-cache (review F4) the planned IDs a successful load did not
+    /// return. The loader skips `notFound` IDs and throws on any other
+    /// error, so `planned − loaded` is exactly the confirmed-missing set —
+    /// re-planning them would only reopen the read-only database to hear
+    /// "gone" again.
+    private func recordKnownMissing(
+        for wikiID: WikiID,
+        planned: (pages: Set<PageID>, sources: Set<SourceID>),
+        loaded: QueueTargetNameIndex
+    ) {
+        let loadedPages = Set(loaded.pageEntries.map(\.id))
+        let loadedSources = Set(loaded.sourceEntries.map(\.id))
+        var missing = closedWikiKnownMissingIDs[wikiID] ?? ([], [])
+        missing.pages.formUnion(planned.pages.subtracting(loadedPages))
+        missing.sources.formUnion(planned.sources.subtracting(loadedSources))
+        closedWikiKnownMissingIDs[wikiID] = missing
+    }
+
+    /// Merge one successful read into the cache. First-match `record*`
+    /// semantics keep earlier entries (including a live session's answer
+    /// recorded by the view's overlay) authoritative over later merges.
+    private func mergeClosedWikiNames(_ index: QueueTargetNameIndex, for wikiID: WikiID) {
+        var cache = closedWikiNameIndexes[wikiID] ?? QueueTargetNameIndex()
+        for entry in index.pageEntries {
+            cache.recordPage(entry.id, title: entry.title)
+        }
+        for entry in index.sourceEntries {
+            cache.recordSource(entry.id, name: entry.name)
+        }
+        closedWikiNameIndexes[wikiID] = cache
+        closedWikiNameLoadStates[wikiID] = .loaded
+    }
+
     /// PID of the extraction subprocess (parsed from progress lines if the
     /// local pdf2md backend reports it). `nil` for remote backends.
     private(set) var extractionPID: Int32? = nil
@@ -335,6 +577,134 @@ final class QueueActivityTracker {
                 forgetRunningItem(id)
             }
         }
+        retryUnavailableReportSummaries()
+    }
+
+    /// Reconnect/explicit-refresh path for the summary cache (plan: "Loading
+    /// retries on reconnect or explicit refresh"). The watchdog reconcile is
+    /// the reconnect signal: any item still marked `.unavailable` gets one
+    /// forced batch retry so a transient store/transport failure can't pin
+    /// report-backed search as unavailable forever. Retries are rate-limited
+    /// (30s backoff) so a permanently unavailable store doesn't churn the
+    /// engine or spam the log on every reconcile tick.
+    func retryUnavailableReportSummaries() {
+        let unavailable = reportSummaryStates.filter { $0.value == .unavailable }.map(\.key)
+        guard !unavailable.isEmpty else { return }
+        if let last = lastUnavailableSummaryRetryAt,
+           Date().timeIntervalSince(last) < 30 {
+            return
+        }
+        lastUnavailableSummaryRetryAt = Date()
+        Task { @MainActor [weak self] in
+            await self?.refreshReportSummaries(itemIDs: unavailable, force: true)
+        }
+    }
+
+    /// Batch-load report summaries for the displayed item IDs. Called by the
+    /// Activity windows after attach (lifecycle-only rows render immediately,
+    /// plan §"How summaries load") and whenever the displayed set changes.
+    ///
+    /// - `force` re-fetches even cached items (terminal transitions, explicit
+    ///   refresh). Unforced loads skip already-loaded/loaded-state items so a
+    ///   churning `onChange` cannot re-read the whole window every snapshot.
+    /// - A `.loaded` result merges per item by attempt, then revision: a
+    ///   summary from an earlier attempt — or an older revision of the same
+    ///   attempt — never replaces a newer `.reportUpdated`-synthesized one
+    ///   (report merge rules).
+    /// - `.unavailable` keeps any cached summaries and marks the *missing*
+    ///   items unavailable — no error banner, logged via DebugLog. The
+    ///   watchdog's reconcile retries unavailable items on reconnect.
+    func refreshReportSummaries(itemIDs: [QueueItem.ID], force: Bool = false) async {
+        guard let engine = queueEngine else { return }
+        var wanted: [QueueItem.ID] = []
+        for id in itemIDs {
+            let state = reportSummaryStates[id]
+            if !force, state == .loaded { continue }
+            if force, state == .loading, inFlightSummaryLoad {
+                pendingSummaryRefreshIDs.insert(id)
+                continue
+            }
+            wanted.append(id)
+        }
+        guard !wanted.isEmpty else { return }
+        for id in wanted { reportSummaryStates[id] = .loading }
+
+        // Serialize concurrent batches: a caller arriving mid-load defers its
+        // IDs to the in-flight loop instead of issuing overlapping reads.
+        if inFlightSummaryLoad {
+            pendingSummaryRefreshIDs.formUnion(wanted)
+            return
+        }
+        inFlightSummaryLoad = true
+        defer { inFlightSummaryLoad = false }
+
+        var batch = wanted
+        while !batch.isEmpty {
+            let result = await engine.loadQueueReportSummaries(for: batch)
+            guard queueEngine === engine else { return }  // detached mid-load
+            switch result {
+            case .loaded(let summaries):
+                merge(summaries: summaries, for: batch)
+            case .unavailable(let reason):
+                DebugLog.store(
+                    "QueueActivityTracker: report summaries unavailable (\(reason)) — \(batch.count) item(s) stay lifecycle-only")
+                for id in batch where reportSummaries[id] == nil {
+                    reportSummaryStates[id] = .unavailable
+                }
+            }
+            // Terminal transitions that landed mid-load get a follow-up pass
+            // inside this loop rather than a stacked engine call.
+            batch = Array(pendingSummaryRefreshIDs)
+            pendingSummaryRefreshIDs.removeAll()
+        }
+    }
+
+    /// Merge loaded summaries into the cache. Items with no summary in the
+    /// response (legacy jobs) settle at `.loaded` with no entry — a truthful
+    /// "no report recorded" rather than a perpetual loading state.
+    private func merge(summaries: [QueueItem.ID: QueueReportSummary], for requested: [QueueItem.ID]) {
+        for id in requested {
+            if let summary = summaries[id] {
+                merge(summary: summary)
+            } else {
+                reportSummaryStates[id] = .loaded
+            }
+        }
+    }
+
+    /// Merge one summary by attempt first, then monotonic revision. A retry
+    /// creates a new attempt whose revisions restart at 1, so comparing
+    /// revision alone would let the previous attempt's summary pin the cache
+    /// and hide the retry's report. Within one attempt, older data never
+    /// replaces newer (report merge rules — a delayed batch load loses to a
+    /// live `.reportUpdated` event).
+    func merge(summary: QueueReportSummary) {
+        if let existing = reportSummaries[summary.itemID] {
+            if existing.attempt > summary.attempt {
+                // A summary from an earlier attempt arrived after the retry
+                // already cached its own — reject it outright.
+                reportSummaryStates[summary.itemID] = .loaded
+                return
+            }
+            if existing.attempt == summary.attempt,
+               existing.revision >= summary.revision {
+                reportSummaryStates[summary.itemID] = .loaded
+                return
+            }
+        }
+        reportSummaries[summary.itemID] = summary
+        reportSummaryStates[summary.itemID] = .loaded
+    }
+
+    /// The cached summary for an item, if one is loaded.
+    func reportSummary(for itemID: QueueItem.ID) -> QueueReportSummary? {
+        reportSummaries[itemID]
+    }
+
+    /// The cache state for an item (`.loading` is the default so rows start
+    /// lifecycle-only and search starts labeled incomplete).
+    func reportSummaryState(for itemID: QueueItem.ID) -> ReportSummaryState {
+        reportSummaryStates[itemID] ?? .loading
     }
 
     /// Start a low-frequency watchdog that polls the daemon's snapshot and
@@ -404,6 +774,10 @@ final class QueueActivityTracker {
         pendingPermissions.removeAll()
         transcriptAttempts.removeAll()
         lastTranscriptBatch.removeAll()
+        reportSummaries.removeAll()
+        reportSummaryStates.removeAll()
+        pendingSummaryRefreshIDs.removeAll()
+        lastUnavailableSummaryRetryAt = nil
     }
 
     // MARK: - Public API
@@ -478,6 +852,9 @@ final class QueueActivityTracker {
         itemDebugURLs.removeValue(forKey: itemID)
         pendingPermissions.removeValue(forKey: itemID)
         itemToQueue.removeValue(forKey: itemID)
+        reportSummaries.removeValue(forKey: itemID)
+        reportSummaryStates.removeValue(forKey: itemID)
+        pendingSummaryRefreshIDs.remove(itemID)
         if let attempt = transcriptAttempts.removeValue(forKey: itemID) {
             lastTranscriptBatch.removeValue(forKey: attempt)
         }
@@ -640,7 +1017,7 @@ final class QueueActivityTracker {
             // the emit closure. `nil` clears the row (resolved / rejected /
             // auto-rejected by the S1 companion timer). Updates replace the
             // prior entry — ACP agents gate one write at a time, so the
-            // array never carries more than one entry at a time.
+            // dictionary never carries more than one entry per item.
             if let permission {
                 pendingPermissions[id] = permission
             } else {
@@ -667,15 +1044,18 @@ final class QueueActivityTracker {
 
         case .completed(let item):
             removeItem(item)
+            refreshSummaryAfterTerminal(itemID: item.id)
 
         case .failed(let item, let error):
             removeItem(item)
             if item.queue == .extraction, extractionLog.isEmpty {
                 extractionLog = "Extraction failed: \(error)"
             }
+            refreshSummaryAfterTerminal(itemID: item.id)
 
         case .cancelled(let item):
             removeItem(item)
+            refreshSummaryAfterTerminal(itemID: item.id)
 
         case .runStateChanged:
             // Not relevant to activity tracking.
@@ -684,6 +1064,34 @@ final class QueueActivityTracker {
             // Ordering changed but state is unchanged; the next snapshot
             // refresh will pick up the new order. No tracker update needed.
             break
+
+        // Integrated-queue-workspace plan §2: the report events feed the
+        // summary cache. Everything else above is unchanged activity behavior.
+        case .reportUpdated(_, let report):
+            // Persistence committed BEFORE this event published, so the report
+            // is durable. Synthesize the bounded summary and merge by revision
+            // (an older event never rolls the cache back).
+            merge(summary: QueueWorkspaceMapper.summary(from: report))
+
+        case .reportUnavailable(let id, let reason):
+            // Report persistence failed: keep the last committed summary (if
+            // any), label reporting unavailable, log — never invent outcomes
+            // and never change the job's own lifecycle presentation.
+            DebugLog.store("QueueActivityTracker: report unavailable for \(id.rawValue.prefix(8)): \(reason)")
+            if reportSummaries[id] == nil {
+                reportSummaryStates[id] = .unavailable
+            }
+        }
+    }
+
+    /// Re-fetch one item's summary after a terminal lifecycle transition —
+    /// report commits can land just before the terminal event publishes, so
+    /// the cached mid-run summary (or a legacy no-report state) may be stale.
+    /// Contract: "Reload on … terminal lifecycle transitions."
+    private func refreshSummaryAfterTerminal(itemID: QueueItem.ID) {
+        guard queueEngine != nil else { return }
+        Task { @MainActor [weak self] in
+            await self?.refreshReportSummaries(itemIDs: [itemID], force: true)
         }
     }
 
@@ -1027,11 +1435,17 @@ enum UsageFormatter {
         return "\(count)"
     }
 
-    /// Format a cost as "$0.34" or "$1,234.56". Returns nil if cost is 0 or nil.
+    /// Format a cost as "$0.34" or "$1234.56" (locale-independent: `%.2f`
+    /// emits no grouping separator). Returns nil if cost is 0 or nil.
     static func cost(_ amount: Double?, currency: String?) -> String? {
         guard let amount, amount > 0 else { return nil }
         let symbol = currency == "USD" || currency == nil ? "$" : ""
-        let suffix = (currency != nil && currency != "USD") ? " \(currency!)" : ""
+        let suffix: String
+        if let currency, currency != "USD" {
+            suffix = " \(currency)"
+        } else {
+            suffix = ""
+        }
         return String(format: "%@%.2f%@", symbol, amount, suffix)
     }
 
@@ -1084,6 +1498,35 @@ enum UsageFormatter {
             parts.append(cost)
         }
         return parts.joined(separator: " · ")
+    }
+
+    /// A grouped, locale-aware integer ("8,120"). The Run Details breakdown
+    /// shows exact counts — never the compact "8.1K" vocabulary — so the
+    /// operator can reconcile the panel against provider usage dashboards.
+    static func groupedCount(_ count: Int) -> String {
+        count.formatted()
+    }
+
+    /// Cost with sub-cent precision for the Run Details breakdown: "$0.0421".
+    /// Four decimals, trailing zeros trimmed but never below two ("$0.34",
+    /// "$0.10") so the line matches the two-decimal `cost` shape whenever the
+    /// extra precision is not needed. Same omission rule as `cost` (nil/zero
+    /// → nil).
+    static func preciseCost(_ amount: Double?, currency: String?) -> String? {
+        guard let amount, amount > 0 else { return nil }
+        let symbol = currency == "USD" || currency == nil ? "$" : ""
+        let suffix: String
+        if let currency, currency != "USD" {
+            suffix = " \(currency)"
+        } else {
+            suffix = ""
+        }
+        let pieces = String(format: "%.4f", amount).split(separator: ".", maxSplits: 1)
+        var decimals = pieces.count > 1 ? String(pieces[1]) : ""
+        while decimals.count > 2 && decimals.hasSuffix("0") {
+            decimals.removeLast()
+        }
+        return symbol + pieces[0] + (decimals.isEmpty ? "" : "." + decimals) + suffix
     }
 
     /// The full per-run summary line for the Activity window. Combines run

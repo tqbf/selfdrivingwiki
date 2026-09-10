@@ -282,6 +282,28 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
         }
     }
 
+    func loadQueueReport(itemID: String, reply: @escaping (Data) -> Void) {
+        queueReply(reply) { [daemon] in
+            let result = try await daemon.performQueueOperation { engine in
+                let loadResult = await engine.loadQueueReport(for: QueueItemID(rawValue: itemID))
+                return try JSONEncoder().encode(loadResult)
+            }
+            return result.map { QueueDataPayload(data: $0) }
+        }
+    }
+
+    func loadQueueReportSummaries(itemIDs: Data, reply: @escaping (Data) -> Void) {
+        queueReply(reply) { [daemon] in
+            let result = try await daemon.performQueueOperation { engine in
+                let rawIDs = try JSONDecoder().decode([String].self, from: itemIDs)
+                let summaries = await engine.loadQueueReportSummaries(
+                    for: rawIDs.map { QueueItemID(rawValue: $0) })
+                return try JSONEncoder().encode(summaries)
+            }
+            return result.map { QueueDataPayload(data: $0) }
+        }
+    }
+
     func queueOwnershipStatus(reply: @escaping (Data) -> Void) {
         let sendableReply = SendableDataReply(reply: reply)
         Task { [daemon] in
@@ -514,6 +536,12 @@ final class WikiDaemonExporter: NSObject, WikiDaemonProtocol, @unchecked Sendabl
     }
     func relinquishQueue(request: Data, reply: @escaping (Data) -> Void) {
         reply(unavailableQueueReply(QueueRelinquishmentSuccess.self))
+    }
+    func loadQueueReport(itemID: String, reply: @escaping (Data) -> Void) {
+        reply(unavailableQueueReply(QueueDataPayload.self))
+    }
+    func loadQueueReportSummaries(itemIDs: Data, reply: @escaping (Data) -> Void) {
+        reply(unavailableQueueReply(QueueDataPayload.self))
     }
 
     // Chat stubs (Phase C — chat is macOS-only via WikiFSEngine).

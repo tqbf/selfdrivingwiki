@@ -123,6 +123,13 @@ public struct QueueWorkerOutputChannel: Sendable {
     /// Internal observation runs after multicast publication and before the
     /// output-specific persistence step. Production uses a no-op observer.
     private let observePublication: @Sendable (QueueEvent) -> Void
+    /// Report execution activation: compare + reset on identity change.
+    private let activateReportExecution: @Sendable (QueueAttemptID, QueueExecutionID) throws -> Void
+    /// Initialize (or execution-reset) a report with its scope.
+    private let beginReport: @Sendable (QueueAttemptID, QueueExecutionID, QueueReportOperation, QueueReportScope) throws -> QueueAttemptReport
+    /// Validate identity, apply a mutation, advance the revision, and return
+    /// the committed report — one store transaction.
+    private let commitReport: @Sendable (QueueAttemptID, QueueExecutionID, QueueReportMutation) throws -> QueueAttemptReport
 
     public init(
         store: QueueStore,
@@ -153,7 +160,23 @@ public struct QueueWorkerOutputChannel: Sendable {
                     logURL: logURL,
                     debugURL: debugURL)
             },
-            observePublication: { _ in })
+            observePublication: { _ in },
+            activateReportExecution: { attemptID, executionID in
+                try store.activateReportExecution(attemptID: attemptID, executionID: executionID)
+            },
+            beginReport: { attemptID, executionID, operation, scope in
+                try store.beginReport(
+                    attemptID: attemptID,
+                    executionID: executionID,
+                    operation: operation,
+                    scope: scope)
+            },
+            commitReport: { attemptID, executionID, mutation in
+                try store.commitReportMutation(
+                    attemptID: attemptID,
+                    executionID: executionID,
+                    mutation: mutation)
+            })
     }
 
     internal init(
@@ -163,7 +186,16 @@ public struct QueueWorkerOutputChannel: Sendable {
         persistTranscript: @escaping @Sendable (QueueTranscriptUpdate) throws -> Void,
         persistUsage: @escaping @Sendable (QueueItem.ID, String?) throws -> Void,
         persistRunPaths: @escaping @Sendable (QueueItem.ID, String?, String?) throws -> Void,
-        observePublication: @escaping @Sendable (QueueEvent) -> Void = { _ in }
+        observePublication: @escaping @Sendable (QueueEvent) -> Void = { _ in },
+        activateReportExecution: @escaping @Sendable (QueueAttemptID, QueueExecutionID) throws -> Void = { _, _ in },
+        beginReport: @escaping @Sendable (QueueAttemptID, QueueExecutionID, QueueReportOperation, QueueReportScope) throws -> QueueAttemptReport = { _, _, _, _ in
+            // A channel without report persistence is reporting-unavailable by
+            // construction; emitReport maps the failure to .reportUnavailable.
+            throw QueueReportChannelError.unavailable
+        },
+        commitReport: @escaping @Sendable (QueueAttemptID, QueueExecutionID, QueueReportMutation) throws -> QueueAttemptReport = { _, _, _ in
+            throw QueueReportChannelError.unavailable
+        }
     ) {
         self.broadcaster = broadcaster
         self.transcriptState = transcriptState
@@ -172,6 +204,9 @@ public struct QueueWorkerOutputChannel: Sendable {
         self.persistUsage = persistUsage
         self.persistRunPaths = persistRunPaths
         self.observePublication = observePublication
+        self.activateReportExecution = activateReportExecution
+        self.beginReport = beginReport
+        self.commitReport = commitReport
     }
 
     /// A fresh non-replaying event subscription.
@@ -192,10 +227,30 @@ public struct QueueWorkerOutputChannel: Sendable {
     }
 
     /// Create and activate a per-dispatch output capability.
+    ///
+    /// Lease activation is also the report execution boundary: the channel
+    /// compares the dispatch's execution identity against the stored report
+    /// header and resets the report when it changed — covering same-attempt
+    /// restarts and halt-resume dispatches. `QueueStore.requeue(id:)` is NOT
+    /// involved, so halt/cancellation keeps observed outcomes until the new
+    /// lease actually activates here.
     public func makeScope(attemptID: QueueAttemptID) -> QueueWorkerOutputScope {
         let scope = QueueWorkerOutputScope(attemptID: attemptID, leaseID: WorkerLeaseID(), channel: self)
         if leases.activate(attemptID: attemptID, leaseID: scope.leaseID) {
             transcriptState.begin(.scoped(attemptID, scope.leaseID))
+            do {
+                try activateReportExecution(
+                    attemptID,
+                    QueueExecutionID(rawValue: scope.leaseID.rawValue))
+            } catch {
+                DebugLog.store(
+                    "Queue output: report execution activation failed for item=\(attemptID.itemID.rawValue): \(error)")
+                // The dispatch's report identity could not be established —
+                // reporting is unavailable for it. Publish that so consumers
+                // label reporting unavailable instead of waiting on a summary
+                // that will never arrive.
+                publish(.reportUnavailable(attemptID.itemID, reason: String(describing: error)))
+            }
         }
         return scope
     }
@@ -333,8 +388,58 @@ public struct QueueWorkerOutputChannel: Sendable {
         emitPendingPermission(itemID: itemID, permission: permission)
     }
 
+    // MARK: - Durable attempt reports
+
+    /// Initialize (or execution-check) the attempt report with its planned
+    /// scope. The committed report (revision included) is published only
+    /// after persistence succeeds; a failure publishes `.reportUnavailable`
+    /// and never changes the job's lifecycle.
+    public func emitReportBegin(
+        operation: QueueReportOperation,
+        scope: QueueReportScope,
+        outputScope: QueueWorkerOutputScope
+    ) {
+        guard let admission = leases.admit(outputScope) else { return }
+        defer { admission.finish() }
+        let attemptID = outputScope.attemptID
+        let executionID = QueueExecutionID(rawValue: outputScope.leaseID.rawValue)
+        do {
+            let report = try beginReport(attemptID, executionID, operation, scope)
+            publish(.reportUpdated(attemptID.itemID, report))
+        } catch {
+            DebugLog.store("Queue output: report begin failed for item=\(attemptID.itemID.rawValue): \(error)")
+            publish(.reportUnavailable(attemptID.itemID, reason: String(describing: error)))
+        }
+    }
+
+    /// Lease-gated durable report update. Commits the mutation and its
+    /// revision BEFORE publishing `.reportUpdated`, so a received event is
+    /// always durable. On failure the update is not presented as durable:
+    /// the channel logs via DebugLog and publishes `.reportUnavailable`.
+    /// Reporting failure never changes job success into failure.
+    public func emitReport(_ mutation: QueueReportMutation, scope: QueueWorkerOutputScope) {
+        guard let admission = leases.admit(scope) else { return }
+        defer { admission.finish() }
+        let attemptID = scope.attemptID
+        let executionID = QueueExecutionID(rawValue: scope.leaseID.rawValue)
+        do {
+            let report = try commitReport(attemptID, executionID, mutation)
+            publish(.reportUpdated(attemptID.itemID, report))
+        } catch {
+            DebugLog.store("Queue output: report commit failed for item=\(attemptID.itemID.rawValue): \(error)")
+            publish(.reportUnavailable(attemptID.itemID, reason: String(describing: error)))
+        }
+    }
+
     /// Finish every event subscription. Repeated calls are safe.
     public func finish() {
         broadcaster.finish()
     }
+}
+
+/// Internal failure of a channel constructed without report persistence.
+/// Surfaced to consumers as `.reportUnavailable`, never as a thrown error
+/// across the emit boundary.
+enum QueueReportChannelError: Error {
+    case unavailable
 }

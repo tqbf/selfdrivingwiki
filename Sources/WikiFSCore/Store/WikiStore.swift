@@ -603,6 +603,21 @@ public protocol WikiStore: AnyObject, Sendable {
     func pageHeadSources(pageID: PageID) throws -> [PageVersionSource]
     func sourceReferencingPageVersions(sourceID: SourceID) throws -> [PageVersionID]
 
+    /// The distinct pages whose recorded page-version provenance cites any of
+    /// `sourceIDs` — the inverse of `sourceReferencingPageVersions(sourceID:)`
+    /// and the evidence seam for the queue Overview's "Outputs" section
+    /// (pages appear only because a citation edge says so). Bounded by
+    /// `limit` (a non-positive limit returns `[]`); when at least `limit`
+    /// pages match, the result is truncated at exactly `limit` rows —
+    /// callers must treat a full-page result as a floor (e.g. "200+"),
+    /// never a verified total. Ordered by title (case-insensitive) then
+    /// page id, with `nil`-title rows placed last, so the result is
+    /// deterministic for a given store state. Titles resolve from the live
+    /// `pages` row and are `nil` when the page row has vanished — callers
+    /// degrade honestly. Read-only: routes through `dbWriter.read` (usable
+    /// from read-only store handles) and emits no `ResourceChangeEvent`.
+    func pagesCitingSources(sourceIDs: [SourceID], limit: Int) throws -> [CitedPage]
+
     /// Typed read projections over existing source-markdown activity data.
     func extractionProvenance(markdownVersionID: SourceMarkdownVersionID) throws -> ExtractionProvenance?
     func activeExtractionProvenance(sourceID: SourceID) throws -> ExtractionProvenance?

@@ -154,12 +154,13 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
             packageProducer: preparation.packageProvenance))
     }
 
+    @discardableResult
     func persistBytesExtraction(
         wikiID: WikiID,
         sourceID: SourceID,
         resolution: BytesExtractionResolution,
         markdown: String
-    ) async throws {
+    ) async throws -> QueueExtractionOutputReference? {
         guard let store = storeResolver(wikiID) else {
             // A finished extraction whose store vanished mid-flight is data
             // loss — fail the item loudly instead of silently completing.
@@ -168,31 +169,37 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
         }
         if let packageProducer = resolution.packageProducer {
             do {
-                _ = try store.appendInstalledPackageMarkdown(
+                let version = try store.appendInstalledPackageMarkdown(
                     sourceID: sourceID, content: markdown, package: packageProducer,
                     origin: .extraction, toolVersion: resolution.modelVersion,
                     sourceVersionID: nil, note: nil)
+                DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
+                return QueueExtractionOutputReference(versionID: version.id.rawValue)
             } catch {
                 DebugLog.store("DaemonQueueExtractionProvider: package write failed (source=\(sourceID.rawValue)): \(error)")
                 throw error
             }
         } else {
-            _ = DebugLog.trying("recordMarkdownExtraction", operation: {
+            guard let version = DebugLog.trying("recordMarkdownExtraction", operation: {
                 try store.recordMarkdownExtraction(
                     sourceID: sourceID, content: markdown,
                     backend: resolution.backend,
                     sourceVersionID: nil, note: nil, modelVersion: resolution.modelVersion)
-            })
+            }) else {
+                return nil
+            }
+            DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
+            return QueueExtractionOutputReference(versionID: version.id.rawValue)
         }
-        DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
     }
 
+    @discardableResult
     func persistTranscriptExtraction(
         wikiID: WikiID,
         sourceID: SourceID,
         resolution: TranscriptExtractionResolution,
         outcome: TranscriptFetchOutcome
-    ) async throws {
+    ) async throws -> QueueExtractionOutputReference? {
         guard let store = storeResolver(wikiID) else {
             // A finished extraction whose store vanished mid-flight is data
             // loss — fail the item loudly instead of silently completing.
@@ -201,12 +208,16 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
         }
         switch resolution.resultMode {
         case .builtInTool(let tool):
-            _ = DebugLog.trying("appendDerivedMarkdown", operation: {
+            guard let version = DebugLog.trying("appendDerivedMarkdown", operation: {
                 try store.appendDerivedMarkdown(
                     sourceID: sourceID, content: outcome.markdown, origin: .transcript,
                     producer: .tool(tool), providerID: nil,
                     modelID: nil, toolVersion: nil, sourceVersionID: nil, note: nil)
-            })
+            }) else {
+                return nil
+            }
+            DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
+            return QueueExtractionOutputReference(versionID: version.id.rawValue)
 
         case .installedPackage(let baseProducer):
             // Package transcript: resolve the source's immutable initial
@@ -221,16 +232,17 @@ final class DaemonQueueExtractionProvider: QueueExtractionProvider {
                 protocolRevision: baseProducer.protocolRevision,
                 reportedMetadata: outcome.reportedMetadata)
             do {
-                _ = try store.appendInstalledPackageMarkdown(
+                let version = try store.appendInstalledPackageMarkdown(
                     sourceID: sourceID, content: outcome.markdown, package: producer,
                     origin: .transcript, toolVersion: nil,
                     sourceVersionID: initialVersion.id, note: nil)
+                DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
+                return QueueExtractionOutputReference(versionID: version.id.rawValue)
             } catch {
                 DebugLog.store("DaemonQueueExtractionProvider: package transcript write failed (source=\(sourceID.rawValue)): \(error)")
                 throw error
             }
         }
-        DarwinNotifier.postChange(forWikiID: wikiID.rawValue)
     }
 }
 

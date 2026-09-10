@@ -31,6 +31,16 @@ public struct QueueWorkerOutputScope: Sendable {
     public func emitLiveUsage(itemID: QueueItem.ID, usage: SessionUsage) { channel.emitLiveUsage(itemID: itemID, usage: usage, scope: self) }
     public func emitRunPaths(itemID: QueueItem.ID, logURL: URL?, debugURL: URL?) { channel.emitRunPaths(itemID: itemID, logURL: logURL, debugURL: debugURL, scope: self) }
     public func emitPendingPermission(itemID: QueueItem.ID, permission: PendingPermission?) { channel.emitPendingPermission(itemID: itemID, permission: permission, scope: self) }
+
+    /// Initialize the durable attempt report for this dispatch with its
+    /// planned scope. Lease-gated: a stale dispatch cannot initialize.
+    public func emitReportBegin(operation: QueueReportOperation, scope: QueueReportScope) {
+        channel.emitReportBegin(operation: operation, scope: scope, outputScope: self)
+    }
+
+    /// Commit one durable report mutation (validated against this dispatch's
+    /// attempt + lease) and publish it. Stale dispatches cannot commit.
+    public func emitReport(_ mutation: QueueReportMutation) { channel.emitReport(mutation, scope: self) }
 }
 
 // MARK: - CompositeWorkerFactory
@@ -226,6 +236,14 @@ public enum QueueEvent: Sendable {
     /// `QueueActivityTracker` → `ActivityWindowView`. ACP agents gate one
     /// write at a time, so at most one pending request per item at a time.
     case pendingPermission(QueueItem.ID, PendingPermission?)
+    /// A durable report update was committed (with its new revision) and then
+    /// published. Persistence strictly precedes publication — a received
+    /// `.reportUpdated` is durable.
+    case reportUpdated(QueueItem.ID, QueueAttemptReport)
+    /// Report persistence failed. Nothing was committed; any previously
+    /// loaded report remains the last durable state. Job lifecycle is never
+    /// changed by a reporting failure.
+    case reportUnavailable(QueueItem.ID, reason: String)
 
     /// The item this event pertains to (if any).
     public var item: QueueItem? {
@@ -235,7 +253,8 @@ public enum QueueEvent: Sendable {
             return i
         case .failed(let i, _):
             return i
-        case .progress, .transcript, .liveUsage, .usage, .runPaths, .runStateChanged, .pendingPermission:
+        case .progress, .transcript, .liveUsage, .usage, .runPaths, .runStateChanged, .pendingPermission,
+             .reportUpdated, .reportUnavailable:
             return nil
         }
     }

@@ -285,6 +285,48 @@ public final class DaemonWorkloadClient: @unchecked Sendable {
         }
     }
 
+    // MARK: - Durable attempt reports
+
+    /// Load the durable attempt report for one queue item. The daemon
+    /// answers with a JSON-encoded `QueueReportLoadResult` so missing
+    /// reports and capability failures both arrive as typed values.
+    public func loadQueueReport(for itemID: QueueItem.ID) async throws -> QueueReportLoadResult {
+        try await withTimeout {
+            let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
+                self.proxy.loadQueueReport(itemID: itemID.rawValue) { data in
+                    cont.resume(returning: data)
+                }
+            }
+            let payload = try self.decodeQueuePayload(QueueDataPayload.self, from: replyData)
+            do {
+                return try JSONDecoder().decode(QueueReportLoadResult.self, from: payload.data)
+            } catch {
+                throw DaemonXPCError.unexpectedReply
+            }
+        }
+    }
+
+    /// Load bounded report summaries for the displayed queue items. The
+    /// daemon answers with a JSON-encoded `QueueReportSummariesResult`.
+    public func loadQueueReportSummaries(
+        for itemIDs: [QueueItem.ID]
+    ) async throws -> QueueReportSummariesResult {
+        let requestData = try JSONEncoder().encode(itemIDs.map(\.rawValue))
+        return try await withTimeout {
+            let replyData = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
+                self.proxy.loadQueueReportSummaries(itemIDs: requestData) { data in
+                    cont.resume(returning: data)
+                }
+            }
+            let payload = try self.decodeQueuePayload(QueueDataPayload.self, from: replyData)
+            do {
+                return try JSONDecoder().decode(QueueReportSummariesResult.self, from: payload.data)
+            } catch {
+                throw DaemonXPCError.unexpectedReply
+            }
+        }
+    }
+
     /// Read the daemon queue ownership epoch without constructing queue resources.
     public func queueOwnershipStatus() async throws -> QueueOwnershipStatusPayload {
         try await withTimeout {

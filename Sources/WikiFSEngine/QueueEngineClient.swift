@@ -77,6 +77,19 @@ public protocol QueueEngineClient: AnyObject, Sendable {
 
     /// Load persisted activity metadata for all items with recorded activity.
     func loadAllActivitySnapshots() async throws -> [QueueItem.ID: QueueEngine.ActivitySnapshot]
+
+    // MARK: - Durable attempt reports
+
+    /// Load the current attempt's durable report for one item. Non-throwing:
+    /// `.notReported` for jobs without a report, `.unavailable` when the
+    /// store/transport cannot serve reports (including an older daemon
+    /// without reporting capability) — never a generic thrown error.
+    func loadQueueReport(for itemID: QueueItem.ID) async -> QueueReportLoadResult
+
+    /// Load bounded report summaries for the displayed item IDs so row
+    /// progress and outcome search work without opening each job. Fails
+    /// softly with `.unavailable`; consumers retain lifecycle-only rows.
+    func loadQueueReportSummaries(for itemIDs: [QueueItem.ID]) async -> QueueReportSummariesResult
 }
 
 // MARK: - QueueEngine conformance

@@ -200,52 +200,57 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
             packageProducer: preparation.packageProvenance))
     }
 
+    @discardableResult
     func persistBytesExtraction(
         wikiID: WikiID,
         sourceID: SourceID,
         resolution: BytesExtractionResolution,
         markdown: String
-    ) async throws {
+    ) async throws -> QueueExtractionOutputReference? {
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
             DebugLog.extraction("AppQueueExtractionProvider: persistBytesExtraction — no session for wikiID=\(wikiID)")
-            return
+            return nil
         }
         if let packageProducer = resolution.packageProducer {
             do {
-                _ = try store.internalStore.appendInstalledPackageMarkdown(
+                let version = try store.internalStore.appendInstalledPackageMarkdown(
                     sourceID: sourceID, content: markdown, package: packageProducer,
                     origin: .extraction, toolVersion: resolution.modelVersion,
                     sourceVersionID: nil, note: nil)
+                return QueueExtractionOutputReference(versionID: version.id.rawValue)
             } catch {
                 DebugLog.store("AppQueueExtractionProvider: package provenance write failed (source=\(sourceID.rawValue)): \(error)")
                 throw error
             }
         } else {
-            store.seedPdfMarkdown(
+            let version = store.seedPdfMarkdown(
                 for: sourceID,
                 content: markdown,
                 backend: resolution.backend,
                 modelVersion: resolution.modelVersion
             )
+            return version.map { QueueExtractionOutputReference(versionID: $0.id.rawValue) }
         }
     }
 
+    @discardableResult
     func persistTranscriptExtraction(
         wikiID: WikiID,
         sourceID: SourceID,
         resolution: TranscriptExtractionResolution,
         outcome: TranscriptFetchOutcome
-    ) async throws {
+    ) async throws -> QueueExtractionOutputReference? {
         guard let store = sessionBox.resolve(wikiID: wikiID) else {
             DebugLog.extraction("AppQueueExtractionProvider: persistTranscriptExtraction — no session for wikiID=\(wikiID)")
-            return
+            return nil
         }
         switch resolution.resultMode {
         case .builtInTool(let tool):
             // Built-in tool: keep the existing log-only discipline (the fetch
             // succeeded; a store-write failure leaves a Console.app trace).
-            _ = store.appendTranscriptMarkdown(
+            let version = store.appendTranscriptMarkdown(
                 for: sourceID, content: outcome.markdown, tool: tool)
+            return version.map { QueueExtractionOutputReference(versionID: $0.id.rawValue) }
 
         case .installedPackage(let baseProducer):
             // Package transcript: resolve the source's immutable initial
@@ -262,10 +267,11 @@ final class AppQueueExtractionProvider: QueueExtractionProvider {
                 protocolRevision: baseProducer.protocolRevision,
                 reportedMetadata: outcome.reportedMetadata)
             do {
-                _ = try store.internalStore.appendInstalledPackageMarkdown(
+                let version = try store.internalStore.appendInstalledPackageMarkdown(
                     sourceID: sourceID, content: outcome.markdown, package: producer,
                     origin: .transcript, toolVersion: nil,
                     sourceVersionID: initialVersion.id, note: nil)
+                return QueueExtractionOutputReference(versionID: version.id.rawValue)
             } catch {
                 DebugLog.store("AppQueueExtractionProvider: package transcript write failed (source=\(sourceID.rawValue)): \(error)")
                 throw error

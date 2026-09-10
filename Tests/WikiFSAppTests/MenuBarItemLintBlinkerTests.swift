@@ -318,6 +318,10 @@ private final class GatedSnapshotEngine: QueueEngineClient, @unchecked Sendable 
     func waitForCompletion(of id: QueueItem.ID) async throws -> Result<Void, Error> { throw GateError.unimplemented }
     func loadTranscript(for itemID: QueueItem.ID) async throws -> [ChatTranscriptItem] { throw GateError.unimplemented }
     func loadAllActivitySnapshots() async throws -> [QueueItem.ID: QueueEngine.ActivitySnapshot] { throw GateError.unimplemented }
+
+    func loadQueueReport(for itemID: QueueItem.ID) async -> QueueReportLoadResult { .unavailable(reason: "gated") }
+
+    func loadQueueReportSummaries(for itemIDs: [QueueItem.ID]) async -> QueueReportSummariesResult { .unavailable(reason: "gated") }
 }
 
 // MARK: - Minimal stubs (mirror MenuBarItemMaintenanceMenuTests)
@@ -331,7 +335,7 @@ private final class StubExtractor: MarkdownExtractor {
 
 private struct StubExtractionProvider: QueueExtractionProvider {
     func resolveExtraction(wikiID: WikiID, sourceID: SourceID, backendOverride: ExtractionBackend?) async throws -> ExtractionResolution? { nil }
-    func persistBytesExtraction(wikiID: WikiID, sourceID: SourceID, resolution: BytesExtractionResolution, markdown: String) async throws {}
-    func persistTranscriptExtraction(wikiID: WikiID, sourceID: SourceID, resolution: TranscriptExtractionResolution, outcome: TranscriptFetchOutcome) async throws {}
+    func persistBytesExtraction(wikiID: WikiID, sourceID: SourceID, resolution: BytesExtractionResolution, markdown: String) async throws -> QueueExtractionOutputReference? { nil }
+    func persistTranscriptExtraction(wikiID: WikiID, sourceID: SourceID, resolution: TranscriptExtractionResolution, outcome: TranscriptFetchOutcome) async throws -> QueueExtractionOutputReference? { nil }
 }
 #endif

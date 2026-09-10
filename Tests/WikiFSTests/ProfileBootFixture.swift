@@ -311,14 +311,14 @@ private struct ProfileQueueExtractionProvider: QueueExtractionProvider {
         sourceID: SourceID,
         resolution: BytesExtractionResolution,
         markdown: String
-    ) async throws {}
+    ) async throws -> QueueExtractionOutputReference? { nil }
 
     func persistTranscriptExtraction(
         wikiID: WikiID,
         sourceID: SourceID,
         resolution: TranscriptExtractionResolution,
         outcome: TranscriptFetchOutcome
-    ) async throws {}
+    ) async throws -> QueueExtractionOutputReference? { nil }
 }
 
 private func fixtureTransportServices() -> DaemonTransportServices {

@@ -260,11 +260,26 @@ Open from the menu bar or keyboard:
 
 | Window | Shortcut | What it shows |
 |---|---|---|
-| **Agent Queue** | ⌘I | Ingestion and lint jobs. Live agent transcript in the detail pane. |
-| **Extraction Queue** | ⌘E | PDF-to-markdown jobs. Progress text in the detail pane. |
+| **Agent Queue** | ⌘I | Ingestion and lint jobs. |
+| **Extraction Queue** | ⌘E | PDF-to-markdown jobs. |
 
 Both windows show:
-- **Active** section — currently running and queued items (drag to reorder).
-- **Recent** section — last 30 completed/failed/cancelled items.
-- **Per-item controls** — Cancel (running/queued), Retry (failed/cancelled).
-- **Toolbar** — Pause/Resume, Stop All.
+- **Active** section — currently running and queued items (drag to reorder;
+  reordering turns off while filters or search are active).
+- **Recent** section — up to 200 completed/failed/cancelled items.
+- **Per-item controls** — Cancel (running/queued), Retry Job (failed/cancelled).
+- **Sidebar header** — the search field appears above the job list. Separate
+  icon buttons for **Pause Queue** or **Resume Queue**, **Stop All…**, and
+  **Filter** sit beside All Jobs. Point at an icon to see its name.
+- **Toolbar** — the **Run Details** toggle (sidebar.right icon) stays at the
+  right edge.
+
+Pause stops new starts and lets running jobs finish. Resume starts dispatch
+again. Stop All pauses the queue and cancels its running jobs. Queued jobs stay
+queued. The confirmation states this before you confirm.
+
+Select a job to open its workspace. **Overview** shows the job's targets.
+The Run Details toggle opens the optional Run Details inspector. **Activity**
+shows the transcript or progress text. See
+[Organizing and managing](organizing-and-managing.md#the-activity-queue) for
+the full workspace guide.

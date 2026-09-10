@@ -77,7 +77,8 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
         onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
-        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
+        onReport: (@Sendable (QueueReportMutation) -> Void)?
     ) async throws {
         guard let store = storeResolver(wikiID) else {
             throw QueueIngestionError.spawnFailed("No store for wikiID=\(wikiID.rawValue)")
@@ -94,12 +95,15 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         let stateMarkdown = daemonStateMarkdown(from: store)
 
         var sources: [OperationRequest.StagedSource] = []
+        var stagingOutcomes: [(id: SourceID, outcome: QueueIngestionReporting.StagingOutcome)] = []
+        stagingOutcomes.reserveCapacity(sourceIDs.count)
         let allSources = (DebugLog.trying("listSources", operation: { try store.listSources() })) ?? []
         for sourceID in sourceIDs {
             guard let source = allSources.first(where: { $0.id == sourceID }),
                   let bytes = DebugLog.trying("sourceContent", operation: { try store.sourceContent(id: sourceID) })
             else {
                 DebugLog.ingest("DaemonQueueIngestionProvider: skipping \(sourceID.rawValue) — source or bytes missing")
+                stagingOutcomes.append((id: sourceID, outcome: .bytesUnavailable))
                 continue
             }
 
@@ -120,7 +124,12 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
                 name: source.effectiveName,
                 sourceID: source.id
             ))
+            stagingOutcomes.append((id: sourceID, outcome: .staged(name: source.effectiveName)))
         }
+
+        // Report the ACTUAL staging facts: prepared vs skipped counts come
+        // from this collection, never from the request.
+        onReport?(QueueIngestionReporting.stagingMutation(requested: stagingOutcomes))
 
         guard !sources.isEmpty else {
             throw QueueIngestionError.noSources
@@ -128,7 +137,12 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
 
         DebugLog.ingest("DaemonQueueIngestionProvider: handing off \(sources.count) source(s)")
 
-        let providerLabel = resolveSelectedProvider().label
+        let selectedProvider = resolveSelectedProvider()
+        let providerLabel = selectedProvider.label
+        // The ACTUAL provider selected at launch — never the scheduler's
+        // capacity bucket (`default-ingest`).
+        onReport?(QueueIngestionReporting.launchMutation(providerID: selectedProvider.id))
+        onReport?(QueueIngestionReporting.runningMutation())
 
         await launcher.run(
             request: .ingest(sources: sources, stateMarkdown: stateMarkdown),
@@ -152,7 +166,29 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         let results = await launcherResults(launcher)
         onUsage?(results.usage)
         onLogPaths?(results.logURL, results.debugURL)
+        // Validate FIRST: an unsuccessful agent end leaves the report at its
+        // running phase with the job lifecycle carrying the failure — the
+        // report never claims a completion that validate rejected.
         try validateLauncherResults(results)
+        // Snapshot the actual post-run citation evidence into the durable job.
+        // A snapshot read failure is logged but does not rewrite the successful
+        // agent outcome; nil remains distinguishable from a recorded empty set.
+        let outputs: [QueueRecordedOutputPage]?
+        do {
+            outputs = try store.pagesCitingSources(
+                sourceIDs: sourceIDs,
+                limit: QueueRecordedOutputLimits.maxRows
+            ).map { QueueRecordedOutputPage(pageID: $0.pageID, title: $0.title) }
+        } catch {
+            DebugLog.store("DaemonQueueIngestionProvider: output snapshot failed: \(error)")
+            outputs = nil
+        }
+        // Per-source ingestion completion is NOT inferred from agent exit or
+        // merge success: targets stay `.submitted`; only the run phase closes.
+        onReport?(QueueIngestionReporting.agentCompletionMutation(
+            operation: .ingest,
+            usage: results.usage,
+            outputs: outputs))
     }
 
     // MARK: - Lint
@@ -165,7 +201,8 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
         onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
-        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
+        onReport: (@Sendable (QueueReportMutation) -> Void)?
     ) async throws {
         guard let store = storeResolver(wikiID) else {
             throw QueueIngestionError.spawnFailed("No store for wikiID=\(wikiID.rawValue)")
@@ -175,7 +212,10 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         DebugLog.ingest("DaemonQueueIngestionProvider.runLint: begin wikiID=\(wikiID.rawValue)")
 
         let stateMarkdown = daemonStateMarkdown(from: store)
-        let providerLabel = resolveSelectedProvider().label
+        let selectedProvider = resolveSelectedProvider()
+        let providerLabel = selectedProvider.label
+        onReport?(QueueIngestionReporting.launchMutation(providerID: selectedProvider.id))
+        onReport?(QueueIngestionReporting.runningMutation())
 
         await runLintAgent(
             request: .lint(stateMarkdown: stateMarkdown),
@@ -190,6 +230,11 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         onUsage?(results.usage)
         onLogPaths?(results.logURL, results.debugURL)
         try validateLauncherResults(results)
+        // Whole-wiki scope stays a marker; agent completion carries NO typed
+        // page findings — availability is notReported, never zero.
+        onReport?(QueueIngestionReporting.agentCompletionMutation(
+            operation: .lint,
+            usage: results.usage))
     }
 
     func runLintPages(
@@ -201,7 +246,8 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         onUsage: (@Sendable (SessionUsage?) -> Void)?,
         onLiveUsage: (@Sendable (SessionUsage) -> Void)?,
         onLogPaths: (@Sendable (URL?, URL?) -> Void)?,
-        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?
+        onPendingPermission: (@Sendable (PendingPermission?) -> Void)?,
+        onReport: (@Sendable (QueueReportMutation) -> Void)?
     ) async throws {
         guard let store = storeResolver(wikiID) else {
             throw QueueIngestionError.spawnFailed("No store for wikiID=\(wikiID.rawValue)")
@@ -215,10 +261,18 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
             guard let s = allPages.first(where: { $0.id == id }) else { return nil }
             return (id: id, title: s.title)
         }
+        // The requested IDs stay the report scope even though the agent
+        // request joins titles; unresolvable pages are recorded skipped.
+        onReport?(QueueIngestionReporting.lintPagesStagingMutation(
+            resolved: pages,
+            requested: pageIDs))
 
         let combinedTitle = pages.map(\.title).joined(separator: ", ")
         let stateMarkdown = daemonStateMarkdown(from: store)
-        let providerLabel = resolveSelectedProvider().label
+        let selectedProvider = resolveSelectedProvider()
+        let providerLabel = selectedProvider.label
+        onReport?(QueueIngestionReporting.launchMutation(providerID: selectedProvider.id))
+        onReport?(QueueIngestionReporting.runningMutation())
 
         await runLintAgent(
             request: .lintPage(
@@ -236,6 +290,11 @@ final class DaemonQueueIngestionProvider: QueueIngestionProvider {
         onUsage?(results.usage)
         onLogPaths?(results.logURL, results.debugURL)
         try validateLauncherResults(results)
+        // No typed page findings/checked-page callback exists — completion
+        // availability stays notReported (never zero findings).
+        onReport?(QueueIngestionReporting.agentCompletionMutation(
+            operation: .lint,
+            usage: results.usage))
     }
 
     // MARK: - Private

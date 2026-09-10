@@ -185,5 +185,20 @@ actor QueueEngineHotSwap: QueueEngineClient {
         defer { releaseAdmission(admission.generation) }
         return try await admission.client.loadAllActivitySnapshots()
     }
+
+    // MARK: - Durable attempt reports
+
+    /// Report loads forward through the active client. They are non-throwing
+    /// and fail softly at the inner client (or transport), so no admission
+    /// error semantics are needed.
+    func loadQueueReport(for itemID: QueueItem.ID) async -> QueueReportLoadResult {
+        await activeClient.loadQueueReport(for: itemID)
+    }
+
+    func loadQueueReportSummaries(
+        for itemIDs: [QueueItem.ID]
+    ) async -> QueueReportSummariesResult {
+        await activeClient.loadQueueReportSummaries(for: itemIDs)
+    }
 }
 #endif

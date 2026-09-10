@@ -215,5 +215,9 @@ actor FakeQueueEngineClient: QueueEngineClient {
     nonisolated func waitForCompletion(of id: QueueItem.ID) async -> Result<Void, Error> { .success(()) }
     nonisolated func loadTranscript(for itemID: QueueItem.ID) async -> [ChatTranscriptItem] { [] }
     nonisolated func loadAllActivitySnapshots() async -> [QueueItem.ID: QueueEngine.ActivitySnapshot] { [:] }
+
+    nonisolated func loadQueueReport(for itemID: QueueItem.ID) async -> QueueReportLoadResult { .notReported }
+
+    nonisolated func loadQueueReportSummaries(for itemIDs: [QueueItem.ID]) async -> QueueReportSummariesResult { .loaded([:]) }
 }
 #endif

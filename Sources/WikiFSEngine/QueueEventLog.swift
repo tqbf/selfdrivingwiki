@@ -26,6 +26,8 @@ enum QueueEventType: String, Codable, Sendable {
     /// the run to `.queued`, so re-emitting is harmless but useless). The
     /// `write()` method skips this case.
     case pendingPermission
+    case reportUpdated
+    case reportUnavailable
 }
 
 // MARK: - QueueLogRecord
@@ -284,6 +286,41 @@ struct QueueLogRecord: Codable, Sendable {
             self.finishedAt = nil
             self.durationMs = nil
 
+        case .reportUpdated(let id, _):
+            // Durable attempt-report updates stream per mutation; their
+            // durable home is queue.sqlite (attempt report tables), so the
+            // JSONL audit trail skips them like other high-volume payloads.
+            self.eventType = .reportUpdated
+            self.itemID = id.rawValue
+            self.queue = nil
+            self.wikiID = nil
+            self.providerID = nil
+            self.itemState = nil
+            self.runState = nil
+            self.orderingKey = nil
+            self.attempt = nil
+            self.error = nil
+            self.startedAt = nil
+            self.finishedAt = nil
+            self.durationMs = nil
+
+        case .reportUnavailable(let id, let reason):
+            // Reporting failure: logged as an item-scoped record (no payload
+            // fields) so diagnostics show reporting gaps; `write()` skips it.
+            self.eventType = .reportUnavailable
+            self.itemID = id.rawValue
+            self.queue = nil
+            self.wikiID = nil
+            self.providerID = nil
+            self.itemState = nil
+            self.runState = nil
+            self.orderingKey = nil
+            self.attempt = nil
+            self.error = Self.truncate(reason, maxLength: 4096)
+            self.startedAt = nil
+            self.finishedAt = nil
+            self.durationMs = nil
+
         case .runStateChanged(let queue, let state):
             self.eventType = .runStateChanged
             self.itemID = nil
@@ -424,6 +461,8 @@ public actor QueueEventLog {
         if case .usage = event { return }
         if case .runPaths = event { return }
         if case .pendingPermission = event { return }
+        if case .reportUpdated = event { return }
+        if case .reportUnavailable = event { return }
 
         ensureOpenForToday()
         guard let handle = fileHandle else { return }

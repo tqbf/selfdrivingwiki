@@ -592,11 +592,11 @@ private struct StubExtractionProvider: QueueExtractionProvider {
     func persistBytesExtraction(
         wikiID: WikiID, sourceID: SourceID,
         resolution: BytesExtractionResolution, markdown: String
-    ) async throws {}
+    ) async throws -> QueueExtractionOutputReference? { nil }
     func persistTranscriptExtraction(
         wikiID: WikiID, sourceID: SourceID,
         resolution: TranscriptExtractionResolution, outcome: TranscriptFetchOutcome
-    ) async throws {}
+    ) async throws -> QueueExtractionOutputReference? { nil }
 }
 
 /// Creates a `QueueEngine` backed by an in-memory store + stub provider.

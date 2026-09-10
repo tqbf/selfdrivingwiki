@@ -150,3 +150,11 @@ even when no window is open. This lets you monitor agent work in the background.
 - **About** / **Quit** (⌘Q).
 
 When you queue an operation, a brief hint popover appears: *"Ingest queued."*
+
+A job title starts with its first page or source name. For a batch, the title
+adds "and 1 other" or "and N others." Whole-wiki jobs use the wiki name. An
+operation chip identifies ingestion, extraction, or lint. If the first name is
+not available, the title uses a target count and never shows a raw ID.
+
+The Overview also shows page and source names when the wiki window is closed.
+Select a name to open that page or source in its wiki.

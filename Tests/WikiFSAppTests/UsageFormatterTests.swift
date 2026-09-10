@@ -10,6 +10,8 @@ import Foundation
 /// logic is fully testable in isolation.
 ///
 /// Covers: `tokenSummary`, `summary` (backward-compat), `fullSummary`,
+/// the Run Details pieces `groupedCount` / `preciseCost` (the per-field
+/// usage rows themselves are pinned by `QueueRunDetailsFacts` tests),
 /// `duration`, `startTime`, `cost`, `tokens`.
 @Suite struct UsageFormatterTests {
 
@@ -159,6 +161,40 @@ import Foundation
             cost: 0.34, currency: "USD", contextUsed: 0, contextSize: 0)
         let result = UsageFormatter.summary(usage: usage)
         #expect(result == "797 tokens in · 203 tokens out · $0.34")
+    }
+
+    // MARK: - groupedCount(_:) + preciseCost(_:currency:) — Run Details pieces
+
+    @Test func groupedCountFollowsLocaleGroupingNotCompactVocabulary() {
+        // The Run Details breakdown shows exact counts, grouped per the
+        // current locale ("8,120" in en-US) — never the compact "8.1K"
+        // vocabulary `tokens` uses. Pin against Foundation's own formatting
+        // so the contract holds on any CI locale.
+        #expect(UsageFormatter.groupedCount(8_120) == 8_120.formatted())
+        #expect(UsageFormatter.groupedCount(4_225) == 4_225.formatted())
+        #expect(UsageFormatter.groupedCount(999) == "999")
+        #expect(UsageFormatter.groupedCount(8_120) != UsageFormatter.tokens(8_120))
+    }
+
+    @Test func preciseCostKeepsSubCentPrecision() {
+        // String(format:) is locale-independent, so these pins are exact.
+        #expect(UsageFormatter.preciseCost(0.0421, currency: "USD") == "$0.0421")
+        #expect(UsageFormatter.preciseCost(0.001, currency: "USD") == "$0.001")
+    }
+
+    @Test func preciseCostTrimsTrailingZerosButNeverBelowTwoDecimals() {
+        #expect(UsageFormatter.preciseCost(0.34, currency: "USD") == "$0.34")
+        #expect(UsageFormatter.preciseCost(0.10, currency: "USD") == "$0.10")
+        #expect(UsageFormatter.preciseCost(1234.56, currency: "USD") == "$1234.56")
+    }
+
+    @Test func preciseCostOmitsNilAndZero() {
+        #expect(UsageFormatter.preciseCost(nil, currency: nil) == nil)
+        #expect(UsageFormatter.preciseCost(0, currency: "USD") == nil)
+    }
+
+    @Test func preciseCostKeepsNonUSDSuffix() {
+        #expect(UsageFormatter.preciseCost(2.00, currency: "EUR") == "2.00 EUR")
     }
 
     // MARK: - fullSummary(usage:startedAt:finishedAt:)

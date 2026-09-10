@@ -388,20 +388,22 @@ private final class FakeTranscriptionProvider: QueueExtractionProvider, @uncheck
     func persistBytesExtraction(
         wikiID: WikiID, sourceID: SourceID,
         resolution: BytesExtractionResolution, markdown: String
-    ) async throws {
+    ) async throws -> QueueExtractionOutputReference? {
         lock.withLock { state in
             state.callLog.append("persistBytes(wikiID:\(wikiID.rawValue), sourceID:\(sourceID.rawValue))")
         }
+        return nil
     }
 
     func persistTranscriptExtraction(
         wikiID: WikiID, sourceID: SourceID,
         resolution: TranscriptExtractionResolution, outcome: TranscriptFetchOutcome
-    ) async throws {
+    ) async throws -> QueueExtractionOutputReference? {
         lock.withLock { state in
             state.callLog.append("persist(wikiID:\(wikiID.rawValue), sourceID:\(sourceID.rawValue), tool:\(resolution.resultMode))")
             state.lastTechnique = "youtube-captions"
         }
+        return nil
     }
 }
 

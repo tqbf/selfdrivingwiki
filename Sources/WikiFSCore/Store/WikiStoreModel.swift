@@ -3205,6 +3205,16 @@ public final class WikiStoreModel {
         DebugLog.trying("pageOrigin", operation: { try store.pageOrigin(pageID: id) })
     }
 
+    /// The distinct pages whose recorded provenance cites any of `sourceIDs`
+    /// — the ingestion Overview's "Outputs" evidence, bounded by `limit`.
+    /// Read-only (emits nothing). THROWS, unlike most read wrappers here: the
+    /// caller must distinguish "no pages recorded" (a resolved zero) from
+    /// "the read failed" and degrade each honestly — logging happens at the
+    /// call seam that catches.
+    public func pagesCitingSources(sourceIDs: [SourceID], limit: Int) throws -> [CitedPage] {
+        try store.pagesCitingSources(sourceIDs: sourceIDs, limit: limit)
+    }
+
     /// The page version that the active page editor loaded for `pageID`.
     /// Readers use this to bind render identity to the exact version state the
     /// view already owns, instead of re-querying HEAD during conversion.

@@ -58,6 +58,27 @@ public struct ProvenanceDeletionBlocker: Equatable, Hashable, Sendable {
     }
 }
 
+/// One page whose recorded page-version provenance cites at least one of the
+/// queried sources — the inverse projection of `PageVersionSource`
+/// (sources → pages). The evidence seam behind the queue Overview's
+/// "Outputs" section: pages appear here ONLY because a citation edge says
+/// so, never because a job reported success.
+public struct CitedPage: Equatable, Hashable, Sendable {
+    public let pageID: PageID
+    /// The page's current title from the live `pages` row — the same seam
+    /// `pageSummaries` feeds the queue's `QueueTargetNameIndex` from. `nil`
+    /// only when the page row has vanished while a citation edge survived
+    /// (an FK-less edge); callers degrade honestly instead of inventing a
+    /// name. A deleted page otherwise never appears at all: its
+    /// `page_versions` rows (and their citation edges) cascade away with it.
+    public let title: String?
+
+    public init(pageID: PageID, title: String?) {
+        self.pageID = pageID
+        self.title = title
+    }
+}
+
 /// A non-empty, persistently ordered collection of provenance deletion blockers.
 public struct NonEmptyProvenanceDeletionBlockers: Equatable, Sendable {
     /// SQLite's deterministic page, version, source order. Consumers preserve
