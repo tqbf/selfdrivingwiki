@@ -117,26 +117,10 @@ struct QueueWorkspaceIntegrationTests {
         #expect(QueueWorkspaceMapper.reportOperation(for: makeItem(id: "e2", queue: .extraction)) == .extract)
     }
 
-    @Test func headerTitleCarriesFullOperationLabel() {
-        // Exact standard wording: the full operation label prefixes the job
-        // details so the job type reads in the title, not only in secondary
-        // metadata. The job-details phrase is COUNT-ONLY (operator request:
-        // no target names, no raw IDs — a closed wiki used to surface a raw
-        // ID where a name was expected). Ingestion/Lint appear in the Agent
-        // Queue; Extraction appears only in the Extraction Queue.
-        #expect(QueueWorkspaceMapper.headerTitle(operation: .ingest, jobTitle: "12 sources") == "Ingestion: 12 sources")
-        #expect(QueueWorkspaceMapper.headerTitle(operation: .ingest, jobTitle: "1 source") == "Ingestion: 1 source")
-        #expect(QueueWorkspaceMapper.headerTitle(operation: .lint, jobTitle: "3 pages") == "Lint: 3 pages")
-        #expect(QueueWorkspaceMapper.headerTitle(operation: .lint, jobTitle: "Research Wiki") == "Lint: Research Wiki")
-        #expect(QueueWorkspaceMapper.headerTitle(operation: .extract, jobTitle: "12 sources") == "Extraction: 12 sources")
-        #expect(QueueWorkspaceMapper.headerTitle(operation: .extract, jobTitle: "1 source") == "Extraction: 1 source")
-    }
-
-    @Test func jobTitlesAreOperationAndCountOnly() {
-        // Row titles and the header's job-details phrase are operation +
-        // count only: no resolved or recorded target names, and never a raw
-        // target ID — even when nothing resolves (legacy closed-wiki
-        // payloads). The whole-wiki lint wording keeps the wiki display name.
+    @Test func navigatorAndHeaderShareJobTitles() {
+        // Navigator rows and selected-job headers use one formatter. Titles
+        // contain operation/count context where needed, but never a resolved
+        // target name or raw target ID. Whole-wiki lint keeps the wiki name.
         let rawPageID = PageID(rawValue: "01J9ZQPAGE4T8AWJ3XG8YQ0MEB")
         let lint = makeItem(id: "l", queue: .ingestion, lintPageIDs: [rawPageID])
         let lintMany = makeItem(id: "l3", queue: .ingestion, lintPageIDs: [
@@ -153,24 +137,14 @@ struct QueueWorkspaceIntegrationTests {
         #expect(ActivityWindowView.computeRowTitle(for: ingestOne, wikiName: "Wiki") == "1 source")
         #expect(ActivityWindowView.computeRowTitle(for: extract, wikiName: "Wiki") == "2 sources")
 
-        #expect(ActivityWindowView.headerJobCountPhrase(for: lint, wikiName: "Wiki") == "1 page")
-        #expect(ActivityWindowView.headerJobCountPhrase(for: lintMany, wikiName: "Wiki") == "3 pages")
-        #expect(ActivityWindowView.headerJobCountPhrase(for: wholeWiki, wikiName: "Wiki") == "Wiki")
-        #expect(ActivityWindowView.headerJobCountPhrase(for: ingest, wikiName: "Wiki") == "3 sources")
-        #expect(ActivityWindowView.headerJobCountPhrase(for: ingestOne, wikiName: "Wiki") == "1 source")
-        #expect(ActivityWindowView.headerJobCountPhrase(for: extract, wikiName: "Wiki") == "2 sources")
-
-        // No raw target ID may reach either title.
+        // The selected-job header uses this exact same value. There is no
+        // second formatter that can add a divergent operation prefix.
         for item in [lint, lintMany, wholeWiki, ingest, ingestOne, extract] {
-            let rowTitle = ActivityWindowView.computeRowTitle(for: item, wikiName: "Wiki")
-            #expect(!rowTitle.contains(rawPageID.rawValue),
-                    "row title must not contain a raw target ID: '\(rowTitle)'")
-            let headerTitle = QueueWorkspaceMapper.headerTitle(
-                operation: QueueWorkspaceMapper.reportOperation(for: item),
-                jobTitle: ActivityWindowView.headerJobCountPhrase(for: item, wikiName: "Wiki"))
-            #expect(!headerTitle.contains(rawPageID.rawValue),
-                    "header title must not contain a raw target ID: '\(headerTitle)'")
+            let sharedTitle = ActivityWindowView.computeRowTitle(for: item, wikiName: "Wiki")
+            #expect(!sharedTitle.contains(rawPageID.rawValue),
+                    "job title must not contain a raw target ID: '\(sharedTitle)'")
         }
+        #expect(ActivityWindowView.computeRowTitle(for: ingestOne, wikiName: "Wiki") == "1 source")
     }
 
     @Test func windowScopeFilteringIsStrict() {

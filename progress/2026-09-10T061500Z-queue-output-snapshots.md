@@ -15,7 +15,7 @@ The Agent Queue loaded ingestion outputs from the selected wiki store. The load
 failed when the wiki had no open session. Historical job details therefore
 depended on mutable wiki state and window state.
 
-## Design
+## Progress
 
 `QueueAttemptReport` now owns an optional output snapshot. Each
 `QueueRecordedOutputPage` contains a typed `PageID` and the title recorded at

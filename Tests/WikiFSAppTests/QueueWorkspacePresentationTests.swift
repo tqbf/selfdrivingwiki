@@ -545,7 +545,7 @@ import WikiFSEngine
     @Test func headerCarriesStronglyTypedQueueItemID() {
         let jobID = QueueItemID(rawValue: "01M24JCFZF2G8JM12QHTZAX0PQ")
         let header = QueueJobHeaderPresentation(
-            title: "Ingestion: 1 source",
+            title: "1 source",
             operationLabel: "Ingest",
             jobID: jobID,
             lifecycle: .completed)

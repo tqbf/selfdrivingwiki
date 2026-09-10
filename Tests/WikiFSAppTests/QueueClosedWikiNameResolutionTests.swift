@@ -416,25 +416,15 @@ struct QueueClosedWikiNameResolutionTests {
             attempt: 0,
             createdAt: 0)
         for (item, rawTargetID) in [(lintItem, pageID.rawValue), (ingestItem, sourceID.rawValue)] {
-            let rowTitle = ActivityWindowView.computeRowTitle(
+            let sharedTitle = ActivityWindowView.computeRowTitle(
                 for: item, wikiName: rawWikiName)
-            #expect(!rowTitle.contains(rawTargetID),
-                    "row title must not contain a raw target ID: '\(rowTitle)'")
-            let headerTitle = QueueWorkspaceMapper.headerTitle(
-                operation: QueueWorkspaceMapper.reportOperation(for: item),
-                jobTitle: ActivityWindowView.headerJobCountPhrase(
-                    for: item, wikiName: rawWikiName))
-            #expect(!headerTitle.contains(rawTargetID),
-                    "header title must not contain a raw target ID: '\(headerTitle)'")
+            #expect(!sharedTitle.contains(rawTargetID),
+                    "job title must not contain a raw target ID: '\(sharedTitle)'")
         }
-        // Exact count-only wordings for the legacy closed-wiki payloads.
+        // Exact shared wordings for navigator rows and selected-job headers.
         #expect(ActivityWindowView.computeRowTitle(for: lintItem, wikiName: rawWikiName)
                 == "Lint 1 page")
         #expect(ActivityWindowView.computeRowTitle(for: ingestItem, wikiName: rawWikiName)
-                == "1 source")
-        #expect(ActivityWindowView.headerJobCountPhrase(for: lintItem, wikiName: rawWikiName)
-                == "1 page")
-        #expect(ActivityWindowView.headerJobCountPhrase(for: ingestItem, wikiName: rawWikiName)
                 == "1 source")
     }
 

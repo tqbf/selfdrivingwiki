@@ -1236,11 +1236,9 @@ struct ActivityWindowView: View {
             || item.state == .cancelled
         let errorText: String? = item.state == .failed ? item.error : nil
         return QueueJobHeaderPresentation(
-            title: QueueWorkspaceMapper.headerTitle(
-                operation: QueueWorkspaceMapper.reportOperation(for: item),
-                jobTitle: Self.headerJobCountPhrase(
-                    for: item,
-                    wikiName: wikiDisplayName(for: item.wikiID))),
+            title: Self.computeRowTitle(
+                for: item,
+                wikiName: wikiDisplayName(for: item.wikiID)),
             operationLabel: QueueWorkspaceMapper.operationLabel(for: item),
             jobID: item.id,
             lifecycle: QueueWorkspaceMapper.lifecycle(for: item.state),
@@ -2277,24 +2275,6 @@ struct ActivityWindowView: View {
         case .extraction, .transcription:
             return count > 1 ? "\(count) sources" : Self.kindLabel(for: item)
         }
-    }
-
-    /// The count-only "<Job Details>" phrase the header title prefixes —
-    /// "Ingestion: 12 sources", "Extraction: 1 source", "Lint: 3 pages",
-    /// whole-wiki "Lint: <wiki>" via ``QueueWorkspaceMapper.headerTitle``.
-    /// Same no-names/no-ID rule as ``computeRowTitle(for:wikiName:)``; PURE +
-    /// `nonisolated` for the same suite-pinning reason.
-    nonisolated static func headerJobCountPhrase(
-        for item: QueueItem,
-        wikiName: String
-    ) -> String {
-        if let pageIDs = item.payload.lintPageIDs {
-            if pageIDs.isEmpty { return wikiName }
-            return pageIDs.count == 1 ? "1 page" : "\(pageIDs.count) pages"
-        }
-        let count = item.payload.sourceIDs.count
-        guard count > 0 else { return Self.kindLabel(for: item) }
-        return count > 1 ? "\(count) sources" : "1 source"
     }
 
     /// Short relative time for sidebar rows ("2 min. ago"), from the most

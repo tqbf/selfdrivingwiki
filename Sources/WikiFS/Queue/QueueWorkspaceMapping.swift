@@ -46,27 +46,6 @@ enum QueueWorkspaceMapper {
         }
     }
 
-    /// The selected-job header title: the full operation label made explicit
-    /// as a prefix over the job details — "Ingestion: <Job Details>",
-    /// "Extraction: <Job Details>", "Lint: <Job Details>" — so the job type
-    /// reads in the title itself, not only in secondary metadata. Keyed on
-    /// the recorded operation (lint-vs-ingest from the payload, same
-    /// derivation as ``reportOperation(for:)``) so title and report never
-    /// disagree.
-    ///
-    /// `jobTitle` is the COUNT-ONLY job phrase (operator request,
-    /// 2026-09-09): no target names and no raw IDs ever reach the title —
-    /// "Ingestion: 12 sources", "Extraction: 1 source", "Lint: 3 pages",
-    /// whole-wiki "Lint: <wiki>". Produced by
-    /// `ActivityWindowView.headerJobCountPhrase`.
-    static func headerTitle(operation: QueueReportOperation, jobTitle: String) -> String {
-        switch operation {
-        case .ingest: return "Ingestion: \(jobTitle)"
-        case .extract: return "Extraction: \(jobTitle)"
-        case .lint: return "Lint: \(jobTitle)"
-        }
-    }
-
     /// The recorded operation for an item — the header/overview language
     /// selector. Lint-vs-ingest comes from the payload, exactly like the
     /// producers' report-begin decision, so UI and report never disagree.

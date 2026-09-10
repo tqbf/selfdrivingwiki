@@ -12,11 +12,9 @@ import WikiFSCore
 /// state-driven actions (plan §1 "Selected job workspace"). Job errors and
 /// pending permissions render here, above the parent's content selector.
 struct QueueJobHeaderPresentation {
-    /// Recognizable job title with the operation made explicit as a prefix —
-    /// "Ingestion: 12 sources", "Extraction: 1 source", "Lint: 3 pages",
-    /// whole-wiki "Lint: <wiki>" (composed via `QueueWorkspaceMapper.headerTitle`
-    /// over the count-only job phrase; no target names and no raw IDs —
-    /// operator request. This layer only renders).
+    /// The same recognizable title as the navigator row. One shared formatter
+    /// prevents the selected-job header from adding a divergent prefix. The
+    /// title contains no target names or raw target IDs.
     let title: String
     /// Operation word: "Ingest" / "Extract" / "Lint".
     let operationLabel: String
