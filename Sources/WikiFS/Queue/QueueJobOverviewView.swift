@@ -10,8 +10,9 @@ import SwiftUI
 /// Kind-specific scope/result language is the caller's mapping job (plan:
 /// "operation-specific scope and result language"): `sectionTitle` is
 /// "Sources" for ingestion/extraction and "Scope" or "Pages" for lint;
-/// `resultStatement` carries wording like "Agent run completed; page-level
-/// results not reported".
+/// `resultStatement` carries the producer's recorded summary (design change
+/// 10, 2026-09-10: only `.available` reports render one — a `.notReported`
+/// report renders no statement line).
 ///
 /// Run Details no longer lives here: the facts moved to the window's optional
 /// Run Details inspector panel (`QueueRunDetailsView`), opened from the
@@ -26,8 +27,9 @@ struct QueueJobOverviewPresentation {
     /// one scope row (`identity: nil`, title "Whole wiki") — this view never
     /// enumerates the wiki to build itself.
     let rows: [QueueTargetRowValue]
-    /// Job-level result statement, e.g. "Agent run completed; page-level
-    /// results not reported". Rendered under the section header; `nil` hides it.
+    /// Job-level result statement (the producer's recorded summary).
+    /// Rendered under the section header; `nil` hides it — including a
+    /// `.notReported` report, which renders NO statement line.
     let resultStatement: String?
     /// Empty-inventory message ("No sources recorded for this job.").
     let emptyStateText: String

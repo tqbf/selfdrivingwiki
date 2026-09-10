@@ -53,6 +53,12 @@ enum QueueWorkspaceMapper {
     /// the recorded operation (lint-vs-ingest from the payload, same
     /// derivation as ``reportOperation(for:)``) so title and report never
     /// disagree.
+    ///
+    /// `jobTitle` is the COUNT-ONLY job phrase (operator request,
+    /// 2026-09-09): no target names and no raw IDs ever reach the title —
+    /// "Ingestion: 12 sources", "Extraction: 1 source", "Lint: 3 pages",
+    /// whole-wiki "Lint: <wiki>". Produced by
+    /// `ActivityWindowView.headerJobCountPhrase`.
     static func headerTitle(operation: QueueReportOperation, jobTitle: String) -> String {
         switch operation {
         case .ingest: return "Ingestion: \(jobTitle)"
@@ -270,15 +276,23 @@ enum QueueWorkspaceMapper {
 
     // MARK: - Target states → status / reason
 
-    /// Report target state → the shared status vocabulary. `.interrupted`
-    /// projects as its own interrupted presentation, never failed/succeeded
-    /// (report truth rule 10).
+    /// Report target state → the shared status vocabulary, or `nil` for the
+    /// evidence-less states. `.interrupted` projects as its own interrupted
+    /// presentation, never failed/succeeded (report truth rule 10).
+    ///
+    /// Operator decision (2026-09-09): `.planned` and `.notReported` carry no
+    /// evidence — "Planned" is the default state, so labeling a row with it
+    /// communicates nothing. The mapper returns `nil` and the inventory row
+    /// renders name-only (no status circle, no text); the absence of
+    /// evidence stays truthful in the Run Details inspector ("Not Reported")
+    /// and never reads as a zero or an empty success. Real recorded states
+    /// keep their chip.
     static func targetStatus(
         for state: QueueReportTargetState,
         result: QueueTargetResult?
-    ) -> QueueWorkspaceStatus {
+    ) -> QueueWorkspaceStatus? {
         switch state {
-        case .planned: return .planned()
+        case .planned, .notReported: return nil
         case .preparing: return .preparing()
         case .submitted: return .submitted()
         case .processing: return .processing()
@@ -286,11 +300,6 @@ enum QueueWorkspaceMapper {
         case .skipped: return .skipped()
         case .failed: return .failedTarget()
         case .interrupted: return .interrupted()
-        // Operator decision (2026-09-08): unobserved targets render as
-        // "Planned" — the same vocabulary as not-yet-run rows. Absence of
-        // evidence stays truthful in the Run Details inspector ("Not
-        // Reported") and never reads as a zero or an empty success.
-        case .notReported: return .planned()
         }
     }
 

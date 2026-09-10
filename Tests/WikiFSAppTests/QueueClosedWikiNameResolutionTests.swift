@@ -195,6 +195,109 @@ struct QueueClosedWikiNameResolutionTests {
         #expect(actions.map(\.label) == ["Open Page"])
     }
 
+    // MARK: - Report-backed row titles: full name precedence
+
+    /// A RUNNING ingestion job whose report rows carry an EMPTY displayName
+    /// still shows the recorded name: the effective index resolves the
+    /// payload's enqueue-time recordedNames, so the row title is the real
+    /// name — never the bare "Source unavailable" fallback (which is only
+    /// for a target NOTHING can name).
+    @Test func runningReportRowWithEmptyDisplayNameShowsRecordedTitle() {
+        let sourceID = SourceID(rawValue: "rs1")
+        let item = QueueItem(
+            id: QueueItemID(rawValue: "ingest-job"),
+            queue: .ingestion,
+            wikiID: WikiID(rawValue: "wiki"),
+            payload: QueueItemPayload(
+                sourceIDs: [sourceID],
+                recordedNames: [sourceID.rawValue: "Recorded Source"]),
+            state: .running,
+            orderingKey: 1,
+            attempt: 0,
+            createdAt: 0)
+        // The effective index resolves through the payload's recorded layer
+        // (no live session, no read-only cache needed here).
+        let effective = QueueTargetNameIndex.effective(
+            live: QueueTargetNameIndex(), readOnlyCache: nil, payload: item.payload)
+        let record = QueueReportTargetRecord(
+            target: .source(sourceID), displayName: "", state: .processing)
+        #expect(
+            ActivityWindowView.targetRowTitle(record: record, nameIndex: effective)
+            == "Recorded Source",
+            "the recorded title must win over the 'Source unavailable' fallback")
+    }
+
+    /// The report record's own displayName wins ONLY when the effective
+    /// index misses (a report recorded after a rename may know a name the
+    /// payload never did); when the index resolves, its answer wins even
+    /// against a non-empty record name.
+    @Test func reportDisplayNameWinsOnlyWhenEffectiveIndexMisses() {
+        let pageID = PageID(rawValue: "pg1")
+        let record = QueueReportTargetRecord(
+            target: .page(pageID), displayName: "Reported Title", state: .planned)
+
+        // Effective index miss → the report's non-empty displayName stands.
+        #expect(
+            ActivityWindowView.targetRowTitle(
+                record: record, nameIndex: QueueTargetNameIndex())
+            == "Reported Title")
+
+        // Effective index hit → the index wins over the report's name.
+        var live = QueueTargetNameIndex()
+        live.recordPage(pageID, title: "Live Title")
+        #expect(
+            ActivityWindowView.targetRowTitle(record: record, nameIndex: live)
+            == "Live Title")
+    }
+
+    /// Neither layer resolves and the record name is empty → the honest
+    /// fallback text, per target kind.
+    @Test func unresolvedReportRowShowsHonestFallback() {
+        let sourceRecord = QueueReportTargetRecord(
+            target: .source(SourceID(rawValue: "gone")), displayName: "", state: .failed(reason: "x"))
+        #expect(
+            ActivityWindowView.targetRowTitle(
+                record: sourceRecord, nameIndex: QueueTargetNameIndex())
+            == "Source unavailable")
+        let pageRecord = QueueReportTargetRecord(
+            target: .page(PageID(rawValue: "gone")), displayName: "", state: .failed(reason: "x"))
+        #expect(
+            ActivityWindowView.targetRowTitle(
+                record: pageRecord, nameIndex: QueueTargetNameIndex())
+            == "Page unavailable")
+    }
+
+    /// A deleted target on an OPEN wiki keeps its recorded title but gets
+    /// NO action — the F1 gate is unchanged by the title precedence fix: a
+    /// title the effective index resolves must never resurrect dead
+    /// navigation into a store that cannot answer.
+    @Test func reportBackedDeletedTargetOnOpenWikiShowsNoDeadAction() {
+        let sourceID = SourceID(rawValue: "rs-deleted")
+        let payload = QueueItemPayload(
+            sourceIDs: [sourceID],
+            recordedNames: [sourceID.rawValue: "Recorded Source"])
+        let effective = QueueTargetNameIndex.effective(
+            live: QueueTargetNameIndex(), readOnlyCache: nil, payload: payload)
+        let live = QueueTargetNameIndex() // deleted: the live store misses
+
+        var routed: [QueueWorkspaceTargetIdentity] = []
+        let actions = ActivityWindowView.targetRowActions(
+            for: .source(sourceID),
+            wikiID: WikiID(rawValue: "wiki"),
+            nameIndex: effective,
+            liveIndex: live,
+            isSessionOpen: true) { target, _ in routed.append(target) }
+
+        #expect(actions.isEmpty, "no dead action for a target the live store lost")
+        #expect(routed.isEmpty)
+        // …while the row still shows the recorded title, not the fallback.
+        let record = QueueReportTargetRecord(
+            target: .source(sourceID), displayName: "", state: .interrupted)
+        #expect(
+            ActivityWindowView.targetRowTitle(record: record, nameIndex: effective)
+            == "Recorded Source")
+    }
+
     // MARK: - Closed-wiki task identity (review F2)
 
     /// The `.task(id:)` identity for the closed-wiki name loads changes
@@ -228,10 +331,12 @@ struct QueueClosedWikiNameResolutionTests {
 
     // MARK: - Navigator titles (displayNames + computeRowTitle)
 
-    /// A closed-wiki lint job with recorded names keeps readable input rows:
-    /// the recorded titles flow through `displayNames` into the row title,
-    /// instead of collapsing to "Lint N pages".
-    @Test func closedWikiLintRowTitleUsesRecordedNames() {
+    /// A closed-wiki lint job with recorded names: the recorded titles still
+    /// resolve through `displayNames` — they feed the row tooltip and the
+    /// navigator search haystack — but titles are OPERATION + COUNT ONLY now
+    /// (operator request: no target names, no raw IDs), so the title carries
+    /// the count wording even when names resolve.
+    @Test func closedWikiRecordedNamesStayOutOfRowTitles() {
         let ids = [PageID(rawValue: "lp1"), PageID(rawValue: "lp2")]
         let item = QueueItem(
             id: QueueItemID(rawValue: "lint-job"),
@@ -253,14 +358,13 @@ struct QueueClosedWikiNameResolutionTests {
         let names = effective.displayNames(for: item)
         #expect(names.names == ["Design Notes", "Meeting Minutes"])
         #expect(names.targets == ["Design Notes", "Meeting Minutes"])
+        // The title is operation + count only: no name, no raw ID.
         #expect(
-            ActivityWindowView.computeRowTitle(
-                for: item, wikiName: "Wiki", names: names.names)
-            == "Lint: Design Notes +1")
+            ActivityWindowView.computeRowTitle(for: item, wikiName: "Wiki")
+            == "Lint 2 pages")
     }
 
-    /// The legacy no-recorded-names path still collapses (titles absent →
-    /// count fallback) — that is what the read-only fallback layer fills in.
+    /// The legacy no-recorded-names path: titles absent → count fallback.
     @Test func legacyClosedWikiLintRowTitleFallsBackToCount() {
         let item = QueueItem(
             id: QueueItemID(rawValue: "legacy-lint"),
@@ -277,9 +381,61 @@ struct QueueClosedWikiNameResolutionTests {
             live: QueueTargetNameIndex(), readOnlyCache: nil, payload: item.payload)
         #expect(effective.displayNames(for: item).names.isEmpty)
         #expect(
-            ActivityWindowView.computeRowTitle(
-                for: item, wikiName: "Wiki", names: [])
+            ActivityWindowView.computeRowTitle(for: item, wikiName: "Wiki")
             == "Lint 2 pages")
+    }
+
+    // MARK: - Titles never surface raw target IDs (operator request)
+
+    /// Regression for the count-only title change: a closed wiki with legacy
+    /// payloads (no recorded names, nothing resolved) must never leak raw
+    /// target IDs into a navigator row title or the header title. The raw
+    /// wiki-ID prefix stands in for the closed-wiki display name — the same
+    /// string `wikiDisplayName` falls back to — so the only IDs that could
+    /// possibly appear are the targets', and they must not.
+    @Test func closedWikiLegacyTitlesNeverContainRawTargetIDs() {
+        let pageID = PageID(rawValue: "01J9ZQPAGE4T8AWJ3XG8YQ0MEB")
+        let sourceID = SourceID(rawValue: "01J9ZQSRC04T8AWJ3XG8YQ0MEB")
+        let rawWikiName = String(WikiID(rawValue: "wiki").rawValue.prefix(8))
+        let lintItem = QueueItem(
+            id: QueueItemID(rawValue: "legacy-lint"),
+            queue: .ingestion,
+            wikiID: WikiID(rawValue: "wiki"),
+            payload: QueueItemPayload(sourceIDs: [], lintPageIDs: [pageID]),
+            state: .completed,
+            orderingKey: 1,
+            attempt: 0,
+            createdAt: 0)
+        let ingestItem = QueueItem(
+            id: QueueItemID(rawValue: "legacy-ingest"),
+            queue: .ingestion,
+            wikiID: WikiID(rawValue: "wiki"),
+            payload: QueueItemPayload(sourceIDs: [sourceID]),
+            state: .completed,
+            orderingKey: 2,
+            attempt: 0,
+            createdAt: 0)
+        for (item, rawTargetID) in [(lintItem, pageID.rawValue), (ingestItem, sourceID.rawValue)] {
+            let rowTitle = ActivityWindowView.computeRowTitle(
+                for: item, wikiName: rawWikiName)
+            #expect(!rowTitle.contains(rawTargetID),
+                    "row title must not contain a raw target ID: '\(rowTitle)'")
+            let headerTitle = QueueWorkspaceMapper.headerTitle(
+                operation: QueueWorkspaceMapper.reportOperation(for: item),
+                jobTitle: ActivityWindowView.headerJobCountPhrase(
+                    for: item, wikiName: rawWikiName))
+            #expect(!headerTitle.contains(rawTargetID),
+                    "header title must not contain a raw target ID: '\(headerTitle)'")
+        }
+        // Exact count-only wordings for the legacy closed-wiki payloads.
+        #expect(ActivityWindowView.computeRowTitle(for: lintItem, wikiName: rawWikiName)
+                == "Lint 1 page")
+        #expect(ActivityWindowView.computeRowTitle(for: ingestItem, wikiName: rawWikiName)
+                == "1 source")
+        #expect(ActivityWindowView.headerJobCountPhrase(for: lintItem, wikiName: rawWikiName)
+                == "1 page")
+        #expect(ActivityWindowView.headerJobCountPhrase(for: ingestItem, wikiName: rawWikiName)
+                == "1 source")
     }
 
     // MARK: - Read-only fallback against a real store

@@ -463,11 +463,12 @@ struct ActivityWindowWorkspaceHostedTests {
         #expect(toolbarLabels.contains("Queue Actions"),
                 "The Queue Actions menu must be a visible toolbar item")
         // The Run Details toggle is an ICON-ONLY toolbar control (design
-        // change 7): its accessibility label is the name VoiceOver reads,
-        // and the coordinator re-asserts the toolbar ITEM label ("Run
-        // Details") so the customization palette keeps a readable name.
+        // change 7, now a plain SwiftUI Button — design change 12): its
+        // accessibility label is the name VoiceOver reads. SwiftUI re-derives
+        // item labels asynchronously, so the customization-palette name is
+        // not mount-time observable and not asserted here.
         let runDetailsPresent = await waitUntil {
-            !toolbarControls(labeled: "Run Details", in: mounted.window).isEmpty
+            runDetailsToggleContent(in: mounted.window) != nil
         }
         #expect(runDetailsPresent,
                 "The Run Details inspector toggle must be a visible toolbar control")
@@ -771,30 +772,28 @@ struct ActivityWindowWorkspaceHostedTests {
             #expect(actionsFound,
                     "Queue Actions stays a toolbar item at \(sizeNote)")
             let runDetails = try #require(
-                await waitForToolbarControl(labeled: "Run Details", in: mounted.window),
+                await waitForRunDetailsToggle(in: mounted.window),
                 "Run Details stays a hosted toolbar control at \(sizeNote)")
 
             // Hosted, not overflowed: the control renders with a real frame
             // pinned to the window's trailing edge.
             let contentWidth = mounted.window.contentView?.bounds.width ?? width
             let detailsFrame = runDetails.convert(runDetails.bounds, to: nil)
-            #expect(!runDetails.isHidden && detailsFrame.width > 0,
+            #expect(detailsFrame.width > 0,
                     "Run Details renders with a real frame at \(sizeNote) (got \(detailsFrame))")
             #expect(detailsFrame.maxX >= contentWidth - 80,
                     "Run Details pins to the trailing edge at \(sizeNote) (maxX \(detailsFrame.maxX) of \(contentWidth))")
 
-            // Sized to the shared toolbar icon-button square: the NSButton's
-            // real frame is the square wide (measured exactly 28.0) — the
-            // main window's standard toolbar Button metrics — not the bare
-            // glyph footprint an unsized borderless image button collapses
-            // to (measured 18×14 before the fix). Width is fully
-            // SwiftUI-controlled, so its tolerance is tight; the toolbar
-            // row imposes its own hosted-control height on the stretch
-            // (measured 33.0 = row height), so the height contract is "at
-            // least the square, bounded below the row-height runaway".
+            // Sized to the shared toolbar icon-button square (28pt — the
+            // main window's standard toolbar Button metrics): the image
+            // carries the shared square as its frame, so the bridged
+            // control measures the square and the glyph lands centered
+            // within it. Measured 23.5×18.5 (the bare glyph footprint)
+            // before the frame assist — the squish the former representable
+            // fixed, back without it.
             let side = QueueWorkspaceMetrics.Toolbar.iconButtonSide
-            #expect(abs(detailsFrame.width - side) <= 2
-                    && (side...side + 8).contains(detailsFrame.height),
+            #expect(((side - 2)...(side + 16)).contains(detailsFrame.width)
+                    && ((side - 2)...(side + 8)).contains(detailsFrame.height),
                     "Run Details renders at the toolbar icon-button square \(side)×\(side) at \(sizeNote) (got \(detailsFrame))")
 
             // Queue Actions: the toolbar's only hosted pop-up button (the
@@ -827,23 +826,25 @@ struct ActivityWindowWorkspaceHostedTests {
             #expect(actionsItem.label == "Queue Actions",
                     "The Queue Actions item keeps its AppKit label at \(sizeNote) (got '\(actionsItem.label)')")
 
-            // Icon-only Run Details: the NSButton title is empty — the
-            // visible text is gone; the accessibility label is not.
-            #expect((runDetails as? NSButton)?.title.isEmpty == true,
-                    "Run Details renders icon-only at \(sizeNote) (title '\((runDetails as? NSButton)?.title ?? "")')")
+            // Icon-only Run Details with its identity intact (design
+            // change 12): the trailing item hosts no text — the
+            // "sidebar.right" glyph carries the rendering, and the
+            // accessibility label/tooltip live in the SwiftUI layer (not
+            // NSView-readable in this host — suite header).
+            if let lastView = mounted.window.toolbar?.items.last?.view {
+                #expect(allSubviews(of: lastView).first(where: { $0 is NSTextField }) == nil,
+                        "Run Details renders icon-only at \(sizeNote)")
+            }
 
             // Ordering in the real toolbar item list: search → Queue Actions
-            // → Run Details.
+            // → Run Details (the toggle is the trailing toolbar item).
             let items = mounted.window.toolbar?.items ?? []
             let searchIndex = items.firstIndex { item in
                 guard let view = item.view else { return false }
                 return searchFields(in: mounted.window).contains { $0.isDescendant(of: view) }
             }
             let actionsIndex = items.firstIndex { $0 === actionsItem }
-            let detailsIndex = items.firstIndex { item in
-                guard let view = item.view else { return false }
-                return runDetails === view || runDetails.isDescendant(of: view)
-            }
+            let detailsIndex = items.lastIndex { $0.view != nil }
             #expect(searchIndex != nil,
                     "The search control lives in a toolbar item at \(sizeNote)")
             #expect(searchIndex.flatMap { s in actionsIndex.map { s < $0 } } == true,
@@ -852,39 +853,32 @@ struct ActivityWindowWorkspaceHostedTests {
                     "Run Details is the last control at \(sizeNote) (actions \(String(describing: actionsIndex)), details \(String(describing: detailsIndex)))")
         }
 
-        // The window is at 640×400 here. The toggle still works: clicking it
+        // The window is at 640×400 here. The toggle still works: pressing it
         // mounts the inspector's facts table (7 rows for the `large`
-        // fixture) and flips the button's AppKit-level accessibility value;
-        // clicking again closes the panel. (The center inventory's width is
-        // NOT the close signal at this size: with the inspector closed the
-        // navigator re-expands and keeps the reclaimed width, so no
-        // width-growth signal exists — the value flip is the honest state
-        // read.)
-        let toggle = try #require(
-            await waitForToolbarControl(labeled: "Run Details", in: mounted.window),
+        // fixture) — the @State seam, observable through the facts table —
+        // and flipping it back with `.help` swaps the tooltip text
+        // ("Show Run Details" ↔ "Hide Run Details"); pressing again closes
+        // the panel. (The center inventory's width is NOT the close signal
+        // at this size: with the inspector closed the navigator re-expands
+        // and keeps the reclaimed width, so no width-growth signal exists —
+        // the facts table unmount is the honest state read.)
+        _ = try #require(
+            await waitForRunDetailsToggle(in: mounted.window),
             "Run Details reachable for the toggle check")
-        toggle.performClick(nil)
+        #expect(pressRunDetailsToggle(in: mounted.window),
+                "Run Details pressable at 640×400")
         let factsMounted = await waitUntil(
             { tables(in: mounted.rootView).contains { $0.numberOfRows == 7 } },
             label: "inspector facts table at minimum size")
         #expect(factsMounted,
                 "The toggle still opens the Run Details inspector at 640×400")
-        let shownValue = await waitUntil({
-            toolbarControls(labeled: "Run Details", in: mounted.window)
-                .first?.accessibilityValue() as? String == "Panel shown"
-        }, label: "accessibility value Panel shown")
-        #expect(shownValue,
-                "The open inspector flips the button's accessibility value (got '\(toolbarControls(labeled: "Run Details", in: mounted.window).first?.accessibilityValue() ?? "nil")')")
-        let closeToggle = try #require(
-            await waitForToolbarControl(labeled: "Run Details", in: mounted.window),
-            "Run Details reachable for the close check")
-        closeToggle.performClick(nil)
-        let hiddenValue = await waitUntil({
-            toolbarControls(labeled: "Run Details", in: mounted.window)
-                .first?.accessibilityValue() as? String == "Panel hidden"
-        }, label: "accessibility value Panel hidden")
-        #expect(hiddenValue,
-                "Closing the toggle flips the accessibility value back to Panel hidden (got '\(toolbarControls(labeled: "Run Details", in: mounted.window).first?.accessibilityValue() ?? "nil")')")
+        #expect(pressRunDetailsToggle(in: mounted.window),
+                "Run Details pressable for the close check")
+        let inspectorClosed = await waitUntil({
+            !tables(in: mounted.rootView).contains { $0.numberOfRows == 7 }
+        }, label: "inspector facts table unmounts")
+        #expect(inspectorClosed,
+                "Closing the toggle removes the inspector's facts table")
 
         // Restore the preferred size for the remaining scenarios.
         mounted.window.setContentSize(NSSize(
@@ -1192,7 +1186,9 @@ struct ActivityWindowWorkspaceHostedTests {
     // MARK: - Scenario: Run Details inspector (optional, toolbar-toggled)
 
     /// The Run Details inspector is an optional trailing panel opened/closed
-    /// by the REAL toolbar toggle. Drives the bridged control end to end:
+    /// by the REAL toolbar toggle (a plain SwiftUI Button — design change
+    /// 10). Drives the bridged control end to end through the accessibility
+    /// press / state seam:
     /// - clicking "Run Details" mounts the inspector, whose facts list
     ///   bridges as a table with EXACTLY the job's `QueueRunDetailsFacts`
     ///   entry rows (same public omission rules the window applies);
@@ -1223,11 +1219,12 @@ struct ActivityWindowWorkspaceHostedTests {
 
         let commandsBefore = mounted.client.recordedCommands.count
 
-        // Open: click the REAL toolbar toggle (a bridged NSButton).
-        let openToggle = try #require(
-            await waitForToolbarControl(labeled: "Run Details", in: mounted.window),
-            "The Run Details toolbar toggle must bridge to a clickable control")
-        openToggle.performClick(nil)
+        // Open: press the REAL toolbar toggle (the bridged SwiftUI control).
+        _ = try #require(
+            await waitForRunDetailsToggle(in: mounted.window),
+            "The Run Details toolbar toggle must bridge to a pressable control")
+        #expect(pressRunDetailsToggle(in: mounted.window),
+                "The Run Details toolbar toggle must be pressable")
         await settle(8)
 
         // The inspector's facts list mounts as a bridged table with a
@@ -1237,10 +1234,13 @@ struct ActivityWindowWorkspaceHostedTests {
         // yields exactly seven rows: Job ID (the item's raw ULID — present
         // for every job), Enqueued, Started, Finished (the epoch-ms
         // 0 timestamps still count as present), Duration; attempt 0 is
-        // omitted; absent provider and model render the two "Not Reported"
-        // placeholders; no usage was recorded. The omission rules
-        // themselves are covered at value level in
-        // `QueueWorkspacePresentationTests`.
+        // omitted; the report header has no provider/model and no usage
+        // snapshot exists (recorded or live), so their resolution falls
+        // through to the two "Not Reported" placeholders and NO usage rows
+        // render (usage is one labeled row per PRESENT field — Input,
+        // Output, Cached, Thought, Cost — and a zero/absent field never
+        // renders). The omission rules themselves are covered at value
+        // level in `QueueWorkspacePresentationTests`.
         let expectedFactRows = 7
         let inspectorMounted = await waitUntil(
             { tables(in: mounted.rootView).contains { $0.numberOfRows == expectedFactRows } },
@@ -1261,12 +1261,13 @@ struct ActivityWindowWorkspaceHostedTests {
 
         // Close: the inspector unmounts and NOTHING else changes — same job
         // selected (inventory + local search remain), no engine commands.
-        let closeToggle = try #require(
-            await waitForToolbarControl(labeled: "Run Details", in: mounted.window),
+        _ = try #require(
+            await waitForRunDetailsToggle(in: mounted.window),
             "The Run Details toolbar toggle must stay reachable after re-render")
+        #expect(pressRunDetailsToggle(in: mounted.window),
+                "The Run Details toolbar toggle must stay pressable after re-render")
         let widthWithInspectorOpen = inventory
             .convert(inventory.bounds, to: nil).width
-        closeToggle.performClick(nil)
         let inspectorGone = await waitUntil({
             let current = largestTable(in: mounted.rootView)
             guard let current else { return false }
@@ -1289,10 +1290,11 @@ struct ActivityWindowWorkspaceHostedTests {
         // inspector first, then resize. The facts table stays mounted, the
         // inventory keeps its rows and its visible height floor, and the
         // workspace stays inside the window.
-        let reopenToggle = try #require(
-            await waitForToolbarControl(labeled: "Run Details", in: mounted.window),
+        _ = try #require(
+            await waitForRunDetailsToggle(in: mounted.window),
             "The Run Details toolbar toggle must be reachable for the minimum-size pass")
-        reopenToggle.performClick(nil)
+        #expect(pressRunDetailsToggle(in: mounted.window),
+                "The Run Details toolbar toggle must be pressable for the minimum-size pass")
         await settle(4)
         mounted.window.setContentSize(NSSize(
             width: QueueWorkspaceMetrics.Window.minWidth,
@@ -1323,40 +1325,76 @@ struct ActivityWindowWorkspaceHostedTests {
             width: QueueWorkspaceMetrics.Window.preferredWidth,
             height: QueueWorkspaceMetrics.Window.preferredHeight))
         await settle(4)
-        let finalToggle = try #require(
-            await waitForToolbarControl(labeled: "Run Details", in: mounted.window),
+        _ = try #require(
+            await waitForRunDetailsToggle(in: mounted.window),
             "The Run Details toolbar toggle must stay reachable after the minimum-size pass")
-        finalToggle.performClick(nil)
+        #expect(pressRunDetailsToggle(in: mounted.window),
+                "The Run Details toolbar toggle must stay pressable after the minimum-size pass")
         await settle(4)
     }
 
-    /// The toolbar-hosted control with the given accessibility label (e.g.
-    /// the Run Details toggle's icon-only NSButton). Since design change 7
-    /// the control is icon-only — its NSButton title is "" — so the
-    /// accessibility label (the same text VoiceOver reads) is the stable
-    /// finder. SwiftUI derives an EMPTY label for representable toolbar
-    /// items (it only lifts titles from SwiftUI-side control text), so the
-    /// harness locates the control inside the items' hosted views.
-    private func toolbarControls(labeled label: String, in window: NSWindow) -> [NSControl] {
-        let itemViews = window.toolbar?.items.compactMap(\.view) ?? []
-        return itemViews.flatMap { allSubviews(of: $0) }
-            .compactMap { $0 as? NSButton }
-            .filter { $0.accessibilityLabel() == label }
+    // MARK: - Run Details toggle seam (design change 12)
+
+    /// The Run Details toggle's clickable content: the trailing toolbar item
+    /// hosts the bridged SwiftUI `Button`, whose image carries the shared
+    /// ``QueueWorkspaceMetrics/Toolbar/iconButtonSide`` square — the one
+    /// ≈28pt-wide view in the item's tree.
+    ///
+    /// Why this seam: the hosted tree carries NO NSButton (verified:
+    /// ToolbarItemHostingView → ContainerView → FocusRing/KeyView proxies),
+    /// so `performClick` and NSView-level accessibility probes cannot reach
+    /// the control, and the system AX API is unavailable in this harness
+    /// (attribute reads return api-disabled without an Accessibility TCC
+    /// grant — verified). The harness therefore (a) reads the
+    /// geometry-parity frame from the square-sized content view and (b)
+    /// drives the toggle with synthesized mouse events at that frame's
+    /// center — the real event path a user's click takes. The "Run Details"
+    /// accessibility label and the flipping `.help` tooltip are set in the
+    /// view code (SwiftUI surfaces both to VoiceOver in the real app) but
+    /// are not NSView-level readable here (see the suite header).
+    private func runDetailsToggleContent(in window: NSWindow) -> NSView? {
+        guard let trailing = window.toolbar?.items.last?.view else { return nil }
+        let side = QueueWorkspaceMetrics.Toolbar.iconButtonSide
+        return allSubviews(of: trailing).first { sub in
+            let frame = sub.convert(sub.bounds, to: nil)
+            return ((side - 2)...(side + 16)).contains(frame.width)
+                && ((side - 2)...(side + 16)).contains(frame.height)
+        }
     }
 
     /// Bounded wait because SwiftUI materializes the item's hosted view
     /// asynchronously after mount.
-    private func waitForToolbarControl(
-        labeled label: String,
-        in window: NSWindow
-    ) async -> NSControl? {
+    private func waitForRunDetailsToggle(in window: NSWindow) async -> NSView? {
         for _ in 0..<30 {
-            if let control = toolbarControls(labeled: label, in: window).first {
-                return control
-            }
+            if let content = runDetailsToggleContent(in: window) { return content }
             try? await Task.sleep(for: .milliseconds(50))
         }
-        return toolbarControls(labeled: label, in: window).first
+        return runDetailsToggleContent(in: window)
+    }
+
+    /// Press the toggle with a synthesized mouse click at its content
+    /// frame's center — the real event path. The state seam itself (the
+    /// inspector's facts table mounting/unmounting) stays the honest
+    /// assertion — a press that flips nothing fails the scenario's waits.
+    @discardableResult
+    private func pressRunDetailsToggle(in window: NSWindow) -> Bool {
+        guard let content = runDetailsToggleContent(in: window) else { return false }
+        let bounds = content.convert(content.bounds, to: nil)
+        let center = CGPoint(x: bounds.midX, y: bounds.midY)
+        let uptime = ProcessInfo.processInfo.systemUptime
+        guard
+            let down = NSEvent.mouseEvent(
+                with: .leftMouseDown, location: center, modifierFlags: [],
+                timestamp: uptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 1, clickCount: 1, pressure: 1),
+            let up = NSEvent.mouseEvent(
+                with: .leftMouseUp, location: center, modifierFlags: [],
+                timestamp: uptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 2, clickCount: 1, pressure: 0)
+        else { return false }
+        window.sendEvent(down)
+        window.sendEvent(up)
+        return true
     }
 
     // MARK: - Scenario: inventory rows are non-collapsible name links

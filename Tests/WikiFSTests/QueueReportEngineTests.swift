@@ -358,6 +358,7 @@ struct QueueReportEngineTests {
         #expect(lintCompletion.phase == .finished)
         #expect(lintCompletion.targetUpserts.isEmpty)  // no invented page outcomes
         #expect(lintCompletion.resultSummary?.contains("page-level results not reported") == true)
+        #expect(lintCompletion.usage == nil)  // no usage reported → none committed
 
         let ingestCompletion = QueueIngestionReporting.agentCompletionMutation(
             operation: .ingest,
@@ -369,6 +370,26 @@ struct QueueReportEngineTests {
         #expect(ingestCompletion.availability == .notReported)
         #expect(ingestCompletion.model == QueueReportModelName(rawValue: "claude-sonnet-4-5"))
         #expect(ingestCompletion.resultSummary?.contains("not reported") == true)
+        // The launcher's run-total usage rides along as the durable
+        // report-header usage (design change 11) — the same values the
+        // navigator showed live.
+        #expect(ingestCompletion.usage == QueueReportUsage(
+            inputTokens: 1, outputTokens: 2,
+            cachedReadTokens: nil, thoughtTokens: nil,
+            cost: nil, currency: nil))
+
+        // Optional counters and cost/currency carry over 1:1.
+        let fullUsage = QueueIngestionReporting.agentCompletionMutation(
+            operation: .ingest,
+            usage: SessionUsage(
+                inputTokens: 4_178, outputTokens: 537, totalTokens: 4_715,
+                cachedReadTokens: 133_376, cachedWriteTokens: nil,
+                thoughtTokens: 395, cost: 0.0421, currency: "USD",
+                contextUsed: 0, contextSize: 0))
+        #expect(fullUsage.usage == QueueReportUsage(
+            inputTokens: 4_178, outputTokens: 537,
+            cachedReadTokens: 133_376, thoughtTokens: 395,
+            cost: 0.0421, currency: "USD"))
     }
 
     @Test("Whole-wiki lint scope stays a marker and never enumerates pages")

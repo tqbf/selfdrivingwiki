@@ -62,6 +62,9 @@ public enum QueueIngestionReporting {
     /// The completion mutation for a successful AGENT run whose per-target
     /// outcomes the runner cannot prove. Staged sources stay `.submitted`;
     /// lint pages stay `.processing`; availability is `.notReported`.
+    /// The launcher's accumulated run-total usage rides along as the durable
+    /// report-header `usage` — the same values the navigator showed live —
+    /// so Run Details keeps final totals after completion/reload.
     public static func agentCompletionMutation(
         operation: QueueReportOperation,
         usage: SessionUsage?
@@ -79,7 +82,8 @@ public enum QueueIngestionReporting {
             phase: .finished,
             model: usage?.modelId.map { QueueReportModelName(rawValue: $0) },
             availability: .notReported,
-            resultSummary: summary)
+            resultSummary: summary,
+            usage: usage.map(QueueReportUsage.init(sessionUsage:)))
     }
 
     /// The lint-page staging mutation: resolved pages are recorded by their
@@ -105,5 +109,42 @@ public enum QueueIngestionReporting {
             }
         }
         return QueueReportMutation(phase: .staging, targetUpserts: records)
+    }
+}
+
+// MARK: - SessionUsage ↔ durable report usage
+
+extension QueueReportUsage {
+    /// Map the launcher's live run-total usage onto the durable report-header
+    /// value the queue store persists. The token/cost/currency fields carry
+    /// over 1:1; SessionUsage-only fields (context window, per-model labels)
+    /// are not part of the durable header — the report's own provider/model
+    /// columns already carry the labels.
+    public init(sessionUsage usage: SessionUsage) {
+        self.init(
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            cachedReadTokens: usage.cachedReadTokens,
+            thoughtTokens: usage.thoughtTokens,
+            cost: usage.cost,
+            currency: usage.currency)
+    }
+}
+
+extension SessionUsage {
+    /// Map a durable report-header usage back onto the snapshot vocabulary
+    /// the Run Details panel renders. Context-window fields have no durable
+    /// counterpart and are zeroed — the panel never renders them.
+    public init(reportUsage: QueueReportUsage) {
+        self.init(
+            inputTokens: reportUsage.inputTokens,
+            outputTokens: reportUsage.outputTokens,
+            totalTokens: reportUsage.inputTokens + reportUsage.outputTokens,
+            cachedReadTokens: reportUsage.cachedReadTokens,
+            thoughtTokens: reportUsage.thoughtTokens,
+            cost: reportUsage.cost,
+            currency: reportUsage.currency,
+            contextUsed: 0,
+            contextSize: 0)
     }
 }

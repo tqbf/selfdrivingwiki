@@ -718,7 +718,8 @@ struct ActivityWindowView: View {
             liveUsage: nil,
             pendingPermission: nil,
             summarySearchText: "",
-            progressLine: nil)
+            progressLine: nil,
+            jobID: Self.jobIDChipText(for: item))
         HStack(spacing: 8) {
             statusView(for: item)
                 .frame(width: 16)
@@ -744,6 +745,18 @@ struct ActivityWindowView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
+                // Design change 13 (2026-09-10): the row's own job ID chip —
+                // the FULL raw ULID in footnote monospaced secondary, its own
+                // small line, text-selectable where supported. This is the
+                // QUEUE ITEM id only; target SourceID/PageID values never
+                // render anywhere in the navigator (rows show operation +
+                // count titles and target NAMES only).
+                Text(data.jobID)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .textSelection(.enabled)
+                    .help(data.jobID)
                 // Report-backed phase progress on running rows ("Staging
                 // sources · 8 of 12"), from the item's cached summary —
                 // precomputed above so the row body reads plain values only.
@@ -864,6 +877,13 @@ struct ActivityWindowView: View {
 
     @ViewBuilder
     private func contextMenu(for item: QueueItem) -> some View {
+        // Design change 13 (2026-09-10): the row's job ID is always
+        // copyable — the full raw ULID, the same value the row chip shows.
+        Button("Copy Job ID", systemImage: "doc.on.doc") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(
+                Self.jobIDChipText(for: item), forType: .string)
+        }
         // #598: extraction jobs carry sourceIDs — offer a "Reveal Source"
         // action that navigates to the source in the wiki's Sources outline,
         // mirroring #583's "Open Page" for lint jobs. Only shown for
@@ -991,13 +1011,42 @@ struct ActivityWindowView: View {
     }
 
     /// The toolbar control that opens/closes the optional Run Details
-    /// inspector — a real, icon-only NSButton (see
-    /// ``RunDetailsToolbarToggle``). Toggling it touches only panel
-    /// presentation: selection, filters, and queue state are untouched.
+    /// inspector — a plain SwiftUI toolbar `Button` mirroring the main
+    /// window's inspector toggle (ContentView): the bare "sidebar.right"
+    /// system image, `.help` tooltip, no visible title. Design change 12
+    /// (2026-09-10, icon parity): this replaces the former
+    /// `RunDetailsToolbarToggle` NSViewRepresentable. The state seam is
+    /// unchanged — the button action toggles the same
+    /// `showsRunDetailsInspector` @State (a user event, never a view-update
+    /// write), the tooltip text flips with it ("Show Run Details" / "Hide
+    /// Run Details"), and the accessibility label stays "Run Details" for
+    /// VoiceOver. Toggling touches only panel presentation: selection,
+    /// filters, and queue state are untouched.
+    ///
+    /// Geometry parity is enforced, not assumed: measured in the hosted
+    /// window, this window's bridged toolbar `Button` collapses to the bare
+    /// glyph footprint (23.5×18.5) — the main taskbar's standard toolbar
+    /// icon button is the ``QueueWorkspaceMetrics/Toolbar/iconButtonSide``
+    /// square — so the image carries the shared square as its frame and the
+    /// bridged control measures 28×28 like the main window's.
+    ///
+    /// Palette-label loss (documented like the toolbar search item): a
+    /// SwiftUI `Button` labeled with only an `Image` has no title for
+    /// SwiftUI to lift into the `NSToolbarItem` label, so the customization
+    /// palette shows this item unlabeled (verified in the hosted harness:
+    /// `item.label == ""`). The in-window tooltip and the "Run Details"
+    /// accessibility label carry the identity.
     private var runDetailsInspectorToggle: some View {
-        RunDetailsToolbarToggle(isOn: $showsRunDetailsInspector)
-            .frame(width: QueueWorkspaceMetrics.Toolbar.iconButtonSide,
-                   height: QueueWorkspaceMetrics.Toolbar.iconButtonSide)
+        Button {
+            showsRunDetailsInspector.toggle()
+        } label: {
+            Image(systemName: "sidebar.right")
+                .frame(width: QueueWorkspaceMetrics.Toolbar.iconButtonSide,
+                       height: QueueWorkspaceMetrics.Toolbar.iconButtonSide)
+                .contentShape(Rectangle())
+        }
+        .help(showsRunDetailsInspector ? "Hide Run Details" : "Show Run Details")
+        .accessibilityLabel("Run Details")
     }
 
     // MARK: - Detail pane
@@ -1267,7 +1316,9 @@ struct ActivityWindowView: View {
         return QueueJobHeaderPresentation(
             title: QueueWorkspaceMapper.headerTitle(
                 operation: QueueWorkspaceMapper.reportOperation(for: item),
-                jobTitle: rowTitle(for: item)),
+                jobTitle: Self.headerJobCountPhrase(
+                    for: item,
+                    wikiName: wikiDisplayName(for: item.wikiID))),
             operationLabel: QueueWorkspaceMapper.operationLabel(for: item),
             wikiName: wikiDisplayName(for: item.wikiID),
             lifecycle: QueueWorkspaceMapper.lifecycle(for: item.state),
@@ -1362,14 +1413,20 @@ struct ActivityWindowView: View {
             // state, never a fabricated "0".
             countText: report.targets.isEmpty ? nil : String(report.targets.count),
             rows: rows,
-            resultStatement: resultStatement(for: report),
+            resultStatement: Self.resultStatement(for: report),
             emptyStateText: emptyStateText(for: operation, isWholeWiki: isWholeWiki),
             outputs: outputsSectionValue(for: item, operation: operation, nameIndex: nameIndex))
     }
 
-    /// One recorded target → one inventory row. The recorded display name is
-    /// preserved for history even when the target no longer resolves; live
-    /// navigation actions appear only while the target stays resolvable.
+    /// One recorded target → one inventory row. Titles use the FULL name
+    /// precedence: the effective index (live → payload recordedNames →
+    /// read-only cache) first — it carries the enqueue-time name and keeps
+    /// resolving after later renames or a closed wiki — then the report
+    /// record's own displayName when the index cannot answer (a report
+    /// recorded after a rename may know a name the payload never did), and
+    /// the honest fallback text only when neither can. The record's
+    /// displayName therefore only wins when the effective index MISSES, and
+    /// an empty record displayName can never mask a resolvable name.
     private func targetRow(
         record: QueueReportTargetRecord,
         item: QueueItem,
@@ -1378,24 +1435,41 @@ struct ActivityWindowView: View {
         isSessionOpen: Bool
     ) -> QueueTargetRowValue {
         let identity: QueueWorkspaceTargetIdentity
-        let fallbackTitle: String
         switch record.target {
         case .source(let id):
             identity = .source(id)
-            fallbackTitle = "Source unavailable"
         case .page(let id):
             identity = .page(id)
-            fallbackTitle = "Page unavailable"
         }
         return QueueTargetRowValue(
             identity: identity,
-            title: record.displayName.isEmpty ? fallbackTitle : record.displayName,
+            title: Self.targetRowTitle(record: record, nameIndex: nameIndex),
             status: QueueWorkspaceMapper.targetStatus(
                 for: record.state, result: record.result),
             reason: QueueWorkspaceMapper.targetReason(for: record),
             actions: rowActions(
                 for: identity, wikiID: item.wikiID, nameIndex: nameIndex,
                 liveIndex: liveIndex, isSessionOpen: isSessionOpen))
+    }
+
+    /// Pure computation of one recorded target row's title (value-level
+    /// suite seam, same pattern as ``targetRowActions``). FULL name
+    /// precedence: the effective index (live → payload recordedNames →
+    /// read-only cache) first; the report record's own displayName only
+    /// when the index cannot answer and its name is non-empty; the honest
+    /// fallback text last. An empty record displayName is absence — it can
+    /// never mask a name another layer resolves.
+    nonisolated static func targetRowTitle(
+        record: QueueReportTargetRecord,
+        nameIndex: QueueTargetNameIndex
+    ) -> String {
+        let recordedName: String? = record.displayName.isEmpty ? nil : record.displayName
+        switch record.target {
+        case .source(let id):
+            return nameIndex.sourceName(id) ?? recordedName ?? "Source unavailable"
+        case .page(let id):
+            return nameIndex.pageTitle(id) ?? recordedName ?? "Page unavailable"
+        }
     }
 
     /// Legacy / loading Overview: rows derived from the item's payload. Jobs
@@ -1423,7 +1497,9 @@ struct ActivityWindowView: View {
                         identity: .page(pageID),
                         title: nameIndex.pageTitle(pageID)
                             ?? unresolvedTargetTitle(.page(pageID), in: item.wikiID, loadedFallback: "Deleted page"),
-                        status: .planned(),
+                        // Legacy rows never ran: no recorded evidence →
+                        // name-only (operator decision, 2026-09-09).
+                        status: nil,
                         actions: rowActions(
                             for: .page(pageID), wikiID: item.wikiID, nameIndex: nameIndex,
                             liveIndex: liveIndex, isSessionOpen: isSessionOpen))
@@ -1435,7 +1511,9 @@ struct ActivityWindowView: View {
                     identity: .source(sourceID),
                     title: nameIndex.sourceName(sourceID)
                         ?? unresolvedTargetTitle(.source(sourceID), in: item.wikiID, loadedFallback: "Source unavailable"),
-                    status: .planned(),
+                    // Legacy rows never ran: no recorded evidence →
+                    // name-only (operator decision, 2026-09-09).
+                    status: nil,
                     actions: rowActions(
                         for: .source(sourceID), wikiID: item.wikiID, nameIndex: nameIndex,
                         liveIndex: liveIndex, isSessionOpen: isSessionOpen))
@@ -1600,42 +1678,53 @@ struct ActivityWindowView: View {
     }
 
     /// Availability-aware result statement (plan report truth rules 8–9):
-    /// reported summaries pass through; agent lint's not-reported contract
-    /// keeps its canonical sentence; a persistence failure says so instead of
-    /// presenting uncommitted outcomes as durable.
-    private func resultStatement(for report: QueueAttemptReport) -> String? {
+    /// reported summaries pass through; a persistence failure says so instead
+    /// of presenting uncommitted outcomes as durable. Design change 10
+    /// (2026-09-10): a `.notReported` report renders NO statement line — the
+    /// producer summary sentences say only that per-target outcomes were not
+    /// reported, which the inventory rows already show state by state, so the
+    /// line communicated nothing and read as a result. The engine-side
+    /// producer summaries in `QueueIngestionReporting` stay (they remain
+    /// durable report data and back the report truth rules); only the
+    /// Overview rendering drops them. Pure + `nonisolated` static so the
+    /// value suite pins the mapping without hosting the window.
+    nonisolated static func resultStatement(for report: QueueAttemptReport) -> String? {
         switch report.availability {
         case .available:
             return report.resultSummary
         case .notReported:
-            // Producer-set wording; the fallback is the backend contract's
-            // canonical sentence for agent lint runs.
-            return report.resultSummary ?? "Agent run completed; page-level results not reported"
+            return nil
         case .reportingUnavailable:
             return "Reporting unavailable for this run — recorded outcomes may be incomplete."
         }
     }
 
-    /// Run Details facts: the job's queue item id, item timestamps + the
-    /// report header's provider/model. Usage comes from the tracker's
-    /// recorded (or, while running, live) usage snapshot as the
-    /// input/output breakdown line; a snapshot with nothing reportable omits
-    /// the row rather than showing zeros.
+    /// Run Details facts: the job's queue item id, item timestamps, and the
+    /// report header's provider/model — falling back to the usage snapshot's
+    /// provider/model while a run is in flight (the report header is only
+    /// written at completion, so a running job would otherwise show "Not
+    /// Reported" next to a navigator that already shows the live model).
+    /// Usage is the state-aware resolution from `runDetailsUsage` — the
+    /// durable report-header totals for terminal states, the tracker's
+    /// recorded-or-live snapshot mid-run (running prefers live) — so a
+    /// retried run doesn't show the previous attempt's frozen totals, and
+    /// `entries` maps it to one labeled row per present field; a snapshot
+    /// with nothing reportable produces no usage rows rather than zeros.
     private func runDetailsFacts(
         for item: QueueItem,
         report: QueueAttemptReport?
     ) -> QueueRunDetailsFacts {
         let startedAt = date(fromMillis: item.startedAt)
         let finishedAt = date(fromMillis: item.finishedAt)
-        var usageLines: [String] = []
-        if let usage = activityTracker.usage(for: item.id) {
-            // The breakdown omits zero/absent clauses itself; an empty
-            // result (nothing reportable) omits the row.
-            let breakdown = UsageFormatter.runDetailsSummary(usage: usage)
-            if !breakdown.isEmpty {
-                usageLines.append(breakdown)
-            }
-        }
+        let usage = Self.runDetailsUsage(
+            itemState: item.state,
+            report: report?.usage,
+            recorded: activityTracker.usage(for: item.id),
+            live: activityTracker.liveUsage(for: item.id))
+        let providerModel = Self.runDetailsProviderModel(
+            reportProvider: report?.provider.map { $0.rawValue },
+            reportModel: report?.model.map { $0.rawValue },
+            usage: usage)
         return QueueRunDetailsFacts(
             jobID: item.id.rawValue,
             enqueuedAt: date(fromMillis: item.createdAt),
@@ -1643,9 +1732,65 @@ struct ActivityWindowView: View {
             finishedAt: finishedAt,
             durationText: QueueWorkspaceFormat.duration(from: startedAt, to: finishedAt),
             attempt: report?.attemptID.attempt ?? item.attempt,
-            providerText: report?.provider.map { $0.rawValue },
-            modelText: report?.model.map { $0.rawValue },
-            usageLines: usageLines)
+            providerText: providerModel.provider,
+            modelText: providerModel.model,
+            usage: usage)
+    }
+
+    /// The Run Details usage-snapshot resolution over the durable report
+    /// header and the tracker's recorded and live sources. Design change 11
+    /// (2026-09-10): the completion mutation now commits final usage into the
+    /// report header, so terminal states read THAT first — it is the durable
+    /// truth that survives completion/reload, and it wins over a possibly
+    /// stale tracker snapshot. The tracker's recorded-or-live snapshot stays
+    /// as the mid-run fallback (the report header carries no usage until
+    /// completion): while the item is `.running` the live snapshot wins — a
+    /// RETRIED run keeps its item id while the previous attempt's recorded
+    /// snapshot survives `.started` (the tracker clears `liveUsage` at
+    /// terminal state, never `itemUsage`), and showing the prior attempt's
+    /// frozen totals next to a running clock would misrepresent the run. A
+    /// running item with no live snapshot yet (before the first
+    /// `usage_update`) falls back to the recorded one. Legacy reports with
+    /// NULL usage columns contribute nothing (`report == nil`) — absence is
+    /// absence, never zeros. Pure + `nonisolated` static so the value suite
+    /// pins the precedence without hosting the window.
+    nonisolated static func runDetailsUsage(
+        itemState: QueueItemState,
+        report: QueueReportUsage?,
+        recorded: SessionUsage?,
+        live: SessionUsage?
+    ) -> SessionUsage? {
+        switch itemState {
+        case .running:
+            return live ?? recorded
+        case .queued, .completed, .failed, .cancelled:
+            return report.map(SessionUsage.init(reportUsage:)) ?? recorded
+        }
+    }
+
+    /// The Run Details provider/model resolution. Report header values
+    /// always win when present — non-nil AND non-blank, matching
+    /// `entries`' blank-means-absent rule. Otherwise the usage snapshot's
+    /// point-in-time provider label and model stand in: the human-readable
+    /// model name when the agent advertised one, else the raw model id —
+    /// the same vocabulary `fullSummary` renders for completed rows. The
+    /// fallback is the live session's OWN snapshot, so a running job shows
+    /// what is actually running; nothing is invented. Pure + `nonisolated`
+    /// static so the value suite pins it without hosting the window.
+    nonisolated static func runDetailsProviderModel(
+        reportProvider: String?,
+        reportModel: String?,
+        usage: SessionUsage?
+    ) -> (provider: String?, model: String?) {
+        func present(_ value: String?) -> String? {
+            guard let trimmed = value?.trimmingCharacters(in: .whitespaces),
+                  !trimmed.isEmpty else { return nil }
+            return trimmed
+        }
+        return (
+            provider: present(reportProvider) ?? present(usage?.providerLabel),
+            model: present(reportModel)
+                ?? (present(usage?.modelName) ?? present(usage?.modelId)))
     }
 
     private func emptyStateText(
@@ -2024,6 +2169,18 @@ struct ActivityWindowView: View {
         /// Phase progress line from the cached summary ("Staging sources ·
         /// 8 of 12"), or `nil` when nothing countable is recorded.
         let progressLine: String?
+        /// The row's job-ID chip (design change 13, 2026-09-10): the item's
+        /// FULL raw ULID — the queue item id, never a target SourceID/PageID.
+        let jobID: String
+    }
+
+    /// The navigator row's job-ID chip text (design change 13, 2026-09-10):
+    /// the item's OWN queue item id — the FULL raw ULID. Target identities
+    /// (SourceID/PageID) never render in the navigator, so the chip can
+    /// never leak one. Pure + `nonisolated` static so the value suite pins
+    /// the mapping without hosting the window.
+    nonisolated static func jobIDChipText(for item: QueueItem) -> String {
+        item.id.rawValue
     }
 
     /// Snapshot all `@Observable`-derived display data for the given items into
@@ -2064,11 +2221,10 @@ struct ActivityWindowView: View {
             // Resolve source/page names through the closed-wiki-aware
             // effective index (live → recorded → read-only; observable reads
             // happen once, above, inside makeNameIndex — not per target).
-            // Same names as the old per-item `sourceNames(for:)` /
-            // `lintPageTitles(for:)` scans, in payload order — plus the
-            // closed-wiki fallbacks, so a closed-wiki job's navigator row
-            // keeps its recorded/resolved names instead of collapsing to
-            // "Lint N pages".
+            // Names feed the row TOOLTIP and the navigator search haystack
+            // only — row titles are operation + count only (operator
+            // request), so a closed-wiki job whose names are still resolving
+            // or missing degrades to the count wording, never a raw ID.
             let effectiveIndex = QueueTargetNameIndex.effective(
                 live: nameIndex(for: item.wikiID),
                 readOnlyCache: activityTracker.closedWikiNameIndexes[item.wikiID],
@@ -2076,7 +2232,7 @@ struct ActivityWindowView: View {
             let resolved = effectiveIndex.displayNames(for: item)
 
             result[item.id] = RowDisplayData(
-                title: computeRowTitle(for: item, wikiName: wikiName, names: resolved.names),
+                title: Self.computeRowTitle(for: item, wikiName: wikiName),
                 subtitle: computeRowSubtitle(for: item, wikiName: wikiName),
                 wikiName: wikiName,
                 targetNames: resolved.targets,
@@ -2086,7 +2242,8 @@ struct ActivityWindowView: View {
                 summarySearchText: reportSummaries[item.id]?.searchText ?? "",
                 progressLine: Self.progressLine(
                     summary: reportSummaries[item.id],
-                    item: item))
+                    item: item),
+                jobID: Self.jobIDChipText(for: item))
         }
         return result
     }
@@ -2159,32 +2316,55 @@ struct ActivityWindowView: View {
             .joined(separator: " · ")
     }
 
-    /// Pure computation of the row title from pre-resolved data (no
-    /// `@Observable` reads). Shared between `buildRowDisplayData` (precompute
-    /// path) and `rowTitle(for:)` (detail pane). PURE + `nonisolated` (same
+    /// Pure computation of the navigator row title from the payload and the
+    /// wiki display name (no `@Observable` reads). PURE + `nonisolated` (same
     /// reason as ``navigatorSearchText``): the value-level suite pins the
-    /// closed-wiki title behavior — recorded/resolved names feed `names`, so
-    /// a closed-wiki job stops collapsing to "Lint N pages".
+    /// exact wordings without a main-actor hop.
+    ///
+    /// Titles are OPERATION + COUNT ONLY (operator request, 2026-09-09: the
+    /// first target's name left every row title and the header title, because
+    /// a closed wiki could surface a raw ID where a name was expected):
+    /// "Ingest 12 sources" / "1 source", "Lint 3 pages", and the unchanged
+    /// whole-wiki "Lint <wiki>". Extraction keeps its existing count wording
+    /// ("12 sources" / the kind label). No target name and no raw target ID
+    /// can reach a row title; resolved names still feed the row tooltip and
+    /// the navigator search haystack (``navigatorSearchText``).
     nonisolated static func computeRowTitle(
         for item: QueueItem,
-        wikiName: String,
-        names: [String]
+        wikiName: String
     ) -> String {
         if let pageIDs = item.payload.lintPageIDs {
             if pageIDs.isEmpty { return "Lint \(wikiName)" }
-            guard let first = names.first else { return "Lint \(pageIDs.count) pages" }
-            return names.count > 1 ? "Lint: \(first) +\(names.count - 1)" : "Lint: \(first)"
+            return pageIDs.count == 1 ? "Lint 1 page" : "Lint \(pageIDs.count) pages"
         }
-        guard let first = names.first else {
-            let count = item.payload.sourceIDs.count
+        let count = item.payload.sourceIDs.count
+        switch item.queue {
+        case .ingestion:
+            // Zero targets cannot be spoken as a count — the kind label is
+            // the same fallback the old count path used.
+            guard count > 0 else { return Self.kindLabel(for: item) }
+            return count > 1 ? "Ingest \(count) sources" : "1 source"
+        case .extraction, .transcription:
             return count > 1 ? "\(count) sources" : Self.kindLabel(for: item)
         }
-        return names.count > 1 ? "\(first) +\(names.count - 1)" : first
     }
 
-    /// Instance convenience over the pure row title.
-    private func computeRowTitle(for item: QueueItem, wikiName: String, names: [String]) -> String {
-        Self.computeRowTitle(for: item, wikiName: wikiName, names: names)
+    /// The count-only "<Job Details>" phrase the header title prefixes —
+    /// "Ingestion: 12 sources", "Extraction: 1 source", "Lint: 3 pages",
+    /// whole-wiki "Lint: <wiki>" via ``QueueWorkspaceMapper.headerTitle``.
+    /// Same no-names/no-ID rule as ``computeRowTitle(for:wikiName:)``; PURE +
+    /// `nonisolated` for the same suite-pinning reason.
+    nonisolated static func headerJobCountPhrase(
+        for item: QueueItem,
+        wikiName: String
+    ) -> String {
+        if let pageIDs = item.payload.lintPageIDs {
+            if pageIDs.isEmpty { return wikiName }
+            return pageIDs.count == 1 ? "1 page" : "\(pageIDs.count) pages"
+        }
+        let count = item.payload.sourceIDs.count
+        guard count > 0 else { return Self.kindLabel(for: item) }
+        return count > 1 ? "\(count) sources" : "1 source"
     }
 
     /// Pure computation of the row subtitle from pre-resolved data.
@@ -2195,19 +2375,8 @@ struct ActivityWindowView: View {
         return wikiName
     }
 
-    /// Row title for the detail pane (the sidebar precomputes via
-    /// `buildRowDisplayData`). Reads `@Observable` properties — only safe
-    /// outside `ForEachChild.updateValue`. Resolves names through the M2
-    /// index (one pass over the wiki's sources/pages) instead of the old
-    /// per-target linear scans.
-    private func rowTitle(for item: QueueItem) -> String {
-        let wikiName = wikiDisplayName(for: item.wikiID)
-        let names = makeNameIndex(for: item).displayNames(for: item).names
-        return computeRowTitle(for: item, wikiName: wikiName, names: names)
-    }
-
     /// Row subtitle for the detail pane. Reads `@Observable` — same caveat as
-    /// ``rowTitle(for:)``.
+    /// ``buildRowDisplayData(for:)``.
     private func rowSubtitle(for item: QueueItem) -> String {
         computeRowSubtitle(for: item, wikiName: wikiDisplayName(for: item.wikiID))
     }
@@ -2249,146 +2418,10 @@ struct ActivityWindowView: View {
     }
 }
 
-// MARK: - Run Details toolbar toggle
+// MARK: - Toolbar job-search control (design change 6, 2026-09-09)
 
-/// The Run Details inspector's toolbar control: a REAL, icon-only NSButton.
-///
-/// Why AppKit owns this one control: SwiftUI's toolbar `Button` styles
-/// render layer-backed content whose action wiring does not survive the
-/// hosting window's toolbar re-host cycles — when the toolbar overflows
-/// (narrow window) and restores, the control keeps rendering but clicks do
-/// nothing. A `Toggle` in button style additionally never bridges its title
-/// to the `NSToolbarItem` label. Owning the NSButton fixes the action: its
-/// target/action writes the toggle state through a `Binding`, and the write
-/// lands in the framework's state storage, so it stays live no matter how
-/// many times SwiftUI re-hosts the toolbar content.
-///
-/// Design change 7 (2026-09-09): the button is icon-only — the bare
-/// "sidebar.right" image, borderless, matching the main window's right
-/// inspector toggle (ContentView). The visible title is gone but the
-/// identity survives: `setAccessibilityLabel("Run Details")` names it for
-/// VoiceOver, the accessibility value ("Panel shown"/"Panel hidden") and the
-/// tooltip ("Show Run Details"/"Hide Run Details") carry the state, and the
-/// coordinator still re-asserts the `NSToolbarItem` label ("Run Details") so
-/// the customization palette keeps a readable name.
-///
-/// SwiftUI has no SwiftUI-side title to lift for a representable, so it
-/// derives an empty toolbar item label; the coordinator re-asserts the
-/// label (on the next runloop tick, after SwiftUI's own toolbar sync) from
-/// both `makeNSView` and every `updateNSView`.
-///
-/// Sizing (Run Details toggle squish fix): a borderless `.imageOnly`
-/// NSButton with no frame reports its intrinsic size as the bare glyph
-/// footprint (measured 18×14), visibly smaller than the main window's
-/// standard SwiftUI toolbar `Button` (~28×28 with proper insets). The
-/// control is sized at ``QueueWorkspaceMetrics/Toolbar/iconButtonSide``
-/// from both sides so every sizing path agrees on the standard square:
-/// the SwiftUI `.frame` on the representable (in
-/// ``ActivityWindowView/runDetailsInspectorToggle``) constrains the hosted
-/// view, and the button subclass (``ToolbarIconButton``) reports the same
-/// square as its intrinsic content size for the toolbar item's own
-/// min/max measurement. The glyph centers inside the button's bounds like
-/// a standard toolbar button's; the toolbar row may stretch the hosted
-/// height above the square (measured 33pt = row height) without moving
-/// the centered glyph, so the visible rendering matches.
-///
-/// The click path never writes SwiftUI state *during* a view update: the
-/// write happens in the button's action (a user event), so the
-/// NSViewRepresentable state-write rule holds (`updateNSView` only reads).
-struct RunDetailsToolbarToggle: NSViewRepresentable {
-    @Binding var isOn: Bool
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(binding: $isOn)
-    }
-
-    func makeNSView(context: Context) -> NSButton {
-        let button = ToolbarIconButton(
-            title: "",
-            image: NSImage(systemSymbolName: "sidebar.right",
-                           accessibilityDescription: "Run Details") ?? NSImage(),
-            target: context.coordinator,
-            action: #selector(Coordinator.toggle))
-        button.isBordered = false
-        button.imagePosition = .imageOnly
-        button.setAccessibilityLabel("Run Details")
-        button.setAccessibilityValue(context.coordinator.stateTextFor(isOn))
-        button.toolTip = context.coordinator.helpText(for: false)
-        context.coordinator.reassertToolbarItemLabel(for: button)
-        return button
-    }
-
-    func updateNSView(_ button: NSButton, context: Context) {
-        // Reads only: the state write happens in the button's action, never
-        // inside the SwiftUI update pass.
-        button.setAccessibilityValue(context.coordinator.stateTextFor(isOn))
-        button.toolTip = context.coordinator.helpText(for: isOn)
-        context.coordinator.reassertToolbarItemLabel(for: button)
-    }
-
-    @MainActor
-    final class Coordinator: NSObject {
-        /// The `NSToolbarItem` label for this control.
-        static let itemLabel = "Run Details"
-
-        private let binding: Binding<Bool>
-
-        init(binding: Binding<Bool>) {
-            self.binding = binding
-        }
-
-        /// Find the toolbar item hosting this button and keep its label.
-        /// Runs on the NEXT runloop tick: SwiftUI re-derives toolbar item
-        /// labels during its own update (and a representable has no SwiftUI
-        /// title to lift, so it derives ""), then we assert ours — so ours
-        /// is the last write before the toolbar is observed.
-        func reassertToolbarItemLabel(for button: NSButton) {
-            guard button.window?.toolbar != nil else { return }
-            DispatchQueue.main.async { [weak button] in
-                guard let button, let toolbar = button.window?.toolbar else { return }
-                for item in toolbar.items {
-                    guard let view = item.view, button.isDescendant(of: view) else { continue }
-                    if item.label != Self.itemLabel {
-                        item.label = Self.itemLabel
-                    }
-                    return
-                }
-            }
-        }
-
-        func stateTextFor(_ isOn: Bool) -> String {
-            isOn ? "Panel shown" : "Panel hidden"
-        }
-
-        func helpText(for isOn: Bool) -> String {
-            isOn ? "Hide Run Details" : "Show Run Details"
-        }
-
-        @objc func toggle() {
-            binding.wrappedValue.toggle()
-        }
-    }
-}
-
-/// The Run Details toggle's button: a borderless NSButton whose intrinsic
-/// content size is pinned to the standard toolbar icon-button square
-/// (``QueueWorkspaceMetrics/Toolbar/iconButtonSide``). A plain borderless
-/// image-only button collapses to the bare glyph footprint, so the toolbar
-/// item hosting it measured the glyph, not the standard button metrics.
-/// Reporting the square keeps the SwiftUI `.frame`, the representable's
-/// size proposal, and the toolbar item's own min/max measurement in
-/// agreement; a borderless button centers its image inside its bounds, so
-/// the glyph lands with the same insets as a standard toolbar button.
-@MainActor
-private final class ToolbarIconButton: NSButton {
-    override var intrinsicContentSize: NSSize {
-        NSSize(width: QueueWorkspaceMetrics.Toolbar.iconButtonSide,
-               height: QueueWorkspaceMetrics.Toolbar.iconButtonSide)
-    }
-}
-
-/// The toolbar job-search control (design change 6, 2026-09-09): one
-/// persistent `NSStackView` hosting BOTH forms — the expanded `NSSearchField`
+/// The toolbar job-search control: one persistent `NSStackView` hosting BOTH
+/// forms — the expanded `NSSearchField`
 /// and the collapsed magnifying-glass button — with visibility toggled by the
 /// expand/collapse decision. The field never leaves the hierarchy across
 /// state changes, so expansion can re-focus it without remounting. It lives
@@ -2398,7 +2431,7 @@ private final class ToolbarIconButton: NSButton {
 /// for free — the in-field magnifying glass, the clear button, and
 /// Escape-to-clear.
 ///
-/// State discipline (mirrors ``RunDetailsToolbarToggle``): `makeNSView` /
+/// State discipline (the NSViewRepresentable state-write rule): `makeNSView` /
 /// `updateNSView` never write SwiftUI state. The query write happens in the
 /// delegate callbacks (user edits only). The expansion write happens in the
 /// button's action (a user event), and the empty-editing-end write happens in
@@ -2540,8 +2573,8 @@ struct QueueSearchToolbarControl: NSViewRepresentable {
     final class Coordinator: NSObject, NSSearchFieldDelegate {
         /// The `NSToolbarItem` label for this control — what the
         /// customization palette shows. SwiftUI derives "" for representable
-        /// items, so the coordinator asserts this (same pattern as
-        /// ``RunDetailsToolbarToggle``).
+        /// items (it only lifts titles from SwiftUI-side control text), so
+        /// the coordinator asserts this label itself.
         static let itemLabel = "Search"
 
         private let text: Binding<String>

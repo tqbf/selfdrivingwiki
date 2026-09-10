@@ -12,10 +12,10 @@ import SwiftUI
 /// pending permissions render here, above the parent's content selector.
 struct QueueJobHeaderPresentation {
     /// Recognizable job title with the operation made explicit as a prefix —
-    /// "Ingestion: <Job Details>", "Extraction: <Job Details>", "Lint: <Job
-    /// Details>" (composed via `QueueWorkspaceMapper.headerTitle` over the
-    /// first target name, "Lint 3 pages", or "Whole wiki"; this layer only
-    /// renders).
+    /// "Ingestion: 12 sources", "Extraction: 1 source", "Lint: 3 pages",
+    /// whole-wiki "Lint: <wiki>" (composed via `QueueWorkspaceMapper.headerTitle`
+    /// over the count-only job phrase; no target names and no raw IDs —
+    /// operator request. This layer only renders).
     let title: String
     /// Operation word: "Ingest" / "Extract" / "Lint".
     let operationLabel: String

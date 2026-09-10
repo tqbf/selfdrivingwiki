@@ -10,7 +10,8 @@ import Foundation
 /// logic is fully testable in isolation.
 ///
 /// Covers: `tokenSummary`, `summary` (backward-compat), `fullSummary`,
-/// `runDetailsSummary` (+ its `groupedCount` / `preciseCost` pieces),
+/// the Run Details pieces `groupedCount` / `preciseCost` (the per-field
+/// usage rows themselves are pinned by `QueueRunDetailsFacts` tests),
 /// `duration`, `startTime`, `cost`, `tokens`.
 @Suite struct UsageFormatterTests {
 
@@ -194,54 +195,6 @@ import Foundation
 
     @Test func preciseCostKeepsNonUSDSuffix() {
         #expect(UsageFormatter.preciseCost(2.00, currency: "EUR") == "2.00 EUR")
-    }
-
-    // MARK: - runDetailsSummary(usage:) — Run Details breakdown
-
-    @Test func runDetailsSummaryMatchesApprovedExampleShape() {
-        // The approved line: "In 8,120 · Out 4,225 tokens · $0.0421".
-        // Grouping interpolates through `groupedCount` so the pin is exact
-        // yet locale-safe.
-        let usage = SessionUsage(
-            inputTokens: 8_120, outputTokens: 4_225, totalTokens: 12_345,
-            cachedReadTokens: nil, thoughtTokens: nil,
-            cost: 0.0421, currency: "USD", contextUsed: 0, contextSize: 0)
-        let result = UsageFormatter.runDetailsSummary(usage: usage)
-        #expect(result == "In \(UsageFormatter.groupedCount(8_120)) · Out \(UsageFormatter.groupedCount(4_225)) tokens · $0.0421")
-    }
-
-    @Test func runDetailsSummaryAppendsCachedAndThoughtWhenPresent() {
-        let usage = SessionUsage(
-            inputTokens: 8_120, outputTokens: 4_225, totalTokens: 12_345,
-            cachedReadTokens: 1_024, thoughtTokens: 412,
-            cost: 0.0421, currency: "USD", contextUsed: 0, contextSize: 0)
-        let result = UsageFormatter.runDetailsSummary(usage: usage)
-        #expect(result == "In \(UsageFormatter.groupedCount(8_120)) · Out \(UsageFormatter.groupedCount(4_225)) tokens · \(UsageFormatter.groupedCount(1_024)) cached · \(UsageFormatter.groupedCount(412)) thought · $0.0421")
-    }
-
-    @Test func runDetailsSummaryOmitsZeroAndAbsentClauses() {
-        // Zero/absent input and output omit their clause — never a fake zero.
-        let costOnly = SessionUsage(
-            inputTokens: 0, outputTokens: 0, totalTokens: 0,
-            cachedReadTokens: nil, thoughtTokens: 0,
-            cost: 0.0421, currency: "USD", contextUsed: 0, contextSize: 0)
-        #expect(UsageFormatter.runDetailsSummary(usage: costOnly) == "$0.0421")
-
-        let inputOnly = SessionUsage(
-            inputTokens: 8_120, outputTokens: 0, totalTokens: 8_120,
-            cachedReadTokens: nil, thoughtTokens: nil,
-            cost: nil, currency: nil, contextUsed: 0, contextSize: 0)
-        #expect(UsageFormatter.runDetailsSummary(usage: inputOnly)
-            == "In \(UsageFormatter.groupedCount(8_120))")
-    }
-
-    @Test func runDetailsSummaryEmptyWhenNothingReportable() {
-        // Nothing reportable → "" so the caller omits the usage row entirely.
-        let empty = SessionUsage(
-            inputTokens: 0, outputTokens: 0, totalTokens: 0,
-            cachedReadTokens: nil, thoughtTokens: nil,
-            cost: nil, currency: nil, contextUsed: 0, contextSize: 0)
-        #expect(UsageFormatter.runDetailsSummary(usage: empty) == "")
     }
 
     // MARK: - fullSummary(usage:startedAt:finishedAt:)

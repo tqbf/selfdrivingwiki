@@ -221,6 +221,43 @@ public enum QueueReportScope: Hashable, Codable, Sendable {
     case wholeWiki
 }
 
+// MARK: - Durable usage
+
+/// Final usage totals for one attempt, committed into the report header by
+/// the agent-completion mutation. These are the same values the navigator
+/// showed live (`AgentLauncher.runTotalUsage`) — persisted so Run Details
+/// keeps them after completion/reload instead of depending on the tracker's
+/// in-memory session snapshots.
+///
+/// Field rules mirror `SessionUsage`'s own optionality: the mandatory token
+/// counters are always stored; the optional counters ride along when the
+/// provider reported them. Reports written before usage was durable have all
+/// NULL columns and decode `usage == nil` — absence is absence, never zeros.
+public struct QueueReportUsage: Hashable, Codable, Sendable {
+    public let inputTokens: Int
+    public let outputTokens: Int
+    public let cachedReadTokens: Int?
+    public let thoughtTokens: Int?
+    public let cost: Double?
+    public let currency: String?
+
+    public init(
+        inputTokens: Int,
+        outputTokens: Int,
+        cachedReadTokens: Int?,
+        thoughtTokens: Int?,
+        cost: Double?,
+        currency: String?
+    ) {
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+        self.cachedReadTokens = cachedReadTokens
+        self.thoughtTokens = thoughtTokens
+        self.cost = cost
+        self.currency = currency
+    }
+}
+
 // MARK: - Mutations
 
 /// One producer-originated report change. The store validates the attempt and
@@ -234,6 +271,10 @@ public struct QueueReportMutation: Sendable, Hashable {
     public var model: QueueReportModelName?
     public var availability: QueueReportAvailability?
     public var resultSummary: String?
+    /// Final usage totals, set by the terminal completion mutation when the
+    /// launcher's run-total usage is available. Absent in every other
+    /// mutation — those never clobber committed usage.
+    public var usage: QueueReportUsage?
     /// Affected target rows only — never a whole-batch document.
     public var targetUpserts: [QueueReportTargetRecord]
 
@@ -243,6 +284,7 @@ public struct QueueReportMutation: Sendable, Hashable {
         model: QueueReportModelName? = nil,
         availability: QueueReportAvailability? = nil,
         resultSummary: String? = nil,
+        usage: QueueReportUsage? = nil,
         targetUpserts: [QueueReportTargetRecord] = []
     ) {
         self.phase = phase
@@ -250,6 +292,7 @@ public struct QueueReportMutation: Sendable, Hashable {
         self.model = model
         self.availability = availability
         self.resultSummary = resultSummary
+        self.usage = usage
         self.targetUpserts = targetUpserts
     }
 }
@@ -270,6 +313,10 @@ public struct QueueAttemptReport: Hashable, Codable, Sendable {
     public let model: QueueReportModelName?
     public let availability: QueueReportAvailability
     public let resultSummary: String?
+    /// Final usage committed at agent completion, or `nil` for reports
+    /// written before usage was durable (NULL columns — never zeros) and for
+    /// attempts that never reached the completion mutation.
+    public let usage: QueueReportUsage?
     /// Ordered by stable inventory sequence.
     public let targets: [QueueReportTargetRecord]
 
@@ -284,6 +331,7 @@ public struct QueueAttemptReport: Hashable, Codable, Sendable {
         model: QueueReportModelName?,
         availability: QueueReportAvailability,
         resultSummary: String?,
+        usage: QueueReportUsage? = nil,
         targets: [QueueReportTargetRecord]
     ) {
         self.attemptID = attemptID
@@ -296,6 +344,7 @@ public struct QueueAttemptReport: Hashable, Codable, Sendable {
         self.model = model
         self.availability = availability
         self.resultSummary = resultSummary
+        self.usage = usage
         self.targets = targets
     }
 

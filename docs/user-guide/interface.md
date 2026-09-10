@@ -151,6 +151,8 @@ even when no window is open. This lets you monitor agent work in the background.
 
 When you queue an operation, a brief hint popover appears: *"Ingest queued."*
 
-Queue windows keep showing page and source names even when the wiki's window
-is closed. Links in those rows work too: clicking a name opens the wiki and
-goes to that page or source.
+Job titles and navigator rows show only the operation and the target count —
+"Ingest 12 sources" or "Lint 3 pages" — never a target name or a raw page ID.
+The Overview's target rows still show page and source names, even when the
+wiki's window is closed. Links in those rows work too: clicking a name opens
+the wiki and goes to that page or source.

@@ -15,8 +15,8 @@ Covers issues #1219, #1220, and #1221.
 
 ## Design changes
 
-The review rounds and later operator decisions changed eight presentation
-decisions. The sections below
+The review rounds and later operator decisions changed the presentation
+decisions below. The sections below
 keep their original structure. Where a sentence contradicts this section,
 this section is current.
 
@@ -42,15 +42,23 @@ this section is current.
    "Reveal Source", or "Browse Pages" for a whole-wiki scope. The full
    recorded name stays available as the row tooltip and in the local
    inventory search. Affected section: "Target inventory (Overview)".
-4. **Unobserved targets render as "Planned" (2026-09-08).** Target rows no
-   longer show a "Not Reported" status. A row without recorded evidence
-   shows "Planned", the same vocabulary as a not-yet-run job. Planned is
-   not a result and never reads as a zero or an empty success. Absence
-   stays explicit where it matters: the Run Details inspector keeps its
-   "Not Reported" placeholders for provider and model, and the section
-   result line keeps sentences such as "Agent run completed; page-level
-   results not reported". Affected sections: "Target inventory
-   (Overview)", "Report truth rules".
+4. **Unobserved targets render as "Planned" (2026-09-08; rendering superseded
+   2026-09-09).** Target rows no longer show a "Not Reported" status. This
+   change originally rendered a row without recorded evidence as "Planned",
+   the same vocabulary as a not-yet-run job. The later operator decision of
+   2026-09-09 supersedes that rendering: because "Planned" is the default
+   state, labeling an evidence-less row with it communicates nothing, so
+   those rows now render NAME-ONLY — no status circle, no "Planned" text
+   (the typed signal is `QueueTargetRowValue.status == nil`; see the
+   2026-09-10 progress note "Planned inventory rows render name-only").
+   "Planned" stays in the target-state vocabulary below; it is just never
+   the rendered chip for an evidence-less row. The superseded change's
+   other rules stand: Planned is not a result and never reads as a zero or
+   an empty success, and absence stays explicit where it matters — the Run
+   Details inspector keeps its "Not Reported" placeholders for provider and
+   model, and the section result line keeps sentences such as "Agent run
+   completed; page-level results not reported". Affected sections: "Target
+   inventory (Overview)", "Report truth rules".
 5. **Overview shows Inputs and Outputs (2026-09-09).** An ingestion job's
    Overview renders two sections: "Inputs" (the payload sources — the
    former single inventory) and "Outputs" (pages whose recorded
@@ -114,8 +122,9 @@ this section is current.
    an OPEN wiki, an action additionally requires LIVE store membership —
    a target deleted after enqueue keeps its recorded title but gets no
    dead-end action; on a CLOSED wiki the click-through stays, because the
-   stash+open route resolves at click time. Titles always come from the
-   effective index in both cases. The load refresh keys on the displayed
+   stash+open route resolves at click time. Target NAMES still come from
+   the effective index in both cases — they feed the inventory rows, the
+   navigator tooltip, and search (titles are count-only, design change 9). The load refresh keys on the displayed
    jobs' target composition AND the open-wiki set (a window closing
    re-triggers it); items arriving mid-load are parked on the in-flight
    wiki and re-planned once after the load; IDs a completed load proved
@@ -123,6 +132,63 @@ this section is current.
    database; and a cancelled load is retryable, never an "unavailable"
    wiki. Affected sections: "Target inventory (Overview)", "History and
    search scope".
+9. **Count-only titles (2026-09-09, operator request).** Target names left
+    the job header title and the navigator row titles entirely: both now
+    carry the operation and the target count only — "Ingest 12 sources" /
+    "1 source", "Lint 3 pages", whole-wiki "Lint <wiki>" — because a closed
+    wiki could surface a raw target ID where a name was expected. The
+    header title prefixes the operation word over the count: "Ingestion:
+    12 sources", "Extraction: 1 source", "Lint: 3 pages", whole-wiki
+    "Lint: <wiki>". No raw ID can reach a rendered title. Names stay
+    everywhere else: the Overview inventory rows keep their names and
+    click-through (design change 8), navigator rows keep the names tooltip,
+    and search still matches target names. Affected sections: "Job
+    navigator (left)", "Selected job workspace (right)".
+10. **No result-statement line for not-reported reports (2026-09-10,
+    operator request).** The Overview's result statement resolves only for
+    `.available` reports (the producer's recorded summary) and
+    `.reportingUnavailable` (the honest failure). A `.notReported` report
+    renders NO statement line: the producer sentences ("Agent run
+    completed; per-source ingestion outcomes are not reported", and the
+    lint variant) only restate what the inventory rows already show state
+    by state, so the line communicated nothing and read as a result. This
+    supersedes design change 4's sentence keeping those sentences in the
+    section result line; the engine-side producer summaries in
+    `QueueIngestionReporting` stay — they remain durable report data. Only
+    the Overview rendering changes. Affected section: "Target inventory
+    (Overview)".
+11. **Durable usage in the report header (2026-09-10, operator request).**
+    The agent-completion mutation commits the launcher's accumulated
+    run-total usage — the same values the navigator shows live — into the
+    report header (`queue_attempt_reports` gains nullable `input_tokens`,
+    `output_tokens`, `cached_read_tokens`, `thought_tokens`, `cost`, and
+    `currency` columns; additive migration v8). Run Details reads the
+    report header's usage FIRST; the tracker's recorded-or-live snapshot
+    stays the mid-run fallback (a running item still prefers live), so
+    token counts no longer vanish from Run Details after completion or
+    reload. Legacy reports with NULL usage columns render no usage rows —
+    never fake zeros. A failed or cancelled run intentionally keeps its
+    usage on the v4 activity-record path (the report header usage stays
+    NULL); the completion mutation commits usage only for runs that pass
+    outcome validation. Affected section: "Run details".
+12. **Run Details toggle icon parity (2026-09-10, operator request).** The
+    toolbar toggle is a plain SwiftUI toolbar `Button` mirroring the main
+    window's inspector toggle exactly: the `sidebar.right` system image,
+    a `.help` tooltip that flips with state, no visible title, and the
+    "Run Details" accessibility label. This replaces the
+    `RunDetailsToolbarToggle` NSViewRepresentable; the palette-label loss
+    (no SwiftUI title to lift into the `NSToolbarItem` label) is accepted
+    and documented like the search item. Affected section: "Selected job
+    workspace".
+13. **Navigator job-ID chips (2026-09-10, operator request).** Every
+    navigator row shows the job's OWN queue item id as a small chip: the
+    full raw ULID in caption2 monospaced secondary on its own line below
+    the subtitle, text-selectable where supported, with a "Copy Job ID"
+    context-menu action that writes the ULID to the pasteboard. The chip is
+    the QUEUE ITEM id only — target SourceID/PageID values stay hidden
+    everywhere (rows carry operation + count titles and target NAMES only,
+    per design changes 3 and 9). Both queue windows share the navigator, so
+    the chip appears in both. Affected section: "Job navigator (left)".
 
 ## Goal
 
@@ -145,19 +211,19 @@ This is a layout contract, not pixel-perfect artwork.
 │ Native title bar   Agent Queue       Search Jobs       Pause Queue   …    │
 │                    1 running · 4 queued                                  │
 ├─────────────────────────┬─────────────────────────────────────────────────┤
-│ All Jobs  [Filter ▾]    │ Ingest 12 sources                      Cancel   │
+│ All Jobs  [Filter ▾]    │ Ingestion: 12 sources                 Cancel   │
 │                         │ Research Wiki · Running · 2m 14s               │
 │ ACTIVE                  │ Staging sources: 8 of 12                       │
 │ ◉ Research papers       │ ━━━━━━━━━━━━━────────                          │
-│   Ingest · Research     │ [Overview | Activity]                          │
+│   Ingest 12 sources     │ [Overview | Activity]                          │
 │   Staging · 8 of 12     ├─────────────────────────────────────────────────┤
 │ ◷ Check selected pages  │ Sources (12)                Find in Sources    │
-│   Lint · Notes          │ Name                         State / Result     │
+│   Lint 3 pages          │ Name                         State / Result     │
 │   Queued                │ Long source title…           Submitted         │
 │                         │ Another source               Skipped           │
 │ RECENT                  │   Source bytes unavailable                      │
 │ ⚠ Research papers       │ … independently scrollable inventory …         │
-│   Ingest · Research     ├─────────────────────────────────────────────────┤
+│   Ingest 1 source       ├─────────────────────────────────────────────────┤
 │   Failed                │ Run Details ▸   Actual provider when reported  │
 └─────────────────────────┴─────────────────────────────────────────────────┘
 ```
@@ -170,8 +236,10 @@ repeated badges, custom traffic lights, and permanently visible raw metadata.
 
 - The navigator keeps the Active and Recent sections and the current engine
   order.
-- Each row shows a type or source title, the wiki and operation, and one state
-  or progress line with a status symbol. Rows drop duplicated elapsed and token
+- Each row shows the operation and target count only — "Ingest 12 sources",
+  "1 source", "Lint 3 pages", whole-wiki "Lint <wiki>" — never a target name
+  or raw ID (design change 9), plus the wiki and one state or progress line
+  with a status symbol. Rows drop duplicated elapsed and token
   lines and always-visible cancel glyphs.
 - The job search lives in the window toolbar, LEFT of the Queue Actions menu
   (design change 6): an expanded native search field at split-view widths of
@@ -184,7 +252,10 @@ repeated badges, custom traffic lights, and permanently visible raw metadata.
 
 ### Selected job workspace (right)
 
-The header shows the job title, the operation, the wiki, the lifecycle state,
+The header shows the job title — the operation word prefixed over the
+count-only job phrase, e.g. "Ingestion: 12 sources", "Extraction: 1 source",
+"Lint: 3 pages", whole-wiki "Lint: <wiki>" (design change 9; never a target
+name or raw ID) — the wiki, the lifecycle state,
 the current recorded phase, and one elapsed clock. The header carries Cancel
 for queued or running jobs and Retry Job for failed or cancelled jobs.
 
@@ -233,15 +304,24 @@ touches no selection, filter, or queue state. It uses labeled values:
 
 | Value | Note |
 | --- | --- |
+| Job ID | The job's queue item id (raw ULID) — the panel's FIRST row, rendered monospaced and text-selectable so the operator can copy it and correlate logs and CLI output with the panel. The caller always maps it from the item id; only synthetic facts without one omit the row |
 | Enqueue, start, and finish time | One label per time |
 | Duration | One elapsed clock in the header, history here |
 | Attempt | The current attempt number |
-| Actual provider and model | Shown only when reported |
-| Usage and cost | Shown when reported |
+| Actual provider and model | Shown only when reported. While a run is in flight the report header is still unwritten, so the recorded-or-live usage snapshot stands in: its provider label and model name (the human-readable name when the backend advertised one, else the raw model id) — the live session's own labels, never invented. Report header values win again once completion writes them |
+| Usage and cost | One labeled row per present field, in this order: Input, Output, Cached, Thought, Cost. Zero or absent fields are omitted — never a fake zero — and a snapshot with nothing reportable produces no usage rows. Token values are locale-grouped exact counts (never the compact "8.1K" vocabulary) so the panel reconciles against provider usage dashboards; cost keeps sub-cent precision |
 
 The view omits unavailable optional values. Where absence matters, it shows
 Not Reported. The capacity bucket `default-ingest` never appears as the actual
 provider.
+
+The usage snapshot is state-aware recorded-or-live: queued and terminal jobs
+show the final recorded totals from the completion `.usage` event. A running
+job prefers the live session's snapshot — after Retry Job the item keeps its
+id while the previous attempt's recorded totals survive the restart, and
+showing them next to a running clock would misrepresent the run; before the
+first live update arrives, the recorded snapshot stands in rather than the
+panel showing nothing.
 
 ### Window behavior
 

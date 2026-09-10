@@ -1529,38 +1529,6 @@ enum UsageFormatter {
         return symbol + pieces[0] + (decimals.isEmpty ? "" : "." + decimals) + suffix
     }
 
-    /// The Run Details usage line with the input/output split the operator
-    /// asked for:
-    ///
-    ///     "In 8,120 · Out 4,225 tokens · $0.0421"
-    ///
-    /// Cached-read and thought clauses append (in that order, before the
-    /// cost) only when the snapshot carries them. Zero or absent input/output
-    /// omit their clause — never a fake zero. A snapshot with only cost keeps
-    /// the single-clause shape; a snapshot with nothing reportable returns ""
-    /// so the caller omits the row entirely. The Activity window keeps
-    /// `fullSummary`; both draw from this shared formatter so the two
-    /// surfaces stay consistent.
-    static func runDetailsSummary(usage: SessionUsage) -> String {
-        var parts: [String] = []
-        if usage.inputTokens > 0 {
-            parts.append("In \(groupedCount(usage.inputTokens))")
-        }
-        if usage.outputTokens > 0 {
-            parts.append("Out \(groupedCount(usage.outputTokens)) tokens")
-        }
-        if let cached = usage.cachedReadTokens, cached > 0 {
-            parts.append("\(groupedCount(cached)) cached")
-        }
-        if let thought = usage.thoughtTokens, thought > 0 {
-            parts.append("\(groupedCount(thought)) thought")
-        }
-        if let cost = preciseCost(usage.cost, currency: usage.currency) {
-            parts.append(cost)
-        }
-        return parts.joined(separator: " · ")
-    }
-
     /// The full per-run summary line for the Activity window. Combines run
     /// metadata (provider, model, start time, duration) with token usage:
     ///

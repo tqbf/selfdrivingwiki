@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import WikiFSCore
+import WikiFSEngine
 
 // MARK: - Status
 
@@ -9,9 +10,12 @@ import WikiFSCore
 /// a symbol"), and a *semantic* style the views map to `foregroundStyle` so
 /// light/dark and Increase Contrast adapt without per-view colors.
 ///
-/// Pure value — no SwiftUI imports, no backend reporting types. Callers map
+/// Pure value — no SwiftUI imports, no backend enums inspected. Callers map
 /// `QueueItem.State` and §2 report target states onto the factories below; the
-/// workspace never inspects backend enums.
+/// workspace never inspects backend enums. (File-wide caveat: the value layer
+/// does carry one backend-reported payload as opaque data — the `SessionUsage`
+/// field on `QueueRunDetailsFacts`, formatted into rows by `entries` and never
+/// interpreted here.)
 struct QueueWorkspaceStatus: Equatable, Sendable {
     /// Semantic color role. Views resolve it once; tests assert the role, not
     /// a resolved `Color`.
@@ -285,8 +289,14 @@ struct QueueTargetRowValue: Identifiable {
     /// not collapsible): it feeds local inventory matching and the name
     /// link's tooltip.
     let fullName: String?
-    /// State/result text + symbol + style.
-    let status: QueueWorkspaceStatus
+    /// State/result text + symbol + style, or `nil` for an EVIDENCE-LESS
+    /// target: "Planned" is the default state (operator decision, 2026-09-09),
+    /// so a row with no recorded evidence renders name-only — no status
+    /// circle, no "Planned" text. A row carrying a real recorded state
+    /// (Submitted, Processing, Succeeded, Skipped, Failed, Interrupted,
+    /// Preparing — or a whole-wiki scope row's live lifecycle) always carries
+    /// a status here, and the row renders its chip.
+    let status: QueueWorkspaceStatus?
     /// Skip/failure reason or an availability explanation ("Source bytes
     /// unavailable"). Search-only today (the row itself is not collapsible).
     let reason: String?
@@ -301,7 +311,7 @@ struct QueueTargetRowValue: Identifiable {
         identity: QueueWorkspaceTargetIdentity?,
         title: String,
         fullName: String? = nil,
-        status: QueueWorkspaceStatus,
+        status: QueueWorkspaceStatus?,
         reason: String? = nil,
         actions: [QueueWorkspaceAction] = []
     ) {
@@ -320,7 +330,7 @@ struct QueueTargetRowValue: Identifiable {
         identity: QueueWorkspaceTargetIdentity,
         title: String,
         fullName: String? = nil,
-        status: QueueWorkspaceStatus,
+        status: QueueWorkspaceStatus?,
         reason: String? = nil,
         actions: [QueueWorkspaceAction] = []
     ) {
@@ -345,7 +355,7 @@ struct QueueTargetRowValue: Identifiable {
     func matches(query: String) -> Bool {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return true }
-        let haystacks = [title, fullName, reason, status.text].compactMap { $0 }
+        let haystacks = [title, fullName, reason, status?.text].compactMap { $0 }
         return haystacks.contains { $0.localizedStandardContains(trimmed) }
     }
 }
@@ -407,9 +417,12 @@ struct QueueRunDetailsFacts: Sendable {
     var providerText: String?
     /// Actual model when reported (usage). `nil` → "Not Reported" placeholder.
     var modelText: String?
-    /// Preformatted usage/cost lines (e.g. `UsageFormatter` output); each its
-    /// own selectable monospaced-digit row, omitted entirely when empty.
-    var usageLines: [String]
+    /// The job's usage/cost snapshot — the tracker's recorded totals, or
+    /// while a run is in flight the live session's snapshot. `entries` maps
+    /// it to one labeled row per PRESENT field (Input / Output / Cached /
+    /// Thought / Cost); zero or absent fields are omitted — never a fake
+    /// zero — and a snapshot with nothing reportable produces no usage rows.
+    var usage: SessionUsage?
 
     init(
         jobID: String = "",
@@ -420,7 +433,7 @@ struct QueueRunDetailsFacts: Sendable {
         attempt: Int? = nil,
         providerText: String? = nil,
         modelText: String? = nil,
-        usageLines: [String] = []
+        usage: SessionUsage? = nil
     ) {
         self.jobID = jobID
         self.enqueuedAt = enqueuedAt
@@ -430,7 +443,7 @@ struct QueueRunDetailsFacts: Sendable {
         self.attempt = attempt
         self.providerText = providerText
         self.modelText = modelText
-        self.usageLines = usageLines
+        self.usage = usage
     }
 
     /// The inspector's entries, applying the omission rules above. Blank
@@ -473,10 +486,36 @@ struct QueueRunDetailsFacts: Sendable {
         } else {
             result.append(.notReported("Model"))
         }
-        for (index, line) in usageLines.enumerated() where !line.isEmpty {
-            // Label only the first usage line; continuation lines keep the
-            // grid aligned under it.
-            result.append(QueueRunDetailEntry(label: index == 0 ? "Usage" : "", value: line))
+        // Usage maps to one labeled row per PRESENT field, in this order:
+        // Input, Output, Cached, Thought, Cost. Zero or absent fields are
+        // omitted — never a fake zero — and a snapshot with nothing
+        // reportable produces no usage rows at all. Token values are
+        // locale-grouped exact counts (`groupedCount`, never the compact
+        // "8.1K" vocabulary) so the operator can reconcile the panel against
+        // provider usage dashboards; cost goes through `preciseCost` so
+        // sub-cent precision survives. Rows keep the default rendering
+        // (monospacedDigit + text selection) — only the Job ID is fully
+        // monospaced.
+        if let usage {
+            if usage.inputTokens > 0 {
+                result.append(QueueRunDetailEntry(
+                    label: "Input", value: UsageFormatter.groupedCount(usage.inputTokens)))
+            }
+            if usage.outputTokens > 0 {
+                result.append(QueueRunDetailEntry(
+                    label: "Output", value: UsageFormatter.groupedCount(usage.outputTokens)))
+            }
+            if let cached = usage.cachedReadTokens, cached > 0 {
+                result.append(QueueRunDetailEntry(
+                    label: "Cached", value: UsageFormatter.groupedCount(cached)))
+            }
+            if let thought = usage.thoughtTokens, thought > 0 {
+                result.append(QueueRunDetailEntry(
+                    label: "Thought", value: UsageFormatter.groupedCount(thought)))
+            }
+            if let cost = UsageFormatter.preciseCost(usage.cost, currency: usage.currency) {
+                result.append(QueueRunDetailEntry(label: "Cost", value: cost))
+            }
         }
         return result
     }

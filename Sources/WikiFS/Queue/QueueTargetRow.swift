@@ -5,8 +5,12 @@ import SwiftUI
 /// so both queue windows present targets identically (plan §1 "Overview
 /// inventory").
 ///
-/// The row is NOT collapsible: it shows the target name and its state/result,
-/// nothing else. Typed identity (SourceID/PageID) is never rendered — the
+/// The row is NOT collapsible: it shows the target name and — when the
+/// target carries a real recorded state — its state/result chip, nothing
+/// else. Evidence-less rows (`QueueTargetRowValue.status == nil`,
+/// operator decision 2026-09-09) render name-only: "Planned" is the
+/// default state, so it gets no circle and no text. Typed identity
+/// (SourceID/PageID) is never rendered — the
 /// name is the surface. When the target carries a live navigation action, the
 /// The NAME ITSELF is the link (native `.link` button style) performing it —
 /// "Open Page" for pages, "Reveal Source" for sources, "Browse Pages" for
@@ -97,11 +101,18 @@ struct QueueTargetRow: View {
     }
 
     /// State/Result cell: symbol + text in the status's semantic style.
+    /// Evidence-less rows (`status == nil`, operator decision 2026-09-09:
+    /// "Planned" is the default state, so labeling it communicates nothing)
+    /// render NO status region at all — the row is name-only, and no empty
+    /// status element ever reaches the accessibility tree.
+    @ViewBuilder
     private var statusColumn: some View {
-        Label(value.status.text, systemImage: value.status.symbol)
-            .font(.callout)
-            .foregroundStyle(color(for: value.status.style))
-            .accessibilityLabel("\(value.title): \(value.status.text)")
+        if let status = value.status {
+            Label(status.text, systemImage: status.symbol)
+                .font(.callout)
+                .foregroundStyle(color(for: status.style))
+                .accessibilityLabel("\(value.title): \(status.text)")
+        }
     }
 
     /// Semantic style → foreground style, resolved in exactly one place.

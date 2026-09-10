@@ -1,5 +1,11 @@
 import Foundation
 import Testing
+#if canImport(CSQLite)
+import CSQLite
+#else
+import SQLite3
+#endif
+import WikiFSEngine
 @testable import WikiFSCore
 
 /// Durable attempt-report store behavior (plan §2): additive v7 migration,
@@ -64,6 +70,178 @@ struct QueueReportStoreTests {
         #expect(loaded.revision == QueueReportRevision(rawValue: 1))
         #expect(loaded.targets.count == 2)
         #expect(loaded.operation == .ingest)
+    }
+
+    // MARK: Durable usage (v8)
+
+    /// Run raw SQL on a closed DB file, bypassing the store — stages states
+    /// the store's own API cannot produce (the FTS5DesyncMigrationTests
+    /// bypass).
+    private func executeRaw(_ sql: String, at url: URL) throws {
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        defer { sqlite3_close(db) }
+        var message: UnsafeMutablePointer<CChar>?
+        let rc = sqlite3_exec(db, sql, nil, nil, &message)
+        let detail = message.map { String(cString: $0) } ?? ""
+        if message != nil { sqlite3_free(message) }
+        #expect(rc == SQLITE_OK, "raw SQL failed (\(rc)): \(detail)")
+    }
+
+    /// Single-cell raw read (the FTS5DesyncMigrationTests bypass).
+    private func scalar(_ sql: String, at url: URL) -> String? {
+        var db: OpaquePointer?
+        guard sqlite3_open(url.path, &db) == SQLITE_OK else { return nil }
+        defer { sqlite3_close(db) }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_step(stmt) == SQLITE_ROW, let text = sqlite3_column_text(stmt, 0) else { return nil }
+        return String(cString: text)
+    }
+
+    /// The usage columns the v8 migration adds.
+    private static let usageColumnNames = [
+        "input_tokens", "output_tokens", "cached_read_tokens",
+        "thought_tokens", "cost", "currency",
+    ]
+
+    @Test("Pre-usage report DB migrates on reopen; legacy report decodes nil usage; completion commits durable usage")
+    func preUsageReportDatabaseMigratesAndCommitsUsage() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("queue-report-preusage-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("queue.sqlite")
+
+        let execution = QueueExecutionID(rawValue: UUID())
+        let item = try {
+            let store = try QueueStore(databaseURL: url)
+            defer { store.close() }
+            let item = try makeItem(store)
+            _ = try store.beginReport(
+                attemptID: QueueAttemptID(itemID: item.id, attempt: 0),
+                executionID: execution,
+                operation: .ingest,
+                scope: scope([SourceID(rawValue: "s1")]))
+            return item
+        }()
+
+        // Rewind the report header to its PRE-USAGE (v7) shape: rebuild the
+        // table without the six usage columns and un-track the v8 migration,
+        // so the reopen below replays the genuine pre-usage upgrade path.
+        try executeRaw("""
+        ALTER TABLE queue_attempt_reports RENAME TO queue_attempt_reports_pre_v8;
+        CREATE TABLE queue_attempt_reports (
+            item_id        TEXT NOT NULL REFERENCES queue_items(id) ON DELETE CASCADE,
+            attempt        INTEGER NOT NULL,
+            execution_id   TEXT NOT NULL,
+            operation      TEXT NOT NULL,
+            scope          TEXT NOT NULL,
+            phase          TEXT NOT NULL,
+            provider_id    TEXT,
+            model          TEXT,
+            availability   TEXT NOT NULL,
+            result_summary TEXT,
+            revision       INTEGER NOT NULL,
+            updated_at     INTEGER NOT NULL,
+            PRIMARY KEY (item_id, attempt)
+        ) WITHOUT ROWID;
+        INSERT INTO queue_attempt_reports (
+            item_id, attempt, execution_id, operation, scope, phase,
+            provider_id, model, availability, result_summary, revision, updated_at
+        )
+            SELECT item_id, attempt, execution_id, operation, scope, phase,
+                   provider_id, model, availability, result_summary, revision, updated_at
+            FROM queue_attempt_reports_pre_v8;
+        DROP TABLE queue_attempt_reports_pre_v8;
+        DELETE FROM grdb_migrations WHERE identifier = 'v8_add_attempt_report_usage';
+        """, at: url)
+        for column in Self.usageColumnNames {
+            #expect(scalar(
+                """
+                SELECT COUNT(*) FROM pragma_table_info('queue_attempt_reports')
+                WHERE name = '\(column)'
+                """, at: url) == "0",
+                "pre-usage DB must lack \(column)")
+        }
+
+        // Reopen: v8 runs, the columns are added, and the legacy report —
+        // whose usage columns are NULL — decodes `usage == nil` (never
+        // zeros).
+        let reopened = try QueueStore(databaseURL: url)
+        let legacy = try reopened.loadReport(itemID: item.id)
+        #expect(legacy?.usage == nil)
+        #expect(legacy?.targets.isEmpty == false)
+
+        // The completion mutation commits the launcher's run-total usage.
+        let usage = SessionUsage(
+            inputTokens: 4_178, outputTokens: 537, totalTokens: 4_715,
+            cachedReadTokens: 133_376, cachedWriteTokens: nil,
+            thoughtTokens: 395, cost: 0.0421, currency: "USD",
+            contextUsed: 0, contextSize: 0, modelId: "claude-sonnet-4-5")
+        _ = try reopened.commitReportMutation(
+            attemptID: QueueAttemptID(itemID: item.id, attempt: 0),
+            executionID: execution,
+            mutation: QueueIngestionReporting.agentCompletionMutation(
+                operation: .ingest, usage: usage))
+        let expected = QueueReportUsage(
+            inputTokens: 4_178, outputTokens: 537,
+            cachedReadTokens: 133_376, thoughtTokens: 395,
+            cost: 0.0421, currency: "USD")
+        #expect(try reopened.loadReport(itemID: item.id)?.usage == expected)
+        reopened.close()
+
+        // Reopen again: the committed usage is DURABLE — the fix for token
+        // counts vanishing from Run Details after completion/reload.
+        let final = try QueueStore(databaseURL: url)
+        defer { final.close() }
+        #expect(try final.loadReport(itemID: item.id)?.usage == expected)
+    }
+
+    @Test("Usage survives non-usage mutations; a new execution resets it")
+    func usageCommitSemantics() throws {
+        let store = try makeStore()
+        defer { store.close() }
+        let item = try makeItem(store)
+        let attemptID = QueueAttemptID(itemID: item.id, attempt: 0)
+        let execution = QueueExecutionID(rawValue: UUID())
+        _ = try store.beginReport(
+            attemptID: attemptID,
+            executionID: execution,
+            operation: .ingest,
+            scope: scope(item.payload.sourceIDs))
+
+        let usage = QueueReportUsage(
+            inputTokens: 10, outputTokens: 20,
+            cachedReadTokens: nil, thoughtTokens: 5,
+            cost: 0.001, currency: "USD")
+        _ = try store.commitReportMutation(
+            attemptID: attemptID,
+            executionID: execution,
+            mutation: QueueReportMutation(usage: usage))
+        #expect(try store.loadReport(itemID: item.id)?.usage == usage)
+
+        // A non-usage mutation (mid-run phase + target upsert) must NOT
+        // clobber the committed usage — the COALESCE write preserves it.
+        _ = try store.commitReportMutation(
+            attemptID: attemptID,
+            executionID: execution,
+            mutation: QueueReportMutation(
+                phase: .running,
+                targetUpserts: [QueueReportTargetRecord(
+                    target: .source(SourceID(rawValue: "src-1")),
+                    state: .submitted)]))
+        #expect(try store.loadReport(itemID: item.id)?.usage == usage)
+
+        // A new execution on the SAME attempt resets the header: the dead
+        // dispatch's usage goes NULL with the rest of its progress.
+        let secondExecution = QueueExecutionID(rawValue: UUID())
+        _ = try store.beginReport(
+            attemptID: attemptID,
+            executionID: secondExecution,
+            operation: .ingest,
+            scope: scope(item.payload.sourceIDs))
+        #expect(try store.loadReport(itemID: item.id)?.usage == nil)
     }
 
     // MARK: Attempt isolation

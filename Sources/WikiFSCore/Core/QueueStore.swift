@@ -332,6 +332,12 @@ public final class QueueStore: @unchecked Sendable {
         // `pruneHistory` and item deletion clean reports without a separate
         // sweep. `retryItem` deliberately does NOT touch these tables —
         // previous attempts' reports are preserved (attempt isolation).
+        //
+        // v8: durable usage columns on `queue_attempt_reports` (nullable
+        // INTEGER input/output/cached-read/thought tokens + REAL cost + TEXT
+        // currency), committed by the agent-completion mutation so Run
+        // Details keeps final totals after completion/reload without the
+        // tracker's session snapshots.
         m.registerMigration("v7_add_attempt_reports") { db in
             try db.execute(sql: """
             CREATE TABLE IF NOT EXISTS queue_attempt_reports (
@@ -370,6 +376,30 @@ public final class QueueStore: @unchecked Sendable {
             CREATE INDEX IF NOT EXISTS idx_queue_attempt_report_targets_order
                 ON queue_attempt_report_targets(item_id, attempt, seq);
             """)
+        }
+
+        // v8: durable usage on the report header. Additive and column-guarded:
+        // GRDB runs each migration body exactly once per tracked database,
+        // but hand-rolled-era databases re-run the whole ladder and a dev
+        // database may carry columns from an intermediate build — the guard
+        // keeps every path a safe no-op instead of "duplicate column".
+        // Legacy reports keep NULL here and decode `usage == nil` (never
+        // zeros).
+        m.registerMigration("v8_add_attempt_report_usage") { db in
+            let usageColumns: [(String, String)] = [
+                ("input_tokens", "INTEGER"),
+                ("output_tokens", "INTEGER"),
+                ("cached_read_tokens", "INTEGER"),
+                ("thought_tokens", "INTEGER"),
+                ("cost", "REAL"),
+                ("currency", "TEXT"),
+            ]
+            let existing = Set(try db.columns(in: "queue_attempt_reports").map(\.name))
+            for (name, type) in usageColumns where !existing.contains(name) {
+                try db.execute(sql: """
+                ALTER TABLE queue_attempt_reports ADD COLUMN \(name) \(type);
+                """)
+            }
         }
 
         return m
@@ -1293,7 +1323,9 @@ extension QueueStore {
 
     private static let reportHeaderColumns = """
         item_id, attempt, execution_id, operation, scope, phase, provider_id,
-        model, availability, result_summary, revision
+        model, availability, result_summary, revision,
+        input_tokens, output_tokens, cached_read_tokens, thought_tokens,
+        cost, currency
         """
 
     private static let reportEncoder = JSONEncoder()
@@ -1394,7 +1426,26 @@ extension QueueStore {
             model: modelRaw.map(QueueReportModelName.init(rawValue:)),
             availability: availability,
             resultSummary: row["result_summary"],
+            usage: Self.readReportUsage(row),
             targets: targets)
+    }
+
+    /// Decode the report header's durable usage. `input_tokens` is the
+    /// anchor: reports written before usage was durable (and attempts that
+    /// never reached the completion mutation) have all six columns NULL and
+    /// decode `nil` — absence stays absence, never zeros. The columns are
+    /// written together by one mutation, so an anchored read is enough; a
+    /// committed-but-zero counter stores 0 and decodes 0 (the presentation
+    /// layer omits zero rows).
+    private static func readReportUsage(_ row: Row) -> QueueReportUsage? {
+        guard let inputTokens: Int = row["input_tokens"] else { return nil }
+        return QueueReportUsage(
+            inputTokens: inputTokens,
+            outputTokens: row["output_tokens"] ?? 0,
+            cachedReadTokens: row["cached_read_tokens"],
+            thoughtTokens: row["thought_tokens"],
+            cost: row["cost"],
+            currency: row["currency"])
     }
 
     /// The item's current attempt, validated against `attemptID`. Shared
@@ -1436,6 +1487,9 @@ extension QueueStore {
             UPDATE queue_attempt_reports
             SET execution_id = ?, phase = ?, availability = ?,
                 result_summary = NULL, provider_id = NULL, model = NULL,
+                input_tokens = NULL, output_tokens = NULL,
+                cached_read_tokens = NULL, thought_tokens = NULL,
+                cost = NULL, currency = NULL,
                 revision = revision + 1, updated_at = ?
             WHERE item_id = ? AND attempt = ?;
             """,
@@ -1680,6 +1734,12 @@ extension QueueStore {
                         model = COALESCE(?, model),
                         availability = COALESCE(?, availability),
                         result_summary = COALESCE(?, result_summary),
+                        input_tokens = COALESCE(?, input_tokens),
+                        output_tokens = COALESCE(?, output_tokens),
+                        cached_read_tokens = COALESCE(?, cached_read_tokens),
+                        thought_tokens = COALESCE(?, thought_tokens),
+                        cost = COALESCE(?, cost),
+                        currency = COALESCE(?, currency),
                         revision = revision + 1,
                         updated_at = ?
                     WHERE item_id = ? AND attempt = ?;
@@ -1690,6 +1750,12 @@ extension QueueStore {
                         mutation.model?.rawValue,
                         mutation.availability?.rawValue,
                         mutation.resultSummary,
+                        mutation.usage?.inputTokens,
+                        mutation.usage?.outputTokens,
+                        mutation.usage?.cachedReadTokens,
+                        mutation.usage?.thoughtTokens,
+                        mutation.usage?.cost,
+                        mutation.usage?.currency,
                         now,
                         attemptID.itemID.rawValue,
                         attemptID.attempt,

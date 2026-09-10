@@ -61,7 +61,7 @@ struct QueueOverviewLayoutHostedTests {
             QueueTargetRowValue(
                 identity: .source(SourceID(rawValue: "layout-source-\(index)")),
                 title: String(format: "Source-%03d.pdf", index),
-                status: .planned())
+                status: nil)
         }
         return QueueJobOverviewPresentation(
             sectionTitle: "Sources",
@@ -137,7 +137,7 @@ struct QueueOverviewLayoutHostedTests {
         let dead = QueueTargetRowValue(
             identity: .page(PageID(rawValue: "dead-page")),
             title: "Deleted Page",
-            status: .planned())
+            status: nil)
 
         let host = NSHostingController(rootView: List {
             QueueTargetRow(value: linked)

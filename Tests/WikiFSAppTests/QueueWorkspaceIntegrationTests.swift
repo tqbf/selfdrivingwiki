@@ -120,11 +120,57 @@ struct QueueWorkspaceIntegrationTests {
     @Test func headerTitleCarriesFullOperationLabel() {
         // Exact standard wording: the full operation label prefixes the job
         // details so the job type reads in the title, not only in secondary
-        // metadata. Ingestion/Lint appear in the Agent Queue; Extraction
-        // appears only in the Extraction Queue.
-        #expect(QueueWorkspaceMapper.headerTitle(operation: .ingest, jobTitle: "Notes.pdf") == "Ingestion: Notes.pdf")
+        // metadata. The job-details phrase is COUNT-ONLY (operator request:
+        // no target names, no raw IDs — a closed wiki used to surface a raw
+        // ID where a name was expected). Ingestion/Lint appear in the Agent
+        // Queue; Extraction appears only in the Extraction Queue.
+        #expect(QueueWorkspaceMapper.headerTitle(operation: .ingest, jobTitle: "12 sources") == "Ingestion: 12 sources")
+        #expect(QueueWorkspaceMapper.headerTitle(operation: .ingest, jobTitle: "1 source") == "Ingestion: 1 source")
         #expect(QueueWorkspaceMapper.headerTitle(operation: .lint, jobTitle: "3 pages") == "Lint: 3 pages")
-        #expect(QueueWorkspaceMapper.headerTitle(operation: .extract, jobTitle: "Paper.pdf") == "Extraction: Paper.pdf")
+        #expect(QueueWorkspaceMapper.headerTitle(operation: .lint, jobTitle: "Research Wiki") == "Lint: Research Wiki")
+        #expect(QueueWorkspaceMapper.headerTitle(operation: .extract, jobTitle: "12 sources") == "Extraction: 12 sources")
+        #expect(QueueWorkspaceMapper.headerTitle(operation: .extract, jobTitle: "1 source") == "Extraction: 1 source")
+    }
+
+    @Test func jobTitlesAreOperationAndCountOnly() {
+        // Row titles and the header's job-details phrase are operation +
+        // count only: no resolved or recorded target names, and never a raw
+        // target ID — even when nothing resolves (legacy closed-wiki
+        // payloads). The whole-wiki lint wording keeps the wiki display name.
+        let rawPageID = PageID(rawValue: "01J9ZQPAGE4T8AWJ3XG8YQ0MEB")
+        let lint = makeItem(id: "l", queue: .ingestion, lintPageIDs: [rawPageID])
+        let lintMany = makeItem(id: "l3", queue: .ingestion, lintPageIDs: [
+            PageID(rawValue: "p1"), PageID(rawValue: "p2"), PageID(rawValue: "p3")])
+        let wholeWiki = makeItem(id: "lw", queue: .ingestion, lintPageIDs: [])
+        let ingest = makeItem(id: "i", queue: .ingestion, sourceIDs: ["a", "b", "c"])
+        let ingestOne = makeItem(id: "i1", queue: .ingestion, sourceIDs: ["a"])
+        let extract = makeItem(id: "x", queue: .extraction, sourceIDs: ["a", "b"])
+
+        #expect(ActivityWindowView.computeRowTitle(for: lint, wikiName: "Wiki") == "Lint 1 page")
+        #expect(ActivityWindowView.computeRowTitle(for: lintMany, wikiName: "Wiki") == "Lint 3 pages")
+        #expect(ActivityWindowView.computeRowTitle(for: wholeWiki, wikiName: "Wiki") == "Lint Wiki")
+        #expect(ActivityWindowView.computeRowTitle(for: ingest, wikiName: "Wiki") == "Ingest 3 sources")
+        #expect(ActivityWindowView.computeRowTitle(for: ingestOne, wikiName: "Wiki") == "1 source")
+        #expect(ActivityWindowView.computeRowTitle(for: extract, wikiName: "Wiki") == "2 sources")
+
+        #expect(ActivityWindowView.headerJobCountPhrase(for: lint, wikiName: "Wiki") == "1 page")
+        #expect(ActivityWindowView.headerJobCountPhrase(for: lintMany, wikiName: "Wiki") == "3 pages")
+        #expect(ActivityWindowView.headerJobCountPhrase(for: wholeWiki, wikiName: "Wiki") == "Wiki")
+        #expect(ActivityWindowView.headerJobCountPhrase(for: ingest, wikiName: "Wiki") == "3 sources")
+        #expect(ActivityWindowView.headerJobCountPhrase(for: ingestOne, wikiName: "Wiki") == "1 source")
+        #expect(ActivityWindowView.headerJobCountPhrase(for: extract, wikiName: "Wiki") == "2 sources")
+
+        // No raw target ID may reach either title.
+        for item in [lint, lintMany, wholeWiki, ingest, ingestOne, extract] {
+            let rowTitle = ActivityWindowView.computeRowTitle(for: item, wikiName: "Wiki")
+            #expect(!rowTitle.contains(rawPageID.rawValue),
+                    "row title must not contain a raw target ID: '\(rowTitle)'")
+            let headerTitle = QueueWorkspaceMapper.headerTitle(
+                operation: QueueWorkspaceMapper.reportOperation(for: item),
+                jobTitle: ActivityWindowView.headerJobCountPhrase(for: item, wikiName: "Wiki"))
+            #expect(!headerTitle.contains(rawPageID.rawValue),
+                    "header title must not contain a raw target ID: '\(headerTitle)'")
+        }
     }
 
     @Test func windowScopeFilteringIsStrict() {
@@ -264,21 +310,23 @@ struct QueueWorkspaceIntegrationTests {
     @Test func targetStatusNeverProjectsInterruptedAsFailedOrSucceeded() {
         // Report truth rule 10: unfinished targets are interrupted.
         let interrupted = QueueWorkspaceMapper.targetStatus(for: .interrupted, result: nil)
-        #expect(interrupted.text == "Interrupted")
-        #expect(interrupted.style != .failure)
+        #expect(interrupted?.text == "Interrupted")
+        #expect(interrupted?.style != .failure)
 
         let failed = QueueWorkspaceMapper.targetStatus(
             for: .failed(reason: "convert failed"), result: nil)
-        #expect(failed.text == "Failed")
-        #expect(failed.style == .failure)
+        #expect(failed?.text == "Failed")
+        #expect(failed?.style == .failure)
 
         let succeeded = QueueWorkspaceMapper.targetStatus(for: .succeeded, result: nil)
-        #expect(succeeded.text == "Succeeded")
+        #expect(succeeded?.text == "Succeeded")
 
-        // Operator decision (2026-09-08): unobserved targets render as
-        // "Planned", never as a zero or an empty success.
-        let notReported = QueueWorkspaceMapper.targetStatus(for: .notReported, result: nil)
-        #expect(notReported.text == "Planned")
+        // Operator decision (2026-09-09): evidence-less targets (.planned,
+        // .notReported) map to NO status — the inventory row renders
+        // name-only, never a zero or an empty success (supersedes the
+        // 2026-09-08 "render as Planned" presentation).
+        #expect(QueueWorkspaceMapper.targetStatus(for: .planned, result: nil) == nil)
+        #expect(QueueWorkspaceMapper.targetStatus(for: .notReported, result: nil) == nil)
     }
 
     @Test func targetReasonPrefersRecordedReasonOverDetail() {
