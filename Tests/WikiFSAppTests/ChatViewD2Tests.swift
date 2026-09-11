@@ -286,22 +286,10 @@ struct ChatViewD2Tests {
         #expect(launcher.events.isEmpty)
     }
 
-    @Test func startNewChat_retargetBackToDraft_preservesTab() throws {
-        let (model, _) = try tempModel()
-        // Start in .chat(id) state (post-morph).
-        let chatID = ChatID(rawValue: "01J" + String(repeating: "F", count: 22))
-        model.openTab(.chat(chatID))
-        let chatTabID = model.tabs[0].id
-        #expect(model.tabs[0].selection == .chat(chatID))
-
-        // Simulate "New Chat": clear launcher state + retarget back to .newChat.
-        model.retargetTab(id: chatTabID, to: .newChat)
-
-        #expect(model.tabs.count == 1)
-        #expect(model.tabs[0].id == chatTabID)  // same tab UUID
-        #expect(model.tabs[0].selection == .newChat)
-        #expect(model.selection == .newChat)
-    }
+    // The D2-era `startNewChat_retargetBackToDraft_preservesTab` test was
+    // removed: retargetTab-to-.newChat non-reuse is pinned in EditorTabTests,
+    // and the legacy rollback revert is pinned in
+    // OrphanChatSeedingTests.rollbackRevertsRetargetedTabToDraftComposer.
 
     // MARK: - Integration: persisted chat renders through ChatDetailView path
 

@@ -16,7 +16,7 @@ This document supersedes three earlier plan docs (`persisted-chat-history.md`,
 | **Phase 0 — AgentBackend port** | `AgentBackend` protocol (`start`/`send`/`resume`/`cancel`) + `ClaudeCLIBackend` (actor) wrapping the spawn/parse/encode behind a per-turn `AsyncStream<AgentEvent>`. The launcher never touches a `Process` or wire format. Behavior-preserving. |
 | **A.1 — WikiRenderContext** | Pure `Sendable` value type capturing the reader's full render precompute (existence/display/loose sets, embedMap, sourceDerivedChain `@vN`, siblingMaps) + the four closures. Memoized on `WikiStoreModel`, invalidated by `WikiEventBus`. Reader refactored onto it (behavior-preserving). |
 | **A.2 — Transcript render context** | `WikiRenderContext` threaded into `AgentTranscriptWebView` (current-per-render provider). `BlobSchemeHandler` registered on the transcript `WKWebView`. Two-tier streaming render: links-only while streaming, full embeds on finalize. |
-| **D2 — Unified ConversationView** | One surface for live (streaming) + persisted (browsed) chat via the source-of-truth rule (`activeChatID == chatID ? launcher.events : store.chatMessages`). Flip gated on final flush commit (no truncation). Draft-state morph (`.ask`/`.edit` → `.chat(id)` on first send). `startNewConversation` retarget-back. `ChatHistoryDetailView` deleted + absorbed. |
+| **D2 — Unified ConversationView** | One surface for live (streaming) + persisted (browsed) chat via the source-of-truth rule (`activeChatID == chatID ? launcher.events : store.chatMessages`). Flip gated on final flush commit (no truncation). **Update (2026-09):** chats are durable from creation — `beginNewChat()` persists the row and opens `.chat(id)` directly; the first-send draft morph and `startNewConversation` retarget-back survive only in the legacy `AgentOperationRunner` path. `ChatHistoryDetailView` deleted + absorbed. |
 | **D3 — Continue a persisted conversation** | Seeded-fallback: takeover rules (idle take / between-turns stopAgent+flush-then-take / mid-gen refuse), byte-capped `continuationPreamble`, same-row append (seq continues, title preserved). Display text separated from send text (user sees their message, not the preamble). Per-session `currentRunToken` guard against stale `onExit`. |
 | **D4 — Sidebar affordances** | `+` New Conversation menu, Rename Conversation context menu, live indicator (circle.fill + "responding…"), Ask/Edit subtitles. |
 
@@ -418,6 +418,12 @@ makes the update match no row, so the rename always wins; the model call is
 skipped entirely for any title that is neither empty nor the provisional text.
 A failed or empty model call leaves the provisional title in place.
 
+Accepted edge (no provenance column by design): a rename whose text happens
+to equal the provisional first line is indistinguishable from the untouched
+provisional state, and the model title replaces it. Distinguishing the two
+would need a title-provenance column — a schema change deliberately not made
+for this behavior.
+
 Without a pin (Default mode) the provisional title is final; only a
 still-empty legacy row gets the first-line fallback write.
 
@@ -454,8 +460,10 @@ bookmark-folder navigation), not a persisted tab lifecycle. `retargetTab` and
 
 `AgentToolsView` sidebar:
 
-- **+ New Conversation** menu on the Recent Conversations header (Ask default,
-  Edit) → `store.openTab(.ask/.edit)` (draft state).
+- **+ New Chat** button on the Chats header → `store.beginNewChat()`: the
+  durable row is persisted first and its `.chat(id)` tab opens directly.
+  (Historical: the Ask/Edit draft-choice menu and `.ask`/`.edit` draft state
+  are gone — see "Durable chat identity from creation".)
 - **Live indicator** — tinted `circle.fill` + "responding…" caption when the
   matching launcher (`askLauncher` for `.ask`, `editLauncher` for `.edit`)
   has `activeChatID == chat.id` AND `isGenerating`. Pure `isLiveRow(...)`

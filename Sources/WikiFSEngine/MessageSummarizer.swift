@@ -106,9 +106,10 @@ public enum MessageSummarizer {
     }
 
     /// Generate a conversation title from the opening question and the
-    /// assistant's first reply (chat identity plan: the summary provider names
-    /// an untouched empty-title chat). One-shot summarizer-stage session with
-    /// the `chat-title-task` system prompt; same mechanics as `modelSummary`.
+    /// assistant's first reply (the summary provider refines an untouched
+    /// provisional title; empty-title rows are legacy recovery). One-shot
+    /// summarizer-stage session with the `chat-title-task` system prompt;
+    /// same mechanics as `modelSummary`.
     ///
     /// - Returns: the sanitized title, or nil when the model produced nothing
     ///   usable — the caller leaves the existing title in place.

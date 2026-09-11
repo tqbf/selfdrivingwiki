@@ -584,6 +584,28 @@ import SQLite3
         }
     }
 
+    /// ACCEPTED EDGE (text-CAS limitation, no provenance column by design):
+    /// a user rename whose text happens to EQUAL the provisional title is
+    /// indistinguishable from the untouched provisional state, so the
+    /// model-title upgrade replaces it. Distinguishing the two would need a
+    /// title-provenance column (schema change, ruled out for this change).
+    /// Documented in plans/chat-and-persistence.md §First-send titling.
+    @Test func setChatTitleIfRenameToExactProvisionalTextIsTheAcceptedEdge() throws {
+        let store = try tempStore()
+        let provisional = "What is a tide pool?"
+        let chat = try store.createChat(kind: .edit, title: "")
+
+        // The user "renames" the chat to exactly the provisional text.
+        try store.renameChat(id: chat.id, to: provisional)
+
+        let replaced = try store.setChatTitleIf(
+            chatID: chat.id, expectedTitle: provisional, title: "Model Generated Title")
+
+        #expect(replaced == true,
+                "the text-CAS cannot tell a rename-to-identical from untouched state")
+        #expect(try store.getChat(id: chat.id).title == "Model Generated Title")
+    }
+
     @Test func setChatTitleIfEmptyDelegatesToSetChatTitleIf() throws {
         // The empty case IS the CAS with an empty expectation — one write
         // path, two names.

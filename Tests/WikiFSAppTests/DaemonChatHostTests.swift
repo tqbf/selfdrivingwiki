@@ -1117,7 +1117,11 @@ struct DaemonChatHostTests {
     /// title in every mode; with a summarizer stage pin (Model mode) the
     /// post-turn summarizer pass replaces that exact text with the
     /// model-generated title (`setChatTitleIf`), through the
-    /// `chat-title-task` prompt.
+    /// `chat-title-task` prompt. (The production `onMessageSummary` wiring —
+    /// launcher turn-end → `DaemonChatHost.summarizePendingMessages` — is
+    /// exercised live; this harness drives the pass via the testing seam
+    /// because chat_messages persistence timing differs under the fake
+    /// backend.)
     @Test func modelModeSummarizerTitlesEmptyChatAfterFirstTurn() async throws {
         let dir = makeTempDir()
         let provider = AgentProvider(
