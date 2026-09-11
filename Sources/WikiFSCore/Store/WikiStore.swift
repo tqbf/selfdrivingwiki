@@ -940,6 +940,34 @@ public protocol WikiStore: AnyObject, Sendable {
     /// chat has `id`.
     func renameChat(id: ChatID, to title: String) throws
 
+    /// Set a chat's title ONLY when its current title is empty, in one
+    /// conditional `UPDATE` (`WHERE id = ? AND title = ''`). The first send
+    /// titles an untouched empty chat through this without racing a concurrent
+    /// manual rename into a stale overwrite. Bumps `updated_at` and refreshes
+    /// the `chat_search` sidecar when the title is written.
+    ///
+    /// Returns `true` when the title was written (exactly one `.chat .updated`
+    /// event is emitted) and `false` when the chat exists with a nonempty
+    /// title (no event). Throws `.chatNotFound` when no chat has `id`.
+    @discardableResult
+    func setChatTitleIfEmpty(chatID: ChatID, title: String) throws -> Bool
+
+    /// Replace a chat's title ONLY when it still equals `expectedTitle`, in
+    /// one conditional `UPDATE` (`WHERE id = ? AND title = ?`). The
+    /// provisional→final upgrade: the first send writes a provisional title,
+    /// and the summarizer's generated title replaces exactly that text — a
+    /// manual rename (any other current title) makes the update match no row
+    /// and the rename wins. Bumps `updated_at` and refreshes the
+    /// `chat_search` sidecar when the title is written.
+    ///
+    /// Returns `true` when the title was written (exactly one `.chat .updated`
+    /// event is emitted) and `false` when the current title differs (no
+    /// event). Throws `.chatNotFound` when no chat has `id`.
+    @discardableResult
+    func setChatTitleIf(
+        chatID: ChatID, expectedTitle: String, title: String
+    ) throws -> Bool
+
     /// Delete a chat. `ON DELETE CASCADE` removes its messages. No error if
     /// `id` doesn't exist.
     func deleteChat(id: ChatID) throws

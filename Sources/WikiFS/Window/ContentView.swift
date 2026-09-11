@@ -449,8 +449,8 @@ struct ContentView: View {
             .opacity(0).allowsHitTesting(false)
 
         // Cmd+Shift+C: Add Chat (same handler as the chats sidebar + / the
-        // address-bar "new chat" button — store.beginNewChat(), which also
-        // surfaces the optimistic sidebar row (#1223)).
+        // address-bar "new chat" button — store.beginNewChat(), which
+        // persists the chat row and opens its `.chat(id)` tab).
         Button("") { store.beginNewChat() }
             .keyboardShortcut("c", modifiers: [.command, .shift])
             .opacity(0).allowsHitTesting(false)

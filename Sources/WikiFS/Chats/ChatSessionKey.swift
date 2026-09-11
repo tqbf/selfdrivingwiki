@@ -15,9 +15,9 @@ import WikiFSTypes
 ///   in principle satisfy a `activeChatID == chatID` liveness check. The
 ///   `.draft` case has no `ChatID` at all, so it cannot.
 public enum ChatSessionKey: Hashable, Sendable {
-    /// The `.newChat` composer — no persisted row exists yet. The daemon
-    /// assigns a real id on the first send, at which point the tab retargets
-    /// to `.chat(id)` and a fresh session is created under that key.
+    /// The compatibility `.newChat` draft composer (legacy navigation intent —
+    /// durable New Chat tabs open straight to `.chat(id)`). The daemon assigns
+    /// a real id when a draft's first send creates the chat.
     case draft
     /// A persisted chat row.
     case chat(ChatID)

@@ -2,16 +2,15 @@ import Foundation
 import Testing
 @testable import WikiFSCore
 
-/// Regression coverage for #1223 — creating a new chat must surface a row in
-/// the Chats sidebar immediately, with a stable identity, and reconcile it
-/// without duplication when the daemon commits the real `ChatSummary` on the
-/// first send.
+/// Durable new-chat identity: `beginNewChat()` persists an empty chat row
+/// BEFORE its tab opens, so the tab, the Chats-sidebar row, the first send,
+/// and later navigation all share one stored `ChatID`. The tab never morphs,
+/// there is no optimistic draft overlay, and empty chats are durable rows
+/// that survive tab closure until the user deletes them.
 ///
-/// The optimistic row is model-only: `beginNewChat()` inserts a
-/// `ChatSummary` into `store.chats` (never into the SQLite store), owned by
-/// the draft tab via `EditorTab.optimisticChatID`. `reloadChats()` re-merges
-/// the overlay on every refresh, and the draft→persisted morph
-/// (`retargetActiveTabToChat`) drops it in favor of the real row.
+/// The former #1223 optimistic-row contract (a model-only `ChatSummary` keyed
+/// by `EditorTab.optimisticChatID`, reconciled by `retargetActiveTabToChat`)
+/// is gone; these tests pin the persisted-from-creation replacement.
 @MainActor
 struct NewChatSidebarProjectionTests {
 
@@ -27,129 +26,305 @@ struct NewChatSidebarProjectionTests {
         return (model, store)
     }
 
-    @Test("beginNewChat projects a row immediately without persisting a chat")
-    func beginNewChatProjectsOptimisticRow() throws {
-        let (model, store) = try makeModel()
-
-        model.beginNewChat()
-
-        // The sidebar list carries exactly one row during the same flow.
-        #expect(model.chats.count == 1)
-        let row = try #require(model.chats.first)
-        #expect(row.title.isEmpty, "empty title renders as \"New Chat\" in the cell")
-
-        // The row's identity is the draft tab's stable optimisticChatID.
-        guard case .newChat = model.selection else {
-            Issue.record("expected .newChat selection")
-            return
-        }
-        #expect(model.activeTab?.optimisticChatID == row.id)
-
-        // Nothing was persisted — the daemon owns row creation on first send.
-        #expect(try store.listChats().isEmpty)
-        #expect(model.pendingDraftChats.map(\.id) == [row.id])
+    /// A read-only store over a fully migrated DB: every write (including
+    /// `createChat`) throws, which is exactly the failure `beginNewChat()`'
+    /// catch path must survive. Read-only reopen mirrors the File Provider's
+    /// handle (`GRDBWikiStore.init(readOnlyURL:)`).
+    private func makeReadOnlyModel() throws -> (WikiStoreModel, GRDBWikiStore, URL) {
+        let url = tempURL()
+        _ = try GRDBWikiStore(databaseURL: url)
+        let readOnly = try GRDBWikiStore(readOnlyURL: url)
+        let model = WikiStoreModel(store: readOnly)
+        return (model, readOnly, url)
     }
 
-    @Test("The optimistic row sorts above older persisted chats")
-    func optimisticRowSortsFirst() throws {
-        let (model, store) = try makeModel()
-
-        // A persisted chat from "earlier" (the daemon commits with a fresh
-        // updated_at; seed one and backdate the projection via a reload).
-        _ = try store.createChat(kind: .edit, title: "Earlier chat")
-        model.reloadChats()
-        #expect(model.chats.count == 1)
-
-        model.beginNewChat()
-
-        #expect(model.chats.count == 2)
-        #expect(model.chats.first?.title.isEmpty == true, "the fresh draft row leads")
-        #expect(model.chats.last?.title == "Earlier chat")
+    private func activeChatID(_ model: WikiStoreModel) -> ChatID? {
+        guard case .chat(let id) = model.activeTab?.selection else { return nil }
+        return id
     }
 
-    @Test("First-send reconciliation replaces the draft row without duplication")
-    func firstSendReconcilesWithoutDuplicate() throws {
+    // MARK: - AC.1 Persist before opening the tab
+
+    @Test("beginNewChat persists exactly one empty chat before opening its tab")
+    func beginNewChatPersistsRowBeforeOpeningTab() throws {
         let (model, store) = try makeModel()
+
         model.beginNewChat()
-        let draftRowID = try #require(model.chats.first?.id)
 
-        // The daemon commits the chat on the first send and returns its ID.
-        let committed = try store.createChat(kind: .edit, title: "Hello world")
-        model.retargetActiveTabToChat(chatID: committed.id)
+        // The tab is a `.chat` route keyed by the STORED id — no draft state.
+        let tabChatID = try #require(activeChatID(model))
+        #expect(model.selection == .chat(tabChatID))
 
-        // Exactly one row — the real one — and no leftover draft row.
-        #expect(model.chats.map(\.id) == [committed.id])
-        #expect(model.chats.allSatisfy { $0.title == "Hello world" })
-        #expect(model.pendingDraftChats.isEmpty)
-        #expect(draftRowID != committed.id)
+        // The sidebar carries the same row immediately (synchronous cache), and
+        // the store holds exactly that row.
+        #expect(model.chats.map(\.id) == [tabChatID])
+        #expect(model.chats.first?.title.isEmpty == true,
+                "empty title renders as \"New Chat\" in the cell")
+        #expect(try store.listChats().map(\.id) == [tabChatID])
 
-        // The tab morphed to the committed chat, and the sidebar was asked
-        // to reveal (select + scroll to) the committed row.
-        #expect(model.selection == .chat(committed.id))
-        #expect(model.pendingSidebarReveal == .chat(committed.id))
+        // The persisted row becomes visible and selected in the sidebar.
+        #expect(model.pendingSidebarReveal == .chat(tabChatID))
 
-        // The store holds exactly the committed row — no ghost persisted.
-        #expect(try store.listChats().map(\.id) == [committed.id])
+        // A fresh tab for a fresh chat: isEditing is off, title falls back.
+        #expect(model.activeTab?.title == "New Chat")
     }
 
-    @Test("Closing a draft tab drops its optimistic row and persists nothing")
-    func closingDraftTabDropsRow() throws {
+    @Test("beginNewChat failure shows the store error and opens no tab")
+    func beginNewChatFailureShowsStoreErrorAndOpensNoTab() throws {
+        let (model, readOnly, _) = try makeReadOnlyModel()
+
+        // The double's own failure detail, captured from the same store.
+        let doubleDetail: String = {
+            do {
+                _ = try readOnly.createChat(kind: .edit, title: "must fail")
+                return "createChat unexpectedly succeeded"
+            } catch {
+                return error.localizedDescription
+            }
+        }()
+
+        // A failed creation must not leak an omnibox prefill question into a
+        // later, unrelated chat.
+        model.beginNewChat(prefill: "stale question")
+
+        let storeError = try #require(model.storeError, "the failure must surface the store error alert")
+        #expect(storeError.title == "Could Not Create Chat")
+        #expect(storeError.message.contains(doubleDetail),
+                "the alert message must carry the store failure detail")
+
+        // No phantom tab, no sidebar row, no reveal, no selection, no prefill.
+        #expect(model.tabs.isEmpty)
+        #expect(model.chats.isEmpty)
+        #expect(model.pendingSidebarReveal == nil)
+        #expect(model.selection == nil)
+        #expect(model.pendingChatQuestion == nil)
+    }
+
+    @Test("beginNewChat installs the prefill only after the store write succeeds")
+    func beginNewChatPrefillInstallsAfterPersistence() throws {
+        let (model, store) = try makeModel()
+
+        model.beginNewChat(prefill: "Explain the venturi effect")
+
+        let chatID = try #require(activeChatID(model))
+        #expect(model.pendingChatQuestion == "Explain the venturi effect")
+        #expect(try store.listChats().map(\.id) == [chatID])
+    }
+
+    // MARK: - AC.2 Resolve the durable row after navigation
+
+    @Test("new chat resolves from the store after switching to a page and back")
+    func newChatResolvesAfterSwitchingToPageAndBack() throws {
         let (model, store) = try makeModel()
         model.beginNewChat()
-        #expect(model.chats.count == 1)
+        let chatID = try #require(activeChatID(model))
+        let page = try store.createPage(title: "A Page")
+        model.reloadFromStore()
+
+        // Switch to the page tab, then back to the chat.
+        model.openTab(.page(page.id))
+        #expect(model.selection == .page(page.id))
+        model.openTab(.chat(chatID))
+
+        // The same stored identity resolves authoritatively from SQLite —
+        // never a "Chat Deleted" state for a live row.
+        #expect(model.selection == .chat(chatID))
+        #expect(model.resolveChat(id: chatID) == .available(try store.getChat(id: chatID)))
+        #expect(model.chats.contains { $0.id == chatID })
+    }
+
+    // MARK: - AC.7 Empty chats are durable resources
+
+    @Test("closing an empty chat tab keeps the persisted row")
+    func closingEmptyChatTabKeepsPersistedRow() throws {
+        let (model, store) = try makeModel()
+        model.beginNewChat()
+        let chatID = try #require(activeChatID(model))
         let tabID = try #require(model.activeTabID)
 
         model.closeTab(id: tabID)
 
-        #expect(model.chats.isEmpty)
-        #expect(model.pendingDraftChats.isEmpty)
-        #expect(try store.listChats().isEmpty)
+        #expect(model.tabs.isEmpty)
+        // The row stays: closing a tab never deletes the chat.
+        #expect(try store.listChats().map(\.id) == [chatID])
+        #expect(model.chats.map(\.id) == [chatID])
     }
 
-    @Test("An external store refresh keeps the open draft's row visible")
-    func externalRefreshKeepsDraftRow() throws {
+    @Test("reopening an empty chat from the sidebar uses the same stored ID")
+    func reopeningEmptyChatUsesSameID() throws {
         let (model, store) = try makeModel()
         model.beginNewChat()
-        let draftRowID = try #require(model.activeTab?.optimisticChatID)
+        let chatID = try #require(activeChatID(model))
+        // Consume the creation-time reveal so the reopen assertions observe
+        // only NEW reveal requests.
+        model.consumePendingSidebarReveal()
+        model.closeTab(id: try #require(model.activeTabID))
 
-        // A wikictl/agent write lands; the change bridge fires reloadFromStore.
-        _ = try store.createChat(kind: .edit, title: "Written externally")
-        model.reloadFromStore()
+        model.openTab(.chat(chatID))
 
-        // Both the real row and the still-open draft row are projected.
-        #expect(model.chats.count == 2)
-        #expect(model.chats.contains { $0.id == draftRowID })
-        #expect(model.chats.contains { $0.title == "Written externally" })
+        #expect(model.selection == .chat(chatID))
+        #expect(activeChatID(model) == chatID)
+        #expect(model.resolveChat(id: chatID) != .notFound)
+        #expect(model.pendingSidebarReveal == nil,
+                "plain tab opens do not request a Show-In-List reveal")
+        _ = store
     }
 
-    @Test("Multiple open drafts each get their own row, newest first")
-    func multipleDraftsGetMultipleRows() throws {
-        let (model, _) = try makeModel()
+    // MARK: - AC.8 Repeated commands create distinct durable chats
+
+    @Test("multiple new chats create distinct persisted rows and tabs")
+    func multipleNewChatsCreateDistinctPersistedRowsAndTabs() throws {
+        let (model, store) = try makeModel()
 
         model.beginNewChat()
-        let firstRowID = try #require(model.activeTab?.optimisticChatID)
+        let firstID = try #require(activeChatID(model))
+        let firstTabID = try #require(model.activeTabID)
         // Guarantee distinct updatedAt timestamps for the ordering assertion.
         model.beginNewChat()
-        let secondRowID = try #require(model.activeTab?.optimisticChatID)
+        let secondID = try #require(activeChatID(model))
+        let secondTabID = try #require(model.activeTabID)
 
-        #expect(firstRowID != secondRowID)
-        #expect(model.chats.count == 2)
-        #expect(model.chats.first?.id == secondRowID, "the newest draft leads")
-        #expect(Set(model.chats.map(\.id)) == [firstRowID, secondRowID])
+        #expect(firstID != secondID)
+        #expect(firstTabID != secondTabID)
+        #expect(model.tabs.map(\.selection) == [.chat(firstID), .chat(secondID)])
+        // Two store rows, newest first, matching the tabs.
+        #expect(try store.listChats().map(\.id) == [secondID, firstID])
+        #expect(model.chats.map(\.id) == [secondID, firstID])
     }
 
-    @Test("A title derived from the first message replaces the draft title")
-    func firstMessageTitleReplacesDraftTitle() throws {
+    // MARK: - App-side provisional title (no cross-process round trip)
+
+    @Test("applyProvisionalChatTitle fills the row and cache at send time")
+    func provisionalTitleAppliesAtSend() throws {
         let (model, store) = try makeModel()
         model.beginNewChat()
+        let chatID = try #require(activeChatID(model))
 
-        // The daemon derives the title from the first message at commit time;
-        // mirror that commit and reconcile exactly as the app does.
-        let title = ChatSummary.title(fromFirstMessage: "What is a wiki link?\nSecond line")
-        let committed = try store.createChat(kind: .edit, title: title)
-        model.retargetActiveTabToChat(chatID: committed.id)
+        model.applyProvisionalChatTitle(
+            chatID: chatID, userText: "What is a tide pool?")
 
-        #expect(model.chats.map(\.title) == [title])
+        // Cache AND store carry the provisional title instantly.
+        #expect(model.chats.first?.title == "What is a tide pool?")
+        #expect(try store.getChat(id: chatID).title == "What is a tide pool?")
+
+        // A renamed chat is never touched by a later provisional write.
+        model.renameChat(id: chatID, to: "Renamed")
+        model.applyProvisionalChatTitle(chatID: chatID, userText: "another question")
+        #expect(try store.getChat(id: chatID).title == "Renamed")
+    }
+
+    @Test("an open chat tab's title re-syncs when the row changes")
+    func chatTabTitleResyncsOnReload() throws {
+        let (model, store) = try makeModel()
+        model.beginNewChat()
+        let chatID = try #require(activeChatID(model))
+        #expect(model.activeTab?.title == "New Chat")
+
+        // The daemon titles the row (provisional or model title); the next
+        // reload must re-derive the OPEN TAB's snapshot, not just the sidebar.
+        _ = try store.setChatTitleIfEmpty(chatID: chatID, title: "Titled Row")
+        model.reloadChats()
+
+        #expect(model.chats.first?.title == "Titled Row")
+        #expect(model.activeTab?.title == "Titled Row",
+                "the tab title is a snapshot — reloadChats must re-derive it")
+
+        // A manual rename re-syncs the same way.
+        model.renameChat(id: chatID, to: "Renamed")
+        model.reloadChats()
+        #expect(model.activeTab?.title == "Renamed")
+    }
+
+    @Test("an external store refresh keeps every persisted chat row visible")
+    func externalRefreshKeepsPersistedRows() throws {
+        let (model, store) = try makeModel()
+        model.beginNewChat()
+        let chatID = try #require(activeChatID(model))
+
+        // A wikictl/agent write lands; the change bridge fires reloadFromStore.
+        let external = try store.createChat(kind: .edit, title: "Written externally")
+        model.reloadFromStore()
+
+        #expect(model.chats.map(\.id) == [external.id, chatID],
+                "most-recent-first, no overlay merging, no duplicates")
+        #expect(try store.listChats().count == 2)
+    }
+
+    @Test("the first send titles the untouched empty chat without re-creating a row")
+    func firstSendTitlesTheUntouchedEmptyChat() throws {
+        let (model, store) = try makeModel()
+        model.beginNewChat()
+        let chatID = try #require(activeChatID(model))
+
+        // The daemon's first-send title write (one conditional UPDATE).
+        let titled = try store.setChatTitleIfEmpty(
+            chatID: chatID,
+            title: ChatSummary.title(fromFirstMessage: "What is a wiki link?\nSecond line"))
+        #expect(titled)
+        model.reloadFromStore()
+
+        // Same identity, same single row, new title.
+        #expect(activeChatID(model) == chatID)
+        #expect(try store.listChats().map(\.id) == [chatID])
+        #expect(model.chats.first?.title == "What is a wiki link?")
         #expect(model.chats.count == 1)
+    }
+
+    @Test("a manual rename before the first send is never overwritten by the title write")
+    func manualRenameBeforeFirstSendIsPreserved() throws {
+        let (model, store) = try makeModel()
+        model.beginNewChat()
+        let chatID = try #require(activeChatID(model))
+
+        model.renameChat(id: chatID, to: "My rename")
+        let titled = try store.setChatTitleIfEmpty(
+            chatID: chatID,
+            title: ChatSummary.title(fromFirstMessage: "first message"))
+        #expect(titled == false, "the conditional update matches no row")
+
+        #expect(try store.getChat(id: chatID).title == "My rename")
+    }
+
+    // MARK: - AC.9 Pre-send selections survive back-to-back picks
+
+    /// The composer selectors derive each write from the model's `chats`
+    /// projection. A provider pick followed immediately by a thinking pick
+    /// (no await between them) must not clobber the first choice through a
+    /// stale projection — `updateChatModelAndThinkingSelection` refreshes the
+    /// cache synchronously after the store write.
+    @Test("back-to-back provider and thinking picks both survive")
+    func backToBackSelectionsDoNotClobber() throws {
+        let (model, store) = try makeModel()
+        model.beginNewChat()
+        let chatID = try #require(activeChatID(model))
+        let configured = ChatConfigurationValueID(rawValue: "high")
+
+        // Pick 1: the provider (ProviderSelector.selectRow's durable path).
+        model.updateChatModelAndThinkingSelection(
+            chatID: chatID,
+            providerID: ProviderID(rawValue: "acme"),
+            modelID: ModelID(rawValue: "acme-1"),
+            configuredThinkingID: nil,
+            effectiveThinkingID: nil)
+        // The projection reflects the write NOW (no await).
+        let afterProvider = try #require(model.chats.first { $0.id == chatID })
+        #expect(afterProvider.modelProviderId == ProviderID(rawValue: "acme"))
+
+        // Pick 2: the thinking selector derives provider/model from the
+        // projection, exactly as ThinkingEffortSelector.select does.
+        let summary = try #require(model.chats.first { $0.id == chatID })
+        model.updateChatModelAndThinkingSelection(
+            chatID: chatID,
+            providerID: summary.modelProviderId,
+            modelID: summary.modelId,
+            configuredThinkingID: configured,
+            effectiveThinkingID: configured)
+
+        // Both choices survive in the STORE row the daemon's first turn reads.
+        let row = try store.getChat(id: chatID)
+        #expect(row.modelProviderId == ProviderID(rawValue: "acme"))
+        #expect(row.modelId == ModelID(rawValue: "acme-1"))
+        #expect(row.configuredThinkingOptionID == configured)
+        #expect(row.effectiveThinkingOptionID == configured)
     }
 }

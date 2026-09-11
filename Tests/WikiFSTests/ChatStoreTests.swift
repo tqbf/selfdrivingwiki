@@ -492,4 +492,167 @@ import SQLite3
             _ = try store.getChat(id: ChatID(rawValue: "existing-chat"))
         }
     }
+
+    // MARK: - setChatTitleIfEmpty (durable new-chat first-send title)
+
+    @Test func setChatTitleIfEmptySetsEmptyTitle() throws {
+        let store = try tempStore()
+        // The row beginNewChat persists: kind .edit, empty title.
+        let chat = try store.createChat(kind: .edit, title: "")
+
+        let titled = try store.setChatTitleIfEmpty(
+            chatID: chat.id, title: "What does this page say?")
+
+        #expect(titled == true)
+        let updated = try store.getChat(id: chat.id)
+        #expect(updated.title == "What does this page say?")
+        #expect(datesApproximatelyEqual(updated.updatedAt, Date(), tolerance: 60))
+    }
+
+    @Test func setChatTitleIfEmptyPreservesManualRename() throws {
+        let store = try tempStore()
+        let chat = try store.createChat(kind: .edit, title: "")
+
+        // The user renamed the chat before its first send.
+        try store.renameChat(id: chat.id, to: "My rename")
+
+        let titled = try store.setChatTitleIfEmpty(
+            chatID: chat.id, title: "first message")
+
+        #expect(titled == false, "a nonempty title must never be overwritten")
+        #expect(try store.getChat(id: chat.id).title == "My rename")
+    }
+
+    @Test func setChatTitleIfEmptyMissingThrows() throws {
+        let store = try tempStore()
+        let missingID = ChatID(rawValue: "01J" + String(repeating: "Z", count: 22))
+
+        #expect(throws: WikiStoreError.self) {
+            try store.setChatTitleIfEmpty(chatID: missingID, title: "no row")
+        }
+    }
+
+    @Test func setChatTitleIfEmptyUpdatesChatSearch() throws {
+        let store = try tempStore()
+        let chat = try store.createChat(kind: .edit, title: "")
+        _ = try store.appendChatMessages(
+            chatID: chat.id, events: [.userText("Explain the venturi effect")])
+        #expect(store.scalarText(
+            "SELECT title FROM chat_search WHERE chat_id = '\(chat.id.rawValue)';") == "",
+            "before the first send the sidecar carries the empty title")
+
+        let titled = try store.setChatTitleIfEmpty(
+            chatID: chat.id, title: "Explain the venturi effect")
+
+        #expect(titled)
+        #expect(store.scalarText(
+            "SELECT title FROM chat_search WHERE chat_id = '\(chat.id.rawValue)';")
+            == "Explain the venturi effect")
+    }
+
+    // MARK: - setChatTitleIf (provisional → model-title upgrade)
+
+    @Test func setChatTitleIfReplacesExpectedTitle() throws {
+        let store = try tempStore()
+        let chat = try store.createChat(kind: .edit, title: "Provisional")
+
+        let replaced = try store.setChatTitleIf(
+            chatID: chat.id, expectedTitle: "Provisional", title: "Model Generated Title")
+
+        #expect(replaced)
+        #expect(try store.getChat(id: chat.id).title == "Model Generated Title")
+    }
+
+    @Test func setChatTitleIfMissKeepsRenamedTitle() throws {
+        let store = try tempStore()
+        let chat = try store.createChat(kind: .edit, title: "My rename")
+
+        let replaced = try store.setChatTitleIf(
+            chatID: chat.id, expectedTitle: "Provisional", title: "Model Generated Title")
+
+        #expect(replaced == false, "a current title that differs must never be overwritten")
+        #expect(try store.getChat(id: chat.id).title == "My rename")
+    }
+
+    @Test func setChatTitleIfMissingThrows() throws {
+        let store = try tempStore()
+        let missingID = ChatID(rawValue: "01J" + String(repeating: "Z", count: 22))
+
+        #expect(throws: WikiStoreError.self) {
+            try store.setChatTitleIf(
+                chatID: missingID, expectedTitle: "any", title: "no row")
+        }
+    }
+
+    /// ACCEPTED EDGE (text-CAS limitation, no provenance column by design):
+    /// a user rename whose text happens to EQUAL the provisional title is
+    /// indistinguishable from the untouched provisional state, so the
+    /// model-title upgrade replaces it. Distinguishing the two would need a
+    /// title-provenance column (schema change, ruled out for this change).
+    /// Documented in plans/chat-and-persistence.md §First-send titling.
+    @Test func setChatTitleIfRenameToExactProvisionalTextIsTheAcceptedEdge() throws {
+        let store = try tempStore()
+        let provisional = "What is a tide pool?"
+        let chat = try store.createChat(kind: .edit, title: "")
+
+        // The user "renames" the chat to exactly the provisional text.
+        try store.renameChat(id: chat.id, to: provisional)
+
+        let replaced = try store.setChatTitleIf(
+            chatID: chat.id, expectedTitle: provisional, title: "Model Generated Title")
+
+        #expect(replaced == true,
+                "the text-CAS cannot tell a rename-to-identical from untouched state")
+        #expect(try store.getChat(id: chat.id).title == "Model Generated Title")
+    }
+
+    @Test func setChatTitleIfEmptyDelegatesToSetChatTitleIf() throws {
+        // The empty case IS the CAS with an empty expectation — one write
+        // path, two names.
+        let store = try tempStore()
+        let chat = try store.createChat(kind: .edit, title: "")
+        #expect(try store.setChatTitleIf(chatID: chat.id, expectedTitle: "", title: "Titled"))
+        #expect(try store.getChat(id: chat.id).title == "Titled")
+        // Second call with the same expectation misses (title moved on).
+        #expect(try store.setChatTitleIf(chatID: chat.id, expectedTitle: "", title: "Again") == false)
+        #expect(try store.getChat(id: chat.id).title == "Titled")
+    }
+
+    /// Concurrency shape: the app's rename and the daemon's first-send title
+    /// race through TWO handles over the same WAL database (exactly the
+    /// production topology — the store serializes each writer at the file
+    /// level). The conditional UPDATE makes a stale read-then-write overwrite
+    /// unrepresentable: whichever write commits second simply matches no row.
+    /// The result value proves which write won; the final title must equal the
+    /// winner's. Serialized + time-limited per the pool-blocking rules.
+    @Suite(.serialized, .timeLimit(.minutes(2)))
+    struct SetChatTitleIfEmptyRaceTests {
+        @Test func manualRenameAndFirstTitleNeverApplyStaleOverwrite() async throws {
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("chat-title-race-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let url = dir.appendingPathComponent("WikiFS.sqlite")
+            _ = try GRDBWikiStore(databaseURL: url) // schema bootstrap
+            let appStore = try GRDBWikiStore(databaseURL: url)
+            let daemonStore = try GRDBWikiStore(databaseURL: url)
+            let chat = try appStore.createChat(kind: .edit, title: "")
+
+            async let rename: Void = appStore.renameChat(id: chat.id, to: "My rename")
+            async let titleResult = try daemonStore.setChatTitleIfEmpty(
+                chatID: chat.id, title: "first message")
+            let (_, titled) = try await (rename, titleResult)
+
+            let final = try appStore.getChat(id: chat.id)
+            if titled == false {
+                // The conditional UPDATE matched no row — the rename was
+                // already committed, and the title write did NOT overwrite it.
+                #expect(final.title == "My rename")
+            } else {
+                // The title write matched an empty row. The rename may have
+                // landed before it (rename wins) or after it (title wins) —
+                // but the final title must always be one of the two writers'.
+                #expect(final.title == "first message" || final.title == "My rename")
+            }
+        }
+    }
 }

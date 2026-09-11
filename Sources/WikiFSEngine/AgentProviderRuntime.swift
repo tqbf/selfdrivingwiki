@@ -99,8 +99,29 @@ public protocol AgentProviderServices: Sendable {
     func prepareSummarization() async throws -> AgentProviderSummaryPreparation
     func discoverCatalog(for provider: AgentProvider) async throws -> ACPProviderCatalogObservation
     func modelSummary(text: String, preparation: AgentOperationPreparation) async throws -> String?
+    /// Generate a conversation title from the opening question and the
+    /// assistant's first reply, through the summarizer-stage preparation.
+    /// Throws `.unavailable` when no summarizer model is configured; returns
+    /// nil when the model produced nothing usable.
+    func modelTitle(
+        question: String,
+        answer: String?,
+        preparation: AgentOperationPreparation
+    ) async throws -> String?
     func release(_ token: AgentProviderAttemptToken) async
     func readiness() async -> Bool
+}
+
+public extension AgentProviderServices {
+    /// Default for conformers that carry no summarizer backend (throws
+    /// `.unavailable`).
+    func modelTitle(
+        question: String,
+        answer: String?,
+        preparation: AgentOperationPreparation
+    ) async throws -> String? {
+        throw AgentProviderRuntimeError.unavailable
+    }
 }
 
 public extension AgentProviderServices {
@@ -212,6 +233,17 @@ public actor MutableAgentProviderServices: AgentProviderPrivateServices {
         preparation: AgentOperationPreparation
     ) async throws -> String? {
         try await installed.modelSummary(text: text, preparation: preparation)
+    }
+
+    public func modelTitle(
+        question: String,
+        answer: String?,
+        preparation: AgentOperationPreparation
+    ) async throws -> String? {
+        try await installed.modelTitle(
+            question: question,
+            answer: answer,
+            preparation: preparation)
     }
 
     public func release(_ token: AgentProviderAttemptToken) async {
@@ -460,6 +492,25 @@ public actor AgentProviderRuntime: AgentProviderPrivateServices {
             cache: true)
         return await MessageSummarizer.modelSummary(
             text: text,
+            backend: prepared.backend,
+            profile: prepared.profile)
+    }
+
+    public func modelTitle(
+        question: String,
+        answer: String?,
+        preparation: AgentOperationPreparation
+    ) async throws -> String? {
+        guard preparation.selection.stage == .summarizer else {
+            throw AgentProviderRuntimeError.stageMismatch
+        }
+        let prepared = try backend(
+            from: preparation.selection.token,
+            stage: .summarizer,
+            cache: true)
+        return await MessageSummarizer.modelTitle(
+            question: question,
+            answer: answer,
             backend: prepared.backend,
             profile: prepared.profile)
     }

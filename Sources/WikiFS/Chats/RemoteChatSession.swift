@@ -24,8 +24,34 @@ public final class RemoteChatSession {
 
     public private(set) var syncState: ChatClientSyncState?
     private(set) var displayTranscript: ChatDisplayTranscript = .empty
+    /// Projection input for the presentation layer: the same merged items and
+    /// validated active content block that produce `displayTranscript`, kept as
+    /// one snapshot so the view can append local echo rows and re-project.
+    private(set) var displayProjectionInput: TranscriptProjectionInput = .empty
     public private(set) var runState: ChatRunState = .idle
     public var syncStatus: ChatClientSyncStatus? { syncState?.syncStatus }
+
+    /// Turn identities this session already knows authoritatively or through
+    /// its own optimistic overlay: committed rows, overlay user messages, the
+    /// active turn, and queued turns. The presentation drops a view-local
+    /// outgoing echo as soon as its turn appears here, which is exactly when
+    /// authoritative data has taken over rendering that turn.
+    var knownTurnIDs: Set<ChatTurnID> {
+        guard let syncState else { return [] }
+        var ids = Set<ChatTurnID>()
+        ids.formUnion(syncState.committedItems.compactMap { $0.item.turnID })
+        if let projection = syncState.projection {
+            for item in projection.transcriptOverlay {
+                guard case .message(let message) = item, message.role == .user else { continue }
+                ids.insert(message.turnID)
+            }
+            ids.formUnion(projection.queuedTurns.map(\.submission.turnID))
+            if let activeTurn = projection.activeTurn {
+                ids.insert(activeTurn.turnID)
+            }
+        }
+        return ids
+    }
 
     public var exitStatus: Int32?
     public var runningKind: WikiOperation.Kind?
@@ -142,6 +168,7 @@ public final class RemoteChatSession {
     private func projectDisplayState() {
         guard let syncState else {
             displayTranscript = .empty
+            displayProjectionInput = .empty
             runState = .idle
             exitStatus = nil
             runningKind = nil
@@ -166,6 +193,12 @@ public final class RemoteChatSession {
             items: items,
             activeContentBlock: activeContentBlock
         ).transcript
+        // Assigned before the projection early-return below: a projection-nil
+        // session still carries committed items the presentation can render.
+        displayProjectionInput = TranscriptProjectionInput(
+            items: items,
+            activeContentBlock: activeContentBlock
+        )
 
         guard let projection = syncState.projection else {
             runState = .idle
@@ -428,6 +461,7 @@ public final class RemoteChatSession {
     func reset() {
         syncState = chatID.chatID.map { ChatClientSyncState(chatID: $0) }
         displayTranscript = .empty
+        displayProjectionInput = .empty
         runState = .idle
         exitStatus = nil
         runningKind = nil

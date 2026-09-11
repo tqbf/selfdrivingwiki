@@ -611,6 +611,74 @@ struct StoreEmissionTests {
         #expect(events.last?.id == chat.id.rawValue)
     }
 
+    /// First-send title write on an untouched empty chat: exactly ONE
+    /// `.chat .updated` event, driven by the mutation's `true` result.
+    @Test func setChatTitleIfEmptyChangedEmitsOnce() async throws {
+        let (store, _, rec) = try makeHarness()
+        let chat = try store.createChat(kind: .edit, title: "")
+        try await drain(rec)
+        let titled = try store.setChatTitleIfEmpty(chatID: chat.id, title: "First send")
+        #expect(titled)
+        let events = try await awaitEvents(rec)
+        #expect(events.count == 1, "exactly one event for one conditional update")
+        #expect(events.first?.kind == .chat)
+        #expect(events.first?.change == .updated)
+        #expect(events.first?.id == chat.id.rawValue)
+    }
+
+    /// A chat that already has a title (manual rename) matches no row — the
+    /// `false` result emits NOTHING (the rename already emitted its own event).
+    @Test func setChatTitleIfEmptyAlreadyTitledEmitsNothing() async throws {
+        let (store, _, rec) = try makeHarness()
+        let chat = try store.createChat(kind: .edit, title: "")
+        try store.renameChat(id: chat.id, to: "Manual")
+        // Two prerequisite mutator calls (createChat + renameChat) — drain
+        // both so only the mutation under test is observed.
+        try await drain(rec, expected: 2)
+        let titled = try store.setChatTitleIfEmpty(chatID: chat.id, title: "First send")
+        #expect(titled == false)
+        await assertNoEventsDelivered(rec)
+    }
+
+    /// A missing chat throws `.chatNotFound` inside the savepoint — the
+    /// rollback emits NOTHING.
+    @Test func setChatTitleIfEmptyMissingEmitsNothing() async throws {
+        let (store, _, rec) = try makeHarness()
+        let missingID = ChatID(rawValue: "01J" + String(repeating: "Z", count: 22))
+        #expect(throws: WikiStoreError.self) {
+            try store.setChatTitleIfEmpty(chatID: missingID, title: "no row")
+        }
+        await assertNoEventsDelivered(rec)
+    }
+
+    /// The provisional→model-title upgrade (CAS on the expected text) emits
+    /// exactly one `.chat .updated` when the expected title matches.
+    @Test func setChatTitleIfChangedEmitsOnce() async throws {
+        let (store, _, rec) = try makeHarness()
+        let chat = try store.createChat(kind: .edit, title: "Provisional")
+        try await drain(rec)
+        let replaced = try store.setChatTitleIf(
+            chatID: chat.id, expectedTitle: "Provisional", title: "Model Title")
+        #expect(replaced)
+        let events = try await awaitEvents(rec)
+        #expect(events.count == 1)
+        #expect(events.first?.kind == .chat)
+        #expect(events.first?.change == .updated)
+        #expect(events.first?.id == chat.id.rawValue)
+    }
+
+    /// A CAS miss (current title differs — e.g. a manual rename won) emits
+    /// NOTHING.
+    @Test func setChatTitleIfMissEmitsNothing() async throws {
+        let (store, _, rec) = try makeHarness()
+        let chat = try store.createChat(kind: .edit, title: "Manual")
+        try await drain(rec)
+        let replaced = try store.setChatTitleIf(
+            chatID: chat.id, expectedTitle: "Provisional", title: "Model Title")
+        #expect(replaced == false)
+        await assertNoEventsDelivered(rec)
+    }
+
     @Test func deleteChatEmitsChatDeleted() async throws {
         let (store, _, rec) = try makeHarness()
         let chat = try store.createChat(kind: .edit, title: "Test Chat")

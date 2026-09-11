@@ -79,8 +79,9 @@ public struct ChatSubmitRequest: Codable, Sendable {
     }
 }
 
-/// Reply to `submitChatTurn`: always returns the authoritative chat id so the
-/// draft state can retarget after the daemon creates the chat row.
+/// Reply to `submitChatTurn`: always returns the authoritative chat id. For a
+/// nil-ID submission the daemon created the chat, and the compatibility draft
+/// surface follows the returned id. Durable app chats already know their id.
 public struct ChatSubmitReply: Codable, Sendable {
     public let chatID: ChatID?
     public let error: String?

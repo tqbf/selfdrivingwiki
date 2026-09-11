@@ -65,19 +65,182 @@ public enum MessageSummarizer {
         ChatSummary.summaryExtract(from: text, maxLength: 200)
     }
 
+    // MARK: - Chat titles (summarizer-stage model)
+
+    /// Sanitize a model-produced chat title into sidebar-safe text: keep the
+    /// first non-empty line, strip wrapping quotes / code fences / a "Title:"
+    /// label / trailing periods (repeatedly, so `".`-style stacks unwind), and
+    /// cap the length. PURE. Returns the empty string when nothing usable
+    /// remains.
+    public static func sanitizeTitle(_ raw: String, maxLength: Int = 80) -> String {
+        var title = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let firstLine = title.split(whereSeparator: \.isNewline).first {
+            title = firstLine.trimmingCharacters(in: .whitespaces)
+        }
+        let opening = ["```", "\"", "'", "\u{201C}", "\u{2018}"]
+        let closing = ["```", "\"", "'", "\u{201D}", "\u{2019}"]
+        // Bounded fixpoint: `"...".` needs quote-then-period-then-quote strips.
+        for _ in 0..<4 {
+            var changed = false
+            if title.lowercased().hasPrefix("title:") {
+                title = String(title.dropFirst("title:".count))
+                changed = true
+            }
+            for fence in opening where title.hasPrefix(fence) {
+                title.removeFirst(fence.count)
+                changed = true
+            }
+            for fence in closing where title.hasSuffix(fence) {
+                title.removeLast(fence.count)
+                changed = true
+            }
+            if title.hasSuffix(".") {
+                title.removeLast()
+                changed = true
+            }
+            title = title.trimmingCharacters(in: .whitespaces)
+            if !changed { break }
+        }
+        guard title.count > maxLength else { return title }
+        return String(title.prefix(maxLength)).trimmingCharacters(in: .whitespaces)
+    }
+
+    /// Generate a conversation title from the opening question and the
+    /// assistant's first reply (the summary provider refines an untouched
+    /// provisional title; empty-title rows are legacy recovery). One-shot
+    /// summarizer-stage session with the `chat-title-task` system prompt;
+    /// same mechanics as `modelSummary`.
+    ///
+    /// - Returns: the sanitized title, or nil when the model produced nothing
+    ///   usable — the caller leaves the existing title in place.
+    public static func modelTitle(
+        question: String,
+        answer: String?,
+        backend: any AgentBackend,
+        profile: BackendProfile
+    ) async -> String? {
+        let cleanQuestion = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanQuestion.isEmpty else { return nil }
+        let excerpt = String(
+            (answer ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                .prefix(1_200))
+        let prompt: String
+        if excerpt.isEmpty {
+            prompt = "Question:\n\(cleanQuestion)\n\nTitle:"
+        } else {
+            prompt = "Question:\n\(cleanQuestion)\n\nAssistant reply (may be truncated):\n\(excerpt)\n\nTitle:"
+        }
+        DebugLog.ingest("MessageSummarizer: starting model title for q=\(cleanQuestion.prefix(40))...")
+        guard let raw = await oneShotReply(
+            systemPrompt: PublicPrompts.chatTitleTask,
+            prompt: prompt,
+            backend: backend,
+            profile: profile) else { return nil }
+        let title = sanitizeTitle(raw)
+        guard !title.isEmpty else {
+            DebugLog.ingest("MessageSummarizer: model title was unusable for q=\(cleanQuestion.prefix(40))...")
+            return nil
+        }
+        DebugLog.ingest("MessageSummarizer: model title for q=\(cleanQuestion.prefix(40))... → \(title)")
+        return title
+    }
+
+    /// One backend session, ONE turn, collected assistant text (`.result`
+    /// fallback), session always cancelled. The shared core of `modelSummary`
+    /// and `modelTitle`. Returns nil on start/turn failure or empty output.
+    private static func oneShotReply(
+        systemPrompt: String,
+        prompt: String,
+        backend: any AgentBackend,
+        profile: BackendProfile
+    ) async -> String? {
+        let session: SessionHandle
+        do {
+            session = try await backend.start(
+                profile: profile,
+                systemPrompt: systemPrompt,
+                onExit: { _ in })
+        } catch {
+            DebugLog.agent("MessageSummarizer.oneShotReply: start failed: \(error.localizedDescription)")
+            return nil
+        }
+
+        var collected = ""
+        var turnError: String?
+        let stream = await backend.send(TurnInput(userText: prompt), into: session)
+        for await event in stream {
+            switch event {
+            case .assistantText(let chunk):
+                collected += chunk
+            case .assistantTextDelta(let chunk):
+                collected += chunk
+            case .result(let isError, let resultText):
+                if isError {
+                    turnError = resultText
+                } else if collected.isEmpty {
+                    collected = resultText
+                }
+            case .turnFailed(let reason):
+                turnError = reason.description
+            default:
+                break
+            }
+        }
+
+        // Always cancel — it was a one-shot session (mirrors extraction).
+        await backend.cancel(session)
+
+        if let turnError {
+            DebugLog.agent("MessageSummarizer.oneShotReply: turn failed: \(turnError)")
+            return nil
+        }
+
+        let trimmed = collected.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            DebugLog.ingest("MessageSummarizer: model returned empty output for prompt=\(prompt.prefix(40))...")
+            return nil
+        }
+        return trimmed
+    }
+
     /// Extract the summarizable text from an `AgentEvent` (the source for a
     /// per-message summary). Returns the text for `.assistantText` and
     /// `.result`; nil for everything else (tool/thinking/user events have no
     /// assistant summary surface). PURE.
+    ///
+    /// ACP backends open replies with meta preambles — a skills-budget
+    /// `Warning:` line, a `Thinking:` dump — which are not content. Leading
+    /// preamble lines are stripped; a message that is ONLY preamble yields nil
+    /// so it is never summarized and never becomes `chats.summary` or a title
+    /// input.
     public static func textToSummarize(from event: AgentEvent) -> String? {
         switch event {
         case .assistantText(let text):
-            return text
+            return summarizableAssistantText(text)
         case .result(_, let text):
-            return text
+            return summarizableAssistantText(text)
         default:
             return nil
         }
+    }
+
+    /// Drop leading blank / `Warning:` / `Thinking:` lines from assistant
+    /// text. PURE. Returns nil when nothing substantive remains.
+    static func summarizableAssistantText(_ text: String) -> String? {
+        var lines = text.components(separatedBy: .newlines)
+        while !lines.isEmpty {
+            let line = lines[0].trimmingCharacters(in: .whitespaces)
+            if line.isEmpty
+                || line.hasPrefix("Warning:")
+                || line.hasPrefix("Thinking:") {
+                lines.removeFirst()
+            } else {
+                break
+            }
+        }
+        let rest = lines.joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return rest.isEmpty ? nil : rest
     }
 
     /// The message whose summary doubles as the CHAT-level summary
@@ -123,58 +286,13 @@ public enum MessageSummarizer {
         guard !cleanText.isEmpty else { return nil }
 
         DebugLog.ingest("MessageSummarizer: starting model mode for seq=\(cleanText.prefix(40))...")
-
-        let session: SessionHandle
-        do {
-            session = try await backend.start(
-                profile: profile,
-                systemPrompt: modelSystemPrompt,
-                onExit: { _ in })
-        } catch {
-            DebugLog.agent("MessageSummarizer.modelSummary: start failed: \(error.localizedDescription)")
-            return nil
-        }
-
-        // Send one turn + collect assistant text. Mirror ACPExtractionClient's
-        // collection: append .assistantText, take .result as fallback.
-        let prompt = "Summarize this in one sentence:\n\n\(cleanText)"
-        var collected = ""
-        var turnError: String?
-        let stream = await backend.send(TurnInput(userText: prompt), into: session)
-        for await event in stream {
-            switch event {
-            case .assistantText(let chunk):
-                collected += chunk
-            case .assistantTextDelta(let chunk):
-                collected += chunk
-            case .result(let isError, let resultText):
-                if isError {
-                    turnError = resultText
-                } else if collected.isEmpty {
-                    collected = resultText
-                }
-            case .turnFailed(let reason):
-                turnError = reason.description
-            default:
-                break
-            }
-        }
-
-        // Always cancel — it was a one-shot session (mirrors extraction).
-        await backend.cancel(session)
-
-        if let turnError {
-            DebugLog.agent("MessageSummarizer.modelSummary: turn failed: \(turnError)")
-            return nil
-        }
-
-        let trimmed = collected.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            DebugLog.ingest("MessageSummarizer: model returned empty output for seq=\(cleanText.prefix(40))...")
-            return nil
-        }
-        DebugLog.ingest("MessageSummarizer: model summary for seq=\(cleanText.prefix(40))... length=\(trimmed.count)")
-        return trimmed
+        guard let summary = await oneShotReply(
+            systemPrompt: modelSystemPrompt,
+            prompt: "Summarize this in one sentence:\n\n\(cleanText)",
+            backend: backend,
+            profile: profile) else { return nil }
+        DebugLog.ingest("MessageSummarizer: model summary for seq=\(cleanText.prefix(40))... length=\(summary.count)")
+        return summary
     }
 
     /// Build the `BackendProfile` for the summarizer stage from the user's

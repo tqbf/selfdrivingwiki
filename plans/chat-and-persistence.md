@@ -16,7 +16,7 @@ This document supersedes three earlier plan docs (`persisted-chat-history.md`,
 | **Phase 0 — AgentBackend port** | `AgentBackend` protocol (`start`/`send`/`resume`/`cancel`) + `ClaudeCLIBackend` (actor) wrapping the spawn/parse/encode behind a per-turn `AsyncStream<AgentEvent>`. The launcher never touches a `Process` or wire format. Behavior-preserving. |
 | **A.1 — WikiRenderContext** | Pure `Sendable` value type capturing the reader's full render precompute (existence/display/loose sets, embedMap, sourceDerivedChain `@vN`, siblingMaps) + the four closures. Memoized on `WikiStoreModel`, invalidated by `WikiEventBus`. Reader refactored onto it (behavior-preserving). |
 | **A.2 — Transcript render context** | `WikiRenderContext` threaded into `AgentTranscriptWebView` (current-per-render provider). `BlobSchemeHandler` registered on the transcript `WKWebView`. Two-tier streaming render: links-only while streaming, full embeds on finalize. |
-| **D2 — Unified ConversationView** | One surface for live (streaming) + persisted (browsed) chat via the source-of-truth rule (`activeChatID == chatID ? launcher.events : store.chatMessages`). Flip gated on final flush commit (no truncation). Draft-state morph (`.ask`/`.edit` → `.chat(id)` on first send). `startNewConversation` retarget-back. `ChatHistoryDetailView` deleted + absorbed. |
+| **D2 — Unified ConversationView** | One surface for live (streaming) + persisted (browsed) chat via the source-of-truth rule (`activeChatID == chatID ? launcher.events : store.chatMessages`). Flip gated on final flush commit (no truncation). **Update (2026-09):** chats are durable from creation — `beginNewChat()` persists the row and opens `.chat(id)` directly; the first-send draft morph and `startNewConversation` retarget-back survive only in the legacy `AgentOperationRunner` path. `ChatHistoryDetailView` deleted + absorbed. |
 | **D3 — Continue a persisted conversation** | Seeded-fallback: takeover rules (idle take / between-turns stopAgent+flush-then-take / mid-gen refuse), byte-capped `continuationPreamble`, same-row append (seq continues, title preserved). Display text separated from send text (user sees their message, not the preamble). Per-session `currentRunToken` guard against stale `onExit`. |
 | **D4 — Sidebar affordances** | `+` New Conversation menu, Rename Conversation context menu, live indicator (circle.fill + "responding…"), Ask/Edit subtitles. |
 
@@ -200,6 +200,11 @@ gains display-name healing, embeds, and pins the next time it renders.
 
 ## Conversation surface (pillar 2)
 
+> Historical note (2026-09): the draft-morph narrative below — first-send
+> retarget, remount disposal, `.ask`/`.edit` draft state — is superseded by
+> "Durable chat identity from creation" later in this document. New chats
+> persist first and open `.chat(id)`.
+
 `ConversationView(mode:chatID:)` is the single surface for live + persisted:
 
 - **Source-of-truth rule:** if `launcher.activeChatID == chatID`, render
@@ -286,12 +291,179 @@ start and only calls `finish` if it's still current (`run()` +
 `startInteractiveQuery` both guarded). Tests can't catch this (no real
 processes); the full suite confirms behavior-preserving.
 
+## Optimistic echo (#1218)
+
+> Historical note (2026-09): the echo, failure, and queue contracts below are
+> current. The draft-retarget parts are superseded by "Durable chat identity
+> from creation" — durable chats never retarget; only the compatibility
+> `.newChat` surface follows a daemon-created chat.
+
+Pressing return must show the user's message on the next frame, in every case:
+draft (new chat), cold existing chat, and live chat. A failed send must keep
+the message visible, marked failed, with nothing silently dropped.
+
+### The view-local overlay
+
+`ChatDetailView` owned no echo for drafts. It awaited the full XPC
+`submitChatTurn` reply, which the daemon answers only after agent bootstrap
+(spawn + ACP initialize + session/new). Only then did the tab retarget, the
+view remount, and the persisted transcript render. Envelopes pushed during that
+wait found no session and were dropped.
+
+The fix is a unified view-local outgoing overlay, owned by
+`ChatOutgoingMessagesController` (`Sources/WikiFS/Chats/`). Every send first
+appends a `PendingOutgoingMessage` to controller state, synchronously, before
+any await. `ChatDetailPresentation.make` projects the echo items in both
+transcript branches:
+
+- **Live branch** — `projectionInput.items + echoItems` with the session's
+  validated `activeContentBlock`. `RemoteChatSession.displayProjectionInput`
+  publishes the merged items and validated block as one snapshot, so the view
+  re-projects instead of keeping a pre-projected transcript path. Appending
+  echo items cannot invalidate the validated block; the streaming row stays
+  streaming.
+- **Non-live branch** (drafts and cold chats) — `persistedTranscriptItems +
+  echoItems` with no active block.
+
+A finite status machine replaces flag pairs: `submitting` from the frame the
+send is accepted until the XPC reply lands, then `failed(message:)` on failure.
+The failed echo renders as one user row plus a typed `.turnFailure` row with
+category `.transportError` — the same durable vocabulary failed agent turns
+use, so `ChatWebView` needs no echo-specific production change.
+
+### turnID reconciliation
+
+The controller builds the submission, so it owns the `ChatTurnID`. The echo
+retires the moment that turn appears in authoritative data. `make` filters
+echoes against `authoritativeTurnIDs` — `RemoteChatSession.knownTurnIDs`
+(committed items, overlay user messages, active turn, queued turns) united with
+the persisted transcript's turn IDs. The daemon persists the user message with
+the submission's `turnID` before bootstrap, so the authoritative row replaces
+the echo at handoff with no gap.
+
+For existing chats the controller also calls the reducer's
+`optimisticSubmit`. Its lifecycle side effects (flipping a cold projection
+live/queued) are load-bearing. The turnID filter hides the copy: whichever
+rendering path produces the user row first, only one row shows.
+
+### Failure contract
+
+On failure the controller marks only its own entry `failed`, calls
+`optimisticSubmitFailed` for existing chats, sets the preflight error, and
+restores the composer conservatively:
+
+- The failed row stays in the transcript. A later send never removes it.
+  Disposal happens at the `.id(chatID)` remount. Retry is edit-and-resend.
+- Restoration reads an atomic `ComposerSnapshot` (trimmed text plus attachment
+  IDs) and proceeds only when the composer is untouched. A failure never
+  overwrites text or attachments the user added while the send was in flight.
+- The restore carries the typed draft text and structured attachments, never
+  the wire message with its inlined attachment references.
+
+The queued-send path uses the same payload shape and restore rule.
+`PendingQueuedMessage` carries `draftText` and `attachments`.
+`makePendingQueuedMessage`, `outgoingPayload(from:)`, and
+`restoreQueuedMessage` are pure functions, so the queue-and-fire path supplies
+the identical restore contract.
+
+### Draft double-send guard
+
+While a draft submit is in flight, `canSend` is false and the composer caption
+reads "Starting chat…". The guard is scoped to drafts. A persisted chat with
+in-flight sends is never blocked.
+
+### Follow-ups
+
+Recorded on tqbf/selfdrivingwiki#1218:
+
+- Make `submitChatTurn` reply before agent bootstrap. This would cut the draft
+  retarget latency from about 4 seconds to about SQLite-write time, and it
+  changes the failure/rollback contract.
+- A tap-to-retry affordance on failed rows, with cleanup semantics for
+  retained failures.
+- The web-view remount flash on retarget (pre-existing).
+
+## Durable chat identity from creation
+
+### The contract
+
+Every app-created chat now owns one `ChatID` from before its tab exists.
+`WikiStoreModel.beginNewChat()` writes an empty-title `.edit` row through
+`WikiStore.createChat` first. It then inserts the returned `ChatSummary` into
+the model's `chats` cache, opens `.chat(chat.id)`, and requests a sidebar
+reveal. The store row, the tab, the sidebar highlight, the first send, and
+later navigation all use that stored id. If the store write fails, the app
+shows its `storeError` alert ("Could Not Create Chat") and opens no tab.
+
+Empty chats are durable resources. Closing an empty chat's tab keeps the row.
+The user deletes it explicitly. A page-switch round trip resolves the row from
+SQLite, so the deleted presentation shows only for a genuinely deleted row.
+
+ACP startup stays lazy. The daemon creates its controller through
+`makeOrGetController` on the first send. The local echo from the optimistic
+echo section covers that latency, so a cold controller start does not delay
+the user's message.
+
+### First-send titling
+
+The first send writes a PROVISIONAL title — the first line of the question —
+in every summarizer mode, so the row never renders untitled after a send.
+
+With a summarizer stage pin (Model mode), the post-turn summarizer pass then
+generates a title from the opening question and the assistant's first reply,
+through the `chat-title-task` prompt, and replaces the UNTOUCHED provisional
+text via `WikiStore.setChatTitleIf(chatID:expectedTitle:title:)` — one
+conditional `UPDATE` matching the expected current title. A manual rename
+makes the update match no row, so the rename always wins; the model call is
+skipped entirely for any title that is neither empty nor the provisional text.
+A failed or empty model call leaves the provisional title in place.
+
+Accepted edge (no provenance column by design): a rename whose text happens
+to equal the provisional first line is indistinguishable from the untouched
+provisional state, and the model title replaces it. Distinguishing the two
+would need a title-provenance column — a schema change deliberately not made
+for this behavior.
+
+Without a pin (Default mode) the provisional title is final; only a
+still-empty legacy row gets the first-line fallback write.
+
+Both writes run one conditional `UPDATE` inside `mutate(event:_:)` (the empty
+case is the CAS with an empty expectation). The result drives emission: a
+written title emits exactly one `.chat .updated` event; a miss returns `false`
+and emits nothing; a missing chat throws `.chatNotFound` and the savepoint
+rolls back with no event. A written title also refreshes the `chat_search`
+sidecar in the same transaction, through the helper shared with `renameChat`.
+
+`DaemonChatHost.submitTurn` derives the provisional title from
+`request.submission.userText` and calls the write before
+`makeOrGetController`, so it lands before the turn enters the durable queue.
+The nil-ID compatibility path keeps its creation-time title. A failed send
+never deletes an app-created chat. The rollback stays limited to nil-ID
+daemon-created compatibility chats.
+
+### What was removed
+
+- `EditorTab.optimisticChatID`, `WikiStoreModel.pendingDraftChats`, and the
+  draft-row overlay merge in `reloadChats()`. Every sidebar row is a store row.
+- The first-send retarget effect from the durable path. `ChatOutgoingMessagesController`
+  keeps an optional `chatCreated` hook that only the compatibility `.newChat`
+  surface installs; durable wiring passes nil, so the view never remounts onto
+  a second identity.
+- The draft-only double-send condition for durable chats. The compatibility
+  `.newChat` surface keeps its guard.
+
+`.newChat` remains a compatibility navigation intent (legacy omnibox
+bookmark-folder navigation), not a persisted tab lifecycle. `retargetTab` and
+`retargetActiveTabToChat` remain for the legacy `AgentOperationRunner` path.
+
 ## Sidebar affordances (pillar 4)
 
 `AgentToolsView` sidebar:
 
-- **+ New Conversation** menu on the Recent Conversations header (Ask default,
-  Edit) → `store.openTab(.ask/.edit)` (draft state).
+- **+ New Chat** button on the Chats header → `store.beginNewChat()`: the
+  durable row is persisted first and its `.chat(id)` tab opens directly.
+  (Historical: the Ask/Edit draft-choice menu and `.ask`/`.edit` draft state
+  are gone — see "Durable chat identity from creation".)
 - **Live indicator** — tinted `circle.fill` + "responding…" caption when the
   matching launcher (`askLauncher` for `.ask`, `editLauncher` for `.edit`)
   has `activeChatID == chat.id` AND `isGenerating`. Pure `isLiveRow(...)`

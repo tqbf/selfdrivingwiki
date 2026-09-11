@@ -20,7 +20,7 @@ struct ChatDetailPresentation {
         let preflightError: String?
         let pendingPermissions: [PendingPermission]
         let runStartedAt: Date?
-        let transcript: ChatDisplayTranscript
+        let projectionInput: TranscriptProjectionInput
         let exitStatus: Int32?
 
     }
@@ -60,6 +60,8 @@ struct ChatDetailPresentation {
         showsInternals: Bool,
         remoteSession: RemoteState,
         persistedTranscriptItems: [PersistedChatTranscriptItem],
+        pendingOutgoing: [PendingOutgoingMessage] = [],
+        authoritativeTurnIDs: Set<ChatTurnID> = [],
         queuedMessages: [PendingQueuedMessage],
         hasDraftText: Bool,
         isChatOperationConfigured: Bool
@@ -67,12 +69,21 @@ struct ChatDetailPresentation {
         let isLiveChat = chatID.map {
             remoteSession.sessionChatID == $0 && remoteSession.runState.isLive
         } ?? false
+        // An echo retires the moment authoritative data carries its turn —
+        // the session overlay, the persisted transcript, or both.
+        let visiblePendingOutgoing = pendingOutgoing
+            .filter { authoritativeTurnIDs.contains($0.id) == false }
+        let echoItems = outgoingEchoItems(from: visiblePendingOutgoing)
         let displayTranscript = isLiveChat
-            ? remoteSession.transcript
+            ? ChatDisplayProjection.project(
+                items: remoteSession.projectionInput.items + echoItems,
+                activeContentBlock: remoteSession.projectionInput.activeContentBlock
+            ).transcript
             : ChatDisplayProjection.project(
-                items: persistedTranscriptItems.map(\.item),
+                items: persistedTranscriptItems.map(\.item) + echoItems,
                 activeContentBlock: nil
             ).transcript
+        let isDraftSubmitPending = chatID == nil && pendingOutgoing.contains { $0.isSubmitting }
         let controls = Controls(
             showsDebugControls: showsDebugControls(
                 runState: remoteSession.runState,
@@ -93,7 +104,8 @@ struct ChatDetailPresentation {
             hasMount: true,
             runState: remoteSession.runState,
             hasDraftText: hasDraftText,
-            isChatOperationConfigured: isChatOperationConfigured
+            isChatOperationConfigured: isChatOperationConfigured,
+            isDraftSubmitPending: isDraftSubmitPending
         )
         let outlineEntries = buildOutlineEntries(
             displayTranscript: displayTranscript,
@@ -133,7 +145,8 @@ struct ChatDetailPresentation {
                     runState: remoteSession.runState,
                     hasChatID: chatID != nil,
                     isLiveChat: isLiveChat,
-                    isChatOperationConfigured: isChatOperationConfigured
+                    isChatOperationConfigured: isChatOperationConfigured,
+                    isDraftSubmitPending: isDraftSubmitPending
                 ),
                 canSend: canSend,
                 sendButtonTitle: sendButtonTitle(
@@ -170,6 +183,39 @@ struct ChatDetailPresentation {
             return "Ask a question, or ask the Agent to update the wiki…"
         }
         return isLiveChat ? "Ask a question to start a chat." : "No messages were persisted for this chat."
+    }
+
+    /// Transcript items for view-local outgoing echoes. Identity follows the
+    /// reducer's optimistic convention (`ChatClientSync.optimisticSubmit`): one
+    /// user message named `optimistic-<turnID>`, plus — once the send has
+    /// failed — a typed transport-failure row for the same turn. The failure
+    /// row uses the same durable vocabulary failed agent turns use, so the
+    /// renderer needs no echo-specific production change.
+    static func outgoingEchoItems(from pending: [PendingOutgoingMessage]) -> [ChatTranscriptItem] {
+        pending.flatMap { message -> [ChatTranscriptItem] in
+            let echoMessage = ChatTranscriptItem.message(
+                ChatTranscriptMessageItem(
+                    messageID: ChatMessageID(rawValue: "optimistic-\(message.id.rawValue)"),
+                    turnID: message.id,
+                    role: .user,
+                    text: message.wireMessage,
+                    createdAt: message.submittedAt
+                )
+            )
+            guard case .failed(let failureMessage) = message.status else {
+                return [echoMessage]
+            }
+            return [
+                echoMessage,
+                .turnFailure(ChatTranscriptTurnFailureItem(
+                    failureID: ChatTranscriptFailureID(rawValue: "send-failed-\(message.id.rawValue)"),
+                    turnID: message.id,
+                    category: .transportError,
+                    message: failureMessage,
+                    createdAt: message.submittedAt
+                )),
+            ]
+        }
     }
 
     static func transcriptIsAnswering(isLiveChat: Bool, runState: ChatRunState) -> Bool {
@@ -254,11 +300,15 @@ struct ChatDetailPresentation {
         runState: ChatRunState,
         hasChatID: Bool,
         isLiveChat: Bool,
-        isChatOperationConfigured: Bool
+        isChatOperationConfigured: Bool,
+        isDraftSubmitPending: Bool = false
     ) -> String? {
         _ = hasChatID
         if isChatOperationConfigured == false {
             return "Configure an enabled provider and model in Settings → Providers before sending."
+        }
+        if isDraftSubmitPending {
+            return "Starting chat…"
         }
         if runState == .queued {
             return "Waiting for the other session to finish before sending…"
@@ -275,13 +325,15 @@ struct ChatDetailPresentation {
         hasMount: Bool,
         runState: ChatRunState,
         hasDraftText: Bool,
-        isChatOperationConfigured: Bool
+        isChatOperationConfigured: Bool,
+        isDraftSubmitPending: Bool = false
     ) -> Bool {
         _ = hasMount
         return isChatOperationConfigured
             && !runState.isAnswering
             && runState != .queued
             && hasDraftText
+            && isDraftSubmitPending == false
     }
 
     private static func showsStopButton(

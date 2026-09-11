@@ -190,8 +190,11 @@ struct WikiDetailView: View {
                     .fill(Color.accentColor.opacity(isSidebarDropTargeted ? 0.08 : 0))
             }
         case .newChat:
-            // D2: draft state — empty composer until the first send retargets
-            // the tab to .chat(id). chatID == nil signals the draft state.
+            // Compatibility navigation intent, NOT a persisted tab lifecycle:
+            // every New Chat command persists the chat first and opens
+            // `.chat(id)` directly. This branch remains only for legacy paths
+            // that can still land on `.newChat` (e.g. omnibox bookmark-folder
+            // navigation), rendering the draft composer with `chatID == nil`.
             // Phase C4: chat is daemon-hosted; the coordinator owns the
             // RemoteChatSession. When the daemon is unavailable, render an
             // explanatory unavailable state instead of the composer.
@@ -332,8 +335,9 @@ struct WikiDetailView: View {
         store.newPageInNewTab()
     }
 
-    /// Start a new chat in the draft state (mirrors the Chats sidebar `+`).
-    /// beginNewChat also surfaces the optimistic sidebar row (#1223).
+    /// Start a new chat (mirrors the Chats sidebar `+`). The chat row is
+    /// persisted first, so the tab opens straight to `.chat(id)` with the
+    /// stored identity.
     private func addChat() {
         store.beginNewChat()
     }

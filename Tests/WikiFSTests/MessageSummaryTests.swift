@@ -473,5 +473,103 @@ struct MessageSummaryTests {
         #expect(v1 > v0)
         #expect(v2 > v1)
     }
+
+    // MARK: - Chat titles (summarizer-stage model)
+
+    @Test func textToSummarize_stripsBackendPreambleLines() {
+        // A message that ONLY carries the ACP skills-budget warning has
+        // nothing to summarize — it must never become a summary, the
+        // chats.summary, or a title input.
+        let warning = "Warning: Skill descriptions were shortened to fit the 2% skills context budget. "
+        #expect(MessageSummarizer.textToSummarize(from: .assistantText(warning)) == nil)
+
+        // A message that OPENS with the warning keeps the content after it.
+        let withContent = MessageSummarizer.textToSummarize(from: .assistantText(
+            warning + "\n\nTidal pools form where the tide recedes twice a day."))
+        #expect(withContent == "Tidal pools form where the tide recedes twice a day.")
+
+        // Thinking dumps are preamble for the same reason.
+        let thinking = MessageSummarizer.textToSummarize(from: .assistantText(
+            "Thinking:\n\nTidal pools differ from the open shore in several ways."))
+        #expect(thinking == "Tidal pools differ from the open shore in several ways.")
+    }
+
+    @Test func sanitizeTitle_stripsQuotesFencesLabelsAndPeriod() {
+        #expect(MessageSummarizer.sanitizeTitle("\"Venturi Effects Explained\"") == "Venturi Effects Explained")
+        #expect(MessageSummarizer.sanitizeTitle("```Venturi Effects```") == "Venturi Effects")
+        #expect(MessageSummarizer.sanitizeTitle("Title: Venturi Effects") == "Venturi Effects")
+        #expect(MessageSummarizer.sanitizeTitle("Venturi Effects.") == "Venturi Effects")
+        #expect(MessageSummarizer.sanitizeTitle("Venturi Effects\n\nSome extra reasoning") == "Venturi Effects")
+        #expect(MessageSummarizer.sanitizeTitle("  \n  Venturi Effects  \n ") == "Venturi Effects")
+        #expect(MessageSummarizer.sanitizeTitle("\u{201C}Curly Quotes\u{201D}") == "Curly Quotes")
+        #expect(MessageSummarizer.sanitizeTitle("\"Bootstrap Order in Dependency Graphs\".") == "Bootstrap Order in Dependency Graphs")
+    }
+
+    @Test func sanitizeTitle_capsLength() {
+        let long = String(repeating: "a", count: 200)
+        let capped = MessageSummarizer.sanitizeTitle(long, maxLength: 80)
+        #expect(capped.count == 80)
+    }
+
+    @Test func sanitizeTitle_garbageReturnsEmpty() {
+        #expect(MessageSummarizer.sanitizeTitle("\"\"") == "")
+        #expect(MessageSummarizer.sanitizeTitle("Title:") == "")
+        #expect(MessageSummarizer.sanitizeTitle("   ") == "")
+    }
+
+    @Test func modelTitle_buildsTitleFromQuestionAndAnswer() async {
+        let backend = FakeAgentBackend(behaviors: [
+            FakeSessionBehavior(events: [.assistantText("Venturi Effects Explained"), .messageStop])
+        ])
+        let title = await MessageSummarizer.modelTitle(
+            question: "How does a venturi mask work?",
+            answer: "A venturi mask uses a jet entrainment system...",
+            backend: backend,
+            profile: BackendProfile(model: "test-model"))
+        #expect(title == "Venturi Effects Explained")
+        // One-shot session: start, send, cancel.
+        let counts = await (backend.startCount, backend.sendCount, backend.cancelCount)
+        #expect(counts.0 == 1, "startCount")
+        #expect(counts.1 == 1, "sendCount")
+        #expect(counts.2 == 1, "cancelCount")
+    }
+
+    @Test func modelTitle_sanitizedModelOutput() async {
+        // A model that wraps the title in quotes and appends a period still
+        // yields clean sidebar text.
+        let backend = FakeAgentBackend(behaviors: [
+            FakeSessionBehavior(events: [.assistantText("\"Bootstrap Order in Dependency Graphs\"."), .messageStop])
+        ])
+        let title = await MessageSummarizer.modelTitle(
+            question: "What loads first in a dependency graph?",
+            answer: nil,
+            backend: backend,
+            profile: BackendProfile())
+        #expect(title == "Bootstrap Order in Dependency Graphs")
+    }
+
+    @Test func modelTitle_emptyQuestion_returnsNilWithoutSession() async {
+        let backend = FakeAgentBackend(behaviors: [])
+        let title = await MessageSummarizer.modelTitle(
+            question: "   ",
+            answer: "unused",
+            backend: backend,
+            profile: BackendProfile())
+        #expect(title == nil)
+        let starts = await backend.startCount
+        #expect(starts == 0)
+    }
+
+    @Test func modelTitle_unusableOutput_returnsNil() async {
+        let backend = FakeAgentBackend(behaviors: [
+            FakeSessionBehavior(events: [.assistantText("\"\""), .messageStop])
+        ])
+        let title = await MessageSummarizer.modelTitle(
+            question: "A real question?",
+            answer: nil,
+            backend: backend,
+            profile: BackendProfile())
+        #expect(title == nil)
+    }
 }
 #endif // os(macOS)

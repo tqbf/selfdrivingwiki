@@ -31,6 +31,10 @@ struct ChatDetailView: View {
     @State private var outlineScroll: ChatScrollRequest? = nil
     @State private var quoteAnchor: ChatHighlightRequest? = nil
     @State private var queuedMessages: [PendingQueuedMessage] = []
+    @State private var outgoing = ChatOutgoingMessagesController()
+    /// Previous `runState.isAnswering`, so the answer→idle transition (one
+    /// turn finished) can be detected exactly once.
+    @State private var sessionWasAnswering = false
     @State private var diagnosticExportError: String?
     @State private var metadataState: MetadataHydrationState = .idle
     @State private var chatResolution: ChatResolution?
@@ -60,9 +64,25 @@ struct ChatDetailView: View {
             preflightError: remoteSession.preflightError,
             pendingPermissions: remoteSession.pendingPermissions,
             runStartedAt: remoteSession.runStartedAt,
-            transcript: remoteSession.displayTranscript,
+            projectionInput: remoteSession.displayProjectionInput,
             exitStatus: remoteSession.exitStatus
         )
+    }
+
+    /// Turn identities already rendered by authoritative data: the session's
+    /// committed rows, overlay, active and queued turns, plus the persisted
+    /// transcript. An outgoing echo retires the moment its turn appears here.
+    private var authoritativeTurnIDs: Set<ChatTurnID> {
+        remoteSession.knownTurnIDs.union(
+            persistedTranscriptItems.compactMap { $0.item.turnID }
+        )
+    }
+
+    /// Compatibility draft surface only (`.newChat` navigation intent): a
+    /// draft submit must fully resolve (or fail) before another one starts.
+    /// Durable chats send through the normal persisted-chat path instead.
+    private var isDraftSubmitPending: Bool {
+        chatID == nil && outgoing.pendingOutgoing.contains { $0.isSubmitting }
     }
 
     private var presentation: ChatDetailPresentation {
@@ -72,6 +92,8 @@ struct ChatDetailView: View {
             showsInternals: showsInternals,
             remoteSession: remotePresentationState,
             persistedTranscriptItems: persistedTranscriptItems,
+            pendingOutgoing: outgoing.pendingOutgoing,
+            authoritativeTurnIDs: authoritativeTurnIDs,
             queuedMessages: queuedMessages,
             hasDraftText: hasDraftText,
             isChatOperationConfigured: isChatOperationConfigured
@@ -131,6 +153,18 @@ struct ChatDetailView: View {
         }
         .onChange(of: remoteSession.runState) { _, runState in
             if !runState.isLive { showsInternals = false }
+            // A turn just finished: the daemon may have titled the chat or
+            // written summaries during the turn, and those writes cross to
+            // this process through the chat-sync stream — the one channel an
+            // open chat is guaranteed to receive. Re-read the row so the
+            // header, sidebar row, and tab title reflect it now instead of
+            // waiting on the cross-process Darwin bridge.
+            let turnEnded = sessionWasAnswering && !runState.isAnswering
+            sessionWasAnswering = runState.isAnswering
+            if turnEnded, let chatID {
+                chatResolution = store.resolveChat(id: chatID)
+                store.reloadChats()
+            }
             if !runState.isLive, !queuedMessages.isEmpty {
                 firePendingQueuedMessage()
             }
@@ -140,9 +174,15 @@ struct ChatDetailView: View {
         .task(id: ChatResolutionTaskKey(
             chatID: chatID,
             messageVersion: store.messageVersion,
-            retryVersion: chatResolutionRetryVersion
+            retryVersion: chatResolutionRetryVersion,
+            isLive: isLiveChat
         )) {
-            guard let chatID, !isLiveChat else {
+            // Resolve in EVERY state, live included: the durable row carries
+            // the title/date the header card renders, and a brand-new chat is
+            // on screen precisely while its first session is live. The task
+            // re-runs on messageVersion and liveness flips, so the card keeps
+            // up with daemon-side writes.
+            guard let chatID else {
                 chatResolution = nil
                 return
             }
@@ -161,10 +201,13 @@ struct ChatDetailView: View {
                 await coordinator.rehydrate(wikiID: session.wikiID, chatID: chatID)
             } else {
                 persistedTranscriptItems = []
-                if let question = store.pendingChatQuestion {
-                    store.pendingChatQuestion = nil
-                    store.draftChatMessage = question
-                }
+            }
+            // The omnibox "Ask" pre-fill (#288) is consumed on the FIRST frame
+            // of either surface: a durable new chat opens straight to
+            // `.chat(id)`, so the question can no longer wait for a draft tab.
+            if let question = store.pendingChatQuestion {
+                store.pendingChatQuestion = nil
+                store.draftChatMessage = question
             }
         }
         .task(id: chatID.map { MetadataHydrationKey.chat($0, store.messageVersion) }) {
@@ -183,6 +226,7 @@ struct ChatDetailView: View {
             updateRightSidebarRegistration()
         }
         .onAppear {
+            installOutgoingEnvironment()
             updateRightSidebarRegistration()
         }
         .onChange(of: presentation.outlineEntries) { _, _ in
@@ -657,12 +701,24 @@ struct ChatDetailView: View {
             return
         }
         guard presentation.composer.canSend else { return }
+        // Belt-and-braces with the canSend guard (compat draft surface only):
+        // a draft submit must fully resolve or fail before another one starts.
+        guard !isDraftSubmitPending else { return }
         let message = store.draftChatMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
-        let wireMessage = buildWireMessage(from: message)
+        let payload = ChatOutgoingMessagesController.OutgoingPayload(
+            wireMessage: buildWireMessage(from: message),
+            draftText: message,
+            attachments: attachments
+        )
         store.clearActiveChatDraft()
         attachments = []
-        submitMessage(wireMessage)
+        // The durable row's provisional title appears the moment the user
+        // sends — no cross-process round trip.
+        if let chatID {
+            store.applyProvisionalChatTitle(chatID: chatID, userText: message)
+        }
+        outgoing.send(chatID: chatID, payload: payload, makeRequest: makeSubmitRequest)
     }
 
     private func queueMessage() {
@@ -670,9 +726,10 @@ struct ChatDetailView: View {
         let message = store.draftChatMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
         queuedMessages.append(
-            PendingQueuedMessage(
+            ChatOutgoingMessagesController.makePendingQueuedMessage(
+                draftText: message,
                 wireMessage: buildWireMessage(from: message),
-                preview: message
+                attachments: attachments
             )
         )
         store.clearActiveChatDraft()
@@ -680,14 +737,29 @@ struct ChatDetailView: View {
     }
 
     private func recallQueuedMessage() {
-        guard let pending = queuedMessages.popLast() else { return }
-        store.draftChatMessage = pending.preview
+        // Read without mutating first: a touched composer rejects the restore,
+        // and the queued message stays queued rather than being dropped.
+        guard let pending = queuedMessages.last,
+              let restore = ChatOutgoingMessagesController.restoreQueuedMessage(
+                  pending, composer: currentComposerSnapshot()
+              )
+        else { return }
+        queuedMessages.removeLast()
+        store.draftChatMessage = restore.draftText
+        attachments = restore.attachments
     }
 
     private func editQueuedMessage(_ index: Int) {
-        guard !hasDraftText, queuedMessages.indices.contains(index) else { return }
-        let pending = queuedMessages.remove(at: index)
-        store.draftChatMessage = pending.preview
+        guard queuedMessages.indices.contains(index) else { return }
+        let pending = queuedMessages[index]
+        // Restore (and remove) only from an untouched composer; otherwise the
+        // queued message stays queued rather than being dropped.
+        guard let restore = ChatOutgoingMessagesController.restoreQueuedMessage(
+            pending, composer: currentComposerSnapshot()
+        ) else { return }
+        queuedMessages.remove(at: index)
+        store.draftChatMessage = restore.draftText
+        attachments = restore.attachments
     }
 
     private func removeQueuedMessage(_ index: Int) {
@@ -701,7 +773,14 @@ struct ChatDetailView: View {
         // consume it.
         guard isChatOperationConfigured, let pending = queuedMessages.first else { return }
         queuedMessages.removeFirst()
-        submitMessage(pending.wireMessage)
+        if let chatID {
+            store.applyProvisionalChatTitle(chatID: chatID, userText: pending.draftText)
+        }
+        outgoing.send(
+            chatID: chatID,
+            payload: ChatOutgoingMessagesController.outgoingPayload(from: pending),
+            makeRequest: makeSubmitRequest
+        )
     }
 
     private func buildWireMessage(from message: String) -> String {
@@ -710,44 +789,65 @@ struct ChatDetailView: View {
         return "\(refs)\n\n\(message)"
     }
 
-    private func submitMessage(_ wireMessage: String) {
-        Task {
-            guard isChatOperationConfigured else { return }
-            let submission = ChatTurnSubmission(
-                commandID: ChatCommandID(rawValue: ULID.generate()),
-                turnID: ChatTurnID(rawValue: ULID.generate()),
-                userText: wireMessage,
-                contextReferences: [],
-                submittedAt: Date()
-            )
-            if chatID != nil {
+    private func makeSubmitRequest(_ submission: ChatTurnSubmission) -> ChatSubmitRequest {
+        let override = chatID == nil ? remoteSession.pendingModelOverride : nil
+        return ChatSubmitRequest(
+            wikiID: session.wikiID,
+            chatID: chatID,
+            submission: submission,
+            providerId: override?.providerId,
+            modelId: override?.modelId,
+            configuredThinkingOptionID: chatID == nil
+                ? remoteSession.pendingConfiguredThinkingOptionID
+                : nil
+        )
+    }
+
+    private func currentComposerSnapshot() -> ChatOutgoingMessagesController.ComposerSnapshot {
+        ChatOutgoingMessagesController.ComposerSnapshot(
+            trimmedText: store.draftChatMessage.trimmingCharacters(in: .whitespacesAndNewlines),
+            attachmentIDs: attachments.map(\.id)
+        )
+    }
+
+    /// Real effect wiring for the send lifecycle controller. Idempotent; the
+    /// `.id(chatID)` remount re-runs `onAppear` and re-installs onto the fresh
+    /// controller instance. Durable chats need no transition effect: their
+    /// `ChatID` is fixed at creation and the authoritative turn replaces the
+    /// echo through the turnID filter. The compatibility `.newChat` surface
+    /// (nil chatID) still follows the daemon-created chat on success.
+    private func installOutgoingEnvironment() {
+        let chatCreated: (@MainActor (ChatID) -> Void)? = chatID == nil
+            ? { @MainActor [store] resolvedChatID in
+                store.retargetActiveTabToChat(chatID: resolvedChatID)
+            }
+            : nil
+        outgoing.installEnvironment(.init(
+            submit: { [coordinator] request in
+                try await coordinator.submitTurn(request)
+            },
+            optimisticSubmit: { [remoteSession] submission in
                 remoteSession.optimisticSubmit(submission)
-            }
-            do {
-                let override = remoteSession.pendingModelOverride
-                let resolvedChatID = try await coordinator.submitTurn(
-                    ChatSubmitRequest(
-                        wikiID: session.wikiID,
-                        chatID: chatID,
-                        submission: submission,
-                        providerId: chatID == nil ? override?.providerId : nil,
-                        modelId: chatID == nil ? override?.modelId : nil,
-                        configuredThinkingOptionID: chatID == nil
-                            ? remoteSession.pendingConfiguredThinkingOptionID
-                            : nil
-                    )
+            },
+            optimisticSubmitFailed: { [remoteSession] turnID in
+                remoteSession.optimisticSubmitFailed(turnID: turnID)
+            },
+            chatCreated: chatCreated,
+            readComposer: { [store] in
+                ChatOutgoingMessagesController.ComposerSnapshot(
+                    trimmedText: store.draftChatMessage
+                        .trimmingCharacters(in: .whitespacesAndNewlines),
+                    attachmentIDs: self.attachments.map(\.id)
                 )
-                if chatID == nil {
-                    store.retargetActiveTabToChat(chatID: resolvedChatID)
-                }
-            } catch {
-                if chatID != nil {
-                    remoteSession.optimisticSubmitFailed(turnID: submission.turnID)
-                }
-                DebugLog.agent("ChatDetailView.submitMessage failed: \(error)")
-                remoteSession.preflightError = error.localizedDescription
+            },
+            restoreDraft: { [store] draftText, restoredAttachments in
+                store.draftChatMessage = draftText
+                self.attachments = restoredAttachments
+            },
+            setPreflightError: { [remoteSession] message in
+                remoteSession.preflightError = message
             }
-        }
+        ))
     }
 
     nonisolated static func debugFolderButtonHelpText(debugURL: URL?) -> String {
@@ -782,13 +882,15 @@ struct ChatDetailView: View {
         runState: ChatRunState,
         hasChatID: Bool,
         isLiveChat: Bool,
-        isChatOperationConfigured: Bool
+        isChatOperationConfigured: Bool,
+        isDraftSubmitPending: Bool = false
     ) -> String? {
         ChatDetailPresentation.composerCaptionText(
             runState: runState,
             hasChatID: hasChatID,
             isLiveChat: isLiveChat,
-            isChatOperationConfigured: isChatOperationConfigured
+            isChatOperationConfigured: isChatOperationConfigured,
+            isDraftSubmitPending: isDraftSubmitPending
         )
     }
 
@@ -796,13 +898,15 @@ struct ChatDetailView: View {
         hasMount: Bool,
         runState: ChatRunState,
         hasDraftText: Bool,
-        isChatOperationConfigured: Bool
+        isChatOperationConfigured: Bool,
+        isDraftSubmitPending: Bool = false
     ) -> Bool {
         ChatDetailPresentation.canSendPredicate(
             hasMount: hasMount,
             runState: runState,
             hasDraftText: hasDraftText,
-            isChatOperationConfigured: isChatOperationConfigured
+            isChatOperationConfigured: isChatOperationConfigured,
+            isDraftSubmitPending: isDraftSubmitPending
         )
     }
 
@@ -825,10 +929,43 @@ struct ChatDetailView: View {
     }
 }
 
+/// One locally echoed outgoing send owned by `ChatOutgoingMessagesController`.
+/// The finite status machine replaces flag pairs: a send is `submitting` from
+/// the frame it is accepted until the XPC reply lands, and on failure it
+/// becomes `failed(message:)` while staying visible in the transcript. The
+/// entry is removed only when authoritative data takes over its turn or the
+/// view remounts — never by a later send.
+struct PendingOutgoingMessage: Identifiable, Equatable {
+    enum Status: Equatable {
+        case submitting
+        case failed(message: String)
+    }
+
+    let id: ChatTurnID
+    var status: Status
+    /// The composer text as typed, before attachment references were prefixed.
+    let draftText: String
+    /// The message actually submitted on the wire (attachments inlined).
+    let wireMessage: String
+    /// The structured attachments captured at send time, for failure restore.
+    let attachments: [ChatAttachment]
+    let submittedAt: Date
+
+    var isSubmitting: Bool {
+        if case .submitting = status { return true }
+        return false
+    }
+}
+
 struct PendingQueuedMessage: Identifiable, Equatable {
     let id = UUID()
     let wireMessage: String
     let preview: String
+    /// The composer text as typed, preserved so a failed queued send can
+    /// restore the composer without exposing wire reference syntax.
+    let draftText: String
+    /// The structured attachments captured when the message was queued.
+    let attachments: [ChatAttachment]
 }
 
 struct ChatAttachment: Identifiable, Hashable {
@@ -839,11 +976,19 @@ struct ChatAttachment: Identifiable, Hashable {
     var hashableID: String { "\(kind.rawValue):\(itemID)" }
     var id: String { hashableID }
 
+    init(kind: SidebarDragPayload.Kind, itemID: String, displayName: String) {
+        self.kind = kind
+        self.itemID = itemID
+        self.displayName = displayName
+    }
+
     @MainActor
     init(payload: SidebarDragPayload, store: WikiStoreModel) {
-        self.kind = payload.kind
-        self.itemID = payload.id
-        self.displayName = store.resolveAttachmentName(for: payload) ?? payload.id
+        self.init(
+            kind: payload.kind,
+            itemID: payload.id,
+            displayName: store.resolveAttachmentName(for: payload) ?? payload.id
+        )
     }
 
     func hash(into hasher: inout Hasher) {
@@ -881,6 +1026,11 @@ private struct ChatResolutionTaskKey: Hashable {
     let chatID: ChatID?
     let messageVersion: Int
     let retryVersion: Int
+    /// Whether the session is live. A live→cold flip (idle eviction, daemon
+    /// restart, app relaunch) must re-resolve: the header renders the cached
+    /// resolution once the live overlay is gone, and the daemon may have
+    /// titled or summarized the row during the session.
+    let isLive: Bool
 }
 
 private struct ChatHydrationTaskKey: Hashable {
