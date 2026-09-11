@@ -206,15 +206,40 @@ public enum MessageSummarizer {
     /// per-message summary). Returns the text for `.assistantText` and
     /// `.result`; nil for everything else (tool/thinking/user events have no
     /// assistant summary surface). PURE.
+    ///
+    /// ACP backends open replies with meta preambles — a skills-budget
+    /// `Warning:` line, a `Thinking:` dump — which are not content. Leading
+    /// preamble lines are stripped; a message that is ONLY preamble yields nil
+    /// so it is never summarized and never becomes `chats.summary` or a title
+    /// input.
     public static func textToSummarize(from event: AgentEvent) -> String? {
         switch event {
         case .assistantText(let text):
-            return text
+            return summarizableAssistantText(text)
         case .result(_, let text):
-            return text
+            return summarizableAssistantText(text)
         default:
             return nil
         }
+    }
+
+    /// Drop leading blank / `Warning:` / `Thinking:` lines from assistant
+    /// text. PURE. Returns nil when nothing substantive remains.
+    static func summarizableAssistantText(_ text: String) -> String? {
+        var lines = text.components(separatedBy: .newlines)
+        while !lines.isEmpty {
+            let line = lines[0].trimmingCharacters(in: .whitespaces)
+            if line.isEmpty
+                || line.hasPrefix("Warning:")
+                || line.hasPrefix("Thinking:") {
+                lines.removeFirst()
+            } else {
+                break
+            }
+        }
+        let rest = lines.joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return rest.isEmpty ? nil : rest
     }
 
     /// The message whose summary doubles as the CHAT-level summary

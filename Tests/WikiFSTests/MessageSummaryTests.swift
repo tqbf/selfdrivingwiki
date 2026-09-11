@@ -476,6 +476,24 @@ struct MessageSummaryTests {
 
     // MARK: - Chat titles (summarizer-stage model)
 
+    @Test func textToSummarize_stripsBackendPreambleLines() {
+        // A message that ONLY carries the ACP skills-budget warning has
+        // nothing to summarize — it must never become a summary, the
+        // chats.summary, or a title input.
+        let warning = "Warning: Skill descriptions were shortened to fit the 2% skills context budget. "
+        #expect(MessageSummarizer.textToSummarize(from: .assistantText(warning)) == nil)
+
+        // A message that OPENS with the warning keeps the content after it.
+        let withContent = MessageSummarizer.textToSummarize(from: .assistantText(
+            warning + "\n\nTidal pools form where the tide recedes twice a day."))
+        #expect(withContent == "Tidal pools form where the tide recedes twice a day.")
+
+        // Thinking dumps are preamble for the same reason.
+        let thinking = MessageSummarizer.textToSummarize(from: .assistantText(
+            "Thinking:\n\nTidal pools differ from the open shore in several ways."))
+        #expect(thinking == "Tidal pools differ from the open shore in several ways.")
+    }
+
     @Test func sanitizeTitle_stripsQuotesFencesLabelsAndPeriod() {
         #expect(MessageSummarizer.sanitizeTitle("\"Venturi Effects Explained\"") == "Venturi Effects Explained")
         #expect(MessageSummarizer.sanitizeTitle("```Venturi Effects```") == "Venturi Effects")
