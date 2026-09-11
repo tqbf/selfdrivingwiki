@@ -1088,8 +1088,10 @@ struct ChatWebView: NSViewRepresentable {
             white-space: pre-wrap; word-break: break-word;
           }
           .chat-tool-group-reasoning .row-status { font-style: normal; }
-          .chat-tool-group-reasoning p { margin: 0; display: inline; }
-          .chat-tool-group-reasoning p:last-child { display: inline; }
+          /* Paragraphs stay block-level: a folded reasoning entry can hold
+             several bolded step lines, and inline flow would concatenate
+             them into one unreadable run. */
+          .chat-tool-group-reasoning p { margin: 0; }
           .chat-tool-group-reasoning.is-streaming { opacity: 0.85; }
           /* Interim assistant notes (Summary mode): one-line expandable
              disclosures so only the turn's final answer renders expanded. */

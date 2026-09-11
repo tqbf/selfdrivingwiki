@@ -361,13 +361,17 @@ struct ChatTranscriptHostedTests {
                 updatedAt: .distantPast
             )
         }
-        return .toolCallGroup(ChatToolCallGroupRow(
+        return .toolCallGroup(groupStruct(calls: calls))
+    }
+
+    private func groupStruct(calls: [ChatDisplayToolCall]) -> ChatToolCallGroupRow {
+        ChatToolCallGroupRow(
             id: ChatToolCallGroupID(hostedBy: calls[0]),
             turnID: ChatTurnID(rawValue: "turn-group-hosted"),
             calls: calls,
             state: .aggregating(calls),
             summary: .summarizing(calls)
-        ))
+        )
     }
 
     private func appendRow(_ row: ChatDisplayRow, revision: Int, webView: WKWebView) async throws {
@@ -465,28 +469,57 @@ struct ChatTranscriptHostedTests {
 
         let waiter = NavigationWaiter()
         try await waiter.load(ChatWebView.Coordinator.shellHTML, in: webView)
-        try await appendRow(
-            groupRow(ids: [("t1", .completed), ("t2", .completed)]),
-            revision: 91,
-            webView: webView
-        )
+        var keyboardGroupStruct = groupStruct(calls: [
+            ChatDisplayToolCall(
+                id: ToolCallID(rawValue: "t1"),
+                turnID: ChatTurnID(rawValue: "turn-group-hosted"),
+                toolName: "Bash",
+                status: .completed,
+                detail: "cmd for t1",
+                output: "output for t1",
+                permissionRequestID: nil,
+                updatedAt: .distantPast
+            ),
+            ChatDisplayToolCall(
+                id: ToolCallID(rawValue: "t2"),
+                turnID: ChatTurnID(rawValue: "turn-group-hosted"),
+                toolName: "Bash",
+                status: .completed,
+                detail: "cmd for t2",
+                output: "output for t2",
+                permissionRequestID: nil,
+                updatedAt: .distantPast
+            ),
+        ])
+        keyboardGroupStruct.reasoning = [
+            ChatDisplayReasoningEntry(
+                id: ChatMessageID(rawValue: "r-hosted"),
+                text: "**Drafting outline**\n\n**Expanding citations**",
+                contentState: .final
+            ),
+        ]
+        try await appendRow(.toolCallGroup(keyboardGroupStruct), revision: 91, webView: webView)
 
-        // The detail body is height-bounded with scrolling overflow, and the
-        // summary is a native focus target (keyboard operable).
+        // The detail body is height-bounded with scrolling overflow, the
+        // summary is a native focus target (keyboard operable), and folded
+        // reasoning paragraphs stay block-level so a multi-paragraph entry
+        // never concatenates onto one line.
         let styles = await evaluateJavaScriptWithTimeout(webView, """
             (function(){
                 var group=document.querySelector('[data-row-id="toolgroup-t1"]');
                 var detail=group.querySelector('.chat-tool-group-detail');
                 var summary=group.querySelector('summary');
                 var style=getComputedStyle(detail);
+                var paragraph=group.querySelector('.chat-tool-group-reasoning p');
                 return [
                     style.maxHeight,
                     style.overflowY,
-                    String(summary.tabIndex >= 0)
+                    String(summary.tabIndex >= 0),
+                    getComputedStyle(paragraph).display
                 ].join('|');
             })()
             """)
-        #expect(styles == "400px|auto|true")
+        #expect(styles == "400px|auto|true|block")
 
         // Keyboard disclosure. The web view is first responder and the
         // summary holds DOM focus. Space (handled by the delegated group-
