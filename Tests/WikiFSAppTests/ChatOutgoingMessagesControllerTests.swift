@@ -30,7 +30,7 @@ struct ChatOutgoingMessagesControllerTests {
         var recordedRequests: [ChatSubmitRequest] = []
         var optimisticSubmissions: [ChatTurnSubmission] = []
         var optimisticFailures: [ChatTurnID] = []
-        var retargetedChatIDs: [ChatID] = []
+        var createdChatIDs: [ChatID] = []
         var restoredDrafts: [(draftText: String, attachments: [ChatAttachment])] = []
         var preflightErrors: [String?] = []
         var composerSnapshot = ChatOutgoingMessagesController.ComposerSnapshot(
@@ -41,7 +41,13 @@ struct ChatOutgoingMessagesControllerTests {
 
         var suspendedSubmitCount: Int { submitWaiters.count }
 
-        func installEnvironment() {
+        func installEnvironment(chatCreated: ((ChatID) -> Void)? = nil) {
+            let hook: (@MainActor (ChatID) -> Void)? = chatCreated.map { userHook in
+                { @MainActor [weak self] chatID in
+                    self?.createdChatIDs.append(chatID)
+                    userHook(chatID)
+                }
+            }
             controller.installEnvironment(.init(
                 submit: { [weak self] request in
                     guard let self else { throw CancellationError() }
@@ -53,9 +59,7 @@ struct ChatOutgoingMessagesControllerTests {
                 optimisticSubmitFailed: { [weak self] turnID in
                     self?.optimisticFailures.append(turnID)
                 },
-                retarget: { [weak self] chatID in
-                    self?.retargetedChatIDs.append(chatID)
-                },
+                chatCreated: hook,
                 readComposer: { [weak self] in
                     self?.composerSnapshot
                     ?? ChatOutgoingMessagesController.ComposerSnapshot(trimmedText: "", attachmentIDs: [])
@@ -189,18 +193,59 @@ struct ChatOutgoingMessagesControllerTests {
         await harness.waitUntil { harness.preflightErrors.count == 1 }
     }
 
-    @Test func draftSubmitRetargetsOnSuccess() async {
+    /// AC.3: the first send carries the SAME `ChatID` creation returned, and
+    /// there is no retarget effect — the echo is reconciled by turnID while the
+    /// view keeps its single identity.
+    @Test func firstSendKeepsCreationIdentity() async {
         let harness = SendHarness()
         harness.installEnvironment()
+        let creationChatID = ChatID(rawValue: "01J" + String(repeating: "C", count: 22))
+
+        harness.send(chatID: creationChatID)
+        #expect(harness.optimisticSubmissions.count == 1,
+                "an existing (durable empty) chat takes the optimistic path")
+        await harness.waitUntil { harness.suspendedSubmitCount == 1 }
+        // The wire request carries the creation identity verbatim.
+        #expect(harness.recordedRequests.first?.chatID == creationChatID)
+
+        harness.resumeNextSubmit(with: .success(creationChatID))
+        await harness.waitUntil { harness.suspendedSubmitCount == 0 }
+
+        // No remount, no retarget: the echoed entry stays visible until
+        // authoritative data (carrying the same turnID) takes over rendering.
+        #expect(harness.controller.pendingOutgoing.count == 1)
+        #expect(harness.controller.pendingOutgoing.first?.isSubmitting == true)
+    }
+
+    /// Compatibility `.newChat` surface: a nil-ID submission created the chat
+    /// daemon-side, and the surface must follow the returned id (the
+    /// pre-durable retarget). The hook records the transition; the real wiring
+    /// retargets the active tab, and the `.id(chatID)` remount discards the
+    /// controller's echo state.
+    @Test func nilIDSubmitSuccessFollowsCreatedChat() async {
+        let harness = SendHarness()
+        harness.installEnvironment(chatCreated: { _ in })
 
         harness.send(chatID: nil)
         await harness.waitUntil { harness.suspendedSubmitCount == 1 }
-        #expect(harness.recordedRequests.first?.chatID == nil)
         harness.resumeNextSubmit(with: .success(Self.resolvedChatID))
-        await harness.waitUntil { harness.retargetedChatIDs == [Self.resolvedChatID] }
+        await harness.waitUntil { harness.createdChatIDs.count == 1 }
 
-        // Disposal is the remount's job; the entry is retained.
-        #expect(harness.controller.pendingOutgoing.count == 1)
+        #expect(harness.createdChatIDs == [Self.resolvedChatID])
+    }
+
+    /// Durable chats never transition identity on success — the compat hook
+    /// fires ONLY for nil-ID submissions.
+    @Test func durableIDSubmitDoesNotFireChatCreated() async {
+        let harness = SendHarness()
+        harness.installEnvironment(chatCreated: { _ in })
+
+        harness.send(chatID: Self.existingChatID)
+        await harness.waitUntil { harness.suspendedSubmitCount == 1 }
+        harness.resumeNextSubmit(with: .success(Self.existingChatID))
+        await harness.waitUntil { harness.suspendedSubmitCount == 0 }
+
+        #expect(harness.createdChatIDs.isEmpty)
     }
 
     @Test func failureRetainsFailedRowAndMarksIt() async {
@@ -319,7 +364,7 @@ struct ChatOutgoingMessagesControllerTests {
         #expect(harness.controller.pendingOutgoing.count == 2)
         await harness.waitUntil { harness.suspendedSubmitCount == 1 }
         harness.resumeNextSubmit(with: .success(Self.resolvedChatID))
-        await harness.waitUntil { harness.retargetedChatIDs.count == 1 }
+        await harness.waitUntil { harness.suspendedSubmitCount == 0 }
 
         #expect(Self.failedMessage(harness.controller.pendingOutgoing.first) == "daemon down")
         #expect(harness.controller.pendingOutgoing.last?.isSubmitting == true)

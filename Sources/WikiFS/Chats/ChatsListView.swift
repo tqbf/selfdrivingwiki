@@ -43,9 +43,7 @@ struct ChatsListView: NSViewControllerRepresentable {
             // the live badge on visible rows without a full reload.
             vc.reconfigureLiveState()
         }
-        vc.reconcileHighlight(
-            activeSelection: store.activeTab?.selection,
-            draftChatID: store.activeTab?.optimisticChatID)
+        vc.reconcileHighlight(activeSelection: store.activeTab?.selection)
         if let pending = store.pendingSidebarReveal, case .chat(let id) = pending {
             _ = vc.revealAndSelect(id: id)
             store.consumePendingSidebarReveal()
@@ -198,23 +196,14 @@ final class ChatsListViewController: NSViewController {
     /// `updateNSViewController`. Only acts when the table is in single-selection
     /// state so user multi-selects (Cmd/Shift) aren't clobbered.
     ///
-    /// #1223: a `.newChat` draft has no persisted `ChatSummary` yet — the
-    /// active draft tab's optimistic row (`draftChatID`) is highlighted
-    /// instead, so the new-chat row stays selected while the draft editor is
-    /// open.
-    func reconcileHighlight(activeSelection: WikiSelection?, draftChatID: ChatID? = nil) {
+    /// Every new chat is persisted before its tab opens, so a `.chat(id)`
+    /// selection always has a real `ChatSummary` row to highlight — there is
+    /// no optimistic draft row anymore (see ``WikiStoreModel/beginNewChat()``).
+    func reconcileHighlight(activeSelection: WikiSelection?) {
         guard !isReconcilingHighlight, tableView.selectedRowIndexes.count <= 1 else { return }
         switch activeSelection {
         case .chat(let id):
             guard let row = items.firstIndex(where: { $0.id == id }) else { return }
-            if tableView.selectedRow != row {
-                isReconcilingHighlight = true
-                tableView.selectRowIndexes(IndexSet([row]), byExtendingSelection: false)
-                isReconcilingHighlight = false
-            }
-        case .newChat:
-            guard let draftChatID,
-                  let row = items.firstIndex(where: { $0.id == draftChatID }) else { fallthrough }
             if tableView.selectedRow != row {
                 isReconcilingHighlight = true
                 tableView.selectRowIndexes(IndexSet([row]), byExtendingSelection: false)

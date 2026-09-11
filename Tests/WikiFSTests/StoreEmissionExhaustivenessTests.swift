@@ -60,4 +60,21 @@ struct StoreEmissionExhaustivenessTests {
         let end = tail.dropFirst().range(of: "\n    public func ")?.lowerBound ?? source.endIndex
         #expect(source[start..<end].contains("mutate("))
     }
+
+    /// The first-send title write MUST route through `mutate(event:_:)`: the
+    /// conditional `false` result emits nothing, `true` emits exactly one
+    /// `.chat .updated`, and a missing chat throws inside the savepoint so the
+    /// rollback also emits nothing.
+    @Test func chatTitleIfEmptyPublicMutatorRoutesThroughMutate() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Sources/WikiFSCore/Store/GRDBWikiStore.swift"),
+            encoding: .utf8)
+        let signature = "public func setChatTitleIfEmpty("
+        let start = try #require(source.range(of: signature)?.lowerBound)
+        let tail = source[start...]
+        let end = tail.dropFirst().range(of: "\n    public func ")?.lowerBound ?? source.endIndex
+        #expect(source[start..<end].contains("mutate("))
+    }
 }

@@ -200,6 +200,11 @@ gains display-name healing, embeds, and pins the next time it renders.
 
 ## Conversation surface (pillar 2)
 
+> Historical note (2026-09): the draft-morph narrative below — first-send
+> retarget, remount disposal, `.ask`/`.edit` draft state — is superseded by
+> "Durable chat identity from creation" later in this document. New chats
+> persist first and open `.chat(id)`.
+
 `ConversationView(mode:chatID:)` is the single surface for live + persisted:
 
 - **Source-of-truth rule:** if `launcher.activeChatID == chatID`, render
@@ -288,6 +293,11 @@ processes); the full suite confirms behavior-preserving.
 
 ## Optimistic echo (#1218)
 
+> Historical note (2026-09): the echo, failure, and queue contracts below are
+> current. The draft-retarget parts are superseded by "Durable chat identity
+> from creation" — durable chats never retarget; only the compatibility
+> `.newChat` surface follows a daemon-created chat.
+
 Pressing return must show the user's message on the next frame, in every case:
 draft (new chat), cold existing chat, and live chat. A failed send must keep
 the message visible, marked failed, with nothing silently dropped.
@@ -372,6 +382,62 @@ Recorded on tqbf/selfdrivingwiki#1218:
 - A tap-to-retry affordance on failed rows, with cleanup semantics for
   retained failures.
 - The web-view remount flash on retarget (pre-existing).
+
+## Durable chat identity from creation
+
+### The contract
+
+Every app-created chat now owns one `ChatID` from before its tab exists.
+`WikiStoreModel.beginNewChat()` writes an empty-title `.edit` row through
+`WikiStore.createChat` first. It then inserts the returned `ChatSummary` into
+the model's `chats` cache, opens `.chat(chat.id)`, and requests a sidebar
+reveal. The store row, the tab, the sidebar highlight, the first send, and
+later navigation all use that stored id. If the store write fails, the app
+shows its `storeError` alert ("Could Not Create Chat") and opens no tab.
+
+Empty chats are durable resources. Closing an empty chat's tab keeps the row.
+The user deletes it explicitly. A page-switch round trip resolves the row from
+SQLite, so the deleted presentation shows only for a genuinely deleted row.
+
+ACP startup stays lazy. The daemon creates its controller through
+`makeOrGetController` on the first send. The local echo from the optimistic
+echo section covers that latency, so a cold controller start does not delay
+the user's message.
+
+### First-send titling
+
+The first send must title an untouched empty chat without overwriting a manual
+rename. A read-then-rename race can overwrite the new name: the daemon reads an
+empty title, the app renames, and the daemon writes the stale title. The store
+instead offers `setChatTitleIfEmpty(chatID:title:)`. It runs one conditional
+UPDATE with `WHERE id = ? AND title = ''` inside `mutate(event:_:)`. The result
+drives emission: a written title emits exactly one `.chat .updated` event. An
+already-titled chat returns `false` and emits nothing. A missing chat throws
+`.chatNotFound` and the savepoint rolls back with no event. A written title
+also refreshes the `chat_search` sidecar in the same transaction, through the
+helper shared with `renameChat`.
+
+`DaemonChatHost.submitTurn` derives the title from
+`request.submission.userText` and calls the operation before
+`makeOrGetController`, so the title lands before the turn enters the durable
+queue. The nil-ID compatibility path keeps its creation-time title. A failed
+send never deletes an app-created chat. The rollback stays limited to nil-ID
+daemon-created compatibility chats.
+
+### What was removed
+
+- `EditorTab.optimisticChatID`, `WikiStoreModel.pendingDraftChats`, and the
+  draft-row overlay merge in `reloadChats()`. Every sidebar row is a store row.
+- The first-send retarget effect from the durable path. `ChatOutgoingMessagesController`
+  keeps an optional `chatCreated` hook that only the compatibility `.newChat`
+  surface installs; durable wiring passes nil, so the view never remounts onto
+  a second identity.
+- The draft-only double-send condition for durable chats. The compatibility
+  `.newChat` surface keeps its guard.
+
+`.newChat` remains a compatibility navigation intent (legacy omnibox
+bookmark-folder navigation), not a persisted tab lifecycle. `retargetTab` and
+`retargetActiveTabToChat` remain for the legacy `AgentOperationRunner` path.
 
 ## Sidebar affordances (pillar 4)
 

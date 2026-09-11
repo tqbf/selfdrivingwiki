@@ -957,6 +957,160 @@ struct DaemonChatHostTests {
             )
         )
     }
+
+    // MARK: - Durable new-chat identity (first-send title + failed sends)
+
+    private func makeSubmission(
+        commandID: String,
+        turnID: String,
+        text: String
+    ) -> ChatTurnSubmission {
+        ChatTurnSubmission(
+            commandID: ChatCommandID(rawValue: commandID),
+            turnID: ChatTurnID(rawValue: turnID),
+            userText: text,
+            contextReferences: [],
+            submittedAt: Date()
+        )
+    }
+
+    /// AC.5: an app-created empty-title chat gets its title from the first
+    /// user message. The title write happens BEFORE the turn runs, so even a
+    /// preflight failure (no real backend here) leaves the row titled, and
+    /// AC.6's other half holds: the failed send does NOT delete the row.
+    @Test func existingEmptyChatGetsFirstMessageTitle() async throws {
+        let dir = makeTempDir()
+        let (daemon, wiki) = try await makeProfileDaemon(dir: dir)
+        let host = try await daemon.ensureChatHost(wikiID: wiki.id)
+        let store = try daemon.resolvePreparedStore(wikiID: wiki.id)
+        let empty = try store.createChat(kind: .edit, title: "")
+
+        await #expect(throws: DaemonChatError.self) {
+            try await host.submitTurn(ChatSubmitRequest(
+                wikiID: wiki.id,
+                chatID: empty.id,
+                submission: makeSubmission(
+                    commandID: "command-empty-title",
+                    turnID: "turn-empty-title",
+                    text: "What does this page say?")
+            ))
+        }
+
+        let chats = try store.listChats()
+        #expect(chats.map(\.id) == [empty.id], "the failed send keeps the row")
+        #expect(try store.getChat(id: empty.id).title
+            == ChatSummary.title(fromFirstMessage: "What does this page say?"))
+    }
+
+    /// AC.6: a failed send against an EXISTING titled chat keeps the row (the
+    /// rollback stays limited to daemon-created nil-ID compatibility chats).
+    @Test func existingChatSubmitFailureDoesNotDeleteChat() async throws {
+        let dir = makeTempDir()
+        let (daemon, wiki) = try await makeProfileDaemon(dir: dir)
+        let host = try await daemon.ensureChatHost(wikiID: wiki.id)
+        let store = try daemon.resolvePreparedStore(wikiID: wiki.id)
+        let existing = try store.createChat(kind: .edit, title: "Manual title")
+
+        await #expect(throws: DaemonChatError.self) {
+            try await host.submitTurn(ChatSubmitRequest(
+                wikiID: wiki.id,
+                chatID: existing.id,
+                submission: makeSubmission(
+                    commandID: "command-fail-keep",
+                    turnID: "turn-fail-keep",
+                    text: "failed send")
+            ))
+        }
+
+        // Untouched: the manual title survives AND the row survives.
+        let chats = try store.listChats()
+        #expect(chats.map(\.id) == [existing.id])
+        #expect(try store.getChat(id: existing.id).title == "Manual title")
+    }
+
+    /// AC.10: the daemon's nil-ID compatibility path still creates the chat,
+    /// seeds the derived title + configuration from the request, starts the
+    /// turn, and returns the created ID — with a working injected provider
+    /// runtime (fake ACP backend) so the turn genuinely starts.
+    @Test func nilIDSubmitCreatesChatStartsTurnAndReturnsCreatedID() async throws {
+        let dir = makeTempDir()
+        let provider = AgentProvider(
+            id: ProviderID(rawValue: "nilid-provider"),
+            label: "NilID Provider",
+            command: ["/usr/bin/true"],
+            enabled: true,
+            isDefault: true)
+        let configuration = AgentProvidersConfig(
+            providers: [provider],
+            selectedModelIds: [provider.id.rawValue: ModelID(rawValue: "nilid-model")])
+        try configuration.save(to: dir)
+        let backend = FakeAgentBackend(behaviors: [FakeSessionBehavior()])
+        let services = AgentProviderRuntime(
+            readConfiguration: {
+                AgentProvidersConfig(
+                    providers: [provider],
+                    selectedModelIds: [provider.id.rawValue: ModelID(rawValue: "nilid-model")])
+            },
+            resolveCommand: { providers in
+                Dictionary(uniqueKeysWithValues: providers.compactMap { p in
+                    p.command.map { (p.id, $0) }
+                })
+            },
+            readCredential: { _ in nil },
+            resolvePermissionPolicy: { _ in .bypass },
+            makeBackend: { _, _, _ in backend })
+        let wikiID = WikiID(rawValue: "nilid-wiki")
+        var wikiRegistry = WikiRegistry()
+        wikiRegistry.add(WikiDescriptor(
+            id: wikiID,
+            displayName: "NilID wiki",
+            createdAt: Date(timeIntervalSince1970: 1),
+            lastUsedAt: Date(timeIntervalSince1970: 1)
+        ))
+        try wikiRegistry.save(to: dir)
+        let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("wiki.sqlite"))
+        let host: DaemonChatHost = await MainActor.run {
+            let extractionCoordinator = ExtractionCoordinator(
+                services: UnavailableExtractionServices())
+            let gate = GenerationGate(laneLimits: [.ingest: 1, .interactive: 1])
+            let launcherPair = makeTestLauncherPair(
+                extractionCoordinator: extractionCoordinator,
+                generationGate: gate,
+                providerServices: services)
+            return DaemonChatHost(
+                containerDirectory: dir,
+                launcherPair: launcherPair,
+                storeResolver: { requested in requested == wikiID ? store : nil },
+                pushEvent: { _ in },
+                providerServices: services,
+                idleEvictionDelay: .seconds(60)
+            )
+        }
+
+        let returnedID = try await host.submitTurn(ChatSubmitRequest(
+            wikiID: wikiID,
+            chatID: nil,
+            submission: makeSubmission(
+                commandID: "command-nilid",
+                turnID: "turn-nilid",
+                text: "Explain the venturi effect"),
+            providerId: provider.id,
+            modelId: ModelID(rawValue: "nilid-model")
+        ))
+
+        // Exactly one row exists, with the derived title and the request's
+        // configuration, and the returned ID equals that row's ID.
+        let chats = try store.listChats()
+        #expect(chats.count == 1)
+        let created = chats[0]
+        #expect(created.id == returnedID)
+        #expect(created.title == ChatSummary.title(fromFirstMessage: "Explain the venturi effect"))
+        #expect(created.modelProviderId == provider.id)
+        #expect(created.modelId == ModelID(rawValue: "nilid-model"))
+        // The injected runtime actually started the turn.
+        #expect(await backend.sendCount >= 1)
+        #expect(await host.hasLiveSession(returnedID))
+    }
 }
 
 // MARK: - Test helpers

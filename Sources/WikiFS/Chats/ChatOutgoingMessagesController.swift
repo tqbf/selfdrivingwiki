@@ -5,7 +5,8 @@ import WikiFSCore
 import WikiFSEngine
 
 /// Owns the send lifecycle for the chat composer: optimistic echo state, the
-/// XPC submit, the draft retarget, and the failure contract. All effects are
+/// XPC submit, the failure contract, and (compatibility surfaces only) the
+/// draft-created transition. All effects are
 /// injected as closures (the same wiring pattern as
 /// `RemoteChatSession.installHistoryLoader`), which keeps the lifecycle
 /// testable without a daemon.
@@ -45,7 +46,12 @@ final class ChatOutgoingMessagesController {
         /// load-bearing for run state and the queue/stop UI.
         let optimisticSubmit: @MainActor (ChatTurnSubmission) -> Void
         let optimisticSubmitFailed: @MainActor (ChatTurnID) -> Void
-        let retarget: @MainActor (ChatID) -> Void
+        /// Compatibility `.newChat` surfaces only. Durable chats are created
+        /// before their tab exists, so the durable wiring leaves this nil and
+        /// `completeSend` never transitions identity. A nil-ID submission
+        /// (daemon creates the chat) needs the surface to follow the created
+        /// chat, exactly like the pre-durable retarget.
+        var chatCreated: (@MainActor (ChatID) -> Void)? = nil
         let readComposer: @MainActor () -> ComposerSnapshot
         let restoreDraft: @MainActor (String, [ChatAttachment]) -> Void
         let setPreflightError: @MainActor (String?) -> Void
@@ -131,20 +137,22 @@ final class ChatOutgoingMessagesController {
         submittedAt: Date,
         environment: Environment
     ) {
-        guard chatID == nil else {
-            // Existing chat: the authoritative turn replaces the echo through
-            // the turnID filter as soon as the session or store carries it.
-            return
+        // Durable chats carry their `ChatID` from creation, so the
+        // authoritative turn replaces the echo through the turnID filter and
+        // the view never remounts onto a second identity — no retarget.
+        // A legacy `chatID == nil` submission (compat draft surface) created
+        // the chat daemon-side; the surface follows it via the compatibility
+        // hook, and the `.id(chatID)` remount then discards this controller.
+        if chatID == nil, let chatCreated = environment.chatCreated {
+            chatCreated(resolvedChatID)
         }
         let elapsed = Date().timeIntervalSince(submittedAt)
         DebugLog.agent(
-            "ChatOutgoingMessagesController draft retarget completed "
+            "ChatOutgoingMessagesController submit completed "
                 + "(chatID=\(resolvedChatID.rawValue), turn=\(turnID.rawValue), "
+                + "created=\(chatID == nil ? "true" : "false"), "
                 + "elapsed=\(String(format: "%.2f", elapsed))s)"
         )
-        environment.retarget(resolvedChatID)
-        // The `.id(chatID)` remount discards controller state; the persisted
-        // transcript renders the turn from here on.
     }
 
     private func failSend(

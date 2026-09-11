@@ -250,10 +250,10 @@ struct AddressBarView: View {
     private func navigate(to result: OmniboxResult) {
         switch result {
         case .ask(let question):
-            // Open a new chat tab with the question pre-filled (#288).
-            // beginNewChat also surfaces the optimistic sidebar row (#1223).
-            store.pendingChatQuestion = question
-            store.beginNewChat()
+            // Open a durable new chat with the question pre-filled (#288).
+            // beginNewChat persists the row first and installs the prefill
+            // only on success, so a failed creation never leaks the question.
+            store.beginNewChat(prefill: question)
         default:
             store.select(result.selection)
         }

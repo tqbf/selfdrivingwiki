@@ -70,10 +70,8 @@ struct AgentToolsView: View {
     /// Section header: title on the leading edge, a `+` button on the trailing
     /// edge — mirrors `BookmarksContainerView`'s `bookmarksHeader` (native
     /// macOS pattern: Photos, Mail, Finder sidebar section headers). The `+`
-    /// opens the draft state for a new chat by retargeting/opening a tab to
-    /// `.newChat` — the same draft state `ChatDetailView` renders with `chatID ==
-    /// nil`. This reuses the existing `store.openTab` path rather than
-    /// duplicating tab logic. (D4)
+    /// persists a durable empty chat via `store.beginNewChat()` and opens its
+    /// `.chat(id)` tab, so the new row appears in this list immediately.
     private var chatsHeader: some View {
         HStack {
             Text("Chats")
@@ -81,8 +79,6 @@ struct AgentToolsView: View {
                 .foregroundStyle(.primary)
             Spacer()
             Button {
-                // #1223: beginNewChat also inserts the optimistic sidebar row,
-                // so the new chat appears in this list during the same click.
                 store.beginNewChat()
             } label: {
                 Image(systemName: "plus")

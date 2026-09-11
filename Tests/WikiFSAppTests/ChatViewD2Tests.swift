@@ -14,8 +14,10 @@ import WikiFSEngine
 ///       persisted `chatMessages`. Plus the flip-timing gate: `activeChatID` is
 ///       cleared in `finish()` AFTER `flushTranscript()` commits the tail.
 ///   (b) `retargetTab` preserves the tab UUID while changing its selection.
-///   (c) draft-state morph: the runner retargets the active tab from .newChat
-///       to .chat(id) on first send (via `retargetActiveTabToChat`).
+///   (c) legacy runner morph: `AgentOperationRunner.startChat` persists the
+///       chat and retargets the active tab in place (the app's New Chat flow
+///       persists first and opens `.chat(id)` directly — see
+///       `NewChatSidebarProjectionTests`).
 ///   (d) `startNewChat` clears `activeChatID`.
 @MainActor
 struct ChatViewD2Tests {

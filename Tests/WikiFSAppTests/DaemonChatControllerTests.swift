@@ -75,6 +75,50 @@ struct DaemonChatControllerTests {
         #expect(kinds.contains(.chatSyncUpdate))
     }
 
+    /// AC.9: an app-created EMPTY chat (the row `beginNewChat` persists) whose
+    /// provider, model, configured thinking, and effective thinking were all
+    /// selected BEFORE the first send drives the controller's cold start — the
+    /// injected runtime preparation must receive all four stored values from
+    /// the row (`DaemonChatController.currentRuntimeStartPreparation` reads
+    /// them straight off `store.getChat`).
+    @Test func firstTurnStartsRuntimeWithPersistedProviderModelAndThinkingSelection() async throws {
+        let harness = try ControllerHarness()
+        let configured = ChatConfigurationValueID(rawValue: "configured-high")
+        let effective = ChatConfigurationValueID(rawValue: "effective-high")
+        let empty = try harness.store.createChat(
+            kind: .edit,
+            title: "",
+            modelProviderId: ProviderID(rawValue: "provider-test"),
+            modelId: ModelID(rawValue: "model-test"),
+            configuredThinkingOptionID: configured,
+            effectiveThinkingOptionID: effective)
+
+        let controller = try DaemonChatController(
+            chatID: empty.id,
+            wikiID: WikiID(rawValue: "wiki-controller"),
+            store: harness.store,
+            runtime: harness.runtime,
+            pushEvent: { _ in })
+        let submission = harness.makeSubmission(
+            commandID: "command-empty-first", turnID: "turn-empty-first")
+        let request = ChatSubmitRequest(
+            wikiID: WikiID(rawValue: "wiki-controller"),
+            chatID: empty.id,
+            submission: submission)
+
+        _ = try await controller.submit(request)
+
+        let runtime = await harness.runtime.snapshot()
+        let prepared = try #require(runtime.prepareInputs.last,
+            "a cold first turn must call prepareStart")
+        #expect(prepared.request.providerID == ProviderID(rawValue: "provider-test"))
+        #expect(prepared.request.modelID == ModelID(rawValue: "model-test"))
+        #expect(prepared.configuredThinkingOptionID == configured)
+        #expect(prepared.priorEffectiveThinkingOptionID == effective)
+        #expect(runtime.submitCalls.map(\.turnID) == [submission.turnID],
+                "the turn actually starts on the prepared runtime")
+    }
+
     @Test func queuedCancellationTargetIsRejectedAndFollowerIsPreserved() async throws {
         let harness = try ControllerHarness()
         let controller = try harness.makeController()
@@ -1096,6 +1140,7 @@ actor StubControllerRuntime: ChatAgentRuntime {
     struct Snapshot: Sendable {
         let startRequests: [ChatRuntimeStartRequest]
         let prepareCallCount: Int
+        let prepareInputs: [ChatRuntimeStartInput]
         let submitCalls: [ChatTurnSubmission]
         let cancelCalls: [ChatTurnID?]
         let permissionResolutions: [ChatPermissionResolution]
@@ -1107,6 +1152,7 @@ actor StubControllerRuntime: ChatAgentRuntime {
     private var generation = ChatSessionGenerationID(rawValue: "generation-stub")
     private var startRequests: [ChatRuntimeStartRequest] = []
     private var prepareCallCount = 0
+    private var prepareInputs: [ChatRuntimeStartInput] = []
     private var preparedProviderID: ProviderID?
     private var preparedModelID: ModelID?
     private var preparedThinkingConfiguration: ResolvedThinkingConfiguration?
@@ -1140,6 +1186,7 @@ actor StubControllerRuntime: ChatAgentRuntime {
 
     func prepareStart(_ input: ChatRuntimeStartInput) async throws -> ChatRuntimePreparedStart {
         prepareCallCount += 1
+        prepareInputs.append(input)
         let request = ChatRuntimeStartRequest(
             chatID: input.request.chatID,
             generation: input.request.generation,
@@ -1278,6 +1325,7 @@ actor StubControllerRuntime: ChatAgentRuntime {
         Snapshot(
             startRequests: startRequests,
             prepareCallCount: prepareCallCount,
+            prepareInputs: prepareInputs,
             submitCalls: submitCalls,
             cancelCalls: cancelCalls,
             permissionResolutions: permissionResolutions,

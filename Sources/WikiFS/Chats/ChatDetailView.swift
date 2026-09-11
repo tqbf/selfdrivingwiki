@@ -75,6 +75,9 @@ struct ChatDetailView: View {
         )
     }
 
+    /// Compatibility draft surface only (`.newChat` navigation intent): a
+    /// draft submit must fully resolve (or fail) before another one starts.
+    /// Durable chats send through the normal persisted-chat path instead.
     private var isDraftSubmitPending: Bool {
         chatID == nil && outgoing.pendingOutgoing.contains { $0.isSubmitting }
     }
@@ -177,10 +180,13 @@ struct ChatDetailView: View {
                 await coordinator.rehydrate(wikiID: session.wikiID, chatID: chatID)
             } else {
                 persistedTranscriptItems = []
-                if let question = store.pendingChatQuestion {
-                    store.pendingChatQuestion = nil
-                    store.draftChatMessage = question
-                }
+            }
+            // The omnibox "Ask" pre-fill (#288) is consumed on the FIRST frame
+            // of either surface: a durable new chat opens straight to
+            // `.chat(id)`, so the question can no longer wait for a draft tab.
+            if let question = store.pendingChatQuestion {
+                store.pendingChatQuestion = nil
+                store.draftChatMessage = question
             }
         }
         .task(id: chatID.map { MetadataHydrationKey.chat($0, store.messageVersion) }) {
@@ -674,8 +680,8 @@ struct ChatDetailView: View {
             return
         }
         guard presentation.composer.canSend else { return }
-        // Belt-and-braces with the canSend guard: a draft submit must fully
-        // resolve (retarget or fail) before another one starts.
+        // Belt-and-braces with the canSend guard (compat draft surface only):
+        // a draft submit must fully resolve or fail before another one starts.
         guard !isDraftSubmitPending else { return }
         let message = store.draftChatMessage.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !message.isEmpty else { return }
@@ -777,8 +783,16 @@ struct ChatDetailView: View {
 
     /// Real effect wiring for the send lifecycle controller. Idempotent; the
     /// `.id(chatID)` remount re-runs `onAppear` and re-installs onto the fresh
-    /// controller instance.
+    /// controller instance. Durable chats need no transition effect: their
+    /// `ChatID` is fixed at creation and the authoritative turn replaces the
+    /// echo through the turnID filter. The compatibility `.newChat` surface
+    /// (nil chatID) still follows the daemon-created chat on success.
     private func installOutgoingEnvironment() {
+        let chatCreated: (@MainActor (ChatID) -> Void)? = chatID == nil
+            ? { @MainActor [store] resolvedChatID in
+                store.retargetActiveTabToChat(chatID: resolvedChatID)
+            }
+            : nil
         outgoing.installEnvironment(.init(
             submit: { [coordinator] request in
                 try await coordinator.submitTurn(request)
@@ -789,9 +803,7 @@ struct ChatDetailView: View {
             optimisticSubmitFailed: { [remoteSession] turnID in
                 remoteSession.optimisticSubmitFailed(turnID: turnID)
             },
-            retarget: { [store] chatID in
-                store.retargetActiveTabToChat(chatID: chatID)
-            },
+            chatCreated: chatCreated,
             readComposer: { [store] in
                 ChatOutgoingMessagesController.ComposerSnapshot(
                     trimmedText: store.draftChatMessage

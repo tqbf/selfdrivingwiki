@@ -2,8 +2,11 @@
 /// `List(selection:)`, so its selection must be ONE `Hashable` type — this enum
 /// unifies wiki pages and ingested files.
 public enum WikiSelection: Hashable, Sendable {
-    /// A new-chat composer with no persisted chat id yet (the draft tab state).
-    /// The first send retargets the tab in place to `.chat(id)`.
+    /// A compatibility draft composer with no persisted chat id (legacy
+    /// navigation intent; omnibox bookmark-folder navigation still lands
+    /// here). Durable new chats never use this state — `beginNewChat()`
+    /// persists the row and opens `.chat(id)` directly. A legacy send from
+    /// this surface retargets the tab in place to `.chat(id)`.
     case newChat
     /// The append-only operation log (`log.md`).
     case changeLog

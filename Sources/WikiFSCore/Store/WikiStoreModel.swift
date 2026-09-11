@@ -256,15 +256,6 @@ public final class WikiStoreModel {
     /// like `bookmarkNodes`.
     public private(set) var chats: [ChatSummary] = []
 
-    /// Optimistic sidebar rows for open `.newChat` draft tabs (#1223). One
-    /// entry per draft tab created through ``beginNewChat()``; each carries
-    /// the tab's `optimisticChatID` and exists ONLY here — no `chats` row is
-    /// written until the daemon commits the chat on the first send. Pruned
-    /// and re-merged on every ``reloadChats()`` against the tabs that are
-    /// still drafting, so committing, closing, or retargeting a draft tab
-    /// removes its row without leaking a ghost.
-    public private(set) var pendingDraftChats: [ChatSummary] = []
-
     /// Monotonic counter bumped on every `reloadChats()`. `ChatSummary` (the
     /// chat-list model) doesn't carry per-message fields, so a
     /// `chat_messages.summary` write produces an `==` `chats` array and
@@ -284,58 +275,53 @@ public final class WikiStoreModel {
     /// Rebuild `chats` from the store. Best-effort (`try?`) — the history list
     /// degrading to empty on a store hiccup must never crash the sidebar.
     ///
-    /// After loading persisted rows, re-merges the optimistic draft rows
-    /// (#1223): one per `.newChat` tab that is still drafting, merged into the
-    /// most-recent-first order by `(updatedAt, id)`. The overlay is applied
-    /// HERE — not at the mutation sites — so every refresh path (local
-    /// writes, the `WikiEventBus` → `reloadFromStore()` external bridge)
-    /// keeps draft rows visible and can never duplicate a committed chat:
-    /// once the daemon writes the real row, the load carries it and the
-    /// draft tab's morph drops the overlay entry.
+    /// Every visible row lives in SQLite (new chats are persisted by
+    /// ``beginNewChat()`` before their tab opens), so this is a plain
+    /// rebuild — no overlay merging.
     public func reloadChats() {
-        var loaded = DebugLog.trying("listChats", operation: { try store.listChats() }) ?? []
-        let draftingIDs = draftTabChatIDs
-        if pendingDraftChats.isEmpty == false {
-            // Drop overlay rows whose draft tab is gone (committed/closed).
-            pendingDraftChats = pendingDraftChats.filter { draftingIDs.contains($0.id) }
-        }
-        if pendingDraftChats.isEmpty == false {
-            loaded = (loaded + pendingDraftChats).sorted {
-                ($0.updatedAt, $0.id.rawValue) > ($1.updatedAt, $1.id.rawValue)
-            }
-        }
-        chats = loaded
+        chats = DebugLog.trying("listChats", operation: { try store.listChats() }) ?? []
         messageVersion &+= 1
     }
 
-    /// The optimistic chat IDs implied by the current tabs: one per tab that
-    /// is still showing the `.newChat` draft state (#1223).
-    var draftTabChatIDs: Set<ChatID> {
-        Set(tabs.compactMap { $0.selection == .newChat ? $0.optimisticChatID : nil })
-    }
-
-    /// Open a new chat draft AND make it visible in the Chats sidebar
-    /// immediately (#1223). Mints the draft's stable chat identity, inserts
-    /// an optimistic `ChatSummary` (empty title — the cell renders "New
-    /// Chat"), then opens the `.newChat` tab. Nothing is persisted: the
-    /// daemon creates the real `chats` row on the first send, and
-    /// ``retargetActiveTabToChat(chatID:)`` reconciles the overlay against
-    /// it.
-    public func beginNewChat() {
-        let now = Date()
-        let summary = ChatSummary(
-            id: ChatID(rawValue: ULID.generate()),
-            kind: .edit,
-            title: "",
-            createdAt: now,
-            updatedAt: now,
-            messageCount: 0)
-        openTab(.newChat)
-        guard let activeID = activeTabID,
-              let index = tabs.firstIndex(where: { $0.id == activeID }) else { return }
-        tabs[index].optimisticChatID = summary.id
-        pendingDraftChats.append(summary)
-        reloadChats()
+    /// Create a durable empty chat AND open its tab (#1223 successor). The
+    /// `chats` row is written through ``WikiStore.createChat`` FIRST — an
+    /// empty-title `.edit` chat — so the tab, the sidebar row, the first
+    /// send, and later navigation all share one `ChatID` from the first
+    /// frame. ACP startup stays lazy: the daemon creates its controller on
+    /// the first send, and the local outgoing echo covers that latency.
+    ///
+    /// `prefill` (the omnibox "Ask" question) is installed only AFTER the
+    /// store write succeeds, so a failed creation never leaks the question
+    /// into an unrelated chat later.
+    ///
+    /// The new `ChatSummary` is inserted into the local array before the tab
+    /// opens (same synchronous-cache pattern as `startChat`): the event bus
+    /// fires `reloadFromStore()` async after the store write, but the
+    /// immediate caller (openTab → tabTitle) reads `chats` synchronously, so
+    /// the row must be present NOW.
+    ///
+    /// Empty chats are durable resources: they survive tab closure until the
+    /// user deletes them. On a store failure, no tab, sidebar row, reveal,
+    /// selection, or prefill happens — the existing `storeError` alert
+    /// surfaces the failure instead.
+    public func beginNewChat(prefill: String? = nil) {
+        let chat: ChatSummary
+        do {
+            chat = try store.createChat(kind: .edit, title: "")
+        } catch {
+            DebugLog.store("WikiStoreModel.beginNewChat failed: \(error)")
+            storeError = StoreError(
+                title: "Could Not Create Chat",
+                message: "The chat could not be created: \(error.localizedDescription)")
+            return
+        }
+        if let prefill {
+            pendingChatQuestion = prefill
+        }
+        chats.insert(chat, at: 0)
+        openTab(.chat(chat.id))
+        // The persisted row becomes visible and selected in the Chats sidebar.
+        requestSidebarReveal(.chat(chat.id))
     }
 
     /// Computed tree for the Bookmarks section.
@@ -1240,8 +1226,9 @@ public final class WikiStoreModel {
 
     /// Retarget an open tab IN PLACE to a new selection, preserving the tab's
     /// UUID — so tab order, drag/drop position, and per-tab history survive (D2).
-    /// Used for the draft-state morph (.newChat → .chat(id) on first send) and
-    /// the startNewChat retarget-back (.chat(id) → .newChat). If no tab
+    /// Kept for the legacy `AgentOperationRunner` chat path (start + rollback);
+    /// the app's New Chat flow persists the chat first and never retargets.
+    /// If no tab
     /// with `id` exists, this is a no-op. If a DIFFERENT tab already shows `to`,
     /// that tab is focused instead (tab-reuse, same as `openTab`).
     public func retargetTab(id: UUID, to selection: WikiSelection) {
@@ -1252,20 +1239,15 @@ public final class WikiStoreModel {
         // If another tab already displays this selection, reuse it (focus, don't
         // duplicate) — mirrors openTab's dedup. This handles e.g. re-clicking a
         // chat that's already open in another tab.
-        // Exception: .newChat is a draft state, not a unique resource — don't
-        // reuse an existing draft tab when retargeting to .newChat (#348).
+        // Exception: .newChat is a compatibility draft state, not a unique
+        // resource — don't reuse an existing draft tab when retargeting to
+        // .newChat (#348).
         if selection != .newChat, let existing = tabs.first(where: { $0.selection == selection }), existing.id != id {
             selectTab(id: existing.id)
             return
         }
-        // #1223: morphing a tab into or out of the draft state changes which
-        // optimistic sidebar rows exist — refresh the overlay, and clear the
-        // tab's optimisticChatID when it leaves the draft state.
-        let wasDraft = tabs[index].selection == .newChat
         tabs[index].selection = selection
-        if selection != .newChat { tabs[index].optimisticChatID = nil }
         tabs[index].title = tabTitle(for: selection)
-        if wasDraft || selection == .newChat { reloadChats() }
         // If this is the active tab, sync selection + drafts so the view updates.
         if activeTabID == id {
             isApplyingTabSelection = true
@@ -1277,14 +1259,11 @@ public final class WikiStoreModel {
     }
 
     /// Convenience: retarget the ACTIVE tab to `.chat(chatID)`. Used by the
-    /// draft-state morph on first send (the active tab is .newChat → .chat).
-    /// No-op if there is no active tab.
-    ///
-    /// #1223: this is the draft→persisted commit point — reload the chats
-    /// list (the daemon has written the real row by the time the submit
-    /// reply arrives) so the optimistic draft row is replaced by the real
-    /// one, then request a sidebar reveal so the committed row is selected
-    /// and scrolled into view.
+    /// legacy `AgentOperationRunner.startChat` path, which persists the chat
+    /// row itself and morphs the active draft tab in place (the app's New
+    /// Chat flow persists first and opens `.chat(id)` directly instead).
+    /// No-op if there is no active tab. Reloads the chats list and requests a
+    /// sidebar reveal so the committed row is selected and scrolled into view.
     public func retargetActiveTabToChat(chatID: ChatID) {
         guard let activeID = activeTabID else { return }
         retargetTab(id: activeID, to: .chat(chatID))
@@ -1363,8 +1342,7 @@ public final class WikiStoreModel {
     private func applyCloseTab(id: UUID, at index: Int) {
         let closed = tabs.remove(at: index)
         pushRecentlyClosed(closed)
-        // #1223: closing a draft tab drops its optimistic sidebar row.
-        if closed.optimisticChatID != nil { reloadChats() }
+        // Chats are durable: closing a chat tab never deletes its row.
         if tabs.isEmpty {
             setActiveTab(nil)
         } else if closed.id == activeTabID {
@@ -1379,12 +1357,9 @@ public final class WikiStoreModel {
         guard let kept = tabs.first(where: { $0.id == id }) else { return }
         let toClose = tabs.filter { $0.id != id }
         guard !toClose.isEmpty else { return }
-        // #1223: refresh the overlay if a closed tab owned a draft row.
-        let dropsDraftRow = toClose.contains { $0.optimisticChatID != nil }
         toClose.reversed().forEach { pushRecentlyClosed($0) }
         tabs = [kept]
         setActiveTab(kept.id)
-        if dropsDraftRow { reloadChats() }
     }
 
     /// Close every tab to the right of `id`. The anchor and tabs to its left
@@ -1393,25 +1368,19 @@ public final class WikiStoreModel {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         let toClose = Array(tabs.dropFirst(index + 1))
         guard !toClose.isEmpty else { return }
-        // #1223: refresh the overlay if a closed tab owned a draft row.
-        let dropsDraftRow = toClose.contains { $0.optimisticChatID != nil }
         toClose.reversed().forEach { pushRecentlyClosed($0) }
         tabs = Array(tabs.prefix(index + 1))
         if let active = activeTabID, !tabs.contains(where: { $0.id == active }) {
             setActiveTab(tabs[index].id)
         }
-        if dropsDraftRow { reloadChats() }
     }
 
     /// Close all tabs and enter the empty state.
     public func closeAllTabs() {
         guard !tabs.isEmpty else { return }
-        // #1223: refresh the overlay if any closed tab owned a draft row.
-        let dropsDraftRow = tabs.contains { $0.optimisticChatID != nil }
         tabs.reversed().forEach { pushRecentlyClosed($0) }
         tabs = []
         setActiveTab(nil)
-        if dropsDraftRow { reloadChats() }
     }
 
     /// Reopen the last closed tab.
@@ -4646,6 +4615,13 @@ public final class WikiStoreModel {
                 modelID: modelID,
                 configuredThinkingID: configuredThinkingID,
                 effectiveThinkingID: effectiveThinkingID)
+            // Synchronous cache refresh, same principle as startChat's
+            // immediate insert: the composer selectors derive the NEXT
+            // selection from `chats`, and a back-to-back pick (provider then
+            // thinking, or the reverse) must read the row just written — not
+            // a stale projection awaiting the async bus reload. The bus
+            // reload still lands afterwards and is harmless.
+            reloadChats()
         } catch {
             DebugLog.store("WikiStoreModel.updateChatModelAndThinkingSelection failed: \(error)")
         }

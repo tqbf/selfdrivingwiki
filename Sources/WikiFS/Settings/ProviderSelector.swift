@@ -83,10 +83,11 @@ struct ProviderSelector: View {
     }
 
     /// THIS chat's model override, if any: `ChatSummary.modelProviderId`/
-    /// `.modelId` for a persisted chat, or `RemoteChatSession.pendingModelOverride`
-    /// for a `.draft` chat that has no row yet. `nil` = no override for this
-    /// chat — `current` falls through to the stage pin / global default,
-    /// unchanged from before this picker became chat-scoped.
+    /// `.modelId` for a persisted chat (durable new chats included — the row
+    /// exists from creation), or `RemoteChatSession.pendingModelOverride`
+    /// for the compatibility `.draft` surface that has no row. `nil` = no
+    /// override for this chat — `current` falls through to the stage pin /
+    /// global default, unchanged from before this picker became chat-scoped.
     private var chatModelOverride: (providerId: ProviderID, modelId: ModelID?)? {
         switch remoteSession.chatID {
         case .draft:
@@ -565,9 +566,11 @@ struct ProviderSelector: View {
     /// Selecting a row parses its id back into (provider, modelId) and persists
     /// both as THIS CHAT's override, then closes the popover. Mirrors paseo's
     /// "choosing a model implies choosing its provider" — but scoped to the
-    /// chat, not the global default (see the type doc comment). For a `.draft`
-    /// chat (no row yet), stashes the pick on `remoteSession` for
-    /// `ChatDetailView.submitMessage` to seed at creation.
+    /// chat, not the global default (see the type doc comment). Durable new
+    /// chats persist the pick on their existing empty row through
+    /// `updateChatModelAndThinkingSelection`, so it applies to the first send.
+    /// The compatibility `.draft` surface (no row) stashes the pick on
+    /// `remoteSession` for the daemon to seed at creation.
     private func selectRow(_ row: SelectorRow) {
         let provider = row.provider
         let modelId = row.modelId

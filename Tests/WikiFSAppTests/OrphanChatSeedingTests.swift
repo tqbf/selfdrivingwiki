@@ -138,7 +138,7 @@ struct OrphanChatSeedingTests {
 
         let chat = try #require(model.startChat(kind: .edit, firstMessage: "doomed"))
         model.retargetActiveTabToChat(chatID: chat.id)
-        // The draft-state morph retargeted the tab to .chat(id).
+        // The legacy runner path retargeted the tab to .chat(id).
         let retargeted = try #require(model.tabs.first { $0.id == activeID })
         #expect(retargeted.selection == .chat(chat.id))
 

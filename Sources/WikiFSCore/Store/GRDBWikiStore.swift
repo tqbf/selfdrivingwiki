@@ -9514,20 +9514,65 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
 
             // Refresh the FTS sidecar title so keyword search reflects the new
             // name (the body is unchanged). A no-op if no chat_search row exists
-            // yet (a chat with no messages has nothing to index). Mirrors
-            // `SQLiteWikiStore.renameChat`'s `upsertChatSearch(chatID:)`.
-            do {
-                let body: String = (try String.fetchOne(
-                    db,
-                    sql: "SELECT COALESCE(GROUP_CONCAT(text, '\n'), '') FROM chat_messages WHERE chat_id = ?;",
-                    arguments: [id.rawValue]
-                )) ?? ""
-                try db.execute(sql: """
-                INSERT OR REPLACE INTO chat_search (chat_id, title, body) VALUES (?, ?, ?);
-                """, arguments: [id.rawValue, title, body])
-            } catch {
-                DebugLog.store("GRDBWikiStore.renameChat: upsertChatSearch[\(id.rawValue)] failed — \(error)")
+            // yet (a chat with no messages has nothing to index).
+            Self.refreshChatSearch(db: db, chatID: id, title: title)
+        }
+    }
+
+    /// Refresh the FTS sidecar (title + concatenated message body) for a chat,
+    /// on the caller's open `Database` — one transaction with the mutation that
+    /// changed the title. A no-op when the chat has no messages (nothing to
+    /// index). Failures are logged, never thrown: search is a sidecar, and a
+    /// failed refresh must not roll back the title write. Mirrors
+    /// `SQLiteWikiStore.renameChat`'s `upsertChatSearch(chatID:)`.
+    private static func refreshChatSearch(db: Database, chatID: ChatID, title: String) {
+        do {
+            let body: String = (try String.fetchOne(
+                db,
+                sql: "SELECT COALESCE(GROUP_CONCAT(text, '\n'), '') FROM chat_messages WHERE chat_id = ?;",
+                arguments: [chatID.rawValue]
+            )) ?? ""
+            try db.execute(sql: """
+            INSERT OR REPLACE INTO chat_search (chat_id, title, body) VALUES (?, ?, ?);
+            """, arguments: [chatID.rawValue, title, body])
+        } catch {
+            DebugLog.store("GRDBWikiStore.refreshChatSearch[\(chatID.rawValue)] failed — \(error)")
+        }
+    }
+
+    /// Set a chat's title only when it is still empty (first send on an
+    /// app-created empty chat). ONE conditional `UPDATE` — `id` AND `title = ''`
+    /// predicates — so a concurrent manual rename can never be overwritten by a
+    /// stale read-then-write: the row simply doesn't match anymore.
+    ///
+    /// Emission is driven by the result: `true` (row titled) emits exactly one
+    /// `.chat .updated`; `false` (chat exists, already titled) emits nothing;
+    /// a missing chat throws `.chatNotFound` inside the savepoint so it rolls
+    /// back and emits nothing.
+    @discardableResult
+    public func setChatTitleIfEmpty(chatID: ChatID, title: String) throws -> Bool {
+        try mutate(event: { titled in
+            titled ? self.localEvent(.chat, id: chatID.rawValue, change: .updated) : nil
+        }) { db in
+            try db.execute(sql: """
+            UPDATE chats SET title = ?, updated_at = ?
+            WHERE id = ? AND title = '';
+            """, arguments: [title, Date().timeIntervalSince1970, chatID.rawValue])
+            if db.changesCount > 0 {
+                // The empty chat just became searchable by its first message's
+                // title — refresh the sidecar in the same transaction.
+                Self.refreshChatSearch(db: db, chatID: chatID, title: title)
+                return true
             }
+            // No row matched: either the chat exists with a nonempty title
+            // (valid no-op) or it does not exist (error).
+            let exists = try Int.fetchOne(
+                db,
+                sql: "SELECT 1 FROM chats WHERE id = ?;",
+                arguments: [chatID.rawValue]
+            ) ?? 0
+            guard exists != 0 else { throw WikiStoreError.chatNotFound(chatID) }
+            return false
         }
     }
 

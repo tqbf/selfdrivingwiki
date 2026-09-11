@@ -64,6 +64,28 @@ final class DaemonChatHost: @unchecked Sendable {
         let resolvedChatID: ChatID
         if let existingChatID = request.chatID {
             resolvedChatID = existingChatID
+            // Title an untouched app-created empty chat from its first message,
+            // BEFORE the turn enters the durable queue or the ACP controller
+            // starts. One conditional UPDATE in the store — a chat the user
+            // renamed before sending is never overwritten, and the nil-ID
+            // compatibility path below keeps its creation-time title.
+            guard let store = storeResolver(request.wikiID) else {
+                throw DaemonChatError.noStore(request.wikiID)
+            }
+            do {
+                try store.setChatTitleIfEmpty(
+                    chatID: resolvedChatID,
+                    title: ChatSummary.title(fromFirstMessage: request.submission.userText))
+            } catch WikiStoreError.chatNotFound {
+                // The row is gone (deleted while the daemon held no session).
+                // Fail the send now with the truthful error instead of running
+                // a turn that cannot be persisted.
+                throw WikiStoreError.chatNotFound(resolvedChatID)
+            } catch {
+                // Best-effort: a title write failure must not block the
+                // message send (the turn's own store writes still validate).
+                DebugLog.store("DaemonChatHost.setChatTitleIfEmpty failed for \(resolvedChatID.rawValue): \(error)")
+            }
         } else {
             guard let store = storeResolver(request.wikiID) else {
                 throw DaemonChatError.noStore(request.wikiID)
