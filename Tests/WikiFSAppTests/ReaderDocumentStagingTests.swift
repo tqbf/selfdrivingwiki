@@ -11,6 +11,11 @@ import Testing
 /// two-tier retention contract: pending entries are never evicted, served
 /// entries are bounded by an oldest-served LRU cap, and there is no
 /// forget-on-restage.
+///
+/// These tests are synchronous `@MainActor` functions, so each runs
+/// atomically on the main actor: `resetForTesting()` at the start cannot
+/// interleave with another suite mid-test, which is what makes the
+/// served-cap determinism safe despite the process-global store.
 @Suite(.serialized, .timeLimit(.minutes(3)))
 @MainActor
 struct ReaderDocumentStagingTests {

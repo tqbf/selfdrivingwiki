@@ -17,6 +17,14 @@ import WebKit
 /// Per repo rules (#1051): no blocking waits — every wait races a bounded
 /// `Task.sleep` poll, and deferred binding writes are awaited before
 /// assertions.
+///
+/// Global `ReaderDocumentStaging` state is deliberately NOT reset here: this
+/// suite `await`s, and another suite could run `resetForTesting()` in that
+/// window. Every assertion is therefore session-scoped (`ownedTokens`,
+/// captured identities, miss-tolerant `beginServing` checks) so concurrent
+/// staging suites cannot flip an outcome. The staging/handler suites reset
+/// the store, but they are synchronous `@MainActor` tests — they run
+/// atomically and cannot interleave with these awaits mid-test.
 @Suite(.serialized, .timeLimit(.minutes(3)))
 @MainActor
 struct ReaderNavigationFailureTests {
@@ -109,7 +117,6 @@ struct ReaderNavigationFailureTests {
     /// AC.4 — the CURRENT identity's failure, for both WebKit phases, sets
     /// the failure message and clears the spinner.
     @Test func provisionalAndCommittedDidFailSetFailureState() async throws {
-        ReaderDocumentStaging.resetForTesting()
         let loader = MintingLoader()
         let coordinator = WikiReaderRep.Coordinator(
             stagingSession: ReaderDocumentStagingSession(tokenProvider: { UUID() }, load: loader.seam))
@@ -139,7 +146,6 @@ struct ReaderNavigationFailureTests {
     /// AC.4 — a mapped-stale identity's failure changes nothing (log only):
     /// no failure message, no spinner write, no page-loaded flip.
     @Test func staleNavigationFailureIgnored() async throws {
-        ReaderDocumentStaging.resetForTesting()
         let loader = MintingLoader()
         let coordinator = WikiReaderRep.Coordinator(
             stagingSession: ReaderDocumentStagingSession(tokenProvider: { UUID() }, load: loader.seam))
@@ -169,7 +175,6 @@ struct ReaderNavigationFailureTests {
     /// change nothing (log only): the page is not marked loaded and the
     /// spinner is not cleared by a navigation that is not the current load.
     @Test func staleDidFinishIgnored() async throws {
-        ReaderDocumentStaging.resetForTesting()
         let loader = MintingLoader()
         let coordinator = WikiReaderRep.Coordinator(
             stagingSession: ReaderDocumentStagingSession(tokenProvider: { UUID() }, load: loader.seam))
@@ -196,7 +201,6 @@ struct ReaderNavigationFailureTests {
     /// failure state is set (deferred write), the spinner is cleared, and the
     /// never-dispatched token is retired (staging misses afterwards).
     @Test func nilLoaderSurfacesFailure() async throws {
-        ReaderDocumentStaging.resetForTesting()
         let loader = NilLoader()
         let session = ReaderDocumentStagingSession(tokenProvider: { UUID() }, load: loader.seam)
         let coordinator = WikiReaderRep.Coordinator(stagingSession: session)
@@ -217,7 +221,6 @@ struct ReaderNavigationFailureTests {
     /// trigger re-runs the load with the current props: fresh token staged,
     /// failure cleared (deferred write), generation advanced.
     @Test func retryAppliesTriggerAndRestages() async throws {
-        ReaderDocumentStaging.resetForTesting()
         let loader = MintingLoader()
         let session = ReaderDocumentStagingSession(tokenProvider: { UUID() }, load: loader.seam)
         let coordinator = WikiReaderRep.Coordinator(stagingSession: session)
@@ -267,7 +270,6 @@ struct ReaderNavigationFailureTests {
     /// AC.5 (separate teardown assertion) — `Coordinator.teardown()` invokes
     /// the session's `retireAll()`, and the retired tokens then miss.
     @Test func teardownRetiresAllOwnedTokens() async throws {
-        ReaderDocumentStaging.resetForTesting()
         let loader = MintingLoader()
         let session = ReaderDocumentStagingSession(tokenProvider: { UUID() }, load: loader.seam)
         let coordinator = WikiReaderRep.Coordinator(stagingSession: session)

@@ -51,12 +51,14 @@ enum WikiReaderDocumentOrigin {
         return url
     }
 
-    /// Extracts the staging token from a document URL, if the URL is a reader
-    /// document URL carrying exactly one syntactically valid `load` query
-    /// item. Anything else (no query, unrelated queries, malformed UUIDs,
-    /// duplicate items) yields `nil` and the scheme task fails loudly.
+    /// Extracts the staging token from a reader **document** URL, if the URL
+    /// is exactly the document path carrying one syntactically valid `load`
+    /// query item. Anything else — no query, unrelated queries, malformed
+    /// UUIDs, duplicate items, or a different path on the same origin —
+    /// yields `nil` and the scheme task fails loudly; a token can only ever
+    /// be consumed through the exact document URL it was minted for.
     static func loadToken(from url: URL) -> UUID? {
-        guard url.scheme == scheme, url.host == host else { return nil }
+        guard url.scheme == scheme, url.host == host, url.path == documentPath else { return nil }
         guard let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?
             .queryItems,
             items.count == 1,

@@ -84,6 +84,13 @@ struct WikiReaderDocumentOriginTests {
         let foreign = try #require(URL(string: "https://example.com/document.html?load=\(token.uuidString)"))
         #expect(WikiReaderDocumentOrigin.loadToken(from: foreign) == nil)
 
+        // Same origin, wrong path: a token may only be consumed through the
+        // exact document URL it was minted for.
+        let wrongPath = try #require(URL(string: "wiki-reader://reader/other.html?load=\(token.uuidString)"))
+        #expect(WikiReaderDocumentOrigin.loadToken(from: wrongPath) == nil)
+        let noPath = try #require(URL(string: "wiki-reader://reader?load=\(token.uuidString)"))
+        #expect(WikiReaderDocumentOrigin.loadToken(from: noPath) == nil)
+
         // Missing query, unrelated query, malformed UUID, duplicate items.
         #expect(WikiReaderDocumentOrigin.loadToken(from: try #require(URL(string: "wiki-reader://reader/document.html"))) == nil)
         #expect(WikiReaderDocumentOrigin.loadToken(from: try #require(URL(string: "wiki-reader://reader/document.html?src=notes"))) == nil)

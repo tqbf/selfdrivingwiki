@@ -2434,19 +2434,22 @@ internal struct WikiReaderRep: NSViewRepresentable {
             guard let identity = resolveTerminalNavigation(identity, phase: "didFail(\(phase))") else { return }
             navigationIdentities.removeValue(forKey: identity)
             DebugLog.reader("reader navigation failed (\(phase)): \(error.localizedDescription)")
+            beginLoadFailure("This page couldn't be loaded: \(error.localizedDescription)")
+        }
+
+        /// Single failure path for every load-failure shape (WebKit didFail in
+        /// either phase, or a load that never started via the nil-load seam):
+        /// resets the timing stamps, then records the failure and clears the
+        /// spinner. Both binding writes are deferred (next main-actor turn):
+        /// coordinator paths are reachable from `makeNSView`/`updateNSView`,
+        /// and a synchronous write inside SwiftUI's update pass is "Modifying
+        /// state during view update".
+        private func beginLoadFailure(_ message: String) {
             // A failed load emits no painted/html-load timing points, and
             // resetting the stamps keeps a late failure from poisoning a
             // subsequent load's timing split.
             loadStart = nil
             htmlLoadStart = nil
-            beginLoadFailure("This page couldn't be loaded: \(error.localizedDescription)")
-        }
-
-        /// Records the failure and clears the spinner. Both writes are
-        /// deferred (next main-actor turn): coordinator paths are reachable
-        /// from `makeNSView`/`updateNSView`, and a synchronous write inside
-        /// SwiftUI's update pass is "Modifying state during view update".
-        private func beginLoadFailure(_ message: String) {
             setLoadFailure(message)
             setLoading(false)
         }
