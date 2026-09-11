@@ -27,7 +27,8 @@ struct ChatDetailView: View {
     @AppStorage("chatInspectorTab") private var inspectorTab: InspectorTab = .metadata
     @AppStorage("chatOutlineWidth") private var outlineWidth: Double = 240
     @State private var isHeaderExpanded = false
-    @AppStorage("chat.hideToolCalls") private var hideToolCalls = false
+    @AppStorage(ChatToolCallDisplayPreference.storageKey) private var toolCallDisplayModeRaw =
+        ChatToolCallDisplayMode.summary.rawValue
     @State private var outlineScroll: ChatScrollRequest? = nil
     @State private var quoteAnchor: ChatHighlightRequest? = nil
     @State private var queuedMessages: [PendingQueuedMessage] = []
@@ -85,6 +86,10 @@ struct ChatDetailView: View {
         chatID == nil && outgoing.pendingOutgoing.contains { $0.isSubmitting }
     }
 
+    private var toolCallDisplayMode: ChatToolCallDisplayMode {
+        ChatToolCallDisplayMode.resolving(raw: toolCallDisplayModeRaw)
+    }
+
     private var presentation: ChatDetailPresentation {
         ChatDetailPresentation.make(
             chatID: chatID,
@@ -96,7 +101,8 @@ struct ChatDetailView: View {
             authoritativeTurnIDs: authoritativeTurnIDs,
             queuedMessages: queuedMessages,
             hasDraftText: hasDraftText,
-            isChatOperationConfigured: isChatOperationConfigured
+            isChatOperationConfigured: isChatOperationConfigured,
+            toolCallDisplayMode: toolCallDisplayMode
         )
     }
 
@@ -134,7 +140,6 @@ struct ChatDetailView: View {
                     showsDebugControls: presentation.controls.showsDebugControls,
                     isAnswering: remoteSession.runState.isAnswering,
                     showsInternals: $showsInternals,
-                    hideToolCalls: $hideToolCalls,
                     exitStatus: remoteSession.exitStatus,
                     debugFolderURL: remoteSession.debugFolderURL,
                     copyDiagnostics: copyDiagnostics,
@@ -415,8 +420,7 @@ struct ChatDetailView: View {
                 runStartedAt: remoteSession.runStartedAt,
                 chatZoom: chatZoom,
                 outlineScroll: outlineScroll,
-                quoteAnchor: quoteAnchor,
-                hideToolCalls: hideToolCalls
+                quoteAnchor: quoteAnchor
             ),
             renderer: ChatTranscriptRendererEnvironment(
                 renderContext: { [weak store] in store?.renderContext() },

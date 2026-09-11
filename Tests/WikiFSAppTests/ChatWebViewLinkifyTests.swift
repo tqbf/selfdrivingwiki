@@ -72,15 +72,17 @@ struct ChatWebViewLinkifyTests {
 
     @Test func typedToolRowUsesDisclosureMarkup() {
         let row = ChatDisplayRow.toolCall(
-            id: ToolCallID(rawValue: "tool-linkify"),
-            turnID: turnID,
-            toolName: "Read",
-            status: .running,
-            detail: "page.md",
-            output: nil,
-            permissionRequestID: nil,
-            updatedAt: .distantPast
-        )
+                ChatDisplayToolCall(
+                    id: ToolCallID(rawValue: "tool-linkify"),
+                    turnID: turnID,
+                    toolName: "Read",
+                    status: .running,
+                    detail: "page.md",
+                    output: nil,
+                    permissionRequestID: nil,
+                    updatedAt: .distantPast
+                )
+            )
         let html = Transcript.chatDisplayRowHTML(row)
         #expect(html.contains("<details"))
         #expect(html.contains("Read"))

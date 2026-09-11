@@ -224,15 +224,21 @@ public enum MessageSummarizer {
         }
     }
 
-    /// Drop leading blank / `Warning:` / `Thinking:` lines from assistant
-    /// text. PURE. Returns nil when nothing substantive remains.
+    /// Drop the known skills-budget warning (via the shared
+    /// `completeOnly` filter) plus leading blank / `Thinking:` lines from
+    /// assistant text. PURE. Returns nil when nothing substantive remains.
+    ///
+    /// The `Warning:` removal is deliberately NARROWER than it used to be:
+    /// only the exact known skill-description warning family is dropped.
+    /// Any other `Warning:` line is content and is preserved. `Thinking:`
+    /// preambles keep their separate treatment.
     static func summarizableAssistantText(_ text: String) -> String? {
-        var lines = text.components(separatedBy: .newlines)
+        guard let withoutKnownWarning = AgentPresentationPreamble.visibleText(text, policy: .completeOnly)
+        else { return nil }
+        var lines = withoutKnownWarning.components(separatedBy: .newlines)
         while !lines.isEmpty {
             let line = lines[0].trimmingCharacters(in: .whitespaces)
-            if line.isEmpty
-                || line.hasPrefix("Warning:")
-                || line.hasPrefix("Thinking:") {
+            if line.isEmpty || line.hasPrefix("Thinking:") {
                 lines.removeFirst()
             } else {
                 break

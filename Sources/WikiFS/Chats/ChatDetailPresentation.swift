@@ -64,7 +64,8 @@ struct ChatDetailPresentation {
         authoritativeTurnIDs: Set<ChatTurnID> = [],
         queuedMessages: [PendingQueuedMessage],
         hasDraftText: Bool,
-        isChatOperationConfigured: Bool
+        isChatOperationConfigured: Bool,
+        toolCallDisplayMode: ChatToolCallDisplayMode = .summary
     ) -> Self {
         let isLiveChat = chatID.map {
             remoteSession.sessionChatID == $0 && remoteSession.runState.isLive
@@ -74,7 +75,9 @@ struct ChatDetailPresentation {
         let visiblePendingOutgoing = pendingOutgoing
             .filter { authoritativeTurnIDs.contains($0.id) == false }
         let echoItems = outgoingEchoItems(from: visiblePendingOutgoing)
-        let displayTranscript = isLiveChat
+        // Canonical first (one row per durable item — what Activity renders),
+        // then the human-facing presentation projection for this surface.
+        let canonicalTranscript = isLiveChat
             ? ChatDisplayProjection.project(
                 items: remoteSession.projectionInput.items + echoItems,
                 activeContentBlock: remoteSession.projectionInput.activeContentBlock
@@ -83,6 +86,10 @@ struct ChatDetailPresentation {
                 items: persistedTranscriptItems.map(\.item) + echoItems,
                 activeContentBlock: nil
             ).transcript
+        let displayTranscript = ChatTranscriptPresentationProjection.project(
+            transcript: canonicalTranscript,
+            toolCallDisplayMode: toolCallDisplayMode
+        )
         let isDraftSubmitPending = chatID == nil && pendingOutgoing.contains { $0.isSubmitting }
         let controls = Controls(
             showsDebugControls: showsDebugControls(
@@ -248,9 +255,15 @@ struct ChatDetailPresentation {
                 if case .assistantMessage = row { return true }
                 return false
             }
+            // Cached summaries predate this projection, so they are sanitized
+            // here: a stale cached skill warning must not re-enter the
+            // outline through the back door. When the cached value cleans to
+            // empty, fall back to the (already cleaned) assistant row text.
             let cachedSummary: String?
             if case .assistantMessage(let responseID, _, _, _, _) = response {
                 cachedSummary = cachedResponseSummaries[responseID]
+                    .flatMap { AgentPresentationPreamble.visibleText($0, policy: .completeOnly) }
+                    .flatMap { $0.isEmpty ? nil : $0 }
             } else {
                 cachedSummary = nil
             }

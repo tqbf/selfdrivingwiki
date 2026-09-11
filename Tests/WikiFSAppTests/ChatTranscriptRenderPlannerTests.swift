@@ -86,6 +86,91 @@ struct ChatTranscriptRenderPlannerTests {
             contentState: .final
         )
     }
+
+    private func toolRow(_ id: String, status: ChatToolCallStatus) -> ChatDisplayRow {
+        .toolCall(ChatDisplayToolCall(
+            id: ToolCallID(rawValue: id),
+            turnID: turn,
+            toolName: "Bash",
+            status: status,
+            detail: nil,
+            output: nil,
+            permissionRequestID: nil,
+            updatedAt: .distantPast
+        ))
+    }
+
+    private func groupRow(ids: [String], statuses: [ChatToolCallStatus]) -> ChatDisplayRow {
+        let calls = zip(ids, statuses).map { id, status in
+            ChatDisplayToolCall(
+                id: ToolCallID(rawValue: id),
+                turnID: turn,
+                toolName: "Bash",
+                status: status,
+                detail: nil,
+                output: nil,
+                permissionRequestID: nil,
+                updatedAt: .distantPast
+            )
+        }
+        return .toolCallGroup(ChatToolCallGroupRow(
+            id: ChatToolCallGroupID(hostedBy: calls[0]),
+            turnID: turn,
+            calls: calls,
+            state: .aggregating(calls),
+            summary: .summarizing(calls)
+        ))
+    }
+
+    // MARK: - Growing groups and mode changes
+
+    @Test func growingGroupReplacesOneStableRow() {
+        // A live run grows from one completed call to two calls. The group
+        // keeps its host identity, so the plan is exactly one replacement of
+        // the same row — never a reload or identity churn.
+        let before = groupRow(ids: ["t1"], statuses: [.completed])
+        let after = groupRow(ids: ["t1", "t2"], statuses: [.completed, .running])
+        #expect(before.id == after.id)
+        #expect(ChatTranscriptRenderPlanner.commands(
+            previous: snapshot(rows: [before]),
+            desired: snapshot(rows: [after])
+        ) == [.replace(after)])
+    }
+
+    @Test func growingGroupReplacementIsOrderedAheadOfNewTailRows() {
+        // The run closes (an answer arrives) while the group also gained a
+        // call: replace the group first, then append the new message.
+        let before = groupRow(ids: ["t1"], statuses: [.completed])
+        let after = groupRow(ids: ["t1", "t2"], statuses: [.completed, .completed])
+        let answer = row("answer", text: "Done")
+        #expect(ChatTranscriptRenderPlanner.commands(
+            previous: snapshot(rows: [before]),
+            desired: snapshot(rows: [after, answer])
+        ) == [.replace(after), .append([answer])])
+    }
+
+    @Test func modeChangeWithNewRowIdentitiesRemovesAndAppends() {
+        // Summary → Detailed changes every tool row's identity. The plan is
+        // the exact identity diff (remove the group, append the calls) — no
+        // reload and no fabricated replacements.
+        let summaryGroup = groupRow(ids: ["t1", "t2"], statuses: [.completed, .completed])
+        let detailed = [toolRow("t1", status: .completed), toolRow("t2", status: .completed)]
+        #expect(ChatTranscriptRenderPlanner.commands(
+            previous: snapshot(rows: [summaryGroup]),
+            desired: snapshot(rows: detailed)
+        ) == [.remove(summaryGroup.id), .append(detailed)])
+
+        // And the reverse direction: Detailed → Summary removes the two
+        // calls (reverse order) and appends the single group row.
+        #expect(ChatTranscriptRenderPlanner.commands(
+            previous: snapshot(rows: detailed),
+            desired: snapshot(rows: [summaryGroup])
+        ) == [
+            .remove(.toolCall(ToolCallID(rawValue: "t2"))),
+            .remove(.toolCall(ToolCallID(rawValue: "t1"))),
+            .append([summaryGroup]),
+        ])
+    }
 }
 
 @MainActor

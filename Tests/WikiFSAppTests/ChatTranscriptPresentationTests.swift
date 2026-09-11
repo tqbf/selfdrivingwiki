@@ -36,15 +36,17 @@ struct ChatTranscriptPresentationTests {
             contentState: .final
         )
         let tool = ChatDisplayRow.toolCall(
-            id: ToolCallID(rawValue: "tool-1"),
-            turnID: turnID,
-            toolName: "Read",
-            status: .running,
-            detail: "page.md",
-            output: nil,
-            permissionRequestID: nil,
-            updatedAt: .distantPast
-        )
+                ChatDisplayToolCall(
+                    id: ToolCallID(rawValue: "tool-1"),
+                    turnID: turnID,
+                    toolName: "Read",
+                    status: .running,
+                    detail: "page.md",
+                    output: nil,
+                    permissionRequestID: nil,
+                    updatedAt: .distantPast
+                )
+            )
 
         let reasoningHTML = ChatWebView.Coordinator.chatDisplayRowHTML(reasoning)
         let toolHTML = ChatWebView.Coordinator.chatDisplayRowHTML(tool)
@@ -58,15 +60,17 @@ struct ChatTranscriptPresentationTests {
 
     @Test func completedToolWithoutOutputShowsNoSyntheticResultText() {
         let tool = ChatDisplayRow.toolCall(
-            id: ToolCallID(rawValue: "tool-no-output"),
-            turnID: turnID,
-            toolName: "Bash",
-            status: .completed,
-            detail: nil,
-            output: nil,
-            permissionRequestID: nil,
-            updatedAt: .distantPast
-        )
+                ChatDisplayToolCall(
+                    id: ToolCallID(rawValue: "tool-no-output"),
+                    turnID: turnID,
+                    toolName: "Bash",
+                    status: .completed,
+                    detail: nil,
+                    output: nil,
+                    permissionRequestID: nil,
+                    updatedAt: .distantPast
+                )
+            )
 
         let html = ChatWebView.Coordinator.chatDisplayRowHTML(tool)
 
@@ -86,15 +90,17 @@ struct ChatTranscriptPresentationTests {
         expectedSummary: String
     ) {
         let legacyRow = ChatDisplayRow.toolCall(
-            id: ToolCallID(rawValue: "tool-legacy"),
-            turnID: turnID,
-            toolName: "Bash",
-            status: .completed,
-            detail: output,
-            output: nil,
-            permissionRequestID: nil,
-            updatedAt: .distantPast
-        )
+                ChatDisplayToolCall(
+                    id: ToolCallID(rawValue: "tool-legacy"),
+                    turnID: turnID,
+                    toolName: "Bash",
+                    status: .completed,
+                    detail: output,
+                    output: nil,
+                    permissionRequestID: nil,
+                    updatedAt: .distantPast
+                )
+            )
 
         let html = ChatWebView.Coordinator.chatDisplayRowHTML(legacyRow)
 
@@ -104,6 +110,85 @@ struct ChatTranscriptPresentationTests {
         #expect(html.contains("<pre class=\"chat-tool-detail\">\(expectedSummary)</pre>"))
         #expect(html.contains("<pre class=\"chat-tool-detail\">```") == false)
         #expect(html.contains("~~~</pre>") == false)
+    }
+
+    // MARK: - Tool activity groups (Summary mode)
+
+    private func groupFixture(
+        states: [ChatToolCallStatus],
+        names: [String]? = nil,
+        details: [String?]? = nil
+    ) -> ChatToolCallGroupRow {
+        let callNames = names ?? states.map { _ in "Bash" }
+        let callDetails = details ?? states.map { _ in String?(nil) }
+        let calls = zip(zip(callNames, callDetails), states).enumerated().map { index, pair in
+            ChatDisplayToolCall(
+                id: ToolCallID(rawValue: "tg\(index)"),
+                turnID: ChatTurnID(rawValue: "turn-1"),
+                toolName: pair.0.0,
+                status: pair.1,
+                detail: pair.0.1,
+                output: nil,
+                permissionRequestID: nil,
+                updatedAt: .distantPast
+            )
+        }
+        return ChatToolCallGroupRow(
+            id: ChatToolCallGroupID(hostedBy: calls[0]),
+            turnID: ChatTurnID(rawValue: "turn-1"),
+            calls: calls,
+            state: .aggregating(calls),
+            summary: .summarizing(calls)
+        )
+    }
+
+    @Test func toolGroupHasAccessibleStateAndSemanticMarkup() {
+        let group = groupFixture(states: [.completed, .failed, .running])
+        let html = ChatWebView.Coordinator.chatDisplayRowHTML(.toolCallGroup(group))
+
+        // Stable host identity via the root row protocol; children use the
+        // separate source-identity attribute and never the root one.
+        #expect(html.contains("<details"))
+        #expect(html.contains("data-row-id=\"toolgroup-tg0\""))
+        #expect(html.contains("data-tool-call-id=\"tg1\""))
+        #expect(html.contains("data-tool-call-id=\"tg2\""))
+        #expect(html.contains("data-row-id=\"tool-tg") == false)
+
+        // Deterministic category phrase and state, with a text+symbol cue.
+        #expect(html.contains("Tool activity"))
+        #expect(html.contains("3 commands — Running, 1 failed"))
+        #expect(html.contains("◌"))
+        #expect(html.contains("⚠"))
+
+        // Accessibility label carries total and failure counts plus state.
+        #expect(html.contains("Tool activity, 3 tool calls, Running, 1 failed"))
+
+        // Expanded body renders every child with name, status, detail, and
+        // output formatting, inside the bounded scrolling detail area.
+        #expect(html.contains("chat-tool-group-detail"))
+        #expect(html.contains("chat-tool-child"))
+        #expect(html.contains("Show tool details for Bash"))
+        #expect(group.summary.totalCount == 3)
+    }
+
+    @Test func toolGroupStylesSupportBothAppearancesAndReducedMotion() {
+        let shell = ChatWebView.Coordinator.shellHTML
+
+        // Light-mode semantic variables (the variables tool-group styles use).
+        #expect(shell.contains("--text: #1c1c1e"))
+        #expect(shell.contains("--code-bg:"))
+        #expect(shell.contains("--border:"))
+        // Dark-mode override of the same variables.
+        #expect(shell.contains("prefers-color-scheme: dark"))
+        #expect(shell.contains("--text: #e6e6e6"))
+        // Tool-group rules consume the semantic variables (no hardcoded
+        // appearance in the group block itself).
+        #expect(shell.contains(".chat-tool-group {"))
+        #expect(shell.contains(".chat-tool-group-detail {"))
+        #expect(shell.contains("max-height: 400px"))
+        #expect(shell.contains("overflow-y: auto"))
+        // Reduced-motion behavior is preserved globally.
+        #expect(shell.contains("prefers-reduced-motion: reduce"))
     }
 
     @Test func insightCalloutMarkersRenderAsTextInsteadOfAnInlineCodeSpan() {
@@ -132,15 +217,17 @@ struct ChatTranscriptPresentationTests {
 
     @Test func incompleteToolFenceRemainsVisibleAsRawOutput() {
         let row = ChatDisplayRow.toolCall(
-            id: ToolCallID(rawValue: "tool-incomplete-fence"),
-            turnID: turnID,
-            toolName: "Bash",
-            status: .completed,
-            detail: nil,
-            output: "```console\nfile changed",
-            permissionRequestID: nil,
-            updatedAt: .distantPast
-        )
+                ChatDisplayToolCall(
+                    id: ToolCallID(rawValue: "tool-incomplete-fence"),
+                    turnID: turnID,
+                    toolName: "Bash",
+                    status: .completed,
+                    detail: nil,
+                    output: "```console\nfile changed",
+                    permissionRequestID: nil,
+                    updatedAt: .distantPast
+                )
+            )
 
         let html = ChatWebView.Coordinator.chatDisplayRowHTML(row)
 

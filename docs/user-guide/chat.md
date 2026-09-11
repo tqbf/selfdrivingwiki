@@ -126,11 +126,29 @@ Agent messages render as full Markdown:
 ### Tool calls
 
 When the agent uses tools, you see compact progress rows between response
-blocks:
-- Each row updates in place as the tool runs.
-- Click the **disclosure triangle** to show details.
-- Errors have an icon and a text label, not color alone.
-- Toggle **Hide tool calls** (in the Activity menu) to filter these out.
+blocks. By default the transcript groups them: each run of tool calls in one
+turn becomes a single **Tool activity** row.
+
+- The row's summary line reports what the run did, for example
+  **3 commands, 5 files read, and 2 searches**.
+- A state cue pairs a symbol with text: `◌ Running`, `✓ Completed`,
+  `⚠ 2 failed`.
+- Click the **disclosure triangle** to expand the row and see every individual
+  tool call — its name, status, input, and output. Expanding never loses
+  anything: the row keeps its details while the run grows.
+- Errors use an icon and a text label, not color alone.
+
+You control the presentation in **Settings → Appearance → Chat → Tool call
+display**:
+
+| Mode | Behavior |
+|---|---|
+| **Summary** (default) | One expandable Tool activity row per run of tool calls. Details stay available when expanded. |
+| **Detailed** | One expandable row per tool call. |
+| **Hidden** | No tool-call rows. |
+
+The chat choice never affects diagnostics: **Show Full Activity** and the queue
+Activity window always show every tool call as its own row.
 
 ### Reasoning blocks
 
@@ -149,8 +167,8 @@ blocks also show the time when the app recorded the response.
 - The **Activity menu** (⋯ icon) is available while a query chat is queued or
   answering. It has options:
   - **Show Full Activity** — replaces the chat transcript with the full run
-    activity feed.
-  - **Hide tool calls** — filters tool-call rows.
+    activity feed. This diagnostic view always stays detailed; the chat
+    tool-call display preference does not apply to it.
   - **Exit status** — shows "Ended" or "Exited N" when the process finishes.
   - **Reveal Debug Folder** — opens the run's debug trace folder in Finder,
     when the run created one.

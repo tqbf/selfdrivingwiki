@@ -6,11 +6,14 @@ import WikiFSCore
 
 extension ChatDisplayRowID {
     /// Prefixes make the DOM namespace explicit even where raw durable IDs
-    /// happen to share the same string representation.
+    /// happen to share the same string representation. The group prefix is
+    /// distinct from the single-tool prefix, so `toolgroup-x` and `tool-x`
+    /// can never alias the same element.
     var domValue: String {
         switch self {
         case .message(let id): "message-\(id.rawValue)"
         case .toolCall(let id): "tool-\(id.rawValue)"
+        case .toolCallGroup(let id): "toolgroup-\(id.rawValue)"
         case .notice(let id): "notice-\(id.rawValue)"
         case .failure(let id): "failure-\(id.rawValue)"
         }
@@ -19,6 +22,10 @@ extension ChatDisplayRowID {
     init?(domValue: String) {
         if domValue.hasPrefix("message-") {
             self = .message(ChatMessageID(rawValue: String(domValue.dropFirst("message-".count))))
+        } else if domValue.hasPrefix("toolgroup-") {
+            self = .toolCallGroup(ChatToolCallGroupID(
+                rawValue: String(domValue.dropFirst("toolgroup-".count))
+            ))
         } else if domValue.hasPrefix("tool-") {
             self = .toolCall(ToolCallID(rawValue: String(domValue.dropFirst("tool-".count))))
         } else if domValue.hasPrefix("notice-") {
@@ -568,17 +575,18 @@ struct ChatWebView: NSViewRepresentable {
                 <div class="row-thinking-body">\(renderedMarkdown(text, context: context, isFinal: contentState == .final))</div></details>
                 """
 
-            case .toolCall(_, _, let toolName, let status, let detail, let output, _, _):
-                let statusText = toolStatusLabel(status)
-                let isError = status == .failed || status == .cancelled
-                let summaryText = toolSummary(descriptor: detail, output: output, fallback: toolName)
-                let outputText = toolDetailPayload(output ?? detail ?? "")
-                let cue = isError ? "⚠" : (status == .running || status == .pending ? "◌" : "✓")
-                return """
-                <details class="row chat-row chat-tool\(isError ? " is-error" : "")\((status == .running || status == .pending) ? " is-running" : "")" role="group" aria-label="Tool \(escape(toolName)), \(statusText)"\(attributes)>
-                <summary data-focus-key="disclosure" aria-label="Show tool details for \(escape(toolName)), \(statusText)"><span class="row-status" aria-hidden="true">\(cue)</span> <span class="chat-tool-name">\(escape(toolName))</span><span class="chat-tool-summary">\(escape(statusText))\(summaryText.isEmpty ? "" : " — \(escape(summaryText))")</span></summary>
-                \(outputText.isEmpty ? "" : "<pre class=\"chat-tool-detail\">\(escape(outputText))</pre>")</details>
-                """
+            case .toolCall(let call):
+                return Self.toolCallDetailsHTML(
+                    call,
+                    identityAttributes: attributes,
+                    cssClasses: "row chat-row chat-tool"
+                )
+
+            case .toolCallGroup(let group):
+                let rowID = htmlAttributeEscape(row.id.domValue)
+                let groupAttributes =
+                    " data-row-id=\"\(rowID)\"\(turnAttribute)"
+                return Self.toolCallGroupHTML(group, attributes: groupAttributes)
 
             case .notice(_, _, _, let title, let message, _):
                 return """
@@ -590,6 +598,60 @@ struct ChatWebView: NSViewRepresentable {
                 <aside class="row row-turn-failed" role="alert" aria-label="Chat action failed"\(attributes)><span class="row-turn-failed-icon" aria-hidden="true">⚠︎</span><div class="row-turn-failed-body"><strong>Chat action failed</strong> \(escape(message))</div></aside>
                 """
             }
+        }
+
+        /// The shared per-call markup. Used both by the canonical single-tool
+        /// row (identity = the root `data-row-id` protocol) and by children
+        /// inside a group row (identity = the child-only `data-tool-call-id`
+        /// attribute, never the root protocol). Formatting and escaping stay
+        /// in this one place.
+        private static func toolCallDetailsHTML(
+            _ call: ChatDisplayToolCall,
+            identityAttributes: String,
+            cssClasses: String
+        ) -> String {
+            let statusText = toolStatusLabel(call.status)
+            let isError = call.status == .failed || call.status == .cancelled
+            let summaryText = toolSummary(descriptor: call.detail, output: call.output, fallback: call.toolName)
+            let outputText = toolDetailPayload(call.output ?? call.detail ?? "")
+            let cue = isError ? "⚠" : (call.status == .running || call.status == .pending ? "◌" : "✓")
+            return """
+            <details class="\(cssClasses)\(isError ? " is-error" : "")\((call.status == .running || call.status == .pending) ? " is-running" : "")" role="group" aria-label="Tool \(escape(call.toolName)), \(statusText)"\(identityAttributes)>
+            <summary data-focus-key="disclosure" aria-label="Show tool details for \(escape(call.toolName)), \(statusText)"><span class="row-status" aria-hidden="true">\(cue)</span> <span class="chat-tool-name">\(escape(call.toolName))</span><span class="chat-tool-summary">\(escape(statusText))\(summaryText.isEmpty ? "" : " — \(escape(summaryText))")</span></summary>
+            \(outputText.isEmpty ? "" : "<pre class=\"chat-tool-detail\">\(escape(outputText))</pre>")</details>
+            """
+        }
+
+        /// One collapsed tool-activity row: a stable host identity, the
+        /// deterministic category phrase, text+symbol state, and every child
+        /// call in the expanded body. The detail area is height-bounded and
+        /// scrolls (`CSS` in `shellHTML`).
+        private static func toolCallGroupHTML(
+            _ group: ChatToolCallGroupRow,
+            attributes: String
+        ) -> String {
+            let state = group.state
+            let phrase = group.summary.phrase
+            let summaryPhrase = phrase.isEmpty
+                ? escape(state.text)
+                : "\(escape(phrase)) — \(escape(state.text))"
+            // Total count, failure count, and state in one deterministic label.
+            let ariaLabel = "Tool activity, "
+                + "\(group.calls.count) tool call\(group.calls.count == 1 ? "" : "s"), "
+                + state.text
+            let children = group.calls.map { call in
+                toolCallDetailsHTML(
+                    call,
+                    identityAttributes: " data-tool-call-id=\"\(htmlAttributeEscape(call.id.rawValue))\"",
+                    cssClasses: "chat-tool chat-tool-child"
+                )
+            }
+            .joined()
+            return """
+            <details class="row chat-row chat-tool-group\(state.isError ? " is-error" : "")\(state.isActive ? " is-running" : "")" role="group" aria-label="\(escape(ariaLabel))"\(attributes)>
+            <summary data-focus-key="disclosure" aria-label="Show tool activity, \(escape(ariaLabel))"><span class="row-status" aria-hidden="true">\(state.symbol)</span> <span class="chat-tool-group-label">Tool activity</span><span class="chat-tool-group-summary">\(summaryPhrase)</span></summary>
+            <div class="chat-tool-group-detail">\(children)</div></details>
+            """
         }
 
         /// Returns a collapsed descriptor without mutating durable output. New
@@ -952,6 +1014,50 @@ struct ChatWebView: NSViewRepresentable {
             white-space: pre-wrap; word-break: break-word;
             max-height: 200px; overflow-y: auto;
           }
+          /* Collapsed tool-activity group (Summary mode): one row per
+             contiguous run. Colors come only from the semantic variables so
+             light and dark follow the system appearance. */
+          .chat-tool-group {
+            display: block; font-size: 11.5px; color: var(--muted);
+            margin: 0 0 10px; padding: 2px 2px;
+            background: var(--code-bg); border: 1px solid var(--border);
+            border-radius: 6px;
+          }
+          .chat-tool-group > summary {
+            display: grid; grid-template-columns: auto auto minmax(0, 1fr);
+            align-items: baseline; column-gap: 6px;
+            list-style: none; cursor: pointer; padding: 3px 4px;
+          }
+          .chat-tool-group > summary::-webkit-details-marker { display: none; }
+          .chat-tool-group[open] > summary .chat-tool-group-summary::before {
+            content: "▾ "; opacity: 0.5;
+          }
+          .chat-tool-group:not([open]) > summary .chat-tool-group-summary::before {
+            content: "▸ "; opacity: 0.5;
+          }
+          .chat-tool-group-label {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-weight: 600; color: var(--text);
+          }
+          .chat-tool-group-summary {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            min-width: 0; overflow-wrap: anywhere;
+          }
+          .chat-tool-group.is-error { border-color: #ff453a; }
+          .chat-tool-group.is-error .chat-tool-group-label,
+          .chat-tool-group.is-error .chat-tool-group-summary { color: #ff453a; }
+          /* Expanded body: every child call, height-bounded so one huge run
+             cannot take over the transcript. */
+          .chat-tool-group-detail {
+            margin: 2px 0 0; padding: 4px 6px;
+            border-top: 1px solid var(--border);
+            max-height: 400px; overflow-y: auto;
+          }
+          .chat-tool-child {
+            display: block; padding: 2px 0;
+            border-bottom: 1px solid var(--border);
+          }
+          .chat-tool-child:last-child { border-bottom: none; }
           p { margin: 0 0 0.6em; }
           p:last-child { margin-bottom: 0; }
           h1, h2, h3, h4, h5, h6 { line-height: 1.25; font-weight: 600; margin: 0.7em 0 0.3em; }
@@ -1127,9 +1233,14 @@ struct ChatWebView: NSViewRepresentable {
             var active = document.activeElement;
             var focusKey = active && oldRow.contains(active) ? active.getAttribute('data-focus-key') : null;
             var offsets = selectionOffsets(oldRow);
+            // Disclosure state must survive a same-identity replacement: a
+            // live group grows (or changes status) while the user has it
+            // expanded, and the expansion must not reset.
+            var wasOpen = oldRow.tagName === 'DETAILS' ? oldRow.open : null;
             oldRow.outerHTML = html;
             var newRow = document.querySelector('[data-row-id="' + CSS.escape(rowID) + '"]');
             if (!newRow) return renderAcknowledgement('replace', revision, rowID, 'missingRow');
+            if (wasOpen !== null && newRow.tagName === 'DETAILS') newRow.open = wasOpen;
             if (focusKey) {
               var replacementFocus = newRow.querySelector('[data-focus-key="' + CSS.escape(focusKey) + '"]');
               if (replacementFocus) replacementFocus.focus({preventScroll:true});

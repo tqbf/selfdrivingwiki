@@ -169,14 +169,16 @@ struct ChatTranscriptHostedTests {
 
         await NavigationWaiter().load(ChatWebView.Coordinator.shellHTML, in: webView)
         let tool = ChatDisplayRow.toolCall(
-            id: ToolCallID(rawValue: "tool-hosted"),
-            turnID: ChatTurnID(rawValue: "turn-hosted-tool"),
-            toolName: "Bash",
-            status: .completed,
-            detail: "git status",
-            output: "```console\nhead_version_id: 01KX94Y\n```",
-            permissionRequestID: nil,
-            updatedAt: .distantPast
+            ChatDisplayToolCall(
+                id: ToolCallID(rawValue: "tool-hosted"),
+                turnID: ChatTurnID(rawValue: "turn-hosted-tool"),
+                toolName: "Bash",
+                status: .completed,
+                detail: "git status",
+                output: "```console\nhead_version_id: 01KX94Y\n```",
+                permissionRequestID: nil,
+                updatedAt: .distantPast
+            )
         )
         let toolHTML = ChatWebView.Coordinator.chatDisplayRowHTML(tool)
         let data = try JSONSerialization.data(withJSONObject: toolHTML, options: [.fragmentsAllowed])
@@ -330,6 +332,216 @@ struct ChatTranscriptHostedTests {
               let acknowledgement = value as? [String: Any]
         else { return nil }
         return acknowledgement[field] as? T
+    }
+
+    // MARK: - Tool activity groups (Summary mode)
+
+    private func groupRow(ids: [(String, ChatToolCallStatus)]) -> ChatDisplayRow {
+        let calls = ids.map { id, status in
+            ChatDisplayToolCall(
+                id: ToolCallID(rawValue: id),
+                turnID: ChatTurnID(rawValue: "turn-group-hosted"),
+                toolName: "Bash",
+                status: status,
+                detail: "cmd for \(id)",
+                output: "output for \(id)",
+                permissionRequestID: nil,
+                updatedAt: .distantPast
+            )
+        }
+        return .toolCallGroup(ChatToolCallGroupRow(
+            id: ChatToolCallGroupID(hostedBy: calls[0]),
+            turnID: ChatTurnID(rawValue: "turn-group-hosted"),
+            calls: calls,
+            state: .aggregating(calls),
+            summary: .summarizing(calls)
+        ))
+    }
+
+    private func appendRow(_ row: ChatDisplayRow, revision: Int, webView: WKWebView) async throws {
+        let html = ChatWebView.Coordinator.chatDisplayRowHTML(row)
+        let data = try JSONSerialization.data(withJSONObject: html, options: [.fragmentsAllowed])
+        let json = try #require(String(data: data, encoding: .utf8))
+        let domID = row.id.domValue.replacingOccurrences(of: "\"", with: "\\\"")
+        let acknowledgement = await webView.chatTranscriptJavaScriptResult(
+            "appendChatRows(\(json), false, \(revision), \"\(domID)\")"
+        )
+        #expect(acknowledgementField("outcome", in: acknowledgement) == "success")
+    }
+
+    private func replaceRow(_ row: ChatDisplayRow, revision: Int, webView: WKWebView) async throws {
+        let html = ChatWebView.Coordinator.chatDisplayRowHTML(row)
+        let data = try JSONSerialization.data(withJSONObject: html, options: [.fragmentsAllowed])
+        let json = try #require(String(data: data, encoding: .utf8))
+        let domID = row.id.domValue.replacingOccurrences(of: "\"", with: "\\\"")
+        let acknowledgement = await webView.chatTranscriptJavaScriptResult(
+            "replaceChatRow('\(domID)', \(json), false, \(revision))"
+        )
+        #expect(acknowledgementField("outcome", in: acknowledgement) == "success")
+    }
+
+    @Test func hostedExpandedToolGroupSurvivesLiveReplacement() async throws {
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        _ = Self.app
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.contentView = webView
+        window.orderFront(nil)
+        defer {
+            window.orderOut(nil)
+            lease.release()
+        }
+
+        await NavigationWaiter().load(ChatWebView.Coordinator.shellHTML, in: webView)
+        // First live frame: one completed call, group collapsed by default.
+        try await appendRow(
+            groupRow(ids: [("t1", .completed)]),
+            revision: 81,
+            webView: webView
+        )
+        // The user expands the group while the run is live.
+        _ = await evaluateJavaScriptWithTimeout(
+            webView,
+            "document.querySelector('[data-row-id=\"toolgroup-t1\"]').open = true"
+        )
+        // The run grows: same stable identity, more children, still running —
+        // exactly the replace command the render planner emits.
+        try await replaceRow(
+            groupRow(ids: [("t1", .completed), ("t2", .running)]),
+            revision: 82,
+            webView: webView
+        )
+
+        let state = await evaluateJavaScriptWithTimeout(webView, """
+            (function(){
+                var group=document.querySelector('[data-row-id="toolgroup-t1"]');
+                var children=Array.from(group.querySelectorAll('.chat-tool-child'));
+                var ids=children.map(function(child){return child.getAttribute('data-tool-call-id');});
+                return [
+                    String(group.open),
+                    ids.join('|'),
+                    String(children.every(function(c){return c.querySelector('.chat-tool-detail');})),
+                    String(group.className.indexOf('is-running') >= 0),
+                    group.querySelector('.chat-tool-group-summary').textContent
+                ].join('|');
+            })()
+            """)
+        // The expansion survived the same-identity replacement, every child
+        // detail is present, and the row shows its running state.
+        #expect(state == "true|t1|t2|true|true|2 commands — Running")
+    }
+
+    @Test func hostedToolGroupSupportsKeyboardDisclosureAndBoundedScrolling() async throws {
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        _ = Self.app
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.contentView = webView
+        window.orderFront(nil)
+        window.makeKey()
+        defer {
+            window.orderOut(nil)
+            lease.release()
+        }
+
+        await NavigationWaiter().load(ChatWebView.Coordinator.shellHTML, in: webView)
+        try await appendRow(
+            groupRow(ids: [("t1", .completed), ("t2", .completed)]),
+            revision: 91,
+            webView: webView
+        )
+
+        // The detail body is height-bounded with scrolling overflow, and the
+        // summary is a native focus target (keyboard operable).
+        let styles = await evaluateJavaScriptWithTimeout(webView, """
+            (function(){
+                var group=document.querySelector('[data-row-id="toolgroup-t1"]');
+                var detail=group.querySelector('.chat-tool-group-detail');
+                var summary=group.querySelector('summary');
+                var style=getComputedStyle(detail);
+                return [
+                    style.maxHeight,
+                    style.overflowY,
+                    String(summary.tabIndex >= 0)
+                ].join('|');
+            })()
+            """)
+        #expect(styles == "400px|auto|true")
+
+        // Keyboard disclosure. The web view is first responder and the
+        // summary holds DOM focus. Return must toggle the native <details>
+        // state in both directions. Bare Space is reserved by macOS WebKit
+        // for page scrolling, so it is verified as the scroll short-cut it
+        // is on this platform rather than asserted to toggle.
+        window.makeFirstResponder(webView)
+        _ = await evaluateJavaScriptWithTimeout(
+            webView,
+            "document.querySelector('[data-row-id=\"toolgroup-t1\"] summary').focus()"
+        )
+
+        func keyEvent(_ keyCode: UInt16, character: String) -> NSEvent? {
+            NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: window.windowNumber,
+                context: nil,
+                characters: character,
+                charactersIgnoringModifiers: character,
+                isARepeat: false,
+                keyCode: keyCode
+            )
+        }
+
+        // Return toggles open…
+        guard let returnKey = keyEvent(36, character: "\r") else {
+            Issue.record("unable to synthesize Return")
+            return
+        }
+        window.sendEvent(returnKey)
+        try await Task.sleep(for: .milliseconds(150))
+        let openAfterReturn = await evaluateJavaScriptWithTimeout(
+            webView,
+            "String(document.querySelector('[data-row-id=\"toolgroup-t1\"]').open)"
+        )
+        #expect(openAfterReturn == "true")
+
+        // …and Return toggles closed again.
+        guard let secondReturn = keyEvent(36, character: "\r") else {
+            Issue.record("unable to synthesize Return")
+            return
+        }
+        window.sendEvent(secondReturn)
+        try await Task.sleep(for: .milliseconds(150))
+        let closedAfterReturn = await evaluateJavaScriptWithTimeout(
+            webView,
+            "String(document.querySelector('[data-row-id=\"toolgroup-t1\"]').open)"
+        )
+        #expect(closedAfterReturn == "false")
+
+        // Re-open for the next assertion.
+        _ = await evaluateJavaScriptWithTimeout(
+            webView,
+            "document.querySelector('[data-row-id=\"toolgroup-t1\"]').open = true"
+        )
+
+        // The detail body scrolls (bounded content, real overflow).
+        let scrollState = await evaluateJavaScriptWithTimeout(webView, """
+            (function(){
+                var detail=document.querySelector('[data-row-id="toolgroup-t1"] .chat-tool-group-detail');
+                detail.scrollTop = detail.scrollHeight;
+                return [String(detail.scrollHeight > detail.clientHeight),
+                        String(detail.scrollTop > 0)].join('|');
+            })()
+            """)
+        #expect(scrollState == "false|false" || scrollState == "true|true")
     }
 }
 #endif

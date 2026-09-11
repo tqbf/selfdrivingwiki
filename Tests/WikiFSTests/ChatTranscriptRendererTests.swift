@@ -142,4 +142,48 @@ import WikiFSCore
         let sectionHeaders = rendered.split(separator: "\n").filter { $0.hasPrefix("## ") }
         #expect(sectionHeaders.count == 0)
     }
+
+    // MARK: - Known skill-description warning (exports)
+
+    /// The complete known warning is omitted from exported Markdown for old
+    /// and new chats alike; substantive text after it is preserved.
+    @Test func omitsKnownSkillWarningFromExports() {
+        let warning = "Warning: Skill descriptions were shortened to fit the 2% skills context budget."
+
+        // Warning-only assistant message: no Assistant section at all.
+        let warningOnly = ChatTranscriptRenderer.render(
+            summary: summary(messageCount: 1),
+            messages: [message(.assistantText(warning), seq: 0)])
+        #expect(warningOnly.contains("## Assistant") == false)
+        #expect(warningOnly.contains("Skill descriptions") == false)
+
+        // Warning plus answer: only the answer survives.
+        let withAnswer = ChatTranscriptRenderer.render(
+            summary: summary(messageCount: 1),
+            messages: [message(.assistantText(warning + "\n\nVenturi masks jet entrainment."), seq: 0)])
+        #expect(withAnswer.contains("## Assistant\n\nVenturi masks jet entrainment.") == true)
+        #expect(withAnswer.contains("Skill descriptions") == false)
+
+        // Result events get the same treatment.
+        let resultOnly = ChatTranscriptRenderer.render(
+            summary: summary(messageCount: 1),
+            messages: [message(.result(isError: false, text: warning), seq: 0)])
+        #expect(resultOnly.contains("## Result") == false)
+    }
+
+    @Test func preservesIncompleteWarningPrefixInExports() {
+        // A FINAL message that is only a proper prefix of the warning is
+        // content as far as exports are concerned — it stays.
+        let partial = "Warning: Skill descriptions were shortened"
+        let rendered = ChatTranscriptRenderer.render(
+            summary: summary(messageCount: 1),
+            messages: [message(.assistantText(partial), seq: 0)])
+        #expect(rendered.contains("## Assistant\n\n\(partial)") == true)
+
+        // Unrelated warnings are never touched.
+        let unrelated = ChatTranscriptRenderer.render(
+            summary: summary(messageCount: 1),
+            messages: [message(.assistantText("Warning: Provider timeout"), seq: 0)])
+        #expect(unrelated.contains("## Assistant\n\nWarning: Provider timeout") == true)
+    }
 }

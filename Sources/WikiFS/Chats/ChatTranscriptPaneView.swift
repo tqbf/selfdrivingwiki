@@ -28,8 +28,7 @@ struct ChatTranscriptPaneView: View {
                 blobStore: renderer.blobStore,
                 zoom: presentation.chatZoom,
                 scrollRequest: rendererInput.webScrollRequest(for: presentation.outlineScroll),
-                quoteAnchor: presentation.quoteAnchor,
-                hideToolCalls: presentation.hideToolCalls
+                quoteAnchor: presentation.quoteAnchor
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(.horizontal, PageEditorMetrics.contentInset + ChatMetrics.extraHorizontalMargin)
@@ -128,7 +127,6 @@ struct ChatTranscriptPanePresentation {
     let chatZoom: Double
     let outlineScroll: ChatScrollRequest?
     let quoteAnchor: ChatHighlightRequest?
-    let hideToolCalls: Bool
 }
 
 /// Renderer dependencies prepared by `ChatDetailView`. This shell contains no

@@ -46,11 +46,27 @@ enum AppearanceMode: String, CaseIterable {
 /// (AppKit surfaces — NSAlert, menu bar, status item). The WKWebView reader
 /// follows automatically via its CSS `color-scheme: light dark` property.
 struct AppearanceSettingsView: View {
-    @AppStorage(AppearanceSettingsView.storageKey) private var modeRaw = AppearanceMode.system.rawValue
+    @AppStorage private var modeRaw: String
+    @AppStorage private var toolCallDisplayModeRaw: String
 
     /// The `@AppStorage` key shared with `WikiFSApp` so both the picker and
     /// the root scene read/write the same `UserDefaults` value.
     static let storageKey = "appearance.mode"
+
+    /// Injectable defaults so hosted tests can drive the real controls
+    /// against an isolated suite instead of the app's standard defaults.
+    init(store: UserDefaults = .standard) {
+        _modeRaw = AppStorage(
+            wrappedValue: AppearanceMode.system.rawValue,
+            AppearanceSettingsView.storageKey,
+            store: store
+        )
+        _toolCallDisplayModeRaw = AppStorage(
+            wrappedValue: ChatToolCallDisplayMode.summary.rawValue,
+            ChatToolCallDisplayPreference.storageKey,
+            store: store
+        )
+    }
 
     var body: some View {
         Form {
@@ -71,6 +87,21 @@ struct AppearanceSettingsView: View {
                 Text("System follows your macOS appearance setting. "
                      + "Light or Dark overrides it for this app only.")
             }
+
+            Section {
+                Picker("Tool call display", selection: toolCallDisplayModeBinding) {
+                    ForEach(ChatToolCallDisplayMode.allCases, id: \.self) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .pickerStyle(.radioGroup)
+                .labelsHidden()
+                .accessibilityLabel("Tool call display")
+            } header: {
+                Text("Chat")
+            } footer: {
+                Text(ChatToolCallDisplayMode.settingsFooterText)
+            }
         }
         .formStyle(.grouped)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -81,6 +112,14 @@ struct AppearanceSettingsView: View {
         Binding(
             get: { AppearanceMode(rawValue: modeRaw) ?? .system },
             set: { modeRaw = $0.rawValue }
+        )
+    }
+
+    /// Bridges `@AppStorage(String)` → `ChatToolCallDisplayMode` for the picker.
+    private var toolCallDisplayModeBinding: Binding<ChatToolCallDisplayMode> {
+        Binding(
+            get: { ChatToolCallDisplayMode.resolving(raw: toolCallDisplayModeRaw) },
+            set: { toolCallDisplayModeRaw = $0.rawValue }
         )
     }
 }

@@ -494,6 +494,41 @@ struct MessageSummaryTests {
         #expect(thinking == "Tidal pools differ from the open shore in several ways.")
     }
 
+    /// The summarizer now removes ONLY the known skill warning — never an
+    /// arbitrary `Warning:` line — and keeps a final incomplete prefix.
+    @Test func textToSummarizeRemovesKnownSkillWarning() {
+        let sentence = "Warning: Skill descriptions were shortened to fit the 2% skills context budget."
+        // Complete warning-only: nothing to summarize.
+        #expect(MessageSummarizer.textToSummarize(from: .assistantText(sentence)) == nil)
+        #expect(MessageSummarizer.textToSummarize(from: .assistantText(sentence + "\n\n")) == nil)
+
+        // Warning plus answer: the answer survives, and leading blank lines
+        // after the warning go with it.
+        let withAnswer = MessageSummarizer.textToSummarize(from: .assistantText(
+            sentence + "\n\n\nVenturi masks use jet entrainment."))
+        #expect(withAnswer == "Venturi masks use jet entrainment.")
+
+        // A provider suffix on the same line is part of the known family.
+        #expect(MessageSummarizer.textToSummarize(from: .assistantText(sentence + " (12 tools)")) == nil)
+    }
+
+    @Test func textToSummarizePreservesIncompleteAndUnrelatedWarnings() {
+        // A final incomplete prefix of the warning is content.
+        let partial = "Warning: Skill descriptions were shortened"
+        #expect(MessageSummarizer.textToSummarize(from: .assistantText(partial)) == partial)
+
+        // Unrelated Warning: lines are content too — the old broad leading-
+        // Warning: strip is gone.
+        let unrelated = "Warning: Provider timeout after 30s"
+        #expect(MessageSummarizer.textToSummarize(from: .assistantText(unrelated)) == unrelated)
+
+        // Thinking: preambles keep their separate treatment, including after
+        // an unrelated warning.
+        let mixed = MessageSummarizer.textToSummarize(from: .assistantText(
+            "Thinking:\n\nShoreline features differ by tide stage."))
+        #expect(mixed == "Shoreline features differ by tide stage.")
+    }
+
     @Test func sanitizeTitle_stripsQuotesFencesLabelsAndPeriod() {
         #expect(MessageSummarizer.sanitizeTitle("\"Venturi Effects Explained\"") == "Venturi Effects Explained")
         #expect(MessageSummarizer.sanitizeTitle("```Venturi Effects```") == "Venturi Effects")

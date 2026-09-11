@@ -147,6 +147,53 @@ struct ChatPresentationAPIManifestTests {
         #expect(pane.contains("(String, Bool)") == false)
     }
 
+    /// The Summary mode adds a typed app-only group row. It must carry the
+    /// run's identity through a dedicated type (never an index or sentinel),
+    /// keep every child payload, and stay out of the durable contract.
+    @Test func presentationProjectionUsesTypedToolGroupRows() throws {
+        let projection = try source(named: "ChatDisplayProjection.swift")
+        let groupSummary = try source(named: "ChatToolCallGroupSummary.swift")
+        let presentation = try source(named: "ChatTranscriptPresentationProjection.swift")
+        let preference = try source(named: "ChatToolCallDisplayPreference.swift")
+
+        #expect(projection.contains("case toolCallGroup(ChatToolCallGroupRow)") == true)
+        #expect(projection.contains("case toolCallGroup(ChatToolCallGroupID)") == true)
+        #expect(projection.contains("struct ChatDisplayToolCall") == true)
+        #expect(groupSummary.contains("struct ChatToolCallGroupID") == true)
+        #expect(groupSummary.contains("hostToolCallID") == true)
+        #expect(groupSummary.contains("enum ChatToolCallGroupState") == true)
+        #expect(groupSummary.contains("struct ChatToolCallGroupSummary") == true)
+        // Grouping is presentation-only: no grouping logic may leak into the
+        // durable types or the projection input.
+        #expect(preference.contains("chat.toolCallDisplayMode") == true)
+        #expect(preference.contains("chat.hideToolCalls") == true)
+        #expect(presentation.contains("ChatDisplayProjection.project") == false)
+        #expect(presentation.contains(".toolCallGroup(ChatToolCallGroupRow(") == true)
+    }
+
+    /// Both display policies exist and the app never reintroduces a Boolean
+    /// warning filter or a second storage key.
+    @Test func warningPreamblePolicyStaysTypedAndShared() throws {
+        let preamble = try source(
+            named: "AgentPresentationPreamble.swift",
+            directory: "Sources/WikiFSCore/Core"
+        )
+        let renderer = try source(
+            named: "ChatTranscriptRenderer.swift",
+            directory: "Sources/WikiFSCore/Core"
+        )
+        let presentation = try source(named: "ChatTranscriptPresentationProjection.swift")
+
+        #expect(preamble.contains("case streamingPrefixAware") == true)
+        #expect(preamble.contains("case completeOnly") == true)
+        #expect(preamble.contains("knownWarningSentence") == true)
+        // The exact known sentence is pinned in one place.
+        #expect(preamble.contains("Warning: Skill descriptions were shortened") == true)
+        #expect(renderer.contains("AgentPresentationPreamble.visibleText") == true)
+        #expect(presentation.contains(".streamingPrefixAware") == true)
+        #expect(presentation.contains(".completeOnly") == true)
+    }
+
     private func source(named file: String, directory: String = "Sources/WikiFS/Chats") throws -> String {
         try String(
             contentsOf: repositoryRoot.appending(path: directory).appending(path: file),

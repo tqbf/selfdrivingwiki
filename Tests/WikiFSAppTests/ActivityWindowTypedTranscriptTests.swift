@@ -54,6 +54,63 @@ struct ActivityWindowTypedTranscriptTests {
         #expect(presentation.transcriptView().rendering.rows.count == items.count)
     }
 
+    /// Show Full Activity and the queue Activity window always render the
+    /// canonical detailed transcript: every tool call stays its own row and
+    /// the known skill warning stays visible, regardless of the user's chat
+    /// Tool-call-display preference.
+    @Test func keepsCanonicalDetailedRows() {
+        let warning = "Warning: Skill descriptions were shortened to fit the 2% skills context budget."
+        let turn = ChatTurnID(rawValue: "turn-activity")
+        let items: [ChatTranscriptItem] = [
+            .message(ChatTranscriptMessageItem(
+                messageID: ChatMessageID(rawValue: "activity-question"),
+                turnID: turn,
+                role: .user,
+                text: "Question",
+                createdAt: .distantPast
+            )),
+            .toolCall(ChatTranscriptToolCallItem(
+                toolCallID: ToolCallID(rawValue: "tool-activity-1"),
+                turnID: turn,
+                toolName: "Bash",
+                status: .completed,
+                detail: "git status",
+                output: nil,
+                permissionRequestID: nil,
+                updatedAt: .distantPast
+            )),
+            .toolCall(ChatTranscriptToolCallItem(
+                toolCallID: ToolCallID(rawValue: "tool-activity-2"),
+                turnID: turn,
+                toolName: "Read",
+                status: .completed,
+                detail: "notes.md",
+                output: nil,
+                permissionRequestID: nil,
+                updatedAt: .distantPast
+            )),
+            .message(ChatTranscriptMessageItem(
+                messageID: ChatMessageID(rawValue: "activity-warning"),
+                turnID: turn,
+                role: .assistant,
+                text: warning,
+                createdAt: .distantPast
+            )),
+        ]
+
+        let view = makePresentation(items: items).transcriptView()
+        let rowIDs = view.rendering.rows.map(\.id)
+        // One row per durable item, identities untouched — no grouping, no
+        // warning filtering on the Activity surface.
+        #expect(rowIDs == [
+            .message(ChatMessageID(rawValue: "activity-question")),
+            .toolCall(ToolCallID(rawValue: "tool-activity-1")),
+            .toolCall(ToolCallID(rawValue: "tool-activity-2")),
+            .message(ChatMessageID(rawValue: "activity-warning")),
+        ])
+        #expect(view.rendering.rows[3].textForSearch.contains("Skill descriptions"))
+    }
+
     @Test func wikiLinkIntentUsesSelectedItemsWikiHandler() {
         var received: (URL, Bool)?
         let presentation = makePresentation(
