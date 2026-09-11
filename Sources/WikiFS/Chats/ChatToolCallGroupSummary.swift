@@ -71,16 +71,6 @@ enum ChatToolCallGroupState: Hashable, Sendable {
         return false
     }
 
-    /// Error surface: any failure or cancellation, including inside an
-    /// active group.
-    var isError: Bool {
-        switch self {
-        case .running(let failedCount): failedCount > 0
-        case .completed: false
-        case .failed: true
-        }
-    }
-
     /// Symbol + text state cue. Never color-only (accessibility).
     var symbol: String {
         switch self {

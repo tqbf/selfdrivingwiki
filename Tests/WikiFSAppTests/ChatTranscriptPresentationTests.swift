@@ -185,6 +185,9 @@ struct ChatTranscriptPresentationTests {
         // appearance in the group block itself).
         #expect(shell.contains(".chat-tool-group {"))
         #expect(shell.contains(".chat-tool-group-detail {"))
+        // The group row never gets a red outline, even when calls failed:
+        // the "N failed" text and warning symbol carry the state.
+        #expect(shell.contains(".chat-tool-group.is-error") == false)
         #expect(shell.contains("max-height: 400px"))
         #expect(shell.contains("overflow-y: auto"))
         // Reduced-motion behavior is preserved globally.

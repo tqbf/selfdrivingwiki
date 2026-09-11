@@ -670,7 +670,7 @@ struct ChatWebView: NSViewRepresentable {
                 }
                 .joined()
             return """
-            <details class="row chat-row chat-tool-group\(state.isError ? " is-error" : "")\(state.isActive ? " is-running" : "")" role="group" aria-label="\(escape(ariaLabel))"\(attributes)>
+            <details class="row chat-row chat-tool-group\(state.isActive ? " is-running" : "")" role="group" aria-label="\(escape(ariaLabel))"\(attributes)>
             <summary data-focus-key="disclosure" aria-label="Show tool activity, \(escape(ariaLabel))"><span class="row-status" aria-hidden="true">\(state.symbol)</span> <span class="chat-tool-group-label">Tool activity</span><span class="chat-tool-group-summary">\(summaryPhrase)</span></summary>
             <div class="chat-tool-group-detail">\(children)</div></details>
             """
@@ -1065,9 +1065,9 @@ struct ChatWebView: NSViewRepresentable {
             font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
             min-width: 0; overflow-wrap: anywhere;
           }
-          .chat-tool-group.is-error { border-color: #ff453a; }
-          .chat-tool-group.is-error .chat-tool-group-label,
-          .chat-tool-group.is-error .chat-tool-group-summary { color: #ff453a; }
+          /* A failed child call is surfaced by its own red text inside the
+             expanded body; the group row itself stays neutral — the summary
+             already carries "N failed" text and the warning symbol. */
           /* Expanded body: every child call, height-bounded so one huge run
              cannot take over the transcript. */
           .chat-tool-group-detail {
