@@ -21,6 +21,10 @@ struct ChatOutgoingMessagesControllerTests {
 
     @MainActor
     private final class SendHarness {
+        /// Longer than any waitUntil deadline, so the sweeper only fires on an
+        /// abandoned continuation, never in a passing run.
+        static let submitWaitTimeout: Duration = .seconds(10)
+
         let controller = ChatOutgoingMessagesController()
 
         var recordedRequests: [ChatSubmitRequest] = []
@@ -33,9 +37,9 @@ struct ChatOutgoingMessagesControllerTests {
             trimmedText: "", attachmentIDs: []
         )
 
-        private var submitContinuations: [CheckedContinuation<ChatID, Error>] = []
+        private var submitWaiters: [PendingSubmit] = []
 
-        var suspendedSubmitCount: Int { submitContinuations.count }
+        var suspendedSubmitCount: Int { submitWaiters.count }
 
         func installEnvironment() {
             controller.installEnvironment(.init(
@@ -88,9 +92,9 @@ struct ChatOutgoingMessagesControllerTests {
         }
 
         func resumeNextSubmit(with result: Result<ChatID, Error>) {
-            guard let continuation = submitContinuations.first else { return }
-            submitContinuations.removeFirst()
-            continuation.resume(with: result)
+            guard let waiter = submitWaiters.first else { return }
+            submitWaiters.removeFirst()
+            waiter.resume(with: result)
         }
 
         /// Yields the main actor until `condition` holds. Bounded so a starved
@@ -111,11 +115,44 @@ struct ChatOutgoingMessagesControllerTests {
             return true
         }
 
+        /// Suspend until the test resumes the submit, racing a bounded
+        /// deadline: whichever fires first removes the waiter and completes the
+        /// continuation exactly once, so an abandoned wait fails fast instead
+        /// of parking the task forever (AGENTS.md #1051 rule).
         private func suspendSubmitting(_ request: ChatSubmitRequest) async throws -> ChatID {
             recordedRequests.append(request)
-            return try await withCheckedThrowingContinuation { continuation in
-                submitContinuations.append(continuation)
+            return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<ChatID, Error>) in
+                let waiter = PendingSubmit(continuation: continuation)
+                submitWaiters.append(waiter)
+                Task { [weak self] in
+                    try? await Task.sleep(for: Self.submitWaitTimeout)
+                    self?.timeOutSubmit(waiter)
+                }
             }
+        }
+
+        private func timeOutSubmit(_ waiter: PendingSubmit) {
+            guard let index = submitWaiters.firstIndex(where: { $0 === waiter }) else { return }
+            submitWaiters.remove(at: index)
+            waiter.resume(with: .failure(SendError(message: "submit wait timed out")))
+        }
+    }
+
+    /// Identity wrapper so the deadline sweeper and the test's resume path can
+    /// agree on exactly-once completion of one stored continuation.
+    @MainActor
+    private final class PendingSubmit {
+        private let continuation: CheckedContinuation<ChatID, Error>
+        private var didResume = false
+
+        init(continuation: CheckedContinuation<ChatID, Error>) {
+            self.continuation = continuation
+        }
+
+        func resume(with result: Result<ChatID, Error>) {
+            guard didResume == false else { return }
+            didResume = true
+            continuation.resume(with: result)
         }
     }
 
