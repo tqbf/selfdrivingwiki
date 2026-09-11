@@ -666,7 +666,6 @@ struct ActivityWindowView: View {
             title: Self.kindLabel(for: item),
             operationLabel: QueueWorkspaceMapper.operationLabel(for: item),
             jobID: item.id,
-            relativeTime: nil,
             wikiName: String(item.wikiID.rawValue.prefix(8)),
             targetNames: [],
             usage: nil,
@@ -684,17 +683,11 @@ struct ActivityWindowView: View {
                 HStack(spacing: QueueWorkspaceMetrics.Spacing.xs) {
                     QueueOperationChip(label: data.operationLabel)
                     // Lead with the strongly typed queue-item ID. Running rows
-                    // update their elapsed suffix inside a per-second TimelineView;
-                    // terminal and queued rows use the precomputed relative time.
-                    if item.state == .running, item.startedAt != nil {
-                        TimelineView(.periodic(from: .now, by: 1)) { context in
-                            rowMetadata(
-                                jobID: data.jobID,
-                                suffix: "running · \(elapsedString(item.startedAt, now: context.date))")
-                        }
-                    } else {
-                        rowMetadata(jobID: data.jobID, suffix: data.relativeTime)
-                    }
+                    // append the state word; rows carry no time text —
+                    // timestamps live in Run Details and the job header.
+                    rowMetadata(
+                        jobID: data.jobID,
+                        suffix: item.state == .running ? "running" : nil)
                 }
                 // Report-backed phase progress on running rows ("Staging
                 // sources · 8 of 12"), from the item's cached summary —
@@ -726,15 +719,13 @@ struct ActivityWindowView: View {
                         .lineLimit(2)
                 }
                 // #544 live progress: show running token counts + model during
-                // the run. Cleared on terminal state by the tracker. Elapsed
-                // time ticks here via TimelineView (per-second) so the line
-                // updates even between usage_updates. Extraction rows show
-                // their ticking elapsed in the subtitle above instead.
+                // the run. Cleared on terminal state by the tracker. The line
+                // is static between usage_updates — rows carry no elapsed
+                // clock (duration lives in Run Details and the job header).
                 if item.state == .running, let usage = data.liveUsage {
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        let elapsed = elapsedString(item.startedAt, now: context.date)
-                        let line = UsageFormatter.liveSummary(usage: usage)
-                        Text(line.isEmpty ? elapsed : "\(line) · \(elapsed)")
+                    let line = UsageFormatter.liveSummary(usage: usage)
+                    if !line.isEmpty {
+                        Text(line)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
@@ -762,7 +753,7 @@ struct ActivityWindowView: View {
     }
 
     /// The sidebar metadata line. Keep the queue ID typed until this rendering
-    /// boundary, where its raw ULID is displayed beside optional timing text.
+    /// boundary, where its raw ULID is displayed beside optional state text.
     private func rowMetadata(jobID: QueueItem.ID, suffix: String?) -> some View {
         Text(Self.rowMetadataText(jobID: jobID, suffix: suffix))
             .font(.caption.monospaced())
@@ -2044,9 +2035,6 @@ struct ActivityWindowView: View {
         /// Strongly typed queue identity rendered as the row's leading
         /// metadata. Raw text is produced only by `rowMetadata(jobID:suffix:)`.
         let jobID: QueueItem.ID
-        /// Frozen relative time for non-running rows. Running rows derive a
-        /// live elapsed suffix in their `TimelineView` instead.
-        let relativeTime: String?
         /// Wiki display name retained for filtering; it is not row metadata.
         let wikiName: String
         let targetNames: [String]
@@ -2128,7 +2116,6 @@ struct ActivityWindowView: View {
                     nameIndex: effectiveIndex),
                 operationLabel: QueueWorkspaceMapper.operationLabel(for: item),
                 jobID: item.id,
-                relativeTime: relativeTime(for: item),
                 wikiName: wikiName,
                 targetNames: resolved.targets,
                 usage: itemUsage[item.id],
@@ -2245,40 +2232,9 @@ struct ActivityWindowView: View {
             : "\(firstName) and \(remaining) others"
     }
 
-    /// Short relative time for sidebar rows ("2 min. ago"), from the most
-    /// meaningful timestamp for the item's state.
-    private func relativeTime(for item: QueueItem) -> String? {
-        let millis: Int64? = switch item.state {
-        case .running: item.startedAt
-        case .queued: item.createdAt
-        default: item.finishedAt ?? item.startedAt
-        }
-        guard let date = date(fromMillis: millis) else { return nil }
-        return date.formatted(.relative(presentation: .named))
-    }
-
     private func date(fromMillis millis: Int64?) -> Date? {
         guard let millis else { return nil }
         return Date(timeIntervalSince1970: Double(millis) / 1000)
-    }
-
-    /// Compact elapsed-time string from an epoch-ms start timestamp to `now`.
-    /// Used by the live-usage row line (#544) so it ticks independently of
-    /// usage_updates. Mirrors `AgentRunStatusView.durationString`'s format:
-    /// "42s", "3m 12s", "1h 5m". Returns "—" when no start timestamp.
-    private func elapsedString(_ startedAtMs: Int64?, now: Date) -> String {
-        guard let startedAtMs, startedAtMs > 0 else { return "—" }
-        let start = Date(timeIntervalSince1970: Double(startedAtMs) / 1000)
-        let seconds = max(0, Int(now.timeIntervalSince(start).rounded(.down)))
-        if seconds < 60 { return "\(seconds)s elapsed" }
-        let minutes = seconds / 60
-        let remainingSeconds = seconds % 60
-        if minutes < 60 {
-            return remainingSeconds == 0 ? "\(minutes)m elapsed" : "\(minutes)m \(remainingSeconds)s elapsed"
-        }
-        let hours = minutes / 60
-        let remainingMinutes = minutes % 60
-        return remainingMinutes == 0 ? "\(hours)h elapsed" : "\(hours)h \(remainingMinutes)m elapsed"
     }
 }
 
