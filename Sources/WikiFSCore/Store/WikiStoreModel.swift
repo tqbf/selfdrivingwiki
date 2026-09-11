@@ -337,6 +337,26 @@ public final class WikiStoreModel {
         requestSidebarReveal(.chat(chat.id))
     }
 
+    /// Write the provisional first-line title for a chat the app just sent
+    /// to, and reflect it in the local cache immediately (synchronous cache
+    /// pattern, same as ``beginNewChat()``). The daemon derives the identical
+    /// text at submit, so the two writes converge; this one makes the title
+    /// visible the moment the user sends, without waiting on cross-process
+    /// change delivery. No-op when the row already has a title (a rename or a
+    /// prior send) or the write fails.
+    public func applyProvisionalChatTitle(chatID: ChatID, userText: String) {
+        guard let row = chats.first(where: { $0.id == chatID }),
+              row.title.isEmpty else { return }
+        do {
+            try internalStore.setChatTitleIfEmpty(
+                chatID: chatID,
+                title: ChatSummary.title(fromFirstMessage: userText))
+            reloadChats()
+        } catch {
+            DebugLog.store("WikiStoreModel.applyProvisionalChatTitle failed: \(error)")
+        }
+    }
+
     /// Computed tree for the Bookmarks section.
     public var bookmarkTree: [BookmarkTreeItem] {
         let t0 = DispatchTime.now()

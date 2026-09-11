@@ -177,7 +177,12 @@ struct ChatDetailView: View {
             retryVersion: chatResolutionRetryVersion,
             isLive: isLiveChat
         )) {
-            guard let chatID, !isLiveChat else {
+            // Resolve in EVERY state, live included: the durable row carries
+            // the title/date the header card renders, and a brand-new chat is
+            // on screen precisely while its first session is live. The task
+            // re-runs on messageVersion and liveness flips, so the card keeps
+            // up with daemon-side writes.
+            guard let chatID else {
                 chatResolution = nil
                 return
             }
@@ -708,6 +713,11 @@ struct ChatDetailView: View {
         )
         store.clearActiveChatDraft()
         attachments = []
+        // The durable row's provisional title appears the moment the user
+        // sends — no cross-process round trip.
+        if let chatID {
+            store.applyProvisionalChatTitle(chatID: chatID, userText: message)
+        }
         outgoing.send(chatID: chatID, payload: payload, makeRequest: makeSubmitRequest)
     }
 
@@ -763,6 +773,9 @@ struct ChatDetailView: View {
         // consume it.
         guard isChatOperationConfigured, let pending = queuedMessages.first else { return }
         queuedMessages.removeFirst()
+        if let chatID {
+            store.applyProvisionalChatTitle(chatID: chatID, userText: pending.draftText)
+        }
         outgoing.send(
             chatID: chatID,
             payload: ChatOutgoingMessagesController.outgoingPayload(from: pending),

@@ -192,7 +192,26 @@ struct NewChatSidebarProjectionTests {
         #expect(model.chats.map(\.id) == [secondID, firstID])
     }
 
-    // MARK: - Sidebar projection after external writes
+    // MARK: - App-side provisional title (no cross-process round trip)
+
+    @Test("applyProvisionalChatTitle fills the row and cache at send time")
+    func provisionalTitleAppliesAtSend() throws {
+        let (model, store) = try makeModel()
+        model.beginNewChat()
+        let chatID = try #require(activeChatID(model))
+
+        model.applyProvisionalChatTitle(
+            chatID: chatID, userText: "What is a tide pool?")
+
+        // Cache AND store carry the provisional title instantly.
+        #expect(model.chats.first?.title == "What is a tide pool?")
+        #expect(try store.getChat(id: chatID).title == "What is a tide pool?")
+
+        // A renamed chat is never touched by a later provisional write.
+        model.renameChat(id: chatID, to: "Renamed")
+        model.applyProvisionalChatTitle(chatID: chatID, userText: "another question")
+        #expect(try store.getChat(id: chatID).title == "Renamed")
+    }
 
     @Test("an open chat tab's title re-syncs when the row changes")
     func chatTabTitleResyncsOnReload() throws {
