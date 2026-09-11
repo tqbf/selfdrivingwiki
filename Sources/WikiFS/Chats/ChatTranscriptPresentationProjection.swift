@@ -79,18 +79,66 @@ enum ChatTranscriptPresentationProjection {
         _ rows: [ChatDisplayRow],
         toolCallDisplayMode: ChatToolCallDisplayMode
     ) -> [ChatDisplayRow] {
+        switch toolCallDisplayMode {
+        case .summary:
+            return summarizedRows(rows)
+        case .detailed:
+            return nonGroupedRows(rows, hidingTools: false)
+        case .hidden:
+            return nonGroupedRows(rows, hidingTools: true)
+        }
+    }
+
+    /// Warning cleanup without grouping (Detailed and Hidden modes preserve
+    /// the canonical row sequence).
+    private static func nonGroupedRows(
+        _ rows: [ChatDisplayRow],
+        hidingTools: Bool
+    ) -> [ChatDisplayRow] {
         var cleaned: [ChatDisplayRow] = []
-        var pendingRun: [ChatDisplayToolCall] = []
-        // Group rows are accumulated as contiguous runs close, so cleaning
-        // (which can drop rows) happens before boundaries are decided.
-        func closeRun() {
-            guard pendingRun.isEmpty == false else { return }
-            let calls = pendingRun
-            pendingRun = []
-            cleaned.append(.toolCallGroup(ChatToolCallGroupRow(
+        for row in rows {
+            if case .toolCall = row, hidingTools { continue }
+            if case .assistantMessage(let id, let turnID, let text, let createdAt, let contentState) = row {
+                if let cleanedRow = cleanedAssistant(
+                    id: id, turnID: turnID, text: text, createdAt: createdAt, contentState: contentState
+                ) {
+                    cleaned.append(cleanedRow)
+                }
+                continue
+            }
+            cleaned.append(row)
+        }
+        return cleaned
+    }
+
+    /// Summary mode: contiguous runs of reasoning + tool calls collapse into
+    /// one group row (reasoning folds into the group's expanded body), and
+    /// every assistant block except the turn's final answer becomes a
+    /// one-line interim disclosure. Nothing is deleted; collapsed rows keep
+    /// their durable message IDs.
+    private static func summarizedRows(_ rows: [ChatDisplayRow]) -> [ChatDisplayRow] {
+        var projected: [ChatDisplayRow] = []
+        var pendingReasoning: [(entry: ChatDisplayReasoningEntry, row: ChatDisplayRow)] = []
+        var pendingTools: [ChatDisplayToolCall] = []
+
+        // A run closes at any non-work row. A run with tools becomes one
+        // group row; reasoning-only runs keep their standalone rows (there is
+        // no tool to host a group identity).
+        func flushRun() {
+            defer {
+                pendingReasoning = []
+                pendingTools = []
+            }
+            guard pendingTools.isEmpty == false else {
+                projected.append(contentsOf: pendingReasoning.map(\.row))
+                return
+            }
+            let calls = pendingTools
+            projected.append(.toolCallGroup(ChatToolCallGroupRow(
                 id: ChatToolCallGroupID(hostedBy: calls[0]),
                 turnID: calls[0].turnID,
                 calls: calls,
+                reasoning: pendingReasoning.map(\.entry),
                 state: .aggregating(calls),
                 summary: .summarizing(calls)
             )))
@@ -99,43 +147,80 @@ enum ChatTranscriptPresentationProjection {
         for row in rows {
             switch row {
             case .toolCall(let call):
-                switch toolCallDisplayMode {
-                case .hidden:
-                    continue
-                case .summary:
-                    pendingRun.append(call)
-                case .detailed:
-                    cleaned.append(row)
-                }
+                pendingTools.append(call)
+
+            case .reasoning(let id, _, let text, _, let contentState):
+                pendingReasoning.append((
+                    entry: ChatDisplayReasoningEntry(
+                        id: id,
+                        text: text,
+                        contentState: contentState
+                    ),
+                    row: row
+                ))
 
             case .assistantMessage(let id, let turnID, let text, let createdAt, let contentState):
-                closeRun()
-                // The known warning is assistant prose, so only assistant
-                // rows are cleaned; unrelated Warning: content is preserved.
-                let policy: AgentPresentationPreambleWarningPolicy =
-                    contentState == .streaming ? .streamingPrefixAware : .completeOnly
-                guard let visible = AgentPresentationPreamble.visibleText(text, policy: policy) else {
-                    continue
-                }
-                if visible == text {
-                    cleaned.append(row)
-                } else {
-                    // Same message ID, cleaned text.
-                    cleaned.append(.assistantMessage(
-                        id: id,
-                        turnID: turnID,
-                        text: visible,
-                        createdAt: createdAt,
-                        contentState: contentState
-                    ))
+                flushRun()
+                if let cleanedRow = cleanedAssistant(
+                    id: id, turnID: turnID, text: text, createdAt: createdAt, contentState: contentState
+                ) {
+                    projected.append(cleanedRow)
                 }
 
             default:
-                closeRun()
-                cleaned.append(row)
+                flushRun()
+                projected.append(row)
             }
         }
-        closeRun()
-        return cleaned
+        flushRun()
+        return collapseInterimAssistants(projected)
+    }
+
+    /// The turn's last assistant block is the answer and stays expanded;
+    /// earlier blocks become interim disclosures under the same message ID.
+    private static func collapseInterimAssistants(_ rows: [ChatDisplayRow]) -> [ChatDisplayRow] {
+        guard let lastAssistantIndex = rows.lastIndex(where: \.isAssistant) else {
+            return rows
+        }
+        var result = rows
+        for index in rows.indices where index != lastAssistantIndex {
+            guard case .assistantMessage(let id, let turnID, let text, let createdAt, let contentState) = rows[index]
+            else { continue }
+            result[index] = .assistantInterim(
+                id: id,
+                turnID: turnID,
+                text: text,
+                createdAt: createdAt,
+                contentState: contentState
+            )
+        }
+        return result
+    }
+
+    /// Warning cleanup for one assistant block. Returns nil when the block
+    /// cleans to nothing (warning-only).
+    private static func cleanedAssistant(
+        id: ChatMessageID,
+        turnID: ChatTurnID,
+        text: String,
+        createdAt: Date,
+        contentState: ChatDisplayContentState
+    ) -> ChatDisplayRow? {
+        // The known warning is assistant prose, so only assistant rows are
+        // cleaned; unrelated Warning: content is preserved.
+        let policy: AgentPresentationPreambleWarningPolicy =
+            contentState == .streaming ? .streamingPrefixAware : .completeOnly
+        guard let visible = AgentPresentationPreamble.visibleText(text, policy: policy) else {
+            return nil
+        }
+        if visible == text {
+            return .assistantMessage(
+                id: id, turnID: turnID, text: text, createdAt: createdAt, contentState: contentState
+            )
+        }
+        // Same message ID, cleaned text.
+        return .assistantMessage(
+            id: id, turnID: turnID, text: visible, createdAt: createdAt, contentState: contentState
+        )
     }
 }

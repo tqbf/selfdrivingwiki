@@ -150,11 +150,26 @@ display**:
 The chat choice never affects diagnostics: **Show Full Activity** and the queue
 Activity window always show every tool call as its own row.
 
+### Reading a long turn
+
+In Summary mode a running turn reads compactly:
+
+- The **question** stays at the top.
+- Each run of tool activity is **one row** (see above), and the agent's
+  reasoning folds inside the row's expanded body.
+- Progress notes the agent writes between runs collapse to one-line
+  **"Note"** disclosures — click one to read the full text.
+- The **final answer** is the only fully expanded block in the turn.
+
+The chat outline lists each question with an excerpt of the final answer.
+
 ### Reasoning blocks
 
 Some models show a collapsed reasoning block:
 - The preview shows the first line.
 - Click the block to read it.
+- In Summary mode, reasoning that sits next to a run of tool calls folds
+  inside that Tool activity row's expanded body instead.
 
 ### Response state and time
 

@@ -563,6 +563,20 @@ struct ChatWebView: NSViewRepresentable {
                 </article>
                 """
 
+            case .assistantInterim(_, _, let text, _, let contentState):
+                // A non-final assistant block: one-line expandable note, so
+                // the turn reads question → compact work rows → final answer.
+                let state = contentState == .streaming ? "streaming" : "completed"
+                let preview = String(text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first ?? "")
+                let previewShort = preview.count > ChatTranscriptPresentationMetrics.reasoningPreviewLength
+                    ? String(preview.prefix(ChatTranscriptPresentationMetrics.reasoningPreviewLength)) + "…"
+                    : preview
+                return """
+                <details class="row chat-row row-thinking chat-interim collapsible\(contentState == .streaming ? " is-streaming" : "")" role="group" aria-label="Interim note, \(state)"\(attributes)>
+                <summary data-focus-key="disclosure" aria-label="Show interim note, \(state)"><span class="row-status" aria-hidden="true">\(contentState == .streaming ? "◌" : "✓")</span> <span class="row-thinking-label">Note</span> <span class="row-thinking-preview">\(escape(previewShort))</span></summary>
+                <div class="row-thinking-body">\(renderedMarkdown(text, context: context, isFinal: contentState == .final))</div></details>
+                """
+
             case .reasoning(_, _, let text, _, let contentState):
                 let state = contentState == .streaming ? "streaming" : "completed"
                 let preview = String(text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first ?? "")
@@ -586,7 +600,7 @@ struct ChatWebView: NSViewRepresentable {
                 let rowID = htmlAttributeEscape(row.id.domValue)
                 let groupAttributes =
                     " data-row-id=\"\(rowID)\"\(turnAttribute)"
-                return Self.toolCallGroupHTML(group, attributes: groupAttributes)
+                return Self.toolCallGroupHTML(group, attributes: groupAttributes, context: context)
 
             case .notice(_, _, _, let title, let message, _):
                 return """
@@ -628,7 +642,8 @@ struct ChatWebView: NSViewRepresentable {
         /// scrolls (`CSS` in `shellHTML`).
         private static func toolCallGroupHTML(
             _ group: ChatToolCallGroupRow,
-            attributes: String
+            attributes: String,
+            context: WikiRenderContext?
         ) -> String {
             let state = group.state
             let phrase = group.summary.phrase
@@ -639,14 +654,21 @@ struct ChatWebView: NSViewRepresentable {
             let ariaLabel = "Tool activity, "
                 + "\(group.calls.count) tool call\(group.calls.count == 1 ? "" : "s"), "
                 + state.text
-            let children = group.calls.map { call in
-                toolCallDetailsHTML(
-                    call,
-                    identityAttributes: " data-tool-call-id=\"\(htmlAttributeEscape(call.id.rawValue))\"",
-                    cssClasses: "chat-tool chat-tool-child"
-                )
+            let children = group.reasoning.map { entry in
+                let streaming = entry.contentState == .streaming
+                return """
+                <div class="chat-tool-group-reasoning\(streaming ? " is-streaming" : "")" data-reasoning-id="\(htmlAttributeEscape(entry.id.rawValue))"><span class="row-status" aria-hidden="true">\(streaming ? "◌" : "✓")</span> \(renderedMarkdown(entry.text, context: context, isFinal: !streaming))</div>
+                """
             }
             .joined()
+                + group.calls.map { call in
+                    toolCallDetailsHTML(
+                        call,
+                        identityAttributes: " data-tool-call-id=\"\(htmlAttributeEscape(call.id.rawValue))\"",
+                        cssClasses: "chat-tool chat-tool-child"
+                    )
+                }
+                .joined()
             return """
             <details class="row chat-row chat-tool-group\(state.isError ? " is-error" : "")\(state.isActive ? " is-running" : "")" role="group" aria-label="\(escape(ariaLabel))"\(attributes)>
             <summary data-focus-key="disclosure" aria-label="Show tool activity, \(escape(ariaLabel))"><span class="row-status" aria-hidden="true">\(state.symbol)</span> <span class="chat-tool-group-label">Tool activity</span><span class="chat-tool-group-summary">\(summaryPhrase)</span></summary>
@@ -1058,6 +1080,21 @@ struct ChatWebView: NSViewRepresentable {
             border-bottom: 1px solid var(--border);
           }
           .chat-tool-child:last-child { border-bottom: none; }
+          /* Reasoning folded into a group's expanded body: dim, italic,
+             never counted in the summary phrase. */
+          .chat-tool-group-reasoning {
+            font-size: 11px; font-style: italic; color: var(--muted);
+            padding: 2px 0; border-bottom: 1px solid var(--border);
+            white-space: pre-wrap; word-break: break-word;
+          }
+          .chat-tool-group-reasoning .row-status { font-style: normal; }
+          .chat-tool-group-reasoning p { margin: 0; display: inline; }
+          .chat-tool-group-reasoning p:last-child { display: inline; }
+          .chat-tool-group-reasoning.is-streaming { opacity: 0.85; }
+          /* Interim assistant notes (Summary mode): one-line expandable
+             disclosures so only the turn's final answer renders expanded. */
+          .chat-row.chat-interim { font-size: 11.5px; }
+          .chat-interim > summary .row-thinking-label { text-transform: none; }
           p { margin: 0 0 0.6em; }
           p:last-child { margin-bottom: 0; }
           h1, h2, h3, h4, h5, h6 { line-height: 1.25; font-weight: 600; margin: 0.7em 0 0.3em; }

@@ -157,6 +157,8 @@ struct ChatPresentationAPIManifestTests {
         let preference = try source(named: "ChatToolCallDisplayPreference.swift")
 
         #expect(projection.contains("case toolCallGroup(ChatToolCallGroupRow)") == true)
+        #expect(projection.contains("case assistantInterim(") == true)
+        #expect(groupSummary.contains("struct ChatDisplayReasoningEntry") == true)
         #expect(projection.contains("case toolCallGroup(ChatToolCallGroupID)") == true)
         #expect(projection.contains("struct ChatDisplayToolCall") == true)
         #expect(groupSummary.contains("struct ChatToolCallGroupID") == true)

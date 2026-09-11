@@ -251,7 +251,10 @@ struct ChatDetailPresentation {
         displayTranscript.sections.compactMap { section -> ChatOutlineEntry? in
             guard case .turn(let turn) = section,
                   let prompt = turn.prompt else { return nil }
-            let response = turn.rows.first { row in
+            // The turn's LAST assistant block is the answer (earlier blocks
+            // are interim notes in Summary mode), so the outline excerpts
+            // the answer, not a progress note.
+            let response = turn.rows.last { row in
                 if case .assistantMessage = row { return true }
                 return false
             }

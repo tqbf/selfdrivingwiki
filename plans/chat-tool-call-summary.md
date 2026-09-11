@@ -99,6 +99,27 @@ never changed, escapes never decoded, and the file system is never consulted.
 Grammar-approved paths deduplicate by exact normalized string; every ambiguous
 or missing descriptor counts as one distinct operation per tool call.
 
+## Interim notes and folded reasoning
+
+In Summary mode a turn reads as: question, one compact row per work run, the
+final answer. Two rules produce that shape:
+
+- **Interim notes.** The turn's LAST assistant block is the answer and stays
+  fully expanded. Earlier assistant blocks (progress notes the agent emits
+  between runs) collapse into one-line expandable disclosures labeled
+  "Note" with a first-line preview. Nothing is deleted: expanding an interim
+  note shows the full markdown, and the block keeps its durable message ID,
+  so live updates replace it in place.
+- **Folded reasoning.** Reasoning adjacent to a tool run renders inside that
+  group's expanded body (dim, italic, with its own `data-reasoning-id`
+  attribute) instead of taking a transcript line. Reasoning never changes
+  the category counts or state. Reasoning with no adjacent tools keeps its
+  own collapsed row, and messages, notices, and failures still end runs.
+
+The chat outline excerpts the turn's final answer, so a collapsed interim
+note cannot become the response excerpt. Detailed mode keeps every block
+fully expanded; Hidden mode hides only tool rows.
+
 ## Known-warning removal
 
 The one known preamble is removed from human-facing output by the shared,

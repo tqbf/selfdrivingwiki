@@ -20,7 +20,10 @@ struct ChatToolCallSummaryDocumentationContractTests {
     @Test func requiredDocumentsDescribeShippedModesAndActivityBehavior() throws {
         // 1. The design record exists and names the three modes + defaults.
         let designRecord = try read("plans/chat-tool-call-summary.md")
-        for expected in ["Summary", "Detailed", "Hidden", "chat.toolCallDisplayMode", "Full Activity"] {
+        for expected in [
+            "Summary", "Detailed", "Hidden", "chat.toolCallDisplayMode",
+            "Full Activity", "Interim notes", "final answer",
+        ] {
             #expect(designRecord.contains(expected), "design record must mention \(expected)")
         }
 
@@ -39,6 +42,8 @@ struct ChatToolCallSummaryDocumentationContractTests {
             "Appearance",
             "Tool activity",
             "Full Activity",
+            "final answer",
+            "Note",
         ] {
             #expect(userGuide.contains(expected), "user guide must mention \(expected)")
         }

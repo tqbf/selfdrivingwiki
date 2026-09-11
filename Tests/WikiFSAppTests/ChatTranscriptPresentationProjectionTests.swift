@@ -149,7 +149,7 @@ struct ChatTranscriptPresentationProjectionTests {
                 text: "thinking",
                 createdAt: .distantPast,
                 contentState: .final
-            ),                                              // reasoning ends a run
+            ),                                              // reasoning joins the run
             tool("t4", turn: turn1),
             tool("t5", turn: turn1),
             .notice(
@@ -183,15 +183,24 @@ struct ChatTranscriptPresentationProjectionTests {
         let projected = ChatTranscriptPresentationProjection.project(
             transcript: transcript, toolCallDisplayMode: .summary)
 
-        // Turn 1: message, [t1,t2], a, [t3], r, [t4,t5], notice, [t6], f, [t7]
-        // Turn 2: message, [t8,t9]
-        let expectedGroups = ["t1", "t3", "t4", "t6", "t7", "t8"]
+        // Turn 1: q, [t1,t2], a, [t3, r, t4, t5], notice, [t6], f, [t7]
+        // Turn 2: q2, [t8,t9]. Reasoning folds into the run around it.
+        let expectedGroups = ["t1", "t3", "t6", "t7", "t8"]
         let groups = projected.rows.compactMap { row -> String? in
             guard case .toolCallGroup(let group) = row else { return nil }
             return group.id.rawValue
         }
         #expect(groups == expectedGroups)
         #expect(projected.sections.count == 2)
+        // The folded reasoning lives inside the [t3..t5] group.
+        guard case .toolCallGroup(let folded) = projected.rows.first(where: {
+            $0.id == .toolCallGroup(ChatToolCallGroupID(rawValue: "t3"))
+        }) else {
+            Issue.record("expected the t3-hosted group")
+            return
+        }
+        #expect(folded.reasoning.map(\.id) == [ChatMessageID(rawValue: "r")])
+        #expect(folded.calls.map { $0.id.rawValue } == ["t3", "t4", "t5"])
         // Every non-tool row kept its identity and relative order.
         let nonToolIDs = projected.rows.compactMap { row -> ChatDisplayRowID? in
             switch row {
@@ -202,11 +211,96 @@ struct ChatTranscriptPresentationProjectionTests {
         #expect(nonToolIDs == [
             .message(ChatMessageID(rawValue: "q")),
             .message(ChatMessageID(rawValue: "a")),
-            .message(ChatMessageID(rawValue: "r")),
             .notice(ChatTranscriptNoticeID(rawValue: "n")),
             .failure(ChatTranscriptFailureID(rawValue: "f")),
             .message(ChatMessageID(rawValue: "q2")),
         ])
+    }
+
+    @Test func interimAssistantBlocksCollapseAndTheFinalAnswerStaysExpanded() {
+        let transcript = ChatDisplayTranscript(sections: [turnSection(turn1, rows: [
+            message("q", "Q", turn: turn1),
+            tool("t1", turn: turn1),
+            assistant("a1", "Checking the sources now", turn: turn1),
+            tool("t2", name: "Read", detail: "/tmp/a", turn: turn1),
+            assistant("a2", "Final answer stands here.", turn: turn1),
+        ])])
+        let projected = ChatTranscriptPresentationProjection.project(
+            transcript: transcript, toolCallDisplayMode: .summary)
+
+        // q, [t1], interim(a1), [t2], a2(final)
+        #expect(projected.rows.map(\.id) == [
+            .message(ChatMessageID(rawValue: "q")),
+            .toolCallGroup(ChatToolCallGroupID(rawValue: "t1")),
+            .message(ChatMessageID(rawValue: "a1")),
+            .toolCallGroup(ChatToolCallGroupID(rawValue: "t2")),
+            .message(ChatMessageID(rawValue: "a2")),
+        ])
+        guard case .assistantInterim(let interimID, _, let interimText, _, _) = projected.rows[2] else {
+            Issue.record("expected an interim note")
+            return
+        }
+        #expect(interimID == ChatMessageID(rawValue: "a1"))
+        #expect(interimText == "Checking the sources now")
+        guard case .assistantMessage = projected.rows[4] else {
+            Issue.record("expected the expanded final answer")
+            return
+        }
+
+        // Detailed mode keeps both blocks fully expanded.
+        let detailed = ChatTranscriptPresentationProjection.project(
+            transcript: transcript, toolCallDisplayMode: .detailed)
+        #expect(detailed.rows[2].isAssistant)
+        if case .assistantMessage = detailed.rows[2] {} else {
+            Issue.record("detailed mode must keep plain assistant rows")
+        }
+    }
+
+    @Test func singleAssistantTurnsStayFullyExpanded() {
+        let transcript = ChatDisplayTranscript(sections: [turnSection(turn1, rows: [
+            message("q", "Q", turn: turn1),
+            assistant("only", "The one answer.", turn: turn1),
+        ])])
+        let projected = ChatTranscriptPresentationProjection.project(
+            transcript: transcript, toolCallDisplayMode: .summary)
+        if case .assistantMessage = projected.rows[1] {} else {
+            Issue.record("the only assistant block is the answer")
+        }
+    }
+
+    @Test func orphanReasoningWithoutToolsKeepsItsOwnRow() {
+        let transcript = ChatDisplayTranscript(sections: [turnSection(turn1, rows: [
+            message("q", "Q", turn: turn1),
+            .reasoning(
+                id: ChatMessageID(rawValue: "r"),
+                turnID: turn1,
+                text: "just thinking",
+                createdAt: .distantPast,
+                contentState: .final
+            ),
+            assistant("a", "Answer.", turn: turn1),
+        ])])
+        let projected = ChatTranscriptPresentationProjection.project(
+            transcript: transcript, toolCallDisplayMode: .summary)
+        // No tools to host a group, so the reasoning stays its own row.
+        if case .reasoning = projected.rows[1] {} else {
+            Issue.record("orphan reasoning must stay a standalone row")
+        }
+        if case .assistantMessage = projected.rows[2] {} else {
+            Issue.record("single answer stays expanded")
+        }
+    }
+
+    @Test func streamingAssistantStaysExpandedWhileItIsTheLastBlock() {
+        let transcript = ChatDisplayTranscript(sections: [turnSection(turn1, rows: [
+            message("q", "Q", turn: turn1),
+            assistant("partial", "Working on it…", turn: turn1, streaming: true),
+        ])])
+        let projected = ChatTranscriptPresentationProjection.project(
+            transcript: transcript, toolCallDisplayMode: .summary)
+        if case .assistantMessage = projected.rows[1] {} else {
+            Issue.record("the streaming answer is the last block and stays expanded")
+        }
     }
 
     @Test func oneCallGroupsAreStillGroups() {

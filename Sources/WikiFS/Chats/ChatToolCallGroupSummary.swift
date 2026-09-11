@@ -3,6 +3,15 @@
 import Foundation
 import WikiFSTypes
 
+/// The display-only payload of one reasoning block that folded into a tool
+/// run. Reasoning adjacent to tool calls renders inside the group's expanded
+/// body instead of taking its own transcript line.
+struct ChatDisplayReasoningEntry: Hashable, Sendable {
+    let id: ChatMessageID
+    let text: String
+    let contentState: ChatDisplayContentState
+}
+
 /// App-only identity for one contiguous tool-call run. Derived from the run's
 /// first (host) tool-call ID, so a growing live run keeps one stable identity
 /// — appending a second call updates the existing group row instead of
@@ -22,13 +31,16 @@ struct ChatToolCallGroupID: Hashable, Sendable {
     var rawValue: String { hostToolCallID.rawValue }
 }
 
-/// One collapsed tool-call run: the host identity, the run's turn, every
-/// original child payload, and the derived aggregate values. Derived values
-/// are stored so the row is one Hashable value the render planner can diff.
+/// One collapsed work segment: the host identity, the run's turn, every
+/// original child payload (reasoning entries and tool calls), and the derived
+/// aggregate values. Derived values are stored so the row is one Hashable
+/// value the render planner can diff. Reasoning is presentation content only
+/// — it never affects state or counts.
 struct ChatToolCallGroupRow: Hashable, Sendable {
     let id: ChatToolCallGroupID
     let turnID: ChatTurnID
     let calls: [ChatDisplayToolCall]
+    var reasoning: [ChatDisplayReasoningEntry] = []
     let state: ChatToolCallGroupState
     let summary: ChatToolCallGroupSummary
 }

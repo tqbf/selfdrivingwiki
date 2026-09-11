@@ -191,6 +191,46 @@ struct ChatTranscriptPresentationTests {
         #expect(shell.contains("prefers-reduced-motion: reduce"))
     }
 
+    @Test func interimAssistantRowsRenderAsOneLineDisclosures() {
+        let interim = ChatDisplayRow.assistantInterim(
+            id: ChatMessageID(rawValue: "a-interim"),
+            turnID: turnID,
+            text: "Checking the tide tables now",
+            createdAt: .distantPast,
+            contentState: .final
+        )
+        let html = ChatWebView.Coordinator.chatDisplayRowHTML(interim)
+
+        #expect(html.contains("<details"))
+        #expect(html.contains("chat-interim"))
+        #expect(html.contains("aria-label=\"Interim note, completed\""))
+        #expect(html.contains("aria-label=\"Show interim note, completed\""))
+        #expect(html.contains("data-row-id=\"message-a-interim\""))
+        #expect(html.contains("data-focus-key=\"disclosure\""))
+        #expect(html.contains("Note"))
+        #expect(html.contains("Checking the tide tables now"))
+    }
+
+    @Test func toolGroupRendersFoldedReasoningInsideItsBody() {
+        var group = groupFixture(states: [.completed, .completed])
+        group.reasoning = [
+            ChatDisplayReasoningEntry(
+                id: ChatMessageID(rawValue: "r-1"),
+                text: "Scanning the index first",
+                contentState: .final
+            ),
+        ]
+        let html = ChatWebView.Coordinator.chatDisplayRowHTML(.toolCallGroup(group))
+
+        // The folded reasoning lives in the expanded body under its own
+        // source identity, and it never changes the summary phrase.
+        #expect(html.contains("chat-tool-group-reasoning"))
+        #expect(html.contains("data-reasoning-id=\"r-1\""))
+        #expect(html.contains("Scanning the index first"))
+        #expect(html.contains("2 commands"))
+        #expect(html.contains("data-row-id=\"message-r-1\"") == false)
+    }
+
     @Test func insightCalloutMarkersRenderAsTextInsteadOfAnInlineCodeSpan() {
         let markdown = """
         `★ Insight ─────────────────────────────────────`

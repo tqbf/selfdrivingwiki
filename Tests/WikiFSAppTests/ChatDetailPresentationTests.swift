@@ -566,6 +566,47 @@ struct ChatDetailPresentationTests {
         #expect(presentation.outlineEntries.isEmpty)
     }
 
+    /// Summary mode collapses earlier assistant blocks into interim notes,
+    /// so the outline must excerpt the turn's LAST assistant block — the
+    /// answer — not a progress note.
+    @Test func outlineExcerptsTheFinalAnswerNotInterimNotes() {
+        let turnID = ChatTurnID(rawValue: "turn-outline")
+        let prompt = ChatDisplayRow.userMessage(
+            id: ChatMessageID(rawValue: "q"),
+            turnID: turnID,
+            text: "Question",
+            createdAt: .distantPast
+        )
+        let transcript = ChatDisplayTranscript(sections: [
+            .turn(ChatDisplayTurn(
+                id: .turn(turnID: turnID, firstRow: .message(ChatMessageID(rawValue: "q"))),
+                turnID: turnID,
+                prompt: prompt,
+                rows: [
+                    prompt,
+                    .assistantMessage(
+                        id: ChatMessageID(rawValue: "interim"),
+                        turnID: turnID,
+                        text: "Checking the tide tables now, one moment.",
+                        createdAt: .distantPast,
+                        contentState: .final
+                    ),
+                    .assistantMessage(
+                        id: ChatMessageID(rawValue: "final"),
+                        turnID: turnID,
+                        text: "Tidal pools form where the tide recedes twice daily.",
+                        createdAt: .distantPast,
+                        contentState: .final
+                    ),
+                ]
+            )),
+        ])
+
+        let entries = ChatDetailPresentation.buildOutlineEntries(displayTranscript: transcript)
+        #expect(entries.count == 1)
+        #expect(entries[0].response == "Tidal pools form where the tide recedes twice daily.")
+    }
+
     // MARK: - Stale cached summaries vs. the known warning
 
     /// A cached response summary predates the presentation projection. When
