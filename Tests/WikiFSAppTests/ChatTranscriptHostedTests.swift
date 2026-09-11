@@ -254,6 +254,74 @@ struct ChatTranscriptHostedTests {
         #expect(state == "true|block")
     }
 
+    @Test func hostedOutgoingEchoRowsRenderInTranscriptDOM() async throws {
+        let lease = await HostedAppKitTestGate.shared.acquire()
+        _ = Self.app
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 640, height: 480))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 480),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.contentView = webView
+        window.orderFront(nil)
+        defer {
+            window.orderOut(nil)
+            lease.release()
+        }
+
+        await NavigationWaiter().load(ChatWebView.Coordinator.shellHTML, in: webView)
+        // Rows exactly as the projection derives them from a submitting echo
+        // and a failed echo (optimistic-<turn> / send-failed-<turn> identity).
+        let failedTurnID = ChatTurnID(rawValue: "turn-echo-failed")
+        let rows: [ChatDisplayRow] = [
+            .userMessage(
+                id: ChatMessageID(rawValue: "optimistic-turn-echo-submitting"),
+                turnID: ChatTurnID(rawValue: "turn-echo-submitting"),
+                text: "Question still sending",
+                createdAt: .distantPast
+            ),
+            .userMessage(
+                id: ChatMessageID(rawValue: "optimistic-turn-echo-failed"),
+                turnID: failedTurnID,
+                text: "Question that failed",
+                createdAt: .distantPast
+            ),
+            .failure(
+                id: ChatTranscriptFailureID(rawValue: "send-failed-turn-echo-failed"),
+                turnID: failedTurnID,
+                category: .transportError,
+                message: "daemon unreachable",
+                createdAt: .distantPast
+            ),
+        ]
+        let html = rows.map { ChatWebView.Coordinator.chatDisplayRowHTML($0) }.joined()
+        let data = try JSONSerialization.data(withJSONObject: html, options: [.fragmentsAllowed])
+        let json = try #require(String(data: data, encoding: .utf8))
+
+        let acknowledgement = await webView.chatTranscriptJavaScriptResult(
+            "appendChatRows(\(json), false, 81, \"message-optimistic-turn-echo-submitting\")"
+        )
+        #expect(acknowledgementField("outcome", in: acknowledgement) == "success")
+
+        let state = await evaluateJavaScriptWithTimeout(webView, """
+            (function(){
+                var ids=Array.from(document.querySelectorAll('[data-row-id]')).map(function(row){return row.getAttribute('data-row-id');});
+                var failed=document.querySelector("[data-row-id='failure-send-failed-turn-echo-failed']");
+                var body=failed ? failed.querySelector('.row-turn-failed-body') : null;
+                return [
+                    ids.join('|'),
+                    failed ? failed.getAttribute('role') : 'missing',
+                    body ? body.textContent.trim() : 'missing'
+                ].join('|');
+            })()
+            """)
+        #expect(state == [
+            "message-optimistic-turn-echo-submitting",
+            "message-optimistic-turn-echo-failed",
+            "failure-send-failed-turn-echo-failed",
+        ].joined(separator: "|") + "|alert|Chat action failed daemon unreachable")
+    }
+
     private func acknowledgementField<T>(
         _ field: String,
         in result: ChatTranscriptJavaScriptResult

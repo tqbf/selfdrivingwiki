@@ -286,6 +286,93 @@ start and only calls `finish` if it's still current (`run()` +
 `startInteractiveQuery` both guarded). Tests can't catch this (no real
 processes); the full suite confirms behavior-preserving.
 
+## Optimistic echo (#1218)
+
+Pressing return must show the user's message on the next frame, in every case:
+draft (new chat), cold existing chat, and live chat. A failed send must keep
+the message visible, marked failed, with nothing silently dropped.
+
+### The view-local overlay
+
+`ChatDetailView` owned no echo for drafts. It awaited the full XPC
+`submitChatTurn` reply, which the daemon answers only after agent bootstrap
+(spawn + ACP initialize + session/new). Only then did the tab retarget, the
+view remount, and the persisted transcript render. Envelopes pushed during that
+wait found no session and were dropped.
+
+The fix is a unified view-local outgoing overlay, owned by
+`ChatOutgoingMessagesController` (`Sources/WikiFS/Chats/`). Every send first
+appends a `PendingOutgoingMessage` to controller state, synchronously, before
+any await. `ChatDetailPresentation.make` projects the echo items in both
+transcript branches:
+
+- **Live branch** — `projectionInput.items + echoItems` with the session's
+  validated `activeContentBlock`. `RemoteChatSession.displayProjectionInput`
+  publishes the merged items and validated block as one snapshot, so the view
+  re-projects instead of keeping a pre-projected transcript path. Appending
+  echo items cannot invalidate the validated block; the streaming row stays
+  streaming.
+- **Non-live branch** (drafts and cold chats) — `persistedTranscriptItems +
+  echoItems` with no active block.
+
+A finite status machine replaces flag pairs: `submitting` from the frame the
+send is accepted until the XPC reply lands, then `failed(message:)` on failure.
+The failed echo renders as one user row plus a typed `.turnFailure` row with
+category `.transportError` — the same durable vocabulary failed agent turns
+use, so `ChatWebView` needs no echo-specific production change.
+
+### turnID reconciliation
+
+The controller builds the submission, so it owns the `ChatTurnID`. The echo
+retires the moment that turn appears in authoritative data. `make` filters
+echoes against `authoritativeTurnIDs` — `RemoteChatSession.knownTurnIDs`
+(committed items, overlay user messages, active turn, queued turns) united with
+the persisted transcript's turn IDs. The daemon persists the user message with
+the submission's `turnID` before bootstrap, so the authoritative row replaces
+the echo at handoff with no gap.
+
+For existing chats the controller also calls the reducer's
+`optimisticSubmit`. Its lifecycle side effects (flipping a cold projection
+live/queued) are load-bearing. The turnID filter hides the copy: whichever
+rendering path produces the user row first, only one row shows.
+
+### Failure contract
+
+On failure the controller marks only its own entry `failed`, calls
+`optimisticSubmitFailed` for existing chats, sets the preflight error, and
+restores the composer conservatively:
+
+- The failed row stays in the transcript. A later send never removes it.
+  Disposal happens at the `.id(chatID)` remount. Retry is edit-and-resend.
+- Restoration reads an atomic `ComposerSnapshot` (trimmed text plus attachment
+  IDs) and proceeds only when the composer is untouched. A failure never
+  overwrites text or attachments the user added while the send was in flight.
+- The restore carries the typed draft text and structured attachments, never
+  the wire message with its inlined attachment references.
+
+The queued-send path uses the same payload shape and restore rule.
+`PendingQueuedMessage` carries `draftText` and `attachments`.
+`makePendingQueuedMessage`, `outgoingPayload(from:)`, and
+`restoreQueuedMessage` are pure functions, so the queue-and-fire path supplies
+the identical restore contract.
+
+### Draft double-send guard
+
+While a draft submit is in flight, `canSend` is false and the composer caption
+reads "Starting chat…". The guard is scoped to drafts. A persisted chat with
+in-flight sends is never blocked.
+
+### Follow-ups
+
+Recorded on tqbf/selfdrivingwiki#1218:
+
+- Make `submitChatTurn` reply before agent bootstrap. This would cut the draft
+  retarget latency from about 4 seconds to about SQLite-write time, and it
+  changes the failure/rollback contract.
+- A tap-to-retry affordance on failed rows, with cleanup semantics for
+  retained failures.
+- The web-view remount flash on retarget (pre-existing).
+
 ## Sidebar affordances (pillar 4)
 
 `AgentToolsView` sidebar:

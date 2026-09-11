@@ -72,7 +72,7 @@ struct ChatDetailPresentationTests {
 
     @Test func transcriptProjectionSelectsTheTypedLiveTranscriptInsteadOfPersistedRows() {
         let chatID = ChatID(rawValue: "01J" + String(repeating: "C", count: 22))
-        let liveTranscript = ChatDisplayProjection.project(items: [
+        let liveItems: [ChatTranscriptItem] = [
             .message(.init(
                 messageID: ChatMessageID(rawValue: "live-message"),
                 turnID: ChatTurnID(rawValue: "live-turn"),
@@ -80,7 +80,7 @@ struct ChatDetailPresentationTests {
                 text: "Live response",
                 createdAt: .distantPast
             ))
-        ], activeContentBlock: nil).transcript
+        ]
         let persistedItems = persisted([
             .message(.init(
                 messageID: ChatMessageID(rawValue: "persisted-message"),
@@ -97,7 +97,7 @@ struct ChatDetailPresentationTests {
             remoteSession: .fixture(
                 sessionChatID: chatID,
                 runState: .answering,
-                transcript: liveTranscript
+                projectionInput: TranscriptProjectionInput(items: liveItems, activeContentBlock: nil)
             ),
             persistedTranscriptItems: persistedItems,
             queuedMessages: [],
@@ -108,7 +108,9 @@ struct ChatDetailPresentationTests {
             chatID: chatID,
             chatResolution: .available(ChatSummary.fixture(id: chatID)),
             showsInternals: false,
-            remoteSession: .fixture(transcript: liveTranscript),
+            remoteSession: .fixture(
+                projectionInput: TranscriptProjectionInput(items: liveItems, activeContentBlock: nil)
+            ),
             persistedTranscriptItems: persistedItems,
             queuedMessages: [],
             hasDraftText: false,
@@ -119,6 +121,265 @@ struct ChatDetailPresentationTests {
         #expect(live.transcript.isAnswering)
         #expect(persisted.transcript.displayTranscript.rows.first?.textForSearch == "Persisted response")
         #expect(persisted.transcript.isAnswering == false)
+    }
+
+    // MARK: - Optimistic outgoing echo
+
+    private func outgoingEchoFixture(
+        status: PendingOutgoingMessage.Status = .submitting,
+        turnID: ChatTurnID = ChatTurnID(rawValue: "echo-turn-1"),
+        wireMessage: String = "Please update the wiki"
+    ) -> PendingOutgoingMessage {
+        PendingOutgoingMessage(
+            id: turnID,
+            status: status,
+            draftText: wireMessage,
+            wireMessage: wireMessage,
+            attachments: [],
+            submittedAt: Date(timeIntervalSince1970: 100)
+        )
+    }
+
+    @Test func draftPendingOutgoingEchoRendersAsUserRow() {
+        let presentation = ChatDetailPresentation.make(
+            chatID: nil,
+            chatResolution: nil,
+            showsInternals: false,
+            remoteSession: .fixture(),
+            persistedTranscriptItems: [],
+            pendingOutgoing: [outgoingEchoFixture()],
+            queuedMessages: [],
+            hasDraftText: false,
+            isChatOperationConfigured: true
+        )
+
+        let rows = presentation.transcript.displayTranscript.rows
+        guard case .userMessage(let id, let turnID, let text, _)? = rows.first else {
+            Issue.record("Expected a user message row, got: \(rows)")
+            return
+        }
+        #expect(id == ChatMessageID(rawValue: "optimistic-echo-turn-1"))
+        #expect(turnID == ChatTurnID(rawValue: "echo-turn-1"))
+        #expect(text == "Please update the wiki")
+    }
+
+    @Test func coldExistingChatPendingOutgoingEchoRendersAsUserRow() {
+        let chatID = ChatID(rawValue: "01J" + String(repeating: "H", count: 22))
+        let presentation = ChatDetailPresentation.make(
+            chatID: chatID,
+            chatResolution: .available(ChatSummary.fixture(id: chatID)),
+            showsInternals: false,
+            remoteSession: .fixture(),
+            persistedTranscriptItems: [],
+            pendingOutgoing: [outgoingEchoFixture()],
+            queuedMessages: [],
+            hasDraftText: false,
+            isChatOperationConfigured: true
+        )
+
+        #expect(presentation.contentState == .chatSurface)
+        let rows = presentation.transcript.displayTranscript.rows
+        guard case .userMessage(_, _, let text, _)? = rows.first else {
+            Issue.record("Expected an echoed user message row, got: \(rows)")
+            return
+        }
+        #expect(text == "Please update the wiki")
+    }
+
+    @Test func liveChatPendingOutgoingEchoRendersAlongsideSessionItems() {
+        let chatID = ChatID(rawValue: "01J" + String(repeating: "I", count: 22))
+        let turnID = ChatTurnID(rawValue: "session-turn")
+        let sessionItems: [ChatTranscriptItem] = [
+            .message(.init(
+                messageID: ChatMessageID(rawValue: "session-user"),
+                turnID: turnID,
+                role: .user,
+                text: "Earlier question",
+                createdAt: .distantPast
+            )),
+            .message(.init(
+                messageID: ChatMessageID(rawValue: "session-assistant"),
+                turnID: turnID,
+                role: .assistant,
+                text: "Earlier answer",
+                createdAt: .distantPast
+            )),
+        ]
+        let presentation = ChatDetailPresentation.make(
+            chatID: chatID,
+            chatResolution: .available(ChatSummary.fixture(id: chatID)),
+            showsInternals: false,
+            remoteSession: .fixture(
+                sessionChatID: chatID,
+                runState: .answering,
+                projectionInput: TranscriptProjectionInput(items: sessionItems, activeContentBlock: nil)
+            ),
+            persistedTranscriptItems: [],
+            pendingOutgoing: [outgoingEchoFixture()],
+            queuedMessages: [],
+            hasDraftText: false,
+            isChatOperationConfigured: true
+        )
+
+        let texts = presentation.transcript.displayTranscript.rows.map(\.textForSearch)
+        #expect(texts == ["Earlier question", "Earlier answer", "Please update the wiki"])
+    }
+
+    @Test func liveOutgoingEchoPreservesActiveStreamingContentBlock() throws {
+        let chatID = ChatID(rawValue: "01J" + String(repeating: "J", count: 22))
+        let turnID = ChatTurnID(rawValue: "streaming-turn")
+        let assistantItem = ChatTranscriptItem.message(.init(
+            messageID: ChatMessageID(rawValue: "streaming-assistant"),
+            turnID: turnID,
+            role: .assistant,
+            text: "Streaming answer",
+            createdAt: .distantPast
+        ))
+        let activeBlock = try #require(ChatDisplayActiveContentBlock(
+            validating: ChatActiveContentBlock(
+                messageID: ChatMessageID(rawValue: "streaming-assistant"),
+                turnID: turnID,
+                role: .assistant
+            ),
+            among: [assistantItem]
+        ))
+        let presentation = ChatDetailPresentation.make(
+            chatID: chatID,
+            chatResolution: .available(ChatSummary.fixture(id: chatID)),
+            showsInternals: false,
+            remoteSession: .fixture(
+                sessionChatID: chatID,
+                runState: .answering,
+                projectionInput: TranscriptProjectionInput(
+                    items: [assistantItem],
+                    activeContentBlock: activeBlock
+                )
+            ),
+            persistedTranscriptItems: [],
+            pendingOutgoing: [outgoingEchoFixture()],
+            queuedMessages: [],
+            hasDraftText: false,
+            isChatOperationConfigured: true
+        )
+
+        let rows = presentation.transcript.displayTranscript.rows
+        let assistantRow = rows.first { row in
+            row.textForSearch == "Streaming answer"
+        }
+        #expect(assistantRow?.contentState == .streaming)
+        #expect(rows.last?.textForSearch == "Please update the wiki")
+    }
+
+    @Test func failedOutgoingEchoRendersUserRowAndFailureRow() {
+        let presentation = ChatDetailPresentation.make(
+            chatID: nil,
+            chatResolution: nil,
+            showsInternals: false,
+            remoteSession: .fixture(),
+            persistedTranscriptItems: [],
+            pendingOutgoing: [outgoingEchoFixture(status: .failed(message: "daemon unreachable"))],
+            queuedMessages: [],
+            hasDraftText: false,
+            isChatOperationConfigured: true
+        )
+
+        let rows = presentation.transcript.displayTranscript.rows
+        guard rows.count == 2 else {
+            Issue.record("Expected one user row and one failure row, got: \(rows)")
+            return
+        }
+        guard case .userMessage(let messageID, let turnID, let text, _)? = rows.first else {
+            Issue.record("Expected echoed user row first, got: \(rows)")
+            return
+        }
+        #expect(messageID == ChatMessageID(rawValue: "optimistic-echo-turn-1"))
+        #expect(turnID == ChatTurnID(rawValue: "echo-turn-1"))
+        #expect(text == "Please update the wiki")
+        guard case .failure(let failureID, let failureTurnID, let category, let message, _)? = rows.last else {
+            Issue.record("Expected typed failure row last, got: \(rows)")
+            return
+        }
+        #expect(failureID == ChatTranscriptFailureID(rawValue: "send-failed-echo-turn-1"))
+        #expect(failureTurnID == turnID)
+        #expect(category == .transportError)
+        #expect(message == "daemon unreachable")
+    }
+
+    @Test func outgoingEchoFilteredWhenAuthoritativeTurnArrives() {
+        let echo = outgoingEchoFixture()
+        let chatID = ChatID(rawValue: "01J" + String(repeating: "K", count: 22))
+        let authoritative: Set<ChatTurnID> = [echo.id]
+        let draft = ChatDetailPresentation.make(
+            chatID: nil,
+            chatResolution: nil,
+            showsInternals: false,
+            remoteSession: .fixture(),
+            persistedTranscriptItems: [],
+            pendingOutgoing: [echo],
+            authoritativeTurnIDs: authoritative,
+            queuedMessages: [],
+            hasDraftText: false,
+            isChatOperationConfigured: true
+        )
+        let live = ChatDetailPresentation.make(
+            chatID: chatID,
+            chatResolution: .available(ChatSummary.fixture(id: chatID)),
+            showsInternals: false,
+            remoteSession: .fixture(
+                sessionChatID: chatID,
+                runState: .answering,
+                projectionInput: TranscriptProjectionInput(items: [
+                    .message(.init(
+                        messageID: ChatMessageID(rawValue: "authoritative-user"),
+                        turnID: echo.id,
+                        role: .user,
+                        text: "Authoritative copy",
+                        createdAt: .distantPast
+                    )),
+                ], activeContentBlock: nil)
+            ),
+            persistedTranscriptItems: [],
+            pendingOutgoing: [echo],
+            authoritativeTurnIDs: authoritative,
+            queuedMessages: [],
+            hasDraftText: false,
+            isChatOperationConfigured: true
+        )
+
+        #expect(draft.transcript.displayTranscript.rows.isEmpty)
+        let liveTexts = live.transcript.displayTranscript.rows.map(\.textForSearch)
+        #expect(liveTexts == ["Authoritative copy"])
+    }
+
+    @Test func draftSubmitPendingBlocksSendAndShowsCaption() {
+        let chatID = ChatID(rawValue: "01J" + String(repeating: "L", count: 22))
+        let draftPending = ChatDetailPresentation.make(
+            chatID: nil,
+            chatResolution: nil,
+            showsInternals: false,
+            remoteSession: .fixture(),
+            persistedTranscriptItems: [],
+            pendingOutgoing: [outgoingEchoFixture()],
+            queuedMessages: [],
+            hasDraftText: true,
+            isChatOperationConfigured: true
+        )
+        let existingWithInFlightSend = ChatDetailPresentation.make(
+            chatID: chatID,
+            chatResolution: .available(ChatSummary.fixture(id: chatID)),
+            showsInternals: false,
+            remoteSession: .fixture(),
+            persistedTranscriptItems: [],
+            pendingOutgoing: [outgoingEchoFixture()],
+            queuedMessages: [],
+            hasDraftText: true,
+            isChatOperationConfigured: true
+        )
+
+        #expect(draftPending.composer.canSend == false)
+        #expect(draftPending.composer.caption == "Starting chat…")
+        #expect(existingWithInFlightSend.composer.canSend == true)
+        #expect(existingWithInFlightSend.composer.caption != "Starting chat…")
     }
 
     @Test func persistedOutlineUsesModelSummaryReturnedByTranscriptPage() throws {
@@ -326,7 +587,7 @@ private extension ChatDetailPresentation.RemoteState {
         preflightError: String? = nil,
         pendingPermissions: [PendingPermission] = [],
         runStartedAt: Date? = nil,
-        transcript: ChatDisplayTranscript = .empty,
+        projectionInput: TranscriptProjectionInput = .empty,
         exitStatus: Int32? = nil
     ) -> Self {
         .init(
@@ -336,7 +597,7 @@ private extension ChatDetailPresentation.RemoteState {
             preflightError: preflightError,
             pendingPermissions: pendingPermissions,
             runStartedAt: runStartedAt,
-            transcript: transcript,
+            projectionInput: projectionInput,
             exitStatus: exitStatus
         )
     }
@@ -344,7 +605,7 @@ private extension ChatDetailPresentation.RemoteState {
 
 private extension PendingQueuedMessage {
     static func fixture(preview: String) -> Self {
-        .init(wireMessage: preview, preview: preview)
+        .init(wireMessage: preview, preview: preview, draftText: preview, attachments: [])
     }
 }
 
