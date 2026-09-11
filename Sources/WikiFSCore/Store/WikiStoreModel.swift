@@ -278,9 +278,22 @@ public final class WikiStoreModel {
     /// Every visible row lives in SQLite (new chats are persisted by
     /// ``beginNewChat()`` before their tab opens), so this is a plain
     /// rebuild — no overlay merging.
+    ///
+    /// Chat tabs store their title as a SNAPSHOT, re-derived only on tab
+    /// operations — so a daemon-side title write (first-send provisional, or
+    /// the summarizer's model-refined title) must re-derive the open chat
+    /// tabs' titles HERE. Otherwise the sidebar recovers after a reload while
+    /// the tab bar keeps a stale "New Chat".
     public func reloadChats() {
         chats = DebugLog.trying("listChats", operation: { try store.listChats() }) ?? []
         messageVersion &+= 1
+        for index in tabs.indices {
+            guard case .chat = tabs[index].selection else { continue }
+            let title = tabTitle(for: tabs[index].selection)
+            if tabs[index].title != title {
+                tabs[index].title = title
+            }
+        }
     }
 
     /// Create a durable empty chat AND open its tab (#1223 successor). The

@@ -194,6 +194,28 @@ struct NewChatSidebarProjectionTests {
 
     // MARK: - Sidebar projection after external writes
 
+    @Test("an open chat tab's title re-syncs when the row changes")
+    func chatTabTitleResyncsOnReload() throws {
+        let (model, store) = try makeModel()
+        model.beginNewChat()
+        let chatID = try #require(activeChatID(model))
+        #expect(model.activeTab?.title == "New Chat")
+
+        // The daemon titles the row (provisional or model title); the next
+        // reload must re-derive the OPEN TAB's snapshot, not just the sidebar.
+        _ = try store.setChatTitleIfEmpty(chatID: chatID, title: "Titled Row")
+        model.reloadChats()
+
+        #expect(model.chats.first?.title == "Titled Row")
+        #expect(model.activeTab?.title == "Titled Row",
+                "the tab title is a snapshot — reloadChats must re-derive it")
+
+        // A manual rename re-syncs the same way.
+        model.renameChat(id: chatID, to: "Renamed")
+        model.reloadChats()
+        #expect(model.activeTab?.title == "Renamed")
+    }
+
     @Test("an external store refresh keeps every persisted chat row visible")
     func externalRefreshKeepsPersistedRows() throws {
         let (model, store) = try makeModel()
