@@ -255,8 +255,8 @@ struct ChatViewD2Tests {
         #expect(model.tabs.count == 1)
         #expect(model.tabs[0].id == askTabID)
         #expect(model.tabs[0].selection == .chat(chatID))
-        // The tab title should update to the chat title (or "Chat" fallback).
-        #expect(model.tabs[0].title == "Chat")
+        // The tab title should update to the chat title (or "New Chat" fallback).
+        #expect(model.tabs[0].title == "New Chat")
     }
 
     @Test func draftMorph_editToChat_preservesTab() throws {

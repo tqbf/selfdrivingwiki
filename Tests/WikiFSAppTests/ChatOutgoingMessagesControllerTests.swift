@@ -101,6 +101,20 @@ struct ChatOutgoingMessagesControllerTests {
             waiter.resume(with: result)
         }
 
+        /// Resume the suspension belonging to a SPECIFIC turn. Two concurrent
+        /// sends register their waiters in task-scheduling order, which is not
+        /// guaranteed to match send order — never resume by position when more
+        /// than one submit is in flight.
+        func resumeSubmit(
+            turnID: ChatTurnID, with result: Result<ChatID, Error>
+        ) {
+            guard let index = submitWaiters.firstIndex(where: {
+                $0.turnID == turnID
+            }) else { return }
+            let waiter = submitWaiters.remove(at: index)
+            waiter.resume(with: result)
+        }
+
         /// Yields the main actor until `condition` holds. Bounded so a starved
         /// completion produces a fast, diagnosed failure instead of a hang.
         @discardableResult
@@ -126,7 +140,9 @@ struct ChatOutgoingMessagesControllerTests {
         private func suspendSubmitting(_ request: ChatSubmitRequest) async throws -> ChatID {
             recordedRequests.append(request)
             return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<ChatID, Error>) in
-                let waiter = PendingSubmit(continuation: continuation)
+                let waiter = PendingSubmit(
+                    turnID: request.submission.turnID,
+                    continuation: continuation)
                 submitWaiters.append(waiter)
                 Task { [weak self] in
                     try? await Task.sleep(for: Self.submitWaitTimeout)
@@ -146,10 +162,12 @@ struct ChatOutgoingMessagesControllerTests {
     /// agree on exactly-once completion of one stored continuation.
     @MainActor
     private final class PendingSubmit {
+        let turnID: ChatTurnID
         private let continuation: CheckedContinuation<ChatID, Error>
         private var didResume = false
 
-        init(continuation: CheckedContinuation<ChatID, Error>) {
+        init(turnID: ChatTurnID, continuation: CheckedContinuation<ChatID, Error>) {
+            self.turnID = turnID
             self.continuation = continuation
         }
 
@@ -338,9 +356,13 @@ struct ChatOutgoingMessagesControllerTests {
         #expect(harness.controller.pendingOutgoing.count == 2)
         await harness.waitUntil { harness.suspendedSubmitCount == 2 }
 
-        harness.resumeNextSubmit(with: .success(Self.resolvedChatID))
+        // Two waiters register in task-scheduling order, which may not match
+        // send order — resume by TURN IDENTITY, never by position.
+        let firstTurnID = harness.optimisticSubmissions[0].turnID
+        let secondTurnID = harness.optimisticSubmissions[1].turnID
+        harness.resumeSubmit(turnID: firstTurnID, with: .success(Self.resolvedChatID))
         await harness.waitUntil { harness.suspendedSubmitCount == 1 }
-        harness.resumeNextSubmit(with: .failure(SendError(message: "only the second fails")))
+        harness.resumeSubmit(turnID: secondTurnID, with: .failure(SendError(message: "only the second fails")))
         await harness.waitUntil {
             harness.controller.pendingOutgoing.contains { Self.failedMessage($0) != nil }
         }

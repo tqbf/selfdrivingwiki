@@ -1112,11 +1112,12 @@ struct DaemonChatHostTests {
         #expect(await host.hasLiveSession(returnedID))
     }
 
-    /// The summary provider names an untouched empty-title chat after the
-    /// first turn. With a summarizer stage pin (Model mode) the submit-time
-    /// truncation title is SKIPPED, and the post-turn summarizer pass
-    /// generates the title from the opening question and first reply through
-    /// the `chat-title-task` prompt, written via `setChatTitleIfEmpty`.
+    /// The summary provider refines the provisional title of a new chat. The
+    /// first send writes the first line of the question as the provisional
+    /// title in every mode; with a summarizer stage pin (Model mode) the
+    /// post-turn summarizer pass replaces that exact text with the
+    /// model-generated title (`setChatTitleIf`), through the
+    /// `chat-title-task` prompt.
     @Test func modelModeSummarizerTitlesEmptyChatAfterFirstTurn() async throws {
         let dir = makeTempDir()
         let provider = AgentProvider(
@@ -1125,6 +1126,7 @@ struct DaemonChatHostTests {
             command: ["/usr/bin/true"],
             enabled: true,
             isDefault: true)
+        let question = "How does a venturi mask work?"
         let summarizeConfig = AgentProvidersConfig(
             providers: [provider],
             selectedModelIds: [provider.id.rawValue: ModelID(rawValue: "title-model")],
@@ -1180,29 +1182,121 @@ struct DaemonChatHostTests {
             submission: makeSubmission(
                 commandID: "command-model-title",
                 turnID: "turn-model-title",
-                text: "How does a venturi mask work?")
+                text: question)
         ))
 
-        // Model mode: no truncation title at submit time.
-        #expect(try store.getChat(id: empty.id).title.isEmpty)
+        // The provisional first-line title is in place immediately, in every
+        // summarizer mode — the row never renders untitled after a send.
+        #expect(try store.getChat(id: empty.id).title
+            == ChatSummary.title(fromFirstMessage: question))
 
         // Deterministic post-turn state: the opening question and the first
         // reply are in chat_messages (the controller's own persistence may
         // also land them; the title pass reads whatever is there).
         _ = try store.appendChatMessages(chatID: empty.id, events: [
-            .userText("How does a venturi mask work?"),
+            .userText(question),
             .assistantText("A venturi mask entrains room air with an oxygen jet."),
         ])
         host.summarizePendingMessagesForTesting(chatID: empty.id, wikiID: wikiID)
 
-        // The pass runs in a detached MainActor task — bounded poll.
+        // The pass runs in a detached MainActor task — bounded poll. The
+        // model title replaces the untouched provisional text.
         var titled: String?
         for _ in 0..<100 {
             titled = try store.getChat(id: empty.id).title
-            if titled?.isEmpty == false { break }
+            if titled == "Venturi Effects Explained" { break }
             try await Task.sleep(for: .milliseconds(50))
         }
         #expect(titled == "Venturi Effects Explained")
+    }
+
+    /// A manual rename between the send and the summarizer pass makes the
+    /// model-title upgrade miss: the CAS matches only the untouched
+    /// provisional text, so the rename wins.
+    @Test func modelTitleUpgradeMissesAfterManualRename() async throws {
+        let dir = makeTempDir()
+        let provider = AgentProvider(
+            id: ProviderID(rawValue: "rename-provider"),
+            label: "Rename Provider",
+            command: ["/usr/bin/true"],
+            enabled: true,
+            isDefault: true)
+        let question = "How does a venturi mask work?"
+        let summarizeConfig = AgentProvidersConfig(
+            providers: [provider],
+            selectedModelIds: [provider.id.rawValue: ModelID(rawValue: "rename-model")],
+            stageProviderIds: ["summarizer": provider.id])
+        try summarizeConfig.save(to: dir)
+        let backend = FakeAgentBackend(behaviors: [
+            FakeSessionBehavior(),
+            FakeSessionBehavior(events: [.assistantText("Model Generated Title"), .messageStop]),
+            FakeSessionBehavior(events: [.assistantText("A one-sentence summary."), .messageStop]),
+        ])
+        let services = AgentProviderRuntime(
+            readConfiguration: { summarizeConfig },
+            resolveCommand: { providers in
+                Dictionary(uniqueKeysWithValues: providers.compactMap { p in
+                    p.command.map { (p.id, $0) }
+                })
+            },
+            readCredential: { _ in nil },
+            resolvePermissionPolicy: { _ in .bypass },
+            makeBackend: { _, _, _ in backend })
+        let wikiID = WikiID(rawValue: "rename-race-wiki")
+        var wikiRegistry = WikiRegistry()
+        wikiRegistry.add(WikiDescriptor(
+            id: wikiID,
+            displayName: "Rename race wiki",
+            createdAt: Date(timeIntervalSince1970: 1),
+            lastUsedAt: Date(timeIntervalSince1970: 1)
+        ))
+        try wikiRegistry.save(to: dir)
+        let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("wiki.sqlite"))
+        let host: DaemonChatHost = await MainActor.run {
+            let extractionCoordinator = ExtractionCoordinator(
+                services: UnavailableExtractionServices())
+            let gate = GenerationGate(laneLimits: [.ingest: 1, .interactive: 1])
+            let launcherPair = makeTestLauncherPair(
+                extractionCoordinator: extractionCoordinator,
+                generationGate: gate,
+                providerServices: services)
+            return DaemonChatHost(
+                containerDirectory: dir,
+                launcherPair: launcherPair,
+                storeResolver: { requested in requested == wikiID ? store : nil },
+                pushEvent: { _ in },
+                providerServices: services,
+                idleEvictionDelay: .seconds(60))
+        }
+        let chat = try store.createChat(kind: .edit, title: "")
+
+        _ = try await host.submitTurn(ChatSubmitRequest(
+            wikiID: wikiID,
+            chatID: chat.id,
+            submission: makeSubmission(
+                commandID: "command-rename-race",
+                turnID: "turn-rename-race",
+                text: question)
+        ))
+
+        // The user renames before the summarizer pass runs.
+        try store.renameChat(id: chat.id, to: "My rename")
+        _ = try store.appendChatMessages(chatID: chat.id, events: [
+            .userText(question),
+            .assistantText("A venturi mask entrains room air with an oxygen jet."),
+        ])
+        host.summarizePendingMessagesForTesting(chatID: chat.id, wikiID: wikiID)
+
+        var finalTitle = ""
+        for _ in 0..<100 {
+            finalTitle = try store.getChat(id: chat.id).title
+            // The pass may still be starting; only a model-title landing
+            // would change the text, and it must NOT be the generated one.
+            if finalTitle == "Model Generated Title" { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(finalTitle == "My rename",
+                "the rename wins; the model title must not overwrite it")
     }
 }
 

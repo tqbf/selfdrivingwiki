@@ -72,27 +72,24 @@ final class DaemonChatHost: @unchecked Sendable {
             guard let store = storeResolver(request.wikiID) else {
                 throw DaemonChatError.noStore(request.wikiID)
             }
-            // In Default summarizer mode the first-line title is the final
-            // title — write it now. In Model mode the summary provider names
-            // the chat after the first turn (refreshChatTitleIfEmpty), so the
-            // row stays untitled until then.
-            let summarizerMode = MessageSummarizer.mode(
-                for: AgentProvidersConfig.loadOrSeed(from: containerDirectory))
-            if summarizerMode == .defaultTruncation {
-                do {
-                    try store.setChatTitleIfEmpty(
-                        chatID: resolvedChatID,
-                        title: ChatSummary.title(fromFirstMessage: request.submission.userText))
-                } catch WikiStoreError.chatNotFound {
-                    // The row is gone (deleted while the daemon held no session).
-                    // Fail the send now with the truthful error instead of running
-                    // a turn that cannot be persisted.
-                    throw WikiStoreError.chatNotFound(resolvedChatID)
-                } catch {
-                    // Best-effort: a title write failure must not block the
-                    // message send (the turn's own store writes still validate).
-                    DebugLog.store("DaemonChatHost.setChatTitleIfEmpty failed for \(resolvedChatID.rawValue): \(error)")
-                }
+            // Write the PROVISIONAL title (first line of the question) in every
+            // summarizer mode, so the row never renders untitled after a send.
+            // In Model mode the post-turn pass upgrades this exact text to the
+            // model-generated title via setChatTitleIf — a manual rename (any
+            // other current title) makes that upgrade miss and wins.
+            do {
+                try store.setChatTitleIfEmpty(
+                    chatID: resolvedChatID,
+                    title: ChatSummary.title(fromFirstMessage: request.submission.userText))
+            } catch WikiStoreError.chatNotFound {
+                // The row is gone (deleted while the daemon held no session).
+                // Fail the send now with the truthful error instead of running
+                // a turn that cannot be persisted.
+                throw WikiStoreError.chatNotFound(resolvedChatID)
+            } catch {
+                // Best-effort: a title write failure must not block the
+                // message send (the turn's own store writes still validate).
+                DebugLog.store("DaemonChatHost.setChatTitleIfEmpty failed for \(resolvedChatID.rawValue): \(error)")
             }
         } else {
             guard let store = storeResolver(request.wikiID) else {
@@ -480,7 +477,7 @@ final class DaemonChatHost: @unchecked Sendable {
         Task { @MainActor in
             do {
                 let preparation = try await services.prepareSummarization()
-                await Self.refreshChatTitleIfEmpty(
+                await Self.refreshChatTitle(
                     chatID: chatID,
                     store: store,
                     services: services,
@@ -512,15 +509,18 @@ final class DaemonChatHost: @unchecked Sendable {
         }
     }
 
-    /// Name an untouched empty-title chat (durable-chat identity, first-send
-    /// titling). In Model summarizer mode the summary provider generates the
-    /// title from the opening question and the assistant's first reply,
-    /// through the `chat-title-task` prompt. In Default mode the title falls
-    /// back to the first-line extract. The write goes through
-    /// `setChatTitleIfEmpty`, so a manual rename can never be overwritten.
-    /// Best-effort: every failure is logged and leaves the title as-is.
+    /// Upgrade the provisional chat title (durable-chat identity, first-send
+    /// titling). The first send writes the first line of the question as a
+    /// provisional title in every mode; this pass refines it. In Model
+    /// summarizer mode the summary provider generates the title from the
+    /// opening question and the assistant's first reply, through the
+    /// `chat-title-task` prompt, and replaces the UNTOUCHED provisional text
+    /// via `setChatTitleIf` — a manual rename makes the upgrade miss. In
+    /// Default mode the first-line title is already final; only a still-empty
+    /// legacy row gets the fallback write. Best-effort: every failure is
+    /// logged and leaves the title as-is.
     @MainActor
-    private static func refreshChatTitleIfEmpty(
+    private static func refreshChatTitle(
         chatID: ChatID,
         store: GRDBWikiStore,
         services: any AgentProviderServices,
@@ -530,16 +530,15 @@ final class DaemonChatHost: @unchecked Sendable {
         do {
             chat = try store.getChat(id: chatID)
         } catch {
-            DebugLog.store("DaemonChatHost.refreshChatTitleIfEmpty: getChat failed: \(error)")
+            DebugLog.store("DaemonChatHost.refreshChatTitle: getChat failed: \(error)")
             return
         }
-        guard chat.title.trimmingCharacters(in: .whitespaces).isEmpty else { return }
 
         let messages: [ChatMessage]
         do {
             messages = try store.chatMessages(chatID: chatID)
         } catch {
-            DebugLog.store("DaemonChatHost.refreshChatTitleIfEmpty: chatMessages failed: \(error)")
+            DebugLog.store("DaemonChatHost.refreshChatTitle: chatMessages failed: \(error)")
             return
         }
         // The opening question and the first assistant reply, in store order.
@@ -549,24 +548,42 @@ final class DaemonChatHost: @unchecked Sendable {
         })?.event else { return }
         let answer = messages.lazy.compactMap { MessageSummarizer.textToSummarize(from: $0.event) }.first
 
+        // The provisional text the first send wrote. A current title that is
+        // neither empty nor this text is a manual rename — never touched, and
+        // the model call is skipped entirely.
+        let provisional = ChatSummary.title(fromFirstMessage: questionText)
+        let currentTitle = chat.title.trimmingCharacters(in: .whitespaces)
+        guard currentTitle.isEmpty || currentTitle == provisional else { return }
+
         switch preparation {
         case .model(let prep):
             do {
-                guard let title = try await services.modelTitle(
+                if let title = try await services.modelTitle(
                     question: questionText,
                     answer: answer,
-                    preparation: prep) else { return }
-                try store.setChatTitleIfEmpty(chatID: chatID, title: title)
+                    preparation: prep) {
+                    if currentTitle.isEmpty {
+                        try store.setChatTitleIfEmpty(chatID: chatID, title: title)
+                    } else {
+                        // Upgrade the untouched provisional text; a rename in
+                        // flight makes this miss and keeps the rename.
+                        try store.setChatTitleIf(
+                            chatID: chatID, expectedTitle: provisional, title: title)
+                    }
+                } else if currentTitle.isEmpty {
+                    // The model produced nothing usable — fall back to the
+                    // provisional text rather than leaving the row untitled.
+                    try store.setChatTitleIfEmpty(chatID: chatID, title: provisional)
+                }
             } catch {
-                DebugLog.store("DaemonChatHost.refreshChatTitleIfEmpty: model title failed: \(error)")
+                DebugLog.store("DaemonChatHost.refreshChatTitle: model title failed: \(error)")
             }
         case .defaultTruncation:
+            guard currentTitle.isEmpty else { return }
             do {
-                try store.setChatTitleIfEmpty(
-                    chatID: chatID,
-                    title: ChatSummary.title(fromFirstMessage: questionText))
+                try store.setChatTitleIfEmpty(chatID: chatID, title: provisional)
             } catch {
-                DebugLog.store("DaemonChatHost.refreshChatTitleIfEmpty: fallback title failed: \(error)")
+                DebugLog.store("DaemonChatHost.refreshChatTitle: fallback title failed: \(error)")
             }
         }
     }

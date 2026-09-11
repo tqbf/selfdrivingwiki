@@ -34,7 +34,7 @@ public enum OmniboxResult: Identifiable, Hashable, Sendable {
         switch self {
         case .page(let p): return p.title
         case .source(let s): return s.effectiveName
-        case .chat(let c): return c.title
+        case .chat(let c): return c.title.isEmpty ? "New Chat" : c.title
         case .bookmark(_, let title): return title
         case .ask(let question): return "Ask: \(question)"
         }

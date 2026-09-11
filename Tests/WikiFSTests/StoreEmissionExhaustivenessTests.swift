@@ -71,10 +71,17 @@ struct StoreEmissionExhaustivenessTests {
         let source = try String(
             contentsOf: root.appendingPathComponent("Sources/WikiFSCore/Store/GRDBWikiStore.swift"),
             encoding: .utf8)
-        let signature = "public func setChatTitleIfEmpty("
-        let start = try #require(source.range(of: signature)?.lowerBound)
-        let tail = source[start...]
-        let end = tail.dropFirst().range(of: "\n    public func ")?.lowerBound ?? source.endIndex
-        #expect(source[start..<end].contains("mutate("))
+        for signature in [
+            "public func setChatTitleIfEmpty(",
+            "public func setChatTitleIf(",
+        ] {
+            let start = try #require(source.range(of: signature)?.lowerBound)
+            let tail = source[start...]
+            let end = tail.dropFirst().range(of: "\n    public func ")?.lowerBound ?? source.endIndex
+            let implementation = source[start..<end]
+            #expect(
+                implementation.contains("mutate(") || implementation.contains("setChatTitleIf("),
+                "\(signature) must route through mutate (directly or via the CAS mutator)")
+        }
     }
 }

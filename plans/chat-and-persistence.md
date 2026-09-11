@@ -406,22 +406,33 @@ the user's message.
 
 ### First-send titling
 
-The first send must title an untouched empty chat without overwriting a manual
-rename. A read-then-rename race can overwrite the new name: the daemon reads an
-empty title, the app renames, and the daemon writes the stale title. The store
-instead offers `setChatTitleIfEmpty(chatID:title:)`. It runs one conditional
-UPDATE with `WHERE id = ? AND title = ''` inside `mutate(event:_:)`. The result
-drives emission: a written title emits exactly one `.chat .updated` event. An
-already-titled chat returns `false` and emits nothing. A missing chat throws
-`.chatNotFound` and the savepoint rolls back with no event. A written title
-also refreshes the `chat_search` sidecar in the same transaction, through the
-helper shared with `renameChat`.
+The first send writes a PROVISIONAL title — the first line of the question —
+in every summarizer mode, so the row never renders untitled after a send.
 
-`DaemonChatHost.submitTurn` derives the title from
-`request.submission.userText` and calls the operation before
-`makeOrGetController`, so the title lands before the turn enters the durable
-queue. The nil-ID compatibility path keeps its creation-time title. A failed
-send never deletes an app-created chat. The rollback stays limited to nil-ID
+With a summarizer stage pin (Model mode), the post-turn summarizer pass then
+generates a title from the opening question and the assistant's first reply,
+through the `chat-title-task` prompt, and replaces the UNTOUCHED provisional
+text via `WikiStore.setChatTitleIf(chatID:expectedTitle:title:)` — one
+conditional `UPDATE` matching the expected current title. A manual rename
+makes the update match no row, so the rename always wins; the model call is
+skipped entirely for any title that is neither empty nor the provisional text.
+A failed or empty model call leaves the provisional title in place.
+
+Without a pin (Default mode) the provisional title is final; only a
+still-empty legacy row gets the first-line fallback write.
+
+Both writes run one conditional `UPDATE` inside `mutate(event:_:)` (the empty
+case is the CAS with an empty expectation). The result drives emission: a
+written title emits exactly one `.chat .updated` event; a miss returns `false`
+and emits nothing; a missing chat throws `.chatNotFound` and the savepoint
+rolls back with no event. A written title also refreshes the `chat_search`
+sidecar in the same transaction, through the helper shared with `renameChat`.
+
+`DaemonChatHost.submitTurn` derives the provisional title from
+`request.submission.userText` and calls the write before
+`makeOrGetController`, so it lands before the turn enters the durable queue.
+The nil-ID compatibility path keeps its creation-time title. A failed send
+never deletes an app-created chat. The rollback stays limited to nil-ID
 daemon-created compatibility chats.
 
 ### What was removed

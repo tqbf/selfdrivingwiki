@@ -651,6 +651,34 @@ struct StoreEmissionTests {
         await assertNoEventsDelivered(rec)
     }
 
+    /// The provisional→model-title upgrade (CAS on the expected text) emits
+    /// exactly one `.chat .updated` when the expected title matches.
+    @Test func setChatTitleIfChangedEmitsOnce() async throws {
+        let (store, _, rec) = try makeHarness()
+        let chat = try store.createChat(kind: .edit, title: "Provisional")
+        try await drain(rec)
+        let replaced = try store.setChatTitleIf(
+            chatID: chat.id, expectedTitle: "Provisional", title: "Model Title")
+        #expect(replaced)
+        let events = try await awaitEvents(rec)
+        #expect(events.count == 1)
+        #expect(events.first?.kind == .chat)
+        #expect(events.first?.change == .updated)
+        #expect(events.first?.id == chat.id.rawValue)
+    }
+
+    /// A CAS miss (current title differs — e.g. a manual rename won) emits
+    /// NOTHING.
+    @Test func setChatTitleIfMissEmitsNothing() async throws {
+        let (store, _, rec) = try makeHarness()
+        let chat = try store.createChat(kind: .edit, title: "Manual")
+        try await drain(rec)
+        let replaced = try store.setChatTitleIf(
+            chatID: chat.id, expectedTitle: "Provisional", title: "Model Title")
+        #expect(replaced == false)
+        await assertNoEventsDelivered(rec)
+    }
+
     @Test func deleteChatEmitsChatDeleted() async throws {
         let (store, _, rec) = try makeHarness()
         let chat = try store.createChat(kind: .edit, title: "Test Chat")

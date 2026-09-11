@@ -66,7 +66,7 @@ struct NewChatSidebarProjectionTests {
         #expect(model.pendingSidebarReveal == .chat(tabChatID))
 
         // A fresh tab for a fresh chat: isEditing is off, title falls back.
-        #expect(model.activeTab?.title == "Chat")
+        #expect(model.activeTab?.title == "New Chat")
     }
 
     @Test("beginNewChat failure shows the store error and opens no tab")

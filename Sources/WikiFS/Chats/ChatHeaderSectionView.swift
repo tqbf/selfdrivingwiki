@@ -20,7 +20,7 @@ struct ChatHeaderSectionView: View {
             CollapsibleDetailHeader(
                 systemImage: ResourceKind.chat.systemImageName,
                 title: chat.title,
-                placeholder: "Untitled Chat",
+                placeholder: "New Chat",
                 titleLineLimit: 1,
                 isExpanded: $isHeaderExpanded,
                 onTitleCommit: onRename

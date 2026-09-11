@@ -9551,21 +9551,36 @@ public final class GRDBWikiStore: WikiStore, LegacyRendererWikiEnablementCompati
     /// back and emits nothing.
     @discardableResult
     public func setChatTitleIfEmpty(chatID: ChatID, title: String) throws -> Bool {
+        try setChatTitleIf(chatID: chatID, expectedTitle: "", title: title)
+    }
+
+    /// The shared conditional-title write: ONE `UPDATE` matching both the chat
+    /// id and the expected current title (empty string = the untitled case).
+    /// Emission is driven by the result: `true` (row written) emits exactly
+    /// one `.chat .updated`; `false` (current title differs — e.g. a manual
+    /// rename) emits nothing; a missing chat throws `.chatNotFound` inside the
+    /// savepoint so it rolls back and emits nothing.
+    @discardableResult
+    public func setChatTitleIf(
+        chatID: ChatID, expectedTitle: String, title: String
+    ) throws -> Bool {
         try mutate(event: { titled in
             titled ? self.localEvent(.chat, id: chatID.rawValue, change: .updated) : nil
         }) { db in
             try db.execute(sql: """
             UPDATE chats SET title = ?, updated_at = ?
-            WHERE id = ? AND title = '';
-            """, arguments: [title, Date().timeIntervalSince1970, chatID.rawValue])
+            WHERE id = ? AND title = ?;
+            """, arguments: [title, Date().timeIntervalSince1970,
+                             chatID.rawValue, expectedTitle])
             if db.changesCount > 0 {
-                // The empty chat just became searchable by its first message's
-                // title — refresh the sidecar in the same transaction.
+                // The chat just became searchable under its new title — refresh
+                // the sidecar in the same transaction.
                 Self.refreshChatSearch(db: db, chatID: chatID, title: title)
                 return true
             }
-            // No row matched: either the chat exists with a nonempty title
-            // (valid no-op) or it does not exist (error).
+            // No row matched: either the chat exists with a different title
+            // (valid no-op — e.g. a manual rename won the race) or it does not
+            // exist (error).
             let exists = try Int.fetchOne(
                 db,
                 sql: "SELECT 1 FROM chats WHERE id = ?;",

@@ -550,6 +550,52 @@ import SQLite3
             == "Explain the venturi effect")
     }
 
+    // MARK: - setChatTitleIf (provisional → model-title upgrade)
+
+    @Test func setChatTitleIfReplacesExpectedTitle() throws {
+        let store = try tempStore()
+        let chat = try store.createChat(kind: .edit, title: "Provisional")
+
+        let replaced = try store.setChatTitleIf(
+            chatID: chat.id, expectedTitle: "Provisional", title: "Model Generated Title")
+
+        #expect(replaced)
+        #expect(try store.getChat(id: chat.id).title == "Model Generated Title")
+    }
+
+    @Test func setChatTitleIfMissKeepsRenamedTitle() throws {
+        let store = try tempStore()
+        let chat = try store.createChat(kind: .edit, title: "My rename")
+
+        let replaced = try store.setChatTitleIf(
+            chatID: chat.id, expectedTitle: "Provisional", title: "Model Generated Title")
+
+        #expect(replaced == false, "a current title that differs must never be overwritten")
+        #expect(try store.getChat(id: chat.id).title == "My rename")
+    }
+
+    @Test func setChatTitleIfMissingThrows() throws {
+        let store = try tempStore()
+        let missingID = ChatID(rawValue: "01J" + String(repeating: "Z", count: 22))
+
+        #expect(throws: WikiStoreError.self) {
+            try store.setChatTitleIf(
+                chatID: missingID, expectedTitle: "any", title: "no row")
+        }
+    }
+
+    @Test func setChatTitleIfEmptyDelegatesToSetChatTitleIf() throws {
+        // The empty case IS the CAS with an empty expectation — one write
+        // path, two names.
+        let store = try tempStore()
+        let chat = try store.createChat(kind: .edit, title: "")
+        #expect(try store.setChatTitleIf(chatID: chat.id, expectedTitle: "", title: "Titled"))
+        #expect(try store.getChat(id: chat.id).title == "Titled")
+        // Second call with the same expectation misses (title moved on).
+        #expect(try store.setChatTitleIf(chatID: chat.id, expectedTitle: "", title: "Again") == false)
+        #expect(try store.getChat(id: chat.id).title == "Titled")
+    }
+
     /// Concurrency shape: the app's rename and the daemon's first-send title
     /// race through TWO handles over the same WAL database (exactly the
     /// production topology — the store serializes each writer at the file

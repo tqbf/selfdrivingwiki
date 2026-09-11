@@ -761,7 +761,7 @@ struct EditorTabTests {
         model.rename(a.id, to: "Renamed A")
         #expect(model.tabs[0].title == "Renamed A")  // page A
         #expect(model.tabs[1].title == "B")          // page B unchanged
-        #expect(model.tabs[2].title == "Chat")        // Chat tab unchanged
+        #expect(model.tabs[2].title == "New Chat")    // Chat tab unchanged
     }
 
     // MARK: - newPageInNewTab
@@ -855,7 +855,7 @@ struct EditorTabTests {
 
     @Test func tabTitleForSpecialSelections() throws {
         let (model, _) = try tempModel()
-        #expect(model.tabTitle(for: .newChat) == "Chat")
+        #expect(model.tabTitle(for: .newChat) == "New Chat")
         #expect(model.tabTitle(for: .changeLog) == "Activity")
     }
 
