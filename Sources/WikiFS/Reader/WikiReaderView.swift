@@ -206,6 +206,13 @@ struct WikiReaderView: View {
     var rendererPackageInputs: RendererPackageEmbedInputs? = nil
     @AppStorage("reader.zoom") private var readerZoom = Double(ZoomScale.defaultScale)
     @State private var isLoading = true
+    /// Set when the document navigation fails (staging miss, load could not
+    /// start, or WebKit `didFail`). Loud by design: a failed load shows an
+    /// error notice with Try Again instead of a silent blank page.
+    @State private var loadFailure: String?
+    /// Incremented by the failure notice's Try Again button; the rep forwards
+    /// it to the coordinator's `applyRetryTrigger` seam.
+    @State private var retryTrigger = 0
 
     /// Find bar: when set, the matched text is passed to the web view for
     /// `window.find()` highlighting and scrolling.
@@ -225,7 +232,9 @@ struct WikiReaderView: View {
                           currentSelection: currentSelection,
                           documentIdentity: documentIdentity,
                           anchorVersion: store.pendingScrollAnchorVersion,
+                          retryTrigger: retryTrigger,
                           isLoading: $isLoading,
+                          loadFailure: $loadFailure,
                           addURLHandler: addURLHandler,
                           addBookmarkHandler: addBookmarkHandler,
                           onRendererActivation: onRendererActivation,
@@ -233,13 +242,40 @@ struct WikiReaderView: View {
                           inlineRendererDescriptors: inlineRendererDescriptors,
                           rendererPackageInputs: rendererPackageInputs,
                           findText: findText, findVersion: findVersion, findOccurrence: findOccurrence)
-            if isLoading {
+            if let loadFailure {
+                readerLoadFailureBanner(message: loadFailure)
+            } else if isLoading {
                 ProgressView()
                     .controlSize(.large)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(.regularMaterial)
             }
         }
+    }
+
+    /// Inline failure notice shown in place of the spinner overlay when the
+    /// document navigation fails. A failed load must never leave a silent
+    /// blank page. Try Again re-runs the load through the coordinator's
+    /// `applyRetryTrigger` seam (fresh token, fresh generation).
+    private func readerLoadFailureBanner(message: String) -> some View {
+        VStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 30))
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            Text("This page couldn't be loaded")
+                .font(.headline)
+            Text(message)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            Button("Try Again") { retryTrigger += 1 }
+                .buttonStyle(.borderedProminent)
+                .padding(.top, 6)
+        }
+        .padding(28)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.regularMaterial)
     }
 
     nonisolated static func rendererActivationRoute(
@@ -1424,6 +1460,100 @@ private final class RendererAttachmentActionMessageHandler: NSObject, WKScriptMe
     }
 }
 
+// MARK: - Reader document staging + navigation identity
+
+/// Identity of one webview navigation, used to gate terminal navigation
+/// callbacks (`didFinish` / `didFail*`) by load generation. Production
+/// delegate adapters derive it from the `WKNavigation` a `load` call returned
+/// (via `ObjectIdentifier`); `WKNavigation` has no public initializer, so
+/// tests mint identities directly with `mint()` instead of fabricating
+/// WebKit objects.
+struct NavigationIdentity: Hashable, Sendable {
+    private enum Backend: Hashable, Sendable {
+        case navigation(ObjectIdentifier)
+        case minted(UUID)
+    }
+
+    private let backend: Backend
+
+    private init(backend: Backend) {
+        self.backend = backend
+    }
+
+    init(navigation: WKNavigation) {
+        backend = .navigation(ObjectIdentifier(navigation))
+    }
+
+    /// Mints a fresh identity for tests (and any non-WebKit caller).
+    static func mint() -> NavigationIdentity {
+        NavigationIdentity(backend: .minted(UUID()))
+    }
+}
+
+/// Owns the reader-document staging lifecycle for one `WikiReaderRep.Coordinator`:
+/// the full set of tokens this coordinator staged (never a single replaceable
+/// token), the fresh-token mint, and the load seam. Injectable so
+/// navigation-failure tests can drive the real stage→load→identity wiring
+/// without a real `WKWebView`.
+@MainActor
+final class ReaderDocumentStagingSession {
+    /// One staged load: the token it was staged under, plus the identity
+    /// returned by the load seam (`nil` when the load could not start).
+    struct StagedLoad {
+        let token: UUID
+        let identity: NavigationIdentity?
+    }
+
+    /// Tokens this session staged, in mint order. Removed by `forget` /
+    /// `retireAll` only — never by staging a newer load (no forget-on-restage:
+    /// a superseded navigation's scheme task may dispatch late).
+    private(set) var ownedTokens: [UUID] = []
+    /// How many times `retireAll` ran (test observation of teardown).
+    private(set) var retireAllCount = 0
+
+    private let tokenProvider: () -> UUID
+    /// The load seam: starts the document navigation, returning its identity
+    /// (`nil` when the navigation could not start). Defaults to a seam that
+    /// never starts a navigation; the coordinator assigns the production
+    /// `webView.load` wrapper after it is fully initialized (the closure
+    /// captures the coordinator, and Swift forbids `self` capture before
+    /// `super.init`).
+    var load: @MainActor (URLRequest) -> NavigationIdentity?
+
+    init(tokenProvider: @escaping () -> UUID = UUID.init,
+         load: (@MainActor (URLRequest) -> NavigationIdentity?)? = nil) {
+        self.tokenProvider = tokenProvider
+        self.load = load ?? { _ in nil }
+    }
+
+    /// Stages `html` under a fresh token and starts the document navigation.
+    /// The token stays owned regardless of the load outcome: a `nil` identity
+    /// means the navigation never started, and the caller retires that
+    /// never-dispatched token via `forget(token:)`; otherwise the token is
+    /// retired only at teardown (`retireAll`) or by served-LRU eviction in
+    /// the staging store.
+    func stageAndLoad(html: String) -> StagedLoad {
+        let token = tokenProvider()
+        ownedTokens.append(token)
+        ReaderDocumentStaging.stage(html, token: token)
+        let identity = load(URLRequest(url: WikiReaderDocumentOrigin.url(loadToken: token)))
+        return StagedLoad(token: token, identity: identity)
+    }
+
+    /// Retires one never-dispatched token (nil-load-seam cleanup).
+    func forget(token: UUID) {
+        ownedTokens.removeAll { $0 == token }
+        ReaderDocumentStaging.forget(token: token)
+    }
+
+    /// Coordinator teardown: retires every token this session owns.
+    func retireAll() {
+        retireAllCount += 1
+        ReaderDocumentStaging.forgetAll(ownedTokens)
+        ownedTokens.removeAll()
+    }
+}
+
 internal struct WikiReaderRep: NSViewRepresentable {
     let markdown: String
     let store: WikiStoreModel
@@ -1435,7 +1565,12 @@ internal struct WikiReaderRep: NSViewRepresentable {
     /// Mirrors `store.pendingScrollAnchorVersion`; passed in so a bump causes an
     /// `updateNSView` (the Coordinator consumes + applies it once the page loads).
     let anchorVersion: Int
+    /// Bumped by the failure notice's Try Again button; forwarded to the
+    /// coordinator's `applyRetryTrigger` seam every update pass.
+    let retryTrigger: Int
     @Binding var isLoading: Bool
+    /// Failure message for the reader's inline error notice. `nil` = no failure.
+    @Binding var loadFailure: String?
     let addURLHandler: (@MainActor @Sendable (String) -> Void)?
     let addBookmarkHandler: (@MainActor @Sendable (BookmarkTargetPickerContext) -> Void)?
     let onRendererActivation: (@MainActor (RendererReference, RendererBridgeInput) -> Void)?
@@ -1508,7 +1643,8 @@ internal struct WikiReaderRep: NSViewRepresentable {
         context.coordinator.startLoad(
             markdown: markdown,
             documentIdentity: documentIdentity,
-            isLoading: $isLoading)
+            isLoading: $isLoading,
+            loadFailure: $loadFailure)
         return container
     }
 
@@ -1533,8 +1669,12 @@ internal struct WikiReaderRep: NSViewRepresentable {
             context.coordinator.startLoad(
                 markdown: markdown,
                 documentIdentity: documentIdentity,
-                isLoading: $isLoading)
+                isLoading: $isLoading,
+                loadFailure: $loadFailure)
         }
+        // Retry steering: no-op while the trigger is unchanged; a changed
+        // trigger (Try Again) re-runs the load with the current props.
+        context.coordinator.applyRetryTrigger(retryTrigger)
         // Consume + apply any pending scroll anchor (handles re-clicks on an
         // already-loaded doc; a fresh load is handled in `didFinish`). Reads the
         // store's version directly so it's robust to the view being re-created
@@ -1608,6 +1748,13 @@ internal struct WikiReaderRep: NSViewRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, WKNavigationDelegate {
+        /// The staging lifecycle owner: every token this coordinator stages,
+        /// the token mint, and the load seam. Production wires the
+        /// process-wide `ReaderDocumentStaging` store + `webView.load`;
+        /// tests inject their own session. Assigned exactly once in `init`
+        /// (after `super.init`, because the production load closure captures
+        /// `self`) and never reassigned afterwards.
+        private(set) var stagingSession: ReaderDocumentStagingSession
         weak var webView: WikiReaderWebView?
         weak var attachmentContainer: WikiReaderContainerView?
         /// The one DOM embed lifecycle owner: units, budgets, and frame
@@ -1642,7 +1789,36 @@ internal struct WikiReaderRep: NSViewRepresentable {
         /// the pure WKWebView parse/layout (loadHTMLString→didFinish).
         private var htmlLoadStart: DispatchTime?
         private var isLoadingBinding: Binding<Bool>?
+        private var loadFailureBinding: Binding<String?>?
+        /// Navigation identity → generation, recorded at load time. Each
+        /// terminal callback (`didFinish` / `didFail*`) resolves its own
+        /// identity here before mutating any state: current generation → apply;
+        /// mapped-stale or unknown/`nil` → log only. Mappings are removed at
+        /// each terminal callback and on teardown.
+        private var navigationIdentities: [NavigationIdentity: Int] = [:]
+        /// The last retry trigger this coordinator applied (`applyRetryTrigger`
+        /// no-ops while the view's trigger is unchanged).
+        private var appliedRetryTrigger = 0
         private var renderOptions: MarkdownRenderOptions?
+
+        /// Production wiring: stage into the process-wide `ReaderDocumentStaging`
+        /// store and load via this coordinator's webview. Tests inject a
+        /// session with their own token provider and load seam.
+        init(stagingSession: ReaderDocumentStagingSession? = nil) {
+            if let stagingSession {
+                self.stagingSession = stagingSession
+                super.init()
+            } else {
+                let session = ReaderDocumentStagingSession(tokenProvider: { UUID() })
+                self.stagingSession = session
+                super.init()
+                // Wire the production load seam only now that `self` exists.
+                session.load = { [weak self] request in
+                    guard let self, let webView = self.webView else { return nil }
+                    return webView.load(request).map(NavigationIdentity.init(navigation:))
+                }
+            }
+        }
 
         /// The generation-scoped DOM lifecycle owner. Created lazily so a
         /// teardown-only coordinator never mints state.
@@ -1656,7 +1832,8 @@ internal struct WikiReaderRep: NSViewRepresentable {
         func startLoad(
             markdown: String,
             documentIdentity: MarkdownDocumentIdentity?,
-            isLoading: Binding<Bool>
+            isLoading: Binding<Bool>,
+            loadFailure: Binding<String?>
         ) {
             convertTask?.cancel()  // drop any in-flight conversion for stale markdown
             cancelTransclusionTasks()
@@ -1671,6 +1848,16 @@ internal struct WikiReaderRep: NSViewRepresentable {
             loadedDocumentIdentity = documentIdentity
             pageLoaded = false
             isLoadingBinding = isLoading
+            loadFailureBinding = loadFailure
+            // Every fresh load clears any prior failure so a stale
+            // navigation's failure can never overwrite the fresh load's state.
+            // Deferred write (see below) — this runs inside SwiftUI's update
+            // pass when called from `makeNSView`/`updateNSView`.
+            setLoadFailure(nil)
+            // Reset the html-load timing stamp with loadStart: a stale
+            // navigation finishing later must not poison the fresh load's
+            // appear-to-painted / html-load split.
+            htmlLoadStart = nil
             // Never write this binding synchronously: `startLoad` is called from
             // `makeNSView` / `updateNSView`, i.e. from inside SwiftUI's update
             // pass, and a direct write there is "Modifying state during view
@@ -1781,7 +1968,7 @@ internal struct WikiReaderRep: NSViewRepresentable {
                 let convertMs = Self.elapsedMs(since: t0)
                 let convertDone = DispatchTime.now()
                 await MainActor.run { [weak self] in
-                    guard let self, let webView = self.webView,
+                    guard let self,
                           self.loadedMarkdown == markdown,
                           self.loadGeneration == generation,
                           self.isDismantled == false,
@@ -1797,21 +1984,46 @@ internal struct WikiReaderRep: NSViewRepresentable {
                     // frames) from an HTML-string parent never reach the
                     // registered scheme handlers, while handler-served
                     // navigations frame and load subresources normally. The
-                    // handler answers this navigation with the converted body.
-                    // All in-document links/images use absolute schemes (wiki://,
+                    // handler answers this navigation with the HTML staged
+                    // under this load's own token — overlapping loads cannot
+                    // cross-consume, and a staging miss fails the navigation
+                    // loudly instead of serving a silent empty document. All
+                    // in-document links/images use absolute schemes (wiki://,
                     // wiki-blob://, http[s]://), so base-relative resolution
                     // is unaffected. Provider-hosted media is never embedded
                     // inline, so no external player validates this origin
                     // (operator decision of 2026-09-03; see
                     // `WikiReaderDocumentOrigin`).
-                    WikiReaderDocumentSchemeHandler.setPendingHTML(html)
-                    guard let documentURL = WikiReaderDocumentOrigin.url else {
-                        DebugLog.reader("reader document origin URL construction failed")
-                        return
-                    }
-                    webView.load(URLRequest(url: documentURL))
+                    self.dispatchStagedDocument(html)
                 }
             }
+        }
+
+        /// Stage the converted document under a fresh token and start the
+        /// document navigation through the staging session's load seam,
+        /// recording the returned navigation identity for this generation.
+        ///
+        /// Internal (not private) so navigation-failure tests can drive the
+        /// real stage→load→identity-recording path without a `WKWebView`.
+        ///
+        /// A `nil` identity means the load never started (production:
+        /// `webView.load` returned `nil`). The never-dispatched token can
+        /// never be consumed — no terminal callback will arrive for it — so it
+        /// is retired immediately and the failure is surfaced loudly instead
+        /// of leaving a spinner forever.
+        @discardableResult
+        func dispatchStagedDocument(_ html: String) -> NavigationIdentity? {
+            guard isDismantled == false else { return nil }
+            let staged = stagingSession.stageAndLoad(html: html)
+            guard let identity = staged.identity else {
+                DebugLog.reader(
+                    "reader document load did not start; retiring never-dispatched token \(staged.token.uuidString)")
+                stagingSession.forget(token: staged.token)
+                beginLoadFailure("The page could not be loaded.")
+                return nil
+            }
+            navigationIdentities[identity] = loadGeneration
+            return identity
         }
 
         static func sourceRendererCandidates(
@@ -2022,6 +2234,11 @@ internal struct WikiReaderRep: NSViewRepresentable {
             // goes away.
             convertTask?.cancel()
             convertTask = nil
+            // Retire every token this coordinator staged; its navigation
+            // identity mappings die too, so late terminal callbacks for this
+            // coordinator's loads can only log.
+            stagingSession.retireAll()
+            navigationIdentities.removeAll()
             cancelTransclusionTasks()
             cancelInlineRetentionTasks()
             webView?.addURLHandler = nil
@@ -2029,6 +2246,8 @@ internal struct WikiReaderRep: NSViewRepresentable {
             webView?.onRendererActivation = nil
             webView?.rendererActivationAdmission = nil
             isLoadingBinding = nil
+            loadFailureBinding = nil
+            appliedRetryTrigger = 0
             renderOptions = nil
             domRendererCoordinator?.removeAll()
             domRendererCoordinator = nil
@@ -2143,12 +2362,52 @@ internal struct WikiReaderRep: NSViewRepresentable {
             """)
         }
 
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        // MARK: - Navigation terminal events (identity-gated)
+        //
+        // WebKit's delegate protocol requires implicitly unwrapped navigation
+        // arguments; the `WKNavigation!` methods below are thin adapters that
+        // mint the load's `NavigationIdentity` and dispatch to internal
+        // terminal-event handlers. Each handler resolves its identity against
+        // the load-time mapping before mutating any state: the CURRENT
+        // generation applies its state changes; mapped-stale and unknown/nil
+        // identities log only. A superseded navigation finishing or failing
+        // out of order can therefore never clear a spinner, emit a timing
+        // point, or set failure state for the wrong generation.
+
+        /// Resolves a terminal event's identity to a current-generation
+        /// mapping. Returns `nil` (log only, no state change) for nil /
+        /// unknown identities, and removes the mapping for mapped-stale ones
+        /// (that navigation is terminal regardless of staleness).
+        private func resolveTerminalNavigation(
+            _ identity: NavigationIdentity?,
+            phase: String
+        ) -> NavigationIdentity? {
+            guard let identity else {
+                DebugLog.reader("reader \(phase) for nil navigation identity — ignored")
+                return nil
+            }
+            guard let generation = navigationIdentities[identity] else {
+                DebugLog.reader("reader \(phase) for unknown navigation identity — ignored")
+                return nil
+            }
+            guard generation == loadGeneration else {
+                navigationIdentities.removeValue(forKey: identity)
+                DebugLog.reader(
+                    "reader \(phase) for stale generation \(generation) (current \(loadGeneration)) — ignored")
+                return nil
+            }
+            return identity
+        }
+
+        /// Terminal-event handler for a successfully finished document load.
+        func didFinishDocumentLoad(_ identity: NavigationIdentity?, in webView: WKWebView) {
+            guard let identity = resolveTerminalNavigation(identity, phase: "didFinish") else { return }
+            navigationIdentities.removeValue(forKey: identity)
             if let start = loadStart {
                 ReaderTiming.point("webview.appear-to-painted", ms: Self.elapsedMs(since: start))
             }
-            // Split the WKWebView cost: async hop (startLoad→loadHTMLString) vs.
-            // pure WKWebView parse/layout (loadHTMLString→didFinish). Tells us
+            // Split the WKWebView cost: async hop (startLoad→load) vs.
+            // pure WKWebView parse/layout (load→didFinish). Tells us
             // whether a navigation-free innerHTML swap would actually help.
             if let html = htmlLoadStart {
                 ReaderTiming.point("webview.html-load", ms: Self.elapsedMs(since: html))
@@ -2164,6 +2423,81 @@ internal struct WikiReaderRep: NSViewRepresentable {
             isLoadingBinding?.wrappedValue = false
             webView.evaluateJavaScript("window.__sdwRendererAttachmentReport && window.__sdwRendererAttachmentReport(\(loadGeneration));")
             consumeAndApplyPendingAnchor(in: webView)
+        }
+
+        /// Terminal-event handler for a failed document load (either WebKit
+        /// phase, or a load that never started via the nil-load seam). Routes
+        /// by navigation identity: the current generation records the failure
+        /// and clears the spinner; mapped-stale and unknown/nil identities log
+        /// only.
+        func handleNavigationFailure(_ error: Error, identity: NavigationIdentity?, phase: String) {
+            guard let identity = resolveTerminalNavigation(identity, phase: "didFail(\(phase))") else { return }
+            navigationIdentities.removeValue(forKey: identity)
+            DebugLog.reader("reader navigation failed (\(phase)): \(error.localizedDescription)")
+            beginLoadFailure("This page couldn't be loaded: \(error.localizedDescription)")
+        }
+
+        /// Single failure path for every load-failure shape (WebKit didFail in
+        /// either phase, or a load that never started via the nil-load seam):
+        /// resets the timing stamps, then records the failure and clears the
+        /// spinner. Both binding writes are deferred (next main-actor turn):
+        /// coordinator paths are reachable from `makeNSView`/`updateNSView`,
+        /// and a synchronous write inside SwiftUI's update pass is "Modifying
+        /// state during view update".
+        private func beginLoadFailure(_ message: String) {
+            // A failed load emits no painted/html-load timing points, and
+            // resetting the stamps keeps a late failure from poisoning a
+            // subsequent load's timing split.
+            loadStart = nil
+            htmlLoadStart = nil
+            setLoadFailure(message)
+            setLoading(false)
+        }
+
+        private func setLoadFailure(_ message: String?) {
+            guard let binding = loadFailureBinding else { return }
+            Task { @MainActor in binding.wrappedValue = message }
+        }
+
+        private func setLoading(_ value: Bool) {
+            guard let binding = isLoadingBinding else { return }
+            Task { @MainActor in binding.wrappedValue = value }
+        }
+
+        // WebKit's delegate protocol requires an implicitly unwrapped navigation argument.
+        // swiftlint:disable:next implicitly_unwrapped_optional
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            didFinishDocumentLoad(NavigationIdentity(navigation: navigation), in: webView)
+        }
+
+        // swiftlint:disable:next implicitly_unwrapped_optional
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            handleNavigationFailure(error, identity: NavigationIdentity(navigation: navigation), phase: "provisional")
+        }
+
+        // swiftlint:disable:next implicitly_unwrapped_optional
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            handleNavigationFailure(error, identity: NavigationIdentity(navigation: navigation), phase: "committed")
+        }
+
+        /// Retry seam, called verbatim from `updateNSView`: no-ops while the
+        /// trigger is unchanged; a changed trigger (the Try Again button)
+        /// re-runs the load with the current props — a fresh token is staged
+        /// (the prior token remains until teardown or served-LRU retirement;
+        /// there is no forget-on-restage), the failure is cleared via the
+        /// deferred write in `startLoad`, and the generation advances so a
+        /// stale navigation can never overwrite the retry's state. Internal so
+        /// tests exercise the exact production path.
+        func applyRetryTrigger(_ trigger: Int) {
+            guard trigger != appliedRetryTrigger,
+                  let isLoading = isLoadingBinding,
+                  let loadFailure = loadFailureBinding else { return }
+            appliedRetryTrigger = trigger
+            startLoad(
+                markdown: loadedMarkdown ?? "",
+                documentIdentity: loadedDocumentIdentity,
+                isLoading: isLoading,
+                loadFailure: loadFailure)
         }
 
         // WebKit's delegate protocol requires an implicitly unwrapped navigation argument.
