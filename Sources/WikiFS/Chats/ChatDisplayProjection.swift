@@ -197,6 +197,18 @@ struct ChatScrollRequest: Equatable {
     let target: ChatOutlineEntry.ID
 }
 
+/// The one coherent projection input the app renders live chats from: the
+/// session's merged transcript items plus its validated active content block.
+/// `RemoteChatSession` publishes this snapshot so the presentation layer can
+/// re-project with view-local echo rows appended instead of keeping a parallel
+/// pre-projected transcript path.
+struct TranscriptProjectionInput: Equatable {
+    let items: [ChatTranscriptItem]
+    let activeContentBlock: ChatDisplayActiveContentBlock?
+
+    static let empty = TranscriptProjectionInput(items: [], activeContentBlock: nil)
+}
+
 /// Proof that an active block names a present assistant/reasoning row. The
 /// projection accepts this value rather than raw wire metadata so invalid live
 /// state cannot accidentally mark a row streaming.
