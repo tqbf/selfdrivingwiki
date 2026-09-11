@@ -705,10 +705,14 @@ struct ChatDetailView: View {
     }
 
     private func recallQueuedMessage() {
-        guard let pending = queuedMessages.popLast() else { return }
-        guard let restore = ChatOutgoingMessagesController.restoreQueuedMessage(
-            pending, composer: currentComposerSnapshot()
-        ) else { return }
+        // Read without mutating first: a touched composer rejects the restore,
+        // and the queued message stays queued rather than being dropped.
+        guard let pending = queuedMessages.last,
+              let restore = ChatOutgoingMessagesController.restoreQueuedMessage(
+                  pending, composer: currentComposerSnapshot()
+              )
+        else { return }
+        queuedMessages.removeLast()
         store.draftChatMessage = restore.draftText
         attachments = restore.attachments
     }
