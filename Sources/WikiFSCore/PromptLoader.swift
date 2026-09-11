@@ -58,4 +58,13 @@ enum GeneratedPrompts {
     static let ingestPlanner = load("ingest-planner")
     static let ingestExecutor = load("ingest-executor")
     static let ingestFinalizer = load("ingest-finalizer")
+    static let chatTitleTask = load("chat-title-task")
+}
+
+/// Public prompt text for callers outside WikiFSCore (the daemon's
+/// summarizer-backed title generator). `GeneratedPrompts` stays module-internal.
+public enum PublicPrompts {
+    /// System prompt for the one-shot chat-title generation session
+    /// (`prompts/chat-title-task.md`).
+    public static let chatTitleTask = GeneratedPrompts.chatTitleTask
 }

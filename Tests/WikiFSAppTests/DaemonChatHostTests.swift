@@ -1111,6 +1111,99 @@ struct DaemonChatHostTests {
         #expect(await backend.sendCount >= 1)
         #expect(await host.hasLiveSession(returnedID))
     }
+
+    /// The summary provider names an untouched empty-title chat after the
+    /// first turn. With a summarizer stage pin (Model mode) the submit-time
+    /// truncation title is SKIPPED, and the post-turn summarizer pass
+    /// generates the title from the opening question and first reply through
+    /// the `chat-title-task` prompt, written via `setChatTitleIfEmpty`.
+    @Test func modelModeSummarizerTitlesEmptyChatAfterFirstTurn() async throws {
+        let dir = makeTempDir()
+        let provider = AgentProvider(
+            id: ProviderID(rawValue: "title-provider"),
+            label: "Title Provider",
+            command: ["/usr/bin/true"],
+            enabled: true,
+            isDefault: true)
+        let summarizeConfig = AgentProvidersConfig(
+            providers: [provider],
+            selectedModelIds: [provider.id.rawValue: ModelID(rawValue: "title-model")],
+            stageProviderIds: ["summarizer": provider.id])
+        try summarizeConfig.save(to: dir)
+        let backend = FakeAgentBackend(behaviors: [
+            FakeSessionBehavior(), // 1: the chat turn
+            // 2: the title (deliberately wrapped — sanitizeTitle cleans it).
+            FakeSessionBehavior(events: [.assistantText("\"Venturi Effects Explained\""), .messageStop]),
+            FakeSessionBehavior(events: [.assistantText("A one-sentence summary."), .messageStop]), // 3: message summary
+        ])
+        let services = AgentProviderRuntime(
+            readConfiguration: { summarizeConfig },
+            resolveCommand: { providers in
+                Dictionary(uniqueKeysWithValues: providers.compactMap { p in
+                    p.command.map { (p.id, $0) }
+                })
+            },
+            readCredential: { _ in nil },
+            resolvePermissionPolicy: { _ in .bypass },
+            makeBackend: { _, _, _ in backend })
+        let wikiID = WikiID(rawValue: "model-title-wiki")
+        var wikiRegistry = WikiRegistry()
+        wikiRegistry.add(WikiDescriptor(
+            id: wikiID,
+            displayName: "Model title wiki",
+            createdAt: Date(timeIntervalSince1970: 1),
+            lastUsedAt: Date(timeIntervalSince1970: 1)
+        ))
+        try wikiRegistry.save(to: dir)
+        let store = try GRDBWikiStore(databaseURL: dir.appendingPathComponent("wiki.sqlite"))
+        let host: DaemonChatHost = await MainActor.run {
+            let extractionCoordinator = ExtractionCoordinator(
+                services: UnavailableExtractionServices())
+            let gate = GenerationGate(laneLimits: [.ingest: 1, .interactive: 1])
+            let launcherPair = makeTestLauncherPair(
+                extractionCoordinator: extractionCoordinator,
+                generationGate: gate,
+                providerServices: services)
+            return DaemonChatHost(
+                containerDirectory: dir,
+                launcherPair: launcherPair,
+                storeResolver: { requested in requested == wikiID ? store : nil },
+                pushEvent: { _ in },
+                providerServices: services,
+                idleEvictionDelay: .seconds(60))
+        }
+        let empty = try store.createChat(kind: .edit, title: "")
+
+        _ = try await host.submitTurn(ChatSubmitRequest(
+            wikiID: wikiID,
+            chatID: empty.id,
+            submission: makeSubmission(
+                commandID: "command-model-title",
+                turnID: "turn-model-title",
+                text: "How does a venturi mask work?")
+        ))
+
+        // Model mode: no truncation title at submit time.
+        #expect(try store.getChat(id: empty.id).title.isEmpty)
+
+        // Deterministic post-turn state: the opening question and the first
+        // reply are in chat_messages (the controller's own persistence may
+        // also land them; the title pass reads whatever is there).
+        _ = try store.appendChatMessages(chatID: empty.id, events: [
+            .userText("How does a venturi mask work?"),
+            .assistantText("A venturi mask entrains room air with an oxygen jet."),
+        ])
+        host.summarizePendingMessagesForTesting(chatID: empty.id, wikiID: wikiID)
+
+        // The pass runs in a detached MainActor task — bounded poll.
+        var titled: String?
+        for _ in 0..<100 {
+            titled = try store.getChat(id: empty.id).title
+            if titled?.isEmpty == false { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(titled == "Venturi Effects Explained")
+    }
 }
 
 // MARK: - Test helpers
