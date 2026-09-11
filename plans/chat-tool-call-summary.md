@@ -52,10 +52,10 @@ failure count in its state. The accessibility label includes the total tool-call
 count, the failure count, and the state.
 
 Disclosure is keyboard operable: the `<summary>` is a native focus target and
-Return toggles it in both directions. On macOS, WebKit reserves bare Space for
-page scrolling even when the summary holds focus, so Space is not a disclosure
-key on this platform; the hosted test pins the Return behavior and the scroll
-shortcut explicitly.
+Return toggles it natively. A delegated keydown handler scoped to tool-group
+summaries also maps unmodified Space to the toggle (suppressing the page
+scroll that bare Space would otherwise perform), so both keys flip the row
+exactly once; a hosted test pins each key's behavior with synthesized events.
 
 Categories are counted in this fixed order: files edited, edit operations,
 shell commands, files read, read operations, searches, other tool calls.

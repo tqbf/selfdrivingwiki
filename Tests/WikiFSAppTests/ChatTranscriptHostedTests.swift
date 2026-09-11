@@ -20,19 +20,26 @@ struct ChatTranscriptHostedTests {
 
     @MainActor
     private final class NavigationWaiter: NSObject, WKNavigationDelegate {
-        private var continuation: CheckedContinuation<Void, Never>?
+        /// Thrown when the navigation does not finish within the bound.
+        private struct NavigationTimeout: Error {}
 
-        func load(_ html: String, in webView: WKWebView) async {
+        private var hasFinished = false
+
+        /// Loads `html` and waits for `didFinish` with a bounded,
+        /// non-blocking poll (repository cooperative-thread rule: never park
+        /// a thread or abandon a continuation waiting on WebKit).
+        func load(_ html: String, in webView: WKWebView) async throws {
             webView.navigationDelegate = self
-            await withCheckedContinuation { continuation in
-                self.continuation = continuation
-                webView.loadHTMLString(html, baseURL: URL(string: "about:blank"))
+            webView.loadHTMLString(html, baseURL: URL(string: "about:blank"))
+            for _ in 0..<100 {
+                if hasFinished { return }
+                try await Task.sleep(for: .milliseconds(100))
             }
+            throw NavigationTimeout()
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            continuation?.resume()
-            continuation = nil
+            hasFinished = true
         }
     }
 
@@ -53,7 +60,8 @@ struct ChatTranscriptHostedTests {
             lease.release()
         }
 
-        await NavigationWaiter().load(ChatWebView.Coordinator.shellHTML, in: webView)
+        let waiter = NavigationWaiter()
+        try await waiter.load(ChatWebView.Coordinator.shellHTML, in: webView)
         let turnID = ChatTurnID(rawValue: "turn-hosted")
         let initial = ChatDisplayRow.assistantMessage(
             id: ChatMessageID(rawValue: "assistant-hosted"),
@@ -117,7 +125,8 @@ struct ChatTranscriptHostedTests {
             lease.release()
         }
 
-        await NavigationWaiter().load(ChatWebView.Coordinator.shellHTML, in: webView)
+        let waiter = NavigationWaiter()
+        try await waiter.load(ChatWebView.Coordinator.shellHTML, in: webView)
         let turnID = ChatTurnID(rawValue: "turn-order")
         let first = ChatDisplayRow.userMessage(
             id: ChatMessageID(rawValue: "row-first"), turnID: turnID,
@@ -167,7 +176,8 @@ struct ChatTranscriptHostedTests {
             lease.release()
         }
 
-        await NavigationWaiter().load(ChatWebView.Coordinator.shellHTML, in: webView)
+        let waiter = NavigationWaiter()
+        try await waiter.load(ChatWebView.Coordinator.shellHTML, in: webView)
         let tool = ChatDisplayRow.toolCall(
             ChatDisplayToolCall(
                 id: ToolCallID(rawValue: "tool-hosted"),
@@ -224,7 +234,8 @@ struct ChatTranscriptHostedTests {
             lease.release()
         }
 
-        await NavigationWaiter().load(ChatWebView.Coordinator.shellHTML, in: webView)
+        let waiter = NavigationWaiter()
+        try await waiter.load(ChatWebView.Coordinator.shellHTML, in: webView)
         let reasoning = ChatDisplayRow.reasoning(
             id: ChatMessageID(rawValue: "reasoning-hosted"),
             turnID: ChatTurnID(rawValue: "turn-hosted-reasoning"),
@@ -271,7 +282,8 @@ struct ChatTranscriptHostedTests {
             lease.release()
         }
 
-        await NavigationWaiter().load(ChatWebView.Coordinator.shellHTML, in: webView)
+        let waiter = NavigationWaiter()
+        try await waiter.load(ChatWebView.Coordinator.shellHTML, in: webView)
         // Rows exactly as the projection derives them from a submitting echo
         // and a failed echo (optimistic-<turn> / send-failed-<turn> identity).
         let failedTurnID = ChatTurnID(rawValue: "turn-echo-failed")
@@ -395,7 +407,8 @@ struct ChatTranscriptHostedTests {
             lease.release()
         }
 
-        await NavigationWaiter().load(ChatWebView.Coordinator.shellHTML, in: webView)
+        let waiter = NavigationWaiter()
+        try await waiter.load(ChatWebView.Coordinator.shellHTML, in: webView)
         // First live frame: one completed call, group collapsed by default.
         try await appendRow(
             groupRow(ids: [("t1", .completed)]),
@@ -450,7 +463,8 @@ struct ChatTranscriptHostedTests {
             lease.release()
         }
 
-        await NavigationWaiter().load(ChatWebView.Coordinator.shellHTML, in: webView)
+        let waiter = NavigationWaiter()
+        try await waiter.load(ChatWebView.Coordinator.shellHTML, in: webView)
         try await appendRow(
             groupRow(ids: [("t1", .completed), ("t2", .completed)]),
             revision: 91,
@@ -475,10 +489,10 @@ struct ChatTranscriptHostedTests {
         #expect(styles == "400px|auto|true")
 
         // Keyboard disclosure. The web view is first responder and the
-        // summary holds DOM focus. Return must toggle the native <details>
-        // state in both directions. Bare Space is reserved by macOS WebKit
-        // for page scrolling, so it is verified as the scroll short-cut it
-        // is on this platform rather than asserted to toggle.
+        // summary holds DOM focus. Space (handled by the delegated group-
+        // summary keydown handler) toggles open, and Return (native
+        // summary behavior) toggles closed — each key flips the native
+        // <details> state exactly once.
         window.makeFirstResponder(webView)
         _ = await evaluateJavaScriptWithTimeout(
             webView,
@@ -500,25 +514,25 @@ struct ChatTranscriptHostedTests {
             )
         }
 
-        // Return toggles open…
+        // Space toggles open…
+        guard let spaceKey = keyEvent(49, character: " ") else {
+            Issue.record("unable to synthesize Space")
+            return
+        }
+        window.sendEvent(spaceKey)
+        try await Task.sleep(for: .milliseconds(150))
+        let openAfterSpace = await evaluateJavaScriptWithTimeout(
+            webView,
+            "String(document.querySelector('[data-row-id=\"toolgroup-t1\"]').open)"
+        )
+        #expect(openAfterSpace == "true")
+
+        // …and Return toggles closed again.
         guard let returnKey = keyEvent(36, character: "\r") else {
             Issue.record("unable to synthesize Return")
             return
         }
         window.sendEvent(returnKey)
-        try await Task.sleep(for: .milliseconds(150))
-        let openAfterReturn = await evaluateJavaScriptWithTimeout(
-            webView,
-            "String(document.querySelector('[data-row-id=\"toolgroup-t1\"]').open)"
-        )
-        #expect(openAfterReturn == "true")
-
-        // …and Return toggles closed again.
-        guard let secondReturn = keyEvent(36, character: "\r") else {
-            Issue.record("unable to synthesize Return")
-            return
-        }
-        window.sendEvent(secondReturn)
         try await Task.sleep(for: .milliseconds(150))
         let closedAfterReturn = await evaluateJavaScriptWithTimeout(
             webView,

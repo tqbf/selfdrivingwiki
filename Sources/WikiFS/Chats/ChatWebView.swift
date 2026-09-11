@@ -1284,6 +1284,22 @@ struct ChatWebView: NSViewRepresentable {
             if (!details) return;
             details.open = !details.open;
           });
+          // Keyboard disclosure for tool-activity groups: when a group
+          // summary holds focus, unmodified Space toggles it instead of
+          // scrolling the page. preventDefault suppresses the native
+          // default (scroll, or the engine's own toggle) so the group
+          // toggles exactly once; Return keeps its native behavior.
+          document.addEventListener('keydown', function(e) {
+            if (e.key !== ' ' && e.code !== 'Space') return;
+            if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+            var summary = e.target && e.target.closest
+              ? e.target.closest('.chat-tool-group > summary') : null;
+            if (!summary) return;
+            var details = summary.closest('details');
+            if (!details) return;
+            e.preventDefault();
+            details.open = !details.open;
+          });
         </script>
         </body></html>
         """

@@ -60,9 +60,11 @@ What changed:
   styles (light/dark, reduced motion preserved), a 400px scroll-bounded
   detail area, and `replaceChatRow` preservation of `<details>` open state so
   a growing live group never collapses. Keyboard disclosure: the summary is a
-  native focus target and Return toggles both ways; macOS WebKit reserves
-  bare Space for page scrolling, so Space is documented as the scroll
-  shortcut rather than a disclosure key.
+  native focus target; Return toggles natively, and a delegated keydown
+  handler scoped to tool-group summaries maps unmodified Space to the toggle
+  (suppressing page scroll), so both keys flip the row exactly once. The
+  hosted WebKit navigation helper is now timeout-bounded per the repository's
+  cooperative-thread rule (the review finding it fixes).
 - **Diagnostics unchanged.** Activity windows, Show Full Activity, canonical
   transcripts, redacted diagnostics, and full debug traces keep every tool
   call and every warning byte (`ActivityTranscriptPresentation.keepsCanonicalDetailedRows`,
