@@ -32,6 +32,9 @@ struct ChatDetailView: View {
     @State private var quoteAnchor: ChatHighlightRequest? = nil
     @State private var queuedMessages: [PendingQueuedMessage] = []
     @State private var outgoing = ChatOutgoingMessagesController()
+    /// Previous `runState.isAnswering`, so the answer→idle transition (one
+    /// turn finished) can be detected exactly once.
+    @State private var sessionWasAnswering = false
     @State private var diagnosticExportError: String?
     @State private var metadataState: MetadataHydrationState = .idle
     @State private var chatResolution: ChatResolution?
@@ -150,6 +153,18 @@ struct ChatDetailView: View {
         }
         .onChange(of: remoteSession.runState) { _, runState in
             if !runState.isLive { showsInternals = false }
+            // A turn just finished: the daemon may have titled the chat or
+            // written summaries during the turn, and those writes cross to
+            // this process through the chat-sync stream — the one channel an
+            // open chat is guaranteed to receive. Re-read the row so the
+            // header, sidebar row, and tab title reflect it now instead of
+            // waiting on the cross-process Darwin bridge.
+            let turnEnded = sessionWasAnswering && !runState.isAnswering
+            sessionWasAnswering = runState.isAnswering
+            if turnEnded, let chatID {
+                chatResolution = store.resolveChat(id: chatID)
+                store.reloadChats()
+            }
             if !runState.isLive, !queuedMessages.isEmpty {
                 firePendingQueuedMessage()
             }
@@ -159,7 +174,8 @@ struct ChatDetailView: View {
         .task(id: ChatResolutionTaskKey(
             chatID: chatID,
             messageVersion: store.messageVersion,
-            retryVersion: chatResolutionRetryVersion
+            retryVersion: chatResolutionRetryVersion,
+            isLive: isLiveChat
         )) {
             guard let chatID, !isLiveChat else {
                 chatResolution = nil
@@ -997,6 +1013,11 @@ private struct ChatResolutionTaskKey: Hashable {
     let chatID: ChatID?
     let messageVersion: Int
     let retryVersion: Int
+    /// Whether the session is live. A live→cold flip (idle eviction, daemon
+    /// restart, app relaunch) must re-resolve: the header renders the cached
+    /// resolution once the live overlay is gone, and the daemon may have
+    /// titled or summarized the row during the session.
+    let isLive: Bool
 }
 
 private struct ChatHydrationTaskKey: Hashable {
