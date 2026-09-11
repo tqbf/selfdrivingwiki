@@ -4,7 +4,10 @@ import SwiftUI
 import WikiFSCore
 
 /// The reusable, typed chat transcript renderer. Both chat and Activity paths
-/// carry `ChatDisplayRow` values into `ChatWebView`.
+/// carry `ChatDisplayRow` values into `ChatWebView`. Tool-call display is a
+/// property of the transcript the caller projects, not a view-level filter:
+/// the chat pane receives the human-facing projection (Summary default), and
+/// Activity feeds receive the canonical detailed transcript.
 struct ChatTranscriptView: View {
     let rendering: ChatTranscriptRenderingInput
     var transcriptID: TranscriptID? = nil
@@ -16,10 +19,9 @@ struct ChatTranscriptView: View {
     var zoom: Double = Double(ZoomScale.defaultScale)
     var scrollRequest: ChatWebScrollRequest? = nil
     var quoteAnchor: ChatHighlightRequest? = nil
-    var hideToolCalls: Bool = false
 
     var body: some View {
-        let visibleRows = rendering.visibleRows(hidingToolCalls: hideToolCalls)
+        let visibleRows = rendering.rows
         Group {
             if visibleRows.isEmpty {
                 placeholder
@@ -77,13 +79,6 @@ struct ChatTranscriptRenderingInput: Hashable, Sendable {
 
     init(transcript: ChatDisplayTranscript) {
         rows = transcript.rows
-    }
-
-    func visibleRows(hidingToolCalls: Bool) -> [ChatDisplayRow] {
-        hidingToolCalls ? rows.filter { row in
-            if case .toolCall = row { return false }
-            return true
-        } : rows
     }
 
     func webScrollRequest(for request: ChatScrollRequest?) -> ChatWebScrollRequest? {

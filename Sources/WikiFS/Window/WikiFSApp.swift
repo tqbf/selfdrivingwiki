@@ -126,6 +126,10 @@ struct WikiFSApp: App {
         // the legacy key is set + valid. The legacy key is orphaned (not deleted)
         // — see `PermissionModeMigration` + `plans/acp-permissions.md` §5.3.
         PermissionModeMigration.migrateOnce()
+        // Tool-call display: migrate the legacy `chat.hideToolCalls` Boolean
+        // into the typed `chat.toolCallDisplayMode` key before any
+        // ChatDetailView reads it. Idempotent; the legacy key is orphaned.
+        ChatToolCallDisplayPreference.migrate(in: .standard)
         // Install the app-only PDFKit title extractor into Core's injectable
         // seam. Core must not import PDFKit (it pulls AppKit into the File
         // Provider extension on macOS 26), so the real implementation lives in

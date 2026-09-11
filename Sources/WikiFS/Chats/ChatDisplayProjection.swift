@@ -5,11 +5,26 @@ import WikiFSCore
 import WikiFSEngine
 import WikiFSTypes
 
+/// The display-only payload of one canonical tool call. Shared by the
+/// individual row case and by group rows, so grouped and ungrouped rendering
+/// consume one typed shape instead of duplicated fields.
+struct ChatDisplayToolCall: Hashable, Sendable {
+    let id: ToolCallID
+    let turnID: ChatTurnID
+    let toolName: String
+    let status: ChatToolCallStatus
+    let detail: String?
+    let output: String?
+    let permissionRequestID: PermissionRequestID?
+    let updatedAt: Date
+}
+
 /// Stable, namespaced identity for one display row. These identifiers preserve
 /// the durable transcript namespace all the way to presentation.
 enum ChatDisplayRowID: Hashable, Sendable, Identifiable {
     case message(ChatMessageID)
     case toolCall(ToolCallID)
+    case toolCallGroup(ChatToolCallGroupID)
     case notice(ChatTranscriptNoticeID)
     case failure(ChatTranscriptFailureID)
 
@@ -39,6 +54,16 @@ enum ChatDisplayRow: Hashable, Sendable, Identifiable {
         createdAt: Date,
         contentState: ChatDisplayContentState
     )
+    /// An assistant block that is NOT the turn's final answer. Summary mode
+    /// renders it as a one-line expandable note (same durable message ID,
+    /// collapsed presentation); Detailed mode never produces it.
+    case assistantInterim(
+        id: ChatMessageID,
+        turnID: ChatTurnID,
+        text: String,
+        createdAt: Date,
+        contentState: ChatDisplayContentState
+    )
     case reasoning(
         id: ChatMessageID,
         turnID: ChatTurnID,
@@ -46,16 +71,8 @@ enum ChatDisplayRow: Hashable, Sendable, Identifiable {
         createdAt: Date,
         contentState: ChatDisplayContentState
     )
-    case toolCall(
-        id: ToolCallID,
-        turnID: ChatTurnID,
-        toolName: String,
-        status: ChatToolCallStatus,
-        detail: String?,
-        output: String?,
-        permissionRequestID: PermissionRequestID?,
-        updatedAt: Date
-    )
+    case toolCall(ChatDisplayToolCall)
+    case toolCallGroup(ChatToolCallGroupRow)
     case notice(
         id: ChatTranscriptNoticeID,
         turnID: ChatTurnID?,
@@ -76,10 +93,13 @@ enum ChatDisplayRow: Hashable, Sendable, Identifiable {
         switch self {
         case .userMessage(let id, _, _, _),
              .assistantMessage(let id, _, _, _, _),
+             .assistantInterim(let id, _, _, _, _),
              .reasoning(let id, _, _, _, _):
             .message(id)
-        case .toolCall(let id, _, _, _, _, _, _, _):
-            .toolCall(id)
+        case .toolCall(let call):
+            .toolCall(call.id)
+        case .toolCallGroup(let group):
+            .toolCallGroup(group.id)
         case .notice(let id, _, _, _, _, _):
             .notice(id)
         case .failure(let id, _, _, _, _):
@@ -91,10 +111,14 @@ enum ChatDisplayRow: Hashable, Sendable, Identifiable {
         switch self {
         case .userMessage(_, let turnID, _, _),
              .assistantMessage(_, let turnID, _, _, _),
+             .assistantInterim(_, let turnID, _, _, _),
              .reasoning(_, let turnID, _, _, _),
-             .toolCall(_, let turnID, _, _, _, _, _, _),
              .failure(_, let turnID, _, _, _):
             turnID
+        case .toolCall(let call):
+            call.turnID
+        case .toolCallGroup(let group):
+            group.turnID
         case .notice(_, let turnID, _, _, _, _):
             turnID
         }
@@ -102,9 +126,11 @@ enum ChatDisplayRow: Hashable, Sendable, Identifiable {
 
     var contentState: ChatDisplayContentState? {
         switch self {
-        case .assistantMessage(_, _, _, _, let state), .reasoning(_, _, _, _, let state):
+        case .assistantMessage(_, _, _, _, let state),
+             .assistantInterim(_, _, _, _, let state),
+             .reasoning(_, _, _, _, let state):
             state
-        case .userMessage, .toolCall, .notice, .failure:
+        case .userMessage, .toolCall, .toolCallGroup, .notice, .failure:
             nil
         }
     }
@@ -114,15 +140,29 @@ enum ChatDisplayRow: Hashable, Sendable, Identifiable {
         return false
     }
 
+    var isAssistant: Bool {
+        switch self {
+        case .assistantMessage, .assistantInterim: true
+        default: false
+        }
+    }
+
     var textForSearch: String {
         switch self {
         case .userMessage(_, _, let text, _),
              .assistantMessage(_, _, let text, _, _),
+             .assistantInterim(_, _, let text, _, _),
              .reasoning(_, _, let text, _, _),
              .failure(_, _, _, let text, _):
             text
-        case .toolCall(_, _, let toolName, _, let detail, let output, _, _):
-            [toolName, detail, output].compactMap { $0 }.joined(separator: "\n")
+        case .toolCall(let call):
+            [call.toolName, call.detail, call.output].compactMap { $0 }.joined(separator: "\n")
+        case .toolCallGroup(let group):
+            (group.reasoning.map(\.text)
+                + group.calls.flatMap { call in
+                    [call.toolName, call.detail, call.output].compactMap { $0 }
+                })
+            .joined(separator: "\n")
         case .notice(_, _, _, let title, let message, _):
             [title, message].joined(separator: "\n")
         }
@@ -132,12 +172,17 @@ enum ChatDisplayRow: Hashable, Sendable, Identifiable {
         switch self {
         case .userMessage(_, _, _, let createdAt),
              .assistantMessage(_, _, _, let createdAt, _),
+             .assistantInterim(_, _, _, let createdAt, _),
              .reasoning(_, _, _, let createdAt, _),
              .notice(_, _, _, _, _, let createdAt),
              .failure(_, _, _, _, let createdAt):
             createdAt
-        case .toolCall(_, _, _, _, _, _, _, let updatedAt):
-            updatedAt
+        case .toolCall(let call):
+            call.updatedAt
+        case .toolCallGroup(let group):
+            // The host (first) call pins the group's time, so a growing run
+            // keeps one stable timestamp for ordering.
+            group.calls.first?.updatedAt ?? .distantPast
         }
     }
 }
@@ -340,7 +385,7 @@ enum ChatDisplayProjection {
                 )
             }
         case .toolCall(let toolCall):
-            .toolCall(
+            .toolCall(ChatDisplayToolCall(
                 id: toolCall.toolCallID,
                 turnID: toolCall.turnID,
                 toolName: toolCall.toolName,
@@ -349,7 +394,7 @@ enum ChatDisplayProjection {
                 output: toolCall.output,
                 permissionRequestID: toolCall.permissionRequestID,
                 updatedAt: toolCall.updatedAt
-            )
+            ))
         case .systemNotice(let notice):
             .notice(
                 id: notice.noticeID,

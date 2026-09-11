@@ -238,7 +238,7 @@ struct ChatTranscriptRenderingInputTests {
             updatedAt: .distantPast
         )))
 
-        #expect(input.visibleRows(hidingToolCalls: false).map(\.id) == [
+        #expect(input.rows.map(\.id) == [
             .toolCall(ToolCallID(rawValue: "tool-write"))
         ])
         let html = ChatWebView.Coordinator.chatDisplayRowHTML(input.rows[0])
@@ -246,8 +246,8 @@ struct ChatTranscriptRenderingInputTests {
         #expect(html.contains("updated page.md"))
     }
 
-    @Test func hideToolCallsFiltersRowsWithoutChangingOtherIdentity() {
-        let input = renderingInput(for: .toolCall(.init(
+    @Test func hidingToolCallsIsAPresentationProjectionNotARendererFilter() {
+        let item = ChatTranscriptItem.toolCall(.init(
             toolCallID: ToolCallID(rawValue: "tool-cancelled"),
             turnID: ChatTurnID(rawValue: "turn-1"),
             toolName: "Write",
@@ -255,10 +255,22 @@ struct ChatTranscriptRenderingInputTests {
             detail: nil,
             permissionRequestID: nil,
             updatedAt: .distantPast
-        )))
+        ))
+        let input = renderingInput(for: item)
 
-        #expect(input.visibleRows(hidingToolCalls: true).isEmpty)
+        // The renderer boundary keeps the canonical row; the Hidden mode is a
+        // property of the human-facing presentation projection.
         #expect(input.rows.map(\.id) == [.toolCall(ToolCallID(rawValue: "tool-cancelled"))])
+        let hidden = ChatTranscriptPresentationProjection.project(
+            transcript: ChatDisplayProjection.project(items: [item], activeContentBlock: nil).transcript,
+            toolCallDisplayMode: .hidden
+        )
+        #expect(hidden.rows.isEmpty)
+        let detailed = ChatTranscriptPresentationProjection.project(
+            transcript: ChatDisplayProjection.project(items: [item], activeContentBlock: nil).transcript,
+            toolCallDisplayMode: .detailed
+        )
+        #expect(detailed.rows.map(\.id) == [.toolCall(ToolCallID(rawValue: "tool-cancelled"))])
     }
 
     @Test func noticeRemainsDistinctFromAssistantContentAtTheRendererBoundary() {

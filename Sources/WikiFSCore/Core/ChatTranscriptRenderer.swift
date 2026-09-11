@@ -37,6 +37,12 @@ public enum ChatTranscriptRenderer {
     /// is a human-readable role label; the body is the event's `plainText`
     /// (which already strips icons/colors/layout). Events with empty
     /// `plainText` yield an empty body and are skipped by the caller.
+    ///
+    /// Assistant prose and result text pass through the known-warning filter
+    /// in `completeOnly` mode, so exported Markdown (File Provider projection,
+    /// `wikictl chat get`) omits the complete skill-description budget
+    /// warning for old and new chats while preserving everything else,
+    /// including an incomplete final prefix of that warning.
     private static func section(for event: AgentEvent) -> (header: String, body: String) {
         switch event {
         case .userText(let text):
@@ -44,7 +50,8 @@ public enum ChatTranscriptRenderer {
         case .systemInit(let model):
             return ("System", "Session started · \(model)")
         case .assistantText(let text):
-            return ("Assistant", text)
+            let visible = AgentPresentationPreamble.visibleText(text, policy: .completeOnly)
+            return ("Assistant", visible ?? "")
         case .toolUse(let name, let inputSummary):
             let body = inputSummary.isEmpty ? name : "\(name) — \(inputSummary)"
             return ("Tool Use", body)
@@ -60,8 +67,10 @@ public enum ChatTranscriptRenderer {
             return ("Subagent", body)
         case .result(let isError, let text):
             let header = isError ? "Failed" : "Result"
-            let body = text.isEmpty ? header : text
-            return (header, body)
+            guard text.isEmpty == false else { return (header, header) }
+            guard let visible = AgentPresentationPreamble.visibleText(text, policy: .completeOnly)
+            else { return ("", "") }
+            return (header, visible.isEmpty ? header : visible)
         case .assistantTextDelta, .thinkingDelta, .messageStop, .raw:
             return ("", "")
         case .turnFailed(let reason):

@@ -46,6 +46,29 @@ struct ChatDiagnosticsTests {
         #expect(merged.mergeOrder == "source-instance-sequence; timestamps-informational")
     }
 
+    /// The known skill warning stays in canonical diagnostics: the normal-chat
+    /// presentation filter removes it, but the diagnostic trace must retain
+    /// the exact bytes for debugging.
+    @Test func fullDiagnosticTraceRetainsKnownSkillWarning() {
+        let warning = "Warning: Skill descriptions were shortened to fit the 2% skills context budget."
+        let trace = ChatDiagnosticTrace(source: .app)
+        let chat = ChatDiagnosticCorrelation.Value(rawValue: "warning-chat")
+
+        _ = trace.record(
+            stage: .displayProjection,
+            outcome: .accepted,
+            payload: .init(correlation: .init(chat: chat), detail: warning)
+        )
+
+        let snapshot = trace.snapshot(chat: chat)
+        #expect(snapshot.events.count == 1)
+        #expect(snapshot.events.first?.payload.detail == warning)
+
+        // The filter's two policies never leak into the diagnostic layer:
+        // the same text that the normal chat would drop is intact here.
+        #expect(AgentPresentationPreamble.visibleText(warning, policy: .completeOnly) == nil)
+    }
+
     @Test func selectedChatWithoutDropsDoesNotReportAnotherChatsEvictions() async {
         let trace = ChatDiagnosticTrace(source: .app)
         let evictedChat = ChatDiagnosticCorrelation.Value(rawValue: "evicted-chat")

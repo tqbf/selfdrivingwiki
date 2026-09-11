@@ -7,7 +7,6 @@ struct ChatDetailControlsView: View {
     let showsDebugControls: Bool
     let isAnswering: Bool
     @Binding var showsInternals: Bool
-    @Binding var hideToolCalls: Bool
     let exitStatus: Int32?
     let debugFolderURL: URL?
     let copyDiagnostics: () -> Void
@@ -21,8 +20,9 @@ struct ChatDetailControlsView: View {
                         .controlSize(.small)
                 }
                 Menu {
+                    // This menu is live diagnostics only. The tool-call display
+                    // preference lives in Settings → Appearance → Chat.
                     Toggle("Show Full Activity", isOn: $showsInternals)
-                    Toggle("Hide tool calls", isOn: $hideToolCalls)
                     Button("Copy Diagnostics", systemImage: "doc.on.doc") {
                         copyDiagnostics()
                     }
