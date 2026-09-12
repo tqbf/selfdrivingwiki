@@ -308,13 +308,22 @@ import ACPModel
     // MARK: - Seatbelt application (issue #1251)
 
     /// The provider config-home derivation mirrors `launchHint`'s substring
-    /// convention: the command tokens are the truth, not a provider id. Claude
-    /// needs no extras (the base profile already allows `~/.claude`); Codex and
-    /// Gemini write distinct config homes; unknown commands get none — a
-    /// denied config-home write is the visible signal to add a mapping.
+    /// convention: the command tokens are the truth, not a provider id.
+    /// Package runners layer their own caches (npx → `~/.npm`, `bun x` →
+    /// `~/.bun`) and providers layer their config homes (codex → `~/.codex`,
+    /// gemini → `~/.gemini`); a plain claude binary needs nothing (the base
+    /// profile already allows `~/.claude`). Unknown commands get no extras —
+    /// a denied config-home write is the visible signal to add a mapping.
     @Test func providerHomeSubpathsDeriveFromCommandTokens() {
+        // The exact launch shape that failed on the first wrapped chat:
+        // npx writes ~/.npm/_cacache before the adapter even starts.
         #expect(ACPBackend.providerHomeSubpaths(
-            forCommand: "/opt/homebrew/bin/bun x @agentclientprotocol/claude-agent-acp") == [])
+            forCommand: "/Users/me/.local/bin/npx @agentclientprotocol/claude-agent-acp") == [".npm"])
+        // bun x adapters get the bun install cache instead.
+        #expect(ACPBackend.providerHomeSubpaths(
+            forCommand: "/opt/homebrew/bin/bun x @agentclientprotocol/claude-agent-acp") == [".bun"])
+        // A plain claude binary needs no runner cache and no extra home.
+        #expect(ACPBackend.providerHomeSubpaths(forCommand: "/usr/local/bin/claude") == [])
         #expect(ACPBackend.providerHomeSubpaths(forCommand: "/usr/local/bin/codex acp") == [".codex"])
         #expect(ACPBackend.providerHomeSubpaths(forCommand: "/usr/local/bin/gemini --experimental-acp") == [".gemini"])
         #expect(ACPBackend.providerHomeSubpaths(forCommand: "/usr/local/bin/hermes acp") == [])
@@ -404,18 +413,18 @@ import ACPModel
         #expect(plan.environment["PATH"] == "/usr/bin:/bin")
     }
 
-    /// Claude's config home is allowed by the base profile, so the plan's
-    /// embedded profile equals the base invocation's exactly (no appended
-    /// allow rules), and a nil scratch skips the TMPDIR relocation.
-    @Test func sandboxedSpawnPlanAddsNothingForClaudeCommands() {
+    /// A plain claude binary launch layers nothing: the plan's embedded
+    /// profile equals the base invocation's exactly (no appended allow
+    /// rules), and a nil scratch skips the TMPDIR relocation.
+    @Test func sandboxedSpawnPlanAddsNothingForPlainClaudeBinary() {
         let invocation = SandboxProfile.invocation(
             homePath: "/Users/me",
             scratchDir: "/tmp/scratch",
             wikiDBPath: "/db/wiki.sqlite")
         let plan = ACPBackend.sandboxedSpawnPlan(
             invocation: invocation,
-            executablePath: "/opt/homebrew/bin/bun",
-            arguments: ["x", "@agentclientprotocol/claude-agent-acp"],
+            executablePath: "/usr/local/bin/claude",
+            arguments: [],
             environment: [:],
             scratchDirectory: nil)
 
@@ -425,11 +434,32 @@ import ACPModel
         let profilePayload = plan.arguments.first { $0.contains("(version 1)") }
         #expect(profilePayload == invocation.profile)
         // No provider-home extras were appended.
+        #expect(plan.arguments.contains("\"/.npm\"") == false)
         #expect(plan.arguments.contains("\"/.codex\"") == false)
-        #expect(plan.arguments.contains("\"/.gemini\"") == false)
         // nil scratch → no TMPDIR relocation, no invented env.
         #expect(plan.environment["TMPDIR"] == nil)
         #expect(plan.environment.isEmpty)
+    }
+
+    /// The first-chat regression (#1251 follow-up): an npx-launched adapter
+    /// must get `~/.npm` layered into the effective profile, or the wrapped
+    /// spawn dies on EPERM writing the npm package cache.
+    @Test func sandboxedSpawnPlanLayersNpmCacheForNpxLaunches() {
+        let invocation = SandboxProfile.invocation(
+            homePath: "/Users/me",
+            scratchDir: "/tmp/scratch",
+            wikiDBPath: "/db/wiki.sqlite")
+        let plan = ACPBackend.sandboxedSpawnPlan(
+            invocation: invocation,
+            executablePath: "/Users/me/.local/bin/npx",
+            arguments: ["@agentclientprotocol/claude-agent-acp"],
+            environment: [:],
+            scratchDirectory: URL(fileURLWithPath: "/tmp/scratch"))
+
+        let profilePayload = plan.arguments.first { $0.contains("(version 1)") }
+        #expect(profilePayload?.contains(
+            "(allow file-write* (subpath (string-append (param \"HOME\") \"/.npm\")))") == true)
+        #expect(plan.environment["TMPDIR"] == "/tmp/scratch/.tmp")
     }
 }
 #endif

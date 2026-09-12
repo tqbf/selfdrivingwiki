@@ -1954,16 +1954,29 @@ public actor ACPBackend: AgentBackend {
     /// already allow, derived from the spawn's full command with the same
     /// substring convention as `launchHint` (a user could rename a provider id
     /// without changing the command, so the command tokens are the truth).
-    /// Claude's home is allowed by the base profile itself; Codex writes
-    /// `~/.codex`; Gemini `~/.gemini`. Unknown commands get no extras — a
+    /// Package runners write their install caches under `~` at startup —
+    /// npx/npm into `~/.npm`, `bun x`/bunx into `~/.bun` — and the ACP
+    /// adapters launch through them, so without these the very first wrapped
+    /// spawn dies on EPERM. Provider config homes follow: codex writes
+    /// `~/.codex`, gemini `~/.gemini`. Unknown commands get no extras — a
     /// denied config-home write surfaces as a visible failure and lands here
     /// as a new mapping entry.
     static func providerHomeSubpaths(forCommand command: String) -> [String] {
         let fullCommand = command.lowercased()
-        if fullCommand.contains("claude") { return [] }
-        if fullCommand.contains("codex") { return [".codex"] }
-        if fullCommand.contains("gemini") { return [".gemini"] }
-        return []
+        var subpaths: [String] = []
+        if fullCommand.contains("npx") || fullCommand.contains("npm") {
+            subpaths.append(".npm")
+        }
+        if fullCommand.contains("bunx") || fullCommand.contains("bun x") {
+            subpaths.append(".bun")
+        }
+        if fullCommand.contains("codex") {
+            subpaths.append(".codex")
+        }
+        if fullCommand.contains("gemini") {
+            subpaths.append(".gemini")
+        }
+        return subpaths
     }
 
     // MARK: - Launch failure diagnostics (#733 + #737)
